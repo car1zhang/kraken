@@ -1,0 +1,37 @@
+#compdef k kraken
+
+_k() {
+    local -a subcmds
+    subcmds=(
+        'ls:list live claudes across tmux'
+        'v:live viewer TUI (vim keys, enter/click open, b branch, dd kill, t grouping)'
+        'o:jump to an agent or shell pane (focus ghostty window + pane)'
+        'b:branch (fork) a session into a split'
+        's:send a message to a claude'
+        'r:read back last n output blocks'
+        'k:kill a pane (claude or shell)'
+        'n:new shell window, optionally running a command'
+        'c:new named claude window with a prompt'
+        'help:show help'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe 'command' subcmds
+        return
+    fi
+
+    case ${words[2]} in
+        o|b|s|r|k)
+            if (( CURRENT == 3 )); then
+                local -a peers
+                local value desc
+                while IFS=$'\t' read -r value desc; do
+                    peers+=("${value}:${desc}")
+                done < <(command k _complete 2>/dev/null)
+                _describe -V -t peers 'session' peers -M 'm:{-_ }={-_ } l:|=* r:|=*'
+            fi
+            ;;
+    esac
+}
+
+_k "$@"
