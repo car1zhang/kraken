@@ -4,11 +4,11 @@ A macOS CLI/TUI for wrangling live [Claude Code](https://claude.com/claude-code)
 
 ```
 $ k
-  #  NAME          PROJECT   STATUS    MODEL    BRANCH        AGE
-  1  yelp-dedupe   monolith  working   opus     carl/yelp…    2m
-  2  api-refactor  monolith  blocked   opus     carl/api…     14s
-  3  scraper       pluto     idle      sonnet   main          1h
-  ...
+ #  STATUS   NAME          PROJECT   BRANCH       MODEL   PANE  TMUX      AGE
+ 1  working  yelp-dedupe   monolith  carl/yelp…   opus    %4    monolith  2m
+ 2  blocked  api-refactor  monolith  carl/api…    opus    %7    monolith  14s
+ 3  idle     scraper       pluto     main         sonnet  %2    pluto     1h
+ ...
 ```
 
 ## Commands
