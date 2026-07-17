@@ -105,6 +105,8 @@ struct ArtifactView: View {
                     } label: {
                         Label("Retry", systemImage: "arrow.clockwise")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Retry")
                     .buttonStyle(.borderedProminent)
                 }
                 .padding()

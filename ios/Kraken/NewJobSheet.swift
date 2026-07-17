@@ -48,6 +48,8 @@ struct NewJobSheet: View {
                         } label: {
                             Label("Create", systemImage: "plus")
                         }
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Create")
                         .buttonStyle(.borderedProminent)
                         .disabled(isBusy || slug.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
