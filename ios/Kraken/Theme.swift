@@ -322,3 +322,19 @@ extension View {
 // after device-testing the previous pass. The dark palette above still
 // supplies every button's tint via .tint(KTheme.___); see each view for
 // which tint/icon/role a given action uses.
+
+// Icon-only sheet/drawer dismiss control — a clear xmark.circle in a bordered
+// pill, used in every sheet's cancellation toolbar slot. Carl: the close
+// buttons were missing icons; toolbar buttons already carry a >=44pt tap area.
+struct SheetCloseButton: View {
+    var label: String = "Close"
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Label(label, systemImage: "xmark.circle.fill")
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.bordered)
+        .accessibilityLabel(label)
+    }
+}

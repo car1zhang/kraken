@@ -91,7 +91,7 @@ struct JobFormView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
+                SheetCloseButton(label: "Cancel") { dismiss() }
             }
         }
     }
@@ -235,7 +235,7 @@ struct JobFormView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
+                SheetCloseButton(label: "Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button {

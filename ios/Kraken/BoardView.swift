@@ -358,7 +358,7 @@ private struct BoardOverviewSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close") { dismiss() }.buttonStyle(.bordered)
+                SheetCloseButton { dismiss() }
             }
         }
         .sheet(item: $selectedJob) { job in
