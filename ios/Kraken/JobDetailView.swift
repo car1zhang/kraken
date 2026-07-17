@@ -1,5 +1,109 @@
 import SwiftUI
 
+// MARK: - artifact folder tree
+//
+// The board now sends nested artifact names as relative paths (e.g.
+// "icon-variations/icon-v1.png"), one flat array. This groups them into a
+// browsable tree so the Artifacts section can show folders instead of a
+// flat list of slash-separated names. No fixed depth cap: each recursion
+// level strips exactly one leading path component, so "a/b/c.png" nests
+// three levels deep the same way "a/c.png" nests one — arbitrarily deep
+// paths degrade gracefully to more folders, never a crash or a raw path
+// string standing in for a real row.
+private enum ArtifactNode: Identifiable {
+    case file(WebArtifact)
+    case folder(name: String, children: [ArtifactNode])
+
+    var id: String {
+        switch self {
+        case .file(let a): return "file:\(a.url)"
+        case .folder(let name, _): return "folder:\(name)"
+        }
+    }
+}
+
+/// Groups a flat artifact list by leading path component, recursively. A
+/// name with no "/" is a top-level file; "icon-variations/icon-v1.png"
+/// becomes a "icon-variations" folder containing a file named "icon-v1.png"
+/// (the prefix is stripped at each level, so nested folders always show
+/// just the next path segment, not the accumulated path).
+private func artifactTree(_ artifacts: [WebArtifact]) -> [ArtifactNode] {
+    var topFiles: [WebArtifact] = []
+    var groups: [String: [WebArtifact]] = [:]
+    var groupOrder: [String] = []
+
+    for a in artifacts {
+        guard let slash = a.name.firstIndex(of: "/") else {
+            topFiles.append(a)
+            continue
+        }
+        let folder = String(a.name[..<slash])
+        let rest = String(a.name[a.name.index(after: slash)...])
+        if groups[folder] == nil { groupOrder.append(folder) }
+        groups[folder, default: []].append(WebArtifact(name: rest, url: a.url))
+    }
+
+    var nodes: [ArtifactNode] = topFiles.map { .file($0) }
+    for folder in groupOrder {
+        nodes.append(.folder(name: folder, children: artifactTree(groups[folder] ?? [])))
+    }
+    return nodes
+}
+
+/// Total file count under a folder, counting nested subfolders' files too —
+/// so a folder's displayed count reflects everything inside it, not just
+/// its direct children.
+private func artifactFileCount(_ nodes: [ArtifactNode]) -> Int {
+    nodes.reduce(0) { total, node in
+        switch node {
+        case .file: return total + 1
+        case .folder(_, let children): return total + artifactFileCount(children)
+        }
+    }
+}
+
+// A recursive View STRUCT, not a @ViewBuilder function: a function returning
+// `some View` can't call itself (the opaque type would be defined in terms of
+// itself), but a struct referencing itself in its own body is fine. A file
+// opens via onOpen; a folder is a DisclosureGroup whose children are more
+// ArtifactRows, so arbitrary nesting depth just falls out of the recursion.
+private struct ArtifactRow: View {
+    let node: ArtifactNode
+    let onOpen: (WebArtifact) -> Void
+
+    var body: some View {
+        switch node {
+        case .file(let a):
+            Button {
+                onOpen(a)
+            } label: {
+                Label(a.name, systemImage: "doc.text")
+            }
+            .buttonStyle(.plain)
+            .font(.data(13))
+            .foregroundStyle(KTheme.accent)
+        case .folder(let name, let children):
+            DisclosureGroup {
+                ForEach(children) { child in
+                    ArtifactRow(node: child, onOpen: onOpen)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(KTheme.text2)
+                    Text(name)
+                        .font(.data(12, weight: .semibold))
+                        .foregroundStyle(KTheme.text)
+                    Spacer()
+                    Text("\(artifactFileCount(children))")
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.text2)
+                }
+            }
+        }
+    }
+}
+
 struct JobDetailView: View {
     let job: WebJob
     let baseURL: String
@@ -111,15 +215,8 @@ struct JobDetailView: View {
                 }
                 if let artifacts = job.artifacts, !artifacts.isEmpty {
                     kSection("Artifacts") {
-                        ForEach(artifacts, id: \.url) { a in
-                            Button {
-                                showingArtifact = a
-                            } label: {
-                                Label(a.name, systemImage: "doc.text")
-                            }
-                            .buttonStyle(.plain)
-                            .font(.data(13))
-                            .foregroundStyle(KTheme.accent)
+                        ForEach(artifactTree(artifacts)) { node in
+                            ArtifactRow(node: node, onOpen: { showingArtifact = $0 })
                         }
                     }
                 }
@@ -309,6 +406,8 @@ struct JobDetailView: View {
         }
     }
 
+    // One row per artifact tree node: a file opens ArtifactView exactly as
+    // before (full relative name + url — the server resolves nested paths,
     private func runAction(_ action: @escaping () async throws -> Void) {
         isBusy = true
         errorMessage = nil
