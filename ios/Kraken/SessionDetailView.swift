@@ -122,6 +122,8 @@ struct SessionDetailView: View {
         let mode: SessionViewMode
     }
 
+    private static let bottomAnchorID = "bottom"
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -129,16 +131,57 @@ struct SessionDetailView: View {
             if !isShell {
                 modePicker
             }
-            ScrollView {
-                Group {
-                    switch mode {
-                    case .transcript: transcriptContent
-                    case .terminal: terminalContent
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Group {
+                            switch mode {
+                            case .transcript: transcriptContent
+                            case .terminal: terminalContent
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(KTheme.ground)
+                // Transcript scroll-to-bottom: the blocks are self-sizing
+                // WKWebViews (MarkdownBody) that measure their height async, so
+                // a scroll fired the instant data arrives lands on ~zero-height
+                // content. Fire it a beat after the block count changes — which
+                // covers both the first load (0→N) and later appends — giving
+                // the web views time to report their heights first. The
+                // terminal deliberately does NOT scroll: capture-pane returns
+                // the current fixed-size screen, so top-aligned already shows
+                // the latest output (its bottom rows), and a nested horizontal
+                // ScrollView doesn't bottom-anchor cleanly anyway.
+                .onChange(of: vm.blocks.count) { oldCount, newCount in
+                    guard mode == .transcript, newCount > oldCount else { return }
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+                    }
+                }
+                .task(id: PollKey(phase: scenePhase, mode: mode)) {
+                    guard scenePhase == .active, let pane = peer.pane else { return }
+                    switch mode {
+                    case .transcript:
+                        await vm.loadTranscript(baseURL: baseURL, pane: pane, n: 20)
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(5))
+                            if Task.isCancelled { break }
+                            await vm.loadTranscript(baseURL: baseURL, pane: pane, n: 20)
+                        }
+                    case .terminal:
+                        await vm.loadTerminal(baseURL: baseURL, pane: pane)
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(2))
+                            if Task.isCancelled { break }
+                            await vm.loadTerminal(baseURL: baseURL, pane: pane)
+                        }
+                    }
+                }
             }
-            .background(KTheme.ground)
             Rectangle().fill(KTheme.hairline).frame(height: 1)
             composer
         }
@@ -153,25 +196,6 @@ struct SessionDetailView: View {
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(KTheme.accent)
                     .padding(.top, 8)
-            }
-        }
-        .task(id: PollKey(phase: scenePhase, mode: mode)) {
-            guard scenePhase == .active, let pane = peer.pane else { return }
-            switch mode {
-            case .transcript:
-                await vm.loadTranscript(baseURL: baseURL, pane: pane, n: 20)
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(5))
-                    if Task.isCancelled { break }
-                    await vm.loadTranscript(baseURL: baseURL, pane: pane, n: 20)
-                }
-            case .terminal:
-                await vm.loadTerminal(baseURL: baseURL, pane: pane)
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(2))
-                    if Task.isCancelled { break }
-                    await vm.loadTerminal(baseURL: baseURL, pane: pane)
-                }
             }
         }
         // Restores whatever was mid-typed the last time this pane's
@@ -218,7 +242,13 @@ struct SessionDetailView: View {
     }
 
     private var transcriptContent: some View {
-        LazyVStack(alignment: .leading, spacing: 8) {
+        // A plain VStack, not LazyVStack: the blocks are capped to the last 20
+        // by the `n: 20` fetch, so realizing them all up front is cheap — and
+        // it's what makes scroll-to-bottom reliable. A LazyVStack only builds
+        // visible rows, so a programmatic scrollTo(bottom) into not-yet-built
+        // MarkdownBody web views landed on empty space; realizing every row
+        // means their async heights are all known by the time we scroll.
+        VStack(alignment: .leading, spacing: 8) {
             if peer.pane == nil {
                 Text("no pane — nothing to read")
                     .font(.data(11))
@@ -228,11 +258,6 @@ struct SessionDetailView: View {
                 if let err = vm.loadError {
                     Text(err).font(.voice(12)).foregroundStyle(KTheme.counter).padding()
                 }
-                // Blocks are already capped to the last 20 by the `n: 20`
-                // fetch, and LazyVStack defers offscreen rows — so the
-                // number of live MarkdownBody web views (one per "text"
-                // block, the only kind that gets markdown) stays small
-                // without any extra capping here.
                 ForEach(Array(vm.blocks.enumerated()), id: \.offset) { _, block in
                     blockView(block)
                 }
