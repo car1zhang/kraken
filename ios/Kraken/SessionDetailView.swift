@@ -297,9 +297,16 @@ struct SessionDetailView: View {
     private func blockView(_ block: ReadBlock) -> some View {
         switch block.kind {
         case "user":
-            Text("❯ " + block.text)
-                .font(.voice(13, weight: .bold))
-                .foregroundStyle(KTheme.text)
+            // A "❯ user" marker keeps the message visually distinct (like
+            // `k r`'s header), but the body renders as markdown too — users
+            // paste markdown (headings, tables, code) and it should render,
+            // not show raw ## / | syntax.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("❯ user")
+                    .font(.data(10))
+                    .foregroundStyle(KTheme.accent)
+                MarkdownBody(markdown: block.text)
+            }
         case "thinking":
             Text(block.text)
                 .font(.voice(13))
