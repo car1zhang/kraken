@@ -11,6 +11,10 @@ final class BoardViewModel {
             let board = try await APIClient.shared.fetchBoard(baseURL: baseURL)
             self.board = board
             self.errorMessage = nil
+            // Every successful fetch (this foreground poll, and the
+            // BGAppRefreshTask in NotificationManager) runs the same
+            // blocked-job diff — one notification per newly-blocked job.
+            NotificationManager.shared.processBoard(board)
         } catch {
             self.errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
         }
@@ -32,6 +36,7 @@ final class BoardViewModel {
 struct BoardView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(AppRouter.self) private var router
     @State private var vm = BoardViewModel()
     @State private var selectedJob: WebJob?
     @State private var showingNewJob = false
@@ -94,6 +99,44 @@ struct BoardView: View {
                     }
                 }
             }
+            // Deep links (kraken://board/<column>, kraken://overview,
+            // kraken://job/<slug>) stamp a pending value on the shared
+            // router; this view is the one that owns each destination, so
+            // it's the one that consumes and clears it. onAppear covers a
+            // route stamped before this view mounted (cold launch via the
+            // -KrakenRoute launch argument); onChange covers routes arriving
+            // while it's already up.
+            .onAppear { consumePendingBoardRoutes() }
+            .onChange(of: router.pendingBoardColumn) { consumePendingBoardRoutes() }
+            .onChange(of: router.pendingOverview) { consumePendingBoardRoutes() }
+            .task(id: router.pendingJobSlug) {
+                guard let slug = router.pendingJobSlug else { return }
+                // The board may not have loaded yet (e.g. a cold launch
+                // straight into a kraken://job/<slug> link) — retry briefly
+                // rather than silently dropping the link.
+                for _ in 0..<10 {
+                    if vm.board == nil {
+                        await vm.refresh(baseURL: serverURL)
+                    }
+                    if let job = vm.board?.jobs.first(where: { $0.slug == slug }) {
+                        selectedJob = job
+                        break
+                    }
+                    try? await Task.sleep(for: .seconds(0.5))
+                }
+                router.pendingJobSlug = nil
+            }
+        }
+    }
+
+    private func consumePendingBoardRoutes() {
+        if let column = router.pendingBoardColumn {
+            selectedColumn = column
+            router.pendingBoardColumn = nil
+        }
+        if router.pendingOverview {
+            showingOverview = true
+            router.pendingOverview = false
         }
     }
 

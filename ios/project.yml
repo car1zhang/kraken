@@ -27,9 +27,24 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        # kraken://board, kraken://board/<column>, kraken://overview,
+        # kraken://job/<slug>, kraken://sessions, kraken://session/<pane>,
+        # kraken://settings — parsed by AppRouter, handled via .onOpenURL.
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.carl.Kraken
+            CFBundleURLSchemes:
+              - kraken
         # The phone-to-Mac hop (`k web --tailnet`) is plain HTTP; ATS would
         # refuse it without this. That hop never leaves the tailnet, which is
         # WireGuard-encrypted end to end — this does not expose the app to
         # the public internet.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # "job blocked" local notifications (no APNs — needs a paid dev
+        # account carl doesn't have): BGAppRefreshTask polls the board and
+        # fires a local notification for newly-blocked jobs. See
+        # NotificationManager.swift.
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.carl.Kraken.refresh

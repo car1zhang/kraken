@@ -176,6 +176,11 @@ struct AnswerRequest: Encodable {
     let text: String
 }
 
+struct SteerRequest: Encodable {
+    let slug: String
+    let text: String
+}
+
 struct CreateJobRequest: Encodable {
     let slug: String
 }
