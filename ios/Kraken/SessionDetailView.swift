@@ -51,6 +51,7 @@ struct SessionDetailView: View {
     let baseURL: String
 
     @Environment(\.scenePhase) private var scenePhase
+    @FocusState private var messageFocused: Bool
     @State private var vm = SessionDetailViewModel()
     @State private var messageText = ""
 
@@ -64,14 +65,17 @@ struct SessionDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            Rectangle().fill(KTheme.hairline).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if peer.pane == nil {
-                        Text("no pane — nothing to read").foregroundStyle(.secondary).padding()
+                        Text("no pane — nothing to read")
+                            .font(.data(11))
+                            .foregroundStyle(KTheme.text2)
+                            .padding()
                     } else {
                         if let err = vm.loadError {
-                            Text(err).foregroundStyle(.red).padding()
+                            Text(err).font(.voice(12)).foregroundStyle(KTheme.counter).padding()
                         }
                         ForEach(Array(vm.blocks.enumerated()), id: \.offset) { _, block in
                             blockView(block)
@@ -81,17 +85,20 @@ struct SessionDetailView: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Divider()
+            .background(KTheme.ground)
+            Rectangle().fill(KTheme.hairline).frame(height: 1)
             composer
         }
+        .background(KTheme.ground)
         .navigationTitle(peer.agentName ?? peer.name ?? peer.tmuxSession ?? "session")
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .top) {
             if vm.showQueuedToast {
                 Text("queued")
-                    .font(.caption)
+                    .font(.data(11))
+                    .foregroundStyle(KTheme.accentInk)
                     .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(.thinMaterial, in: Capsule())
+                    .background(KTheme.accent)
                     .padding(.top, 8)
             }
         }
@@ -108,50 +115,66 @@ struct SessionDetailView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Circle().fill(SessionTheme.color(forStatus: peer.status, role: peer.role)).frame(width: 8, height: 8)
-            Text(peer.status).font(.caption).foregroundStyle(.secondary)
+            Rectangle()
+                .fill(SessionTheme.color(forStatus: peer.status, role: peer.role))
+                .frame(width: 8, height: 8)
+            Text(peer.status)
+                .font(.data(11))
+                .foregroundStyle(SessionTheme.color(forStatus: peer.status, role: peer.role))
             if let branch = peer.branch, !branch.isEmpty {
-                Text(branch).font(.caption).foregroundStyle(.purple)
+                Text(branch).font(.data(11)).foregroundStyle(KTheme.accent)
             }
             Spacer()
         }
         .padding(.horizontal)
-        .padding(.vertical, 6)
+        .padding(.vertical, 7)
+        .background(KTheme.surface)
     }
 
     @ViewBuilder
     private func blockView(_ block: ReadBlock) -> some View {
         switch block.kind {
         case "user":
-            Text("❯ " + block.text).bold()
+            Text("❯ " + block.text)
+                .font(.voice(13, weight: .bold))
+                .foregroundStyle(KTheme.text)
         case "thinking":
-            Text(block.text).italic().foregroundStyle(.secondary)
+            Text(block.text)
+                .font(.voice(13))
+                .italic()
+                .foregroundStyle(KTheme.text2)
         case "tool":
             Text("→ " + block.text)
-                .font(.system(.footnote, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(.data(11))
+                .foregroundStyle(KTheme.text2)
         default:
             Text(block.text)
+                .font(.voice(13))
+                .foregroundStyle(KTheme.text)
         }
     }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let sendError = vm.sendError {
-                Text(sendError).font(.caption).foregroundStyle(.red)
+                Text(sendError).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
             HStack {
                 if let reason = disabledReason {
-                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                    Text(reason).font(.data(11)).foregroundStyle(KTheme.text2)
                 } else {
                     TextField("message", text: $messageText, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
+                        .focused($messageFocused)
+                        .font(.voice(13))
+                        .kField(focused: messageFocused)
                     Button("Send") { send() }
+                        .buttonStyle(.kPrimary)
                         .disabled(vm.isSending || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
         .padding()
+        .background(KTheme.surface)
     }
 
     private func send() {

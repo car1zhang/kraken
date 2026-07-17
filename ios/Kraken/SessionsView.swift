@@ -33,10 +33,10 @@ struct SessionsView: View {
         NavigationStack {
             List {
                 if let err = vm.errorMessage {
-                    Section { Text(err).foregroundStyle(.red) }
+                    kSection { Text(err).font(.voice(12)).foregroundStyle(KTheme.counter) }
                 }
                 if !vm.claudes.isEmpty {
-                    Section("Claude") {
+                    kSection("Claude") {
                         ForEach(vm.claudes) { peer in
                             NavigationLink(value: peer) {
                                 SessionRow(peer: peer)
@@ -45,7 +45,7 @@ struct SessionsView: View {
                     }
                 }
                 if !vm.codexes.isEmpty {
-                    Section("Codex") {
+                    kSection("Codex") {
                         ForEach(vm.codexes) { peer in
                             NavigationLink(value: peer) {
                                 SessionRow(peer: peer)
@@ -54,7 +54,7 @@ struct SessionsView: View {
                     }
                 }
                 if !vm.shells.isEmpty {
-                    Section("Shells") {
+                    kSection("Shells") {
                         ForEach(vm.shells) { peer in
                             NavigationLink(value: peer) {
                                 SessionRow(peer: peer)
@@ -63,9 +63,13 @@ struct SessionsView: View {
                     }
                 }
                 if vm.peers.isEmpty && vm.errorMessage == nil {
-                    Text("no live sessions").foregroundStyle(.secondary)
+                    kSection {
+                        Text("no live sessions").font(.data(11)).foregroundStyle(KTheme.text2)
+                    }
                 }
             }
+            .listStyle(.plain)
+            .kListStyle()
             .navigationTitle("Sessions")
             .navigationDestination(for: Peer.self) { peer in
                 SessionDetailView(peer: peer, baseURL: serverURL)
@@ -101,23 +105,25 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
+            Rectangle()
                 .fill(SessionTheme.color(forStatus: peer.status, role: peer.role))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
-                Text(displayName).font(.subheadline).bold()
+                Text(displayName)
+                    .font(.data(13, weight: .bold))
+                    .foregroundStyle(KTheme.text)
                 HStack(spacing: 6) {
-                    Text(project).foregroundStyle(.secondary)
+                    Text(project).foregroundStyle(KTheme.text2)
                     if let branch = peer.branch, !branch.isEmpty {
-                        Text(branch).foregroundStyle(.purple)
+                        Text(branch).foregroundStyle(KTheme.accent)
                     }
                 }
-                .font(.caption)
+                .font(.data(11))
             }
             Spacer()
             Text(peer.status)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.data(11))
+                .foregroundStyle(SessionTheme.color(forStatus: peer.status, role: peer.role))
         }
         .padding(.leading, indent)
     }
