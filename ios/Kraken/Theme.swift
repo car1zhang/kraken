@@ -3,8 +3,11 @@ import UIKit
 
 // KTheme ports kraken web's "socrat cyber-dark" design system (web/style.css)
 // to SwiftUI: one calm dark surface, mono for data, sans for prose, sharp
-// corners everywhere, neon only where something is hot or interactive.
-// Every screen should build on the pieces here rather than reach for
+// corners on cards/fields/sections, neon only where something is hot or
+// interactive. Buttons are the one deliberate exception — native
+// .bordered/.borderedProminent with SF Symbol icons and their normal rounded
+// geometry, per carl's device-test feedback; everything else should still
+// build on the pieces here rather than reach for
 // .primary/.secondary/systemBackground/RoundedRectangle.
 
 extension Color {
@@ -79,16 +82,26 @@ enum KTheme {
 // MARK: - typography
 
 extension Font {
+    // Carl: "make font size slightly larger." Bumped once, centrally, so
+    // every call site (already routed through .data/.voice everywhere) gets
+    // it for free instead of hand-editing dozens of literals. +1.5pt below
+    // 13pt, +2pt at/above — chosen so it reproduces the sizes called out
+    // during review exactly (10→11.5, 11→12.5, 13→15) while still bumping
+    // everything else in between consistently.
+    fileprivate static func bumped(_ size: CGFloat) -> CGFloat {
+        size < 13 ? size + 1.5 : size + 2
+    }
+
     /// The data accent: SF Mono / Menlo equivalent (system monospaced design).
-    /// Slugs, states, meta lines, column titles, section labels, buttons.
+    /// Slugs, states, meta lines, column titles, section labels.
     static func data(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        .system(size: bumped(size), weight: weight, design: .monospaced)
     }
 
     /// The voice: system sans. Prose — spec/success text, escalation bodies,
     /// transcript text blocks.
     static func voice(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .default)
+        .system(size: bumped(size), weight: weight, design: .default)
     }
 }
 
@@ -106,6 +119,19 @@ enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
         case .queued: return "QUEUED"
         case .working: return "WORKING"
         case .blocked: return "BLOCKED"
+        case .review: return "REVIEW"
+        case .done: return "DONE"
+        }
+    }
+
+    /// Truncated for the always-visible overview strip, where six columns
+    /// have to fit in one row.
+    var shortTitle: String {
+        switch self {
+        case .draft: return "DRAFT"
+        case .queued: return "QUEUE"
+        case .working: return "WORK"
+        case .blocked: return "BLOCK"
         case .review: return "REVIEW"
         case .done: return "DONE"
         }
@@ -291,111 +317,8 @@ extension View {
     }
 }
 
-// MARK: - button styles
-
-/// Save / Answer-submit / Create / Test Connection — the affirmative CTA.
-/// accent bg, ground-colored (accent-ink) text, mono, sharp corners.
-struct KPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.data(13, weight: .semibold))
-            .foregroundStyle(KTheme.accentInk)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(KTheme.accent.opacity(configuration.isPressed ? 0.75 : 1))
-    }
-}
-
-extension ButtonStyle where Self == KPrimaryButtonStyle {
-    static var kPrimary: KPrimaryButtonStyle { KPrimaryButtonStyle() }
-}
-
-/// Cancel / secondary — transparent, 1px hairline2 border, text2.
-struct KGhostButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.data(13))
-            .foregroundStyle(KTheme.text2)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
-            .opacity(configuration.isPressed ? 0.6 : 1)
-    }
-}
-
-extension ButtonStyle where Self == KGhostButtonStyle {
-    static var kGhost: KGhostButtonStyle { KGhostButtonStyle() }
-}
-
-/// Full-width "hot" action blocks — mirrors .btn.unblock (counter) and
-/// .btn.retry (revealed): soft tint bg, 1px solid tint border, tint text.
-struct KBlockButtonStyle: ButtonStyle {
-    var tint: Color
-    var tintSoft: Color
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.data(11, weight: .semibold))
-            .kerning(1)
-            .foregroundStyle(tint)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(tintSoft)
-            .overlay(Rectangle().stroke(tint, lineWidth: 1))
-            .opacity(configuration.isPressed ? 0.75 : 1)
-    }
-}
-
-extension ButtonStyle where Self == KBlockButtonStyle {
-    static var kUnblock: KBlockButtonStyle { KBlockButtonStyle(tint: KTheme.counter, tintSoft: KTheme.counterSoft) }
-    static var kRetry: KBlockButtonStyle { KBlockButtonStyle(tint: KTheme.revealed, tintSoft: KTheme.revealedSoft) }
-}
-
-/// A quiet mono text button that reads as destructive (Kill) — no block,
-/// no border, just counter-tinted text, like .kill in style.css.
-struct KDestructiveTextButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.data(13, weight: .semibold))
-            .foregroundStyle(KTheme.counter)
-            .opacity(configuration.isPressed ? 0.65 : 1)
-    }
-}
-
-extension ButtonStyle where Self == KDestructiveTextButtonStyle {
-    static var kDestructiveText: KDestructiveTextButtonStyle { KDestructiveTextButtonStyle() }
-}
-
-/// A quiet mono text button in text2 — mirrors .mini-add / .rm / .edit's
-/// idle state (their hover states don't translate to touch, so this is
-/// just the resting look).
-struct KMiniButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.data(12))
-            .foregroundStyle(KTheme.text2)
-            .opacity(configuration.isPressed ? 0.6 : 1)
-    }
-}
-
-extension ButtonStyle where Self == KMiniButtonStyle {
-    static var kMini: KMiniButtonStyle { KMiniButtonStyle() }
-}
-
-/// Repo/slug suggestion chips — mono, transparent, 1px accentSoft border,
-/// accent text. Mirrors .chip.
-struct KChipButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.data(11))
-            .foregroundStyle(KTheme.accent)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .overlay(Rectangle().stroke(KTheme.accentSoft, lineWidth: 1))
-            .opacity(configuration.isPressed ? 0.7 : 1)
-    }
-}
-
-extension ButtonStyle where Self == KChipButtonStyle {
-    static var kChip: KChipButtonStyle { KChipButtonStyle() }
-}
+// Buttons deliberately stay native (.bordered / .borderedProminent with SF
+// Symbol icons) rather than a custom "blocky" ButtonStyle — carl's call
+// after device-testing the previous pass. The dark palette above still
+// supplies every button's tint via .tint(KTheme.___); see each view for
+// which tint/icon/role a given action uses.

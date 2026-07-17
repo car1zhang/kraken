@@ -92,52 +92,80 @@ struct JobDetailView: View {
                         escalationRow(e)
                     }
                     if canAnswer {
-                        Button("Answer") { showingAnswer = true }
-                            .buttonStyle(.kUnblock)
-                            .listRowBackground(Color.clear)
+                        Button {
+                            showingAnswer = true
+                        } label: {
+                            Label("Answer", systemImage: "bubble.left.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(KTheme.counter)
+                        .listRowBackground(Color.clear)
                     }
                 }
             }
             if let artifacts = job.artifacts, !artifacts.isEmpty {
                 kSection("Artifacts") {
                     ForEach(artifacts, id: \.url) { a in
-                        Button(a.name) { showingArtifact = a }
-                            .font(.data(12))
-                            .foregroundStyle(KTheme.accent)
+                        Button {
+                            showingArtifact = a
+                        } label: {
+                            Label(a.name, systemImage: "doc.text")
+                        }
+                        .buttonStyle(.plain)
+                        .font(.data(13))
+                        .foregroundStyle(KTheme.accent)
                     }
                 }
             }
 
             kSection {
                 if canQueue {
-                    Button("Queue") {
+                    Button {
                         runAction { try await APIClient.shared.queueJob(baseURL: baseURL, slug: job.slug) }
+                    } label: {
+                        Label("Queue", systemImage: "play.fill")
                     }
-                    .buttonStyle(.kPrimary)
+                    .buttonStyle(.bordered)
+                    .tint(KTheme.accent)
                     .listRowBackground(Color.clear)
                 }
                 if canRetry {
-                    Button("Retry") {
+                    Button {
                         runAction { try await APIClient.shared.retryJob(baseURL: baseURL, slug: job.slug) }
+                    } label: {
+                        Label("Retry", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(.kRetry)
+                    .buttonStyle(.bordered)
+                    .tint(KTheme.revealed)
                     .listRowBackground(Color.clear)
                 }
                 if column == .review {
-                    Button("Mark Done") {
+                    Button {
                         runAction { try await APIClient.shared.markDone(baseURL: baseURL, slug: job.slug) }
+                    } label: {
+                        Label("Mark Done", systemImage: "checkmark")
                     }
-                    .buttonStyle(.kPrimary)
+                    .buttonStyle(.bordered)
+                    .tint(KTheme.solved)
                     .listRowBackground(Color.clear)
                 }
                 if isEditable {
-                    Button("Edit Spec") { showingEdit = true }
-                        .buttonStyle(.kGhost)
-                        .listRowBackground(Color.clear)
+                    Button {
+                        showingEdit = true
+                    } label: {
+                        Label("Edit Spec", systemImage: "square.and.pencil")
+                    }
+                    .buttonStyle(.bordered)
+                    .listRowBackground(Color.clear)
                 }
                 if canKill {
-                    Button("Kill", role: .destructive) { showingKillConfirm = true }
-                        .buttonStyle(.kDestructiveText)
+                    Button(role: .destructive) {
+                        showingKillConfirm = true
+                    } label: {
+                        Label("Kill", systemImage: "xmark.octagon")
+                    }
+                    .buttonStyle(.bordered)
+                    .listRowBackground(Color.clear)
                 }
             }
 
@@ -150,7 +178,7 @@ struct JobDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close") { dismiss() }.buttonStyle(.kGhost)
+                Button("Close") { dismiss() }.buttonStyle(.bordered)
             }
         }
         .disabled(isBusy)
@@ -183,19 +211,12 @@ struct JobDetailView: View {
         }
         .sheet(item: $showingArtifact) { artifact in
             NavigationStack {
-                Group {
-                    if let url = URL(string: baseURL + artifact.url) {
-                        ArtifactView(name: artifact.name, url: url)
-                    } else {
-                        Text("invalid artifact URL")
-                            .foregroundStyle(KTheme.counter)
+                ArtifactView(name: artifact.name, baseURL: baseURL, path: artifact.url)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showingArtifact = nil }.buttonStyle(.bordered)
+                        }
                     }
-                }
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { showingArtifact = nil }.buttonStyle(.kGhost)
-                    }
-                }
             }
         }
     }
@@ -310,12 +331,16 @@ private struct AnswerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
+                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Send") { send() }
-                    .buttonStyle(.kPrimary)
-                    .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button {
+                    send()
+                } label: {
+                    Label("Send", systemImage: "paperplane.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .disabled(isBusy)

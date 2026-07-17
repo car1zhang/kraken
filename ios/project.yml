@@ -17,6 +17,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.carl.Kraken
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: DDUUFX5L3W  # carl set this via Xcode for device signing
         SWIFT_VERSION: "5.10"
         TARGETED_DEVICE_FAMILY: "1"
     info:

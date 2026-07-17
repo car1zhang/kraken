@@ -40,12 +40,16 @@ struct NewJobSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
+                        Button("Cancel") { dismiss() }.buttonStyle(.bordered)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Create") { create() }
-                            .buttonStyle(.kPrimary)
-                            .disabled(isBusy || slug.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Button {
+                            create()
+                        } label: {
+                            Label("Create", systemImage: "plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isBusy || slug.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
                 .disabled(isBusy)

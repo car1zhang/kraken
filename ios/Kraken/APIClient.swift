@@ -176,4 +176,21 @@ actor APIClient {
     func sendMessage(baseURL: String, pane: String, message: String) async throws -> SendResponse {
         try await post(baseURL: baseURL, path: "/api/peers/send", body: SendRequest(pane: pane, message: message))
     }
+
+    // MARK: - artifacts
+
+    /// Fetches a non-html artifact's raw body as text (webArtifact.url is
+    /// already a full server-relative path, e.g. "/api/artifact/x/cell/y").
+    /// Used by ArtifactView to markdown-render .md files and dark-shell
+    /// .log/.txt files instead of loading them raw in the WKWebView.
+    func fetchArtifactText(baseURL: String, path: String) async throws -> String {
+        let url = try buildURL(baseURL: baseURL, path: path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        let data = try await perform(request)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw KrakenError.message("artifact wasn't valid UTF-8 text")
+        }
+        return text
+    }
 }
