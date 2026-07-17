@@ -9,7 +9,7 @@ const COLUMNS = [
   { key: "queued", title: "QUEUED", states: ["ready", "queued", "gate-review"], prefix: ["waits:", "gated:"] },
   { key: "working", title: "WORKING", states: ["planning", "executing"] },
   { key: "blocked", title: "BLOCKED", states: ["blocked", "plan-review"] },
-  { key: "review", title: "REVIEW", states: ["testing", "pr-open"] },
+  { key: "review", title: "REVIEW", states: ["testing", "pr-open", "merged"] },
   { key: "done", title: "DONE", states: ["done", "failed", "abandoned"] },
 ];
 
@@ -19,7 +19,7 @@ const STATE_COLOR = {
   executing: "var(--solved)", planning: "var(--solved)",
   "plan-review": "var(--counter)", blocked: "var(--counter)",
   ready: "var(--accent)", queued: "var(--accent)", "gate-review": "var(--counter)",
-  testing: "var(--revealed)", "pr-open": "var(--revealed)",
+  testing: "var(--revealed)", "pr-open": "var(--revealed)", merged: "var(--solved)",
   done: "var(--text-2)", draft: "var(--text-2)",
   error: "var(--counter)", failed: "var(--counter)", abandoned: "var(--text-2)",
 };

@@ -69,6 +69,7 @@ func TestArtifactContentType(t *testing.T) {
 		"a/img.jpeg":    "image/jpeg",
 		"a/img.jpg":     "image/jpeg",
 		"a/anim.gif":    "image/gif",
+		"a/img.webp":    "image/webp",
 		"a/notes.md":    "text/plain; charset=utf-8",
 		"a/x.log":       "text/plain; charset=utf-8",
 		"a/no-ext":      "text/plain; charset=utf-8",

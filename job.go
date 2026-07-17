@@ -126,8 +126,8 @@ func (j *Job) boolField(key, val string) bool {
 // (failure handling stays with zeus/carl; "queued" is reserved for display).
 var validStates = map[string]bool{
 	"queued": true, "planning": true, "plan-review": true, "executing": true,
-	"blocked": true, "testing": true, "pr-open": true, "done": true,
-	"failed": true, "abandoned": true,
+	"blocked": true, "testing": true, "pr-open": true, "merged": true,
+	"done": true, "failed": true, "abandoned": true,
 }
 
 // parseJob parses one job file's bytes. name is the file's base name, used to
