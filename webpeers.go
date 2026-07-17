@@ -92,8 +92,10 @@ func peersReadHandler(source peerSource) http.HandlerFunc {
 	}
 }
 
-// peersSendHandler mirrors k s: same guard chain and tmux send mechanics via
-// sendToPeer, shared with cmdSend so both refuse identically.
+// peersSendHandler mirrors k s for agents and k s's shell behavior for shells:
+// an agent target goes through sendToPeer's full guard chain, a shell target
+// through sendToShell (types the line and runs it). The app composer posts here
+// for both; the peer's role decides which path.
 func peersSendHandler(source peerSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -115,11 +117,39 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", req.Pane)})
 			return
 		}
+		if p.Role == "shell" {
+			if err := sendToShell(p, req.Message); err != nil {
+				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			webJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": false, "shell": true})
+			return
+		}
 		queued, err := sendToPeer(p, req.Message)
 		if err != nil {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		webJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": queued})
+	}
+}
+
+// peersCaptureHandler returns a pane's visible terminal content — the live
+// view the app shows for shell panes (no transcript) and for agent panes when
+// the user wants raw terminal I/O. Read-only.
+func peersCaptureHandler(source peerSource) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pane := r.URL.Query().Get("pane")
+		p := findPeerByPane(source(), pane)
+		if p == nil {
+			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", pane)})
+			return
+		}
+		text, err := capturePane(p.Pane)
+		if err != nil {
+			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		webJSON(w, http.StatusOK, map[string]any{"pane": p.Pane, "content": text})
 	}
 }

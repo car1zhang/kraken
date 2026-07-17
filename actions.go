@@ -246,6 +246,56 @@ func sendToPeer(p *Peer, msg string) (queued bool, err error) {
 	return queued, nil
 }
 
+// sendToShell types a command line into a shell pane and runs it with Enter —
+// the deliberate counterpart to sendToPeer's shell refusal, used only by the
+// HTTP endpoint where the caller has explicitly targeted a shell. Re-verifies
+// the pane is still agent-free right before typing so a stale snapshot can't
+// send a command into a pane an agent has since claimed.
+func sendToShell(p *Peer, cmd string) error {
+	if p.Role != "shell" {
+		return fmt.Errorf("%s is not a shell pane", displayName(p))
+	}
+	if p.Pane == "" {
+		return fmt.Errorf("no pane to send to")
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return fmt.Errorf("empty command")
+	}
+	if err := verifyKillTarget(p); err != nil {
+		// verifyKillTarget's shell branch is exactly the check we want:
+		// pane still exists, same root process, no agent claimed it
+		return err
+	}
+	if strings.Contains(cmd, "\n") {
+		return fmt.Errorf("shell input must be a single line")
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", p.Pane, "-l", "--", cmd).Run(); err != nil {
+		return fmt.Errorf("tmux send-keys: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := exec.Command("tmux", "send-keys", "-t", p.Pane, "Enter").Run(); err != nil {
+		return fmt.Errorf("tmux send-keys Enter: %v", err)
+	}
+	return nil
+}
+
+// capturePane returns a pane's visible content (tmux capture-pane), the live
+// view the app shows for shells and for agents where the transcript doesn't
+// cover raw terminal I/O. Read-only; safe on any pane.
+func capturePane(pane string) (string, error) {
+	if pane == "" {
+		return "", fmt.Errorf("no pane given")
+	}
+	if _, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{pane_id}").Output(); err != nil {
+		return "", fmt.Errorf("no pane %s — rerun 'k ls'", pane)
+	}
+	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux capture-pane: %v", err)
+	}
+	return string(out), nil
+}
+
 // sendMessage runs the send-time safety checks and types msg into p's prompt,
 // submitting it with Enter. Shared by k s, the bus, and the daemon — every
 // path that talks to an agent goes through the same guards.

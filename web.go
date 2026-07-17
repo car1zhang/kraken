@@ -702,6 +702,7 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/health", healthHandler)
 	mux.HandleFunc("/api/peers", peersHandler(defaultPeerSource))
 	mux.HandleFunc("/api/peers/read", peersReadHandler(defaultPeerSource))
+	mux.HandleFunc("/api/peers/capture", peersCaptureHandler(defaultPeerSource))
 	mux.HandleFunc("/api/peers/send", peersSendHandler(defaultPeerSource))
 	mux.HandleFunc("/api/board", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

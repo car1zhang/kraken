@@ -125,16 +125,23 @@ func TestPeersSendHandlerUnknownPane(t *testing.T) {
 	}
 }
 
-func TestPeersSendHandlerShellPaneRefused(t *testing.T) {
+// A shell target is now routed to the shell send path rather than refused for
+// being a shell (round 4: the app can drive shells). An empty command is the
+// deterministic guard we can assert without a live tmux pane — and crucially
+// the error must NOT be the old "shell pane" refusal.
+func TestPeersSendHandlerShellRoutedNotRefused(t *testing.T) {
 	source := func() []*Peer { return []*Peer{{Pane: "%4", Role: "shell", Name: "sh"}} }
 	h := peersSendHandler(source)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`{"pane":"%4","message":"hi"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`{"pane":"%4","message":"  "}`))
 	h(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "shell pane") {
+	if strings.Contains(w.Body.String(), "would run the message as a shell command") {
+		t.Errorf("shell target should be routed to shell send, not refused: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "empty command") {
 		t.Errorf("body = %s", w.Body.String())
 	}
 }
@@ -169,5 +176,49 @@ func TestPeersSendHandlerBadJSON(t *testing.T) {
 	h(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d", w.Code)
+	}
+}
+
+func TestPeersCaptureUnknownPane404(t *testing.T) {
+	h := peersCaptureHandler(func() []*Peer { return []*Peer{{Pane: "%1", Role: "shell"}} })
+	w := httptest.NewRecorder()
+	h(w, getJSON("/api/peers/capture", url.Values{"pane": {"%9"}}))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "no session in pane %9") {
+		t.Errorf("body = %s", w.Body.String())
+	}
+}
+
+func TestPeersCaptureMissingPane404(t *testing.T) {
+	// an omitted pane param must miss, never resolve a Pane-"" teammate
+	h := peersCaptureHandler(func() []*Peer { return []*Peer{{Pane: "", Role: "teammate"}} })
+	w := httptest.NewRecorder()
+	h(w, httptest.NewRequest(http.MethodGet, "/api/peers/capture", nil))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestPeersSendUnknownPane404(t *testing.T) {
+	h := peersSendHandler(func() []*Peer { return []*Peer{{Pane: "%1", Role: "shell"}} })
+	w := httptest.NewRecorder()
+	h(w, httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`{"pane":"%9","message":"ls"}`)))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestSendToShellRejectsAgent(t *testing.T) {
+	// sendToShell must refuse a non-shell peer before any tmux exec
+	if err := sendToShell(&Peer{Pane: "%1", Role: "main", Agent: "claude"}, "ls"); err == nil {
+		t.Error("want error for non-shell target")
+	}
+}
+
+func TestSendToShellRejectsEmpty(t *testing.T) {
+	if err := sendToShell(&Peer{Pane: "%1", Role: "shell"}, "  "); err == nil {
+		t.Error("want error for empty command")
 	}
 }
