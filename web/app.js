@@ -325,6 +325,33 @@ function renderMD(src) {
       continue;
     }
     if (line.startsWith(">")) { closeList(); out.push(`<blockquote>${inlineMD(line.slice(1).trim())}</blockquote>`); i++; continue; }
+    // GitHub-flavored pipe table: a line with | immediately followed by a
+    // separator row (| --- | :--: | ---: |). A stray | in prose is left alone
+    // because it requires that separator line to trigger.
+    if (line.includes("|") && i + 1 < lines.length &&
+        /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+      closeList();
+      const splitRow = (r) => r.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+      const headers = splitRow(line);
+      const aligns = splitRow(lines[i + 1]).map((c) => {
+        const l = c.startsWith(":"), r = c.endsWith(":");
+        return l && r ? "center" : r ? "right" : "left";
+      });
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) rows.push(splitRow(lines[i++]));
+      const cell = (c, tag, k) => `<${tag} style="text-align:${aligns[k] || "left"}">${inlineMD(c || "")}</${tag}>`;
+      let t = '<div class="md-table"><table><thead><tr>';
+      headers.forEach((h, k) => { t += cell(h, "th", k); });
+      t += "</tr></thead><tbody>";
+      rows.forEach((row) => {
+        t += "<tr>";
+        for (let k = 0; k < headers.length; k++) t += cell(row[k], "td", k);
+        t += "</tr>";
+      });
+      out.push(t + "</tbody></table></div>");
+      continue;
+    }
     if (line.trim() === "") { closeList(); i++; continue; }
     closeList();
     out.push(`<p>${inlineMD(line)}</p>`);
