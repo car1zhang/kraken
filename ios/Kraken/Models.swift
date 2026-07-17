@@ -273,6 +273,16 @@ struct SendRequest: Encodable {
 struct SendResponse: Decodable {
     let ok: Bool
     let queued: Bool?
+    // Present + true when the target peer was a shell: the server typed the
+    // line and ran it as a command rather than routing it to an agent.
+    let shell: Bool?
+}
+
+// GET /api/peers/capture?pane= — raw tmux capture-pane text for a shell (or
+// any) pane, used by SessionDetailView's Terminal mode.
+struct CaptureResponse: Decodable {
+    let pane: String
+    let content: String
 }
 
 struct HealthResponse: Decodable {

@@ -10,6 +10,7 @@
 		15E03CF28FC165A2AC64ED88 /* JobFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29F1852BBFA1274A0BFE991 /* JobFormView.swift */; };
 		200A598DE7D246E25CF248F0 /* NewJobSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */; };
 		25E71118EA12AF32276973CB /* BoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30DCCDA162DA2E0C253F4EA3 /* BoardView.swift */; };
+		3C38197611F50EC43EE8E30E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FF9D9DA885804C0FEC0248E /* Assets.xcassets */; };
 		54994C7136E33E7D02D336C4 /* KrakenApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4936914ABA5DBD9E4D304398 /* KrakenApp.swift */; };
 		55CAF5860D71C1D1935A1687 /* AppRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA367B655DF24A06788B2CD3 /* AppRouter.swift */; };
 		6B63FFF810F372A8F7F58305 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6790EB0668AC92E70C34E1CB /* SessionsView.swift */; };
@@ -29,6 +30,7 @@
 		30DCCDA162DA2E0C253F4EA3 /* BoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardView.swift; sourceTree = "<group>"; };
 		3AD0EAC25E6D5338647D5729 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		4936914ABA5DBD9E4D304398 /* KrakenApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakenApp.swift; sourceTree = "<group>"; };
+		4FF9D9DA885804C0FEC0248E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6790EB0668AC92E70C34E1CB /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactView.swift; sourceTree = "<group>"; };
 		6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewJobSheet.swift; sourceTree = "<group>"; };
@@ -66,6 +68,7 @@
 				D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */,
 				BA367B655DF24A06788B2CD3 /* AppRouter.swift */,
 				6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */,
+				4FF9D9DA885804C0FEC0248E /* Assets.xcassets */,
 				30DCCDA162DA2E0C253F4EA3 /* BoardView.swift */,
 				C99F884263C78D3B9FD03D5D /* JobDetailView.swift */,
 				D29F1852BBFA1274A0BFE991 /* JobFormView.swift */,
@@ -90,6 +93,7 @@
 			buildConfigurationList = CAD19C154A5BF623E35D8D5D /* Build configuration list for PBXNativeTarget "Kraken" */;
 			buildPhases = (
 				A06CF48CBAB880CDB24C5A87 /* Sources */,
+				0794601EF6C95AC8575447F6 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -135,6 +139,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0794601EF6C95AC8575447F6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3C38197611F50EC43EE8E30E /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A06CF48CBAB880CDB24C5A87 /* Sources */ = {

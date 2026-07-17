@@ -36,7 +36,7 @@ struct SettingsView: View {
                                 ProgressView()
                                     .frame(maxWidth: .infinity)
                             } else {
-                                Label("Test Connection", systemImage: "bolt.horizontal")
+                                Label("Test Connection", systemImage: "network")
                                     .frame(maxWidth: .infinity)
                             }
                         }

@@ -254,7 +254,7 @@ struct JobDetailView: View {
                     Button {
                         showingSteer = true
                     } label: {
-                        Label("Steer", systemImage: "arrowshape.turn.up.right")
+                        Label("Steer", systemImage: "arrowshape.turn.up.right.fill")
                     }
                     .tint(KTheme.accent)
                 }
@@ -269,7 +269,7 @@ struct JobDetailView: View {
                     Button(role: .destructive) {
                         showingKillConfirm = true
                     } label: {
-                        Label("Kill", systemImage: "xmark.octagon")
+                        Label("Kill", systemImage: "xmark")
                     }
                 }
             }
@@ -319,10 +319,11 @@ struct JobDetailView: View {
 }
 
 /// One escalation, styled like the web UI's answer modal (title bold sans,
-/// category tag in mono counter-color, body markdown-rendered, hairline-
-/// bordered container). Open escalations stay expanded and prominent
-/// (counterSoft fill, counter left border); answered/closed ones collapse to
-/// a single dim row by default — tap to expand and read the resolved body.
+/// category tag in mono counter-color, body markdown-rendered). Open
+/// escalations stay expanded and prominent (counterSoft row fill, counter
+/// category tag — no left border; carl: "escalations don't need that red
+/// line"); answered/closed ones collapse to a single dim row by default —
+/// tap to expand and read the resolved body.
 private struct EscalationCard: View {
     let e: WebEsc
 
@@ -374,11 +375,6 @@ private struct EscalationCard: View {
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10)
             }
-        }
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(isOpen ? KTheme.counter : KTheme.hairline2)
-                .frame(width: 2)
         }
         .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
         .listRowBackground(isOpen ? KTheme.counterSoft : Color.clear)
