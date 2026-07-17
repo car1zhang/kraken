@@ -95,9 +95,14 @@ Commands:
                       this at login via make install): queues ready jobs (max
                       5 cells), auto-reaps merged PRs, pokes hermes on zeus
                       stalls, notifies on escalations, writes ~/.kraken/daemon.json
-  k web [-p port]     web UI on localhost (default :7777): jobs as a kanban
-                      board, escalations inline, artifacts rendered in the
-                      browser
+  k web [-p port] [--tailnet] [-addr host:port]
+                      web UI + sessions API (default 127.0.0.1:7777): jobs as
+                      a kanban board, escalations inline, artifacts rendered
+                      in the browser; GET/POST /api/peers* let a device on
+                      the tailnet list/read/message live sessions. --tailnet
+                      binds the Mac's tailscale IP (100.64.0.0/10) instead of
+                      localhost; -addr sets an explicit bind and overrides
+                      both -p and --tailnet
 
 <sel>: index from 'k ls', '.' for the current pane, an exact pane id (%3), or
 substring match on name/project/agent/tmux-session; also a session-uuid

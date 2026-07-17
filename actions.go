@@ -198,6 +198,8 @@ func cmdSend(args []string) {
 	all, _ := orderAll(discoverAll())
 	p := selectPeer(args[0], all)
 	if p.Role == "shell" {
+		// checked again in sendToPeer, but early-exit here so a shell target
+		// never blocks on a stdin read that would otherwise follow
 		die("%s is a shell pane — the text would run as a shell command", displayName(p))
 	}
 	msg := strings.Join(args[1:], " ")
@@ -211,29 +213,44 @@ func cmdSend(args []string) {
 		}
 		msg = strings.TrimRight(string(data), "\n")
 	}
-	if strings.TrimSpace(msg) == "" {
-		die("empty message")
-	}
-	if !p.Messageable || p.Pane == "" {
-		die("%s is an in-process teammate — message its lead instead", displayName(p))
-	}
-	if p.Depth > 0 {
-		die("%s is not the foreground agent in pane %s — keys would land in the nested one", displayName(p), p.Pane)
-	}
-	if err := sendMessage(p, msg); err != nil {
+	queued, err := sendToPeer(p, msg)
+	if err != nil {
 		die("%v", err)
 	}
-	if p.Status == "running" {
+	if queued {
 		fmt.Fprintf(os.Stderr, "kraken: %s is mid-turn — the message queued\n", displayName(p))
 	}
 	fmt.Printf("sent to %s (%s)\n", displayName(p), p.Pane)
+}
+
+// sendToPeer runs cmdSend's full guard chain plus the tmux send mechanics,
+// returning whether the message queued behind a mid-turn agent. Shared by
+// cmdSend and the HTTP send endpoint so both refuse on identical guards.
+func sendToPeer(p *Peer, msg string) (queued bool, err error) {
+	if p.Role == "shell" {
+		return false, fmt.Errorf("%s is a shell pane — the text would run as a shell command", displayName(p))
+	}
+	if strings.TrimSpace(msg) == "" {
+		return false, fmt.Errorf("empty message")
+	}
+	if !p.Messageable || p.Pane == "" {
+		return false, fmt.Errorf("%s is an in-process teammate — message its lead instead", displayName(p))
+	}
+	if p.Depth > 0 {
+		return false, fmt.Errorf("%s is not the foreground agent in pane %s — keys would land in the nested one", displayName(p), p.Pane)
+	}
+	queued = p.Status == "running"
+	if err := sendMessage(p, msg); err != nil {
+		return false, err
+	}
+	return queued, nil
 }
 
 // sendMessage runs the send-time safety checks and types msg into p's prompt,
 // submitting it with Enter. Shared by k s, the bus, and the daemon — every
 // path that talks to an agent goes through the same guards.
 func sendMessage(p *Peer, msg string) error {
-	if err := verifySendTarget(p); err != nil {
+	if err := checkSendTarget(p); err != nil {
 		return err
 	}
 	if p.Status == "shell" {
@@ -268,11 +285,11 @@ func sendMessage(p *Peer, msg string) error {
 	return nil
 }
 
-// verifySendTarget re-resolves the pane's process tree immediately before
+// checkSendTarget re-resolves the pane's process tree immediately before
 // typing: the target must still be a claude under this exact pane. A bare
 // pid-exists check would pass for zombies and recycled PIDs — and then the
 // message would be typed at (and run by) the surviving pane shell.
-func verifySendTarget(p *Peer) error {
+func checkSendTarget(p *Peer) error {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", p.Pane, "#{pane_pid}").Output()
 	if err != nil {
 		return fmt.Errorf("pane %s is gone — rerun 'k ls'", p.Pane)

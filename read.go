@@ -32,23 +32,14 @@ func cmdRead(args []string) {
 	}
 	all, _ := orderAll(discoverAll())
 	p := selectPeer(sel, all)
-	if p.Role == "shell" {
-		die("%s is a shell pane — no transcript to read", displayName(p))
+	path, err := readTranscriptPath(p)
+	if err != nil {
+		die("%v", err)
 	}
-	if p.Agent == "codex" {
-		die("reading Codex transcripts is not supported yet")
+	blocks, counted, err := lastBlocks(path, n)
+	if err != nil {
+		die("%v", err)
 	}
-	if p.SessionID == "" {
-		die("no session id resolved for %s", displayName(p))
-	}
-	if p.SessionIDGuessed {
-		die("session id for %s is a guess (no session file) — could read another claude's transcript", displayName(p))
-	}
-	path := transcriptPath(p.SessionID)
-	if path == "" {
-		die("no transcript yet for session %s (fresh forks write theirs on the first turn)", p.SessionID)
-	}
-	blocks, counted := lastBlocks(path, n)
 	if counted == 0 {
 		fmt.Println("no output blocks yet")
 		return
@@ -76,19 +67,42 @@ func cmdRead(args []string) {
 	}
 }
 
+// readTranscriptPath applies k r's pre-flight refusals — shared by cmdRead
+// and the HTTP read endpoint so both give byte-identical error text — and
+// resolves the peer's transcript path.
+func readTranscriptPath(p *Peer) (string, error) {
+	if p.Role == "shell" {
+		return "", fmt.Errorf("%s is a shell pane — no transcript to read", displayName(p))
+	}
+	if p.Agent == "codex" {
+		return "", fmt.Errorf("reading Codex transcripts is not supported yet")
+	}
+	if p.SessionID == "" {
+		return "", fmt.Errorf("no session id resolved for %s", displayName(p))
+	}
+	if p.SessionIDGuessed {
+		return "", fmt.Errorf("session id for %s is a guess (no session file) — could read another claude's transcript", displayName(p))
+	}
+	path := transcriptPath(p.SessionID)
+	if path == "" {
+		return "", fmt.Errorf("no transcript yet for session %s (fresh forks write theirs on the first turn)", p.SessionID)
+	}
+	return path, nil
+}
+
 // lastBlocks returns the transcript's trailing blocks: the last n
 // user/thinking/text blocks plus any tool one-liners interleaved after the
 // first of them. Reads the file tail backward in growing windows so huge
 // transcripts stay fast.
-func lastBlocks(path string, n int) ([]block, int) {
+func lastBlocks(path string, n int) ([]block, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		die("open transcript: %v", err)
+		return nil, 0, fmt.Errorf("open transcript: %v", err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		die("stat transcript: %v", err)
+		return nil, 0, fmt.Errorf("stat transcript: %v", err)
 	}
 	size := info.Size()
 	for window := int64(256 * 1024); ; window *= 2 {
@@ -97,11 +111,11 @@ func lastBlocks(path string, n int) ([]block, int) {
 			start = 0
 		}
 		if _, err := f.Seek(start, 0); err != nil {
-			die("seek transcript: %v", err)
+			return nil, 0, fmt.Errorf("seek transcript: %v", err)
 		}
 		data, err := io.ReadAll(f)
 		if err != nil {
-			die("read transcript: %v", err)
+			return nil, 0, fmt.Errorf("read transcript: %v", err)
 		}
 		lines := strings.Split(string(data), "\n")
 		if start > 0 && len(lines) > 0 {
@@ -121,9 +135,9 @@ func lastBlocks(path string, n int) ([]block, int) {
 		}
 		if counted >= n || start == 0 {
 			if counted == 0 {
-				return nil, 0
+				return nil, 0, nil
 			}
-			return blocks[cut:], counted
+			return blocks[cut:], counted, nil
 		}
 	}
 }

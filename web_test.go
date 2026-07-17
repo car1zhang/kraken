@@ -1,0 +1,56 @@
+package main
+
+import (
+	"net"
+	"testing"
+)
+
+func ipNet(ip string, bits int) *net.IPNet {
+	return &net.IPNet{IP: net.ParseIP(ip), Mask: net.CIDRMask(bits, 32)}
+}
+
+func TestTailscaleIP(t *testing.T) {
+	// a hit sits alongside ordinary LAN/loopback addrs, as a real interface
+	// listing would have
+	addrs := []net.Addr{
+		ipNet("127.0.0.1", 8),
+		ipNet("192.168.1.5", 24),
+		ipNet("100.101.102.103", 10),
+	}
+	ip, ok := tailscaleIP(addrs)
+	if !ok || ip != "100.101.102.103" {
+		t.Fatalf("got %q, %v", ip, ok)
+	}
+
+	// 100.128.0.0/10 is the next block up — outside tailscale's CGNAT range
+	// (100.64.0.0/10 ends at 100.127.255.255)
+	if _, ok := tailscaleIP([]net.Addr{ipNet("100.128.0.1", 16)}); ok {
+		t.Errorf("100.128.0.1 must not match")
+	}
+	// one address below the range
+	if _, ok := tailscaleIP([]net.Addr{ipNet("100.63.255.255", 16)}); ok {
+		t.Errorf("100.63.255.255 must not match")
+	}
+	// IPv6-only and loopback addrs are ignored, not mistaken for a match
+	if _, ok := tailscaleIP([]net.Addr{
+		&net.IPNet{IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)},
+		ipNet("127.0.0.1", 8),
+	}); ok {
+		t.Errorf("loopback/IPv6 addrs must not match")
+	}
+	// miss case: nothing in range at all
+	if _, ok := tailscaleIP([]net.Addr{ipNet("10.0.0.5", 8), ipNet("192.168.0.1", 24)}); ok {
+		t.Errorf("non-tailnet addrs must not match")
+	}
+	// second octet in 64-127 but first octet not 100 — a corporate-VPN shape
+	// (10.100.x.x) that must never bind the API
+	if _, ok := tailscaleIP([]net.Addr{ipNet("10.100.0.5", 8)}); ok {
+		t.Errorf("10.100.0.5 must not match")
+	}
+	if _, ok := tailscaleIP([]net.Addr{ipNet("172.64.1.1", 16)}); ok {
+		t.Errorf("172.64.1.1 must not match")
+	}
+	if _, ok := tailscaleIP(nil); ok {
+		t.Errorf("empty addr list must miss")
+	}
+}
