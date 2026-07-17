@@ -20,6 +20,7 @@ targets:
         DEVELOPMENT_TEAM: DDUUFX5L3W  # carl set this via Xcode for device signing
         SWIFT_VERSION: "5.10"
         TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Generated-Info.plist
       properties:
