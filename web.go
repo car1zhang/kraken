@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -642,8 +643,58 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "warn": parsed.Err})
 }
 
+// tailscaleIP picks the first IPv4 address in addrs that falls in
+// tailscale's CGNAT range, 100.64.0.0/10 (first octet 100, second 64-127).
+// A pure function over an address list so it's testable without touching
+// real interfaces.
+func tailscaleIP(addrs []net.Addr) (string, bool) {
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		default:
+			continue
+		}
+		ip4 := ip.To4()
+		if ip4 == nil {
+			continue // loopback/IPv6-only addrs never match a CGNAT v4 range
+		}
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return ip4.String(), true
+		}
+	}
+	return "", false
+}
+
+// detectTailscaleIP gathers every local interface address and picks the
+// tailnet one — the thin, non-testable caller around tailscaleIP.
+func detectTailscaleIP() (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("enumerate network interfaces: %v", err)
+	}
+	var addrs []net.Addr
+	for _, iface := range ifaces {
+		a, err := iface.Addrs()
+		if err != nil {
+			continue // interface came and went; not fatal to the scan
+		}
+		addrs = append(addrs, a...)
+	}
+	ip, ok := tailscaleIP(addrs)
+	if !ok {
+		return "", fmt.Errorf("no tailscale interface (100.64.0.0/10) found — is tailscale up?")
+	}
+	return ip, nil
+}
+
 func cmdWeb(args []string) {
 	port := "7777"
+	tailnet := false
+	explicitAddr := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-p", "--port":
@@ -652,9 +703,28 @@ func cmdWeb(args []string) {
 				die("-p needs a port")
 			}
 			port = args[i]
+		case "--tailnet":
+			tailnet = true
+		case "-addr":
+			i++
+			if i >= len(args) {
+				die("-addr needs a host:port")
+			}
+			explicitAddr = args[i]
 		default:
-			die("unknown argument: %s (usage: k web [-p port])", args[i])
+			die("unknown argument: %s (usage: k web [-p port] [--tailnet] [-addr host:port])", args[i])
 		}
+	}
+	addr := "127.0.0.1:" + port
+	if tailnet {
+		ip, err := detectTailscaleIP()
+		if err != nil {
+			die("%v", err)
+		}
+		addr = ip + ":" + port
+	}
+	if explicitAddr != "" {
+		addr = explicitAddr // overrides --tailnet/-p, per usage
 	}
 	static, err := fs.Sub(webAssets, "web")
 	if err != nil {
@@ -662,6 +732,10 @@ func cmdWeb(args []string) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(static)))
+	mux.HandleFunc("/api/health", healthHandler)
+	mux.HandleFunc("/api/peers", peersHandler(defaultPeerSource))
+	mux.HandleFunc("/api/peers/read", peersReadHandler(defaultPeerSource))
+	mux.HandleFunc("/api/peers/send", peersSendHandler(defaultPeerSource))
 	mux.HandleFunc("/api/board", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(buildWebBoard())
@@ -718,7 +792,6 @@ func cmdWeb(args []string) {
 		}
 		http.ServeFile(w, r, p)
 	})
-	addr := "127.0.0.1:" + port
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil {

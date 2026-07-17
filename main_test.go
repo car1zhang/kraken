@@ -146,7 +146,10 @@ func TestLastBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks, counted := lastBlocks(path, 1)
+	blocks, counted, err := lastBlocks(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if counted != 1 {
 		t.Fatalf("want counted=1, got %d", counted)
 	}
@@ -155,13 +158,19 @@ func TestLastBlocks(t *testing.T) {
 		t.Errorf("n=1: got %v", blocks)
 	}
 
-	blocks, counted = lastBlocks(path, 2)
+	blocks, counted, err = lastBlocks(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if counted != 2 || len(blocks) != 4 || blocks[0] != (block{"text", "first"}) {
 		t.Errorf("n=2: counted=%d blocks=%v", counted, blocks)
 	}
 
 	// n larger than available: return what exists
-	blocks, counted = lastBlocks(path, 10)
+	blocks, counted, err = lastBlocks(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if counted != 2 || len(blocks) != 4 {
 		t.Errorf("n=10: counted=%d blocks=%v", counted, blocks)
 	}
@@ -176,13 +185,48 @@ func TestLastBlocksCountsUserMessages(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	blocks, counted := lastBlocks(path, 1)
+	blocks, counted, err := lastBlocks(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if counted != 1 || len(blocks) != 1 || blocks[0] != (block{"user", "next question"}) {
 		t.Errorf("n=1: counted=%d blocks=%v", counted, blocks)
 	}
-	blocks, counted = lastBlocks(path, 2)
+	blocks, counted, err = lastBlocks(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if counted != 2 || len(blocks) != 2 || blocks[0] != (block{"text", "answer"}) {
 		t.Errorf("n=2: counted=%d blocks=%v", counted, blocks)
+	}
+}
+
+func TestLastBlocksMissingFile(t *testing.T) {
+	if _, _, err := lastBlocks(filepath.Join(t.TempDir(), "nope.jsonl"), 1); err == nil {
+		t.Errorf("want error for a missing transcript file")
+	}
+}
+
+func TestReadTranscriptPathGuards(t *testing.T) {
+	_, err := readTranscriptPath(&Peer{Role: "shell", Name: "sh"})
+	if err == nil || !strings.Contains(err.Error(), "no transcript to read") {
+		t.Errorf("shell pane: got %v", err)
+	}
+	_, err = readTranscriptPath(&Peer{Agent: "codex", Name: "cx"})
+	if err == nil || !strings.Contains(err.Error(), "Codex") {
+		t.Errorf("codex: got %v", err)
+	}
+	_, err = readTranscriptPath(&Peer{Name: "noid"})
+	if err == nil || !strings.Contains(err.Error(), "no session id resolved") {
+		t.Errorf("empty session id: got %v", err)
+	}
+	_, err = readTranscriptPath(&Peer{Name: "guessed", SessionID: "abcd", SessionIDGuessed: true})
+	if err == nil || !strings.Contains(err.Error(), "a guess") {
+		t.Errorf("guessed session id: got %v", err)
+	}
+	_, err = readTranscriptPath(&Peer{Name: "fresh", SessionID: "no-such-session-id"})
+	if err == nil || !strings.Contains(err.Error(), "no transcript yet") {
+		t.Errorf("unresolvable transcript: got %v", err)
 	}
 }
 
@@ -558,6 +602,24 @@ func TestKillPeerGuards(t *testing.T) {
 	_, err = killPeer(&Peer{Role: "shell", Pane: "%7", CWD: "/tmp"})
 	if err == nil || !strings.Contains(err.Error(), "current pane") {
 		t.Errorf("killing the current pane must be refused, got %v", err)
+	}
+}
+
+func TestSendToPeerGuards(t *testing.T) {
+	// guards fire before any tmux exec, so these are safe to run anywhere;
+	// message text is asserted so a regressed guard can't pass by way of
+	// checkSendTarget failing on the missing pane instead
+	if _, err := sendToPeer(&Peer{Role: "shell", Name: "sh"}, "hi"); err == nil || !strings.Contains(err.Error(), "shell pane") {
+		t.Errorf("shell pane: got %v", err)
+	}
+	if _, err := sendToPeer(&Peer{Name: "x", Messageable: true, Pane: "%1"}, "  "); err == nil || !strings.Contains(err.Error(), "empty message") {
+		t.Errorf("empty message: got %v", err)
+	}
+	if _, err := sendToPeer(&Peer{AgentName: "ip", Role: "teammate", Messageable: false}, "hi"); err == nil || !strings.Contains(err.Error(), "in-process") {
+		t.Errorf("in-process teammate: got %v", err)
+	}
+	if _, err := sendToPeer(&Peer{Name: "nested", Messageable: true, Pane: "%1", Depth: 1}, "hi"); err == nil || !strings.Contains(err.Error(), "not the foreground agent") {
+		t.Errorf("nested agent: got %v", err)
 	}
 }
 
