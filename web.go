@@ -120,6 +120,30 @@ func artifactPath(j *Job, home, name string) (string, bool) {
 	return p, true
 }
 
+// artifactContentType picks the served type by extension: renderable pages
+// and binary formats (pdf, images) get their real type so phone/browser
+// viewers render them; everything else is plain text for the markdown viewer.
+func artifactContentType(p string) string {
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "text/plain; charset=utf-8"
+	}
+}
+
 func buildWebBoard() webBoard {
 	jobs := loadJobs()
 	bySlug := map[string]*Job{}
@@ -770,26 +794,10 @@ func cmdWeb(args []string) {
 			return
 		}
 		// html deliverables render as pages (local, agent-authored content —
-		// same trust as opening the file); everything else stays plain text
-		// for the in-board markdown viewer
-		switch {
-		case strings.HasSuffix(p, ".html"):
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		case strings.HasSuffix(p, ".svg"):
-			w.Header().Set("Content-Type", "image/svg+xml")
-		case strings.HasSuffix(p, ".png"):
-			w.Header().Set("Content-Type", "image/png")
-		case strings.HasSuffix(p, ".jpg"), strings.HasSuffix(p, ".jpeg"):
-			w.Header().Set("Content-Type", "image/jpeg")
-		case strings.HasSuffix(p, ".gif"):
-			w.Header().Set("Content-Type", "image/gif")
-		case strings.HasSuffix(p, ".webp"):
-			w.Header().Set("Content-Type", "image/webp")
-		case strings.HasSuffix(p, ".pdf"):
-			w.Header().Set("Content-Type", "application/pdf")
-		default:
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		}
+		// same trust as opening the file); binary formats viewers can render
+		// get their real type; everything else stays plain text for the
+		// in-board markdown viewer
+		w.Header().Set("Content-Type", artifactContentType(p))
 		http.ServeFile(w, r, p)
 	})
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)

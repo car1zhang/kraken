@@ -54,3 +54,26 @@ func TestTailscaleIP(t *testing.T) {
 		t.Errorf("empty addr list must miss")
 	}
 }
+
+func TestArtifactContentType(t *testing.T) {
+	cases := map[string]string{
+		"a/report.html": "text/html; charset=utf-8",
+		"a/page.HTM":    "text/html; charset=utf-8",
+		"a/d.svg":       "image/svg+xml",
+		"a/doc.pdf":     "application/pdf",
+		"a/doc.PDF":     "application/pdf",
+		"a/img.png":     "image/png",
+		"a/img.jpeg":    "image/jpeg",
+		"a/img.jpg":     "image/jpeg",
+		"a/anim.gif":    "image/gif",
+		"a/img.webp":    "image/webp",
+		"a/notes.md":    "text/plain; charset=utf-8",
+		"a/x.log":       "text/plain; charset=utf-8",
+		"a/no-ext":      "text/plain; charset=utf-8",
+	}
+	for p, want := range cases {
+		if got := artifactContentType(p); got != want {
+			t.Errorf("artifactContentType(%q) = %q, want %q", p, got, want)
+		}
+	}
+}
