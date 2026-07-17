@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -310,17 +311,29 @@ func syncStatesFromInbox(jobs []*Job, escs []*Escalation) []string {
 
 // listArtifacts lists a cell's artifact files, sorted by name. Missing dir
 // (no cell, or nothing produced yet) reads as no artifacts, not an error.
+// listArtifacts returns absolute paths of every file under the cell's
+// artifacts dir, recursing into subdirectories (an artifact can be organized
+// into folders, e.g. icon-variations/) so the board and the app can list and
+// navigate them. Hidden files and dirs are skipped.
 func listArtifacts(j *Job) []string {
-	entries, err := os.ReadDir(cellArtifacts(j))
-	if err != nil {
-		return nil
-	}
+	root := cellArtifacts(j)
 	var out []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			out = append(out, filepath.Join(cellArtifacts(j), e.Name()))
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable entry: skip it, keep walking the rest
 		}
-	}
+		if d.IsDir() {
+			if p != root && strings.HasPrefix(d.Name(), ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), ".") {
+			return nil
+		}
+		out = append(out, p)
+		return nil
+	})
 	sort.Strings(out)
 	return out
 }
