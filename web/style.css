@@ -247,6 +247,12 @@ body {
 .md a { color: var(--accent); }
 .md strong { color: var(--text); font-weight: 600; }
 .md blockquote { border-left: 2px solid var(--hairline-2); padding-left: 10px; color: var(--text-2); margin: 0.55em 0; }
+.md .md-table { overflow-x: auto; margin: 0.7em 0; }
+.md table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.md th, .md td { border: 1px solid var(--hairline); padding: 5px 9px; }
+.md th { background: var(--raised); color: var(--text); font-weight: 600; text-align: left; }
+.md td { color: var(--text); }
+.md tbody tr:nth-child(even) td, .md tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
 
 /* ---- answer modal ---- */
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
