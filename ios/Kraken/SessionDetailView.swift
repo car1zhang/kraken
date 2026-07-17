@@ -81,6 +81,7 @@ struct SessionDetailView: View {
     let baseURL: String
 
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(DraftStore.self) private var draftStore
     @FocusState private var messageFocused: Bool
     @State private var vm = SessionDetailViewModel()
     @State private var messageText = ""
@@ -93,6 +94,14 @@ struct SessionDetailView: View {
     }
 
     private var isShell: Bool { peer.role == "shell" }
+
+    // "shell:<pane>" vs "send:<pane>" — a given pane is only ever one or the
+    // other, but keeping the prefix distinct matches the kind of composer
+    // it belongs to (run-a-command vs message-an-agent) if that ever changes.
+    private var draftKey: String? {
+        guard let pane = peer.pane else { return nil }
+        return (isShell ? "shell:" : "send:") + pane
+    }
 
     private var disabledReason: String? {
         if peer.pane == nil || peer.pane?.isEmpty == true {
@@ -164,6 +173,17 @@ struct SessionDetailView: View {
                     await vm.loadTerminal(baseURL: baseURL, pane: pane)
                 }
             }
+        }
+        // Restores whatever was mid-typed the last time this pane's
+        // composer was open (a fresh push after popping back to the list
+        // gets a fresh @State, so the shared DraftStore — not local state —
+        // is what actually survives the round trip). Every keystroke saves
+        // back to it; a successful send clears it in send() below.
+        .onAppear {
+            if let draftKey { messageText = draftStore.get(draftKey) }
+        }
+        .onChange(of: messageText) {
+            if let draftKey { draftStore.set(draftKey, messageText) }
         }
     }
 
@@ -292,6 +312,7 @@ struct SessionDetailView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .labelStyle(.iconOnly)
+                    .accessibilityLabel("Send")
                     .disabled(vm.isSending || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -304,8 +325,11 @@ struct SessionDetailView: View {
         guard let pane = peer.pane else { return }
         let text = messageText
         Task {
+            // vm.send() returns false on any server error (409s included),
+            // which — deliberately — leaves the draft in place.
             if await vm.send(baseURL: baseURL, pane: pane, message: text) {
                 messageText = ""
+                if let draftKey { draftStore.clear(draftKey) }
             }
         }
     }

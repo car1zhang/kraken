@@ -49,3 +49,25 @@ targets:
           - fetch
         BGTaskSchedulerPermittedIdentifiers:
           - dev.carl.Kraken.refresh
+  KrakenUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: KrakenUITests
+    dependencies:
+      - target: Kraken
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.carl.KrakenUITests
+        SWIFT_VERSION: "5.10"
+        TEST_TARGET_NAME: Kraken
+schemes:
+  Kraken:
+    build:
+      targets:
+        Kraken: all
+        KrakenUITests: [test]
+    test:
+      targets:
+        - KrakenUITests

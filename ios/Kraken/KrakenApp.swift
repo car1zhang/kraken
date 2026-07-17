@@ -4,6 +4,9 @@ import BackgroundTasks
 @main
 struct KrakenApp: App {
     @State private var router = AppRouter()
+    // Owned here (above every tab/sheet) rather than per-view, so a draft
+    // survives dismissing a sheet or switching tabs — see DraftStore.swift.
+    @State private var draftStore = DraftStore()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -27,6 +30,7 @@ struct KrakenApp: App {
         WindowGroup {
             RootTabView()
                 .environment(router)
+                .environment(draftStore)
                 .preferredColorScheme(.dark)
                 .tint(KTheme.accent)
                 .onAppear {
