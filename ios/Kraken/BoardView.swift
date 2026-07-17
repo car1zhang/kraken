@@ -19,6 +19,14 @@ final class BoardViewModel {
     func jobs(in column: BoardColumn) -> [WebJob] {
         (board?.jobs ?? []).filter { BoardTheme.column(for: $0) == column }
     }
+
+    /// Whether any job in `column` needs attention — an open escalation or a
+    /// non-empty health string — for the overview strip/sheet's flag badge.
+    func hasFlag(in column: BoardColumn) -> Bool {
+        jobs(in: column).contains { job in
+            !(job.escalations ?? []).filter { $0.status == "open" }.isEmpty || !(job.health ?? "").isEmpty
+        }
+    }
 }
 
 struct BoardView: View {
@@ -27,12 +35,14 @@ struct BoardView: View {
     @State private var vm = BoardViewModel()
     @State private var selectedJob: WebJob?
     @State private var showingNewJob = false
+    @State private var showingOverview = false
     @State private var selectedColumn: BoardColumn = .draft
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 daemonBar
+                overviewStrip
                 TabView(selection: $selectedColumn) {
                     ForEach(BoardColumn.allCases) { column in
                         columnView(column)
@@ -50,6 +60,7 @@ struct BoardView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .buttonStyle(.plain)
                     .foregroundStyle(KTheme.accent)
                 }
             }
@@ -72,6 +83,13 @@ struct BoardView: View {
             .sheet(isPresented: $showingNewJob) {
                 NavigationStack {
                     NewJobSheet(baseURL: serverURL) {
+                        Task { await vm.refresh(baseURL: serverURL) }
+                    }
+                }
+            }
+            .sheet(isPresented: $showingOverview) {
+                NavigationStack {
+                    BoardOverviewSheet(vm: vm, baseURL: serverURL) {
                         Task { await vm.refresh(baseURL: serverURL) }
                     }
                 }
@@ -109,6 +127,66 @@ struct BoardView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(KTheme.hairline).frame(height: 1)
         }
+    }
+
+    // Always-visible table-of-contents strip: one compact cell per column so
+    // the whole board's shape is readable without swiping the pager. Tapping
+    // a cell jumps the pager there; the chevron opens the full breakdown.
+    private var overviewStrip: some View {
+        HStack(spacing: 0) {
+            ForEach(BoardColumn.allCases) { column in
+                overviewCell(column)
+            }
+            Button {
+                showingOverview = true
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KTheme.text2)
+            .padding(.leading, 6)
+            .padding(.trailing, 10)
+        }
+        .padding(.leading, 6)
+        .padding(.vertical, 4)
+        .background(KTheme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(KTheme.hairline).frame(height: 1)
+        }
+    }
+
+    private func overviewCell(_ column: BoardColumn) -> some View {
+        let count = vm.jobs(in: column).count
+        let flagged = vm.hasFlag(in: column)
+        let isCurrent = selectedColumn == column
+        return Button {
+            selectedColumn = column
+        } label: {
+            VStack(spacing: 2) {
+                HStack(spacing: 3) {
+                    Text(column.shortTitle)
+                        .font(.data(9, weight: .semibold))
+                        .kerning(0.5)
+                        .foregroundStyle(isCurrent ? KTheme.accent : KTheme.text2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if flagged {
+                        Rectangle().fill(KTheme.counter).frame(width: 5, height: 5)
+                    }
+                }
+                Text("\(count)")
+                    .font(.data(13, weight: .semibold))
+                    .foregroundStyle(count > 0 ? KTheme.accent : KTheme.text2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .overlay(alignment: .bottom) {
+                if isCurrent {
+                    Rectangle().fill(KTheme.accent).frame(height: 2)
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func columnView(_ column: BoardColumn) -> some View {
@@ -169,7 +247,7 @@ private struct JobCardView: View {
                 if openEscalationCount > 0 {
                     Image(systemName: "flag.fill")
                         .foregroundStyle(KTheme.counter)
-                        .font(.system(size: 10))
+                        .font(.voice(10))
                 }
             }
             Text("\(job.type) · \(job.repo)")
@@ -193,5 +271,78 @@ private struct JobCardView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardBackground(stateColor: BoardTheme.color(forState: job.state), flagged: openEscalationCount > 0)
+    }
+}
+
+/// The "table of contents" reached from the overview strip's chevron: all
+/// six columns as sections, every job as a compact row, tapping one opens
+/// JobDetail. Reads `vm` (the shared @Observable board view model) directly
+/// rather than a snapshot, so it stays in sync as JobDetail actions refresh
+/// the board underneath it — no separate fetch of its own.
+private struct BoardOverviewSheet: View {
+    let vm: BoardViewModel
+    let baseURL: String
+    var onUpdate: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedJob: WebJob?
+
+    var body: some View {
+        List {
+            ForEach(BoardColumn.allCases) { column in
+                let jobs = vm.jobs(in: column)
+                kSection(column.title) {
+                    if jobs.isEmpty {
+                        Text("empty")
+                            .font(.voice(12))
+                            .foregroundStyle(KTheme.text2.opacity(0.5))
+                    } else {
+                        ForEach(jobs) { job in
+                            Button {
+                                selectedJob = job
+                            } label: {
+                                overviewRow(job)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .kListStyle()
+        .navigationTitle("Board Overview")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }.buttonStyle(.bordered)
+            }
+        }
+        .sheet(item: $selectedJob) { job in
+            NavigationStack {
+                JobDetailView(job: job, baseURL: baseURL, onUpdate: onUpdate)
+            }
+        }
+    }
+
+    private func overviewRow(_ job: WebJob) -> some View {
+        let flagged = !(job.escalations ?? []).filter { $0.status == "open" }.isEmpty || !(job.health ?? "").isEmpty
+        return HStack(spacing: 8) {
+            Rectangle()
+                .fill(BoardTheme.color(forState: job.state))
+                .frame(width: 6, height: 6)
+            Text(job.slug)
+                .font(.data(13))
+                .foregroundStyle(KTheme.text)
+            Spacer()
+            if flagged {
+                Image(systemName: "flag.fill")
+                    .foregroundStyle(KTheme.counter)
+                    .font(.voice(10))
+            }
+            Text(job.state)
+                .font(.data(10))
+                .foregroundStyle(KTheme.text2)
+        }
     }
 }

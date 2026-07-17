@@ -75,8 +75,12 @@ struct JobFormView: View {
                 .font(.voice(13))
                 .foregroundStyle(KTheme.counter)
                 .multilineTextAlignment(.center)
-            Button("Retry") { Task { await load() } }
-                .buttonStyle(.kPrimary)
+            Button {
+                Task { await load() }
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,7 +89,7 @@ struct JobFormView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
+                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
             }
         }
     }
@@ -125,7 +129,8 @@ struct JobFormView: View {
                         HStack {
                             ForEach(repoSuggestions, id: \.self) { r in
                                 Button(r) { repo = r }
-                                    .buttonStyle(.kChip)
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
                             }
                         }
                     }
@@ -172,20 +177,30 @@ struct JobFormView: View {
                         } label: {
                             Image(systemName: "minus.circle.fill")
                         }
-                        .buttonStyle(.kMini)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(KTheme.text2)
                     }
                 }
                 if !slugSuggestions.isEmpty {
-                    Menu("Add prereq") {
+                    Menu {
                         ForEach(slugSuggestions, id: \.self) { s in
                             Button(s) { prereqRows.append(PrereqRow(job: s, gated: false)) }
                         }
+                    } label: {
+                        Label("Add prereq", systemImage: "plus.circle")
                     }
+                    .buttonStyle(.plain)
                     .font(.data(12))
                     .foregroundStyle(KTheme.text2)
                 } else {
-                    Button("Add prereq") { prereqRows.append(PrereqRow(job: "", gated: false)) }
-                        .buttonStyle(.kMini)
+                    Button {
+                        prereqRows.append(PrereqRow(job: "", gated: false))
+                    } label: {
+                        Label("Add prereq", systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.data(12))
+                    .foregroundStyle(KTheme.text2)
                 }
             }
             kSection("Spec") {
@@ -210,12 +225,16 @@ struct JobFormView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
+                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { save() }
-                    .buttonStyle(.kPrimary)
-                    .disabled(isSaving || !editable || mtime == 0)
+                Button {
+                    save()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isSaving || !editable || mtime == 0)
             }
         }
         .disabled(isSaving)

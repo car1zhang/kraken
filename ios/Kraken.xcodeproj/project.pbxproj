@@ -29,7 +29,7 @@
 		6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactView.swift; sourceTree = "<group>"; };
 		6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewJobSheet.swift; sourceTree = "<group>"; };
 		7F80ED1D258C4D24F4AE6965 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		830497A2C99EE12325B9FBD6 /* Kraken.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraken.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		830497A2C99EE12325B9FBD6 /* Kraken.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Kraken.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C99F884263C78D3B9FD03D5D /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
 		D29F1852BBFA1274A0BFE991 /* JobFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobFormView.swift; sourceTree = "<group>"; };
 		D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
@@ -155,6 +155,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = DDUUFX5L3W;
 				INFOPLIST_FILE = "Generated-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -230,6 +231,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = DDUUFX5L3W;
 				INFOPLIST_FILE = "Generated-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

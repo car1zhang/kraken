@@ -167,9 +167,14 @@ struct SessionDetailView: View {
                         .focused($messageFocused)
                         .font(.voice(13))
                         .kField(focused: messageFocused)
-                    Button("Send") { send() }
-                        .buttonStyle(.kPrimary)
-                        .disabled(vm.isSending || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button {
+                        send()
+                    } label: {
+                        Label("Send", systemImage: "paperplane.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .labelStyle(.iconOnly)
+                    .disabled(vm.isSending || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

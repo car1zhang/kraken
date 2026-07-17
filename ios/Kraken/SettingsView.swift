@@ -23,12 +23,12 @@ struct SettingsView: View {
                         testConnection()
                     } label: {
                         if isTesting {
-                            ProgressView().tint(KTheme.accentInk)
+                            ProgressView()
                         } else {
-                            Text("Test Connection")
+                            Label("Test Connection", systemImage: "bolt.horizontal")
                         }
                     }
-                    .buttonStyle(.kPrimary)
+                    .buttonStyle(.borderedProminent)
                     .disabled(isTesting || serverURL.isEmpty)
                     .listRowBackground(Color.clear)
                     if let testResult {
