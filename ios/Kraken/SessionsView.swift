@@ -27,10 +27,12 @@ final class SessionsViewModel {
 struct SessionsView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(AppRouter.self) private var router
     @State private var vm = SessionsViewModel()
+    @State private var path = NavigationPath()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 if let err = vm.errorMessage {
                     kSection { Text(err).font(.voice(12)).foregroundStyle(KTheme.counter) }
@@ -83,6 +85,22 @@ struct SessionsView: View {
                     if Task.isCancelled { break }
                     await vm.refresh(baseURL: serverURL)
                 }
+            }
+            // kraken://session/<pane-without-%> deep link: wait for peers to
+            // load if needed, then push that peer's detail onto the stack.
+            .task(id: router.pendingSessionPane) {
+                guard let pane = router.pendingSessionPane else { return }
+                for _ in 0..<10 {
+                    if vm.peers.isEmpty {
+                        await vm.refresh(baseURL: serverURL)
+                    }
+                    if let peer = vm.peers.first(where: { $0.pane == pane }) {
+                        path.append(peer)
+                        break
+                    }
+                    try? await Task.sleep(for: .seconds(0.5))
+                }
+                router.pendingSessionPane = nil
             }
         }
     }

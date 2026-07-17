@@ -125,12 +125,20 @@ struct JobFormView: View {
                     .kField()
                     .listRowBackground(Color.clear)
                 if !repoSuggestions.isEmpty {
+                    // .bordered/.borderedProminent inside a List row renders
+                    // as a doubled-background blob (a known Form quirk) —
+                    // .plain + manual border reads as a clean tappable chip
+                    // instead, same fix as the row-button audit elsewhere.
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack {
+                        HStack(spacing: 6) {
                             ForEach(repoSuggestions, id: \.self) { r in
                                 Button(r) { repo = r }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
+                                    .buttonStyle(.plain)
+                                    .font(.data(11))
+                                    .foregroundStyle(KTheme.accent)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .overlay(Rectangle().stroke(KTheme.accentSoft, lineWidth: 1))
                             }
                         }
                     }

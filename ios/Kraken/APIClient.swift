@@ -141,6 +141,16 @@ actor APIClient {
         )
     }
 
+    /// Free-text direction routed to a live cell like a terminal message.
+    /// 409s (e.g. the cell isn't actually live) surface via KrakenError same
+    /// as every other action.
+    func steer(baseURL: String, slug: String, text: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/steer",
+            body: SteerRequest(slug: slug, text: text)
+        )
+    }
+
     // MARK: - job authoring
 
     func fetchJobRaw(baseURL: String, slug: String) async throws -> JobRaw {
