@@ -66,10 +66,104 @@ private func inlineMarkdown(_ s: String) -> String {
     return out
 }
 
+// MARK: - GitHub-flavored pipe tables
+//
+// The web UI's renderMD() (web/app.js) doesn't support tables at all — this
+// is a genuine addition, not a port. Kept in the same escape-then-format
+// discipline as the rest of this file: every cell goes through
+// inlineMarkdown (which escapes first internally), so **bold**/`code`/links
+// work inside cells and raw HTML in a cell can't leak through.
+
+/// A GFM separator line ("| --- | :--: | ---: |", pipes optional at the
+/// ends): every cell is only dashes/colons/whitespace, at least one dash.
+private func isTableSeparatorLine(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty, trimmed.contains("-") else { return false }
+    let pattern = #"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$"#
+    guard let re = try? NSRegularExpression(pattern: pattern) else { return false }
+    let range = NSRange(trimmed.startIndex..., in: trimmed)
+    return re.firstMatch(in: trimmed, range: range) != nil
+}
+
+/// Splits a row on unescaped `|` (a `\|` is a literal pipe inside a cell,
+/// per GFM), trims the outer pipes first. Only a backslash immediately
+/// before a pipe is treated as an escape (a lone `\` elsewhere is kept
+/// as-is) — covers the common "literal pipe in a cell" case without a full
+/// general-purpose escape scanner, matching this renderer's small-subset
+/// scope everywhere else.
+private func splitTableRow(_ line: String) -> [String] {
+    var trimmed = line.trimmingCharacters(in: .whitespaces)
+    if trimmed.hasPrefix("|") { trimmed.removeFirst() }
+    if trimmed.hasSuffix("|") { trimmed.removeLast() }
+
+    let chars = Array(trimmed)
+    var cells: [String] = []
+    var current = ""
+    var idx = 0
+    while idx < chars.count {
+        let c = chars[idx]
+        if c == "\\", idx + 1 < chars.count, chars[idx + 1] == "|" {
+            current.append("|")
+            idx += 2
+            continue
+        }
+        if c == "|" {
+            cells.append(current)
+            current = ""
+            idx += 1
+            continue
+        }
+        current.append(c)
+        idx += 1
+    }
+    cells.append(current)
+    return cells.map { $0.trimmingCharacters(in: .whitespaces) }
+}
+
+/// "---"/":---"/":--:"/"---:" → left/left/center/right, per column.
+private func parseTableAlignments(_ separatorLine: String) -> [String] {
+    splitTableRow(separatorLine).map { raw in
+        let c = raw.trimmingCharacters(in: .whitespaces)
+        switch (c.hasPrefix(":"), c.hasSuffix(":")) {
+        case (true, true): return "center"
+        case (false, true): return "right"
+        default: return "left"
+        }
+    }
+}
+
+/// Renders the parsed table. Ragged rows are padded with empty cells (fewer
+/// than the header) or truncated (more) against the header's column count,
+/// never propagating a raw index-out-of-bounds into a live layout. Wrapped
+/// in an overflow-x:auto div so a wide table scrolls instead of squeezing
+/// the phone layout.
+private func renderTable(headerCells: [String], aligns: [String], bodyRows: [[String]]) -> String {
+    let columnCount = headerCells.count
+    func alignAttr(_ i: Int) -> String {
+        let a = i < aligns.count ? aligns[i] : "left"
+        return a == "left" ? "" : " style=\"text-align:\(a)\""
+    }
+    var html = "<div style=\"overflow-x:auto\"><table><thead><tr>"
+    for (i, cell) in headerCells.enumerated() {
+        html += "<th\(alignAttr(i))>\(inlineMarkdown(cell))</th>"
+    }
+    html += "</tr></thead><tbody>"
+    for row in bodyRows {
+        html += "<tr>"
+        for i in 0..<columnCount {
+            let raw = i < row.count ? row[i] : ""
+            html += "<td\(alignAttr(i))>\(inlineMarkdown(raw))</td>"
+        }
+        html += "</tr>"
+    }
+    html += "</tbody></table></div>"
+    return html
+}
+
 /// Ports app.js's renderMD(): a small block-level pass over headings (#-####),
 /// fenced code blocks, unordered/ordered lists, blockquotes, paragraphs, and
 /// blank-line breaks. Line-oriented, single forward pass, exactly like the
-/// original.
+/// original. Tables are the one addition beyond the port (see above).
 private func markdownToHTML(_ src: String) -> String {
     var out: [String] = []
     let lines = src.components(separatedBy: "\n")
@@ -96,6 +190,27 @@ private func markdownToHTML(_ src: String) -> String {
             }
             i += 1 // skip the closing fence (or run off the end if unterminated)
             out.append("<pre><code>\(escapeHTML(buf.joined(separator: "\n")))</code></pre>")
+            continue
+        }
+
+        // A pipe line immediately followed by a valid separator line is a
+        // table; anything else (including a lone pipe line with no valid
+        // separator after it) falls through to the normal paragraph case
+        // below, so a stray "|" in prose is never misparsed.
+        if line.contains("|"), i + 1 < lines.count, isTableSeparatorLine(lines[i + 1]) {
+            closeList()
+            let headerCells = splitTableRow(line)
+            let aligns = parseTableAlignments(lines[i + 1])
+            i += 2
+            var bodyRows: [[String]] = []
+            while i < lines.count {
+                let rowLine = lines[i]
+                if rowLine.trimmingCharacters(in: .whitespaces).isEmpty { break }
+                if !rowLine.contains("|") { break }
+                bodyRows.append(splitTableRow(rowLine))
+                i += 1
+            }
+            out.append(renderTable(headerCells: headerCells, aligns: aligns, bodyRows: bodyRows))
             continue
         }
 
@@ -183,6 +298,11 @@ private func documentShell(body: String, transparent: Bool) -> String {
       a { color: #9E7BFF; }
       strong { color: #D7E2EC; font-weight: 600; }
       blockquote { border-left: 2px solid #2A3A50; padding-left: 10px; color: #6B7A8C; margin: 0.55em 0; }
+      table { border-collapse: collapse; width: 100%; margin: 0.7em 0; font-size: 14px; }
+      th, td { border: 1px solid #1E2836; padding: 6px 10px; }
+      th { background: #151C28; color: #D7E2EC; font-weight: 600; text-align: left; }
+      td { color: #D7E2EC; }
+      tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
     </style>
     </head>
     <body>
