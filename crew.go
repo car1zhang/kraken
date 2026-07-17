@@ -33,7 +33,7 @@ func zeusBrief(j *Job) string {
 	if j.Solo {
 		b.WriteString("Execute everything yourself; do not spawn subagents.\n")
 	} else {
-		b.WriteString("Delegate implementation slices to subagents you name hephaestus, run on the opus model — each slice gets a focused, unique brief with exact scope and file targets. Before accepting a slice, have a subagent named athena, run on the opus model, review it for edge cases, correctness, and style; give athena its own reviewer brief, never hephaestus' brief.\n")
+		b.WriteString("Delegate implementation slices to subagents you name hephaestus, run on the sonnet model — each slice gets a focused, unique brief with exact scope and file targets. Before accepting a slice, have a subagent named athena, run on the opus model, review it for edge cases, correctness, and style; give athena its own reviewer brief, never hephaestus' brief.\n")
 	}
 	if j.Success != "" {
 		fmt.Fprintf(&b, "Success criteria: %s\n", j.Success)
