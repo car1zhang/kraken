@@ -75,8 +75,15 @@ type webBoard struct {
 // cell's artifacts dir and the preserved <slug>.<name> copies in pluto.
 func jobArtifacts(j *Job) []webArtifact {
 	var out []webArtifact
+	root := cellArtifacts(j)
 	for _, p := range listArtifacts(j) {
-		out = append(out, webArtifact{Name: filepath.Base(p), URL: "/api/artifact/" + j.Slug + "/cell/" + filepath.Base(p)})
+		// name is the path relative to the artifacts dir, so nested files
+		// read as "icon-variations/icon-v1.png" and clients can group by dir
+		name := filepath.Base(p)
+		if rel, err := filepath.Rel(root, p); err == nil {
+			name = rel
+		}
+		out = append(out, webArtifact{Name: name, URL: "/api/artifact/" + j.Slug + "/cell/" + name})
 	}
 	prefix := slugify(j.Slug) + "."
 	entries, err := os.ReadDir(plutoDir())
@@ -95,21 +102,36 @@ func jobArtifacts(j *Job) []webArtifact {
 
 // artifactPath resolves an artifact request to a real file, refusing anything
 // that escapes the two artifact homes (the URL is attacker-adjacent input:
-// any local process can hit the port).
+// any local process can hit the port). A cell name may be a subpath
+// (icon-variations/icon-v1.png) so folders are navigable, but every segment is
+// validated against traversal and hidden files.
 func artifactPath(j *Job, home, name string) (string, bool) {
-	if name != filepath.Base(name) || strings.HasPrefix(name, ".") {
+	name = strings.TrimPrefix(name, "/")
+	if name == "" {
 		return "", false
 	}
-	var p string
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
+			return "", false // no traversal, no empty/hidden segments
+		}
+	}
+	var p, root string
 	switch home {
 	case "cell":
-		p = filepath.Join(cellArtifacts(j), name)
+		root = cellArtifacts(j)
+		p = filepath.Join(root, name)
 	case "pluto":
-		if strings.HasSuffix(name, jobSuffix) {
-			return "", false // job files are not artifacts
+		// pluto copies are flat (<slug>.<name>), never nested
+		if strings.Contains(name, "/") || strings.HasSuffix(name, jobSuffix) {
+			return "", false
 		}
-		p = filepath.Join(plutoDir(), slugify(j.Slug)+"."+name)
+		root = plutoDir()
+		p = filepath.Join(root, slugify(j.Slug)+"."+name)
 	default:
+		return "", false
+	}
+	// belt-and-suspenders: the cleaned path must still sit under its home
+	if rel, err := filepath.Rel(root, p); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
 	}
 	if fi, err := os.Stat(p); err != nil || fi.IsDir() {

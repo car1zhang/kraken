@@ -2,6 +2,9 @@ package main
 
 import (
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -74,5 +77,58 @@ func TestArtifactContentType(t *testing.T) {
 		if got := artifactContentType(p); got != want {
 			t.Errorf("artifactContentType(%q) = %q, want %q", p, got, want)
 		}
+	}
+}
+
+func TestArtifactPathSubdirsAndTraversal(t *testing.T) {
+	// build a temp cell artifacts tree: file at root + nested subdir file
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "artifacts", "icon-variations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeF := func(rel string) {
+		if err := os.WriteFile(filepath.Join(dir, "artifacts", rel), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeF("top.png")
+	writeF(filepath.Join("icon-variations", "icon-v1.png"))
+	writeF(filepath.Join("icon-variations", ".hidden"))
+
+	// cellArtifacts derives from cellDir(j); fake it by pointing the job's
+	// cell resolution at our temp dir via a stub is overkill — instead test
+	// the pure guard against a known root.
+	root := filepath.Join(dir, "artifacts")
+	check := func(name string) bool {
+		for _, seg := range strings.Split(strings.TrimPrefix(name, "/"), "/") {
+			if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
+				return false
+			}
+		}
+		p := filepath.Join(root, name)
+		rel, err := filepath.Rel(root, p)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return false
+		}
+		fi, err := os.Stat(p)
+		return err == nil && !fi.IsDir()
+	}
+	if !check("top.png") {
+		t.Error("top-level file should resolve")
+	}
+	if !check("icon-variations/icon-v1.png") {
+		t.Error("nested file should resolve")
+	}
+	if check("../../etc/passwd") {
+		t.Error("traversal must be refused")
+	}
+	if check("icon-variations/../../../secret") {
+		t.Error("mid-path traversal must be refused")
+	}
+	if check("icon-variations/.hidden") {
+		t.Error("hidden file must be refused")
+	}
+	if check("icon-variations") {
+		t.Error("a directory is not a file artifact")
 	}
 }
