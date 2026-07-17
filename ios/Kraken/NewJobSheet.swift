@@ -40,7 +40,7 @@ struct NewJobSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }.buttonStyle(.bordered)
+                        SheetCloseButton(label: "Cancel") { dismiss() }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button {

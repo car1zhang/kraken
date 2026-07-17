@@ -231,7 +231,7 @@ struct JobDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close") { dismiss() }.buttonStyle(.bordered)
+                SheetCloseButton { dismiss() }
             }
         }
         .disabled(isBusy)
@@ -300,7 +300,7 @@ struct JobDetailView: View {
                 ArtifactView(name: artifact.name, baseURL: baseURL, path: artifact.url)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { showingArtifact = nil }.buttonStyle(.bordered)
+                            SheetCloseButton { showingArtifact = nil }
                         }
                     }
             }
@@ -357,6 +357,10 @@ struct JobDetailView: View {
                     .labelStyle(.iconOnly)
                     .accessibilityLabel("Answer")
                     .tint(KTheme.counter)
+                    // Answer is the primary action when a job is blocked —
+                    // carl flagged it as too small, so make it prominent
+                    // (filled) and it stands out from the bordered siblings.
+                    .buttonStyle(.borderedProminent)
                 }
                 if canSteer {
                     Button {
@@ -388,7 +392,9 @@ struct JobDetailView: View {
                 }
             }
             .buttonStyle(.bordered)
-            .controlSize(.small)
+            // Comfortable tap targets — .large gives ~44pt-tall pills; carl
+            // found the previous .small pills too small to hit reliably.
+            .controlSize(.large)
             .padding(.horizontal)
             .padding(.vertical, 8)
         }
@@ -563,7 +569,7 @@ private struct AnswerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
+                SheetCloseButton(label: "Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button {
@@ -653,7 +659,7 @@ private struct SteerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
+                SheetCloseButton(label: "Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button {
