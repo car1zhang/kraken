@@ -214,7 +214,10 @@ struct JobDetailView: View {
     // system entirely — a .bordered/.borderedProminent Button placed inside a
     // List/Form row renders as a doubled-background full-row blob (a known
     // SwiftUI Form quirk); living in a plain HStack above the Form sidesteps
-    // it completely and reads as a normal iOS action bar.
+    // it completely and reads as a normal iOS action bar. Icon-only per
+    // carl: "no text within the circular buttons" — each keeps its tint as
+    // the only differentiator, so .accessibilityLabel carries the name for
+    // VoiceOver now that there's no visible text.
     private var actionBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -224,6 +227,8 @@ struct JobDetailView: View {
                     } label: {
                         Label("Queue", systemImage: "play.fill")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Queue")
                     .tint(KTheme.accent)
                 }
                 if canRetry {
@@ -232,6 +237,8 @@ struct JobDetailView: View {
                     } label: {
                         Label("Retry", systemImage: "arrow.clockwise")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Retry")
                     .tint(KTheme.revealed)
                 }
                 if column == .review {
@@ -240,6 +247,8 @@ struct JobDetailView: View {
                     } label: {
                         Label("Mark Done", systemImage: "checkmark")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Mark Done")
                     .tint(KTheme.solved)
                 }
                 if canAnswer {
@@ -248,6 +257,8 @@ struct JobDetailView: View {
                     } label: {
                         Label("Answer", systemImage: "bubble.left.fill")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Answer")
                     .tint(KTheme.counter)
                 }
                 if canSteer {
@@ -256,6 +267,8 @@ struct JobDetailView: View {
                     } label: {
                         Label("Steer", systemImage: "arrowshape.turn.up.right.fill")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Steer")
                     .tint(KTheme.accent)
                 }
                 if isEditable {
@@ -264,6 +277,8 @@ struct JobDetailView: View {
                     } label: {
                         Label("Edit Spec", systemImage: "square.and.pencil")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Edit Spec")
                 }
                 if canKill {
                     Button(role: .destructive) {
@@ -271,6 +286,8 @@ struct JobDetailView: View {
                     } label: {
                         Label("Kill", systemImage: "xmark")
                     }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Kill")
                 }
             }
             .buttonStyle(.bordered)
@@ -449,6 +466,8 @@ private struct AnswerView: View {
                 } label: {
                     Label("Send", systemImage: "paperplane.fill")
                 }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Send")
                 .buttonStyle(.borderedProminent)
                 .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -520,6 +539,8 @@ private struct SteerView: View {
                 } label: {
                     Label("Send", systemImage: "paperplane.fill")
                 }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Send")
                 .buttonStyle(.borderedProminent)
                 .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

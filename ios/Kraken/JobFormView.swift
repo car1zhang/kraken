@@ -80,6 +80,8 @@ struct JobFormView: View {
             } label: {
                 Label("Retry", systemImage: "arrow.clockwise")
             }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Retry")
             .buttonStyle(.borderedProminent)
         }
         .padding()
@@ -241,6 +243,8 @@ struct JobFormView: View {
                 } label: {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Save")
                 .buttonStyle(.borderedProminent)
                 .disabled(isSaving || !editable || mtime == 0)
             }

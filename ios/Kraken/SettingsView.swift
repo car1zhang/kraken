@@ -36,6 +36,9 @@ struct SettingsView: View {
                                 ProgressView()
                                     .frame(maxWidth: .infinity)
                             } else {
+                                // full-width labeled action, not a circular
+                                // icon button — keeps its text (carl's
+                                // icon-only rule was for the compact pills)
                                 Label("Test Connection", systemImage: "network")
                                     .frame(maxWidth: .infinity)
                             }
