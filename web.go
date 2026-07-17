@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -290,6 +292,75 @@ func webRetry(req webReq) error {
 	return retryCell(j)
 }
 
+// webSteer delivers a mid-run instruction to a live cell. Routing follows the
+// crew contract: all inbound human traffic lands in hermes, which relays to
+// zeus (and knows a material pivot re-triggers plan approval). The message is
+// also appended to the job's mid-run log — the durable trail.
+func webSteer(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		return fmt.Errorf("empty steering message")
+	}
+	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
+		return fmt.Errorf("%s has no live cell to steer", j.Slug)
+	}
+	all, _ := orderAll(discoverAll())
+	_, hermes := cellAgents(j, all)
+	if hermes == nil {
+		return fmt.Errorf("%s: hermes not found — k o %s to investigate", j.Slug, cellSession(j))
+	}
+	if err := appendMidRunLog(j, "me→hermes", "steering: "+oneLine(text)); err != nil {
+		return fmt.Errorf("mid-run log append failed: %v", err)
+	}
+	if err := sendMessage(hermes, "steering from carl: "+text); err != nil {
+		return fmt.Errorf("logged, but delivery failed: %v", err)
+	}
+	return nil
+}
+
+// webReview is the PR-review handoff: open the cell's worktree in an editor
+// to flash through the final diff. nvim gets a new tmux window in the cell
+// session (LSP picks up the worktree root) raised in ghostty; VS Code opens
+// the folder directly. req.Text carries the editor choice.
+func webReview(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	repo, err := resolveRepo(j.Repo)
+	if err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	wt := existingWorktree(j, repo)
+	if wt == "" {
+		return fmt.Errorf("%s has no worktree to review (already torn down?)", j.Slug)
+	}
+	switch req.Text {
+	case "code":
+		if err := exec.Command("code", wt).Run(); err != nil {
+			return fmt.Errorf("open VS Code: %v", err)
+		}
+		return nil
+	default: // nvim
+		sess := cellSession(j)
+		if !liveSessions()[sess] {
+			return fmt.Errorf("cell session %s is gone — open the worktree manually: nvim %s", sess, wt)
+		}
+		if err := exec.Command("tmux", "new-window", "-t", sess+":", "-n", "review",
+			"-c", wt, "nvim", ".").Run(); err != nil {
+			return fmt.Errorf("tmux new-window: %v", err)
+		}
+		if _, err := raiseSession(sess); err != nil {
+			return fmt.Errorf("nvim is open in %s, but %v", sess, err)
+		}
+		return nil
+	}
+}
+
 // webKill tears down a live job's cell and returns the job to draft. The
 // browser confirms before posting; the server still validates the job is
 // actually started and not done.
@@ -335,7 +406,7 @@ func webJobRaw(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	webJSON(w, http.StatusOK, map[string]any{
-		"slug": j.Slug, "content": string(data), "mtime": fi.ModTime().UnixNano(),
+		"slug": j.Slug, "content": string(data), "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10),
 		"editable": editableJob(j),
 	})
 }
@@ -368,7 +439,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fi, _ := os.Stat(path)
-	webJSON(w, http.StatusOK, map[string]any{"slug": slug, "content": content, "mtime": fi.ModTime().UnixNano(), "editable": true})
+	webJSON(w, http.StatusOK, map[string]any{"slug": slug, "content": content, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "editable": true})
 }
 
 // webJobSave writes an edited job file. Optimistic lock: the save carries the
@@ -383,7 +454,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Slug    string `json:"slug"`
 		Content string `json:"content"`
-		MTime   int64  `json:"mtime"`
+		MTime   string `json:"mtime"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
@@ -398,7 +469,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — its file belongs to the crew right now"})
 		return
 	}
-	if fi, err := os.Stat(j.File); err == nil && req.MTime != 0 && fi.ModTime().UnixNano() != req.MTime {
+	if fi, err := os.Stat(j.File); err == nil && req.MTime != "" && req.MTime != "0" && strconv.FormatInt(fi.ModTime().UnixNano(), 10) != req.MTime {
 		webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
 		return
 	}
@@ -408,7 +479,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	parsed := parseJob(filepath.Base(j.File), []byte(req.Content))
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": fi.ModTime().UnixNano(), "warn": parsed.Err})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "warn": parsed.Err})
 }
 
 // --- structured spec editor: frontmatter as a form, body as prose ---
@@ -436,7 +507,13 @@ type jobFormFields struct {
 	Success     string   `json:"success"`
 	Prereqs     []Prereq `json:"prereqs"`
 	Spec        string   `json:"spec"`
-	MTime       int64    `json:"mtime"`
+	// MTime is an opaque string token: UnixNano exceeds JS safe-integer
+	// range, so a numeric round-trip through the browser corrupts it and
+	// every save false-conflicts.
+	MTime string `json:"mtime"`
+	// Force skips the mtime conflict check: an explicit "overwrite what's on
+	// disk" from the editor after a conflict was surfaced, never a default.
+	Force bool `json:"force"`
 }
 
 // webJobForm returns a job parsed into form fields, plus the datalists the
@@ -465,7 +542,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 		"ready": j.Ready, "solo": j.Solo, "auto_approve": j.AutoApprove,
 		"success": j.Success, "prereqs": prereqs,
 		"spec":  strings.TrimSpace(spec),
-		"mtime": fi.ModTime().UnixNano(), "editable": editableJob(j),
+		"mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "editable": editableJob(j),
 		"err": j.Err, "slugs": slugs, "repos": repoCandidates(),
 	})
 }
@@ -547,8 +624,10 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — its file belongs to the crew right now"})
 		return
 	}
-	if fi, err := os.Stat(j.File); err == nil && req.MTime != 0 && fi.ModTime().UnixNano() != req.MTime {
-		webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
+	if fi, err := os.Stat(j.File); err == nil && !req.Force && req.MTime != "" && req.MTime != "0" && strconv.FormatInt(fi.ModTime().UnixNano(), 10) != req.MTime {
+		webJSON(w, http.StatusConflict, map[string]any{
+			"error": "file changed on disk since you opened it", "conflict": true,
+		})
 		return
 	}
 	req.Slug = j.Slug // slug is the filename; immutable here
@@ -560,7 +639,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	parsed := parseJob(filepath.Base(j.File), []byte(content))
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": fi.ModTime().UnixNano(), "warn": parsed.Err})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "warn": parsed.Err})
 }
 
 func cmdWeb(args []string) {
@@ -592,6 +671,8 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/answer", webAction(webAnswer))
 	mux.HandleFunc("/api/retry", webAction(webRetry))
 	mux.HandleFunc("/api/kill", webAction(webKill))
+	mux.HandleFunc("/api/steer", webAction(webSteer))
+	mux.HandleFunc("/api/review", webAction(webReview))
 	mux.HandleFunc("/api/job/raw", webJobRaw)
 	mux.HandleFunc("/api/job/create", webJobCreate)
 	mux.HandleFunc("/api/job/save", webJobSave)
@@ -617,11 +698,22 @@ func cmdWeb(args []string) {
 		// html deliverables render as pages (local, agent-authored content —
 		// same trust as opening the file); everything else stays plain text
 		// for the in-board markdown viewer
-		if strings.HasSuffix(p, ".html") {
+		switch {
+		case strings.HasSuffix(p, ".html"):
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		} else if strings.HasSuffix(p, ".svg") {
+		case strings.HasSuffix(p, ".svg"):
 			w.Header().Set("Content-Type", "image/svg+xml")
-		} else {
+		case strings.HasSuffix(p, ".png"):
+			w.Header().Set("Content-Type", "image/png")
+		case strings.HasSuffix(p, ".jpg"), strings.HasSuffix(p, ".jpeg"):
+			w.Header().Set("Content-Type", "image/jpeg")
+		case strings.HasSuffix(p, ".gif"):
+			w.Header().Set("Content-Type", "image/gif")
+		case strings.HasSuffix(p, ".webp"):
+			w.Header().Set("Content-Type", "image/webp")
+		case strings.HasSuffix(p, ".pdf"):
+			w.Header().Set("Content-Type", "application/pdf")
+		default:
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		}
 		http.ServeFile(w, r, p)

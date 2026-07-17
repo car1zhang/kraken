@@ -290,6 +290,11 @@ func syncStatesFromInbox(jobs []*Job, escs []*Escalation) []string {
 				desired = "plan-review"
 				break
 			}
+			if e.Category == "testing" {
+				// manual-test gate: services are up and waiting on carl —
+				// review column, not blocked
+				desired = "testing"
+			}
 		}
 		if j.State == desired {
 			continue
