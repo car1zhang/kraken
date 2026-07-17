@@ -82,12 +82,11 @@ function cardHTML(j, col) {
     .join("");
   const killable = ["working", "blocked", "review"].includes(col) && j.live;
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  return `<div class="card ${open.length ? "flagged" : ""}" style="--state:${color}"
-      draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}">
+  return `<div class="card ${open.length ? "flagged" : ""} ${editable ? "editable" : ""}" style="--state:${color}"
+      draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
-      ${editable ? `<button class="edit" data-slug="${esc(j.slug)}" title="edit spec">✎</button>` : ""}
       ${killable ? `<button class="kill" data-slug="${esc(j.slug)}" title="kill cell → back to draft">✕</button>` : ""}
     </div>
     <div class="meta">
@@ -103,7 +102,12 @@ function cardHTML(j, col) {
     ${escs}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
-    ${col === "blocked" && open.length ? `<button class="btn unblock" data-slug="${esc(j.slug)}">⚑ answer to unblock</button>` : ""}
+    ${["blocked", "review"].includes(col) && open.length ? `<button class="btn unblock" data-slug="${esc(j.slug)}">⚑ ${col === "review" ? "gate feedback / pass" : "answer to unblock"}</button>` : ""}
+    ${col === "review" && j.live ? `<div class="review-row">
+      <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="nvim">⌨ nvim</button>
+      <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="code">⌨ code</button>
+    </div>` : ""}
+    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}">➤ steer</button>` : ""}
   </div>`;
 }
 
@@ -121,11 +125,10 @@ function render(board) {
   }
   document.getElementById("board").innerHTML = COLUMNS.map(
     (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
-      <div class="col-head"><b>${c.title}</b>
-        ${c.key === "draft" ? '<button class="new-job" id="new-job" title="new job from template">+ new</button>' : ""}
-        <span class="n">${byCol[c.key].length}</span></div>
+      <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
       <div class="col-cards">
-        ${byCol[c.key].map((j) => cardHTML(j, c.key)).join("") || '<div class="empty">·</div>'}
+        ${c.key === "draft" ? '<button class="btn-new" id="new-job">+ NEW JOB</button>' : ""}
+        ${byCol[c.key].map((j) => cardHTML(j, c.key)).join("") || (c.key === "draft" ? "" : '<div class="empty">·</div>')}
       </div>
     </section>`,
   ).join("");
@@ -339,7 +342,8 @@ let rawText = "";
 let showRaw = false;
 let artifactURL = "";
 
-const isPage = (url) => /\.(html|svg)$/.test(url);
+const isPage = (url) => /\.(html|svg|pdf)$/i.test(url);
+const isImage = (url) => /\.(png|jpe?g|gif|webp)$/i.test(url);
 
 function openArtifact(url, name) {
   document.getElementById("panel-title").textContent = name;
@@ -347,6 +351,12 @@ function openArtifact(url, name) {
   rawText = "";
   showRaw = false;
   overlay.hidden = false;
+  document.getElementById("panel-raw").hidden = isImage(url) || /\.pdf$/i.test(url);
+  if (isImage(url)) {
+    panelBody.className = "panel-body page";
+    panelBody.innerHTML = `<img src="${esc(url)}" alt="artifact">`;
+    return;
+  }
   if (isPage(url)) {
     // rendered pages live in a same-origin iframe: full fidelity, and their
     // styles/scripts can't leak into the board
@@ -394,12 +404,60 @@ document.addEventListener("click", (ev) => {
     }
     return;
   }
-  const edit = ev.target.closest(".edit");
-  if (edit) {
-    openEditor(edit.dataset.slug);
+  const steer = ev.target.closest(".steer");
+  if (steer) {
+    openSteer(steer.dataset.slug);
     return;
   }
-  if (ev.target.closest("#new-job")) openEditor(null);
+  const review = ev.target.closest(".review-open");
+  if (review) {
+    post("/api/review", { slug: review.dataset.slug, text: review.dataset.editor });
+    return;
+  }
+  if (ev.target.closest("#new-job")) {
+    openEditor(null);
+    return;
+  }
+  // editable cards open their spec on plain click (buttons/chips above
+  // already returned; escalation blocks inside cards are display-only here)
+  const card = ev.target.closest(".card[data-editable='true']");
+  if (card) openEditor(card.dataset.slug);
+});
+
+// ---- steer: mid-run instructions ----
+
+const steerOverlay = document.getElementById("steer-overlay");
+let steerSlug = null;
+
+function openSteer(slug) {
+  steerSlug = slug;
+  document.getElementById("steer-title").textContent = slug + " — steer";
+  document.getElementById("steer-text").value = "";
+  document.getElementById("steer-note").textContent = "";
+  steerOverlay.hidden = false;
+  document.getElementById("steer-text").focus();
+}
+
+document.getElementById("steer-send").addEventListener("click", async () => {
+  const text = document.getElementById("steer-text").value.trim();
+  if (!text) {
+    document.getElementById("steer-note").textContent = "message is empty";
+    return;
+  }
+  const btn = document.getElementById("steer-send");
+  btn.disabled = true;
+  const ok = await post("/api/steer", { slug: steerSlug, text });
+  btn.disabled = false;
+  if (ok) steerOverlay.hidden = true;
+  else document.getElementById("steer-note").textContent = "send failed — see status bar";
+});
+document.getElementById("steer-cancel").addEventListener("click", () => (steerOverlay.hidden = true));
+steerOverlay.addEventListener("click", (ev) => { if (ev.target === steerOverlay) steerOverlay.hidden = true; });
+document.getElementById("steer-text").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+    ev.preventDefault();
+    document.getElementById("steer-send").click();
+  }
 });
 
 // ---- job editor (draft + spec in the browser) ----
@@ -408,7 +466,7 @@ const editorOverlay = document.getElementById("editor-overlay");
 const editorText = document.getElementById("editor-text");
 const editorNote = document.getElementById("editor-note");
 let editorSlug = null;
-let editorMTime = 0;
+let editorMTime = "";
 
 function prereqRowHTML(p) {
   return `<div class="prereq-row">
@@ -471,7 +529,7 @@ async function loadForm(slug) {
 
 function openEditor(slug) {
   editorSlug = slug;
-  editorMTime = 0;
+  editorMTime = "";
   editorNote.textContent = "";
   editorNote.style.color = "";
   const isNew = !slug;
@@ -479,6 +537,7 @@ function openEditor(slug) {
   document.getElementById("editor-newrow").hidden = !isNew;
   document.getElementById("editor-form").hidden = true;
   document.getElementById("editor-save").disabled = true;
+  document.getElementById("editor-force").hidden = true;
   document.getElementById("editor-slug").value = "";
   editorOverlay.hidden = false;
   if (isNew) {
@@ -519,16 +578,24 @@ document.getElementById("f-prereqs").addEventListener("click", (ev) => {
   if (ev.target.closest(".rm")) ev.target.closest(".prereq-row").remove();
 });
 
-document.getElementById("editor-save").addEventListener("click", async () => {
+async function saveForm(force) {
   if (!editorSlug) return;
+  const forceBtn = document.getElementById("editor-force");
   try {
     const r = await fetch("/api/job/saveform", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(readForm()),
+      body: JSON.stringify({ ...readForm(), force: !!force }),
     });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || r.status);
+    if (!r.ok) {
+      if (d.conflict) {
+        forceBtn.hidden = false;
+        throw new Error(d.error + " — save again after reloading, or overwrite disk");
+      }
+      throw new Error(d.error || r.status);
+    }
+    forceBtn.hidden = true;
     editorMTime = d.mtime;
     editorNote.textContent = d.warn ? "saved — but won't run: " + d.warn : "saved ✓";
     editorNote.style.color = d.warn ? "" : "var(--solved)";
@@ -536,6 +603,13 @@ document.getElementById("editor-save").addEventListener("click", async () => {
   } catch (e) {
     editorNote.style.color = "";
     editorNote.textContent = String(e.message || e);
+  }
+}
+
+document.getElementById("editor-save").addEventListener("click", () => saveForm(false));
+document.getElementById("editor-force").addEventListener("click", () => {
+  if (confirm("overwrite " + editorSlug + ".job.md? whatever changed on disk since you opened the editor is lost.")) {
+    saveForm(true);
   }
 });
 
@@ -568,6 +642,11 @@ function previewArtifact(chip) {
   previewURL = chip.dataset.url;
   chip.classList.add("active");
   box.hidden = false;
+  if (isImage(previewURL)) {
+    box.classList.add("page");
+    box.innerHTML = `<img src="${esc(previewURL)}" alt="artifact preview">`;
+    return;
+  }
   if (isPage(previewURL)) {
     // html/svg render in an iframe here too — raw markup helps no one decide
     box.classList.add("page");
@@ -604,7 +683,7 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") { overlay.hidden = true; answerOverlay.hidden = true; editorOverlay.hidden = true; }
+  if (ev.key === "Escape") { overlay.hidden = true; answerOverlay.hidden = true; editorOverlay.hidden = true; steerOverlay.hidden = true; }
 });
 
 // ---- dag view: jobs layered by dependency depth, edges = prereqs ----

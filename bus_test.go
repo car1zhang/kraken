@@ -382,3 +382,24 @@ func TestAppendMidRunLogHeadingInFrontmatter(t *testing.T) {
 		t.Fatalf("log leaked into zeus prompt: %q", p)
 	}
 }
+
+func TestSyncStatesTestingGate(t *testing.T) {
+	// an open testing-category escalation parks the job in the review column
+	// (manual-test gate), outranked only by plan-review
+	j := &Job{Slug: "g", State: "executing", File: writeTempJob(t, "g")}
+	escs := []*Escalation{{JobSlug: "g", Status: "open", Category: "testing", Title: "manual test: board"}}
+	lines := syncStatesFromInbox([]*Job{j}, escs)
+	if j.State != "testing" || len(lines) != 1 {
+		t.Fatalf("testing gate not applied: state=%q lines=%v", j.State, lines)
+	}
+}
+
+// writeTempJob creates a minimal started job file so writeJobState can patch it.
+func writeTempJob(t *testing.T, slug string) string {
+	t.Helper()
+	path := t.TempDir() + "/" + slug + ".job.md"
+	if err := os.WriteFile(path, []byte("---\njob: "+slug+"\nready: true\nstate: executing\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
