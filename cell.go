@@ -158,9 +158,14 @@ func liveSessions() map[string]bool {
 // cellClaudeArgs mirrors carl's `cc` alias (claude --dangerously-skip-permissions
 // --rc): cell agents work unattended in their own worktree, so they run with
 // bypass permissions from birth. tmux commands never see shell aliases, so the
-// flags are spelled out here.
+// flags are spelled out here. Cell agents (zeus, hermes) run on opus by
+// default; the KRAKEN_CELL_MODEL env var overrides it.
 func cellClaudeArgs() []string {
-	return []string{claudeLauncher(), "--dangerously-skip-permissions", "--rc"}
+	model := os.Getenv("KRAKEN_CELL_MODEL")
+	if model == "" {
+		model = "opus"
+	}
+	return []string{claudeLauncher(), "--dangerously-skip-permissions", "--rc", "--model", model}
 }
 
 // jobPrompt is the spec portion of the job body — everything up to the
