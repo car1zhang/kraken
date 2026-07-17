@@ -118,6 +118,28 @@ func artifactPath(j *Job, home, name string) (string, bool) {
 	return p, true
 }
 
+// artifactContentType picks the served type by extension: renderable pages
+// and binary formats (pdf, images) get their real type so phone/browser
+// viewers render them; everything else is plain text for the markdown viewer.
+func artifactContentType(p string) string {
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	default:
+		return "text/plain; charset=utf-8"
+	}
+}
+
 func buildWebBoard() webBoard {
 	jobs := loadJobs()
 	bySlug := map[string]*Job{}
@@ -289,6 +311,30 @@ func webRetry(req webReq) error {
 		return err
 	}
 	return retryCell(j)
+}
+
+// webSteer sends free-text direction into a live job's cell the same way
+// carl steers from a terminal: the text lands in the cell's hermes pane
+// (hermes is carl's interface — it translates and routes to zeus), through
+// the full k s guard chain via sendToPeer.
+func webSteer(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		return fmt.Errorf("empty steering")
+	}
+	if !j.started() || j.State == "done" {
+		return fmt.Errorf("%s has no live cell to steer", j.Slug)
+	}
+	all, _ := orderAll(discoverAll())
+	_, hermes := cellAgents(j, all)
+	if hermes == nil {
+		return fmt.Errorf("no hermes agent found in %s's cell — rerun after the cell is up", j.Slug)
+	}
+	_, err = sendToPeer(hermes, req.Text)
+	return err
 }
 
 // webKill tears down a live job's cell and returns the job to draft. The
@@ -666,6 +712,7 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/answer", webAction(webAnswer))
 	mux.HandleFunc("/api/retry", webAction(webRetry))
 	mux.HandleFunc("/api/kill", webAction(webKill))
+	mux.HandleFunc("/api/steer", webAction(webSteer))
 	mux.HandleFunc("/api/job/raw", webJobRaw)
 	mux.HandleFunc("/api/job/create", webJobCreate)
 	mux.HandleFunc("/api/job/save", webJobSave)
@@ -689,15 +736,10 @@ func cmdWeb(args []string) {
 			return
 		}
 		// html deliverables render as pages (local, agent-authored content —
-		// same trust as opening the file); everything else stays plain text
-		// for the in-board markdown viewer
-		if strings.HasSuffix(p, ".html") {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		} else if strings.HasSuffix(p, ".svg") {
-			w.Header().Set("Content-Type", "image/svg+xml")
-		} else {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		}
+		// same trust as opening the file); binary formats viewers can render
+		// get their real type; everything else stays plain text for the
+		// in-board markdown viewer
+		w.Header().Set("Content-Type", artifactContentType(p))
 		http.ServeFile(w, r, p)
 	})
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)
