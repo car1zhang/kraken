@@ -382,10 +382,12 @@ func reapOne(j *Job, live map[string]bool) (string, bool) {
 		if err := teardownCell(j, repo, live, false); err != nil {
 			return fmt.Sprintf("merged, but teardown incomplete: %v", err), false
 		}
-		if err := writeJobState(j, "done"); err != nil {
+		// done is always carl's drag: the merge frees the cell, but the job
+		// parks in the review column until he moves it himself
+		if err := writeJobState(j, "merged"); err != nil {
 			return fmt.Sprintf("merged + torn down, but state write failed: %v", err), false
 		}
-		msg := "merged → cell torn down, state: done"
+		msg := "merged → cell torn down, awaiting carl's done drag"
 		if len(copied) > 0 {
 			msg += fmt.Sprintf(" (%d artifacts preserved)", len(copied))
 		}

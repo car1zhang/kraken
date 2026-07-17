@@ -20,7 +20,7 @@ func jobStateColor(state string) string {
 		return green
 	case state == "ready", state == "queued":
 		return cyan
-	case state == "pr-open", state == "testing", state == "plan-review", state == "blocked":
+	case state == "pr-open", state == "testing", state == "merged", state == "plan-review", state == "blocked":
 		return yellow
 	case state == "failed", state == "error":
 		return red
@@ -36,7 +36,7 @@ func jobStateColor(state string) string {
 func stateRank(state string) int {
 	switch {
 	case state == "executing", state == "planning", state == "plan-review",
-		state == "blocked", state == "testing", state == "pr-open":
+		state == "blocked", state == "testing", state == "pr-open", state == "merged":
 		return 0
 	case state == "ready", state == "queued", state == "gate-review":
 		return 1

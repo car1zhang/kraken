@@ -255,8 +255,8 @@ func (d *daemon) tick() (int, error) {
 				msg, changed := reapOne(j, live)
 				if changed {
 					dlog("%s: %s", j.Slug, msg)
-					if j.State == "done" {
-						notify("kraken ✓ "+j.Slug, "PR merged — cell torn down")
+					if j.State == "merged" {
+						notify("kraken ✓ "+j.Slug, "PR merged — review and drag to done")
 					}
 				}
 			}

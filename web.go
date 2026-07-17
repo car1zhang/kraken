@@ -242,7 +242,7 @@ func webDone(req webReq) error {
 		return err
 	}
 	switch displayState(j, bySlug) {
-	case "testing", "pr-open":
+	case "testing", "pr-open", "merged":
 	default:
 		return fmt.Errorf("%s is %s — only review-column jobs move to done", j.Slug, j.State)
 	}
