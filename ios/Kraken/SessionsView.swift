@@ -1,0 +1,124 @@
+import SwiftUI
+import Observation
+
+@Observable
+final class SessionsViewModel {
+    var peers: [Peer] = []
+    var errorMessage: String?
+
+    func refresh(baseURL: String) async {
+        do {
+            let resp = try await APIClient.shared.fetchPeers(baseURL: baseURL)
+            peers = resp.peers
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    // Server order (orderAll in peer.go) already places teammates directly
+    // after their lead; grouping here only needs to split by agent/shell,
+    // never reorder within a group.
+    var claudes: [Peer] { peers.filter { $0.role != "shell" && ($0.agent ?? "claude") == "claude" } }
+    var codexes: [Peer] { peers.filter { $0.role != "shell" && $0.agent == "codex" } }
+    var shells: [Peer] { peers.filter { $0.role == "shell" } }
+}
+
+struct SessionsView: View {
+    @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var vm = SessionsViewModel()
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let err = vm.errorMessage {
+                    Section { Text(err).foregroundStyle(.red) }
+                }
+                if !vm.claudes.isEmpty {
+                    Section("Claude") {
+                        ForEach(vm.claudes) { peer in
+                            NavigationLink(value: peer) {
+                                SessionRow(peer: peer)
+                            }
+                        }
+                    }
+                }
+                if !vm.codexes.isEmpty {
+                    Section("Codex") {
+                        ForEach(vm.codexes) { peer in
+                            NavigationLink(value: peer) {
+                                SessionRow(peer: peer)
+                            }
+                        }
+                    }
+                }
+                if !vm.shells.isEmpty {
+                    Section("Shells") {
+                        ForEach(vm.shells) { peer in
+                            NavigationLink(value: peer) {
+                                SessionRow(peer: peer)
+                            }
+                        }
+                    }
+                }
+                if vm.peers.isEmpty && vm.errorMessage == nil {
+                    Text("no live sessions").foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Sessions")
+            .navigationDestination(for: Peer.self) { peer in
+                SessionDetailView(peer: peer, baseURL: serverURL)
+            }
+            .refreshable { await vm.refresh(baseURL: serverURL) }
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await vm.refresh(baseURL: serverURL)
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(6))
+                    if Task.isCancelled { break }
+                    await vm.refresh(baseURL: serverURL)
+                }
+            }
+        }
+    }
+}
+
+private struct SessionRow: View {
+    let peer: Peer
+
+    private var indent: CGFloat { peer.role == "teammate" ? 16 : 0 }
+
+    private var displayName: String {
+        peer.agentName ?? peer.name ?? peer.tmuxSession ?? "-"
+    }
+
+    private var project: String {
+        guard let cwd = peer.cwd, !cwd.isEmpty else { return "~" }
+        let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
+        return trimmed.split(separator: "/").last.map(String.init) ?? "~"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(SessionTheme.color(forStatus: peer.status, role: peer.role))
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayName).font(.subheadline).bold()
+                HStack(spacing: 6) {
+                    Text(project).foregroundStyle(.secondary)
+                    if let branch = peer.branch, !branch.isEmpty {
+                        Text(branch).foregroundStyle(.purple)
+                    }
+                }
+                .font(.caption)
+            }
+            Spacer()
+            Text(peer.status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.leading, indent)
+    }
+}
