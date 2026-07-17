@@ -220,62 +220,74 @@ func cmdSend(args []string) {
 	if p.Depth > 0 {
 		die("%s is not the foreground agent in pane %s — keys would land in the nested one", displayName(p), p.Pane)
 	}
-	verifySendTarget(p)
+	if err := sendMessage(p, msg); err != nil {
+		die("%v", err)
+	}
+	if p.Status == "running" {
+		fmt.Fprintf(os.Stderr, "kraken: %s is mid-turn — the message queued\n", displayName(p))
+	}
+	fmt.Printf("sent to %s (%s)\n", displayName(p), p.Pane)
+}
+
+// sendMessage runs the send-time safety checks and types msg into p's prompt,
+// submitting it with Enter. Shared by k s, the bus, and the daemon — every
+// path that talks to an agent goes through the same guards.
+func sendMessage(p *Peer, msg string) error {
+	if err := verifySendTarget(p); err != nil {
+		return err
+	}
 	if p.Status == "shell" {
 		// text typed at the ! prompt executes as a shell command on Enter
-		die("%s is in shell mode — sending now would run the message as a shell command", displayName(p))
+		return fmt.Errorf("%s is in shell mode — sending now would run the message as a shell command", displayName(p))
 	}
 	// re-check right before typing: a permission/question prompt has an option
 	// pre-highlighted, so our trailing Enter would answer it for the user
 	if p.Status == "question" || paneShowsQuestion(p.Pane) {
-		die("%s has a question/permission prompt open — sending would answer it; resolve it first", displayName(p))
-	}
-	if p.Status == "running" {
-		fmt.Fprintf(os.Stderr, "kraken: %s is running — message will queue\n", displayName(p))
+		return fmt.Errorf("%s has a question/permission prompt open — sending would answer it; resolve it first", displayName(p))
 	}
 	if strings.Contains(msg, "\n") {
 		load := exec.Command("tmux", "load-buffer", "-b", "kraken", "-")
 		load.Stdin = strings.NewReader(msg)
 		if err := load.Run(); err != nil {
-			die("tmux load-buffer: %v", err)
+			return fmt.Errorf("tmux load-buffer: %v", err)
 		}
 		if err := exec.Command("tmux", "paste-buffer", "-p", "-d", "-b", "kraken", "-t", p.Pane).Run(); err != nil {
-			die("tmux paste-buffer: %v", err)
+			return fmt.Errorf("tmux paste-buffer: %v", err)
 		}
 	} else {
 		if err := exec.Command("tmux", "send-keys", "-t", p.Pane, "-l", "--", msg).Run(); err != nil {
-			die("tmux send-keys: %v", err)
+			return fmt.Errorf("tmux send-keys: %v", err)
 		}
 	}
 	// the TUI's paste detection must drain the literal keys before Enter
 	// lands, or the newline gets swallowed into the message
 	time.Sleep(150 * time.Millisecond)
 	if err := exec.Command("tmux", "send-keys", "-t", p.Pane, "Enter").Run(); err != nil {
-		die("tmux send-keys Enter: %v", err)
+		return fmt.Errorf("tmux send-keys Enter: %v", err)
 	}
-	fmt.Printf("sent to %s (%s)\n", displayName(p), p.Pane)
+	return nil
 }
 
 // verifySendTarget re-resolves the pane's process tree immediately before
 // typing: the target must still be a claude under this exact pane. A bare
 // pid-exists check would pass for zombies and recycled PIDs — and then the
 // message would be typed at (and run by) the surviving pane shell.
-func verifySendTarget(p *Peer) {
+func verifySendTarget(p *Peer) error {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", p.Pane, "#{pane_pid}").Output()
 	if err != nil {
-		die("pane %s is gone — rerun 'k ls'", p.Pane)
+		return fmt.Errorf("pane %s is gone — rerun 'k ls'", p.Pane)
 	}
 	panePID, err := strconv.Atoi(strings.TrimSpace(string(out)))
 	if err != nil || panePID <= 0 {
-		die("pane %s is gone — rerun 'k ls'", p.Pane)
+		return fmt.Errorf("pane %s is gone — rerun 'k ls'", p.Pane)
 	}
 	children, cmds, _ := psSnapshot()
 	for _, hit := range agentPIDsUnder(panePID, children, cmds) {
 		if hit.pid == p.PID && hit.agent == p.Agent {
-			return
+			return nil
 		}
 	}
-	die("%s (pane %s) is gone — rerun 'k ls'", displayName(p), p.Pane)
+	return fmt.Errorf("%s (pane %s) is gone — rerun 'k ls'", displayName(p), p.Pane)
 }
 
 // --- k k ---

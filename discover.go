@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -30,6 +31,15 @@ func listTmuxPanes() []tmuxPane {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
 		"#{pane_id}\t#{pane_pid}\t#{window_index}\t#{pane_current_path}\t#{session_name}").Output()
 	if err != nil {
+		// silent by design (no tmux server = no sessions), but debuggable:
+		// a daemon that sees nothing is otherwise indistinguishable from this
+		if os.Getenv("KRAKEN_DEBUG") != "" {
+			msg := err.Error()
+			if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+				msg += ": " + strings.TrimSpace(string(ee.Stderr))
+			}
+			fmt.Fprintf(os.Stderr, "kraken: list-panes failed: %s\n", msg)
+		}
 		return nil
 	}
 	var panes []tmuxPane
@@ -438,6 +448,9 @@ func paneCommand(root int, children map[int][]int, cmds map[int]string, etimes m
 func discoverAll() ([]*Peer, []*Peer) {
 	panes := listTmuxPanes()
 	children, cmds, etimes := psSnapshot()
+	if os.Getenv("KRAKEN_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "kraken: discover: %d panes, %d ps entries\n", len(panes), len(cmds))
+	}
 	codexNames := readCodexNames()
 	pruneCWDCache(cmds)
 	selfPane := os.Getenv("TMUX_PANE")

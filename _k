@@ -12,6 +12,11 @@ _k() {
         'k:kill a pane (claude or shell)'
         'n:new shell window, optionally running a command'
         'c:new named claude window with a prompt'
+        'j:job board (every *.job.md in pluto)'
+        'start:start a job manually (worktree + cell + crew)'
+        'reap:tear down cells whose PR merged'
+        'done:manually complete a started job'
+        'daemon:run the scheduler loop in the foreground'
         'help:show help'
     )
 
@@ -29,6 +34,13 @@ _k() {
                     peers+=("${value}:${desc}")
                 done < <(command k _complete 2>/dev/null)
                 _describe -V -t peers 'session' peers -M 'm:{-_ }={-_ } l:|=* r:|=*'
+            fi
+            ;;
+        start|done)
+            if (( CURRENT == 3 )); then
+                local -a jobs
+                jobs=(${(f)"$(command ls ~/Documents/pluto 2>/dev/null | command sed -n 's/\.job\.md$//p')"})
+                _describe -t jobs 'job' jobs
             fi
             ;;
     esac

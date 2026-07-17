@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kraken</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="scan" aria-hidden="true"></div>
+
+  <header class="chrome">
+    <span class="mark">KRAKEN<i>▊</i></span>
+    <span class="led" id="daemon-led"></span>
+    <span class="stat" id="daemon-stat">connecting…</span>
+    <span class="stat" id="cells-stat"></span>
+    <span class="stat hot" id="flag-stat"></span>
+    <span class="viewtabs">
+      <button class="viewtab active" data-view="board">BOARD</button>
+      <button class="viewtab" data-view="dag">DAG</button>
+    </span>
+    <span class="spacer"></span>
+    <span class="stat dim" id="tick-stat"></span>
+  </header>
+
+  <main class="board" id="board"></main>
+  <main class="dag" id="dag" hidden>
+    <div class="dag-canvas" id="dag-canvas">
+      <svg id="dag-edges"></svg>
+      <div id="dag-nodes"></div>
+    </div>
+  </main>
+
+  <!-- artifact viewer -->
+  <div class="overlay" id="overlay" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" id="panel-title"></span>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="panel-open">↗ tab</button>
+        <button class="btn ghost" id="panel-raw">raw</button>
+        <button class="btn" id="panel-close">close ✕</button>
+      </div>
+      <div class="panel-body" id="panel-body"></div>
+    </div>
+  </div>
+
+  <!-- blocked → working: answer before the move happens -->
+  <div class="overlay" id="answer-overlay" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" id="answer-title"></span>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="answer-cancel">cancel</button>
+        <button class="btn" id="answer-send">send ⏎</button>
+      </div>
+      <div class="panel-body answer-body">
+        <div id="answer-escs"></div>
+        <div class="answer-reading" id="answer-reading"></div>
+        <div class="answer-preview md" id="answer-preview" hidden></div>
+        <textarea id="answer-text" rows="4"
+          placeholder="your answer — appended to the escalation, relayed hermes → zeus (⌘⏎ to send)"></textarea>
+        <div class="answer-note" id="answer-note"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- job editor: draft + spec authoring in the browser -->
+  <div class="overlay" id="editor-overlay" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" id="editor-title"></span>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="editor-cancel">cancel</button>
+        <button class="btn" id="editor-save">save ⌘⏎</button>
+      </div>
+      <div class="panel-body editor-body">
+        <div class="editor-newrow" id="editor-newrow" hidden>
+          <input id="editor-slug" placeholder="job-slug" spellcheck="false">
+          <button class="btn" id="editor-create">create</button>
+        </div>
+        <div class="editor-form" id="editor-form" hidden>
+          <div class="f-row">
+            <label>type
+              <select id="f-type">
+                <option>build</option><option>explore</option><option>question</option>
+              </select>
+            </label>
+            <label>repo <input id="f-repo" list="repo-list" spellcheck="false"></label>
+            <label>base <input id="f-base" placeholder="origin/main" spellcheck="false"></label>
+            <span class="f-toggles">
+              <label class="check"><input type="checkbox" id="f-ready"> ready</label>
+              <label class="check"><input type="checkbox" id="f-solo"> solo</label>
+              <label class="check"><input type="checkbox" id="f-auto"> auto-approve</label>
+            </span>
+          </div>
+          <label class="f-block">success criteria — what "done" looks like
+            <textarea id="f-success" rows="2" spellcheck="false"></textarea>
+          </label>
+          <div class="f-block">
+            <span class="f-label">prereqs <button class="mini-add" id="f-add-prereq">+ add</button></span>
+            <div id="f-prereqs"></div>
+          </div>
+          <label class="f-block grow">spec — zeus' initial prompt, as fleshed out as possible
+            <textarea id="editor-text" spellcheck="false"></textarea>
+          </label>
+        </div>
+        <div class="answer-note" id="editor-note"></div>
+      </div>
+      <datalist id="repo-list"></datalist>
+      <datalist id="job-list"></datalist>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

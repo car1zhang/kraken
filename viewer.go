@@ -92,9 +92,15 @@ func pinBlocked(peers []*Peer) []*Peer {
 type tickMsg time.Time
 
 type snapshotMsg struct {
-	peers  []*Peer
-	shells []*Peer
-	usage  string
+	peers    []*Peer
+	shells   []*Peer
+	usage    string
+	jobs     []*Job
+	escs     []*Escalation
+	live     map[string]bool
+	health   map[string]string
+	daemonSt daemonStatus
+	daemonOK bool
 }
 
 type actionMsg struct {
@@ -106,10 +112,11 @@ type viewerModel struct {
 	rawPeers   []*Peer // last snapshot, unpinned/unnumbered
 	rawShells  []*Peer
 	mode       string // "type" | "session" | "none"
+	view       string // "sessions" | "jobs" (J toggles)
 	groups     []displayGroup
 	rows       []*Peer // selectable rows in display order (flattened groups)
 	usage      string
-	cursor     int // index into rows
+	cursor     int // index into the current view's selectable rows
 	scroll     int // first visible line of buildLines' output
 	width      int
 	height     int
@@ -117,10 +124,31 @@ type viewerModel struct {
 	noteIsErr  bool
 	loaded     bool
 	refreshing bool
-	// pendingKill holds the peerKey of the pane a first 'd' armed; the second
-	// 'd' kills only if the selection still matches, so list churn between the
-	// two keystrokes can't redirect the kill.
+	// pendingKill arms two-keystroke destructive actions: 'dd' pane kills in
+	// the sessions view (peerKey) and 'xx' job abandons in the jobs view
+	// ("job:"+slug). The confirm fires only if the selection still matches,
+	// so list churn between keystrokes can't redirect it; the key spaces
+	// never collide and a view toggle clears it.
 	pendingKill string
+	// jobs view state
+	jrows          []jobsRow
+	rawJobs        []*Job
+	rawEscs        []*Escalation
+	liveSessionSet map[string]bool
+	healthBySlug   map[string]string
+	daemonSt       daemonStatus
+	daemonOK       bool
+	// inline answer input: non-nil while typing an escalation answer
+	answering *Escalation
+	input     string
+}
+
+// rowCount is the number of selectable rows in the current view.
+func (m *viewerModel) rowCount() int {
+	if m.view == "jobs" {
+		return len(m.jrows)
+	}
+	return len(m.rows)
 }
 
 func (m *viewerModel) Init() tea.Cmd {
@@ -133,11 +161,42 @@ func tickCmd() tea.Cmd {
 }
 
 // refreshCmd runs discovery off the UI goroutine; it only reads, all model
-// state stays owned by Update.
+// state stays owned by Update. Job/inbox/daemon reads ride along — they're
+// cheap file scans next to discovery's ps/tmux walk.
 func refreshCmd() tea.Cmd {
 	return func() tea.Msg {
 		peers, shells := discoverAll()
-		return snapshotMsg{peers: peers, shells: shells, usage: usageHeader(true)}
+		jobs := loadJobs()
+		escs := loadEscalations(jobs)
+		live := liveSessions()
+		st, ok := readDaemonStatus()
+		// cell health shells out to tmux per live cell — computed here, once
+		// per tick, never in the render path
+		byName := map[string]*Peer{}
+		for _, p := range peers {
+			if p.Name != "" {
+				byName[p.Name] = p
+			}
+		}
+		openBySlug := map[string]bool{}
+		for _, e := range escs {
+			if e.Status == "open" {
+				openBySlug[e.JobSlug] = true
+			}
+		}
+		health := map[string]string{}
+		for _, j := range jobs {
+			if j.started() && j.State != "done" && live[cellSession(j)] {
+				if reason := cellHealth(j, peers); reason != "" {
+					health[j.Slug] = reason
+				}
+			}
+		}
+		return snapshotMsg{
+			peers: peers, shells: shells, usage: usageHeader(true),
+			jobs: jobs, escs: escs, live: live, health: health,
+			daemonSt: st, daemonOK: ok,
+		}
 	}
 }
 
@@ -159,6 +218,9 @@ func (m *viewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loaded = true
 		m.usage = msg.usage
 		m.rawPeers, m.rawShells = msg.peers, msg.shells
+		m.rawJobs, m.rawEscs, m.liveSessionSet = msg.jobs, msg.escs, msg.live
+		m.healthBySlug = msg.health
+		m.daemonSt, m.daemonOK = msg.daemonSt, msg.daemonOK
 		m.rebuild()
 	case actionMsg:
 		if msg.err != nil {
@@ -175,9 +237,12 @@ func (m *viewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *viewerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.answering != nil {
+		return m.handleAnswerKey(msg)
+	}
 	key := msg.String()
-	if key != "d" {
-		m.pendingKill = "" // any other key disarms a pending dd
+	if key != "d" && key != "x" {
+		m.pendingKill = "" // any other key disarms a pending dd/xx
 	}
 	switch key {
 	case "q", "ctrl+c":
@@ -189,7 +254,35 @@ func (m *viewerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g", "home":
 		m.setCursor(0)
 	case "G", "end":
-		m.setCursor(len(m.rows) - 1)
+		m.setCursor(m.rowCount() - 1)
+	case "J":
+		if m.view == "jobs" {
+			m.view = "sessions"
+		} else {
+			m.view = "jobs"
+		}
+		m.pendingKill = ""
+		m.rebuild()
+		// after rebuild: its anchor logic follows a stale same-index row from
+		// the previous view — a toggle should always land at the top
+		m.cursor, m.scroll = 0, 0
+		m.clampScroll()
+		m.note, m.noteIsErr = "view: "+m.view, false
+		return m, nil
+	}
+	if m.view == "jobs" {
+		switch key {
+		case "enter", "a", "s", "A", "x":
+			return m.handleJobsKey(key)
+		case "r":
+			if !m.refreshing {
+				m.refreshing = true
+				return m, refreshCmd()
+			}
+		}
+		return m, nil
+	}
+	switch key {
 	case "t":
 		switch m.mode {
 		case "type":
@@ -254,6 +347,9 @@ func (m *viewerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.pendingKill = ""
 		if i, ok := m.rowAt(msg.Y); ok {
 			if i == m.cursor {
+				if m.view == "jobs" {
+					return m.handleJobsKey("enter")
+				}
 				return m, m.actOnSelected("opening", openPeer)
 			}
 			m.setCursor(i)
@@ -298,10 +394,35 @@ func peerKey(p *Peer) string {
 	}
 }
 
+// jobRowKey identifies a jobs-view row across snapshots (cursor anchoring).
+func jobRowKey(r jobsRow) string {
+	if r.esc != nil {
+		return "esc:" + r.esc.File
+	}
+	return "job:" + r.job.Slug
+}
+
 // rebuild derives the display (groups, selectable rows) from the raw snapshot
 // for the current mode, keeping the cursor on the same peer. When the anchored
 // row is gone, the stale index just clamps (positional fallback).
 func (m *viewerModel) rebuild() {
+	if m.view == "jobs" {
+		anchor := ""
+		if r := m.jselected(); r != nil {
+			anchor = jobRowKey(*r)
+		}
+		m.jrows = buildJobRows(m.rawJobs, m.rawEscs, m.healthBySlug)
+		if anchor != "" {
+			for i, r := range m.jrows {
+				if jobRowKey(r) == anchor {
+					m.setCursor(i)
+					return
+				}
+			}
+		}
+		m.setCursor(m.cursor)
+		return
+	}
 	anchor := ""
 	if p := m.selected(); p != nil {
 		anchor = peerKey(p)
@@ -333,15 +454,15 @@ func (m *viewerModel) rebuild() {
 }
 
 func (m *viewerModel) setCursor(i int) {
-	if len(m.rows) == 0 {
+	if m.rowCount() == 0 {
 		m.cursor, m.scroll = 0, 0
 		return
 	}
 	if i < 0 {
 		i = 0
 	}
-	if i > len(m.rows)-1 {
-		i = len(m.rows) - 1
+	if i > m.rowCount()-1 {
+		i = m.rowCount() - 1
 	}
 	m.cursor = i
 	m.clampScroll()
@@ -376,6 +497,9 @@ type viewLine struct {
 // the row it shows. Pure function of model state — View and rowAt both use it,
 // which is what keeps mouse hit-testing agreeing with what is drawn.
 func (m *viewerModel) buildLines() []viewLine {
+	if m.view == "jobs" {
+		return m.buildJobLines()
+	}
 	switch {
 	case !m.loaded:
 		return []viewLine{{text: paint(true, dim, "discovering…"), row: -1}}
@@ -502,7 +626,14 @@ func (m *viewerModel) View() string {
 	for len(out) < m.height-2 {
 		out = append(out, "")
 	}
-	out = append(out, clipLine(viewerHints, m.width), clipLine(m.noteLine(), m.width))
+	hints := viewerHints
+	if m.view == "jobs" {
+		hints = jobsHints
+	}
+	if m.answering != nil {
+		hints = m.answerPromptLine()
+	}
+	out = append(out, clipLine(hints, m.width), clipLine(m.noteLine(), m.width))
 	return strings.Join(out, "\n")
 }
 
@@ -514,7 +645,9 @@ func highlightRow(line string, width int) string {
 	return "\x1b[7m" + line + reset
 }
 
-var viewerHints = paint(true, dim, "j/k move · g/G top/bottom · enter/click open · b branch · dd kill · t group · r refresh · q quit")
+var viewerHints = paint(true, dim, "j/k move · g/G top/bottom · enter/click open · b branch · dd kill · t group · J jobs · r refresh · q quit")
+
+var jobsHints = paint(true, dim, "j/k move · g/G top/bottom · enter drill/answer · a answer · s start · A artifact · xx abandon · J sessions · r refresh · q quit")
 
 func (m *viewerModel) noteLine() string {
 	if m.note == "" {

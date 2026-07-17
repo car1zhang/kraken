@@ -8,6 +8,12 @@ import (
 )
 
 func main() {
+	// Under launchd there is no locale, and in the C locale tmux treats TAB
+	// as unprintable — every -F field separator comes back as "_" and
+	// discovery parses zero panes. Give our tmux children a UTF-8 locale.
+	if os.Getenv("LANG") == "" && os.Getenv("LC_ALL") == "" {
+		os.Setenv("LANG", "en_US.UTF-8")
+	}
 	args := os.Args[1:]
 	if len(args) == 0 {
 		args = []string{"ls"}
@@ -32,6 +38,18 @@ func main() {
 		cmdNewShell(rest)
 	case "c":
 		cmdNewClaude(rest)
+	case "j":
+		cmdJobs(rest)
+	case "start":
+		cmdStart(rest)
+	case "reap":
+		cmdReap(rest)
+	case "done":
+		cmdDone(rest)
+	case "daemon":
+		cmdDaemon(rest)
+	case "web":
+		cmdWeb(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":
@@ -62,6 +80,24 @@ Commands:
                       running cmd (drops back to the shell when cmd exits)
   k c [-c dir] <name> [prompt...]
                       new named claude in a new window of the current session
+  k j [--json]        job board: every *.job.md in ~/Documents/pluto with
+                      state, repo, prereqs, live cell
+  k start <slug>      start a job manually: git worktree on carl/<slug> +
+                      tmux session cell-<slug> + zeus (requires ready: true
+                      and prereqs done)
+  k reap              check started jobs' PRs; merged ones get their cell
+                      torn down (verified) and state stamped done
+  k done <slug> [outcome...]
+                      manually complete a started job (the acceptance path for
+                      explore/question jobs): preserves artifacts into pluto,
+                      tears the cell down, records the outcome
+  k daemon            run the scheduler loop in the foreground (launchd runs
+                      this at login via make install): queues ready jobs (max
+                      5 cells), auto-reaps merged PRs, pokes hermes on zeus
+                      stalls, notifies on escalations, writes ~/.kraken/daemon.json
+  k web [-p port]     web UI on localhost (default :7777): jobs as a kanban
+                      board, escalations inline, artifacts rendered in the
+                      browser
 
 <sel>: index from 'k ls', '.' for the current pane, an exact pane id (%3), or
 substring match on name/project/agent/tmux-session; also a session-uuid
