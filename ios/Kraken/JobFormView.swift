@@ -78,10 +78,10 @@ struct JobFormView: View {
             Button {
                 Task { await load() }
             } label: {
+                // solo full-screen recovery CTA, not a circular pill in a row —
+                // keeps its label (icon-only rule is for the compact buttons)
                 Label("Retry", systemImage: "arrow.clockwise")
             }
-            .labelStyle(.iconOnly)
-            .accessibilityLabel("Retry")
             .buttonStyle(.borderedProminent)
         }
         .padding()

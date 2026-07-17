@@ -407,6 +407,7 @@ private struct AnswerView: View {
     var onSent: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(DraftStore.self) private var draftStore
     @FocusState private var textFocused: Bool
     @State private var selectedFile: String?
     @State private var text = ""
@@ -414,6 +415,11 @@ private struct AnswerView: View {
     @State private var errorMessage: String?
 
     private var openEscalations: [WebEsc] { (job.escalations ?? []).filter { $0.status == "open" } }
+
+    // Keyed per-escalation (not per-job) — carl may draft answers to
+    // several open escalations before sending any of them, and each
+    // should keep its own text independently.
+    private func draftKey(for file: String) -> String { "answer:\(file)" }
 
     var body: some View {
         Form {
@@ -476,6 +482,16 @@ private struct AnswerView: View {
         .onAppear {
             if selectedFile == nil { selectedFile = openEscalations.first?.file }
         }
+        // Selecting a different escalation swaps in ITS draft (each open
+        // escalation keeps its own text); every keystroke saves the current
+        // one, so switching away and back — or dismissing the sheet
+        // entirely — never loses what was typed.
+        .onChange(of: selectedFile) {
+            text = selectedFile.map { draftStore.get(draftKey(for: $0)) } ?? ""
+        }
+        .onChange(of: text) {
+            if let selectedFile { draftStore.set(draftKey(for: selectedFile), text) }
+        }
     }
 
     private func send() {
@@ -486,9 +502,13 @@ private struct AnswerView: View {
             do {
                 try await APIClient.shared.answer(baseURL: baseURL, slug: job.slug, file: file, text: text)
                 isBusy = false
+                draftStore.clear(draftKey(for: file))
+                text = ""
                 onSent()
             } catch {
                 isBusy = false
+                // A failed send (409, etc.) keeps the draft — only a
+                // confirmed post clears it.
                 errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
         }
@@ -503,10 +523,13 @@ private struct SteerView: View {
     var onSteered: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(DraftStore.self) private var draftStore
     @FocusState private var textFocused: Bool
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
+
+    private var draftKey: String { "steer:\(job.slug)" }
 
     var body: some View {
         Form {
@@ -546,6 +569,12 @@ private struct SteerView: View {
             }
         }
         .disabled(isBusy)
+        .onAppear {
+            text = draftStore.get(draftKey)
+        }
+        .onChange(of: text) {
+            draftStore.set(draftKey, text)
+        }
     }
 
     private func send() {
@@ -555,9 +584,12 @@ private struct SteerView: View {
             do {
                 try await APIClient.shared.steer(baseURL: baseURL, slug: job.slug, text: text)
                 isBusy = false
+                draftStore.clear(draftKey)
+                text = ""
                 onSteered()
             } catch {
                 isBusy = false
+                // A failed send (409, etc.) keeps the draft.
                 errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
         }
