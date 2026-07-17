@@ -65,12 +65,30 @@
     </div>
   </div>
 
+  <!-- steer: mid-run instructions to a live cell -->
+  <div class="overlay" id="steer-overlay" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" id="steer-title"></span>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="steer-cancel">cancel</button>
+        <button class="btn" id="steer-send">send ⌘⏎</button>
+      </div>
+      <div class="panel-body answer-body">
+        <textarea id="steer-text" rows="4"
+          placeholder="steering / pivot instruction — hermes relays to zeus; a material pivot re-triggers plan approval"></textarea>
+        <div class="answer-note" id="steer-note"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- job editor: draft + spec authoring in the browser -->
   <div class="overlay" id="editor-overlay" hidden>
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title" id="editor-title"></span>
         <span class="spacer"></span>
+        <button class="btn ghost danger" id="editor-force" hidden>overwrite disk</button>
         <button class="btn ghost" id="editor-cancel">cancel</button>
         <button class="btn" id="editor-save">save ⌘⏎</button>
       </div>
