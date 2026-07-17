@@ -42,105 +42,115 @@ struct JobDetailView: View {
 
     var body: some View {
         Form {
-            Section {
+            kSection {
                 HStack {
-                    Circle().fill(BoardTheme.color(forState: job.state)).frame(width: 10, height: 10)
+                    Rectangle()
+                        .fill(BoardTheme.color(forState: job.state))
+                        .frame(width: 8, height: 8)
                     Text(job.state)
+                        .font(.data(11))
+                        .foregroundStyle(BoardTheme.color(forState: job.state))
                     Spacer()
-                    Text(job.type).foregroundStyle(.secondary)
+                    Text(job.type)
+                        .font(.data(11))
+                        .foregroundStyle(KTheme.text2)
                 }
-                LabeledContent("Repo", value: job.repo)
+                fieldRow("Repo", job.repo)
                 if job.live, let cell = job.cell {
-                    LabeledContent("Cell", value: cell)
+                    fieldRow("Cell", cell)
                 }
             }
 
             if let err = job.err, !err.isEmpty {
-                Section("Error") { Text(err).foregroundStyle(.red) }
+                kSection("Error") { Text(err).font(.voice(13)).foregroundStyle(KTheme.counter) }
             }
             if isUnhealthy {
-                Section("Health") { Text(job.health ?? "").foregroundStyle(.orange) }
+                kSection("Health") { Text(job.health ?? "").font(.voice(13)).foregroundStyle(KTheme.revealed) }
             }
             if let outcome = job.outcome, !outcome.isEmpty {
-                Section("Outcome") { Text(outcome) }
+                kSection("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
             }
             if let success = job.success, !success.isEmpty {
-                Section("Success criterion") { Text(success) }
+                kSection("Success criterion") { Text(success).font(.voice(13)).foregroundStyle(KTheme.text) }
             }
             if let prereqs = job.prereqs, !prereqs.isEmpty {
-                Section("Prereqs") {
+                kSection("Prereqs") {
                     ForEach(prereqs, id: \.job) { p in
                         HStack {
-                            Text(p.job)
+                            Text(p.job).font(.data(12)).foregroundStyle(KTheme.text)
                             Spacer()
                             Text(p.done ? "done" : (p.gated ? "gated" : "pending"))
-                                .font(.caption)
-                                .foregroundStyle(p.done ? .green : (p.gated ? .orange : .secondary))
+                                .font(.data(10))
+                                .foregroundStyle(p.done ? KTheme.solved : (p.gated ? KTheme.counter : KTheme.revealed))
                         }
                     }
                 }
             }
             if let escalations = job.escalations, !escalations.isEmpty {
-                Section("Escalations") {
+                kSection("Escalations") {
                     ForEach(escalations, id: \.file) { e in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(e.category).font(.caption).bold()
-                                Text(e.title)
-                                Spacer()
-                                if e.status == "open" {
-                                    Text("open").font(.caption2).foregroundStyle(.orange)
-                                }
-                            }
-                            Text(e.body).font(.caption).foregroundStyle(.secondary)
-                        }
+                        escalationRow(e)
                     }
                     if canAnswer {
                         Button("Answer") { showingAnswer = true }
+                            .buttonStyle(.kUnblock)
+                            .listRowBackground(Color.clear)
                     }
                 }
             }
             if let artifacts = job.artifacts, !artifacts.isEmpty {
-                Section("Artifacts") {
+                kSection("Artifacts") {
                     ForEach(artifacts, id: \.url) { a in
                         Button(a.name) { showingArtifact = a }
+                            .font(.data(12))
+                            .foregroundStyle(KTheme.accent)
                     }
                 }
             }
 
-            Section {
+            kSection {
                 if canQueue {
                     Button("Queue") {
                         runAction { try await APIClient.shared.queueJob(baseURL: baseURL, slug: job.slug) }
                     }
+                    .buttonStyle(.kPrimary)
+                    .listRowBackground(Color.clear)
                 }
                 if canRetry {
                     Button("Retry") {
                         runAction { try await APIClient.shared.retryJob(baseURL: baseURL, slug: job.slug) }
                     }
+                    .buttonStyle(.kRetry)
+                    .listRowBackground(Color.clear)
                 }
                 if column == .review {
                     Button("Mark Done") {
                         runAction { try await APIClient.shared.markDone(baseURL: baseURL, slug: job.slug) }
                     }
-                }
-                if canKill {
-                    Button("Kill", role: .destructive) { showingKillConfirm = true }
+                    .buttonStyle(.kPrimary)
+                    .listRowBackground(Color.clear)
                 }
                 if isEditable {
                     Button("Edit Spec") { showingEdit = true }
+                        .buttonStyle(.kGhost)
+                        .listRowBackground(Color.clear)
+                }
+                if canKill {
+                    Button("Kill", role: .destructive) { showingKillConfirm = true }
+                        .buttonStyle(.kDestructiveText)
                 }
             }
 
             if let errorMessage {
-                Section { Text(errorMessage).foregroundStyle(.red) }
+                kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
             }
         }
+        .kListStyle()
         .navigationTitle(job.slug)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close") { dismiss() }
+                Button("Close") { dismiss() }.buttonStyle(.kGhost)
             }
         }
         .disabled(isBusy)
@@ -178,15 +188,54 @@ struct JobDetailView: View {
                         ArtifactView(name: artifact.name, url: url)
                     } else {
                         Text("invalid artifact URL")
+                            .foregroundStyle(KTheme.counter)
                     }
                 }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { showingArtifact = nil }
+                        Button("Close") { showingArtifact = nil }.buttonStyle(.kGhost)
                     }
                 }
             }
         }
+    }
+
+    private func fieldRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).font(.data(10)).foregroundStyle(KTheme.text2)
+            Spacer()
+            Text(value).font(.voice(13)).foregroundStyle(KTheme.text)
+        }
+    }
+
+    // Open escalations: counterSoft bg, 2px counter left border. Answered:
+    // transparent, hairline2 left border, text2 — mirrors .esc / .esc.answered.
+    private func escalationRow(_ e: WebEsc) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(e.category)
+                    .font(.data(10, weight: .semibold))
+                    .foregroundStyle(e.status == "open" ? KTheme.counter : KTheme.text2)
+                Text(e.title)
+                    .font(.voice(13))
+                    .foregroundStyle(e.status == "open" ? KTheme.text : KTheme.text2)
+                Spacer()
+                if e.status == "open" {
+                    Text("open").font(.data(9)).foregroundStyle(KTheme.counter)
+                }
+            }
+            Text(e.body)
+                .font(.voice(12))
+                .foregroundStyle(KTheme.text2)
+        }
+        .padding(8)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(e.status == "open" ? KTheme.counter : KTheme.hairline2)
+                .frame(width: 2)
+        }
+        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        .listRowBackground(e.status == "open" ? KTheme.counterSoft : Color.clear)
     }
 
     private func runAction(_ action: @escaping () async throws -> Void) {
@@ -215,6 +264,7 @@ private struct AnswerView: View {
     var onSent: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var textFocused: Bool
     @State private var selectedFile: String?
     @State private var text = ""
     @State private var isBusy = false
@@ -224,41 +274,47 @@ private struct AnswerView: View {
 
     var body: some View {
         Form {
-            Section("Open escalations") {
+            kSection("Open escalations") {
                 ForEach(openEscalations, id: \.file) { e in
                     Button {
                         selectedFile = e.file
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(e.category).font(.caption).bold()
-                                Text(e.title)
-                                Text(e.body).font(.caption).foregroundStyle(.secondary).lineLimit(4)
+                                Text(e.category).font(.data(10, weight: .semibold)).foregroundStyle(KTheme.counter)
+                                Text(e.title).font(.voice(13)).foregroundStyle(KTheme.text)
+                                Text(e.body).font(.voice(12)).foregroundStyle(KTheme.text2).lineLimit(4)
                             }
                             Spacer()
                             if selectedFile == e.file || (selectedFile == nil && e.file == openEscalations.first?.file) {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(KTheme.accent)
                             }
                         }
                     }
                     .buttonStyle(.plain)
                 }
             }
-            Section("Answer") {
-                TextEditor(text: $text).frame(minHeight: 120)
+            kSection("Answer") {
+                TextEditor(text: $text)
+                    .focused($textFocused)
+                    .scrollContentBackground(.hidden)
+                    .kField(focused: textFocused, minHeight: 120)
+                    .listRowBackground(Color.clear)
             }
             if let errorMessage {
-                Section { Text(errorMessage).foregroundStyle(.red) }
+                kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
             }
         }
+        .kListStyle()
         .navigationTitle("Answer \(job.slug)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Send") { send() }
+                    .buttonStyle(.kPrimary)
                     .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }

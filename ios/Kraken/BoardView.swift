@@ -41,6 +41,7 @@ struct BoardView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .always))
             }
+            .background(KTheme.ground)
             .navigationTitle("Board")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -49,6 +50,7 @@ struct BoardView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .foregroundStyle(KTheme.accent)
                 }
             }
             .task(id: scenePhase) {
@@ -77,45 +79,62 @@ struct BoardView: View {
         }
     }
 
+    // 7x7 square LED with a soft glow — mirrors .led / .led.ok.
     private var daemonBar: some View {
         HStack(spacing: 8) {
             if let board = vm.board {
-                Circle()
-                    .fill(board.daemonOK ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
+                Rectangle()
+                    .fill(board.daemonOK ? KTheme.solved : KTheme.counter)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: (board.daemonOK ? KTheme.solved : KTheme.counter).opacity(0.55), radius: 4)
                 Text(board.daemonOK ? "daemon up" : "daemon down")
-                    .font(.caption)
+                    .font(.data(11))
+                    .foregroundStyle(KTheme.text2)
                 Spacer()
                 if let err = vm.errorMessage {
-                    Text(err).font(.caption).foregroundStyle(.red)
+                    Text(err).font(.data(10)).foregroundStyle(KTheme.counter)
                 }
                 Text("cells \(board.liveCells)/\(board.cellCap)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.data(11))
+                    .foregroundStyle(KTheme.text2)
             } else if let err = vm.errorMessage {
-                Text(err).font(.caption).foregroundStyle(.red)
+                Text(err).font(.data(11)).foregroundStyle(KTheme.counter)
             } else {
-                Text("loading…").font(.caption).foregroundStyle(.secondary)
+                Text("loading…").font(.data(11)).foregroundStyle(KTheme.text2)
             }
         }
         .padding(.horizontal)
-        .padding(.vertical, 6)
+        .padding(.vertical, 7)
+        .background(KTheme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(KTheme.hairline).frame(height: 1)
+        }
     }
 
     private func columnView(_ column: BoardColumn) -> some View {
         let jobs = vm.jobs(in: column)
         return ScrollView {
             VStack(spacing: 0) {
-                HStack {
-                    Text(column.title).font(.headline)
+                HStack(alignment: .lastTextBaseline) {
+                    Text(column.title)
+                        .kLabelStyle(size: 10)
                     Spacer()
-                    Text("\(jobs.count)").font(.subheadline).foregroundStyle(.secondary)
+                    Text("\(jobs.count)")
+                        .font(.data(10))
+                        .foregroundStyle(jobs.isEmpty ? KTheme.text2 : KTheme.accent)
                 }
-                .padding([.horizontal, .top])
+                .padding(.horizontal)
+                .padding(.top)
+                .padding(.bottom, 6)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(KTheme.hairline).frame(height: 1)
+                }
+                .padding(.horizontal)
 
                 if jobs.isEmpty {
                     Text("·")
-                        .foregroundStyle(.secondary)
+                        .font(.data(11))
+                        .foregroundStyle(KTheme.text2.opacity(0.5))
                         .padding(.top, 40)
                 } else {
                     LazyVStack(spacing: 10) {
@@ -128,6 +147,7 @@ struct BoardView: View {
                 }
             }
         }
+        .background(KTheme.ground)
         .refreshable { await vm.refresh(baseURL: serverURL) }
     }
 }
@@ -141,34 +161,37 @@ private struct JobCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(job.slug).font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                Text(job.slug)
+                    .font(.data(13, weight: .bold))
+                    .foregroundStyle(KTheme.text)
                 Spacer()
                 if openEscalationCount > 0 {
                     Image(systemName: "flag.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
+                        .foregroundStyle(KTheme.counter)
+                        .font(.system(size: 10))
                 }
             }
             Text("\(job.type) · \(job.repo)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                Circle().fill(BoardTheme.color(forState: job.state)).frame(width: 8, height: 8)
-                Text(job.state).font(.caption).foregroundStyle(.secondary)
+                .font(.data(11))
+                .foregroundStyle(KTheme.text2)
+            HStack(spacing: 6) {
+                Text(job.state)
+                    .font(.data(10))
+                    .foregroundStyle(BoardTheme.color(forState: job.state))
                 if job.live, let cell = job.cell {
-                    Text("· \(cell)").font(.caption2).foregroundStyle(.secondary)
+                    Text("· \(cell)").font(.data(10)).foregroundStyle(KTheme.text2)
                 }
             }
             if let health = job.health, !health.isEmpty {
-                Text("⚠ " + health).font(.caption2).foregroundStyle(.red)
+                Text("⚠ " + health).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
             if let err = job.err, !err.isEmpty {
-                Text("✕ " + err).font(.caption2).foregroundStyle(.red)
+                Text("✕ " + err).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
         }
-        .padding()
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.12)))
+        .cardBackground(stateColor: BoardTheme.color(forState: job.state), flagged: openEscalationCount > 0)
     }
 }

@@ -7,6 +7,7 @@ struct NewJobSheet: View {
     var onCreated: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var slugFocused: Bool
     @State private var slug = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -21,23 +22,29 @@ struct NewJobSheet: View {
                 }
             } else {
                 Form {
-                    Section("New job") {
+                    kSection("New job") {
                         TextField("slug", text: $slug)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
+                            .focused($slugFocused)
+                            .font(.data(13))
+                            .kField(focused: slugFocused)
+                            .listRowBackground(Color.clear)
                     }
                     if let errorMessage {
-                        Text(errorMessage).foregroundStyle(.red)
+                        kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
                     }
                 }
+                .kListStyle()
                 .navigationTitle("New Job")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Create") { create() }
+                            .buttonStyle(.kPrimary)
                             .disabled(isBusy || slug.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }

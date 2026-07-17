@@ -58,6 +58,7 @@ struct JobFormView: View {
         Group {
             if isLoading {
                 ProgressView()
+                    .tint(KTheme.accent)
                     .navigationTitle(slug)
             } else if !loaded {
                 failedLoad
@@ -71,17 +72,20 @@ struct JobFormView: View {
     private var failedLoad: some View {
         VStack(spacing: 16) {
             Text(fetchError ?? "failed to load")
-                .foregroundStyle(.red)
+                .font(.voice(13))
+                .foregroundStyle(KTheme.counter)
                 .multilineTextAlignment(.center)
             Button("Retry") { Task { await load() } }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.kPrimary)
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(KTheme.ground)
         .navigationTitle(slug)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
             }
         }
     }
@@ -89,19 +93,20 @@ struct JobFormView: View {
     private var form: some View {
         Form {
             if isNew {
-                Section {
+                kSection {
                     Text("Created — fill in the spec below, then Save. It stays a draft until you flip Ready or queue it from the board.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.voice(12))
+                        .foregroundStyle(KTheme.text2)
                 }
             }
             if !editable {
-                Section {
+                kSection {
                     Text("This job has a cell in flight — its file belongs to the crew right now.")
-                        .foregroundStyle(.orange)
+                        .font(.voice(12))
+                        .foregroundStyle(KTheme.revealed)
                 }
             }
-            Section("Type") {
+            kSection("Type") {
                 Picker("Type", selection: $type) {
                     Text("build").tag("build")
                     Text("explore").tag("explore")
@@ -109,44 +114,65 @@ struct JobFormView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            Section("Repo") {
+            kSection("Repo") {
                 TextField("repo", text: $repo)
                     .autocorrectionDisabled()
+                    .font(.data(13))
+                    .kField()
+                    .listRowBackground(Color.clear)
                 if !repoSuggestions.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack {
                             ForEach(repoSuggestions, id: \.self) { r in
                                 Button(r) { repo = r }
-                                    .buttonStyle(.bordered)
-                                    .font(.caption)
+                                    .buttonStyle(.kChip)
                             }
                         }
                     }
+                    .listRowBackground(Color.clear)
                 }
                 TextField("base ref (optional, default origin/main)", text: $base)
                     .autocorrectionDisabled()
+                    .font(.data(13))
+                    .kField()
+                    .listRowBackground(Color.clear)
             }
-            Section("Flags") {
+            kSection("Flags") {
                 Toggle("Ready (queue on save)", isOn: $ready)
+                    .font(.voice(13))
+                    .foregroundStyle(KTheme.text)
                 Toggle("Solo (no subagent crew)", isOn: $solo)
+                    .font(.voice(13))
+                    .foregroundStyle(KTheme.text)
                 Toggle("Auto-approve plan", isOn: $autoApprove)
+                    .font(.voice(13))
+                    .foregroundStyle(KTheme.text)
             }
-            Section("Success criterion") {
-                TextEditor(text: $success).frame(minHeight: 80)
+            kSection("Success criterion") {
+                TextEditor(text: $success)
+                    .scrollContentBackground(.hidden)
+                    .kField(minHeight: 80)
+                    .listRowBackground(Color.clear)
             }
-            Section("Prereqs") {
+            kSection("Prereqs") {
                 ForEach($prereqRows) { $row in
                     HStack {
                         TextField("job-slug", text: $row.job)
                             .autocorrectionDisabled()
-                        Toggle("gated", isOn: $row.gated)
+                            .font(.data(12))
+                            .kField()
+                        Text("gated")
+                            .font(.data(10))
+                            .foregroundStyle(row.gated ? KTheme.counter : KTheme.text2)
+                        Toggle("", isOn: $row.gated)
+                            .labelsHidden()
                             .fixedSize()
-                        Button(role: .destructive) {
+                        Button {
                             prereqRows.removeAll { $0.id == row.id }
                         } label: {
                             Image(systemName: "minus.circle.fill")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.kMini)
                     }
                 }
                 if !slugSuggestions.isEmpty {
@@ -155,32 +181,40 @@ struct JobFormView: View {
                             Button(s) { prereqRows.append(PrereqRow(job: s, gated: false)) }
                         }
                     }
+                    .font(.data(12))
+                    .foregroundStyle(KTheme.text2)
                 } else {
                     Button("Add prereq") { prereqRows.append(PrereqRow(job: "", gated: false)) }
+                        .buttonStyle(.kMini)
                 }
             }
-            Section("Spec") {
-                TextEditor(text: $spec).frame(minHeight: 160)
+            kSection("Spec") {
+                TextEditor(text: $spec)
+                    .scrollContentBackground(.hidden)
+                    .kField(minHeight: 160)
+                    .listRowBackground(Color.clear)
             }
             if let loadError, !loadError.isEmpty {
-                Section("File currently won't run") {
-                    Text(loadError).foregroundStyle(.red)
+                kSection("File currently won't run") {
+                    Text(loadError).font(.voice(12)).foregroundStyle(KTheme.counter)
                 }
             }
             if let note {
-                Section {
-                    Text(note).foregroundStyle(noteIsWarning ? .orange : .green)
+                kSection {
+                    Text(note).font(.voice(12)).foregroundStyle(noteIsWarning ? KTheme.revealed : KTheme.solved)
                 }
             }
         }
+        .kListStyle()
         .navigationTitle(slug)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { dismiss() }.buttonStyle(.kGhost)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }
+                    .buttonStyle(.kPrimary)
                     .disabled(isSaving || !editable || mtime == 0)
             }
         }

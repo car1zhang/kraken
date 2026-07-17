@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import UIKit
 
 /// UIViewRepresentable wrapper so a tapped artifact chip (html/svg deliverable
 /// or plain-text file — the server sets Content-Type per web.go's artifact
@@ -8,7 +9,14 @@ private struct ArtifactWebView: UIViewRepresentable {
     let url: URL
 
     func makeUIView(context: Context) -> WKWebView {
-        WKWebView()
+        let webView = WKWebView()
+        // Only the container/loading background moves to the theme's ground
+        // color — the loaded page's own content (markdown/html/svg artifact)
+        // is left exactly as the server renders it.
+        webView.isOpaque = false
+        webView.backgroundColor = UIColor(KTheme.ground)
+        webView.scrollView.backgroundColor = UIColor(KTheme.ground)
+        return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
@@ -25,6 +33,7 @@ struct ArtifactView: View {
 
     var body: some View {
         ArtifactWebView(url: url)
+            .background(KTheme.ground)
             .navigationTitle(name)
             .navigationBarTitleDisplayMode(.inline)
     }
