@@ -187,6 +187,14 @@ actor APIClient {
         try await post(baseURL: baseURL, path: "/api/peers/send", body: SendRequest(pane: pane, message: message))
     }
 
+    /// Raw tmux capture-pane text — SessionDetailView's Terminal mode for
+    /// shells (and the Terminal toggle for claude/codex peers). Same
+    /// percent-encoding rule as readPeer's pane query param.
+    func capturePane(baseURL: String, pane: String) async throws -> String {
+        let resp: CaptureResponse = try await get(baseURL: baseURL, path: "/api/peers/capture", query: [("pane", pane)])
+        return resp.content
+    }
+
     // MARK: - artifacts
 
     /// Fetches a non-html artifact's raw body as text (webArtifact.url is
