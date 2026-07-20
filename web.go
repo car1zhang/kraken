@@ -537,36 +537,6 @@ func webSteer(req webReq) error {
 	return writeJobState(j, "working")
 }
 
-// webSend is the blocked→working "begin implementation" move for a build
-// job whose doc has been approved out-of-band (in conversation, not tracked
-// by kraken): carl's click on ▶ send IS the approval, delivered as zeus'
-// own '/send' trigger phrase from its brief.
-func webSend(req webReq) error {
-	j, _, err := webJobFor(req.Slug)
-	if err != nil {
-		return err
-	}
-	if j.Type != "build" {
-		return fmt.Errorf("%s is not a build job — nothing to send", j.Slug)
-	}
-	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
-		return fmt.Errorf("%s has no live cell to send", j.Slug)
-	}
-	all, _ := orderAll(discoverAll())
-	zeus := cellZeus(j, all)
-	if zeus == nil {
-		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
-	}
-	msg := "/send — the doc is approved; begin implementation per the spec, following your brief's phase 2"
-	if err := sendMessage(zeus, msg); err != nil {
-		return fmt.Errorf("%s: %v", j.Slug, err)
-	}
-	if err := appendMidRunLog(j, "me→zeus", "/send"); err != nil {
-		return fmt.Errorf("delivered, but mid-run log append failed: %v", err)
-	}
-	return writeJobState(j, "working")
-}
-
 // webReview is the PR-review handoff: open the cell's worktree in an editor
 // to flash through the final diff. nvim gets a new tmux window in the cell
 // session (LSP picks up the worktree root) raised in ghostty; VS Code opens
@@ -1085,7 +1055,6 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/retry", webAction(webRetry))
 	mux.HandleFunc("/api/kill", webAction(webKill))
 	mux.HandleFunc("/api/steer", webAction(webSteer))
-	mux.HandleFunc("/api/send", webAction(webSend))
 	mux.HandleFunc("/api/review", webAction(webReview))
 	mux.HandleFunc("/api/archive", webAction(webArchive))
 	mux.HandleFunc("/api/unarchive", webAction(webUnarchive))

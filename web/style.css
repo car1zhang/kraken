@@ -278,13 +278,6 @@ body {
 .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
 .btn.ghost.danger { color: var(--counter); border-color: var(--counter); }
 .btn.ghost.danger:hover { box-shadow: var(--glow-hot); }
-.btn.send {
-  display: block; width: 100%; margin-top: 8px;
-  background: var(--solved-soft); color: var(--solved);
-  border: 1px solid var(--solved);
-  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
-}
-.btn.send:hover { box-shadow: 0 0 10px rgba(80, 200, 130, 0.3); }
 .btn.retry {
   display: block; width: 100%; margin-top: 8px;
   background: var(--revealed-soft); color: var(--revealed);

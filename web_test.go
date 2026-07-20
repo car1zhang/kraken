@@ -286,36 +286,6 @@ func TestAnswerableSingleDigit(t *testing.T) {
 	}
 }
 
-func TestWebSendTypeValidation(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	src := "---\njob: info-job\ntype: info\nrepo: monolith\nready: true\nstate: blocked\n---\n\n# Spec\n"
-	if err := os.WriteFile(filepath.Join(plutoDir(), "info-job"+jobSuffix), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err := webSend(webReq{Slug: "info-job"})
-	if err == nil || !strings.Contains(err.Error(), "not a build job") {
-		t.Fatalf("expected 'not a build job' error, got %v", err)
-	}
-}
-
-func TestWebSendNotLive(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJob(t, "send-not-live", "state: blocked\n")
-	err := webSend(webReq{Slug: "send-not-live"})
-	if err == nil || !strings.Contains(err.Error(), "no live cell") {
-		t.Fatalf("expected 'no live cell' error, got %v", err)
-	}
-}
-
-func TestWebSendNeverStarted(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJob(t, "send-draft", "") // no state: — never started
-	err := webSend(webReq{Slug: "send-draft"})
-	if err == nil || !strings.Contains(err.Error(), "no live cell") {
-		t.Fatalf("expected 'no live cell' error, got %v", err)
-	}
-}
-
 // TestWebDoneValidation covers webDone's server-side floor: started and not
 // done, matching cmdDone rather than the board's (possibly stale) displayed
 // column — a never-started job and an already-done one are both refused; a

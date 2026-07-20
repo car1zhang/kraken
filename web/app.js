@@ -1,7 +1,7 @@
 // kraken web — kanban over /api/board with two legal drag moves:
 //   draft → queued   (flips ready: true in the job file)
 //   blocked → done    (completes the job, outcome auto-filled from success)
-// Un-stalling a blocked cell (answering a question, ▶ send, messaging zeus)
+// Un-stalling a blocked cell (answering a question, messaging zeus)
 // happens via card buttons, not drag — those are actions on the cell, not a
 // board-state assertion the browser is making. Everything else is read-only;
 // the daemon drives working/blocked itself from live pod activity.
@@ -130,7 +130,6 @@ function cardHTML(j, col) {
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
     ${col === "done" && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
-    ${col === "blocked" && j.live && j.type === "build" ? `<button class="btn send" data-slug="${esc(j.slug)}">▶ send</button>` : ""}
     ${col === "blocked" && j.live && j.type === "build" ? `<div class="review-row">
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="nvim">⌨ nvim</button>
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="code">⌨ code</button>
@@ -435,12 +434,6 @@ document.addEventListener("click", (ev) => {
   if (qopt) {
     document.querySelectorAll(`.q-opt[data-slug="${qopt.dataset.slug}"]`).forEach((b) => (b.disabled = true));
     post("/api/question", { slug: qopt.dataset.slug, text: qopt.dataset.idx });
-    return;
-  }
-  const send = ev.target.closest(".send");
-  if (send) {
-    send.disabled = true;
-    post("/api/send", { slug: send.dataset.slug });
     return;
   }
   const retry = ev.target.closest(".retry");
