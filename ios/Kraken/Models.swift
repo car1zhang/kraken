@@ -63,8 +63,26 @@ struct WebJob: Decodable, Identifiable {
     let artifacts: [WebArtifact]?
     let health: String?
     let mtime: Int64
+    // Archived jobs ride the same list with state "archived": their `slug`
+    // is the numbered archive file base (what unarchive/delete target) and
+    // `displaySlug` carries the original slug for rendering.
+    let archived: Bool?
+    let displaySlug: String?
+    // A done job whose zeus session id is recorded — the only ones the
+    // reactivate action can actually resume.
+    let reactivatable: Bool?
 
     var id: String { slug }
+    /// What the UI shows as the job's name (archived jobs may be numbered).
+    var title: String { displaySlug ?? slug }
+
+    enum CodingKeys: String, CodingKey {
+        case slug, type, repo, state, err, outcome, success, cell, live
+        case prereqs, detail, question, roster, artifacts, health, mtime
+        case archived
+        case displaySlug = "display_slug"
+        case reactivatable
+    }
 }
 
 struct WebPrereq: Decodable {

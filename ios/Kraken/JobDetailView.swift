@@ -114,8 +114,10 @@ struct JobDetailView: View {
     @State private var isBusy = false
     @State private var errorMessage: String?
     @State private var showingKillConfirm = false
+    @State private var showingDeleteConfirm = false
     @State private var showingEdit = false
     @State private var showingSteer = false
+    @State private var showingReactivate = false
     @State private var showingSteerToast = false
     @State private var showingArtifact: WebArtifact?
 
@@ -151,8 +153,21 @@ struct JobDetailView: View {
     private var canSteer: Bool {
         job.live
     }
+    private var isArchived: Bool { job.archived == true }
+    // Mirrors the server's rule: only a job with no cell in flight can be
+    // archived — a live one shows Kill instead (kill returns it to draft,
+    // which then archives cleanly).
+    private var canArchive: Bool {
+        !isArchived && !job.live && [BoardColumn.draft, .queued, .done].contains(column)
+    }
+    // Reactivate only where the server can actually resume: a done job
+    // whose zeus session id was recorded.
+    private var canReactivate: Bool {
+        !isArchived && column == .done && job.reactivatable == true
+    }
     private var hasAnyAction: Bool {
         canQueue || canRetry || canMarkDone || canSteer || isEditable || canKill
+            || canArchive || canReactivate || isArchived
     }
 
     var body: some View {
@@ -177,6 +192,11 @@ struct JobDetailView: View {
                     fieldRow("Repo", job.repo)
                     if job.live, let cell = job.cell {
                         fieldRow("Cell", cell)
+                    }
+                    if isArchived, job.title != job.slug {
+                        // numbered archive copy: the file base differs from
+                        // the original slug shown in the title
+                        fieldRow("Archived as", job.slug)
                     }
                 }
 
@@ -257,7 +277,7 @@ struct JobDetailView: View {
             }
             .kListStyle()
         }
-        .navigationTitle(job.slug)
+        .navigationTitle(job.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -302,6 +322,24 @@ struct JobDetailView: View {
                 runAction { try await APIClient.shared.killJob(baseURL: baseURL, slug: job.slug) }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Delete \(job.title) forever? The archived job file and its artifact copies are permanently removed.",
+            isPresented: $showingDeleteConfirm, titleVisibility: .visible
+        ) {
+            Button("Delete Forever", role: .destructive) {
+                runAction { try await APIClient.shared.deleteArchivedJob(baseURL: baseURL, slug: job.slug) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showingReactivate) {
+            NavigationStack {
+                ReactivateView(job: job, baseURL: baseURL) {
+                    showingReactivate = false
+                    onUpdate()
+                    dismiss()
+                }
+            }
         }
         .sheet(isPresented: $showingEdit) {
             NavigationStack {
@@ -382,6 +420,44 @@ struct JobDetailView: View {
                     .labelStyle(.iconOnly)
                     .accessibilityLabel("Steer")
                     .tint(KTheme.accent)
+                }
+                if canReactivate {
+                    Button {
+                        showingReactivate = true
+                    } label: {
+                        Label("Reactivate", systemImage: "arrow.counterclockwise")
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Reactivate")
+                    .tint(KTheme.revealed)
+                }
+                if canArchive {
+                    Button {
+                        runAction { try await APIClient.shared.archiveJob(baseURL: baseURL, slug: job.slug) }
+                    } label: {
+                        Label("Archive", systemImage: "archivebox")
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Archive")
+                    .tint(KTheme.text2)
+                }
+                if isArchived {
+                    Button {
+                        runAction { try await APIClient.shared.unarchiveJob(baseURL: baseURL, slug: job.slug) }
+                    } label: {
+                        Label("Unarchive", systemImage: "tray.and.arrow.up")
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Unarchive")
+                    .tint(KTheme.accent)
+
+                    Button(role: .destructive) {
+                        showingDeleteConfirm = true
+                    } label: {
+                        Label("Delete Forever", systemImage: "trash")
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Delete Forever")
                 }
                 if isEditable {
                     Button {
@@ -539,6 +615,80 @@ private struct QuestionSummary: View {
         .padding(10)
         .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
         .listRowBackground(KTheme.counterSoft)
+    }
+}
+
+/// The reactivate prompt: an optional free-text message folded into the
+/// resume prompt of the done job's original zeus session. Mirrors
+/// SteerView's shape, but an empty message is fine — reactivating without
+/// steering just wakes the session with the standard fresh-branch brief.
+private struct ReactivateView: View {
+    let job: WebJob
+    let baseURL: String
+    var onReactivated: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var textFocused: Bool
+    @State private var text = ""
+    @State private var isBusy = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Form {
+            kSection {
+                Text("Resumes the job's original zeus session in a fresh cell (same worktree path, new branch — the old PR is already merged) and moves the job back to working.")
+                    .font(.voice(12))
+                    .foregroundStyle(KTheme.text2)
+            }
+            kSection("What to adjust (optional)") {
+                TextEditor(text: $text)
+                    .focused($textFocused)
+                    .scrollContentBackground(.hidden)
+                    .kField(focused: textFocused, minHeight: 120)
+                    .listRowBackground(Color.clear)
+            }
+            if let errorMessage {
+                kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
+            }
+        }
+        .kListStyle()
+        .navigationTitle("Reactivate \(job.title)")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                SheetCloseButton(label: "Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    send()
+                } label: {
+                    Label("Reactivate", systemImage: "arrow.counterclockwise")
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Reactivate")
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy)
+            }
+        }
+        .disabled(isBusy)
+    }
+
+    private func send() {
+        isBusy = true
+        errorMessage = nil
+        Task {
+            do {
+                try await APIClient.shared.reactivateJob(
+                    baseURL: baseURL, slug: job.slug,
+                    text: text.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                isBusy = false
+                onReactivated()
+            } catch {
+                isBusy = false
+                errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 }
 

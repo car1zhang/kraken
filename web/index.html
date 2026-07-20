@@ -24,6 +24,14 @@
   </header>
 
   <main class="board" id="board"></main>
+  <!-- archived jobs: a collapsible drawer below the board, not a sixth
+       column — the five live columns keep full width -->
+  <section class="archive-drawer" id="archive-drawer" hidden>
+    <button class="archive-head" id="archive-toggle">
+      <span class="tri" id="archive-tri">▸</span> ARCHIVED <span class="n" id="archive-count">0</span>
+    </button>
+    <div class="archive-cards" id="archive-cards" hidden></div>
+  </section>
   <main class="dag" id="dag" hidden>
     <div class="dag-canvas" id="dag-canvas">
       <svg id="dag-edges"></svg>
@@ -45,7 +53,8 @@
     </div>
   </div>
 
-  <!-- message zeus: mid-run instructions to a live cell -->
+  <!-- message zeus: mid-run instructions to a live cell; the same modal
+       doubles as the reactivate prompt (optional message) -->
   <div class="overlay" id="steer-overlay" hidden>
     <div class="panel">
       <div class="panel-head">

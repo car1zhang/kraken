@@ -281,9 +281,14 @@ private struct JobCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(job.slug)
+                Text(job.title)
                     .font(.data(13, weight: .bold))
                     .foregroundStyle(KTheme.text)
+                if job.archived == true, job.title != job.slug {
+                    Text("as \(job.slug)")
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.text2)
+                }
                 Spacer()
                 if hasPendingQuestion {
                     Image(systemName: "flag.fill")
@@ -381,7 +386,7 @@ private struct BoardOverviewSheet: View {
             Rectangle()
                 .fill(BoardTheme.color(forState: job.state))
                 .frame(width: 6, height: 6)
-            Text(job.slug)
+            Text(job.title)
                 .font(.data(13))
                 .foregroundStyle(KTheme.text)
             Spacer()

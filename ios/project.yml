@@ -62,6 +62,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.carl.KrakenUITests
         SWIFT_VERSION: "5.10"
         TEST_TARGET_NAME: Kraken
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   Kraken:
     build:

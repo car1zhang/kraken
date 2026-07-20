@@ -22,6 +22,7 @@ const STATE_COLOR = {
   queued: "var(--accent)",
   done: "var(--text-2)",
   draft: "var(--text-2)",
+  archived: "var(--text-2)",
 };
 
 let jobsBySlug = {};
@@ -105,11 +106,15 @@ function cardHTML(j, col) {
     .join("");
   const killable = ["working", "blocked"].includes(col) && j.live;
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
+  // archivable mirrors the server's rule (no cell in flight); a live job
+  // shows kill instead — kill returns it to draft, which then archives
+  const archivable = !j.live && ["draft", "queued", "done"].includes(col);
   return `<div class="card ${j.question || j.health ? "flagged" : ""} ${editable ? "editable" : ""}" style="--state:${color}"
       draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
+      ${archivable ? `<button class="kill archive" data-slug="${esc(j.slug)}" title="archive job (frees the slug; reversible)">🗄</button>` : ""}
       ${killable ? `<button class="kill" data-slug="${esc(j.slug)}" title="kill cell → back to draft">✕</button>` : ""}
     </div>
     <div class="meta">
@@ -127,6 +132,7 @@ function cardHTML(j, col) {
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
+    ${col === "done" && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
     ${col === "blocked" && j.live && j.type === "build" ? `<button class="btn send" data-slug="${esc(j.slug)}">▶ send</button>` : ""}
     ${col === "blocked" && j.live && j.type === "build" ? `<div class="review-row">
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="nvim">⌨ nvim</button>
@@ -139,15 +145,21 @@ function cardHTML(j, col) {
 function render(board) {
   jobsBySlug = {};
   const byCol = Object.fromEntries(COLUMNS.map((c) => [c.key, []]));
+  const archived = [];
   let flags = 0;
   for (const j of board.jobs || []) {
     jobsBySlug[j.slug] = j;
+    if (j.archived) {
+      archived.push(j);
+      continue; // drawer, not a column
+    }
     // an unhealthy cell is blocked regardless of its file state — it needs
     // your retry, and the daemon isn't going to fix it
     byCol[j.health ? "blocked" : columnFor(j.state)].push(j);
     if (j.question) flags++;
     if (j.health) flags++;
   }
+  renderArchiveDrawer(archived);
   document.getElementById("board").innerHTML = COLUMNS.map(
     (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
       <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
@@ -171,6 +183,55 @@ function render(board) {
   document.getElementById("flag-stat").textContent = flags ? `⚑ ${flags}` : "";
   document.getElementById("tick-stat").textContent = new Date().toLocaleTimeString();
 }
+
+// ---- archived drawer (collapsible, below the board) ----
+
+let archiveOpen = localStorage.getItem("kraken-archive-open") === "1";
+
+function archivedCardHTML(j) {
+  const label = j.display_slug || j.slug;
+  const renamed = j.display_slug && j.display_slug !== j.slug;
+  const chips = (j.artifacts || [])
+    .map(
+      (a) =>
+        `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(label)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
+    )
+    .join("");
+  return `<div class="card archived" style="--state:var(--text-2)" data-slug="${esc(j.slug)}">
+    <div class="card-top">
+      <span class="slug">${esc(label)}</span>
+      ${renamed ? `<span class="state">as ${esc(j.slug)}</span>` : ""}
+      <span class="state">● archived</span>
+    </div>
+    <div class="meta">
+      <span>${esc(j.type)}</span>
+      <span>${esc(j.repo)}</span>
+      <span>${age(j.mtime)}</span>
+    </div>
+    ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
+    ${chips ? `<div class="chips">${chips}</div>` : ""}
+    <div class="review-row">
+      <button class="btn unarchive" data-slug="${esc(j.slug)}">⬆ unarchive</button>
+      <button class="btn danger delete" data-slug="${esc(j.slug)}">✕ delete forever</button>
+    </div>
+  </div>`;
+}
+
+function renderArchiveDrawer(archived) {
+  const drawer = document.getElementById("archive-drawer");
+  drawer.hidden = view !== "board" || archived.length === 0;
+  document.getElementById("archive-count").textContent = archived.length;
+  document.getElementById("archive-tri").textContent = archiveOpen ? "▾" : "▸";
+  const cards = document.getElementById("archive-cards");
+  cards.hidden = !archiveOpen;
+  cards.innerHTML = archived.map(archivedCardHTML).join("");
+}
+
+document.getElementById("archive-toggle").addEventListener("click", () => {
+  archiveOpen = !archiveOpen;
+  localStorage.setItem("kraken-archive-open", archiveOpen ? "1" : "0");
+  refresh();
+});
 
 // ---- drag & drop (legal moves only) ----
 
@@ -377,6 +438,29 @@ document.addEventListener("click", (ev) => {
     post("/api/retry", { slug: retry.dataset.slug });
     return;
   }
+  const archive = ev.target.closest("button.archive");
+  if (archive) {
+    post("/api/archive", { slug: archive.dataset.slug });
+    return;
+  }
+  const unarchive = ev.target.closest(".unarchive");
+  if (unarchive) {
+    post("/api/unarchive", { slug: unarchive.dataset.slug });
+    return;
+  }
+  const del = ev.target.closest("button.delete");
+  if (del) {
+    const slug = del.dataset.slug;
+    if (confirm(`delete ${slug} forever? the archived job file and its artifact copies are permanently removed.`)) {
+      post("/api/delete", { slug });
+    }
+    return;
+  }
+  const reactivate = ev.target.closest(".reactivate");
+  if (reactivate) {
+    openSteer(reactivate.dataset.slug, "reactivate");
+    return;
+  }
   const kill = ev.target.closest(".kill");
   if (kill) {
     const slug = kill.dataset.slug;
@@ -409,25 +493,35 @@ document.addEventListener("click", (ev) => {
 
 const steerOverlay = document.getElementById("steer-overlay");
 let steerSlug = null;
+let steerMode = "steer"; // "steer" | "reactivate" — same modal, different endpoint
 
-function openSteer(slug) {
+function openSteer(slug, mode = "steer") {
   steerSlug = slug;
-  document.getElementById("steer-title").textContent = slug + " — message zeus";
-  document.getElementById("steer-text").value = "";
+  steerMode = mode;
+  document.getElementById("steer-title").textContent =
+    mode === "reactivate" ? slug + " — reactivate (same zeus session)" : slug + " — message zeus";
+  const text = document.getElementById("steer-text");
+  text.placeholder =
+    mode === "reactivate"
+      ? "optional: what to adjust — delivered as the resume prompt to the job's original zeus session (leave empty to just wake it)"
+      : "message zeus directly — steering / pivot instruction, delivered straight to its pane";
+  text.value = "";
   document.getElementById("steer-note").textContent = "";
+  document.getElementById("steer-send").textContent = mode === "reactivate" ? "reactivate ⌘⏎" : "send ⌘⏎";
   steerOverlay.hidden = false;
-  document.getElementById("steer-text").focus();
+  text.focus();
 }
 
 document.getElementById("steer-send").addEventListener("click", async () => {
   const text = document.getElementById("steer-text").value.trim();
-  if (!text) {
+  // a reactivation message is optional; a steer without text is a mistake
+  if (!text && steerMode !== "reactivate") {
     document.getElementById("steer-note").textContent = "message is empty";
     return;
   }
   const btn = document.getElementById("steer-send");
   btn.disabled = true;
-  const ok = await post("/api/steer", { slug: steerSlug, text });
+  const ok = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug: steerSlug, text });
   btn.disabled = false;
   if (ok) steerOverlay.hidden = true;
   else document.getElementById("steer-note").textContent = "send failed — see status bar";
@@ -647,6 +741,7 @@ document.querySelectorAll(".viewtab").forEach((tab) =>
       t.classList.toggle("active", t.dataset.view === view));
     document.getElementById("board").hidden = view !== "board";
     document.getElementById("dag").hidden = view !== "dag";
+    if (view !== "board") document.getElementById("archive-drawer").hidden = true;
     refresh();
   }));
 
@@ -655,6 +750,7 @@ function applyView() {
     t.classList.toggle("active", t.dataset.view === view));
   document.getElementById("board").hidden = view !== "board";
   document.getElementById("dag").hidden = view !== "dag";
+  if (view !== "board") document.getElementById("archive-drawer").hidden = true;
 }
 
 const NODE_W = 190;
@@ -686,7 +782,9 @@ function dagLayers(jobs) {
 }
 
 function renderDag(board) {
-  const jobs = board.jobs || [];
+  // archived jobs stay out of the dag: they're out of the active namespace,
+  // and their prereq slugs may now point at unrelated newer jobs
+  const jobs = (board.jobs || []).filter((j) => !j.archived);
   const nodesEl = document.getElementById("dag-nodes");
   const edgesEl = document.getElementById("dag-edges");
   if (!jobs.length) {

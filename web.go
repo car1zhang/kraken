@@ -104,6 +104,15 @@ type webJob struct {
 	// board shows it in BLOCKED with a retry affordance.
 	Health  string `json:"health,omitempty"`
 	ModTime int64  `json:"mtime"`
+	// Archived jobs ride the same list with State "archived". Their Slug is
+	// the numbered archive file base (unique even when an active job reuses
+	// the freed slug — it's what unarchive/delete target); DisplaySlug
+	// carries the original slug for rendering.
+	Archived    bool   `json:"archived,omitempty"`
+	DisplaySlug string `json:"display_slug,omitempty"`
+	// Reactivatable marks a done job whose zeus session id is recorded, so
+	// the UIs only offer the reactivate action where it can actually work.
+	Reactivatable bool `json:"reactivatable,omitempty"`
 }
 
 type webBoard struct {
@@ -165,12 +174,24 @@ func artifactPath(j *Job, home, name string) (string, bool) {
 		p = filepath.Join(root, name)
 	case "pluto":
 		// pluto copies are flat (<slug>.<name>), never nested
-		if strings.Contains(name, "/") || strings.HasSuffix(name, jobSuffix) {
+		if strings.Contains(name, "/") {
 			return "", false
 		}
 		root = plutoDir()
 		p = filepath.Join(root, slugify(j.Slug)+"."+name)
+	case "archive":
+		// archived copies are flat under the numbered archive prefix
+		if j.ArchivedName == "" || strings.Contains(name, "/") {
+			return "", false
+		}
+		root = archiveDir()
+		p = filepath.Join(root, j.ArchivedName+"."+name)
 	default:
+		return "", false
+	}
+	// the flat homes join <prefix>.<name>, so a name like "job.md" would
+	// reassemble the job FILE's own path — job files are never artifacts
+	if strings.HasSuffix(p, jobSuffix) {
 		return "", false
 	}
 	// belt-and-suspenders: the cleaned path must still sit under its home
@@ -263,7 +284,8 @@ func buildWebBoard() webBoard {
 			Slug: j.Slug, Type: j.Type, Repo: j.Repo,
 			State: displayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
 			Success: j.Success, Prereqs: prereqs, Artifacts: jobArtifacts(j),
-			ModTime: j.ModTime.Unix(),
+			ModTime:       j.ModTime.Unix(),
+			Reactivatable: j.State == "done" && j.Session != "",
 		}
 		if live[cellSession(j)] {
 			wj.Cell, wj.Live = cellSession(j), true
@@ -300,7 +322,29 @@ func buildWebBoard() webBoard {
 		}
 		board.Jobs = append(board.Jobs, wj)
 	}
+	// archived jobs ride the same list under state "archived": no cell, no
+	// prereqs, no derivation — just the file, its artifacts, and the two
+	// actions (unarchive, delete) keyed on the archive file base
+	for _, a := range loadArchivedJobs() {
+		board.Jobs = append(board.Jobs, webJob{
+			Slug: a.ArchivedName, Type: a.Type, Repo: a.Repo,
+			State: "archived", Archived: true, DisplaySlug: a.Slug,
+			Err: a.Err, Outcome: a.Outcome, Success: a.Success,
+			Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
+		})
+	}
 	return board
+}
+
+// archivedWebArtifacts lists an archived job's artifact copies for the
+// wire, served from the archive home.
+func archivedWebArtifacts(a *Job) []webArtifact {
+	var out []webArtifact
+	for _, p := range archivedArtifactPaths(a) {
+		name := strings.TrimPrefix(filepath.Base(p), a.ArchivedName+".")
+		out = append(out, webArtifact{Name: name, URL: "/api/artifact/" + a.ArchivedName + "/archive/" + name})
+	}
+	return out
 }
 
 // --- board moves (the web UI's only writes; every one re-validates the
@@ -584,6 +628,49 @@ func webKill(req webReq) error {
 	return err
 }
 
+// webArchive moves a job into the archive. Server-side revalidation
+// mirrors archiveJob's own checks; the error text spells out the kill→draft
+// two-step for live jobs since that's the UX carl approved.
+func webArchive(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	_, err = archiveJob(j, liveSessions())
+	return err
+}
+
+// webUnarchive restores an archived job (by archive file base) to the
+// active dir under its original slug.
+func webUnarchive(req webReq) error {
+	a := archivedJobByName(loadArchivedJobs(), req.Slug)
+	if a == nil {
+		return fmt.Errorf("no archived job %q", req.Slug)
+	}
+	return unarchiveJob(a)
+}
+
+// webDelete permanently removes an archived job (file + archived artifact
+// copies). The browser confirms before posting; only archive names ever
+// resolve here, so nothing active can be deleted.
+func webDelete(req webReq) error {
+	a := archivedJobByName(loadArchivedJobs(), req.Slug)
+	if a == nil {
+		return fmt.Errorf("no archived job %q", req.Slug)
+	}
+	return deleteArchivedJob(a)
+}
+
+// webReactivate resumes a done job's zeus session for adjustments; req.Text
+// carries carl's optional steering message into the resume prompt.
+func webReactivate(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	return reactivateJob(j, "", oneLine(req.Text))
+}
+
 // --- job authoring (draft + spec directly in the browser) ---
 
 // editable jobs are ones with no lifecycle in flight: drafts, errored files,
@@ -756,9 +843,10 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 }
 
 // serializeJobFile renders form fields back into canonical frontmatter +
-// spec + the preserved kraken-owned tail. Round-trips through the strict
-// parser by construction.
-func serializeJobFile(f jobFormFields, state, outcome, logSection string) string {
+// spec + the preserved kraken-owned tail (state, outcome, session, run —
+// the form can't touch them by construction). Round-trips through the
+// strict parser by construction.
+func serializeJobFile(f jobFormFields, state, outcome, session string, run int, logSection string) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "job: %s\n", f.Slug)
@@ -792,6 +880,12 @@ func serializeJobFile(f jobFormFields, state, outcome, logSection string) string
 	}
 	if outcome != "" {
 		fmt.Fprintf(&b, "outcome: %s\n", outcome)
+	}
+	if session != "" {
+		fmt.Fprintf(&b, "session: %s\n", session)
+	}
+	if run > 0 {
+		fmt.Fprintf(&b, "run: %d\n", run)
 	}
 	b.WriteString("---\n\n")
 	if spec := strings.TrimSpace(f.Spec); spec != "" {
@@ -840,7 +934,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Slug = j.Slug // slug is the filename; immutable here
 	_, logSection := splitBodyLog(j.Body)
-	content := serializeJobFile(req, j.State, j.Outcome, logSection)
+	content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Run, logSection)
 	if err := atomicWrite(j.File, content); err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -956,6 +1050,10 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/steer", webAction(webSteer))
 	mux.HandleFunc("/api/send", webAction(webSend))
 	mux.HandleFunc("/api/review", webAction(webReview))
+	mux.HandleFunc("/api/archive", webAction(webArchive))
+	mux.HandleFunc("/api/unarchive", webAction(webUnarchive))
+	mux.HandleFunc("/api/delete", webAction(webDelete))
+	mux.HandleFunc("/api/reactivate", webAction(webReactivate))
 	mux.HandleFunc("/api/job/raw", webJobRaw)
 	mux.HandleFunc("/api/job/create", webJobCreate)
 	mux.HandleFunc("/api/job/save", webJobSave)
@@ -968,7 +1066,14 @@ func cmdWeb(args []string) {
 			http.NotFound(w, r)
 			return
 		}
-		j := jobBySlug(loadJobs(), parts[0])
+		// the home decides the namespace the job resolves in: an archived
+		// "foo-2" and an active job slugged "foo-2" are different files
+		var j *Job
+		if parts[1] == "archive" {
+			j = archivedJobByName(loadArchivedJobs(), parts[0])
+		} else {
+			j = jobBySlug(loadJobs(), parts[0])
+		}
 		if j == nil {
 			http.NotFound(w, r)
 			return

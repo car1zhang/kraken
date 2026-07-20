@@ -94,6 +94,7 @@ struct SettingsView: View {
             }
             .background(KTheme.ground)
             .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
             .task {
                 if notifyBlocked {
                     notificationManager.refreshAuthorizationStatus()
