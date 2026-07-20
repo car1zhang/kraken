@@ -16,7 +16,7 @@ import (
 )
 
 // k web — a localhost web UI over the same file-derived state as k j and the
-// viewer: jobs as a kanban board, escalations inline, artifacts rendered in
+// viewer: jobs as a kanban board, questions answered inline, artifacts rendered in
 // the browser. Read-only in this first version; answering stays in k v.
 // Vanilla html/css/js, embedded so the installed binary is self-contained.
 
@@ -34,30 +34,71 @@ type webPrereq struct {
 	Done  bool   `json:"done"`
 }
 
-// webEsc carries the escalation body too — the answer modal renders it (the
-// Escalation type itself excludes Body from JSON for the board's sake).
-type webEsc struct {
-	File     string `json:"file"`
-	Status   string `json:"status"`
-	Category string `json:"category"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	ModTime  int64  `json:"mtime"`
+// webQuestionOption/webQuestionItem/webQuestion mirror status.go's
+// QuestionOption/QuestionItem/PendingQuestion for the wire: those types carry
+// json tags matched to Claude's AskUserQuestion tool-call input shape
+// (multiSelect etc, decoded straight from the transcript), which isn't the
+// API's own naming convention — so the board gets its own DTO instead of
+// reusing those tags directly.
+type webQuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+type webQuestionItem struct {
+	Question    string              `json:"question"`
+	Header      string              `json:"header"`
+	MultiSelect bool                `json:"multi_select"`
+	Options     []webQuestionOption `json:"options"`
+}
+
+type webQuestion struct {
+	ToolUseID string            `json:"tool_use_id"`
+	Questions []webQuestionItem `json:"questions"`
+}
+
+// webQuestionFrom converts status.go's PendingQuestion into the board's DTO.
+func webQuestionFrom(pq *PendingQuestion) *webQuestion {
+	if pq == nil {
+		return nil
+	}
+	wq := &webQuestion{ToolUseID: pq.ToolUseID}
+	for _, q := range pq.Questions {
+		item := webQuestionItem{Question: q.Question, Header: q.Header, MultiSelect: q.MultiSelect}
+		for _, o := range q.Options {
+			item.Options = append(item.Options, webQuestionOption{Label: o.Label, Description: o.Description})
+		}
+		wq.Questions = append(wq.Questions, item)
+	}
+	return wq
+}
+
+// webAgent is one roster entry: a live subagent in the cell's tmux session.
+type webAgent struct {
+	Name  string `json:"name"`
+	Model string `json:"model"`
 }
 
 type webJob struct {
-	Slug        string        `json:"slug"`
-	Type        string        `json:"type"`
-	Repo        string        `json:"repo"`
-	State       string        `json:"state"`
-	Err         string        `json:"err,omitempty"`
-	Outcome     string        `json:"outcome,omitempty"`
-	Success     string        `json:"success,omitempty"`
-	Cell        string        `json:"cell,omitempty"`
-	Live        bool          `json:"live"`
-	Prereqs     []webPrereq   `json:"prereqs,omitempty"`
-	Escalations []webEsc      `json:"escalations,omitempty"`
-	Artifacts   []webArtifact `json:"artifacts,omitempty"`
+	Slug      string        `json:"slug"`
+	Type      string        `json:"type"`
+	Repo      string        `json:"repo"`
+	State     string        `json:"state"`
+	Err       string        `json:"err,omitempty"`
+	Outcome   string        `json:"outcome,omitempty"`
+	Success   string        `json:"success,omitempty"`
+	Cell      string        `json:"cell,omitempty"`
+	Live      bool          `json:"live"`
+	Prereqs   []webPrereq   `json:"prereqs,omitempty"`
+	Artifacts []webArtifact `json:"artifacts,omitempty"`
+	// Detail is the cell's last words: for a live started cell, the last
+	// assistant text block of zeus' transcript — one line, truncated.
+	Detail string `json:"detail,omitempty"`
+	// Question mirrors an unanswered AskUserQuestion call in zeus'
+	// transcript; the board renders it as header + option buttons.
+	Question *webQuestion `json:"question,omitempty"`
+	// Roster lists the cell's live subagents (nested claude peers).
+	Roster []webAgent `json:"roster,omitempty"`
 	// Health is a computed condition on the live cell ("" = healthy): API
 	// errors or dead agent processes. Never written to the job file — the
 	// board shows it in BLOCKED with a retry affordance.
@@ -166,29 +207,51 @@ func artifactContentType(p string) string {
 	}
 }
 
+// cellZeusTranscript resolves a live job's zeus peer and (best-effort) its
+// transcript path in one shot — the shared lookup behind the board's detail
+// and question fields, and the question-answer action. An unresolvable
+// transcript (fresh fork, no session file yet) reads as "" rather than an
+// error — the board field is just omitted.
+func cellZeusTranscript(j *Job, all []*Peer) (zeus *Peer, transcript string) {
+	zeus = cellZeus(j, all)
+	if zeus == nil {
+		return nil, ""
+	}
+	path, err := readTranscriptPath(zeus)
+	if err != nil {
+		return zeus, ""
+	}
+	return zeus, path
+}
+
+// lastAssistantText scans a transcript for the last assistant text block
+// (parseBlocks' "text" kind — thinking and tool_use blocks don't count),
+// tail-reading via lastBlocks the same way k r does so huge transcripts stay
+// fast. "" when the file is unreadable or has no assistant text within the
+// lookback window.
+func lastAssistantText(path string) string {
+	blocks, _, err := lastBlocks(path, 20)
+	if err != nil {
+		return ""
+	}
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if blocks[i].kind == "text" {
+			return truncateOneLine(blocks[i].text, 200)
+		}
+	}
+	return ""
+}
+
 func buildWebBoard() webBoard {
 	jobs := loadJobs()
 	bySlug := map[string]*Job{}
 	for _, j := range jobs {
 		bySlug[j.Slug] = j
 	}
-	escs := loadEscalations(jobs)
-	escByJob := map[string][]webEsc{}
-	for _, e := range escs {
-		escByJob[e.JobSlug] = append(escByJob[e.JobSlug], webEsc{
-			File: e.File, Status: e.Status, Category: e.Category,
-			Title: e.Title, Body: e.Body, ModTime: e.ModTime.Unix(),
-		})
-	}
 	live := liveSessions()
+	times := liveSessionTimes()
 	st, ok := readDaemonStatus()
 	all, _ := orderAll(discoverAll())
-	peerByName := map[string]*Peer{}
-	for _, p := range all {
-		if p.Name != "" {
-			peerByName[p.Name] = p
-		}
-	}
 	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}}
 	for _, j := range jobs {
 		var prereqs []webPrereq
@@ -199,8 +262,7 @@ func buildWebBoard() webBoard {
 		wj := webJob{
 			Slug: j.Slug, Type: j.Type, Repo: j.Repo,
 			State: displayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
-			Success: j.Success, Prereqs: prereqs,
-			Escalations: escByJob[j.Slug], Artifacts: jobArtifacts(j),
+			Success: j.Success, Prereqs: prereqs, Artifacts: jobArtifacts(j),
 			ModTime: j.ModTime.Unix(),
 		}
 		if live[cellSession(j)] {
@@ -208,6 +270,32 @@ func buildWebBoard() webBoard {
 			if j.started() && j.State != "done" {
 				board.LiveCells++
 				wj.Health = cellHealth(j, all)
+				// recompute a fresher state than the daemon's last-written
+				// file so the board doesn't lag its tick; falls back to the
+				// file's state (already in wj.State) when the worktree can't
+				// be resolved
+				if repo, rerr := resolveRepo(j.Repo); rerr == nil {
+					if wt := existingWorktree(j, repo); wt != "" {
+						lastActivity := podLastActivity(wt)
+						// a live session is at least as fresh as its own creation —
+						// covers pre-first-transcript startup and stale transcripts
+						// from a previous run at the same worktree path
+						if created, ok := times[cellSession(j)]; ok && created.After(lastActivity) {
+							lastActivity = created
+						}
+						wj.State = deriveState(j, true, lastActivity, time.Now())
+					}
+				}
+				if _, transcript := cellZeusTranscript(j, all); transcript != "" {
+					wj.Detail = lastAssistantText(transcript)
+					wj.Question = webQuestionFrom(pendingQuestion(transcript))
+				}
+				sess := cellSession(j)
+				for _, p := range all {
+					if p.Agent == "claude" && p.TmuxSession == sess && p.Depth > 0 {
+						wj.Roster = append(wj.Roster, webAgent{Name: p.Name, Model: p.Model})
+					}
+				}
 			}
 		}
 		board.Jobs = append(board.Jobs, wj)
@@ -220,7 +308,6 @@ func buildWebBoard() webBoard {
 
 type webReq struct {
 	Slug string `json:"slug"`
-	File string `json:"file,omitempty"` // escalation file, for answer
 	Text string `json:"text,omitempty"`
 }
 
@@ -281,53 +368,96 @@ func webQueue(req webReq) error {
 	return nil
 }
 
-// webDone is the review→done drag: complete the job, auto-filling the outcome
-// from its success criterion (the exit criterion, per the board contract).
+// webDone is the blocked→done drag: complete the job, auto-filling the
+// outcome from its success criterion (the exit criterion, per the board
+// contract) since there's no crew-authored done marker anymore. Validation
+// mirrors cmdDone (started, not already done) rather than the board's
+// currently-displayed column: the board can be a tick fresher than the job
+// file (see buildWebBoard's derive-ahead), so gating on a stale "blocked"
+// read would 409 a legal drag. The board's column gating (drag only fires
+// from BLOCKED) is the UX guard; this is just the server-side floor.
 func webDone(req webReq) error {
-	j, bySlug, err := webJobFor(req.Slug)
+	j, _, err := webJobFor(req.Slug)
 	if err != nil {
 		return err
 	}
-	switch displayState(j, bySlug) {
-	case "testing", "pr-open", "merged":
-	default:
-		return fmt.Errorf("%s is %s — only review-column jobs move to done", j.Slug, j.State)
+	if !j.started() {
+		return fmt.Errorf("%s hasn't started — nothing to complete", j.Slug)
 	}
-	// outcome preference: the crew's own words (done marker), then the
-	// success criterion, then a bare "accepted"
+	if j.State == "done" {
+		return fmt.Errorf("%s is already done", j.Slug)
+	}
 	outcome := "accepted"
-	if data, rerr := os.ReadFile(cellDoneMarker(j)); rerr == nil {
-		if line := oneLine(strings.SplitN(string(data), "\n", 2)[0]); line != "" {
-			outcome = line
-		}
-	} else if j.Success != "" {
+	if j.Success != "" {
 		outcome = "met: " + oneLine(j.Success)
 	}
 	_, err = doneJob(j, truncateOneLine(outcome, 200))
 	return err
 }
 
-// webAnswer is the blocked→working drag: the modal's text goes to the chosen
-// escalation, which unblocks the cell via the normal bus path.
-func webAnswer(req webReq) error {
-	j, bySlug, err := webJobFor(req.Slug)
+// webAnswerQuestion is the blocked→working move for an interactive
+// AskUserQuestion prompt: the browser posts the 1-based option index as a
+// single digit, delivered as a literal keystroke — that's how Claude Code's
+// own selection dialog submits (the digit press IS the submit; a trailing
+// Enter would fall through to whatever prompt follows).
+func webAnswerQuestion(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
 	if err != nil {
 		return err
 	}
-	switch displayState(j, bySlug) {
-	case "blocked", "plan-review":
-	default:
-		return fmt.Errorf("%s is %s — nothing to answer", j.Slug, j.State)
+	digit := strings.TrimSpace(req.Text)
+	if len(digit) != 1 || digit[0] < '1' || digit[0] > '9' {
+		return fmt.Errorf("answer must be a single digit 1-9")
 	}
-	if strings.TrimSpace(req.Text) == "" {
-		return fmt.Errorf("empty answer")
+	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
+		return fmt.Errorf("%s has no live cell to answer", j.Slug)
 	}
-	for _, e := range loadEscalations([]*Job{j}) {
-		if e.File == req.File && e.Status == "open" {
-			return answerEscalation(j, e, req.Text)
-		}
+	all, _ := orderAll(discoverAll())
+	zeus, transcript := cellZeusTranscript(j, all)
+	if zeus == nil {
+		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
 	}
-	return fmt.Errorf("escalation not found or already answered — refresh the board")
+	if transcript == "" {
+		return fmt.Errorf("%s has no pending question — refresh the board", j.Slug)
+	}
+	pq := pendingQuestion(transcript)
+	if pq == nil {
+		return fmt.Errorf("%s has no pending question — refresh the board", j.Slug)
+	}
+	if !answerableSingleDigit(pq) {
+		return fmt.Errorf("this question needs the pane — answer with k o %s", cellSession(j))
+	}
+	if err := sendDigit(zeus, digit); err != nil {
+		return fmt.Errorf("send digit: %v", err)
+	}
+	if err := appendMidRunLog(j, "me→zeus", "answered question: option "+digit); err != nil {
+		return fmt.Errorf("delivered, but mid-run log append failed: %v", err)
+	}
+	return writeJobState(j, "working")
+}
+
+// answerableSingleDigit reports whether a pending question can be answered by
+// a single-digit board button: exactly one question, and it isn't
+// multi-select. A multi-question or multi-select prompt packs more choice
+// into the payload than one digit can carry — those need the actual pane.
+func answerableSingleDigit(q *PendingQuestion) bool {
+	return q != nil && len(q.Questions) == 1 && !q.Questions[0].MultiSelect
+}
+
+// sendDigit types a single literal keystroke into a pane with no trailing
+// Enter — sendMessage() always appends Enter, which would double-submit past
+// an AskUserQuestion dialog into whatever the agent does next. Verify before
+// acting, mirroring sendMessage's own re-check right before typing — inverted,
+// since sendDigit needs the question prompt to still be showing (sendMessage
+// refuses when one is; here the digit is meaningless without one).
+func sendDigit(p *Peer, digit string) error {
+	if p.Status == "shell" {
+		return fmt.Errorf("%s is in shell mode — sending a digit now would run it as a shell command", displayName(p))
+	}
+	if !paneShowsQuestion(p.Pane) {
+		return fmt.Errorf("the pane no longer shows the question — refresh the board")
+	}
+	return exec.Command("tmux", "send-keys", "-l", "-t", p.Pane, digit).Run()
 }
 
 // webRetry pokes an unhealthy cell agent; shared core in retryCell.
@@ -339,10 +469,11 @@ func webRetry(req webReq) error {
 	return retryCell(j)
 }
 
-// webSteer delivers a mid-run instruction to a live cell. Routing follows the
-// crew contract: all inbound human traffic lands in hermes, which relays to
-// zeus (and knows a material pivot re-triggers plan approval). The message is
-// also appended to the job's mid-run log — the durable trail.
+// webSteer delivers a mid-run instruction directly to zeus — there's no
+// intermediary anymore, so the message goes straight into its pane. Also
+// appended to the job's mid-run log (the durable trail) and, on successful
+// delivery, marks the job working (a steer is carl acting, which un-stalls
+// a blocked cell same as an answered question would).
 func webSteer(req webReq) error {
 	j, _, err := webJobFor(req.Slug)
 	if err != nil {
@@ -356,17 +487,47 @@ func webSteer(req webReq) error {
 		return fmt.Errorf("%s has no live cell to steer", j.Slug)
 	}
 	all, _ := orderAll(discoverAll())
-	_, hermes := cellAgents(j, all)
-	if hermes == nil {
-		return fmt.Errorf("%s: hermes not found — k o %s to investigate", j.Slug, cellSession(j))
+	zeus := cellZeus(j, all)
+	if zeus == nil {
+		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
 	}
-	if err := appendMidRunLog(j, "me→hermes", "steering: "+oneLine(text)); err != nil {
+	if err := appendMidRunLog(j, "me→zeus", "steering: "+oneLine(text)); err != nil {
 		return fmt.Errorf("mid-run log append failed: %v", err)
 	}
-	if err := sendMessage(hermes, "steering from carl: "+text); err != nil {
+	if err := sendMessage(zeus, "steering from carl: "+text); err != nil {
 		return fmt.Errorf("logged, but delivery failed: %v", err)
 	}
-	return nil
+	return writeJobState(j, "working")
+}
+
+// webSend is the blocked→working "begin implementation" move for a build
+// job whose doc has been approved out-of-band (in conversation, not tracked
+// by kraken): carl's click on ▶ send IS the approval, delivered as zeus'
+// own '/send' trigger phrase from its brief.
+func webSend(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	if j.Type != "build" {
+		return fmt.Errorf("%s is not a build job — nothing to send", j.Slug)
+	}
+	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
+		return fmt.Errorf("%s has no live cell to send", j.Slug)
+	}
+	all, _ := orderAll(discoverAll())
+	zeus := cellZeus(j, all)
+	if zeus == nil {
+		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
+	}
+	msg := "/send — the doc is approved; begin implementation per the spec, following your brief's phase 2"
+	if err := sendMessage(zeus, msg); err != nil {
+		return fmt.Errorf("%s: %v", j.Slug, err)
+	}
+	if err := appendMidRunLog(j, "me→zeus", "/send"); err != nil {
+		return fmt.Errorf("delivered, but mid-run log append failed: %v", err)
+	}
+	return writeJobState(j, "working")
 }
 
 // webReview is the PR-review handoff: open the cell's worktree in an editor
@@ -657,9 +818,9 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Type {
-	case "build", "explore", "question":
+	case "build", "info":
 	default:
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be build, explore, or question"})
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be build or info"})
 		return
 	}
 	j := jobBySlug(loadJobs(), req.Slug)
@@ -789,10 +950,11 @@ func cmdWeb(args []string) {
 	})
 	mux.HandleFunc("/api/queue", webAction(webQueue))
 	mux.HandleFunc("/api/done", webAction(webDone))
-	mux.HandleFunc("/api/answer", webAction(webAnswer))
+	mux.HandleFunc("/api/question", webAction(webAnswerQuestion))
 	mux.HandleFunc("/api/retry", webAction(webRetry))
 	mux.HandleFunc("/api/kill", webAction(webKill))
 	mux.HandleFunc("/api/steer", webAction(webSteer))
+	mux.HandleFunc("/api/send", webAction(webSend))
 	mux.HandleFunc("/api/review", webAction(webReview))
 	mux.HandleFunc("/api/job/raw", webJobRaw)
 	mux.HandleFunc("/api/job/create", webJobCreate)

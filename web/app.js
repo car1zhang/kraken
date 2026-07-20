@@ -1,27 +1,27 @@
-// kraken web — kanban over /api/board with three legal drag moves:
+// kraken web — kanban over /api/board with two legal drag moves:
 //   draft → queued   (flips ready: true in the job file)
-//   blocked → working (opens the answer modal; the send IS the move)
-//   review → done    (completes the job, outcome auto-filled from success)
-// Everything else is read-only; the daemon drives all other transitions.
+//   blocked → done    (completes the job, outcome auto-filled from success)
+// Un-stalling a blocked cell (answering a question, ▶ send, messaging zeus)
+// happens via card buttons, not drag — those are actions on the cell, not a
+// board-state assertion the browser is making. Everything else is read-only;
+// the daemon drives working/blocked itself from live pod activity.
 
 const COLUMNS = [
-  { key: "draft", title: "DRAFT", states: ["draft", "error"] },
-  { key: "queued", title: "QUEUED", states: ["ready", "queued", "gate-review"], prefix: ["waits:", "gated:"] },
-  { key: "working", title: "WORKING", states: ["planning", "executing"] },
-  { key: "blocked", title: "BLOCKED", states: ["blocked", "plan-review"] },
-  { key: "review", title: "REVIEW", states: ["testing", "pr-open", "merged"] },
-  { key: "done", title: "DONE", states: ["done", "failed", "abandoned"] },
+  { key: "draft", title: "DRAFT", states: ["draft"] },
+  { key: "queued", title: "QUEUED", states: ["queued"] },
+  { key: "working", title: "WORKING", states: ["working"] },
+  { key: "blocked", title: "BLOCKED", states: ["blocked"] },
+  { key: "done", title: "DONE", states: ["done"] },
 ];
 
-const MOVES = { draft: ["queued"], blocked: ["working"], review: ["done"] };
+const MOVES = { draft: ["queued"], blocked: ["done"] };
 
 const STATE_COLOR = {
-  executing: "var(--solved)", planning: "var(--solved)",
-  "plan-review": "var(--counter)", blocked: "var(--counter)",
-  ready: "var(--accent)", queued: "var(--accent)", "gate-review": "var(--counter)",
-  testing: "var(--revealed)", "pr-open": "var(--revealed)", merged: "var(--solved)",
-  done: "var(--text-2)", draft: "var(--text-2)",
-  error: "var(--counter)", failed: "var(--counter)", abandoned: "var(--text-2)",
+  working: "var(--solved)",
+  blocked: "var(--counter)",
+  queued: "var(--accent)",
+  done: "var(--text-2)",
+  draft: "var(--text-2)",
 };
 
 let jobsBySlug = {};
@@ -30,13 +30,11 @@ let dragging = null; // { slug, from }
 function columnFor(state) {
   for (const c of COLUMNS) {
     if (c.states.includes(state)) return c.key;
-    if (c.prefix && c.prefix.some((p) => state.startsWith(p))) return c.key;
   }
   return "draft";
 }
 
 function stateColor(state) {
-  if (state.startsWith("waits:") || state.startsWith("gated:")) return "var(--revealed)";
   return STATE_COLOR[state] || "var(--text-2)";
 }
 
@@ -55,9 +53,39 @@ function age(unix) {
 
 // ---- render ----
 
+// questionHTML renders a card's pending AskUserQuestion. Option buttons only
+// make sense for a single, non-multi-select question — that's the one shape
+// where "post a single digit" (webAnswerQuestion's whole contract) can answer
+// it. Anything richer (more than one question, or a multi-select) can't be
+// expressed as one digit, so it renders as read-only header(s) plus a note
+// pointing at the pane instead of buttons that would silently mis-answer it.
+function questionHTML(j) {
+  const questions = j.question.questions || [];
+  const single = questions.length === 1 && !questions[0].multi_select;
+  if (!single) {
+    const headers = questions
+      .map((q) => `<div class="q-header">⚑ ${esc(q.header || q.question || "question")}</div>`)
+      .join("");
+    return `<div class="question">
+      ${headers}
+      <div class="q-text">answer in the pane (k o ${esc(j.cell)})</div>
+    </div>`;
+  }
+  const q = questions[0];
+  const opts = (q.options || [])
+    .map(
+      (o, i) => `<button class="q-opt" data-slug="${esc(j.slug)}" data-idx="${i + 1}" title="${esc(o.description || "")}">${i + 1}. ${esc(o.label)}</button>`,
+    )
+    .join("");
+  return `<div class="question">
+    <div class="q-header">⚑ ${esc(q.header || q.question || "question")}</div>
+    ${q.header && q.question ? `<div class="q-text">${esc(q.question)}</div>` : ""}
+    <div class="q-opts">${opts}</div>
+  </div>`;
+}
+
 function cardHTML(j, col) {
   const color = stateColor(j.state);
-  const open = (j.escalations || []).filter((e) => e.status === "open");
   const movable = !!MOVES[col];
   const prereqs = (j.prereqs || [])
     .map((p) => {
@@ -66,23 +94,18 @@ function cardHTML(j, col) {
       return `<span class="${cls}">${esc(p.job)}${mark}</span>`;
     })
     .join(" ");
-  const escs = (j.escalations || [])
-    .slice(0, 3)
-    .map(
-      (e) => `<div class="esc ${e.status === "open" ? "" : "answered"}">
-        <span class="cat">⚑ ${esc(e.category)}</span>${esc(e.title)}
-      </div>`,
-    )
-    .join("");
   const chips = (j.artifacts || [])
     .map(
       (a) =>
         `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(j.slug)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
     )
     .join("");
-  const killable = ["working", "blocked", "review"].includes(col) && j.live;
+  const roster = (j.roster || [])
+    .map((r) => `<div class="roster-row">${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
+    .join("");
+  const killable = ["working", "blocked"].includes(col) && j.live;
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  return `<div class="card ${open.length ? "flagged" : ""} ${editable ? "editable" : ""}" style="--state:${color}"
+  return `<div class="card ${j.question || j.health ? "flagged" : ""} ${editable ? "editable" : ""}" style="--state:${color}"
       draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
@@ -98,16 +121,18 @@ function cardHTML(j, col) {
     </div>
     ${j.err ? `<div class="err">✕ ${esc(j.err)}</div>` : ""}
     ${j.health ? `<div class="err">⚠ ${esc(j.health)}</div>` : ""}
+    ${j.detail ? `<div class="detail">${esc(j.detail)}</div>` : ""}
+    ${roster ? `<div class="roster">${roster}</div>` : ""}
     ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
-    ${escs}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
-    ${["blocked", "review"].includes(col) && open.length ? `<button class="btn unblock" data-slug="${esc(j.slug)}">⚑ ${col === "review" ? "gate feedback / pass" : "answer to unblock"}</button>` : ""}
-    ${col === "review" && j.live ? `<div class="review-row">
+    ${j.question ? questionHTML(j) : ""}
+    ${col === "blocked" && j.live && j.type === "build" ? `<button class="btn send" data-slug="${esc(j.slug)}">▶ send</button>` : ""}
+    ${col === "blocked" && j.live && j.type === "build" ? `<div class="review-row">
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="nvim">⌨ nvim</button>
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="code">⌨ code</button>
     </div>` : ""}
-    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}">➤ steer</button>` : ""}
+    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}">➤ message zeus</button>` : ""}
   </div>`;
 }
 
@@ -120,7 +145,7 @@ function render(board) {
     // an unhealthy cell is blocked regardless of its file state — it needs
     // your retry, and the daemon isn't going to fix it
     byCol[j.health ? "blocked" : columnFor(j.state)].push(j);
-    flags += (j.escalations || []).filter((e) => e.status === "open").length;
+    if (j.question) flags++;
     if (j.health) flags++;
   }
   document.getElementById("board").innerHTML = COLUMNS.map(
@@ -190,13 +215,7 @@ document.addEventListener("drop", async (ev) => {
   const to = col.dataset.col;
   if (!(MOVES[from] || []).includes(to)) return;
   if (from === "draft" && to === "queued") await post("/api/queue", { slug });
-  else if (from === "review" && to === "done") await post("/api/done", { slug });
-  else if (from === "blocked" && to === "working") {
-    // health-blocked cells retry; escalation-blocked cells need an answer
-    const j = jobsBySlug[slug];
-    if (j && j.health) await post("/api/retry", { slug });
-    else openAnswer(slug);
-  }
+  else if (from === "blocked" && to === "done") await post("/api/done", { slug });
 });
 
 async function post(url, body) {
@@ -216,75 +235,6 @@ async function post(url, body) {
     return false;
   }
 }
-
-// ---- answer modal (the blocked → working gate) ----
-
-const answerOverlay = document.getElementById("answer-overlay");
-let answerSlug = null;
-let answerFile = null;
-
-function openAnswer(slug) {
-  const j = jobsBySlug[slug];
-  if (!j) return;
-  const open = (j.escalations || []).filter((e) => e.status === "open");
-  if (!open.length) return;
-  answerSlug = slug;
-  answerFile = open[0].file;
-  document.getElementById("answer-title").textContent = slug + " — answer to unblock";
-  document.getElementById("answer-escs").innerHTML = open
-    .map(
-      (e, i) => `<div class="answer-esc ${i === 0 ? "selected" : ""}" data-file="${esc(e.file)}">
-        <div class="esc-title"><span class="cat">⚑ ${esc(e.category)}</span>${esc(e.title)}</div>
-        <div class="esc-body md">${renderMD(e.body || "")}</div>
-      </div>`,
-    )
-    .join("");
-  const reading = (j.artifacts || [])
-    .map(
-      (a) => `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(slug)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
-    )
-    .join("");
-  document.getElementById("answer-reading").innerHTML = reading
-    ? `<span class="label">READ FIRST</span>${reading}`
-    : "";
-  document.getElementById("answer-text").value = "";
-  document.getElementById("answer-note").textContent = "";
-  document.getElementById("answer-preview").hidden = true;
-  previewURL = null;
-  answerOverlay.hidden = false;
-  document.getElementById("answer-text").focus();
-}
-
-document.getElementById("answer-escs").addEventListener("click", (ev) => {
-  const block = ev.target.closest(".answer-esc");
-  if (!block || ev.target.closest(".chip")) return;
-  answerFile = block.dataset.file;
-  document.querySelectorAll(".answer-esc").forEach((el) =>
-    el.classList.toggle("selected", el === block));
-});
-
-document.getElementById("answer-send").addEventListener("click", async () => {
-  const text = document.getElementById("answer-text").value.trim();
-  if (!text) {
-    document.getElementById("answer-note").textContent = "answer is empty";
-    return;
-  }
-  const btn = document.getElementById("answer-send");
-  btn.disabled = true;
-  const ok = await post("/api/answer", { slug: answerSlug, file: answerFile, text });
-  btn.disabled = false;
-  if (ok) answerOverlay.hidden = true;
-  else document.getElementById("answer-note").textContent = "send failed — see status bar";
-});
-
-document.getElementById("answer-text").addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
-    ev.preventDefault();
-    document.getElementById("answer-send").click();
-  }
-});
-document.getElementById("answer-cancel").addEventListener("click", () => (answerOverlay.hidden = true));
-answerOverlay.addEventListener("click", (ev) => { if (ev.target === answerOverlay) answerOverlay.hidden = true; });
 
 // ---- markdown (tiny subset) ----
 
@@ -406,15 +356,19 @@ function openArtifact(url, name) {
 document.addEventListener("click", (ev) => {
   const chip = ev.target.closest(".chip");
   if (chip) {
-    // inside the unblock modal, artifacts preview inline — a second overlay
-    // would stack underneath the modal and be unreadable
-    if (chip.closest("#answer-overlay")) previewArtifact(chip);
-    else openArtifact(chip.dataset.url, chip.dataset.name);
+    openArtifact(chip.dataset.url, chip.dataset.name);
     return;
   }
-  const unblock = ev.target.closest(".unblock");
-  if (unblock) {
-    openAnswer(unblock.dataset.slug);
+  const qopt = ev.target.closest(".q-opt");
+  if (qopt) {
+    document.querySelectorAll(`.q-opt[data-slug="${qopt.dataset.slug}"]`).forEach((b) => (b.disabled = true));
+    post("/api/question", { slug: qopt.dataset.slug, text: qopt.dataset.idx });
+    return;
+  }
+  const send = ev.target.closest(".send");
+  if (send) {
+    send.disabled = true;
+    post("/api/send", { slug: send.dataset.slug });
     return;
   }
   const retry = ev.target.closest(".retry");
@@ -446,7 +400,7 @@ document.addEventListener("click", (ev) => {
     return;
   }
   // editable cards open their spec on plain click (buttons/chips above
-  // already returned; escalation blocks inside cards are display-only here)
+  // already returned first)
   const card = ev.target.closest(".card[data-editable='true']");
   if (card) openEditor(card.dataset.slug);
 });
@@ -458,7 +412,7 @@ let steerSlug = null;
 
 function openSteer(slug) {
   steerSlug = slug;
-  document.getElementById("steer-title").textContent = slug + " — steer";
+  document.getElementById("steer-title").textContent = slug + " — message zeus";
   document.getElementById("steer-text").value = "";
   document.getElementById("steer-note").textContent = "";
   steerOverlay.hidden = false;
@@ -655,38 +609,6 @@ document.getElementById("editor-slug").addEventListener("keydown", (ev) => {
   }
 });
 
-// previewArtifact toggles an inline rendered view of a READ FIRST chip's
-// artifact inside the answer modal.
-let previewURL = null;
-function previewArtifact(chip) {
-  const box = document.getElementById("answer-preview");
-  document.querySelectorAll("#answer-reading .chip").forEach((c) => c.classList.remove("active"));
-  if (previewURL === chip.dataset.url && !box.hidden) {
-    box.hidden = true;
-    previewURL = null;
-    return;
-  }
-  previewURL = chip.dataset.url;
-  chip.classList.add("active");
-  box.hidden = false;
-  if (isImage(previewURL)) {
-    box.classList.add("page");
-    box.innerHTML = `<img src="${esc(previewURL)}" alt="artifact preview">`;
-    return;
-  }
-  if (isPage(previewURL)) {
-    // html/svg render in an iframe here too — raw markup helps no one decide
-    box.classList.add("page");
-    box.innerHTML = `<iframe src="${esc(previewURL)}" title="artifact preview"></iframe>`;
-    return;
-  }
-  box.classList.remove("page");
-  box.textContent = "loading…";
-  fetch(chip.dataset.url)
-    .then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); })
-    .then((text) => { if (previewURL === chip.dataset.url) box.innerHTML = renderMD(text); })
-    .catch((e) => { box.textContent = "failed to load: " + e; });
-}
 document.getElementById("panel-close").addEventListener("click", () => (overlay.hidden = true));
 document.getElementById("panel-open").addEventListener("click", () => {
   if (artifactURL) window.open(artifactURL, "_blank");
@@ -710,7 +632,7 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") { overlay.hidden = true; answerOverlay.hidden = true; editorOverlay.hidden = true; steerOverlay.hidden = true; }
+  if (ev.key === "Escape") { overlay.hidden = true; editorOverlay.hidden = true; steerOverlay.hidden = true; }
 });
 
 // ---- dag view: jobs layered by dependency depth, edges = prereqs ----
@@ -792,9 +714,8 @@ function renderDag(board) {
   nodesEl.innerHTML = jobs
     .map((j) => {
       const p = pos[j.slug];
-      const open = (j.escalations || []).filter((e) => e.status === "open").length;
       const editable = !j.live && ["draft", "queued", "done"].includes(columnFor(j.state));
-      return `<div class="dag-node ${open || j.health ? "flagged" : ""} ${editable ? "editable" : ""}"
+      return `<div class="dag-node ${j.question || j.health ? "flagged" : ""} ${editable ? "editable" : ""}"
         style="left:${p.x}px;top:${p.y}px;--state:${stateColor(j.state)}"
         data-slug="${esc(j.slug)}" data-editable="${editable}">
         <span class="slug">${esc(j.slug)}</span>

@@ -150,14 +150,31 @@ body {
 .err { color: var(--counter); font-size: 11px; margin-top: 5px; }
 .outcome { color: var(--solved); font-size: 11px; margin-top: 5px; }
 
-.esc {
-  margin-top: 7px; padding: 5px 8px;
+/* the cell's last words: a live zeus' most recent assistant text block */
+.detail { color: var(--text-2); font-size: 11px; line-height: 1.4; margin-top: 6px; }
+
+.roster { margin-top: 5px; display: flex; flex-direction: column; gap: 1px; }
+.roster-row { font: 10px var(--mono); color: var(--text-2); }
+.roster-row .dim { opacity: 0.6; }
+
+/* a pending AskUserQuestion: header + option buttons, answered by a click */
+.question {
+  margin-top: 7px; padding: 6px 8px;
   background: var(--counter-soft);
   border-left: 2px solid var(--counter);
   font-size: 11px; line-height: 1.45;
 }
-.esc .cat { font: 9.5px var(--mono); color: var(--counter); margin-right: 6px; }
-.esc.answered { background: transparent; border-left-color: var(--hairline-2); color: var(--text-2); }
+.q-header { font-weight: 600; color: var(--text); }
+.q-text { color: var(--text-2); margin-top: 2px; }
+.q-opts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.q-opt {
+  font: 10px var(--mono);
+  background: transparent; color: var(--counter);
+  border: 1px solid var(--counter);
+  padding: 3px 8px; cursor: pointer;
+}
+.q-opt:hover { box-shadow: var(--glow-hot); }
+.q-opt:disabled { opacity: 0.4; cursor: default; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .chip {
@@ -215,13 +232,13 @@ body {
 .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
 .btn.ghost.danger { color: var(--counter); border-color: var(--counter); }
 .btn.ghost.danger:hover { box-shadow: var(--glow-hot); }
-.btn.unblock {
+.btn.send {
   display: block; width: 100%; margin-top: 8px;
-  background: var(--counter-soft); color: var(--counter);
-  border: 1px solid var(--counter);
+  background: var(--solved-soft); color: var(--solved);
+  border: 1px solid var(--solved);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.btn.unblock:hover { box-shadow: var(--glow-hot); }
+.btn.send:hover { box-shadow: 0 0 10px rgba(80, 200, 130, 0.3); }
 .btn.retry {
   display: block; width: 100%; margin-top: 8px;
   background: var(--revealed-soft); color: var(--revealed);
@@ -270,36 +287,9 @@ body {
 .md td { color: var(--text); }
 .md tbody tr:nth-child(even) td, .md tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
 
-/* ---- answer modal ---- */
+/* ---- steer/editor note styling, shared by the message-zeus and job-editor
+   overlays ---- */
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
-.answer-esc {
-  border: 1px solid var(--hairline);
-  border-left: 2px solid var(--counter);
-  padding: 9px 12px;
-  cursor: pointer;
-}
-.answer-esc.selected { border-color: var(--counter); box-shadow: var(--glow-hot); }
-.answer-esc .esc-title { font-weight: 600; font-size: 12px; }
-.answer-esc .cat { font: 9.5px var(--mono); color: var(--counter); margin-right: 7px; }
-.answer-esc .esc-body { margin-top: 6px; color: var(--text-2); max-height: 30vh; overflow-y: auto; }
-.answer-reading { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-.answer-reading .label { font: 10px var(--mono); color: var(--text-2); letter-spacing: 1px; margin-right: 4px; }
-.answer-reading .chip.active { border-color: var(--accent); box-shadow: var(--glow); }
-.answer-preview {
-  border: 1px solid var(--hairline);
-  background: var(--ground);
-  padding: 12px 16px;
-  max-height: 38vh; overflow-y: auto;
-}
-.answer-preview.page { padding: 0; overflow: hidden; max-height: none; }
-.answer-preview.page iframe { display: block; width: 100%; height: 44vh; border: none; background: #fff; }
-#answer-text {
-  font: 12px/1.5 var(--sans);
-  background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2);
-  padding: 9px 11px; resize: vertical; min-height: 70px;
-}
-#answer-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
 .answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
 
 /* ---- job editor: frontmatter as a form, spec as prose ---- */
@@ -398,11 +388,10 @@ body {
 @media (max-width: 700px) { .board { grid-template-columns: 1fr; } }
 
 /* image artifacts render natively, contained */
-.panel-body.page img, .answer-preview.page img {
+.panel-body.page img {
   display: block; max-width: 100%; margin: 0 auto;
   background: #fff;
 }
-.answer-preview.page img { max-height: 44vh; object-fit: contain; }
 
 /* pr-review handoff */
 .review-row { display: flex; gap: 8px; margin-top: 8px; }

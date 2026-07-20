@@ -7,7 +7,7 @@ import (
 
 const sampleJob = `---
 job: yelp-dedupe          # slug; this file is yelp-dedupe.job.md
-type: build               # build | explore | question
+type: build               # build | info
 repo: monolith            # substring-matched against existing repos (alphabetic tiebreak);
                           # no match → job errors, surfaced in the viewer
 ready: true               # flip to true to queue
@@ -86,7 +86,7 @@ success: |
 
 func TestParseJobStrict(t *testing.T) {
 	// every construct the parser can't fully understand must set Err — an
-	// erred job never runs and the error is surfaced (board now, inbox later)
+	// erred job never runs, and the error is surfaced on the board
 	cases := map[string]string{
 		"no frontmatter":     "just some text\n",
 		"unterminated":       "---\njob: x\n",
@@ -110,8 +110,8 @@ func TestParseJobStrict(t *testing.T) {
 		if j.Err == "" {
 			t.Errorf("%s: expected Err, got clean parse: %+v", name, j)
 		}
-		if got := displayState(j, nil); got != "error" {
-			t.Errorf("%s: erred job must display error, got %q", name, got)
+		if got := displayState(j, nil); got != "draft" {
+			t.Errorf("%s: erred job must display draft, got %q", name, got)
 		}
 	}
 	// errors accumulate rather than overwriting
@@ -130,17 +130,75 @@ func TestParseJobStrict(t *testing.T) {
 }
 
 func TestParseJobStateAndOutcome(t *testing.T) {
-	src := "---\njob: x\nready: true\nstate: executing\noutcome: went well\n---\nbody"
+	src := "---\njob: x\nready: true\nstate: working\noutcome: went well\n---\nbody"
 	j := parseJob("x.job.md", []byte(src))
-	if j.State != "executing" || j.Outcome != "went well" {
+	if j.State != "working" || j.Outcome != "went well" {
 		t.Fatalf("state/outcome: %q %q", j.State, j.Outcome)
 	}
 	if !j.started() {
-		t.Fatal("executing should count as started")
+		t.Fatal("working should count as started")
 	}
-	j.State = "failed"
-	if j.started() {
-		t.Fatal("failed returns the job to carl — not started")
+}
+
+func TestParseJobType(t *testing.T) {
+	cases := map[string]struct {
+		wantType string
+		wantErr  bool
+	}{
+		"---\ntype: build\n---\n":    {"build", false},
+		"---\ntype: info\n---\n":     {"info", false},
+		"---\ntype: explore\n---\n":  {"info", false},  // legacy alias
+		"---\ntype: question\n---\n": {"info", false},  // legacy alias
+		"---\ntype:\n---\n":          {"build", false}, // empty keeps default
+		"---\n---\n":                 {"build", false}, // absent keeps default
+		"---\ntype: garbage\n---\n":  {"build", true},
+	}
+	for src, want := range cases {
+		j := parseJob("x.job.md", []byte(src))
+		if j.Type != want.wantType {
+			t.Errorf("%q: type = %q, want %q", src, j.Type, want.wantType)
+		}
+		if (j.Err != "") != want.wantErr {
+			t.Errorf("%q: err = %q, wantErr %v", src, j.Err, want.wantErr)
+		}
+	}
+}
+
+func TestValidStates(t *testing.T) {
+	for _, s := range []string{"working", "blocked", "done"} {
+		j := parseJob("x.job.md", []byte("---\nstate: "+s+"\n---\n"))
+		if j.Err != "" {
+			t.Errorf("state %q should be valid, got err %q", s, j.Err)
+		}
+	}
+	// draft and queued are derived for display, never written: kraken never
+	// authors them and a hand-authored one is a dead end (started() false but
+	// startable() also false), so they must now be rejected like any other
+	// unknown state.
+	for _, s := range []string{"queued", "draft", "planning", "plan-review", "executing", "testing", "pr-open", "merged", "failed", "abandoned"} {
+		j := parseJob("x.job.md", []byte("---\nstate: "+s+"\n---\n"))
+		if j.Err == "" {
+			t.Errorf("state %q should now be unknown, got clean parse", s)
+		}
+	}
+}
+
+func TestStarted(t *testing.T) {
+	cases := []struct {
+		state string
+		want  bool
+	}{
+		{"", false},
+		{"queued", false},
+		{"working", true},
+		{"blocked", true},
+		{"done", true},
+	}
+	for _, c := range cases {
+		j := &Job{State: c.state}
+		if got := j.started(); got != c.want {
+			t.Errorf("started() with state %q = %v, want %v", c.state, got, c.want)
+		}
 	}
 }
 
@@ -194,7 +252,7 @@ func TestParsePrereqsTabIndent(t *testing.T) {
 }
 
 func TestPatchStateHealsIndented(t *testing.T) {
-	src := "---\njob: x\n state: executing\n---\nbody"
+	src := "---\njob: x\n state: working\n---\nbody"
 	out, err := patchState(src, "done")
 	if err != nil {
 		t.Fatal(err)
@@ -209,12 +267,12 @@ func TestPatchStateHealsIndented(t *testing.T) {
 
 func TestPatchState(t *testing.T) {
 	// insert when absent — body untouched byte-for-byte
-	out, err := patchState(sampleJob, "executing")
+	out, err := patchState(sampleJob, "working")
 	if err != nil {
 		t.Fatal(err)
 	}
 	j := parseJob("yelp-dedupe.job.md", []byte(out))
-	if j.State != "executing" {
+	if j.State != "working" {
 		t.Fatalf("state after insert: %q", j.State)
 	}
 	orig := parseJob("yelp-dedupe.job.md", []byte(sampleJob))
@@ -239,13 +297,13 @@ func TestPatchState(t *testing.T) {
 }
 
 func TestPatchFieldOutcome(t *testing.T) {
-	src := "---\njob: x\nstate: executing\n---\nbody"
+	src := "---\njob: x\nstate: working\n---\nbody"
 	out, err := patchField(src, "outcome", "approach A works")
 	if err != nil {
 		t.Fatal(err)
 	}
 	j := parseJob("x.job.md", []byte(out))
-	if j.Err != "" || j.Outcome != "approach A works" || j.State != "executing" {
+	if j.Err != "" || j.Outcome != "approach A works" || j.State != "working" {
 		t.Fatalf("outcome insert: err=%q outcome=%q state=%q", j.Err, j.Outcome, j.State)
 	}
 	out2, err := patchField(out, "outcome", "revised")
@@ -282,15 +340,15 @@ func TestDisplayState(t *testing.T) {
 		j    *Job
 		want string
 	}{
-		{mkJob("a", "", false), "draft"},
-		{mkJob("a", "", true), "ready"},
-		{mkJob("a", "executing", true), "executing"},
-		{mkJob("a", "", true, Prereq{Job: "dep"}), "ready"},
-		{mkJob("a", "", true, Prereq{Job: "dep", Gated: true}), "gate-review"},
-		{mkJob("a", "executing", true, Prereq{Job: "dep", Gated: true}), "executing"},
-		{mkJob("a", "", true, Prereq{Job: "pend"}), "waits:pend"},
-		{mkJob("a", "", true, Prereq{Job: "pend", Gated: true}), "gated:pend"},
-		{mkJob("a", "", true, Prereq{Job: "missing"}), "waits:missing"},
+		{mkJob("a", "", false), "draft"},                                  // !ready → draft
+		{mkJob("a", "", true), "queued"},                                  // ready, no prereqs → queued
+		{mkJob("a", "working", true), "working"},                          // kraken-managed state wins
+		{mkJob("a", "", true, Prereq{Job: "dep"}), "queued"},              // ready + met prereq → queued
+		{mkJob("a", "", true, Prereq{Job: "dep", Gated: true}), "queued"}, // met but gated → still queued
+		{mkJob("a", "working", true, Prereq{Job: "dep", Gated: true}), "working"},
+		{mkJob("a", "", true, Prereq{Job: "pend"}), "queued"},              // unmet prereq → queued
+		{mkJob("a", "", true, Prereq{Job: "pend", Gated: true}), "queued"}, // unmet + gated → queued
+		{mkJob("a", "", true, Prereq{Job: "missing"}), "queued"},           // missing dep counts unmet → queued
 	}
 	bySlug := slugMap(done, pending)
 	for _, c := range cases {
@@ -298,10 +356,46 @@ func TestDisplayState(t *testing.T) {
 			t.Errorf("displayState(%+v) = %q, want %q", c.j, got, c.want)
 		}
 	}
+	// erred job displays draft (the draft column surfaces the error detail),
+	// even though it's Ready
 	broken := mkJob("b", "", true)
 	broken.Err = "prereq cycle"
-	if got := displayState(broken, bySlug); got != "error" {
-		t.Errorf("error state: %q", got)
+	if got := displayState(broken, bySlug); got != "draft" {
+		t.Errorf("erred job should display draft: %q", got)
+	}
+	// a done job with a parse error still shows done: terminal beats broken
+	doneButErred := mkJob("c", "done", true)
+	doneButErred.Err = "whatever"
+	if got := displayState(doneButErred, bySlug); got != "done" {
+		t.Errorf("done should win even over an error: %q", got)
+	}
+}
+
+func TestStartable(t *testing.T) {
+	done := mkJob("dep", "done", true)
+	pending := mkJob("pend", "", true)
+	bySlug := slugMap(done, pending)
+	cases := []struct {
+		j    *Job
+		want bool
+	}{
+		{mkJob("a", "", false), false},                                 // !ready
+		{mkJob("a", "", true), true},                                   // ready, no prereqs
+		{mkJob("a", "", true, Prereq{Job: "dep"}), true},               // ready + met prereq
+		{mkJob("a", "", true, Prereq{Job: "pend"}), false},             // unmet prereq
+		{mkJob("a", "", true, Prereq{Job: "missing"}), false},          // missing dep counts unmet
+		{mkJob("a", "", true, Prereq{Job: "dep", Gated: true}), false}, // met but gated: human must release
+		{mkJob("a", "working", true), false},                           // already started
+	}
+	for _, c := range cases {
+		if got := startable(c.j, bySlug); got != c.want {
+			t.Errorf("startable(%+v) = %v, want %v", c.j, got, c.want)
+		}
+	}
+	errored := mkJob("e", "", true)
+	errored.Err = "boom"
+	if startable(errored, bySlug) {
+		t.Error("erred job must never be startable")
 	}
 }
 
@@ -349,45 +443,6 @@ func TestJobBySlug(t *testing.T) {
 	}
 	if jobBySlug(jobs, "nope") != nil {
 		t.Fatal("phantom job")
-	}
-}
-
-func TestZeusBrief(t *testing.T) {
-	j := &Job{Slug: "x", Type: "build", Success: "tests pass"}
-	brief := zeusBrief(j)
-	for _, want := range []string{"zeus", "plan-approval gate", "hephaestus", "athena", "hermes-x",
-		"carl/x", "tests pass", "gh pr checks", "kraken watches your status"} {
-		if !strings.Contains(brief, want) {
-			t.Errorf("build brief missing %q", want)
-		}
-	}
-	j2 := &Job{Slug: "y", Type: "question", Solo: true, AutoApprove: true}
-	brief2 := zeusBrief(j2)
-	if strings.Contains(brief2, "plan-approval gate") {
-		t.Error("auto-approve brief still gates on approval")
-	}
-	if !strings.Contains(brief2, "do not spawn subagents") || strings.Contains(brief2, "hephaestus") {
-		t.Error("solo brief still describes the subagent crew")
-	}
-	if !strings.Contains(brief2, "final artifact") || strings.Contains(brief2, "gh pr checks") {
-		t.Error("question brief has wrong deliverable")
-	}
-	if brief == brief2 {
-		t.Error("briefs must be unique per job")
-	}
-}
-
-func TestHermesBrief(t *testing.T) {
-	j := &Job{Slug: "x", Type: "build", File: "/tmp/x.job.md"}
-	brief := hermesBrief(j)
-	for _, want := range []string{"hermes", "never write code", "plan ready", "zeus looks blocked",
-		"answer to", "status: open", "implication", "k s zeus-x", "k r zeus-x"} {
-		if !strings.Contains(brief, want) {
-			t.Errorf("hermes brief missing %q", want)
-		}
-	}
-	if brief == hermesBrief(&Job{Slug: "y", Type: "explore", File: "/tmp/y.job.md"}) {
-		t.Error("hermes briefs must be unique per job")
 	}
 }
 
@@ -451,11 +506,16 @@ func TestJobColorStable(t *testing.T) {
 }
 
 func TestStateRankOrdering(t *testing.T) {
-	order := []string{"executing", "ready", "waits:x", "draft", "failed", "done"}
+	// five-state model: live cells first, then queued, then draft, then done
+	order := []string{"working", "blocked", "queued", "draft", "done"}
 	for i := 1; i < len(order); i++ {
 		if stateRank(order[i-1]) > stateRank(order[i]) {
 			t.Errorf("%s should rank before %s", order[i-1], order[i])
 		}
+	}
+	// working and blocked are peers within the live-cell rank
+	if stateRank("working") != stateRank("blocked") {
+		t.Errorf("working and blocked should share a rank: %d != %d", stateRank("working"), stateRank("blocked"))
 	}
 }
 

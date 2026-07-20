@@ -98,7 +98,7 @@ extension Font {
         .system(size: bumped(size), weight: weight, design: .monospaced)
     }
 
-    /// The voice: system sans. Prose — spec/success text, escalation bodies,
+    /// The voice: system sans. Prose — spec/success text, job detail bodies,
     /// transcript text blocks.
     static func voice(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: bumped(size), weight: weight, design: .default)
@@ -107,9 +107,10 @@ extension Font {
 
 // MARK: - state → color
 
-/// The six kanban columns, mirroring web/app.js's COLUMNS table.
+/// The five kanban columns — draft/queued/working/blocked/done — mirroring
+/// the server's five job states 1:1 (review was folded into blocked).
 enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
-    case draft, queued, working, blocked, review, done
+    case draft, queued, working, blocked, done
 
     var id: String { rawValue }
 
@@ -119,12 +120,11 @@ enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
         case .queued: return "QUEUED"
         case .working: return "WORKING"
         case .blocked: return "BLOCKED"
-        case .review: return "REVIEW"
         case .done: return "DONE"
         }
     }
 
-    /// Truncated for the always-visible overview strip, where six columns
+    /// Truncated for the always-visible overview strip, where five columns
     /// have to fit in one row.
     var shortTitle: String {
         switch self {
@@ -132,20 +132,20 @@ enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
         case .queued: return "QUEUE"
         case .working: return "WORK"
         case .blocked: return "BLOCK"
-        case .review: return "REVIEW"
         case .done: return "DONE"
         }
     }
 }
 
 enum BoardTheme {
+    // Exact 1:1 mapping to the server's five job states — no aliases, no
+    // prefix matching. See BoardColumn's doc comment.
     private static let columnStates: [BoardColumn: [String]] = [
-        .draft: ["draft", "error"],
-        .queued: ["ready", "queued", "gate-review"],
-        .working: ["planning", "executing"],
-        .blocked: ["blocked", "plan-review"],
-        .review: ["testing", "pr-open"],
-        .done: ["done", "failed", "abandoned"],
+        .draft: ["draft"],
+        .queued: ["queued"],
+        .working: ["working"],
+        .blocked: ["blocked"],
+        .done: ["done"],
     ]
 
     /// Which column a job belongs on. Mirrors app.js's render(): a job with
@@ -158,27 +158,20 @@ enum BoardTheme {
         for (column, states) in columnStates where states.contains(job.state) {
             return column
         }
-        if job.state.hasPrefix("waits:") || job.state.hasPrefix("gated:") {
-            return .queued
-        }
         return .draft
     }
 
-    /// Exact port of app.js's STATE_COLOR / stateColor().
+    /// State → color. working=active (green), blocked=attention (red),
+    /// queued=neutral (accent), draft/done=muted.
     static func color(forState state: String) -> Color {
-        if state.hasPrefix("waits:") || state.hasPrefix("gated:") {
-            return KTheme.revealed
-        }
         switch state {
-        case "executing", "planning":
+        case "working":
             return KTheme.solved
-        case "plan-review", "blocked", "gate-review", "error", "failed":
+        case "blocked":
             return KTheme.counter
-        case "ready", "queued":
+        case "queued":
             return KTheme.accent
-        case "testing", "pr-open":
-            return KTheme.revealed
-        case "done", "draft", "abandoned":
+        case "draft", "done":
             return KTheme.text2
         default:
             return KTheme.text2
@@ -212,8 +205,9 @@ enum SessionTheme {
 // MARK: - reusable view pieces
 
 /// One kanban card's chrome: surface bg, 1px hairline border, 2px leading
-/// bar in the state color. Flagged (open escalations) swaps the leading bar
-/// to counter and adds a soft pink glow — mirrors .card / .card.flagged.
+/// bar in the state color. Flagged (a pending question, or unhealthy) swaps
+/// the leading bar to counter and adds a soft pink glow — mirrors
+/// .card / .card.flagged.
 struct CardBackground: ViewModifier {
     var stateColor: Color
     var flagged: Bool = false

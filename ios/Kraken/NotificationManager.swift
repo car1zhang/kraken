@@ -79,8 +79,8 @@ final class NotificationManager: NSObject {
 
     /// Call after every successful board fetch. `BoardTheme.column(for:)`
     /// already folds "health non-empty" into .blocked, so this one check
-    /// covers both blocked/plan-review states and unhealthy cells — exactly
-    /// what the board itself shows in the BLOCKED column.
+    /// covers both the blocked state and unhealthy cells — exactly what the
+    /// board itself shows in the BLOCKED column.
     func processBoard(_ board: WebBoard) {
         guard UserDefaults.standard.bool(forKey: Self.notifyEnabledKey) else { return }
 
@@ -102,7 +102,8 @@ final class NotificationManager: NSObject {
     private func fire(for job: WebJob) {
         let content = UNMutableNotificationContent()
         content.title = "\(job.slug) blocked"
-        content.body = (job.escalations ?? []).first(where: { $0.status == "open" })?.title
+        content.body = job.question?.questions.first?.header
+            ?? job.detail
             ?? job.health
             ?? "needs attention"
         content.sound = .default

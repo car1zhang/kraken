@@ -134,10 +134,12 @@ actor APIClient {
         let _: OkResponse = try await post(baseURL: baseURL, path: "/api/kill", body: SlugRequest(slug: slug))
     }
 
-    func answer(baseURL: String, slug: String, file: String, text: String) async throws {
+    /// Answers a pending WebQuestionItem by its 1-based option index within
+    /// that question's own options list.
+    func answerQuestion(baseURL: String, slug: String, digit: Int) async throws {
         let _: OkResponse = try await post(
-            baseURL: baseURL, path: "/api/answer",
-            body: AnswerRequest(slug: slug, file: file, text: text)
+            baseURL: baseURL, path: "/api/question",
+            body: QuestionAnswerRequest(slug: slug, text: String(digit))
         )
     }
 

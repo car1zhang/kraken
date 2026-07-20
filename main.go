@@ -48,6 +48,8 @@ func main() {
 		cmdDone(rest)
 	case "daemon":
 		cmdDaemon(rest)
+	case "migrate":
+		cmdMigrate(rest)
 	case "web":
 		cmdWeb(rest)
 	case "_complete":
@@ -89,20 +91,22 @@ Commands:
                       torn down (verified) and state stamped done
   k done <slug> [outcome...]
                       manually complete a started job (the acceptance path for
-                      explore/question jobs): preserves artifacts into pluto,
+                      info jobs): preserves artifacts into pluto,
                       tears the cell down, records the outcome
   k daemon            run the scheduler loop in the foreground (launchd runs
-                      this at login via make install): queues ready jobs (max
-                      5 cells), auto-reaps merged PRs, pokes hermes on zeus
-                      stalls, notifies on escalations, writes ~/.kraken/daemon.json
+                      this at login via make install): queues ready jobs
+                      (≤5 cells), derives working/blocked from cell activity,
+                      auto-reaps merged PRs, notifies on blocked cells,
+                      writes ~/.kraken/daemon.json
+  k migrate           kill + requeue cells started under the old crew format
   k web [-p port] [--tailnet] [-addr host:port]
                       web UI + sessions API (default 127.0.0.1:7777): jobs as
-                      a kanban board, escalations inline, artifacts rendered
-                      in the browser; GET/POST /api/peers* let a device on
-                      the tailnet list/read/message live sessions. --tailnet
-                      binds the Mac's tailscale IP (100.64.0.0/10) instead of
-                      localhost; -addr sets an explicit bind and overrides
-                      both -p and --tailnet
+                      a kanban board, artifacts rendered in the browser,
+                      AskUserQuestion prompts answered inline; GET/POST
+                      /api/peers* let a device on the tailnet list/read/message
+                      live sessions. --tailnet binds the Mac's tailscale IP
+                      (100.64.0.0/10) instead of localhost; -addr sets an
+                      explicit bind and overrides both -p and --tailnet
 
 <sel>: index from 'k ls', '.' for the current pane, an exact pane id (%3), or
 substring match on name/project/agent/tmux-session; also a session-uuid

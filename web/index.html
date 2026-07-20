@@ -45,27 +45,7 @@
     </div>
   </div>
 
-  <!-- blocked → working: answer before the move happens -->
-  <div class="overlay" id="answer-overlay" hidden>
-    <div class="panel">
-      <div class="panel-head">
-        <span class="panel-title" id="answer-title"></span>
-        <span class="spacer"></span>
-        <button class="btn ghost" id="answer-cancel">cancel</button>
-        <button class="btn" id="answer-send">send ⏎</button>
-      </div>
-      <div class="panel-body answer-body">
-        <div id="answer-escs"></div>
-        <div class="answer-reading" id="answer-reading"></div>
-        <div class="answer-preview md" id="answer-preview" hidden></div>
-        <textarea id="answer-text" rows="4"
-          placeholder="your answer — appended to the escalation, relayed hermes → zeus (⌘⏎ to send)"></textarea>
-        <div class="answer-note" id="answer-note"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- steer: mid-run instructions to a live cell -->
+  <!-- message zeus: mid-run instructions to a live cell -->
   <div class="overlay" id="steer-overlay" hidden>
     <div class="panel">
       <div class="panel-head">
@@ -76,7 +56,7 @@
       </div>
       <div class="panel-body answer-body">
         <textarea id="steer-text" rows="4"
-          placeholder="steering / pivot instruction — hermes relays to zeus; a material pivot re-triggers plan approval"></textarea>
+          placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
         <div class="answer-note" id="steer-note"></div>
       </div>
     </div>
@@ -101,7 +81,7 @@
           <div class="f-row">
             <label>type
               <select id="f-type">
-                <option>build</option><option>explore</option><option>question</option>
+                <option>build</option><option>info</option>
               </select>
             </label>
             <label>repo <input id="f-repo" list="repo-list" spellcheck="false"></label>

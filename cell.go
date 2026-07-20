@@ -85,23 +85,8 @@ func cellSession(j *Job) string {
 	return "cell-" + slugify(j.Slug)
 }
 
-func cellInbox(j *Job) string {
-	return filepath.Join(cellDir(j), "inbox")
-}
-
 func cellArtifacts(j *Job) string {
 	return filepath.Join(cellDir(j), "artifacts")
-}
-
-func cellPlan(j *Job) string {
-	return filepath.Join(cellDir(j), "plan.md")
-}
-
-// cellDoneMarker is hermes' completion signal: its first line becomes the
-// job's outcome. The daemon reads it and moves the job to the review column —
-// never straight to done, so carl keeps the final call.
-func cellDoneMarker(j *Job) string {
-	return filepath.Join(cellDir(j), "done.md")
 }
 
 // allArtifactPaths lists a job's artifacts from both homes: the live cell's
@@ -139,18 +124,39 @@ func jobColor(slug string) int {
 	return cellPalette[h.Sum32()%uint32(len(cellPalette))]
 }
 
-// liveSessions snapshots current tmux session names; no tmux server reads as
-// no sessions.
-func liveSessions() map[string]bool {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+// liveSessionTimes snapshots current tmux session names along with each
+// one's creation time (tmux's session_created, unix seconds); no tmux server
+// reads as no sessions. One tmux call covers both liveness and freshness —
+// callers that only need liveness use the liveSessions() wrapper below.
+func liveSessionTimes() map[string]time.Time {
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name} #{session_created}").Output()
 	if err != nil {
-		return map[string]bool{}
+		return map[string]time.Time{}
 	}
-	live := map[string]bool{}
-	for _, s := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if s != "" {
-			live[s] = true
+	live := map[string]time.Time{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
 		}
+		name, ts, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		secs, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			continue
+		}
+		live[name] = time.Unix(secs, 0)
+	}
+	return live
+}
+
+// liveSessions snapshots current tmux session names; a thin bool-only view
+// over liveSessionTimes for the many callers that just need liveness.
+func liveSessions() map[string]bool {
+	live := map[string]bool{}
+	for name := range liveSessionTimes() {
+		live[name] = true
 	}
 	return live
 }
@@ -225,15 +231,15 @@ func cmdStart(args []string) {
 	if err := startCell(j, repo); err != nil {
 		die("%v", err)
 	}
-	fmt.Printf("started %s: worktree %s (branch %s), zeus + hermes in tmux session %s\n",
+	fmt.Printf("started %s: worktree %s (branch %s), zeus in tmux session %s, state: working\n",
 		j.Slug, cellWorktree(j, repo), cellBranch(j), cellSession(j))
 	fmt.Printf("attach: tmux attach -t %s  (or k o %s)\n", cellSession(j), cellSession(j))
 }
 
 // startCell creates a job's cell: worktree off the base ref, tmux session,
-// zeus + hermes panes, identity marker, state write. Callers have validated
-// the job (parseable, ready, unstarted, prereqs met) — this owns mechanics
-// only, and is shared by k start and the daemon.
+// zeus pane, identity marker, state write. Callers have validated the job
+// (parseable, ready, unstarted, prereqs met) — this owns mechanics only, and
+// is shared by k start and the daemon.
 func startCell(j *Job, repo string) error {
 	sess := cellSession(j)
 	if liveSessions()[sess] {
@@ -247,7 +253,7 @@ func startCell(j *Job, repo string) error {
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
-	for _, d := range []string{cellDir(j), cellInbox(j), cellArtifacts(j)} {
+	for _, d := range []string{cellDir(j), cellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
@@ -271,23 +277,12 @@ func startCell(j *Job, repo string) error {
 	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", slugify(j.Slug)).Run()
 	_ = exec.Command("tmux", "set-window-option", "-t", sess+":0",
 		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(slugify(j.Slug)))).Run()
-	if err := spawnCrew(j, sess, wt); err != nil {
-		// roll back the half-cell: leaving the zeus session up would leak an
-		// uncapped cell the daemon retries against forever
-		_ = exec.Command("tmux", "kill-session", "-t", sess).Run()
-		if out, rmErr := exec.Command("git", "-C", repo, "worktree", "remove", "--force", wt).CombinedOutput(); rmErr != nil {
-			return fmt.Errorf("%v; rollback left worktree %s (%s)", err, wt, strings.TrimSpace(string(out)))
-		}
-		return fmt.Errorf("%v — cell rolled back, will retry", err)
-	}
 	// fresh worktree paths trigger claude's folder-trust dialog, which blocks
 	// startup until answered
 	acceptTrustPrompts(sess)
-	state := "planning"
-	if j.AutoApprove {
-		state = "executing" // no plan gate to sit in
-	}
-	if err := writeJobState(j, state); err != nil {
+	// always "working": there is no plan gate to sit in — AutoApprove only
+	// changes what zeus' brief tells it to do once it starts
+	if err := writeJobState(j, "working"); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: cell is up but state write failed: %v\n", err)
 	}
 	return nil
@@ -382,22 +377,24 @@ func reapOne(j *Job, live map[string]bool) (string, bool) {
 		if err := teardownCell(j, repo, live, false); err != nil {
 			return fmt.Sprintf("merged, but teardown incomplete: %v", err), false
 		}
-		// done is always carl's drag: the merge frees the cell, but the job
-		// parks in the review column until he moves it himself
-		if err := writeJobState(j, "merged"); err != nil {
+		// the merge is the completion signal: done is the terminal state, no
+		// intermediate review column to park in
+		if err := writeJobState(j, "done"); err != nil {
 			return fmt.Sprintf("merged + torn down, but state write failed: %v", err), false
 		}
-		msg := "merged → cell torn down, awaiting carl's done drag"
+		if j.Outcome == "" {
+			if err := writeJobFields(j, "outcome", "PR merged"); err != nil {
+				return fmt.Sprintf("merged + torn down, but outcome write failed: %v", err), false
+			}
+		}
+		msg := "merged → cell torn down, done"
 		if len(copied) > 0 {
 			msg += fmt.Sprintf(" (%d artifacts preserved)", len(copied))
 		}
 		return msg, true
 	case "OPEN":
-		if j.State != "pr-open" {
-			if err := writeJobState(j, "pr-open"); err == nil {
-				return "PR open (state → pr-open)", true
-			}
-		}
+		// no state write: PR-open still derives to "working" or "blocked" from
+		// transcript activity, matching the five-state model
 		return "PR open", false
 	case "CLOSED":
 		return "PR closed without merge — decide manually (k done / respec)", false
@@ -440,7 +437,7 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 			return fmt.Errorf("git worktree remove: %s", strings.TrimSpace(string(out)))
 		}
 	}
-	// the cell dir (inbox, plan, artifacts) goes too: artifacts were
+	// the cell dir (doc source, artifacts) goes too: artifacts were
 	// preserved into pluto before teardown, and the mid-run log in the job
 	// file is the durable trail
 	os.RemoveAll(cellDir(j))
@@ -468,9 +465,10 @@ func paneTail(pane string, n int) string {
 }
 
 // acceptTrustPrompts answers claude's folder-trust dialog in a cell's fresh
-// panes. The worktree is kraken-made from a repo carl queued a job on — that
-// IS the trust decision — and an unanswered dialog blocks startup entirely:
-// no session file, no name, no work, and a cell that reads as broken.
+// (single) pane. The worktree is kraken-made from a repo carl queued a job
+// on — that IS the trust decision — and an unanswered dialog blocks startup
+// entirely: no session file, no name, no work, and a cell that reads as
+// broken.
 func acceptTrustPrompts(sess string) {
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
@@ -490,46 +488,40 @@ func acceptTrustPrompts(sess string) {
 				rendered++
 			}
 		}
-		// stop once every pane has rendered past the dialog; keep polling
-		// while panes are still blank (claude may not have drawn it yet)
-		if !sawDialog && rendered >= 2 {
+		// stop once the pane has rendered past the dialog; keep polling while
+		// it's still blank (claude may not have drawn it yet)
+		if !sawDialog && rendered >= 1 {
 			return
 		}
 		time.Sleep(time.Second)
 	}
 }
 
-// cellAgents finds a cell's zeus and hermes: by session-file name when claude
-// has fully started, positionally otherwise — zeus spawns first, so it holds
-// the lowest pane id among the cell session's claudes. Name-only lookup reads
-// a still-starting agent as "gone", which is how a trust dialog once became
-// "zeus process is gone".
-func cellAgents(j *Job, all []*Peer) (zeus, hermes *Peer) {
+// cellZeus finds a cell's zeus: by session-file name when claude has fully
+// started, positionally otherwise — a single-pane cell means the fallback is
+// simply the lowest-pane-id depth-0 claude in the cell session. Name-only
+// lookup reads a still-starting agent as "gone", which is how a trust dialog
+// once became "zeus process is gone".
+func cellZeus(j *Job, all []*Peer) *Peer {
 	sess := cellSession(j)
 	var inSess []*Peer
 	for _, p := range all {
-		switch p.Name {
-		case zeusName(j):
-			zeus = p
-		case hermesName(j):
-			hermes = p
+		if p.Name == zeusName(j) && p.Depth == 0 && p.TmuxSession == sess {
+			return p
 		}
 		if p.TmuxSession == sess && p.Agent == "claude" && p.Depth == 0 {
 			inSess = append(inSess, p)
 		}
+	}
+	if len(inSess) == 0 {
+		return nil
 	}
 	sort.Slice(inSess, func(a, b int) bool {
 		ai, _ := strconv.Atoi(strings.TrimPrefix(inSess[a].Pane, "%"))
 		bi, _ := strconv.Atoi(strings.TrimPrefix(inSess[b].Pane, "%"))
 		return ai < bi
 	})
-	if zeus == nil && len(inSess) > 0 {
-		zeus = inSess[0]
-	}
-	if hermes == nil && len(inSess) > 1 {
-		hermes = inSess[len(inSess)-1]
-	}
-	return zeus, hermes
+	return inSess[0]
 }
 
 // chromeLineRe matches claude's UI furniture: task lists, agent roster,
@@ -560,27 +552,23 @@ func transcriptTail(pane string, n int) []string {
 }
 
 // cellHealth reports why a live cell looks unhealthy ("" = healthy).
-// Conditions, in order: agent processes must exist; no API-error banner in an
-// idle pane; and zeus must not sit idle for stallAfter with work in flight
-// and nothing escalated. Idleness comes from the PANE ("esc to interrupt"
-// absent), never from the session file — an API error that kills a turn
-// leaves the session status stuck on busy forever, and the error banner
-// itself scrolls out of view once subagent rosters grow, so neither signal
-// alone can be trusted. Every reason except "is gone" is retryable: a poke
-// resumes a claude sitting at its prompt.
+// Conditions, in order: zeus' process must exist; no API-error banner may be
+// the last thing in its transcript. Idleness comes from the PANE ("esc to
+// interrupt" absent), never from the session file — an API error that kills
+// a turn leaves the session status stuck on busy forever, and the error
+// banner itself scrolls out of view once subagent rosters grow, so neither
+// signal alone can be trusted. Every reason except "is gone" is retryable: a
+// poke resumes a claude sitting at its prompt.
 func cellHealth(j *Job, all []*Peer) string {
-	zeus, hermes := cellAgents(j, all)
+	zeus := cellZeus(j, all)
 	if zeus == nil {
 		return "zeus process is gone — restart the cell (kill session + k start after cleanup)"
 	}
-	if hermes == nil {
-		return "hermes process is gone — escalations won't flow; retry respawns nothing, investigate the pane"
-	}
 	// found positionally but not yet named: claude is still starting — a
 	// lingering startup prompt needs a human, plain slowness needs patience
-	if zeus.Name != zeusName(j) || hermes.Name != hermesName(j) {
-		if zeus.Status == "question" || hermes.Status == "question" {
-			return "cell agents are stuck on a startup prompt — k o " + cellSession(j) + " to answer it"
+	if zeus.Name != zeusName(j) {
+		if zeus.Status == "question" {
+			return "cell agent is stuck on a startup prompt — k o " + cellSession(j) + " to answer it"
 		}
 		return ""
 	}
@@ -600,9 +588,6 @@ func cellHealth(j *Job, all []*Peer) string {
 	if erroredLast(zeus) {
 		return "zeus hit an API error"
 	}
-	if erroredLast(hermes) {
-		return "hermes hit an API error"
-	}
 	return ""
 }
 
@@ -619,17 +604,13 @@ func retryCell(j *Job) error {
 	if strings.Contains(reason, "is gone") {
 		return fmt.Errorf("%s: %s", j.Slug, reason)
 	}
-	// poke whichever agent stalled (default zeus): a plain nudge resumes a
-	// claude sitting at its prompt after an errored or abandoned turn
-	zeus, hermes := cellAgents(j, all)
-	target := zeus
-	if strings.HasPrefix(reason, "hermes") {
-		target = hermes
-	}
-	if target == nil {
+	// a plain nudge resumes a claude sitting at its prompt after an errored
+	// or abandoned turn
+	zeus := cellZeus(j, all)
+	if zeus == nil {
 		return fmt.Errorf("%s: agent not found — rerun discovery", j.Slug)
 	}
-	return sendMessage(target, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
+	return sendMessage(zeus, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
 }
 
 // killJob tears a live job's cell down completely and returns the job to
@@ -663,9 +644,9 @@ func killJob(j *Job) ([]string, error) {
 
 // preserveArtifacts copies a finishing cell's deliverables into the pluto dir
 // as <slug>.<name> (never overwriting): everything in the cell's artifacts/
-// dir (all job types — hermes' packets are worth keeping), plus, for
-// explore/question jobs, uncommitted root-level *.md in the worktree (where
-// pre-crew zeuses left their docs). Teardown deletes both origins.
+// dir (all job types), plus, for info jobs, uncommitted root-level *.md in
+// the worktree (where a solo zeus might leave a doc outside artifacts/).
+// Teardown deletes both origins.
 func preserveArtifacts(j *Job, repo string) ([]string, error) {
 	var copied []string
 	var firstErr error
@@ -793,4 +774,174 @@ func oneLine(s string) string {
 		}
 		return r
 	}, s))
+}
+
+// --- k migrate ---
+
+// oldJobState re-reads a job file's raw frontmatter `state:` value directly,
+// bypassing the strict parser that already rejected it into j.Err. This is
+// more robust than trying to regexp the old value back out of the error
+// string: cmdMigrate needs the ACTUAL old value to branch correctly (a
+// terminal "merged"/"abandoned"/"failed" must never be re-run; only the
+// in-flight old states should requeue), and the file is the one place that
+// value still lives. "" (not found) reads as not-found, never an error.
+func oldJobState(j *Job) (string, bool) {
+	data, err := os.ReadFile(j.File)
+	if err != nil {
+		return "", false
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	if len(lines) == 0 || !isFence(lines[0]) {
+		return "", false
+	}
+	for i := 1; i < len(lines); i++ {
+		if isFence(lines[i]) {
+			break
+		}
+		line := lines[i]
+		if line == "" || line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		key, rest, ok := strings.Cut(line, ":")
+		if ok && strings.TrimSpace(key) == "state" {
+			return stripComment(rest), true
+		}
+	}
+	return "", false
+}
+
+// migrateTerminal handles an old state that already meant the job was done
+// (merged/abandoned/failed): any leftover cell is torn down (verified,
+// forced) and the job is stamped state: done. ready is never touched — these
+// jobs are finished, not requeued.
+func migrateTerminal(j *Job, live map[string]bool, defaultOutcome string) error {
+	repo, err := resolveRepo(j.Repo)
+	if err != nil {
+		return err
+	}
+	if err := teardownCell(j, repo, live, true); err != nil {
+		return fmt.Errorf("teardown failed: %v", err)
+	}
+	fields := []string{"state", "done"}
+	if j.Outcome == "" {
+		fields = append(fields, "outcome", defaultOutcome)
+	}
+	if err := writeJobFields(j, fields...); err != nil {
+		return fmt.Errorf("teardown ok, but state write failed: %v", err)
+	}
+	return nil
+}
+
+// migrateInFlight handles an old state that meant the job's cell was still
+// mid-run (planning/plan-review/executing/testing/pr-open) under the
+// pre-five-state model: preserve whatever the old cell produced, force-tear
+// it down, and clear state back to "" — NOT touching ready, since a file
+// already ready: true requeues naturally under the daemon and a hand-set
+// ready: false correctly stays parked in draft.
+func migrateInFlight(j *Job, live map[string]bool) error {
+	repo, err := resolveRepo(j.Repo)
+	if err != nil {
+		return err
+	}
+	copied, perr := preserveArtifacts(j, repo)
+	for _, c := range copied {
+		fmt.Printf("%-24s preserved artifact %s\n", j.Slug, c)
+	}
+	if perr != nil {
+		return fmt.Errorf("artifact preservation failed: %v", perr)
+	}
+	if err := teardownCell(j, repo, live, true); err != nil {
+		return fmt.Errorf("teardown failed: %v", err)
+	}
+	if err := writeJobFields(j, "state", ""); err != nil {
+		return fmt.Errorf("teardown ok, but state write failed: %v", err)
+	}
+	return nil
+}
+
+// migrateQueued handles an old "queued" state: just clear state back to "" (no
+// ready write — a queued job was already ready: true by definition under the
+// old model). No teardown is expected — a queued job never had a cell — but
+// one runs defensively anyway in case reality drifted from the file.
+func migrateQueued(j *Job, live map[string]bool) error {
+	repo, err := resolveRepo(j.Repo)
+	if err != nil {
+		return err
+	}
+	if err := teardownCell(j, repo, live, true); err != nil {
+		return fmt.Errorf("defensive teardown failed: %v", err)
+	}
+	if err := writeJobFields(j, "state", ""); err != nil {
+		return fmt.Errorf("state write failed: %v", err)
+	}
+	return nil
+}
+
+// cmdMigrate requeues jobs left behind by the pre-five-state model: their
+// frontmatter state (e.g. "planning", "executing", "pr-open", "merged") no
+// longer parses under validStates, so loadJobs marks them Err "unknown state
+// ..." and they sit inert — invisible to the daemon, unstartable, un-reapable.
+// oldJobState recovers the actual old value (the parser only left it in the
+// error string) and cmdMigrate branches on it:
+//   - merged/abandoned/failed (the old model's terminal states): any leftover
+//     cell is torn down and the job is stamped done — never re-run, ready
+//     untouched.
+//   - planning/plan-review/executing/testing/pr-open (still in flight):
+//     artifacts preserved, cell torn down, state cleared to "" — ready
+//     untouched, so the job's own ready flag decides whether/when it requeues.
+//   - queued: state cleared to "" only; no ready write.
+//   - anything else unrecognized: skipped untouched, printed loudly, since a
+//     value this function doesn't know isn't safe to guess at.
+func cmdMigrate(args []string) {
+	if len(args) != 0 {
+		die("usage: k migrate")
+	}
+	jobs := loadJobs()
+	live := liveSessions()
+	migrated := 0
+	for _, j := range jobs {
+		if !strings.Contains(j.Err, "unknown state") {
+			continue
+		}
+		old, ok := oldJobState(j)
+		if !ok {
+			fmt.Printf("%-24s skipped: could not read the old state: line from %s\n", j.Slug, j.File)
+			continue
+		}
+		switch old {
+		case "merged":
+			if err := migrateTerminal(j, live, "PR merged"); err != nil {
+				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
+				continue
+			}
+			fmt.Printf("%-24s migrated: was merged, marked done\n", j.Slug)
+			migrated++
+		case "abandoned", "failed":
+			if err := migrateTerminal(j, live, "migrated: was "+old); err != nil {
+				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
+				continue
+			}
+			fmt.Printf("%-24s migrated: was %s, marked done\n", j.Slug, old)
+			migrated++
+		case "planning", "plan-review", "executing", "testing", "pr-open":
+			if err := migrateInFlight(j, live); err != nil {
+				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
+				continue
+			}
+			fmt.Printf("%-24s migrated: old cell torn down, state cleared — requeues via its own ready flag\n", j.Slug)
+			migrated++
+		case "queued":
+			if err := migrateQueued(j, live); err != nil {
+				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
+				continue
+			}
+			fmt.Printf("%-24s migrated: state cleared\n", j.Slug)
+			migrated++
+		default:
+			fmt.Printf("%-24s skipped: unrecognized old state %q\n", j.Slug, old)
+		}
+	}
+	if migrated == 0 {
+		fmt.Println("nothing to migrate")
+	}
 }
