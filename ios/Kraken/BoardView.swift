@@ -24,6 +24,28 @@ final class BoardViewModel {
         (board?.jobs ?? []).filter { BoardTheme.column(for: $0) == column }
     }
 
+    /// Non-blocking contract-handshake warnings for the latest board fetch —
+    /// most severe first. `contract` absent or below what this app expects
+    /// means the server predates the handshake or hasn't been restarted onto
+    /// a build that speaks it; above means this app is the one that's stale.
+    var contractWarnings: [String] {
+        guard let board else { return [] }
+        var warnings: [String] = []
+        let contract = board.contract ?? 0
+        if contract < APIClient.expectedContract {
+            warnings.append("server is running an older kraken build — restart k web on the Mac")
+        } else if contract > APIClient.expectedContract {
+            warnings.append("server is newer than this app — update the Kraken app")
+        }
+        if board.stale == true {
+            warnings.append("kraken was reinstalled since this server started — restart k web")
+        }
+        if board.daemonOK && board.daemon.stale == true {
+            warnings.append("kraken was reinstalled since the daemon started — restart the daemon")
+        }
+        return warnings
+    }
+
     /// Whether any job in `column` needs attention — a pending question or a
     /// non-empty health string — for the overview strip/sheet's flag badge.
     func hasFlag(in column: BoardColumn) -> Bool {
@@ -47,6 +69,7 @@ struct BoardView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 daemonBar
+                contractBanner
                 overviewStrip
                 TabView(selection: $selectedColumn) {
                     ForEach(BoardColumn.allCases) { column in
@@ -137,6 +160,26 @@ struct BoardView: View {
         if router.pendingOverview {
             showingOverview = true
             router.pendingOverview = false
+        }
+    }
+
+    // Non-blocking contract-mismatch notice — never hides the board or blocks
+    // actions (approved decision), just flags that the client/server pairing
+    // is off so carl knows to restart k web or update the app.
+    @ViewBuilder
+    private var contractBanner: some View {
+        let warnings = vm.contractWarnings
+        if !warnings.isEmpty {
+            Text(warnings.joined(separator: " · "))
+                .font(.voice(11))
+                .foregroundStyle(KTheme.revealed)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(KTheme.revealedSoft)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(KTheme.hairline).frame(height: 1)
+                }
         }
     }
 

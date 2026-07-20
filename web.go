@@ -23,6 +23,12 @@ import (
 //go:embed web
 var webAssets embed.FS
 
+// apiContract is the wire-shape version for /api/health and /api/board,
+// mirrored by the iOS app's expected value (see ios/API.md). Bump ONLY on a
+// breaking change (a JSON key retyped, removed, or renamed) — additive keys
+// never bump it, since old clients already ignore fields they don't know.
+const apiContract = 1
+
 type webArtifact struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
@@ -121,6 +127,10 @@ type webBoard struct {
 	CellCap   int          `json:"cell_cap"`
 	LiveCells int          `json:"live_cells"`
 	Jobs      []webJob     `json:"jobs"`
+	Contract  int          `json:"contract"`
+	// Stale is this k web process' own self-check (see selfcheck.go) — the
+	// daemon's equivalent rides Daemon.Stale.
+	Stale bool `json:"stale"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from both homes: the live
@@ -272,7 +282,7 @@ func buildWebBoard() webBoard {
 	live := liveSessions()
 	st, ok := readDaemonStatus()
 	all, _ := orderAll(discoverAll())
-	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}}
+	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}, Contract: apiContract, Stale: isSelfStale()}
 	for _, j := range jobs {
 		var prereqs []webPrereq
 		for _, p := range j.Prereqs {
@@ -1016,6 +1026,7 @@ func detectTailscaleIP() (string, error) {
 }
 
 func cmdWeb(args []string) {
+	initSelfCheck()
 	port := "7777"
 	tailnet := false
 	explicitAddr := ""

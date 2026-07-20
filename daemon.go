@@ -41,6 +41,9 @@ type daemonStatus struct {
 	LastTick  int64  `json:"last_tick"`
 	LastError string `json:"last_error,omitempty"`
 	Cells     int    `json:"cells"`
+	// Stale is this daemon process' own self-check (see selfcheck.go) — true
+	// once make install has replaced the binary on disk out from under it.
+	Stale bool `json:"stale,omitempty"`
 }
 
 func daemonStatusPath() string {
@@ -89,6 +92,7 @@ func cmdDaemon(args []string) {
 	if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
 		die("mkdir %s: %v", filepath.Dir(daemonStatusPath()), err)
 	}
+	initSelfCheck()
 	d := &daemon{notified: map[string]int64{}, poked: map[string]int64{}}
 	st := daemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
 	dlog("daemon up (pid %d, cap %d cells, tick %s)", st.PID, cellCap, daemonInterval)
@@ -113,7 +117,7 @@ func cmdDaemon(args []string) {
 			close(firstTick)
 			first = false
 		}
-		st.LastTick, st.Cells, st.LastError = time.Now().Unix(), cells, ""
+		st.LastTick, st.Cells, st.LastError, st.Stale = time.Now().Unix(), cells, "", isSelfStale()
 		if err != nil {
 			st.LastError = err.Error()
 			dlog("tick error: %v", err)

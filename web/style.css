@@ -83,6 +83,16 @@ body {
 .viewtab.active { color: var(--accent); border-color: var(--accent-soft); text-shadow: var(--glow); }
 .viewtab:hover:not(.active) { color: var(--text); }
 
+.stale-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px;
+  background: var(--revealed-soft);
+  border-bottom: 1px solid var(--revealed);
+  color: var(--revealed);
+  font: 11px var(--mono);
+  letter-spacing: 0.2px;
+}
+
 /* ---- board ---- */
 .board {
   display: grid;

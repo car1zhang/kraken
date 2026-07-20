@@ -179,6 +179,21 @@ function render(board) {
   document.getElementById("cells-stat").textContent = `cells ${board.live_cells}/${board.cell_cap}`;
   document.getElementById("flag-stat").textContent = flags ? `⚑ ${flags}` : "";
   document.getElementById("tick-stat").textContent = new Date().toLocaleTimeString();
+
+  // stale-binary self-check (see selfcheck.go): both fields are absent on an
+  // older server, which reads as "not stale" — never a hidden error
+  const banner = document.getElementById("stale-banner");
+  const webStale = !!board.stale;
+  const daemonStale = !!(board.daemon_ok && board.daemon && board.daemon.stale);
+  if (webStale || daemonStale) {
+    const msgs = [];
+    if (webStale) msgs.push("kraken was reinstalled since this server started — restart k web");
+    if (daemonStale) msgs.push("kraken was reinstalled since the daemon started — restart the daemon");
+    banner.textContent = "⚠ " + msgs.join(" · ");
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
 }
 
 // ---- archived drawer (collapsible, lives under the DONE column) ----

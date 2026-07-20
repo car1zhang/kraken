@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func ipNet(ip string, bits int) *net.IPNet {
@@ -610,5 +612,108 @@ func TestWebJobSaveMTimeLock(t *testing.T) {
 	webJobSave(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("garbage mtime: got status %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// fakeFileInfo is a minimal os.FileInfo for exercising binaryStale without
+// touching the filesystem.
+type fakeFileInfo struct {
+	modTime time.Time
+	size    int64
+}
+
+func (f fakeFileInfo) Name() string       { return "kraken" }
+func (f fakeFileInfo) Size() int64        { return f.size }
+func (f fakeFileInfo) Mode() fs.FileMode  { return 0o755 }
+func (f fakeFileInfo) ModTime() time.Time { return f.modTime }
+func (f fakeFileInfo) IsDir() bool        { return false }
+func (f fakeFileInfo) Sys() any           { return nil }
+
+func TestBinaryStale(t *testing.T) {
+	t0 := time.Unix(1700000000, 0)
+	t1 := time.Unix(1700000100, 0)
+	same := fakeFileInfo{modTime: t0, size: 1024}
+	sameCopy := fakeFileInfo{modTime: t0, size: 1024}
+	newerMTime := fakeFileInfo{modTime: t1, size: 1024}
+	biggerSize := fakeFileInfo{modTime: t0, size: 2048}
+
+	cases := []struct {
+		name       string
+		start, now os.FileInfo
+		want       bool
+	}{
+		{"both nil", nil, nil, false},
+		{"nil start", nil, same, false},
+		{"nil now", same, nil, false},
+		{"identical", same, sameCopy, false},
+		{"mtime differs", same, newerMTime, true},
+		{"size differs", same, biggerSize, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := binaryStale(c.start, c.now); got != c.want {
+				t.Errorf("binaryStale(%v, %v) = %v, want %v", c.start, c.now, got, c.want)
+			}
+		})
+	}
+}
+
+// TestIsSelfStaleDetectsChange exercises isSelfStale end to end (rather than
+// just its pure binaryStale helper): TestHealthHandlerContractAndStale can
+// only ever observe stale=false since selfBinaryStart is nil in tests, so
+// this drives the package state directly to cover the true branch too.
+func TestIsSelfStaleDetectsChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kraken")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origPath, origStart := selfBinaryPath, selfBinaryStart
+	selfBinaryPath, selfBinaryStart = path, fi
+	t.Cleanup(func() { selfBinaryPath, selfBinaryStart = origPath, origStart })
+
+	if isSelfStale() {
+		t.Fatal("isSelfStale() = true before any change, want false")
+	}
+
+	if err := os.WriteFile(path, []byte("v1 plus more bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	if !isSelfStale() {
+		t.Fatal("isSelfStale() = false after binary changed, want true")
+	}
+}
+
+// TestHealthHandlerContractAndStale asserts /api/health carries the wire
+// contract version and a stale flag alongside the existing ok/host fields —
+// no fixtures needed, healthHandler doesn't touch the pluto dir.
+func TestHealthHandlerContractAndStale(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+	healthHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthHandler: got status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("healthHandler: bad response json: %v", err)
+	}
+	if ok, _ := resp["ok"].(bool); !ok {
+		t.Errorf("healthHandler: ok = %#v, want true", resp["ok"])
+	}
+	if c, ok := resp["contract"].(float64); !ok || int(c) != apiContract {
+		t.Errorf("healthHandler: contract = %#v, want %d", resp["contract"], apiContract)
+	}
+	if _, ok := resp["stale"].(bool); !ok {
+		t.Errorf("healthHandler: stale = %#v (%T), want a bool", resp["stale"], resp["stale"])
 	}
 }

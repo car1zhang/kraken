@@ -78,7 +78,7 @@ var paneSessionFunc = currentPaneSession
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "host": host})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "host": host, "contract": apiContract, "stale": isSelfStale()})
 }
 
 func peersHandler(source peerSource) http.HandlerFunc {

@@ -7,6 +7,10 @@
 // Swift's synthesized Decodable treats a missing key and an explicit null
 // the same way for Optional properties, so this is safe either way). Fields
 // with no `omitempty` tag are always present and modeled as non-optional.
+// Exception: keys like `contract`/`stale` are always present on new servers
+// but absent on older ones (added after this app's server-version handshake
+// shipped) — those are modeled Optional too, even without omitempty, since
+// the absence itself is what the app checks for.
 
 // MARK: - board
 
@@ -16,6 +20,10 @@ struct WebBoard: Decodable {
     let cellCap: Int
     let liveCells: Int
     let jobs: [WebJob]
+    // Absent on servers older than this contract handshake — that absence is
+    // itself the signal the app uses to warn about a stale server.
+    let contract: Int?
+    let stale: Bool?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -23,6 +31,7 @@ struct WebBoard: Decodable {
         case cellCap = "cell_cap"
         case liveCells = "live_cells"
         case jobs
+        case contract, stale
     }
 }
 
@@ -32,6 +41,9 @@ struct DaemonStatus: Decodable {
     let lastTick: Int64
     let lastError: String?
     let cells: Int
+    // Absent on daemons older than this contract handshake — see the note
+    // atop this file.
+    let stale: Bool?
 
     enum CodingKeys: String, CodingKey {
         case pid
@@ -39,6 +51,7 @@ struct DaemonStatus: Decodable {
         case lastTick = "last_tick"
         case lastError = "last_error"
         case cells
+        case stale
     }
 }
 
@@ -373,4 +386,8 @@ struct CaptureResponse: Decodable {
 struct HealthResponse: Decodable {
     let ok: Bool
     let host: String
+    // Same contract-handshake fields as WebBoard above — absent on older
+    // servers.
+    let contract: Int?
+    let stale: Bool?
 }
