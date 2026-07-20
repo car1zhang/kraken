@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -97,9 +98,14 @@ type webJob struct {
 	Live      bool          `json:"live"`
 	Prereqs   []webPrereq   `json:"prereqs,omitempty"`
 	Artifacts []webArtifact `json:"artifacts,omitempty"`
-	// Detail is the cell's last words: for a live started cell, the last
-	// assistant text block of zeus' transcript — one line, truncated.
+	// Detail is the cell's last words: for a live started cell, the full
+	// text of the last assistant text block of zeus' transcript, capped at
+	// 4000 chars.
 	Detail string `json:"detail,omitempty"`
+	// LastSent is the text of the most recent me→zeus mid-run log entry —
+	// carl's own last message to the cell, independent of whether it's
+	// currently live.
+	LastSent string `json:"last_sent,omitempty"`
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
@@ -267,11 +273,57 @@ func lastAssistantText(path string) string {
 	}
 	for i := len(blocks) - 1; i >= 0; i-- {
 		if blocks[i].kind == "text" {
-			return truncateOneLine(blocks[i].text, 200)
+			return truncateText(blocks[i].text, 4000)
 		}
 	}
 	return ""
 }
+
+// truncateText caps s at limit runes, preserving newlines and internal
+// whitespace (unlike truncateOneLine, which flattens to a single line) —
+// the board wants the cell's actual formatting, just bounded so a runaway
+// transcript block doesn't blow up the wire payload. Other control chars
+// (esp. \x1b) are mapped to space, same as truncateOneLine, since this
+// feeds iOS notification bodies too.
+func truncateText(s string, limit int) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit]) + "…"
+}
+
+// lastSentMessage returns the text of the most recent me→zeus entry in a
+// job body's "## Mid-run log" section (see appendMidRunLog for the entry
+// format: "- [2006-01-02 15:04 actor] text"), timestamp and actor stripped.
+// "" when the body has no log section or no me→zeus entry in it. Entries
+// kraken generated itself from a question-answer click ("answered question:
+// option N") are skipped — they're not something carl typed, so scanning
+// continues to the last entry that actually is.
+func lastSentMessage(body string) string {
+	_, log := splitBodyLog(body)
+	var last string
+	for _, line := range strings.Split(log, "\n") {
+		m := midRunLogEntryRe.FindStringSubmatch(line)
+		if m != nil && m[1] == "me→zeus" && !strings.HasPrefix(m[2], "answered question: option ") {
+			last = m[2]
+		}
+	}
+	return last
+}
+
+// midRunLogEntryRe matches one mid-run log line, capturing the actor and
+// the text that follows it.
+var midRunLogEntryRe = regexp.MustCompile(`^- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([^\]]+)\] (.*)$`)
 
 func buildWebBoard() webBoard {
 	jobs := loadJobs()
@@ -295,6 +347,9 @@ func buildWebBoard() webBoard {
 			Success: j.Success, Prereqs: prereqs, Artifacts: jobArtifacts(j),
 			ModTime:       j.ModTime.Unix(),
 			Reactivatable: j.State == "done" && j.Session != "",
+		}
+		if j.started() && j.State != "done" {
+			wj.LastSent = lastSentMessage(j.Body)
 		}
 		if live[cellSession(j)] {
 			wj.Cell, wj.Live = cellSession(j), true
@@ -518,7 +573,7 @@ func webSteer(req webReq) error {
 	}
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		return fmt.Errorf("empty steering message")
+		return fmt.Errorf("empty message")
 	}
 	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
 		return fmt.Errorf("%s has no live cell to steer", j.Slug)
@@ -528,10 +583,10 @@ func webSteer(req webReq) error {
 	if zeus == nil {
 		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
 	}
-	if err := appendMidRunLog(j, "me→zeus", "steering: "+oneLine(text)); err != nil {
+	if err := appendMidRunLog(j, "me→zeus", oneLine(text)); err != nil {
 		return fmt.Errorf("mid-run log append failed: %v", err)
 	}
-	if err := sendMessage(zeus, "steering from carl: "+text); err != nil {
+	if err := sendMessage(zeus, "from carl: "+text); err != nil {
 		return fmt.Errorf("logged, but delivery failed: %v", err)
 	}
 	return writeJobState(j, "working")

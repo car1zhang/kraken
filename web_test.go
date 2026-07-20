@@ -224,6 +224,60 @@ func TestWebQuestionFromMirrorsFields(t *testing.T) {
 	}
 }
 
+// --- lastSentMessage: the most recent me→zeus mid-run log entry ---
+
+func TestLastSentMessageEmptyBody(t *testing.T) {
+	if got := lastSentMessage(""); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestLastSentMessageNoLogSection(t *testing.T) {
+	body := "# Spec\ndo the thing\n"
+	if got := lastSentMessage(body); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestLastSentMessageOneEntry(t *testing.T) {
+	body := "# Spec\ndo the thing\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n" +
+		"- [2026-07-01 10:00 me→zeus] pivot to plan B\n"
+	if got := lastSentMessage(body); got != "pivot to plan B" {
+		t.Errorf("got %q, want %q", got, "pivot to plan B")
+	}
+}
+
+func TestLastSentMessageMultipleEntriesInterleaved(t *testing.T) {
+	body := "# Spec\ndo the thing\n\n## Mid-run log\n" +
+		"<!-- appended by kraken; do not hand-edit -->\n" +
+		"- [2026-07-01 10:00 me→zeus] first message\n" +
+		"- [2026-07-01 10:05 zeus→me] status update, not mine\n" +
+		"- [2026-07-01 10:10 me→zeus] second message\n" +
+		"- [2026-07-01 10:15 zeus→me] another status update\n"
+	if got := lastSentMessage(body); got != "second message" {
+		t.Errorf("got %q, want %q", got, "second message")
+	}
+}
+
+func TestLastSentMessageSkipsAnsweredQuestionEntries(t *testing.T) {
+	body := "# Spec\ndo the thing\n\n## Mid-run log\n" +
+		"<!-- appended by kraken; do not hand-edit -->\n" +
+		"- [2026-07-01 10:00 me→zeus] real message\n" +
+		"- [2026-07-01 10:05 zeus→me] status update\n" +
+		"- [2026-07-01 10:10 me→zeus] answered question: option 2\n"
+	if got := lastSentMessage(body); got != "real message" {
+		t.Errorf("got %q, want %q", got, "real message")
+	}
+}
+
+func TestTruncateTextSanitizesControlCharsPreservesNewlines(t *testing.T) {
+	in := "line one\x1b[31m colored\x7f\nline two"
+	want := "line one [31m colored \nline two"
+	if got := truncateText(in, 100); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // --- board move validation: pure, file-backed only (no tmux) ---
 
 // writeTestJob writes a minimal parseable job file under a fresh

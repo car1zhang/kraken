@@ -28,6 +28,11 @@ const STATE_COLOR = {
 let jobsBySlug = {};
 let dragging = null; // { slug, from }
 
+// per-slug detail-expanded state, persisted the same way archiveOpen is
+// (see archiveOpen below) so it survives the 3s poll re-render, which
+// rebuilds #board innerHTML and would otherwise wipe any .expanded class
+let expandedDetails = new Set(JSON.parse(localStorage.getItem("kraken-expanded-details") || "[]"));
+
 function columnFor(state) {
   for (const c of COLUMNS) {
     if (c.states.includes(state)) return c.key;
@@ -85,6 +90,13 @@ function questionHTML(j) {
   </div>`;
 }
 
+// detailClampable heuristically decides whether a detail block is long
+// enough to plausibly get clamped by the CSS line-clamp — only then does it
+// make sense to show a pointer cursor / accept clicks to expand it.
+function detailClampable(text) {
+  return text.length > 240 || (text.match(/\n/g) || []).length >= 6;
+}
+
 function cardHTML(j, col) {
   const color = stateColor(j.state);
   const movable = !!MOVES[col];
@@ -123,7 +135,8 @@ function cardHTML(j, col) {
     ${j.live ? `<div class="review-row"><button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button></div>` : ""}
     ${j.err ? `<div class="err">✕ ${esc(j.err)}</div>` : ""}
     ${j.health ? `<div class="err">⚠ ${esc(j.health)}</div>` : ""}
-    ${j.detail ? `<div class="detail">${esc(j.detail)}</div>` : ""}
+    ${j.last_sent ? `<div class="last-sent">me→zeus: ${esc(j.last_sent)}</div>` : ""}
+    ${j.detail ? `<div class="detail${detailClampable(j.detail) ? " clampable" : ""}${expandedDetails.has(j.slug) ? " expanded" : ""}">${esc(j.detail)}</div>` : ""}
     ${roster ? `<div class="roster">${roster}</div>` : ""}
     ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
@@ -134,7 +147,7 @@ function cardHTML(j, col) {
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="nvim">⌨ nvim</button>
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="code">⌨ code</button>
     </div>` : ""}
-    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}">➤ message zeus</button>` : ""}
+    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}" data-mode="${col === "blocked" ? "unblock" : "steer"}">${col === "blocked" ? "⚡ unblock" : "➤ message zeus"}</button>` : ""}
   </div>`;
 }
 
@@ -477,7 +490,15 @@ document.addEventListener("click", (ev) => {
   }
   const steer = ev.target.closest(".steer");
   if (steer) {
-    openSteer(steer.dataset.slug);
+    openSteer(steer.dataset.slug, steer.dataset.mode || "steer");
+    return;
+  }
+  const detail = ev.target.closest(".detail.clampable");
+  if (detail && !window.getSelection().toString()) {
+    const slug = detail.closest(".card")?.dataset.slug;
+    if (detail.classList.toggle("expanded")) expandedDetails.add(slug);
+    else expandedDetails.delete(slug);
+    localStorage.setItem("kraken-expanded-details", JSON.stringify([...expandedDetails]));
     return;
   }
   const tmuxOpen = ev.target.closest(".open-tmux");
@@ -505,21 +526,26 @@ document.addEventListener("click", (ev) => {
 
 const steerOverlay = document.getElementById("steer-overlay");
 let steerSlug = null;
-let steerMode = "steer"; // "steer" | "reactivate" — same modal, different endpoint
+let steerMode = "steer"; // "steer" | "reactivate" | "unblock" — same modal, different endpoint
 
 function openSteer(slug, mode = "steer") {
   steerSlug = slug;
   steerMode = mode;
   document.getElementById("steer-title").textContent =
-    mode === "reactivate" ? slug + " — reactivate (same zeus session)" : slug + " — message zeus";
+    mode === "reactivate" ? slug + " — reactivate (same zeus session)"
+    : mode === "unblock" ? slug + " — unblock"
+    : slug + " — message zeus";
   const text = document.getElementById("steer-text");
   text.placeholder =
     mode === "reactivate"
       ? "optional: what to adjust — delivered as the resume prompt to the job's original zeus session (leave empty to just wake it)"
+      : mode === "unblock"
+      ? "tell the crew how to proceed — routed straight to the cell"
       : "message zeus directly — steering / pivot instruction, delivered straight to its pane";
   text.value = "";
   document.getElementById("steer-note").textContent = "";
-  document.getElementById("steer-send").textContent = mode === "reactivate" ? "reactivate ⌘⏎" : "send ⌘⏎";
+  document.getElementById("steer-send").textContent =
+    mode === "reactivate" ? "reactivate ⌘⏎" : mode === "unblock" ? "unblock ⌘⏎" : "send ⌘⏎";
   steerOverlay.hidden = false;
   text.focus();
 }

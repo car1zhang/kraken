@@ -173,6 +173,7 @@ var webJobSpec = map[string]fieldSpec{
 	"archived":      {kind: wireBool, required: false},
 	"display_slug":  {kind: wireString, required: false},
 	"reactivatable": {kind: wireBool, required: false},
+	"last_sent":     {kind: wireString, required: false},
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
@@ -247,6 +248,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		Archived:      true,
 		DisplaySlug:   "x-orig",
 		Reactivatable: true,
+		LastSent:      "pivot to plan B",
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {

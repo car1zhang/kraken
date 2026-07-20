@@ -153,6 +153,14 @@ struct JobDetailView: View {
     private var canSteer: Bool {
         job.live
     }
+    // A blocked cell's steer affordance is framed as "unblock" rather than
+    // steering — same delivery mechanism, different wording so it doesn't
+    // read as an optional nudge. Keyed off the derived column (mirrors
+    // canKill above) so an unhealthy live cell forced into blocked gets the
+    // same framing as a file-state blocked one.
+    private var isBlockedColumn: Bool {
+        column == .blocked
+    }
     private var isArchived: Bool { job.archived == true }
     // Mirrors the server's rule: only a job with no cell in flight can be
     // archived — a live one shows Kill instead (kill returns it to draft,
@@ -254,6 +262,13 @@ struct JobDetailView: View {
                         DetailCard(text: detail, stateColor: BoardTheme.color(forState: job.state))
                     }
                 }
+                if let lastSent = job.lastSent, !lastSent.isEmpty {
+                    kSection("Last sent") {
+                        Text(lastSent)
+                            .font(.data(12))
+                            .foregroundStyle(KTheme.text2)
+                    }
+                }
                 if let question = job.question {
                     kSection("Question") {
                         // Tappable option buttons only work for a single,
@@ -321,7 +336,7 @@ struct JobDetailView: View {
         }
         .overlay(alignment: .top) {
             if showingSteerToast {
-                Text("steering sent")
+                Text(isBlockedColumn ? "sent" : "steering sent")
                     .font(.data(11))
                     .foregroundStyle(KTheme.accentInk)
                     .padding(.horizontal, 10).padding(.vertical, 4)
@@ -367,7 +382,7 @@ struct JobDetailView: View {
         }
         .sheet(isPresented: $showingSteer) {
             NavigationStack {
-                SteerView(job: job, baseURL: baseURL) {
+                SteerView(job: job, baseURL: baseURL, unblockFraming: isBlockedColumn) {
                     showingSteer = false
                     showSteerToast()
                 }
@@ -430,11 +445,15 @@ struct JobDetailView: View {
                     Button {
                         showingSteer = true
                     } label: {
-                        Label("Steer", systemImage: "arrowshape.turn.up.right.fill")
+                        if isBlockedColumn {
+                            Label("Unblock", systemImage: "lock.open.fill")
+                        } else {
+                            Label("Steer", systemImage: "arrowshape.turn.up.right.fill")
+                        }
                     }
                     .labelStyle(.iconOnly)
-                    .accessibilityLabel("Steer")
-                    .tint(KTheme.accent)
+                    .accessibilityLabel(isBlockedColumn ? "Unblock" : "Steer")
+                    .tint(isBlockedColumn ? KTheme.revealed : KTheme.accent)
                 }
                 if canReactivate {
                     Button {
@@ -742,6 +761,10 @@ private struct ReactivateView: View {
 private struct SteerView: View {
     let job: WebJob
     let baseURL: String
+    // When true (the cell is blocked), the sheet frames itself as "unblock"
+    // rather than steering — same /api/steer delivery, different wording so
+    // it doesn't read as an optional nudge.
+    var unblockFraming: Bool = false
     var onSteered: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -756,7 +779,9 @@ private struct SteerView: View {
     var body: some View {
         Form {
             kSection {
-                Text("Free-text direction for the crew — routed to the cell like a terminal message.")
+                Text(unblockFraming
+                     ? "Tell the crew how to proceed — routed straight to the cell."
+                     : "Free-text direction for the crew — routed to the cell like a terminal message.")
                     .font(.voice(12))
                     .foregroundStyle(KTheme.text2)
             }
@@ -772,7 +797,7 @@ private struct SteerView: View {
             }
         }
         .kListStyle()
-        .navigationTitle("Steer \(job.slug)")
+        .navigationTitle(unblockFraming ? "Unblock \(job.slug)" : "Steer \(job.slug)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {

@@ -78,7 +78,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `live` | bool | always | |
 | `prereqs` | array (`webPrereq`) | omitempty | |
 | `artifacts` | array (`webArtifact`) | omitempty | |
-| `detail` | string | omitempty | zeus' last assistant text, 1 line, truncated |
+| `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 chars |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
 | `roster` | array (`webAgent`) | omitempty | live nested subagents |
 | `health` | string | omitempty | "" (absent) = healthy |
@@ -86,6 +86,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `archived` | bool | omitempty | |
 | `display_slug` | string | omitempty | original slug, archived jobs only |
 | `reactivatable` | bool | omitempty | done + has a recorded zeus session |
+| `last_sent` | string | omitempty | carl's last free-text message; question-answer entries excluded, started + non-done jobs only |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
 

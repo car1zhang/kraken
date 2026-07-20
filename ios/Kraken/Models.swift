@@ -84,6 +84,9 @@ struct WebJob: Decodable, Identifiable {
     // A done job whose zeus session id is recorded — the only ones the
     // reactivate action can actually resume.
     let reactivatable: Bool?
+    // carl's own most recent message to the cell (the last me→zeus mid-run
+    // log entry), independent of whether the cell is currently live.
+    let lastSent: String?
 
     var id: String { slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
@@ -95,6 +98,7 @@ struct WebJob: Decodable, Identifiable {
         case archived
         case displaySlug = "display_slug"
         case reactivatable
+        case lastSent = "last_sent"
     }
 }
 
