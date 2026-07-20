@@ -1,7 +1,7 @@
 // kraken web — kanban over /api/board with two legal drag moves:
 //   draft → queued   (flips ready: true in the job file)
 //   blocked → done    (completes the job, outcome auto-filled from success)
-// Un-stalling a blocked cell (answering a question, ▶ send, messaging zeus)
+// Un-stalling a blocked cell (answering a question, messaging zeus)
 // happens via card buttons, not drag — those are actions on the cell, not a
 // board-state assertion the browser is making. Everything else is read-only;
 // the daemon drives working/blocked itself from live pod activity.
@@ -27,6 +27,11 @@ const STATE_COLOR = {
 
 let jobsBySlug = {};
 let dragging = null; // { slug, from }
+
+// per-slug detail-expanded state, persisted the same way archiveOpen is
+// (see archiveOpen below) so it survives the 3s poll re-render, which
+// rebuilds #board innerHTML and would otherwise wipe any .expanded class
+let expandedDetails = new Set(JSON.parse(localStorage.getItem("kraken-expanded-details") || "[]"));
 
 function columnFor(state) {
   for (const c of COLUMNS) {
@@ -85,6 +90,13 @@ function questionHTML(j) {
   </div>`;
 }
 
+// detailClampable heuristically decides whether a detail block is long
+// enough to plausibly get clamped by the CSS line-clamp — only then does it
+// make sense to show a pointer cursor / accept clicks to expand it.
+function detailClampable(text) {
+  return text.length > 240 || (text.match(/\n/g) || []).length >= 6;
+}
+
 function cardHTML(j, col) {
   const color = stateColor(j.state);
   const movable = !!MOVES[col];
@@ -123,19 +135,19 @@ function cardHTML(j, col) {
     ${j.live ? `<div class="review-row"><button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button></div>` : ""}
     ${j.err ? `<div class="err">✕ ${esc(j.err)}</div>` : ""}
     ${j.health ? `<div class="err">⚠ ${esc(j.health)}</div>` : ""}
-    ${j.detail ? `<div class="detail">${esc(j.detail)}</div>` : ""}
+    ${j.last_sent ? `<div class="last-sent">me→zeus: ${esc(j.last_sent)}</div>` : ""}
+    ${j.detail ? `<div class="detail${detailClampable(j.detail) ? " clampable" : ""}${expandedDetails.has(j.slug) ? " expanded" : ""}">${esc(j.detail)}</div>` : ""}
     ${roster ? `<div class="roster">${roster}</div>` : ""}
     ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
     ${col === "done" && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
-    ${col === "blocked" && j.live && j.type === "build" ? `<button class="btn send" data-slug="${esc(j.slug)}">▶ send</button>` : ""}
     ${col === "blocked" && j.live && j.type === "build" ? `<div class="review-row">
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="nvim">⌨ nvim</button>
       <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="code">⌨ code</button>
     </div>` : ""}
-    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}">➤ message zeus</button>` : ""}
+    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}" data-mode="${col === "blocked" ? "unblock" : "steer"}">${col === "blocked" ? "⚡ unblock" : "➤ message zeus"}</button>` : ""}
   </div>`;
 }
 
@@ -179,6 +191,21 @@ function render(board) {
   document.getElementById("cells-stat").textContent = `cells ${board.live_cells}/${board.cell_cap}`;
   document.getElementById("flag-stat").textContent = flags ? `⚑ ${flags}` : "";
   document.getElementById("tick-stat").textContent = new Date().toLocaleTimeString();
+
+  // stale-binary self-check (see selfcheck.go): both fields are absent on an
+  // older server, which reads as "not stale" — never a hidden error
+  const banner = document.getElementById("stale-banner");
+  const webStale = !!board.stale;
+  const daemonStale = !!(board.daemon_ok && board.daemon && board.daemon.stale);
+  if (webStale || daemonStale) {
+    const msgs = [];
+    if (webStale) msgs.push("kraken was reinstalled since this server started — restart k web");
+    if (daemonStale) msgs.push("kraken was reinstalled since the daemon started — restart the daemon");
+    banner.textContent = "⚠ " + msgs.join(" · ");
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
 }
 
 // ---- archived drawer (collapsible, lives under the DONE column) ----
@@ -422,12 +449,6 @@ document.addEventListener("click", (ev) => {
     post("/api/question", { slug: qopt.dataset.slug, text: qopt.dataset.idx });
     return;
   }
-  const send = ev.target.closest(".send");
-  if (send) {
-    send.disabled = true;
-    post("/api/send", { slug: send.dataset.slug });
-    return;
-  }
   const retry = ev.target.closest(".retry");
   if (retry) {
     retry.disabled = true;
@@ -469,7 +490,15 @@ document.addEventListener("click", (ev) => {
   }
   const steer = ev.target.closest(".steer");
   if (steer) {
-    openSteer(steer.dataset.slug);
+    openSteer(steer.dataset.slug, steer.dataset.mode || "steer");
+    return;
+  }
+  const detail = ev.target.closest(".detail.clampable");
+  if (detail && !window.getSelection().toString()) {
+    const slug = detail.closest(".card")?.dataset.slug;
+    if (detail.classList.toggle("expanded")) expandedDetails.add(slug);
+    else expandedDetails.delete(slug);
+    localStorage.setItem("kraken-expanded-details", JSON.stringify([...expandedDetails]));
     return;
   }
   const tmuxOpen = ev.target.closest(".open-tmux");
@@ -497,21 +526,60 @@ document.addEventListener("click", (ev) => {
 
 const steerOverlay = document.getElementById("steer-overlay");
 let steerSlug = null;
-let steerMode = "steer"; // "steer" | "reactivate" — same modal, different endpoint
+let steerMode = "steer"; // "steer" | "reactivate" | "unblock" — same modal, different endpoint
+
+// steer context: the cell's last message, carl's last sent message, and its
+// artifact chips — populated for "steer"/"unblock" (the data is there either
+// way); "reactivate" hides it outright since the cell is gone.
+function fillSteerContext(j, mode) {
+  const container = document.getElementById("steer-context");
+  const detailEl = document.getElementById("steer-detail");
+  const lastSentEl = document.getElementById("steer-lastsent");
+  const chipsEl = document.getElementById("steer-chips");
+
+  const detail = mode !== "reactivate" && j && j.detail;
+  const lastSent = mode !== "reactivate" && j && j.last_sent;
+  const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
+
+  detailEl.hidden = !detail;
+  // renderMD escapes before transforming, so agent-authored text is inert
+  detailEl.innerHTML = detail ? renderMD(detail) : "";
+
+  lastSentEl.hidden = !lastSent;
+  lastSentEl.textContent = lastSent ? `me→zeus: ${lastSent}` : "";
+
+  chipsEl.hidden = !artifacts;
+  chipsEl.innerHTML = artifacts
+    ? artifacts
+        .map(
+          (a) =>
+            `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(j.slug)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
+        )
+        .join("")
+    : "";
+
+  container.hidden = !detail && !lastSent && !artifacts;
+}
 
 function openSteer(slug, mode = "steer") {
   steerSlug = slug;
   steerMode = mode;
   document.getElementById("steer-title").textContent =
-    mode === "reactivate" ? slug + " — reactivate (same zeus session)" : slug + " — message zeus";
+    mode === "reactivate" ? slug + " — reactivate (same zeus session)"
+    : mode === "unblock" ? slug + " — unblock"
+    : slug + " — message zeus";
   const text = document.getElementById("steer-text");
   text.placeholder =
     mode === "reactivate"
       ? "optional: what to adjust — delivered as the resume prompt to the job's original zeus session (leave empty to just wake it)"
+      : mode === "unblock"
+      ? "tell the crew how to proceed — routed straight to the cell"
       : "message zeus directly — steering / pivot instruction, delivered straight to its pane";
   text.value = "";
   document.getElementById("steer-note").textContent = "";
-  document.getElementById("steer-send").textContent = mode === "reactivate" ? "reactivate ⌘⏎" : "send ⌘⏎";
+  document.getElementById("steer-send").textContent =
+    mode === "reactivate" ? "reactivate ⌘⏎" : mode === "unblock" ? "unblock ⌘⏎" : "send ⌘⏎";
+  fillSteerContext(jobsBySlug[slug], mode);
   steerOverlay.hidden = false;
   text.focus();
 }
@@ -762,8 +830,14 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
   }
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });
+// one Escape closes one layer: the artifact viewer if it's on top (it can be
+// opened from inside the steer/unblock modal), else whichever of editor/steer
+// is open underneath.
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") { overlay.hidden = true; editorOverlay.hidden = true; steerOverlay.hidden = true; }
+  if (ev.key !== "Escape") return;
+  if (!overlay.hidden) { overlay.hidden = true; return; }
+  if (!steerOverlay.hidden) { steerOverlay.hidden = true; return; }
+  if (!editorOverlay.hidden) { editorOverlay.hidden = true; return; }
 });
 
 // ---- dag view: jobs layered by dependency depth, edges = prereqs ----

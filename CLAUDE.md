@@ -42,3 +42,4 @@ Tests (`main_test.go`, `viewer_test.go`) cover the pure functions — parsers, o
 
 - Keep it stdlib-only outside the viewer; new dependencies need a strong reason.
 - Data sources owned by other programs (session files, transcripts, codex logs) are read defensively — missing/malformed files degrade to blank fields, never errors.
+- **API contract**: any change to JSON served to or accepted from the iOS app/web UI (web.go, webpeers.go, daemon.go, job.go) lands in the same commit as `ios/API.md`, `ios/Kraken/Models.swift`, and `contract_test.go`. `apiContract` (web.go) bumps only on breaking changes — a key retyped, renamed, or removed — mirrored by `expectedContract` in `APIClient.swift`; additive keys never bump it.

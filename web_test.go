@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func ipNet(ip string, bits int) *net.IPNet {
@@ -222,6 +224,60 @@ func TestWebQuestionFromMirrorsFields(t *testing.T) {
 	}
 }
 
+// --- lastSentMessage: the most recent me→zeus mid-run log entry ---
+
+func TestLastSentMessageEmptyBody(t *testing.T) {
+	if got := lastSentMessage(""); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestLastSentMessageNoLogSection(t *testing.T) {
+	body := "# Spec\ndo the thing\n"
+	if got := lastSentMessage(body); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestLastSentMessageOneEntry(t *testing.T) {
+	body := "# Spec\ndo the thing\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n" +
+		"- [2026-07-01 10:00 me→zeus] pivot to plan B\n"
+	if got := lastSentMessage(body); got != "pivot to plan B" {
+		t.Errorf("got %q, want %q", got, "pivot to plan B")
+	}
+}
+
+func TestLastSentMessageMultipleEntriesInterleaved(t *testing.T) {
+	body := "# Spec\ndo the thing\n\n## Mid-run log\n" +
+		"<!-- appended by kraken; do not hand-edit -->\n" +
+		"- [2026-07-01 10:00 me→zeus] first message\n" +
+		"- [2026-07-01 10:05 zeus→me] status update, not mine\n" +
+		"- [2026-07-01 10:10 me→zeus] second message\n" +
+		"- [2026-07-01 10:15 zeus→me] another status update\n"
+	if got := lastSentMessage(body); got != "second message" {
+		t.Errorf("got %q, want %q", got, "second message")
+	}
+}
+
+func TestLastSentMessageSkipsAnsweredQuestionEntries(t *testing.T) {
+	body := "# Spec\ndo the thing\n\n## Mid-run log\n" +
+		"<!-- appended by kraken; do not hand-edit -->\n" +
+		"- [2026-07-01 10:00 me→zeus] real message\n" +
+		"- [2026-07-01 10:05 zeus→me] status update\n" +
+		"- [2026-07-01 10:10 me→zeus] answered question: option 2\n"
+	if got := lastSentMessage(body); got != "real message" {
+		t.Errorf("got %q, want %q", got, "real message")
+	}
+}
+
+func TestTruncateTextSanitizesControlCharsPreservesNewlines(t *testing.T) {
+	in := "line one\x1b[31m colored\x7f\nline two"
+	want := "line one [31m colored \nline two"
+	if got := truncateText(in, 100); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // --- board move validation: pure, file-backed only (no tmux) ---
 
 // writeTestJob writes a minimal parseable job file under a fresh
@@ -281,36 +337,6 @@ func TestAnswerableSingleDigit(t *testing.T) {
 				t.Errorf("answerableSingleDigit(%+v) = %v, want %v", c.q, got, c.want)
 			}
 		})
-	}
-}
-
-func TestWebSendTypeValidation(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	src := "---\njob: info-job\ntype: info\nrepo: monolith\nready: true\nstate: blocked\n---\n\n# Spec\n"
-	if err := os.WriteFile(filepath.Join(plutoDir(), "info-job"+jobSuffix), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err := webSend(webReq{Slug: "info-job"})
-	if err == nil || !strings.Contains(err.Error(), "not a build job") {
-		t.Fatalf("expected 'not a build job' error, got %v", err)
-	}
-}
-
-func TestWebSendNotLive(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJob(t, "send-not-live", "state: blocked\n")
-	err := webSend(webReq{Slug: "send-not-live"})
-	if err == nil || !strings.Contains(err.Error(), "no live cell") {
-		t.Fatalf("expected 'no live cell' error, got %v", err)
-	}
-}
-
-func TestWebSendNeverStarted(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJob(t, "send-draft", "") // no state: — never started
-	err := webSend(webReq{Slug: "send-draft"})
-	if err == nil || !strings.Contains(err.Error(), "no live cell") {
-		t.Fatalf("expected 'no live cell' error, got %v", err)
 	}
 }
 
@@ -610,5 +636,108 @@ func TestWebJobSaveMTimeLock(t *testing.T) {
 	webJobSave(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("garbage mtime: got status %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// fakeFileInfo is a minimal os.FileInfo for exercising binaryStale without
+// touching the filesystem.
+type fakeFileInfo struct {
+	modTime time.Time
+	size    int64
+}
+
+func (f fakeFileInfo) Name() string       { return "kraken" }
+func (f fakeFileInfo) Size() int64        { return f.size }
+func (f fakeFileInfo) Mode() fs.FileMode  { return 0o755 }
+func (f fakeFileInfo) ModTime() time.Time { return f.modTime }
+func (f fakeFileInfo) IsDir() bool        { return false }
+func (f fakeFileInfo) Sys() any           { return nil }
+
+func TestBinaryStale(t *testing.T) {
+	t0 := time.Unix(1700000000, 0)
+	t1 := time.Unix(1700000100, 0)
+	same := fakeFileInfo{modTime: t0, size: 1024}
+	sameCopy := fakeFileInfo{modTime: t0, size: 1024}
+	newerMTime := fakeFileInfo{modTime: t1, size: 1024}
+	biggerSize := fakeFileInfo{modTime: t0, size: 2048}
+
+	cases := []struct {
+		name       string
+		start, now os.FileInfo
+		want       bool
+	}{
+		{"both nil", nil, nil, false},
+		{"nil start", nil, same, false},
+		{"nil now", same, nil, false},
+		{"identical", same, sameCopy, false},
+		{"mtime differs", same, newerMTime, true},
+		{"size differs", same, biggerSize, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := binaryStale(c.start, c.now); got != c.want {
+				t.Errorf("binaryStale(%v, %v) = %v, want %v", c.start, c.now, got, c.want)
+			}
+		})
+	}
+}
+
+// TestIsSelfStaleDetectsChange exercises isSelfStale end to end (rather than
+// just its pure binaryStale helper): TestHealthHandlerContractAndStale can
+// only ever observe stale=false since selfBinaryStart is nil in tests, so
+// this drives the package state directly to cover the true branch too.
+func TestIsSelfStaleDetectsChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kraken")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origPath, origStart := selfBinaryPath, selfBinaryStart
+	selfBinaryPath, selfBinaryStart = path, fi
+	t.Cleanup(func() { selfBinaryPath, selfBinaryStart = origPath, origStart })
+
+	if isSelfStale() {
+		t.Fatal("isSelfStale() = true before any change, want false")
+	}
+
+	if err := os.WriteFile(path, []byte("v1 plus more bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	if !isSelfStale() {
+		t.Fatal("isSelfStale() = false after binary changed, want true")
+	}
+}
+
+// TestHealthHandlerContractAndStale asserts /api/health carries the wire
+// contract version and a stale flag alongside the existing ok/host fields —
+// no fixtures needed, healthHandler doesn't touch the pluto dir.
+func TestHealthHandlerContractAndStale(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+	healthHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthHandler: got status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("healthHandler: bad response json: %v", err)
+	}
+	if ok, _ := resp["ok"].(bool); !ok {
+		t.Errorf("healthHandler: ok = %#v, want true", resp["ok"])
+	}
+	if c, ok := resp["contract"].(float64); !ok || int(c) != apiContract {
+		t.Errorf("healthHandler: contract = %#v, want %d", resp["contract"], apiContract)
+	}
+	if _, ok := resp["stale"].(bool); !ok {
+		t.Errorf("healthHandler: stale = %#v (%T), want a bool", resp["stale"], resp["stale"])
 	}
 }

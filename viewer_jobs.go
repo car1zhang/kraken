@@ -316,7 +316,7 @@ func (m *viewerModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := sendMessage(zeus, text); err != nil {
 				return "", err
 			}
-			if err := appendMidRunLog(j, "me→zeus", "steering: "+oneLine(text)); err != nil {
+			if err := appendMidRunLog(j, "me→zeus", oneLine(text)); err != nil {
 				return "", err
 			}
 			if err := writeJobState(j, "working"); err != nil {

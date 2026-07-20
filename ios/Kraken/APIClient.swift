@@ -25,6 +25,10 @@ private struct ErrorBody: Decodable {
 actor APIClient {
     static let shared = APIClient()
 
+    // Mirrors web.go's apiContract constant — bump together, breaking
+    // changes only (additive fields don't need a bump). See ios/API.md.
+    static let expectedContract = 1
+
     private let session: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -86,6 +90,55 @@ actor APIClient {
         return data
     }
 
+    // Turns a DecodingError into a message naming the request and the exact
+    // key path/expectation that failed, instead of Swift's generic
+    // localizedDescription — this is what used to show up as an opaque
+    // "couldn't parse server response" no matter what actually drifted on
+    // the wire. Non-DecodingError failures (e.g. malformed JSON entirely)
+    // keep the generic wording, since there's no key path to report.
+    private func decodeErrorMessage(_ error: Error, method: String, path: String) -> String {
+        guard let decodingError = error as? DecodingError else {
+            return "couldn't parse server response: \(error.localizedDescription)"
+        }
+        let prefix = "\(method) \(path) — "
+        // array indices render as bracketed segments (jobs[3].live) rather
+        // than dotted ones (jobs.Index 3.live), and attach without a
+        // leading dot.
+        func keyPath(_ codingPath: [CodingKey]) -> String {
+            var result = ""
+            for key in codingPath {
+                if let index = key.intValue {
+                    result += "[\(index)]"
+                } else {
+                    result += result.isEmpty ? key.stringValue : ".\(key.stringValue)"
+                }
+            }
+            return result
+        }
+        switch decodingError {
+        case .typeMismatch(_, let context):
+            let fullPath = keyPath(context.codingPath)
+            return fullPath.isEmpty
+                ? "\(prefix)\(context.debugDescription)"
+                : "\(prefix)key \"\(fullPath)\": \(context.debugDescription)"
+        case .keyNotFound(let key, let context):
+            let fullPath = context.codingPath.isEmpty ? key.stringValue : keyPath(context.codingPath) + "." + key.stringValue
+            return "\(prefix)missing key \"\(fullPath)\": \(context.debugDescription)"
+        case .valueNotFound(let type, let context):
+            let fullPath = keyPath(context.codingPath)
+            return fullPath.isEmpty
+                ? "\(prefix)expected \(type), found null"
+                : "\(prefix)key \"\(fullPath)\": expected \(type), found null"
+        case .dataCorrupted(let context):
+            let fullPath = keyPath(context.codingPath)
+            return fullPath.isEmpty
+                ? "\(prefix)malformed response: \(context.debugDescription)"
+                : "\(prefix)key \"\(fullPath)\": \(context.debugDescription)"
+        @unknown default:
+            return "\(prefix)couldn't parse server response: \(decodingError.localizedDescription)"
+        }
+    }
+
     private func get<T: Decodable>(baseURL: String, path: String, query: [(String, String)] = []) async throws -> T {
         let url = try buildURL(baseURL: baseURL, path: path, query: query)
         var request = URLRequest(url: url)
@@ -94,7 +147,7 @@ actor APIClient {
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
-            throw KrakenError.message("couldn't parse server response: \(error.localizedDescription)")
+            throw KrakenError.message(decodeErrorMessage(error, method: "GET", path: path))
         }
     }
 
@@ -108,7 +161,7 @@ actor APIClient {
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
-            throw KrakenError.message("couldn't parse server response: \(error.localizedDescription)")
+            throw KrakenError.message(decodeErrorMessage(error, method: "POST", path: path))
         }
     }
 

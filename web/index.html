@@ -22,6 +22,7 @@
     <span class="spacer"></span>
     <span class="stat dim" id="tick-stat"></span>
   </header>
+  <div class="stale-banner" id="stale-banner" hidden></div>
 
   <main class="board" id="board"></main>
   <main class="dag" id="dag" hidden>
@@ -56,6 +57,11 @@
         <button class="btn" id="steer-send">send ⌘⏎</button>
       </div>
       <div class="panel-body answer-body">
+        <div class="steer-context" id="steer-context" hidden>
+          <div class="steer-detail" id="steer-detail" hidden></div>
+          <div class="last-sent" id="steer-lastsent" hidden></div>
+          <div class="chips" id="steer-chips" hidden></div>
+        </div>
         <textarea id="steer-text" rows="4"
           placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
         <div class="answer-note" id="steer-note"></div>

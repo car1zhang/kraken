@@ -83,6 +83,16 @@ body {
 .viewtab.active { color: var(--accent); border-color: var(--accent-soft); text-shadow: var(--glow); }
 .viewtab:hover:not(.active) { color: var(--text); }
 
+.stale-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px;
+  background: var(--revealed-soft);
+  border-bottom: 1px solid var(--revealed);
+  color: var(--revealed);
+  font: 11px var(--mono);
+  letter-spacing: 0.2px;
+}
+
 /* ---- board ---- */
 .board {
   display: grid;
@@ -186,8 +196,22 @@ body {
 .err { color: var(--counter); font-size: 11px; margin-top: 5px; }
 .outcome { color: var(--solved); font-size: 11px; margin-top: 5px; }
 
-/* the cell's last words: a live zeus' most recent assistant text block */
-.detail { color: var(--text-2); font-size: 11px; line-height: 1.4; margin-top: 6px; }
+/* the cell's last words: a live zeus' most recent assistant text block —
+   clamped to ~6 lines, click to expand/collapse the full text */
+.detail {
+  color: var(--text-2); font-size: 11px; line-height: 1.4; margin-top: 6px;
+  white-space: pre-wrap;
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.detail.clampable { cursor: pointer; }
+.detail.expanded { -webkit-line-clamp: unset; overflow: visible; }
+
+/* carl's own last message to the cell, above .detail */
+.last-sent {
+  font: 10px var(--mono); color: var(--text-2); opacity: 0.7;
+  margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 .roster { margin-top: 5px; display: flex; flex-direction: column; gap: 1px; }
 .roster-row { font: 10px var(--mono); color: var(--text-2); }
@@ -236,6 +260,31 @@ body {
   display: flex; justify-content: center; align-items: flex-start;
   padding: 6vh 4vw;
 }
+/* the artifact viewer can be opened from inside the steer/unblock modal —
+   it must always paint above any other overlay, regardless of DOM order */
+#overlay { z-index: 30; }
+
+/* unblock/steer context: cell's last message, carl's last sent message, and
+   artifact chips, shown above the composer so unblocking has the info needed */
+.steer-context {
+  display: flex; flex-direction: column; gap: 8px;
+  padding-bottom: 12px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--hairline);
+}
+.steer-detail {
+  color: var(--text-2); font-size: 11.5px; line-height: 1.5;
+  max-height: 40vh; overflow-y: auto;
+  padding: 9px 11px; background: var(--raised); border: 1px solid var(--hairline-2);
+}
+/* rendered markdown, not preformatted text — normalize the block rhythm */
+.steer-detail p, .steer-detail ul, .steer-detail ol, .steer-detail pre { margin: 0 0 8px; }
+.steer-detail :last-child { margin-bottom: 0; }
+.steer-detail h1, .steer-detail h2, .steer-detail h3 { font-size: 12.5px; margin: 10px 0 6px; color: var(--text); }
+.steer-detail code { background: var(--surface); padding: 1px 4px; }
+.steer-detail pre { white-space: pre-wrap; }
+/* in the modal the last-sent line is decision context, not a card ornament —
+   let it wrap instead of inheriting the card's one-line ellipsis */
+.steer-context .last-sent { white-space: pre-wrap; overflow: visible; text-overflow: clip; }
 .panel {
   background: var(--surface);
   border: 1px solid var(--hairline-2);
@@ -268,13 +317,6 @@ body {
 .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
 .btn.ghost.danger { color: var(--counter); border-color: var(--counter); }
 .btn.ghost.danger:hover { box-shadow: var(--glow-hot); }
-.btn.send {
-  display: block; width: 100%; margin-top: 8px;
-  background: var(--solved-soft); color: var(--solved);
-  border: 1px solid var(--solved);
-  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
-}
-.btn.send:hover { box-shadow: 0 0 10px rgba(80, 200, 130, 0.3); }
 .btn.retry {
   display: block; width: 100%; margin-top: 8px;
   background: var(--revealed-soft); color: var(--revealed);

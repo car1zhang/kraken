@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,12 @@ import (
 
 //go:embed web
 var webAssets embed.FS
+
+// apiContract is the wire-shape version for /api/health and /api/board,
+// mirrored by the iOS app's expected value (see ios/API.md). Bump ONLY on a
+// breaking change (a JSON key retyped, removed, or renamed) — additive keys
+// never bump it, since old clients already ignore fields they don't know.
+const apiContract = 1
 
 type webArtifact struct {
 	Name string `json:"name"`
@@ -91,9 +98,14 @@ type webJob struct {
 	Live      bool          `json:"live"`
 	Prereqs   []webPrereq   `json:"prereqs,omitempty"`
 	Artifacts []webArtifact `json:"artifacts,omitempty"`
-	// Detail is the cell's last words: for a live started cell, the last
-	// assistant text block of zeus' transcript — one line, truncated.
+	// Detail is the cell's last words: for a live started cell, the full
+	// text of the last assistant text block of zeus' transcript, capped at
+	// 4000 chars.
 	Detail string `json:"detail,omitempty"`
+	// LastSent is the text of the most recent me→zeus mid-run log entry —
+	// carl's own last message to the cell, independent of whether it's
+	// currently live.
+	LastSent string `json:"last_sent,omitempty"`
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
@@ -121,6 +133,10 @@ type webBoard struct {
 	CellCap   int          `json:"cell_cap"`
 	LiveCells int          `json:"live_cells"`
 	Jobs      []webJob     `json:"jobs"`
+	Contract  int          `json:"contract"`
+	// Stale is this k web process' own self-check (see selfcheck.go) — the
+	// daemon's equivalent rides Daemon.Stale.
+	Stale bool `json:"stale"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from both homes: the live
@@ -257,11 +273,57 @@ func lastAssistantText(path string) string {
 	}
 	for i := len(blocks) - 1; i >= 0; i-- {
 		if blocks[i].kind == "text" {
-			return truncateOneLine(blocks[i].text, 200)
+			return truncateText(blocks[i].text, 4000)
 		}
 	}
 	return ""
 }
+
+// truncateText caps s at limit runes, preserving newlines and internal
+// whitespace (unlike truncateOneLine, which flattens to a single line) —
+// the board wants the cell's actual formatting, just bounded so a runaway
+// transcript block doesn't blow up the wire payload. Other control chars
+// (esp. \x1b) are mapped to space, same as truncateOneLine, since this
+// feeds iOS notification bodies too.
+func truncateText(s string, limit int) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit]) + "…"
+}
+
+// lastSentMessage returns the text of the most recent me→zeus entry in a
+// job body's "## Mid-run log" section (see appendMidRunLog for the entry
+// format: "- [2006-01-02 15:04 actor] text"), timestamp and actor stripped.
+// "" when the body has no log section or no me→zeus entry in it. Entries
+// kraken generated itself from a question-answer click ("answered question:
+// option N") are skipped — they're not something carl typed, so scanning
+// continues to the last entry that actually is.
+func lastSentMessage(body string) string {
+	_, log := splitBodyLog(body)
+	var last string
+	for _, line := range strings.Split(log, "\n") {
+		m := midRunLogEntryRe.FindStringSubmatch(line)
+		if m != nil && m[1] == "me→zeus" && !strings.HasPrefix(m[2], "answered question: option ") {
+			last = m[2]
+		}
+	}
+	return last
+}
+
+// midRunLogEntryRe matches one mid-run log line, capturing the actor and
+// the text that follows it.
+var midRunLogEntryRe = regexp.MustCompile(`^- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([^\]]+)\] (.*)$`)
 
 func buildWebBoard() webBoard {
 	jobs := loadJobs()
@@ -272,7 +334,7 @@ func buildWebBoard() webBoard {
 	live := liveSessions()
 	st, ok := readDaemonStatus()
 	all, _ := orderAll(discoverAll())
-	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}}
+	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}, Contract: apiContract, Stale: isSelfStale()}
 	for _, j := range jobs {
 		var prereqs []webPrereq
 		for _, p := range j.Prereqs {
@@ -285,6 +347,9 @@ func buildWebBoard() webBoard {
 			Success: j.Success, Prereqs: prereqs, Artifacts: jobArtifacts(j),
 			ModTime:       j.ModTime.Unix(),
 			Reactivatable: j.State == "done" && j.Session != "",
+		}
+		if j.started() && j.State != "done" {
+			wj.LastSent = lastSentMessage(j.Body)
 		}
 		if live[cellSession(j)] {
 			wj.Cell, wj.Live = cellSession(j), true
@@ -508,7 +573,7 @@ func webSteer(req webReq) error {
 	}
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		return fmt.Errorf("empty steering message")
+		return fmt.Errorf("empty message")
 	}
 	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
 		return fmt.Errorf("%s has no live cell to steer", j.Slug)
@@ -518,41 +583,11 @@ func webSteer(req webReq) error {
 	if zeus == nil {
 		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
 	}
-	if err := appendMidRunLog(j, "me→zeus", "steering: "+oneLine(text)); err != nil {
+	if err := appendMidRunLog(j, "me→zeus", oneLine(text)); err != nil {
 		return fmt.Errorf("mid-run log append failed: %v", err)
 	}
-	if err := sendMessage(zeus, "steering from carl: "+text); err != nil {
+	if err := sendMessage(zeus, "from carl: "+text); err != nil {
 		return fmt.Errorf("logged, but delivery failed: %v", err)
-	}
-	return writeJobState(j, "working")
-}
-
-// webSend is the blocked→working "begin implementation" move for a build
-// job whose doc has been approved out-of-band (in conversation, not tracked
-// by kraken): carl's click on ▶ send IS the approval, delivered as zeus'
-// own '/send' trigger phrase from its brief.
-func webSend(req webReq) error {
-	j, _, err := webJobFor(req.Slug)
-	if err != nil {
-		return err
-	}
-	if j.Type != "build" {
-		return fmt.Errorf("%s is not a build job — nothing to send", j.Slug)
-	}
-	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
-		return fmt.Errorf("%s has no live cell to send", j.Slug)
-	}
-	all, _ := orderAll(discoverAll())
-	zeus := cellZeus(j, all)
-	if zeus == nil {
-		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
-	}
-	msg := "/send — the doc is approved; begin implementation per the spec, following your brief's phase 2"
-	if err := sendMessage(zeus, msg); err != nil {
-		return fmt.Errorf("%s: %v", j.Slug, err)
-	}
-	if err := appendMidRunLog(j, "me→zeus", "/send"); err != nil {
-		return fmt.Errorf("delivered, but mid-run log append failed: %v", err)
 	}
 	return writeJobState(j, "working")
 }
@@ -1016,6 +1051,7 @@ func detectTailscaleIP() (string, error) {
 }
 
 func cmdWeb(args []string) {
+	initSelfCheck()
 	port := "7777"
 	tailnet := false
 	explicitAddr := ""
@@ -1074,7 +1110,6 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/retry", webAction(webRetry))
 	mux.HandleFunc("/api/kill", webAction(webKill))
 	mux.HandleFunc("/api/steer", webAction(webSteer))
-	mux.HandleFunc("/api/send", webAction(webSend))
 	mux.HandleFunc("/api/review", webAction(webReview))
 	mux.HandleFunc("/api/archive", webAction(webArchive))
 	mux.HandleFunc("/api/unarchive", webAction(webUnarchive))
