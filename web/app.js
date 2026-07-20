@@ -542,7 +542,8 @@ function fillSteerContext(j, mode) {
   const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
 
   detailEl.hidden = !detail;
-  detailEl.textContent = detail || "";
+  // renderMD escapes before transforming, so agent-authored text is inert
+  detailEl.innerHTML = detail ? renderMD(detail) : "";
 
   lastSentEl.hidden = !lastSent;
   lastSentEl.textContent = lastSent ? `me→zeus: ${lastSent}` : "";
