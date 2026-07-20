@@ -41,6 +41,9 @@ final class AppRouter {
     var pendingJobSlug: String?
     var pendingJobAction: JobAction?
     var pendingSessionPane: String?
+    // Set by JobDetailView's Cell row: resolves to the first live peer in
+    // that tmux session once SessionsView's peer list is loaded.
+    var pendingSessionCell: String?
 
     func handle(url: URL) {
         guard url.scheme?.lowercased() == "kraken" else { return }

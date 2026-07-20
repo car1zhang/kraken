@@ -318,6 +318,28 @@ struct PeersResponse: Decodable {
     let peers: [Peer]
 }
 
+// SpawnRequest mirrors POST /api/peers/spawn's webReq-style body: `kind` is
+// "shell" or "claude"; `dir` empty/nil lets the server default to home;
+// `name`/`prompt` are claude-only, `cmd` is shell-only. A plain struct with
+// Optionals is fine here — JSONEncoder omits nil keys, so an unused field
+// for the other kind never rides along on the wire.
+struct SpawnRequest: Encodable {
+    let kind: String
+    let dir: String?
+    let name: String?
+    let prompt: String?
+    let cmd: String?
+}
+
+struct SpawnResponse: Decodable {
+    let ok: Bool
+    let at: String
+}
+
+struct PaneRequest: Encodable {
+    let pane: String
+}
+
 struct ReadBlock: Decodable {
     let kind: String
     let text: String

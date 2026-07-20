@@ -8,75 +8,6 @@ import (
 	"time"
 )
 
-// --- newestMtime ---
-
-func TestNewestMtimeMissingDir(t *testing.T) {
-	if got := newestMtime(filepath.Join(t.TempDir(), "does-not-exist")); !got.IsZero() {
-		t.Errorf("missing dir should read as zero time, got %v", got)
-	}
-}
-
-func TestNewestMtimeEmptyDir(t *testing.T) {
-	if got := newestMtime(t.TempDir()); !got.IsZero() {
-		t.Errorf("empty dir should read as zero time, got %v", got)
-	}
-}
-
-func TestNewestMtimePicksNewestJSONL(t *testing.T) {
-	dir := t.TempDir()
-	older := time.Now().Add(-time.Hour)
-	newer := time.Now()
-	write := func(name string, mtime time.Time) {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(path, mtime, mtime); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("a-session.jsonl", older)
-	write("b-sidechain.jsonl", newer)
-	write("ignore-me.txt", newer.Add(time.Hour)) // non-jsonl: must not count
-
-	got := newestMtime(dir)
-	if !got.Equal(newer) {
-		t.Errorf("got %v, want %v", got, newer)
-	}
-}
-
-// --- podLastActivity ---
-
-func TestPodLastActivity(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	worktree := "/Users/carl/.kraken/cells/some-job/wt-monolith"
-	projDir := filepath.Join(dir, ".claude", "projects", projectDirName(worktree))
-	if err := os.MkdirAll(projDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mtime := time.Now().Add(-5 * time.Minute)
-	path := filepath.Join(projDir, "sess.jsonl")
-	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(path, mtime, mtime); err != nil {
-		t.Fatal(err)
-	}
-	got := podLastActivity(worktree)
-	if !got.Equal(mtime) {
-		t.Errorf("got %v, want %v", got, mtime)
-	}
-}
-
-func TestPodLastActivityNoTranscripts(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	if got := podLastActivity("/nowhere/wt-x"); !got.IsZero() {
-		t.Errorf("no transcripts should read as zero time, got %v", got)
-	}
-}
-
 // --- pendingQuestion ---
 
 func writeTranscript(t *testing.T, lines ...string) string {
@@ -286,16 +217,12 @@ func TestPendingQuestionMemoizedByStat(t *testing.T) {
 // --- deriveState ---
 
 func TestDeriveState(t *testing.T) {
-	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	fresh := now.Add(-activityStaleAfter) // exactly at the boundary: still fresh (<=)
-	stale := now.Add(-activityStaleAfter - time.Second)
-
 	cases := []struct {
-		name         string
-		j            *Job
-		live         bool
-		lastActivity time.Time
-		want         string
+		name   string
+		j      *Job
+		live   bool
+		active bool
+		want   string
 	}{
 		{
 			name: "done wins even over an error",
@@ -326,45 +253,180 @@ func TestDeriveState(t *testing.T) {
 			want: "blocked",
 		},
 		{
-			name:         "started but cell not live, job file says working: trust it too",
-			j:            &Job{Ready: true, State: "working"},
-			live:         false,
-			lastActivity: stale, // irrelevant while !live
-			want:         "working",
+			name:   "started but cell not live, job file says working: trust it too",
+			j:      &Job{Ready: true, State: "working"},
+			live:   false,
+			active: false, // irrelevant while !live
+			want:   "working",
 		},
 		{
-			name:         "live, activity exactly at the staleness boundary is still fresh -> working",
-			j:            &Job{Ready: true, State: "blocked"},
-			live:         true,
-			lastActivity: fresh,
-			want:         "working",
+			name:   "live and active -> working",
+			j:      &Job{Ready: true, State: "blocked"},
+			live:   true,
+			active: true,
+			want:   "working",
 		},
 		{
-			name:         "live, activity one second past the boundary -> blocked",
-			j:            &Job{Ready: true, State: "working"},
-			live:         true,
-			lastActivity: stale,
-			want:         "blocked",
-		},
-		{
-			name:         "live, zero lastActivity (no transcripts yet) -> blocked",
-			j:            &Job{Ready: true, State: "working"},
-			live:         true,
-			lastActivity: time.Time{},
-			want:         "blocked",
-		},
-		{
-			name:         "live, activity right now -> working",
-			j:            &Job{Ready: true, State: "blocked"},
-			live:         true,
-			lastActivity: now,
-			want:         "working",
+			name:   "live and not active -> blocked",
+			j:      &Job{Ready: true, State: "working"},
+			live:   true,
+			active: false,
+			want:   "blocked",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := deriveState(c.j, c.live, c.lastActivity, now); got != c.want {
+			if got := deriveState(c.j, c.live, c.active); got != c.want {
 				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// --- cellActive ---
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestCellActive(t *testing.T) {
+	noQuestion := func(string) bool { return false }
+	yesQuestion := func(string) bool { return true }
+
+	cases := []struct {
+		name         string
+		sess         string
+		peers        []*Peer
+		members      []teamMember
+		paneQuestion func(string) bool
+		want         bool
+	}{
+		{
+			name:  "zeus running alone -> true",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"}},
+			want:  true,
+		},
+		{
+			name:         "zeus running but pane shows an open question -> false",
+			sess:         "cell-x",
+			peers:        []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"}},
+			paneQuestion: yesQuestion,
+			want:         false,
+		},
+		{
+			name:  "codex running -> true",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "codex", Status: "running", Pane: "%1"}},
+			want:  true,
+		},
+		{
+			// zeus itself sitting on an open AskUserQuestion reads as
+			// blocked-on-carl, not working, even with no teammates at all.
+			name:  "zeus with Status question (open AskUserQuestion) -> false",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "question", Pane: "%1"}},
+			want:  false,
+		},
+		{
+			// a nested subagent (Depth>0) in zeus' own pane/session counts
+			// the same as any other running claude in the cell session.
+			name: "nested subagent (Depth>0) running in zeus' session -> true",
+			sess: "cell-x",
+			peers: []*Peer{
+				{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1", Depth: 0},
+				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1", Depth: 1},
+			},
+			want: true,
+		},
+		{
+			name:  "zeus waiting + tmux teammate with a running pane -> true",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "running"}},
+			members: []teamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
+			},
+			want: true,
+		},
+		{
+			// regression: an alive-but-idle teammate (pane exists, but the
+			// occupying peer is sitting at its prompt, not "running") must
+			// not vote the cell into working forever.
+			name:  "zeus waiting + tmux teammate whose pane is idle (not running) -> false",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "waiting"}},
+			members: []teamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
+			},
+			want: false,
+		},
+		{
+			name:  "zeus waiting + tmux teammate whose pane is gone -> false",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []teamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
+			},
+			want: false,
+		},
+		{
+			// in-process members have no pane to cross-check against, so an
+			// absent isActive must not default to active — the opposite
+			// default from tmux members, which do have an independent
+			// liveness signal (their pane's status).
+			name:  "zeus waiting + in-process member, isActive nil -> false",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []teamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "in-process"},
+			},
+			want: false,
+		},
+		{
+			name:  "zeus waiting + in-process member, isActive true -> true",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []teamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "in-process", IsActive: boolPtr(true)},
+			},
+			want: true,
+		},
+		{
+			name:  "in-process member, isActive false -> false",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []teamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "in-process", IsActive: boolPtr(false)},
+			},
+			want: false,
+		},
+		{
+			name:  "lead-only members -> false",
+			sess:  "cell-x",
+			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []teamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+			},
+			want: false,
+		},
+		{
+			name: "empty everything -> false",
+			sess: "cell-x",
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pq := c.paneQuestion
+			if pq == nil {
+				pq = noQuestion
+			}
+			if got := cellActive(c.sess, c.peers, c.members, pq); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
 	}

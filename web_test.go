@@ -382,3 +382,233 @@ func TestWebJobSaveFormTypeValidation(t *testing.T) {
 		}
 	}
 }
+
+// --- mtime wire contract: JSON number out, number-or-legacy-string in ---
+
+func TestMTimeTokenUnmarshalJSON(t *testing.T) {
+	cases := []struct {
+		name    string
+		json    string
+		want    mtimeToken
+		wantErr bool
+	}{
+		{"number", `1690000000000`, 1690000000000, false},
+		{"numeric string (legacy)", `"1690000000000"`, 1690000000000, false},
+		{"empty string skips lock", `""`, 0, false},
+		{"zero string skips lock", `"0"`, 0, false},
+		{"zero number skips lock", `0`, 0, false},
+		{"garbage string", `"banana"`, 0, true},
+		{"non-integer number", `1.5`, 0, true},
+		{"null skips lock", `null`, 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var tok mtimeToken
+			err := json.Unmarshal([]byte(c.json), &tok)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got tok=%d", tok)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tok != c.want {
+				t.Errorf("got %d, want %d", tok, c.want)
+			}
+		})
+	}
+}
+
+// TestWebJobRawAndFormEmitNumericMTime pins the response side of the wire
+// contract: the shipped iOS app decodes mtime as Int64, so a JSON string
+// (the old UnixNano encoding) fails to parse there.
+func TestWebJobRawAndFormEmitNumericMTime(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "mtime-numeric", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/job/raw?slug=mtime-numeric", nil)
+	rec := httptest.NewRecorder()
+	webJobRaw(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webJobRaw: got status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("webJobRaw: bad response json: %v", err)
+	}
+	if mt, ok := raw["mtime"].(float64); !ok || mt <= 0 {
+		t.Errorf("webJobRaw: mtime = %#v (%T), want a positive JSON number", raw["mtime"], raw["mtime"])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/job/form?slug=mtime-numeric", nil)
+	rec = httptest.NewRecorder()
+	webJobForm(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webJobForm: got status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var form map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &form); err != nil {
+		t.Fatalf("webJobForm: bad response json: %v", err)
+	}
+	if mt, ok := form["mtime"].(float64); !ok || mt <= 0 {
+		t.Errorf("webJobForm: mtime = %#v (%T), want a positive JSON number", form["mtime"], form["mtime"])
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/job/create", bytes.NewReader(mustJSON(t, map[string]any{"slug": "mtime-created"})))
+	createRec := httptest.NewRecorder()
+	webJobCreate(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("webJobCreate: got status %d, body %s", createRec.Code, createRec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("webJobCreate: bad response json: %v", err)
+	}
+	if mt, ok := created["mtime"].(float64); !ok || mt <= 0 {
+		t.Errorf("webJobCreate: mtime = %#v (%T), want a positive JSON number", created["mtime"], created["mtime"])
+	}
+}
+
+// mustJSON marshals v for use as an httptest request body.
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestWebJobSaveFormMTimeLock exercises the optimistic lock through the real
+// handler: a numeric mtime that doesn't match the file on disk must 409, a
+// matching numeric mtime must save, and a legacy string mtime is still
+// accepted (and still enforced) for older clients.
+func TestWebJobSaveFormMTimeLock(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "mtime-lock", "")
+
+	formReq := httptest.NewRequest(http.MethodGet, "/api/job/form?slug=mtime-lock", nil)
+	formRec := httptest.NewRecorder()
+	webJobForm(formRec, formReq)
+	var form map[string]any
+	if err := json.Unmarshal(formRec.Body.Bytes(), &form); err != nil {
+		t.Fatalf("bad form response: %v", err)
+	}
+	mtime, ok := form["mtime"].(float64)
+	if !ok {
+		t.Fatalf("form mtime = %#v (%T), want float64", form["mtime"], form["mtime"])
+	}
+
+	body, _ := json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": mtime - 1})
+	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	webJobSaveForm(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("mismatched numeric mtime: got status %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": mtime - 1, "force": true})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobSaveForm(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stale mtime + force: got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("stale mtime + force: bad response json: %v", err)
+	}
+	savedMTime, ok := saved["mtime"].(float64)
+	if !ok || savedMTime <= 0 {
+		t.Fatalf("stale mtime + force: mtime = %#v (%T), want a positive JSON number", saved["mtime"], saved["mtime"])
+	}
+
+	// the force save above moved the file's on-disk mtime forward, so the
+	// matching case now has to use that fresh value rather than the mtime
+	// fetched before it.
+	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": savedMTime})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobSaveForm(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("matching numeric mtime: got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": "1"})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobSaveForm(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("mismatched legacy string mtime: got status %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestWebJobSaveMTimeLock mirrors TestWebJobSaveFormMTimeLock against the
+// raw-save handler (webJobSave): same optimistic lock, same mtimeToken wire
+// decoding, no Force field on this endpoint.
+func TestWebJobSaveMTimeLock(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "raw-mtime-lock", "")
+	content := "---\njob: raw-mtime-lock\ntype: build\nrepo: monolith\nready: true\n---\n\n# Spec\n"
+
+	rawReq := httptest.NewRequest(http.MethodGet, "/api/job/raw?slug=raw-mtime-lock", nil)
+	rawRec := httptest.NewRecorder()
+	webJobRaw(rawRec, rawReq)
+	var raw map[string]any
+	if err := json.Unmarshal(rawRec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("bad raw response: %v", err)
+	}
+	mtime, ok := raw["mtime"].(float64)
+	if !ok {
+		t.Fatalf("raw mtime = %#v (%T), want float64", raw["mtime"], raw["mtime"])
+	}
+
+	body, _ := json.Marshal(map[string]any{"slug": "raw-mtime-lock", "content": content, "mtime": mtime - 1})
+	req := httptest.NewRequest(http.MethodPost, "/api/job/save", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	webJobSave(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("mismatched numeric mtime: got status %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	body, _ = json.Marshal(map[string]any{"slug": "raw-mtime-lock", "content": content, "mtime": mtime})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/save", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobSave(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("matching numeric mtime: got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("matching numeric mtime: bad response json: %v", err)
+	}
+	if mt, ok := saved["mtime"].(float64); !ok || mt <= 0 {
+		t.Errorf("matching numeric mtime: mtime = %#v (%T), want a positive JSON number", saved["mtime"], saved["mtime"])
+	}
+
+	body, _ = json.Marshal(map[string]any{"slug": "raw-mtime-lock", "content": content, "mtime": "0"})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/save", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobSave(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy zero string mtime (skips lock): got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	body, _ = json.Marshal(map[string]any{"slug": "raw-mtime-lock", "content": content, "mtime": ""})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/save", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobSave(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty string mtime (skips lock): got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	body, _ = json.Marshal(map[string]any{"slug": "raw-mtime-lock", "content": content, "mtime": "banana"})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/save", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobSave(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("garbage mtime: got status %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}

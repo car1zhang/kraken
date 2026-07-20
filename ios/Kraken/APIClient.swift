@@ -209,6 +209,25 @@ actor APIClient {
         try await get(baseURL: baseURL, path: "/api/peers")
     }
 
+    /// Spawns a new peer — a plain shell or a Claude session — in a fresh
+    /// tmux pane. `dir` nil/empty defaults to home server-side; `name`/
+    /// `prompt` only apply to `kind: "claude"`, `cmd` only to `kind: "shell"`.
+    func spawnPeer(
+        baseURL: String, kind: String, dir: String?, name: String?, prompt: String?, cmd: String?
+    ) async throws -> SpawnResponse {
+        try await post(
+            baseURL: baseURL, path: "/api/peers/spawn",
+            body: SpawnRequest(kind: kind, dir: dir, name: name, prompt: prompt, cmd: cmd)
+        )
+    }
+
+    /// Kills a peer's tmux pane. The server refuses job-cell panes (those
+    /// come down via the job's own Kill action); the UI hides the affordance
+    /// for them too rather than relying solely on the 409.
+    func killPeer(baseURL: String, pane: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/peers/kill", body: PaneRequest(pane: pane))
+    }
+
     func readPeer(baseURL: String, pane: String, n: Int) async throws -> ReadResponse {
         try await get(baseURL: baseURL, path: "/api/peers/read", query: [("pane", pane), ("n", String(n))])
     }

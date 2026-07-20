@@ -16,7 +16,7 @@ func TestZeusBriefBuild(t *testing.T) {
 	brief := zeusBrief(j)
 	for _, want := range []string{
 		"zeus", "hephaestus", "athena", "/send", "PR", "manual test ready",
-		"tests pass", "AskUserQuestion", cellArtifacts(j),
+		"tests pass", "AskUserQuestion", cellArtifacts(j), "TaskStop",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("build brief missing %q", want)
@@ -37,7 +37,7 @@ func TestZeusBriefBuild(t *testing.T) {
 func TestZeusBriefInfo(t *testing.T) {
 	j := &Job{Slug: "y", Type: "info", Success: "explains the system"}
 	brief := zeusBrief(j)
-	for _, want := range []string{"zeus", "/info", "No PR", "AskUserQuestion", cellArtifacts(j)} {
+	for _, want := range []string{"zeus", "/info", "No PR", "AskUserQuestion", cellArtifacts(j), "TaskStop"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("info brief missing %q", want)
 		}
@@ -79,6 +79,20 @@ func TestZeusBriefAutoApprove(t *testing.T) {
 	}
 	if auto == gated {
 		t.Error("auto-approve and gated briefs must differ")
+	}
+}
+
+func TestZeusBriefSubagentHygiene(t *testing.T) {
+	for _, typ := range []string{"build", "info"} {
+		brief := zeusBrief(&Job{Slug: "hygiene-" + typ, Type: typ})
+		if !strings.Contains(brief, "the moment a subagent or teammate finishes its task, stop it (TaskStop)") {
+			t.Errorf("%s brief missing the subagent-hygiene clause", typ)
+		}
+	}
+	// solo jobs run no subagents at all, so the hygiene clause is moot
+	solo := zeusBrief(&Job{Slug: "hygiene-solo", Type: "build", Solo: true})
+	if strings.Contains(solo, "TaskStop") {
+		t.Error("solo brief should not mention TaskStop hygiene — it has no subagents to stop")
 	}
 }
 

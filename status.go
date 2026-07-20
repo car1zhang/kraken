@@ -15,52 +15,85 @@ import (
 
 // status.go — cell status, derived by kraken rather than declared by any
 // agent. There is no status file any agent writes: working/blocked is read
-// straight off session-history activity (transcript jsonl mtimes), and done
-// is explicit. Pending interactive questions are likewise pulled from the
-// zeus session's own transcript.
+// off a live ROLL-CALL of the cell's pane agents and team members (see
+// cellActive), and done is explicit. Pending interactive questions are
+// likewise pulled from the zeus session's own transcript.
 
 // --- activity ---
 
-// activityStaleAfter: how long the cell's transcripts must be silent before
-// the pod counts as stopped. Claude appends transcript events every few
-// seconds mid-turn; minutes of silence means every agent is at its prompt.
-// long single tool calls (test suites, builds) append nothing mid-run; 5m
-// biases against false blocked at the cost of slower blocked detection.
-const activityStaleAfter = 5 * time.Minute
-
-// newestMtime returns the newest modification time among the *.jsonl files
-// directly in dir ("" or an unreadable dir reads as the zero time — never an
-// error). Pure and testable; podLastActivity is a thin wrapper pointing it
-// at a cell's transcript directory.
-func newestMtime(dir string) time.Time {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return time.Time{}
-	}
-	var best time.Time
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+// cellActive reports whether a cell is doing live work right now: PURE, so
+// it's table-testable — no exec, no file reads. peers is the full discovery
+// snapshot (orderAll's result); members is the cell's team roster (loaded by
+// the caller via teamMembersForLead, "" sessions -> nil); paneQuestion checks
+// whether a pane is showing an AskUserQuestion dialog right now (the caller
+// passes paneShowsQuestion; only consulted for peers whose Status is
+// "running", to keep the tmux capture-pane calls at the call site minimal).
+//
+// Active iff either:
+//  1. a pane agent in the cell (TmuxSession == sess, claude or codex) is
+//     "running" AND its pane isn't showing an open question — a question
+//     is waiting-for-carl, i.e. blocked, even though the session file stays
+//     "busy" while the AskUserQuestion tool call is in flight.
+//  2. a live non-lead teammate, cross-checked by backend: a tmux-backed
+//     member counts only if its pane is currently occupied by a peer whose
+//     Status is "running" — mere pane existence would also match an idle
+//     teammate sitting at its prompt, which is the exact false-WORKING bug
+//     this function exists to prevent. An in-process member counts only if
+//     its config entry has IsActive explicitly true: it has no pane to
+//     cross-check (it lives inside zeus' own process), so isActive is the
+//     only liveness signal available, and an absent value must not default
+//     to active. Either way isActive:false (finished without being removed
+//     from the config) is filtered up front.
+func cellActive(sess string, peers []*Peer, members []teamMember, paneQuestion func(string) bool) bool {
+	for _, p := range peers {
+		if p.TmuxSession != sess || p.Status != "running" {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
+		if p.Agent != "claude" && p.Agent != "codex" {
+			// codex peers rarely carry a "running" status today, so a
+			// codex-only cell may read blocked here — acceptable since
+			// cells run a claude zeus.
 			continue
 		}
-		if info.ModTime().After(best) {
-			best = info.ModTime()
+		// refineStatus is the real gate (it sets Status to "question" the
+		// moment it sees an open AskUserQuestion, which already fails the
+		// Status != "running" check above); this callback is belt-and-braces
+		// for a capture-pane race between that refinement and this call.
+		if paneQuestion != nil && paneQuestion(p.Pane) {
+			continue
+		}
+		return true
+	}
+	runningByPane := map[string]bool{}
+	for _, p := range peers {
+		if p.Pane != "" && p.Status == "running" {
+			runningByPane[p.Pane] = true
 		}
 	}
-	return best
-}
-
-// podLastActivity returns the newest mtime across all transcript files of
-// the cell's project dir (~/.claude/projects/<projectDirName(worktree)>/):
-// the main zeus session AND subagent sidechain files both append there, so
-// this is "is anyone in the pod churning" from session history alone — pane
-// content is never consulted, it's too flaky. Zero time when no transcripts
-// exist yet.
-func podLastActivity(worktree string) time.Time {
-	return newestMtime(filepath.Join(home(), ".claude", "projects", projectDirName(worktree)))
+	for _, m := range members {
+		if strings.HasPrefix(m.AgentID, "team-lead@") || m.TmuxPaneID == "leader" {
+			continue // the lead is zeus itself, not a subagent doing work
+		}
+		if m.IsActive != nil && !*m.IsActive {
+			continue // finished without being removed from the config
+		}
+		switch m.BackendType {
+		case "in-process":
+			// no pane to cross-check against: isActive is the only signal,
+			// so require it explicitly true rather than defaulting an
+			// absent flag to active. Getting this wrong true->false just
+			// costs a spurious notification (self-correcting); wrong
+			// false->true wedges the cell reading "working" forever.
+			if m.IsActive != nil && *m.IsActive {
+				return true
+			}
+		case "tmux":
+			if m.TmuxPaneID != "" && runningByPane[m.TmuxPaneID] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // --- pending questions ---
@@ -236,14 +269,16 @@ func scanPendingQuestion(transcript string) *PendingQuestion {
 //   - j.State == "" && j.Ready                  → "queued" (ready, never started)
 //   - started (state working/blocked) but !live → j.State (trust the file; the cell may just
 //     be between daemon restarts)
-//   - live: now.Sub(lastActivity) <= activityStaleAfter → "working", else → "blocked"
-//     (a zero lastActivity — no transcripts yet — reads as maximally stale, so "blocked")
+//   - live && active                            → "working"
+//   - live && !active                           → "blocked"
 //
 // deriveState returns board-state strings identical to job State strings;
 // persisting a working/blocked transition to the job file is the daemon's
 // concern, not this function's — it stays pure so it's testable without
-// touching disk.
-func deriveState(j *Job, live bool, lastActivity time.Time, now time.Time) string {
+// touching disk. active is the caller's ROLL-CALL verdict (cellActive, plus
+// any session-just-created grace) — deriveState itself never touches
+// transcripts or panes.
+func deriveState(j *Job, live bool, active bool) string {
 	if j.State == "done" {
 		return "done"
 	}
@@ -259,7 +294,7 @@ func deriveState(j *Job, live bool, lastActivity time.Time, now time.Time) strin
 	if !live {
 		return j.State
 	}
-	if now.Sub(lastActivity) <= activityStaleAfter {
+	if active {
 		return "working"
 	}
 	return "blocked"

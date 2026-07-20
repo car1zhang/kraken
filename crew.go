@@ -63,6 +63,7 @@ func zeusBrief(j *Job) string {
 		b.WriteString("Work entirely alone: no subagents at all — no implementation crew and no diagram subagents; write a prose-only doc with no figure slots.\n")
 	} else {
 		b.WriteString("Delegate implementation slices to subagents you name hephaestus, run on the sonnet model — each slice gets a focused, unique brief with exact scope and file targets. Before accepting a slice, have a subagent named athena, run on the opus model, review it for edge cases, correctness, and style; give athena its own reviewer brief, never hephaestus' brief.\n")
+		b.WriteString("Subagent hygiene: the moment a subagent or teammate finishes its task, stop it (TaskStop) and free its slot/pane — always; never leave done agents resident.\n")
 	}
 	b.WriteString("Never declare the job done — accepting or merging is carl's (or kraken's) move, never yours.\n")
 	switch j.Type {

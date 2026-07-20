@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,6 +50,102 @@ func newWindow(dir string, argv []string) string {
 		die("tmux new-window: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// errBadSpawnDir marks a not-a-directory dir so HTTP callers can tell a
+// malformed client parameter (400) apart from an environment/tmux failure
+// (409).
+var errBadSpawnDir = errors.New("not a directory")
+
+// checkSpawnDir verifies dir exists as a directory, wrapping errBadSpawnDir
+// on failure. Exported as its own step (rather than folded only into
+// newWindowIn) so the HTTP spawn handler can fail a malformed dir before
+// ensureSession does any tmux work for a request that's doomed anyway.
+func checkSpawnDir(dir string) error {
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("%w: %s", errBadSpawnDir, dir)
+	}
+	return nil
+}
+
+// newWindowIn is newWindow's error-returning core, targeted at an explicit
+// tmux session rather than the caller's own — the piece the HTTP spawn
+// endpoint needs (no $TMUX, no die()).
+func newWindowIn(session, dir string, argv []string) (string, error) {
+	// tmux silently falls back to $HOME on a bad -c dir; a typo should fail
+	if err := checkSpawnDir(dir); err != nil {
+		return "", err
+	}
+	tmuxArgs := []string{"new-window", "-P", "-F", "#{session_name}:#{window_index} (#{pane_id})", "-t", session + ":", "-c", dir}
+	tmuxArgs = append(tmuxArgs, argv...)
+	out, err := exec.Command("tmux", tmuxArgs...).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("tmux new-window: %s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", fmt.Errorf("tmux new-window: %v", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// ensureSession makes sure a detached tmux session named name exists,
+// creating it rooted at dir if not.
+func ensureSession(name, dir string) error {
+	if exec.Command("tmux", "has-session", "-t", name).Run() == nil {
+		return nil
+	}
+	var stderr bytes.Buffer
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", dir)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		// a concurrent spawn may have won the race and created the session
+		// between our has-session check above and this new-session call
+		if exec.Command("tmux", "has-session", "-t", name).Run() == nil {
+			return nil
+		}
+		if stderr.Len() > 0 {
+			return fmt.Errorf("tmux new-session: %s", strings.TrimSpace(stderr.String()))
+		}
+		return fmt.Errorf("tmux new-session: %v", err)
+	}
+	return nil
+}
+
+// currentPaneSession returns the tmux session a pane currently belongs to,
+// read fresh rather than trusted from a stale Peer snapshot — the pane may
+// have moved sessions, or vanished, since discovery ran.
+func currentPaneSession(pane string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{session_name}").Output()
+	if err != nil {
+		return "", fmt.Errorf("pane %s is gone", pane)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// buildSpawnArgv builds the argv for a spawned pane from the HTTP API's kind:
+// "shell" mirrors cmdNewShell's command-then-drop-into-shell pattern, "claude"
+// mirrors cmdNewClaude's launcher + "--" prompt guard.
+func buildSpawnArgv(kind, name, prompt, cmd string) ([]string, error) {
+	switch kind {
+	case "shell":
+		if cmd == "" {
+			return nil, nil
+		}
+		sh := userShell()
+		return []string{sh, "-c", cmd + "\nexec " + sh}, nil
+	case "claude":
+		if name == "" {
+			return nil, fmt.Errorf("claude spawn needs a name")
+		}
+		argv := []string{claudeLauncher(), "--dangerously-skip-permissions", "--name", name}
+		if prompt != "" {
+			// "--" so a prompt starting with "-" can't be read as a claude flag
+			argv = append(argv, "--", prompt)
+		}
+		return argv, nil
+	default:
+		return nil, fmt.Errorf("kind must be \"shell\" or \"claude\"")
+	}
 }
 
 func userShell() string {

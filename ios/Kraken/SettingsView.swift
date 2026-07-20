@@ -68,6 +68,11 @@ struct SettingsView: View {
                         .onChange(of: notifyBlocked) {
                             if notifyBlocked {
                                 notificationManager.requestAuthorizationIfNeeded()
+                            } else {
+                                // Sets frozen while the toggle is off go stale —
+                                // clear them so re-enabling seeds fresh instead
+                                // of bursting a week of missed transitions.
+                                notificationManager.resetConditionTracking()
                             }
                         }
 

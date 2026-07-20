@@ -74,6 +74,11 @@ type teamMember struct {
 	TmuxPaneID  string `json:"tmuxPaneId"`
 	CWD         string `json:"cwd"`
 	BackendType string `json:"backendType"`
+	// IsActive appears on members that finished without being removed from
+	// the config (TaskStop removes a member entirely; a done-but-lingering
+	// one gets isActive: false instead). Pointer: absent must read as active,
+	// not as false.
+	IsActive *bool `json:"isActive"`
 }
 
 // --- status ---
@@ -130,6 +135,33 @@ func containsQuestionMarker(text string) bool {
 func paneShowsQuestion(pane string) bool {
 	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
 	return err == nil && containsQuestionMarker(string(out))
+}
+
+// teamMembersForLead loads the members of the team config whose
+// leadSessionId matches sessionID — the cell's zeus session, for the
+// ROLL-CALL blocked probe in status.go. Defensive like nestTeams: a missing
+// teams dir, an unreadable/malformed config, or no team with that lead all
+// read as no members, never an error. Shares nestTeams' teamConfig/teamMember
+// JSON shape rather than re-declaring it.
+func teamMembersForLead(sessionID string) []teamMember {
+	if sessionID == "" {
+		return nil
+	}
+	configs, _ := filepath.Glob(filepath.Join(home(), ".claude", "teams", "*", "config.json"))
+	for _, cf := range configs {
+		data, err := os.ReadFile(cf)
+		if err != nil {
+			continue
+		}
+		var cfg teamConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			continue
+		}
+		if cfg.LeadSessionID == sessionID {
+			return cfg.Members
+		}
+	}
+	return nil
 }
 
 // --- team nesting ---
