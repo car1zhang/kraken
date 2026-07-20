@@ -93,24 +93,22 @@ body {
   overflow-x: auto;
 }
 
-/* ---- archived drawer: collapsible strip below the five columns ---- */
-.archive-drawer { padding: 0 16px 40px; }
+/* ---- archived drawer: collapsible, tucked under the DONE column ---- */
+.archive-drawer { margin-top: 18px; }
 .archive-head {
   display: flex; align-items: baseline; gap: 7px;
   width: 100%; text-align: left; cursor: pointer;
   background: transparent; border: none;
-  border-top: 1px solid var(--hairline);
-  padding: 10px 2px 6px;
+  border-bottom: 1px solid var(--hairline);
+  padding: 0 2px 6px;
   color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 2.5px;
 }
 .archive-head:hover { color: var(--text); }
 .archive-head .tri { font-size: 9px; letter-spacing: 0; }
-.archive-head .n { font: 10px var(--mono); letter-spacing: 0; color: var(--accent); }
+.archive-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
 .archive-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
-  padding-top: 8px;
+  display: flex; flex-direction: column; gap: 10px;
+  padding-top: 10px;
 }
 .card.archived { opacity: 0.75; }
 .card.archived:hover { opacity: 1; }

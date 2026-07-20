@@ -106,15 +106,11 @@ function cardHTML(j, col) {
     .join("");
   const killable = ["working", "blocked"].includes(col) && j.live;
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  // archivable mirrors the server's rule (no cell in flight); a live job
-  // shows kill instead — kill returns it to draft, which then archives
-  const archivable = !j.live && ["draft", "queued", "done"].includes(col);
   return `<div class="card ${j.question || j.health ? "flagged" : ""} ${editable ? "editable" : ""}" style="--state:${color}"
       draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
-      ${archivable ? `<button class="kill archive" data-slug="${esc(j.slug)}" title="archive job (frees the slug; reversible)">🗄</button>` : ""}
       ${killable ? `<button class="kill" data-slug="${esc(j.slug)}" title="kill cell → back to draft">✕</button>` : ""}
     </div>
     <div class="meta">
@@ -159,7 +155,6 @@ function render(board) {
     if (j.question) flags++;
     if (j.health) flags++;
   }
-  renderArchiveDrawer(archived);
   document.getElementById("board").innerHTML = COLUMNS.map(
     (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
       <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
@@ -167,6 +162,7 @@ function render(board) {
         ${c.key === "draft" ? '<button class="btn-new" id="new-job">+ NEW JOB</button>' : ""}
         ${byCol[c.key].map((j) => cardHTML(j, c.key)).join("") || (c.key === "draft" ? "" : '<div class="empty">·</div>')}
       </div>
+      ${c.key === "done" ? archiveDrawerHTML(archived) : ""}
     </section>`,
   ).join("");
 
@@ -184,7 +180,7 @@ function render(board) {
   document.getElementById("tick-stat").textContent = new Date().toLocaleTimeString();
 }
 
-// ---- archived drawer (collapsible, below the board) ----
+// ---- archived drawer (collapsible, lives under the DONE column) ----
 
 let archiveOpen = localStorage.getItem("kraken-archive-open") === "1";
 
@@ -217,21 +213,20 @@ function archivedCardHTML(j) {
   </div>`;
 }
 
-function renderArchiveDrawer(archived) {
-  const drawer = document.getElementById("archive-drawer");
-  drawer.hidden = view !== "board" || archived.length === 0;
-  document.getElementById("archive-count").textContent = archived.length;
-  document.getElementById("archive-tri").textContent = archiveOpen ? "▾" : "▸";
-  const cards = document.getElementById("archive-cards");
-  cards.hidden = !archiveOpen;
-  cards.innerHTML = archived.map(archivedCardHTML).join("");
+// archiveDrawerHTML renders the drawer inside the DONE column's section —
+// re-created on every render, so its toggle is handled by the delegated
+// document click listener below, never a direct element listener.
+function archiveDrawerHTML(archived) {
+  if (!archived.length) return "";
+  return `<div class="archive-drawer">
+    <button class="archive-head" id="archive-toggle">
+      <span class="tri">${archiveOpen ? "▾" : "▸"}</span> ARCHIVED <span class="n">${archived.length}</span>
+    </button>
+    <div class="archive-cards" ${archiveOpen ? "" : "hidden"}>
+      ${archived.map(archivedCardHTML).join("")}
+    </div>
+  </div>`;
 }
-
-document.getElementById("archive-toggle").addEventListener("click", () => {
-  archiveOpen = !archiveOpen;
-  localStorage.setItem("kraken-archive-open", archiveOpen ? "1" : "0");
-  refresh();
-});
 
 // ---- drag & drop (legal moves only) ----
 
@@ -438,9 +433,11 @@ document.addEventListener("click", (ev) => {
     post("/api/retry", { slug: retry.dataset.slug });
     return;
   }
-  const archive = ev.target.closest("button.archive");
-  if (archive) {
-    post("/api/archive", { slug: archive.dataset.slug });
+  const archiveToggle = ev.target.closest("#archive-toggle");
+  if (archiveToggle) {
+    archiveOpen = !archiveOpen;
+    localStorage.setItem("kraken-archive-open", archiveOpen ? "1" : "0");
+    refresh();
     return;
   }
   const unarchive = ev.target.closest(".unarchive");
@@ -599,6 +596,9 @@ async function loadForm(slug) {
   document.getElementById("editor-newrow").hidden = true;
   document.getElementById("editor-form").hidden = false;
   document.getElementById("editor-save").disabled = false;
+  // archive lives here, inside the opened job, on purpose: no card-level
+  // shortcut — the server still refuses jobs with a cell in flight
+  document.getElementById("editor-archive").hidden = false;
   if (d.err) editorNote.textContent = "current file won't run: " + d.err;
 }
 
@@ -613,6 +613,7 @@ function openEditor(slug) {
   document.getElementById("editor-form").hidden = true;
   document.getElementById("editor-save").disabled = true;
   document.getElementById("editor-force").hidden = true;
+  document.getElementById("editor-archive").hidden = true;
   document.getElementById("editor-slug").value = "";
   editorOverlay.hidden = false;
   if (isNew) {
@@ -688,6 +689,13 @@ document.getElementById("editor-force").addEventListener("click", () => {
   }
 });
 
+document.getElementById("editor-archive").addEventListener("click", async () => {
+  if (!editorSlug) return;
+  const ok = await post("/api/archive", { slug: editorSlug });
+  if (ok) editorOverlay.hidden = true;
+  else editorNote.textContent = "archive failed — see status bar";
+});
+
 document.getElementById("editor-cancel").addEventListener("click", () => (editorOverlay.hidden = true));
 editorOverlay.addEventListener("click", (ev) => { if (ev.target === editorOverlay) editorOverlay.hidden = true; });
 document.getElementById("editor-form").addEventListener("keydown", (ev) => {
@@ -741,7 +749,6 @@ document.querySelectorAll(".viewtab").forEach((tab) =>
       t.classList.toggle("active", t.dataset.view === view));
     document.getElementById("board").hidden = view !== "board";
     document.getElementById("dag").hidden = view !== "dag";
-    if (view !== "board") document.getElementById("archive-drawer").hidden = true;
     refresh();
   }));
 
@@ -750,7 +757,6 @@ function applyView() {
     t.classList.toggle("active", t.dataset.view === view));
   document.getElementById("board").hidden = view !== "board";
   document.getElementById("dag").hidden = view !== "dag";
-  if (view !== "board") document.getElementById("archive-drawer").hidden = true;
 }
 
 const NODE_W = 190;

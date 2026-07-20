@@ -24,14 +24,6 @@
   </header>
 
   <main class="board" id="board"></main>
-  <!-- archived jobs: a collapsible drawer below the board, not a sixth
-       column — the five live columns keep full width -->
-  <section class="archive-drawer" id="archive-drawer" hidden>
-    <button class="archive-head" id="archive-toggle">
-      <span class="tri" id="archive-tri">▸</span> ARCHIVED <span class="n" id="archive-count">0</span>
-    </button>
-    <div class="archive-cards" id="archive-cards" hidden></div>
-  </section>
   <main class="dag" id="dag" hidden>
     <div class="dag-canvas" id="dag-canvas">
       <svg id="dag-edges"></svg>
@@ -78,6 +70,8 @@
         <span class="panel-title" id="editor-title"></span>
         <span class="spacer"></span>
         <button class="btn ghost danger" id="editor-force" hidden>overwrite disk</button>
+        <button class="btn ghost" id="editor-archive" hidden
+          title="move this job (and its preserved artifacts) into the archive — frees the slug; reversible from the ARCHIVED drawer under DONE">archive</button>
         <button class="btn ghost" id="editor-cancel">cancel</button>
         <button class="btn" id="editor-save">save ⌘⏎</button>
       </div>
