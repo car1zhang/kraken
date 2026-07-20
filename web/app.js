@@ -528,6 +528,38 @@ const steerOverlay = document.getElementById("steer-overlay");
 let steerSlug = null;
 let steerMode = "steer"; // "steer" | "reactivate" | "unblock" — same modal, different endpoint
 
+// steer context: the cell's last message, carl's last sent message, and its
+// artifact chips — populated for "steer"/"unblock" (the data is there either
+// way); "reactivate" hides it outright since the cell is gone.
+function fillSteerContext(j, mode) {
+  const container = document.getElementById("steer-context");
+  const detailEl = document.getElementById("steer-detail");
+  const lastSentEl = document.getElementById("steer-lastsent");
+  const chipsEl = document.getElementById("steer-chips");
+
+  const detail = mode !== "reactivate" && j && j.detail;
+  const lastSent = mode !== "reactivate" && j && j.last_sent;
+  const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
+
+  detailEl.hidden = !detail;
+  detailEl.textContent = detail || "";
+
+  lastSentEl.hidden = !lastSent;
+  lastSentEl.textContent = lastSent ? `me→zeus: ${lastSent}` : "";
+
+  chipsEl.hidden = !artifacts;
+  chipsEl.innerHTML = artifacts
+    ? artifacts
+        .map(
+          (a) =>
+            `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(j.slug)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
+        )
+        .join("")
+    : "";
+
+  container.hidden = !detail && !lastSent && !artifacts;
+}
+
 function openSteer(slug, mode = "steer") {
   steerSlug = slug;
   steerMode = mode;
@@ -546,6 +578,7 @@ function openSteer(slug, mode = "steer") {
   document.getElementById("steer-note").textContent = "";
   document.getElementById("steer-send").textContent =
     mode === "reactivate" ? "reactivate ⌘⏎" : mode === "unblock" ? "unblock ⌘⏎" : "send ⌘⏎";
+  fillSteerContext(jobsBySlug[slug], mode);
   steerOverlay.hidden = false;
   text.focus();
 }
@@ -796,8 +829,14 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
   }
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });
+// one Escape closes one layer: the artifact viewer if it's on top (it can be
+// opened from inside the steer/unblock modal), else whichever of editor/steer
+// is open underneath.
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") { overlay.hidden = true; editorOverlay.hidden = true; steerOverlay.hidden = true; }
+  if (ev.key !== "Escape") return;
+  if (!overlay.hidden) { overlay.hidden = true; return; }
+  if (!steerOverlay.hidden) { steerOverlay.hidden = true; return; }
+  if (!editorOverlay.hidden) { editorOverlay.hidden = true; return; }
 });
 
 // ---- dag view: jobs layered by dependency depth, edges = prereqs ----

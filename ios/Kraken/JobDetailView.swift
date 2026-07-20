@@ -773,6 +773,7 @@ private struct SteerView: View {
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
+    @State private var showingArtifact: WebArtifact?
 
     private var draftKey: String { "steer:\(job.slug)" }
 
@@ -784,6 +785,31 @@ private struct SteerView: View {
                      : "Free-text direction for the crew — routed to the cell like a terminal message.")
                     .font(.voice(12))
                     .foregroundStyle(KTheme.text2)
+            }
+            if let detail = job.detail, !detail.isEmpty {
+                kSection("Cell's last message") {
+                    // capped so a long cell message can't push the composer
+                    // below the fold — the web modal caps at 40vh for the same
+                    // reason; the inner scroll keeps the full text reachable
+                    ScrollView {
+                        DetailCard(text: detail, stateColor: BoardTheme.color(forState: job.state))
+                    }
+                    .frame(maxHeight: 280)
+                }
+            }
+            if let lastSent = job.lastSent, !lastSent.isEmpty {
+                kSection("Last sent") {
+                    Text(lastSent)
+                        .font(.data(12))
+                        .foregroundStyle(KTheme.text2)
+                }
+            }
+            if let artifacts = job.artifacts, !artifacts.isEmpty {
+                kSection("Artifacts") {
+                    ForEach(artifactTree(artifacts)) { node in
+                        ArtifactRow(node: node, onOpen: { showingArtifact = $0 })
+                    }
+                }
             }
             kSection("Message") {
                 TextEditor(text: $text)
@@ -821,6 +847,20 @@ private struct SteerView: View {
         }
         .onChange(of: text) {
             draftStore.set(draftKey, text)
+        }
+        // Nested sheet, presented from within SteerView's own sheet — SwiftUI
+        // supports stacking a second sheet on top of a presented one.
+        // Dismissing it lands back on this composer with the draft intact
+        // (draftStore state isn't touched by presentation).
+        .sheet(item: $showingArtifact) { artifact in
+            NavigationStack {
+                ArtifactView(name: artifact.name, baseURL: baseURL, path: artifact.url)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            SheetCloseButton { showingArtifact = nil }
+                        }
+                    }
+            }
         }
     }
 
