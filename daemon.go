@@ -29,6 +29,10 @@ const (
 	// backoff between auto-retry pokes of the same stalled cell, and between
 	// re-notifications of the same standing health complaint.
 	repokeAfter = 10 * time.Minute
+	// sessionCreateGrace: a cell session younger than this counts active
+	// regardless of the ROLL-CALL — claude is still launching before any
+	// session file or pane signal exists yet.
+	sessionCreateGrace = 2 * time.Minute
 )
 
 type daemonStatus struct {
@@ -195,9 +199,11 @@ func (d *daemon) tick() (int, error) {
 			}
 		}
 
-		// state derivation: working ⇄ blocked, driven off pod activity.
-		repo, err := resolveRepo(j.Repo)
-		if err != nil {
+		// state derivation: working ⇄ blocked, driven off a live ROLL-CALL of
+		// the cell's pane agents and team members (resolveRepo stays here
+		// only for its error-notification side effect — state derivation
+		// itself no longer needs the worktree).
+		if _, err := resolveRepo(j.Repo); err != nil {
 			// surfaces on the board as repo?; notify once per file version
 			key := "repo:" + j.File
 			if mt := j.ModTime.Unix(); d.notified[key] != mt {
@@ -206,18 +212,31 @@ func (d *daemon) tick() (int, error) {
 			}
 			continue
 		}
-		wt := existingWorktree(j, repo)
-		if wt == "" {
-			wt = cellWorktree(j, repo) // no worktree yet/gone: podLastActivity degrades to zero mtime
+		active := false
+		if isLive {
+			// a session just created is at least as fresh as its own
+			// creation — covers pre-first-transcript startup before any pane
+			// or team-config signal exists yet
+			if created, ok := times[cellSession(j)]; ok && now.Sub(created) < sessionCreateGrace {
+				active = true
+			} else {
+				zeus := cellZeus(j, all)
+				// prefer the LIVE discovered zeus peer's session id over the
+				// job file's stamped one: right after a daemon restart (or a
+				// reactivation onto a fresh run), j.Session can lag a tick
+				// behind the session claude is actually running under, which
+				// would make teamMembersForLead look up the wrong team config
+				// and silently see no members. A guessed id is never a safe
+				// lookup key (see SessionIDGuessed), so still fall back to
+				// j.Session when the discovered id is guessed or absent.
+				sessionID := j.Session
+				if zeus != nil && zeus.SessionID != "" && !zeus.SessionIDGuessed {
+					sessionID = zeus.SessionID
+				}
+				active = cellActive(cellSession(j), all, teamMembersForLead(sessionID), paneShowsQuestion)
+			}
 		}
-		lastActivity := podLastActivity(wt)
-		// a live session is at least as fresh as its own creation — covers
-		// pre-first-transcript startup and stale transcripts left over from a
-		// previous run at the same worktree path
-		if created, ok := times[cellSession(j)]; ok && created.After(lastActivity) {
-			lastActivity = created
-		}
-		st := deriveState(j, isLive, lastActivity, now)
+		st := deriveState(j, isLive, active)
 		// the dedup key must clear whenever the DERIVED state reads as
 		// working, not only when the daemon itself performs the write below:
 		// web/TUI actions (answering a question, steering, /send) write

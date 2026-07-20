@@ -270,7 +270,6 @@ func buildWebBoard() webBoard {
 		bySlug[j.Slug] = j
 	}
 	live := liveSessions()
-	times := liveSessionTimes()
 	st, ok := readDaemonStatus()
 	all, _ := orderAll(discoverAll())
 	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}}
@@ -292,22 +291,6 @@ func buildWebBoard() webBoard {
 			if j.started() && j.State != "done" {
 				board.LiveCells++
 				wj.Health = cellHealth(j, all)
-				// recompute a fresher state than the daemon's last-written
-				// file so the board doesn't lag its tick; falls back to the
-				// file's state (already in wj.State) when the worktree can't
-				// be resolved
-				if repo, rerr := resolveRepo(j.Repo); rerr == nil {
-					if wt := existingWorktree(j, repo); wt != "" {
-						lastActivity := podLastActivity(wt)
-						// a live session is at least as fresh as its own creation —
-						// covers pre-first-transcript startup and stale transcripts
-						// from a previous run at the same worktree path
-						if created, ok := times[cellSession(j)]; ok && created.After(lastActivity) {
-							lastActivity = created
-						}
-						wj.State = deriveState(j, true, lastActivity, time.Now())
-					}
-				}
 				if _, transcript := cellZeusTranscript(j, all); transcript != "" {
 					wj.Detail = lastAssistantText(transcript)
 					wj.Question = webQuestionFrom(pendingQuestion(transcript))
@@ -686,6 +669,47 @@ func webJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// jobMTime is a job file's mtime as unix milliseconds — the wire format for
+// every editor endpoint. UnixMilli (~1.75e12) fits safely in both a Swift
+// Int64 and a JS number, unlike UnixNano, which overflows JS's 2^53
+// safe-integer range and forced the old string encoding. fi is nil when the
+// preceding os.Stat failed; callers get 0 rather than a panic.
+func jobMTime(fi os.FileInfo) int64 {
+	if fi == nil {
+		return 0
+	}
+	return fi.ModTime().UnixMilli()
+}
+
+// mtimeToken decodes an mtime from the wire as either a JSON number (current
+// format) or a legacy JSON string (older clients that still send the
+// pre-UnixMilli encoding), normalizing to unix-millis. An empty string or
+// JSON null decodes to 0, which callers treat as "skip the optimistic-lock
+// check" — the same meaning "0" already carried under the string encoding.
+type mtimeToken int64
+
+func (t *mtimeToken) UnmarshalJSON(data []byte) error {
+	var n int64
+	if err := json.Unmarshal(data, &n); err == nil {
+		*t = mtimeToken(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("bad mtime")
+	}
+	if s == "" {
+		*t = 0
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("bad mtime")
+	}
+	*t = mtimeToken(n)
+	return nil
+}
+
 // webJobRaw returns a job file's full content + mtime (the editor's load and
 // its optimistic-lock token).
 func webJobRaw(w http.ResponseWriter, r *http.Request) {
@@ -701,7 +725,7 @@ func webJobRaw(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	webJSON(w, http.StatusOK, map[string]any{
-		"slug": j.Slug, "content": string(data), "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10),
+		"slug": j.Slug, "content": string(data), "mtime": jobMTime(fi),
 		"editable": editableJob(j),
 	})
 }
@@ -734,7 +758,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fi, _ := os.Stat(path)
-	webJSON(w, http.StatusOK, map[string]any{"slug": slug, "content": content, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "editable": true})
+	webJSON(w, http.StatusOK, map[string]any{"slug": slug, "content": content, "mtime": jobMTime(fi), "editable": true})
 }
 
 // webJobSave writes an edited job file. Optimistic lock: the save carries the
@@ -747,9 +771,9 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Slug    string `json:"slug"`
-		Content string `json:"content"`
-		MTime   string `json:"mtime"`
+		Slug    string     `json:"slug"`
+		Content string     `json:"content"`
+		MTime   mtimeToken `json:"mtime"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
@@ -764,7 +788,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — its file belongs to the crew right now"})
 		return
 	}
-	if fi, err := os.Stat(j.File); err == nil && req.MTime != "" && req.MTime != "0" && strconv.FormatInt(fi.ModTime().UnixNano(), 10) != req.MTime {
+	if fi, err := os.Stat(j.File); err == nil && req.MTime != 0 && jobMTime(fi) != int64(req.MTime) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
 		return
 	}
@@ -774,7 +798,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	parsed := parseJob(filepath.Base(j.File), []byte(req.Content))
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "warn": parsed.Err})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
 }
 
 // --- structured spec editor: frontmatter as a form, body as prose ---
@@ -802,10 +826,9 @@ type jobFormFields struct {
 	Success     string   `json:"success"`
 	Prereqs     []Prereq `json:"prereqs"`
 	Spec        string   `json:"spec"`
-	// MTime is an opaque string token: UnixNano exceeds JS safe-integer
-	// range, so a numeric round-trip through the browser corrupts it and
-	// every save false-conflicts.
-	MTime string `json:"mtime"`
+	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
+	// legacy client still sending the old string encoding round-trips too.
+	MTime mtimeToken `json:"mtime"`
 	// Force skips the mtime conflict check: an explicit "overwrite what's on
 	// disk" from the editor after a conflict was surfaced, never a default.
 	Force bool `json:"force"`
@@ -837,7 +860,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 		"ready": j.Ready, "solo": j.Solo, "auto_approve": j.AutoApprove,
 		"success": j.Success, "prereqs": prereqs,
 		"spec":  strings.TrimSpace(spec),
-		"mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "editable": editableJob(j),
+		"mtime": jobMTime(fi), "editable": editableJob(j),
 		"err": j.Err, "slugs": slugs, "repos": repoCandidates(),
 	})
 }
@@ -926,7 +949,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — its file belongs to the crew right now"})
 		return
 	}
-	if fi, err := os.Stat(j.File); err == nil && !req.Force && req.MTime != "" && req.MTime != "0" && strconv.FormatInt(fi.ModTime().UnixNano(), 10) != req.MTime {
+	if fi, err := os.Stat(j.File); err == nil && !req.Force && req.MTime != 0 && jobMTime(fi) != int64(req.MTime) {
 		webJSON(w, http.StatusConflict, map[string]any{
 			"error": "file changed on disk since you opened it", "conflict": true,
 		})
@@ -941,7 +964,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	parsed := parseJob(filepath.Base(j.File), []byte(content))
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10), "warn": parsed.Err})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
 }
 
 // tailscaleIP picks the first IPv4 address in addrs that falls in
@@ -1038,6 +1061,9 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/peers/read", peersReadHandler(defaultPeerSource))
 	mux.HandleFunc("/api/peers/capture", peersCaptureHandler(defaultPeerSource))
 	mux.HandleFunc("/api/peers/send", peersSendHandler(defaultPeerSource))
+	mux.HandleFunc("/api/peers/spawn", peersSpawnHandler)
+	mux.HandleFunc("/api/peers/kill", peersKillHandler(defaultPeerSource))
+	mux.HandleFunc("/api/peers/open", peersOpenHandler(defaultPeerSource))
 	mux.HandleFunc("/api/board", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(buildWebBoard())

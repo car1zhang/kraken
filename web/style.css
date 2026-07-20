@@ -431,9 +431,9 @@ body {
 
 /* pr-review handoff */
 .review-row { display: flex; gap: 8px; margin-top: 8px; }
-.review-row .btn.review-open {
+.review-row .btn.review-open, .review-row .btn.tmux-open {
   flex: 1; background: transparent; color: var(--revealed);
   border: 1px solid var(--revealed-soft);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.review-row .btn.review-open:hover { border-color: var(--revealed); box-shadow: 0 0 10px rgba(245, 184, 77, 0.3); }
+.review-row .btn.review-open:hover, .review-row .btn.tmux-open:hover { border-color: var(--revealed); box-shadow: 0 0 10px rgba(245, 184, 77, 0.3); }

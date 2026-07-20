@@ -2,11 +2,20 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
+
+// mobileSession is the dedicated tmux session the HTTP spawn endpoint targets
+// — spawned panes never land in the caller's own session, since there is no
+// caller session for an HTTP request.
+const mobileSession = "mobile"
 
 // k web's sessions API — the same discovery/read/send paths k ls, k r and
 // k s use, exposed over HTTP so the iOS app (reachable via --tailnet) can
@@ -34,6 +43,38 @@ func findPeerByPane(peers []*Peer, pane string) *Peer {
 	}
 	return nil
 }
+
+// requireJSONPost enforces POST + a real application/json Content-Type on
+// every state-changing peers endpoint. application/json is not a CORS
+// "simple request" content type, so requiring it forces a browser to send a
+// preflight OPTIONS first — and since this server never answers preflights
+// with CORS headers, that preflight fails, which blocks a script on any
+// other website from drive-by POSTing here. Every real client (iOS
+// APIClient, web/app.js) already sets this header, so nothing legitimate is
+// affected.
+func requireJSONPost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		webJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content-type must be application/json"})
+		return false
+	}
+	return true
+}
+
+// isCellPane reports whether a tmux session belongs to a job cell — those
+// panes belong to the job board's archive/kill/reactivate lifecycle, not the
+// freeform peers kill action.
+func isCellPane(session string) bool {
+	return strings.HasPrefix(session, "cell-")
+}
+
+// paneSessionFunc resolves a pane's live tmux session; swapped out in tests
+// so peersKillHandler's fresh re-verify doesn't have to shell out to tmux.
+var paneSessionFunc = currentPaneSession
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
@@ -98,6 +139,9 @@ func peersReadHandler(source peerSource) http.HandlerFunc {
 // for both; the peer's role decides which path.
 func peersSendHandler(source peerSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// TODO: same drive-by CORS-simple-request weakness as the spawn/kill/
+		// open handlers (see requireJSONPost) — not hardened here yet because
+		// this handler's callers' Content-Type usage hasn't been verified.
 		if r.Method != http.MethodPost {
 			webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 			return
@@ -151,5 +195,160 @@ func peersCaptureHandler(source peerSource) http.HandlerFunc {
 			return
 		}
 		webJSON(w, http.StatusOK, map[string]any{"pane": p.Pane, "content": text})
+	}
+}
+
+// peersSpawnHandler opens a new shell or claude pane in the dedicated
+// "mobile" tmux session — the app's "+" action has no caller pane/session of
+// its own to target, unlike k n/k c run from inside tmux.
+func peersSpawnHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireJSONPost(w, r) {
+		return
+	}
+	var req struct {
+		Kind   string `json:"kind"`
+		Dir    string `json:"dir"`
+		Name   string `json:"name"`
+		Prompt string `json:"prompt"`
+		Cmd    string `json:"cmd"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+		return
+	}
+	dir := req.Dir
+	switch {
+	case dir == "":
+		dir = home()
+	case dir == "~":
+		dir = home()
+	case strings.HasPrefix(dir, "~/"):
+		dir = filepath.Join(home(), strings.TrimPrefix(dir, "~/"))
+	default:
+		// the mobile client has no way to know the server's cwd, so a bare
+		// relative path can only be a client mistake, not something to resolve
+		if !strings.HasPrefix(dir, "~") && !filepath.IsAbs(dir) {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "dir must be absolute or ~-relative"})
+			return
+		}
+	}
+	argv, err := buildSpawnArgv(req.Kind, req.Name, req.Prompt, req.Cmd)
+	if err != nil {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := checkSpawnDir(dir); err != nil {
+		// a bad dir is a malformed client parameter — fail before ensureSession
+		// does any tmux work for a request that's doomed anyway
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := ensureSession(mobileSession, home()); err != nil {
+		webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	at, err := newWindowIn(mobileSession, dir, argv)
+	if err != nil {
+		// still guard the (unreachable in practice, but defensive) case where
+		// newWindowIn's own dir check disagrees with checkSpawnDir above
+		status := http.StatusConflict
+		if errors.Is(err, errBadSpawnDir) {
+			status = http.StatusBadRequest
+		}
+		webJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "at": at})
+}
+
+// peersKillHandler mirrors k k, plus a guard k k doesn't need: a job cell's
+// pane belongs to its board lifecycle (archive/kill/reactivate), not the
+// app's freeform kill action, so it's refused here rather than torn down out
+// from under the daemon.
+func peersKillHandler(source peerSource) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireJSONPost(w, r) {
+			return
+		}
+		var req struct {
+			Pane string `json:"pane"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+			return
+		}
+		p := findPeerByPane(source(), req.Pane)
+		if p == nil {
+			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", req.Pane)})
+			return
+		}
+		// re-read the pane's session fresh rather than trust the stale
+		// snapshot's TmuxSession — a pane can move sessions (or vanish)
+		// between discovery and this request
+		session, err := paneSessionFunc(p.Pane)
+		if err != nil {
+			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("pane %s is gone", p.Pane)})
+			return
+		}
+		if isCellPane(session) {
+			webJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("%s belongs to job cell %s — use the job's Kill action", displayName(p), session)})
+			return
+		}
+		if _, err := killPeer(p); err != nil {
+			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		webJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// peersOpenHandler mirrors k o for either an arbitrary pane or a job's zeus
+// (resolved by slug) — the app has no tmux target of its own to jump from, so
+// it needs to name the destination by slug when opening a job's cell.
+func peersOpenHandler(source peerSource) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireJSONPost(w, r) {
+			return
+		}
+		var req struct {
+			Pane string `json:"pane"`
+			Slug string `json:"slug"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+			return
+		}
+		if (req.Pane == "") == (req.Slug == "") {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "exactly one of pane or slug is required"})
+			return
+		}
+		if req.Pane != "" {
+			p := findPeerByPane(source(), req.Pane)
+			if p == nil {
+				webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", req.Pane)})
+				return
+			}
+			if _, err := openPeer(p); err != nil {
+				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			webJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		j := jobBySlug(loadJobs(), req.Slug)
+		if j == nil {
+			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no job %q", req.Slug)})
+			return
+		}
+		zeus := cellZeus(j, source())
+		if zeus == nil {
+			webJSON(w, http.StatusConflict, map[string]string{"error": "no live cell agent"})
+			return
+		}
+		if _, err := openPeer(zeus); err != nil {
+			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		webJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }

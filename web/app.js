@@ -106,7 +106,7 @@ function cardHTML(j, col) {
     .join("");
   const killable = ["working", "blocked"].includes(col) && j.live;
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  return `<div class="card ${j.question || j.health ? "flagged" : ""} ${editable ? "editable" : ""}" style="--state:${color}"
+  return `<div class="card editable ${j.question || j.health ? "flagged" : ""}" style="--state:${color}"
       draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
@@ -120,6 +120,7 @@ function cardHTML(j, col) {
       <span>${age(j.mtime)}</span>
       ${prereqs ? `<span class="prereq">${prereqs}</span>` : ""}
     </div>
+    ${j.live ? `<div class="review-row"><button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button></div>` : ""}
     ${j.err ? `<div class="err">✕ ${esc(j.err)}</div>` : ""}
     ${j.health ? `<div class="err">⚠ ${esc(j.health)}</div>` : ""}
     ${j.detail ? `<div class="detail">${esc(j.detail)}</div>` : ""}
@@ -471,7 +472,12 @@ document.addEventListener("click", (ev) => {
     openSteer(steer.dataset.slug);
     return;
   }
-  const review = ev.target.closest(".review-open");
+  const tmuxOpen = ev.target.closest(".open-tmux");
+  if (tmuxOpen) {
+    post("/api/peers/open", { slug: tmuxOpen.dataset.slug });
+    return;
+  }
+  const review = ev.target.closest(".review-open:not(.open-tmux)");
   if (review) {
     post("/api/review", { slug: review.dataset.slug, text: review.dataset.editor });
     return;
@@ -480,10 +486,11 @@ document.addEventListener("click", (ev) => {
     openEditor(null);
     return;
   }
-  // editable cards open their spec on plain click (buttons/chips above
-  // already returned first)
-  const card = ev.target.closest(".card[data-editable='true']");
-  if (card) openEditor(card.dataset.slug);
+  // all cards open their spec on plain click (buttons/chips above already
+  // returned first); loadForm renders read-only when the server says the
+  // job isn't editable
+  const card = ev.target.closest(".card[data-editable]");
+  if (card && !window.getSelection().toString()) openEditor(card.dataset.slug);
 });
 
 // ---- steer: mid-run instructions ----
@@ -538,7 +545,7 @@ const editorOverlay = document.getElementById("editor-overlay");
 const editorText = document.getElementById("editor-text");
 const editorNote = document.getElementById("editor-note");
 let editorSlug = null;
-let editorMTime = "";
+let editorMTime = 0;
 
 function prereqRowHTML(p) {
   return `<div class="prereq-row">
@@ -584,11 +591,33 @@ function readForm() {
   };
 }
 
+// setFormReadOnly locks every field when the server says the job isn't
+// editable (a cell is in flight and the file belongs to the crew) — the
+// spec textarea stays readonly rather than disabled so it's still
+// selectable/copyable.
+function setFormReadOnly(readOnly) {
+  document.getElementById("f-type").disabled = readOnly;
+  document.getElementById("f-repo").disabled = readOnly;
+  document.getElementById("f-base").disabled = readOnly;
+  document.getElementById("f-ready").disabled = readOnly;
+  document.getElementById("f-solo").disabled = readOnly;
+  document.getElementById("f-auto").disabled = readOnly;
+  document.getElementById("f-success").disabled = readOnly;
+  document.getElementById("f-add-prereq").disabled = readOnly;
+  document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
+    .forEach((el) => (el.disabled = readOnly));
+  editorText.readOnly = readOnly;
+  document.getElementById("editor-save").hidden = readOnly;
+  // archive lives here, inside the opened job, on purpose: no card-level
+  // shortcut — the server still refuses jobs with a cell in flight
+  document.getElementById("editor-archive").hidden = readOnly;
+  document.getElementById("editor-hint").textContent = readOnly ? "read-only — cell in flight" : "";
+}
+
 async function loadForm(slug) {
   const r = await fetch("/api/job/form?slug=" + encodeURIComponent(slug));
   const d = await r.json();
   if (d.error) throw new Error(d.error);
-  if (!d.editable) throw new Error("job has a cell in flight — file belongs to the crew");
   editorSlug = slug;
   editorMTime = d.mtime;
   fillForm(d);
@@ -596,24 +625,24 @@ async function loadForm(slug) {
   document.getElementById("editor-newrow").hidden = true;
   document.getElementById("editor-form").hidden = false;
   document.getElementById("editor-save").disabled = false;
-  // archive lives here, inside the opened job, on purpose: no card-level
-  // shortcut — the server still refuses jobs with a cell in flight
-  document.getElementById("editor-archive").hidden = false;
+  setFormReadOnly(!d.editable);
   if (d.err) editorNote.textContent = "current file won't run: " + d.err;
 }
 
 function openEditor(slug) {
   editorSlug = slug;
-  editorMTime = "";
+  editorMTime = 0;
   editorNote.textContent = "";
   editorNote.style.color = "";
   const isNew = !slug;
   document.getElementById("editor-title").textContent = isNew ? "new job" : slug + ".job.md";
   document.getElementById("editor-newrow").hidden = !isNew;
   document.getElementById("editor-form").hidden = true;
+  document.getElementById("editor-save").hidden = false;
   document.getElementById("editor-save").disabled = true;
   document.getElementById("editor-force").hidden = true;
   document.getElementById("editor-archive").hidden = true;
+  document.getElementById("editor-hint").textContent = "";
   document.getElementById("editor-slug").value = "";
   editorOverlay.hidden = false;
   if (isNew) {
@@ -655,7 +684,7 @@ document.getElementById("f-prereqs").addEventListener("click", (ev) => {
 });
 
 async function saveForm(force) {
-  if (!editorSlug) return;
+  if (!editorSlug || editorText.readOnly) return;
   const forceBtn = document.getElementById("editor-force");
   try {
     const r = await fetch("/api/job/saveform", {
@@ -701,7 +730,7 @@ editorOverlay.addEventListener("click", (ev) => { if (ev.target === editorOverla
 document.getElementById("editor-form").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
     ev.preventDefault();
-    document.getElementById("editor-save").click();
+    if (!editorText.readOnly) document.getElementById("editor-save").click();
   }
 });
 document.getElementById("editor-slug").addEventListener("keydown", (ev) => {
@@ -819,7 +848,7 @@ function renderDag(board) {
     .map((j) => {
       const p = pos[j.slug];
       const editable = !j.live && ["draft", "queued", "done"].includes(columnFor(j.state));
-      return `<div class="dag-node ${j.question || j.health ? "flagged" : ""} ${editable ? "editable" : ""}"
+      return `<div class="dag-node editable ${j.question || j.health ? "flagged" : ""}"
         style="left:${p.x}px;top:${p.y}px;--state:${stateColor(j.state)}"
         data-slug="${esc(j.slug)}" data-editable="${editable}">
         <span class="slug">${esc(j.slug)}</span>
@@ -855,7 +884,7 @@ function renderDag(board) {
 
 document.getElementById("dag-nodes").addEventListener("click", (ev) => {
   const node = ev.target.closest(".dag-node");
-  if (node && node.dataset.editable === "true") openEditor(node.dataset.slug);
+  if (node && !window.getSelection().toString()) openEditor(node.dataset.slug);
 });
 
 // ---- poll (paused while dragging so the board doesn't rebuild mid-drag) ----

@@ -191,7 +191,21 @@ struct JobDetailView: View {
                     }
                     fieldRow("Repo", job.repo)
                     if job.live, let cell = job.cell {
-                        fieldRow("Cell", cell)
+                        Button {
+                            router.pendingSessionCell = cell
+                            router.selectedTab = .sessions
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text("Cell").font(.data(10)).foregroundStyle(KTheme.text2)
+                                Spacer()
+                                Text(cell).font(.voice(13)).foregroundStyle(KTheme.accent)
+                                Image(systemName: "chevron.right")
+                                    .font(.data(10))
+                                    .foregroundStyle(KTheme.accent)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
                     if isArchived, job.title != job.slug {
                         // numbered archive copy: the file base differs from
@@ -234,6 +248,7 @@ struct JobDetailView: View {
                         }
                     }
                 }
+                SpecSection(job: job, baseURL: baseURL, editSheetOpen: showingEdit)
                 if let detail = job.detail, !detail.isEmpty {
                     kSection("Detail") {
                         DetailCard(text: detail, stateColor: BoardTheme.color(forState: job.state))
@@ -531,6 +546,36 @@ struct JobDetailView: View {
     // as every other action.
     private func answerQuestion(digit: Int) {
         runAction { try await APIClient.shared.answerQuestion(baseURL: baseURL, slug: job.slug, digit: digit) }
+    }
+}
+
+/// The job's spec markdown, read-only — fetched via fetchJobForm (which
+/// returns `spec` even when `editable` is false), so a preview is available
+/// without opening Edit. A fetch failure just hides the section: this is a
+/// nice-to-have preview, not a load-bearing action.
+private struct SpecSection: View {
+    let job: WebJob
+    let baseURL: String
+    // Toggling this (the Edit Spec sheet opening or closing) changes the
+    // task's id, forcing a refetch — without it, a save inside that sheet
+    // would leave this preview showing the pre-edit spec text.
+    let editSheetOpen: Bool
+
+    @State private var spec: String?
+
+    var body: some View {
+        Group {
+            if let spec, !spec.isEmpty {
+                kSection("Spec") {
+                    DetailCard(text: spec, stateColor: BoardTheme.color(forState: job.state))
+                }
+            }
+        }
+        .task(id: "\(job.slug):\(editSheetOpen)") {
+            if let form = try? await APIClient.shared.fetchJobForm(baseURL: baseURL, slug: job.slug) {
+                spec = form.spec
+            }
+        }
     }
 }
 

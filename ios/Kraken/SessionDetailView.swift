@@ -16,6 +16,9 @@ final class SessionDetailViewModel {
     // command executed) — same toast chip, different word.
     var toastMessage: String?
 
+    var isKilling = false
+    var killError: String?
+
     func loadTranscript(baseURL: String, pane: String, n: Int) async {
         do {
             let resp = try await APIClient.shared.readPeer(baseURL: baseURL, pane: pane, n: n)
@@ -65,6 +68,21 @@ final class SessionDetailViewModel {
             toastMessage = nil
         }
     }
+
+    @discardableResult
+    func kill(baseURL: String, pane: String) async -> Bool {
+        isKilling = true
+        killError = nil
+        do {
+            try await APIClient.shared.killPeer(baseURL: baseURL, pane: pane)
+            isKilling = false
+            return true
+        } catch {
+            isKilling = false
+            killError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+    }
 }
 
 /// Transcript reads the agent's parsed turn history; Terminal shows the raw
@@ -79,21 +97,33 @@ private enum SessionViewMode: String, CaseIterable, Hashable {
 struct SessionDetailView: View {
     let peer: Peer
     let baseURL: String
+    let onKilled: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismiss
     @Environment(DraftStore.self) private var draftStore
     @FocusState private var messageFocused: Bool
     @State private var vm = SessionDetailViewModel()
     @State private var messageText = ""
     @State private var mode: SessionViewMode
+    @State private var showingKillConfirm = false
 
-    init(peer: Peer, baseURL: String) {
+    init(peer: Peer, baseURL: String, onKilled: @escaping () -> Void = {}) {
         self.peer = peer
         self.baseURL = baseURL
+        self.onKilled = onKilled
         _mode = State(initialValue: peer.role == "shell" ? .terminal : .transcript)
     }
 
     private var isShell: Bool { peer.role == "shell" }
+
+    // Job cells are killed via the job's own Kill action (server enforces
+    // this too); a peer with no pane has nothing to kill.
+    private var canKill: Bool {
+        guard let pane = peer.pane, !pane.isEmpty else { return false }
+        if let session = peer.tmuxSession, session.hasPrefix("cell-") { return false }
+        return true
+    }
 
     // "shell:<pane>" vs "send:<pane>" — a given pane is only ever one or the
     // other, but keeping the prefix distinct matches the kind of composer
@@ -188,6 +218,26 @@ struct SessionDetailView: View {
         .background(KTheme.ground)
         .navigationTitle(peer.agentName ?? peer.name ?? peer.tmuxSession ?? "session")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if canKill {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) {
+                        showingKillConfirm = true
+                    } label: {
+                        Label("Kill", systemImage: "xmark")
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Kill")
+                }
+            }
+        }
+        .confirmationDialog(
+            "Kill this session? The tmux pane is closed immediately.",
+            isPresented: $showingKillConfirm, titleVisibility: .visible
+        ) {
+            Button("Kill", role: .destructive) { killPeer() }
+            Button("Cancel", role: .cancel) {}
+        }
         .overlay(alignment: .top) {
             if let toast = vm.toastMessage {
                 Text(toast)
@@ -212,17 +262,22 @@ struct SessionDetailView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Rectangle()
-                .fill(SessionTheme.color(forStatus: peer.status, role: peer.role))
-                .frame(width: 8, height: 8)
-            Text(peer.status)
-                .font(.data(11))
-                .foregroundStyle(SessionTheme.color(forStatus: peer.status, role: peer.role))
-            if let branch = peer.branch, !branch.isEmpty {
-                Text(branch).font(.data(11)).foregroundStyle(KTheme.accent)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Rectangle()
+                    .fill(SessionTheme.color(forStatus: peer.status, role: peer.role))
+                    .frame(width: 8, height: 8)
+                Text(peer.status)
+                    .font(.data(11))
+                    .foregroundStyle(SessionTheme.color(forStatus: peer.status, role: peer.role))
+                if let branch = peer.branch, !branch.isEmpty {
+                    Text(branch).font(.data(11)).foregroundStyle(KTheme.accent)
+                }
+                Spacer()
             }
-            Spacer()
+            if let killError = vm.killError {
+                Text(killError).font(.voice(11)).foregroundStyle(KTheme.counter)
+            }
         }
         .padding(.horizontal)
         .padding(.vertical, 7)
@@ -362,6 +417,16 @@ struct SessionDetailView: View {
             if await vm.send(baseURL: baseURL, pane: pane, message: text) {
                 messageText = ""
                 if let draftKey { draftStore.clear(draftKey) }
+            }
+        }
+    }
+
+    private func killPeer() {
+        guard let pane = peer.pane else { return }
+        Task {
+            if await vm.kill(baseURL: baseURL, pane: pane) {
+                onKilled()
+                dismiss()
             }
         }
     }

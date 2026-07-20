@@ -340,6 +340,7 @@ private struct BoardOverviewSheet: View {
     var onUpdate: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppRouter.self) private var router
     @State private var selectedJob: WebJob?
 
     var body: some View {
@@ -377,6 +378,12 @@ private struct BoardOverviewSheet: View {
             NavigationStack {
                 JobDetailView(job: job, baseURL: baseURL, onUpdate: onUpdate)
             }
+        }
+        // JobDetailView's Cell row switches tabs and dismisses itself, but
+        // that only closes the innermost sheet — this sheet (its presenter)
+        // has to close itself too, or it's left covering the Sessions tab.
+        .onChange(of: router.selectedTab) {
+            dismiss()
         }
     }
 
