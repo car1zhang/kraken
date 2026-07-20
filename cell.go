@@ -108,8 +108,37 @@ func allArtifactPaths(j *Job) []string {
 	return out
 }
 
+// branchForRun names the branch for a given cell run: the bare slug branch
+// for a first run, -rN for later runs (reactivations, or a re-queue whose
+// original branch still exists — worktree teardown never deletes branches).
+func branchForRun(slug string, run int) string {
+	if run >= 2 {
+		return fmt.Sprintf("carl/%s-r%d", slugify(slug), run)
+	}
+	return "carl/" + slugify(slug)
+}
+
 func cellBranch(j *Job) string {
-	return "carl/" + slugify(j.Slug)
+	return branchForRun(j.Slug, j.Run)
+}
+
+// ensureFreshBranch advances the job's run until cellBranch names a branch
+// that doesn't exist yet in repo, persisting the new run so every later
+// cellBranch reader (reap's PR watch, the zeus brief, the board) agrees.
+// No-op when the current branch name is free — a first run stays on
+// carl/<slug> with no run field written.
+func ensureFreshBranch(j *Job, repo string) error {
+	run := j.Run
+	for refExists(repo, branchForRun(j.Slug, run)) {
+		if run < 1 {
+			run = 1
+		}
+		run++
+	}
+	if run == j.Run {
+		return nil
+	}
+	return writeJobFields(j, "run", strconv.Itoa(run))
 }
 
 // cellPalette: tmux 256-color indices picked for contrast against a dark
@@ -253,6 +282,11 @@ func startCell(j *Job, repo string) error {
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
+	// a leftover branch from a killed or reaped earlier run would make the
+	// -b worktree add below fail; every cell run gets a fresh branch
+	if err := ensureFreshBranch(j, repo); err != nil {
+		return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
+	}
 	for _, d := range []string{cellDir(j), cellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
@@ -370,6 +404,7 @@ func reapOne(j *Job, live map[string]bool) (string, bool) {
 	}
 	switch prState(dir, cellBranch(j)) {
 	case "MERGED":
+		stampSessionBeforeTeardown(j)              // last chance to record zeus' session id
 		copied, perr := preserveArtifacts(j, repo) // before teardown deletes the sources
 		if perr != nil {
 			return fmt.Sprintf("merged, but artifact preservation failed (%v) — NOT tearing down", perr), false
@@ -524,6 +559,33 @@ func cellZeus(j *Job, all []*Peer) *Peer {
 	return inSess[0]
 }
 
+// stampSession records zeus' real Claude session id into the job file the
+// moment it's known: the daemon calls this every tick for live cells (so
+// every job that reaches working carries its id from the first minutes,
+// per carl's steer — not only at teardown), and the teardown paths
+// re-check right before the cell disappears as a daemon-down fallback.
+// Guessed ids (cwd + newest-transcript inference) are never written —
+// resuming a guessed id later could resume some other claude's session.
+// Returns nil when there's nothing new to write.
+func stampSession(j *Job, all []*Peer) error {
+	zeus := cellZeus(j, all)
+	if zeus == nil || zeus.SessionID == "" || zeus.SessionIDGuessed || zeus.SessionID == j.Session {
+		return nil
+	}
+	return writeJobFields(j, "session", zeus.SessionID)
+}
+
+// stampSessionBeforeTeardown is the best-effort teardown-path variant of
+// stampSession: it runs its own discovery (the callers don't have one) and
+// only warns on failure — the cell is going away either way, and the
+// daemon has normally stamped the id long before this point.
+func stampSessionBeforeTeardown(j *Job) {
+	all, _ := orderAll(discoverAll())
+	if err := stampSession(j, all); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: session stamp for %s failed: %v\n", j.Slug, err)
+	}
+}
+
 // chromeLineRe matches claude's UI furniture: task lists, agent roster,
 // recaps, spinners, separators, the input box, status bars, update nags.
 // Everything it matches is presentation, not transcript content.
@@ -623,6 +685,7 @@ func killJob(j *Job) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %v", j.Slug, err)
 	}
+	stampSessionBeforeTeardown(j)
 	copied, perr := preserveArtifacts(j, repo)
 	var msgs []string
 	for _, c := range copied {
@@ -742,6 +805,7 @@ func doneJob(j *Job, outcome string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %v", j.Slug, err)
 	}
+	stampSessionBeforeTeardown(j)
 	copied, perr := preserveArtifacts(j, repo)
 	var msgs []string
 	for _, c := range copied {
@@ -774,6 +838,120 @@ func oneLine(s string) string {
 		}
 		return r
 	}, s))
+}
+
+// --- k reactivate ---
+
+// reactivateJob resurrects a done job into its original zeus session for
+// adjustments: the worktree is recreated at the SAME path (the claude
+// project dir — and with it the transcript history — is keyed on that
+// path), the branch is a fresh -rN (the old branch's PR is already merged,
+// and reap watching a merged branch would tear the new cell down on its
+// next pass), and claude is resumed with -r <session> rather than started
+// fresh. session overrides the recorded id (hand-rescue for jobs done
+// before kraken stamped session ids); message rides along in the resume
+// prompt as carl's steering.
+func reactivateJob(j *Job, session, message string) error {
+	if j.Err != "" {
+		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
+	}
+	if j.State != "done" {
+		return fmt.Errorf("%s is not done (state %q) — only done jobs reactivate", j.Slug, j.State)
+	}
+	if session == "" {
+		session = j.Session
+	}
+	if session == "" {
+		return fmt.Errorf("%s has no recorded zeus session (done before kraken stamped session ids) — pass one explicitly: k reactivate %s --session <uuid>", j.Slug, j.Slug)
+	}
+	sess := cellSession(j)
+	if liveSessions()[sess] {
+		return fmt.Errorf("cell %s is already live (k o %s to jump in)", sess, sess)
+	}
+	repo, err := resolveRepo(j.Repo)
+	if err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	if old := existingWorktree(j, repo); old != "" {
+		return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", old, repo, old)
+	}
+	// always advance the run, even when the old branch was deleted locally:
+	// gh pr view <branch> would still find the old MERGED PR by name
+	run := j.Run
+	if run < 1 {
+		run = 1
+	}
+	run++
+	for refExists(repo, branchForRun(j.Slug, run)) {
+		run++
+	}
+	j.Run = run // cellBranch below must see it; persisted right after the worktree lands
+	base, err := baseRef(j, repo)
+	if err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	for _, d := range []string{cellDir(j), cellArtifacts(j)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %v", d, err)
+		}
+	}
+	wt := cellWorktree(j, repo)
+	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, "-b", cellBranch(j), base).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
+	}
+	if err := writeJobFields(j, "run", strconv.Itoa(run)); err != nil {
+		return fmt.Errorf("worktree is up but run write failed: %v — fix %s by hand (run: %d) or reap will watch the wrong branch", err, filepath.Base(j.File), run)
+	}
+	prompt := "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, but a FRESH branch " + cellBranch(j) + " off " + base + ". Your previous branch's PR is already merged — never push to it; your earlier changes are already in the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
+	if message != "" {
+		prompt += "\nsteering from carl: " + message
+	}
+	argv := append(cellClaudeArgs(), "--name", zeusName(j), "-r", session, "--", prompt)
+	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
+		"-n", slugify(j.Slug), shellCmdString(argv)).Run(); err != nil {
+		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)
+	}
+	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", slugify(j.Slug)).Run()
+	_ = exec.Command("tmux", "set-window-option", "-t", sess+":0",
+		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(slugify(j.Slug)))).Run()
+	// the worktree path is the same as the previous run's, so claude's
+	// folder trust normally persists — but a fresh machine or cleared
+	// config would block startup on the dialog just like a first start
+	acceptTrustPrompts(sess)
+	if err := writeJobState(j, "working"); err != nil {
+		return fmt.Errorf("cell is up but state write failed: %v", err)
+	}
+	return nil
+}
+
+func cmdReactivate(args []string) {
+	session := ""
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--session" {
+			i++
+			if i >= len(args) {
+				die("--session needs a session uuid")
+			}
+			session = args[i]
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	if len(rest) < 1 {
+		die("usage: k reactivate <job-slug> [--session <uuid>] [message...]")
+	}
+	j := jobBySlug(loadJobs(), rest[0])
+	if j == nil {
+		die("no job %q in %s (k j lists them)", rest[0], plutoDir())
+	}
+	if err := reactivateJob(j, session, oneLine(strings.Join(rest[1:], " "))); err != nil {
+		die("%v", err)
+	}
+	fmt.Printf("reactivated %s: zeus session resumed in tmux session %s (branch %s), state: working\n",
+		j.Slug, cellSession(j), cellBranch(j))
+	fmt.Printf("attach: tmux attach -t %s  (or k o %s)\n", cellSession(j), cellSession(j))
 }
 
 // --- k migrate ---

@@ -153,6 +153,34 @@ actor APIClient {
         )
     }
 
+    /// Moves a job (file + preserved artifacts) into the archive, freeing
+    /// its slug. Server refuses jobs with a cell in flight — kill first.
+    func archiveJob(baseURL: String, slug: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/archive", body: SlugRequest(slug: slug))
+    }
+
+    /// Restores an archived job (slug = the numbered archive file base)
+    /// under its original slug, state preserved.
+    func unarchiveJob(baseURL: String, slug: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/unarchive", body: SlugRequest(slug: slug))
+    }
+
+    /// Permanently deletes an archived job file and its archived artifact
+    /// copies. Only archive names resolve server-side — nothing active can
+    /// be deleted.
+    func deleteArchivedJob(baseURL: String, slug: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/delete", body: SlugRequest(slug: slug))
+    }
+
+    /// Resumes a done job's original zeus session for adjustments; `text`
+    /// is carl's optional steering message, folded into the resume prompt.
+    func reactivateJob(baseURL: String, slug: String, text: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/reactivate",
+            body: SteerRequest(slug: slug, text: text)
+        )
+    }
+
     // MARK: - job authoring
 
     func fetchJobRaw(baseURL: String, slug: String) async throws -> JobRaw {

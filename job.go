@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,11 +35,26 @@ type Job struct {
 	Success     string   `json:"success,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
-	State   string    `json:"state,omitempty"`
-	Outcome string    `json:"outcome,omitempty"`
-	Body    string    `json:"-"`
-	Err     string    `json:"err,omitempty"`
-	ModTime time.Time `json:"-"`
+	State   string `json:"state,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+	// Session is zeus' Claude session id, kraken-managed: stamped into the
+	// job file as soon as the live cell's zeus reports a real (non-guessed)
+	// id. It is what makes a done job reactivatable into the same
+	// conversation after its cell is long gone.
+	Session string `json:"session,omitempty"`
+	// Run is the kraken-managed cell-run counter for branch versioning:
+	// 0/1 → carl/<slug>, N≥2 → carl/<slug>-rN. A reactivated (or re-run)
+	// job must ship on a fresh branch — the old branch's PR is already
+	// merged, and reap watching a merged branch would tear the new cell
+	// down instantly.
+	Run int `json:"run,omitempty"`
+	// ArchivedName is set only on jobs loaded from the archive dir: the
+	// numbered file base (e.g. "foo-2") that uniquely identifies the
+	// archived file even when its Slug collides with an active job's.
+	ArchivedName string    `json:"archived_name,omitempty"`
+	Body         string    `json:"-"`
+	Err          string    `json:"err,omitempty"`
+	ModTime      time.Time `json:"-"`
 }
 
 type Prereq struct {
@@ -211,6 +227,18 @@ func parseJob(name string, data []byte) *Job {
 			}
 		case "outcome":
 			j.Outcome = val
+		case "session":
+			j.Session = val
+		case "run":
+			if val == "" {
+				break
+			}
+			n, err := strconv.Atoi(val)
+			if err != nil || n < 1 {
+				j.addErr(fmt.Sprintf("bad run value %q", val))
+			} else {
+				j.Run = n
+			}
 		case "success":
 			if val == "|" || val == "" {
 				var b []string
@@ -573,6 +601,12 @@ func writeJobFields(j *Job, keyvals ...string) error {
 			j.State = keyvals[i+1]
 		case "outcome":
 			j.Outcome = keyvals[i+1]
+		case "session":
+			j.Session = keyvals[i+1]
+		case "run":
+			if n, err := strconv.Atoi(keyvals[i+1]); err == nil {
+				j.Run = n
+			}
 		}
 	}
 	return nil

@@ -46,6 +46,12 @@ func main() {
 		cmdReap(rest)
 	case "done":
 		cmdDone(rest)
+	case "archive":
+		cmdArchive(rest)
+	case "unarchive":
+		cmdUnarchive(rest)
+	case "reactivate":
+		cmdReactivate(rest)
 	case "daemon":
 		cmdDaemon(rest)
 	case "migrate":
@@ -93,6 +99,19 @@ Commands:
                       manually complete a started job (the acceptance path for
                       info jobs): preserves artifacts into pluto,
                       tears the cell down, records the outcome
+  k archive <slug>    move a job (file + preserved artifacts) into
+                      ~/Documents/pluto/archive, freeing its slug; archive
+                      name conflicts get numbered (foo-2, foo-3, ...). Only
+                      jobs with no cell in flight — kill a live job first
+                      (kill returns it to draft)
+  k unarchive <archived-name>
+                      restore an archived job (k j lists archived last) under
+                      its original slug, state preserved; refused while the
+                      slug is taken by an active job
+  k reactivate <slug> [--session <uuid>] [message...]
+                      resume a done job's original zeus session for
+                      adjustments: same worktree path, fresh carl/<slug>-rN
+                      branch (the old PR is merged), state back to working
   k daemon            run the scheduler loop in the foreground (launchd runs
                       this at login via make install): queues ready jobs
                       (≤5 cells), derives working/blocked from cell activity,

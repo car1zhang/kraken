@@ -45,7 +45,8 @@
     </div>
   </div>
 
-  <!-- message zeus: mid-run instructions to a live cell -->
+  <!-- message zeus: mid-run instructions to a live cell; the same modal
+       doubles as the reactivate prompt (optional message) -->
   <div class="overlay" id="steer-overlay" hidden>
     <div class="panel">
       <div class="panel-head">
@@ -69,6 +70,8 @@
         <span class="panel-title" id="editor-title"></span>
         <span class="spacer"></span>
         <button class="btn ghost danger" id="editor-force" hidden>overwrite disk</button>
+        <button class="btn ghost" id="editor-archive" hidden
+          title="move this job (and its preserved artifacts) into the archive — frees the slug; reversible from the ARCHIVED drawer under DONE">archive</button>
         <button class="btn ghost" id="editor-cancel">cancel</button>
         <button class="btn" id="editor-save">save ⌘⏎</button>
       </div>

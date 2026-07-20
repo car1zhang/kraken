@@ -73,6 +73,7 @@ struct SessionsView: View {
             .listStyle(.plain)
             .kListStyle()
             .navigationTitle("Sessions")
+            .navigationBarTitleDisplayMode(.large)
             .navigationDestination(for: Peer.self) { peer in
                 SessionDetailView(peer: peer, baseURL: serverURL)
             }

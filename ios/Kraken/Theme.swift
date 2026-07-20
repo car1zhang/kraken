@@ -50,8 +50,20 @@ enum KTheme {
         nav.shadowColor = UIColor(hairline)
         nav.titleTextAttributes = [.foregroundColor: UIColor(text)]
         nav.largeTitleTextAttributes = [.foregroundColor: UIColor(text)]
+        // The at-rest (scroll-edge) bar must be TRANSPARENT: with an opaque
+        // scroll-edge appearance, iOS 26 paints the bar background over the
+        // large-title text whenever the stack root is scrollable (List /
+        // ScrollView) — the title exists in the a11y tree but is invisible.
+        // That's exactly the Sessions/Settings "no title" bug carl reported;
+        // Board only escaped because its root is a plain VStack. The opaque
+        // variant still applies once content scrolls under the bar
+        // (standardAppearance), which is the only time it's visible anyway.
+        let navEdge = UINavigationBarAppearance()
+        navEdge.configureWithTransparentBackground()
+        navEdge.titleTextAttributes = [.foregroundColor: UIColor(text)]
+        navEdge.largeTitleTextAttributes = [.foregroundColor: UIColor(text)]
         UINavigationBar.appearance().standardAppearance = nav
-        UINavigationBar.appearance().scrollEdgeAppearance = nav
+        UINavigationBar.appearance().scrollEdgeAppearance = navEdge
         UINavigationBar.appearance().compactAppearance = nav
         UINavigationBar.appearance().tintColor = UIColor(accent)
 
@@ -108,9 +120,11 @@ extension Font {
 // MARK: - state → color
 
 /// The five kanban columns — draft/queued/working/blocked/done — mirroring
-/// the server's five job states 1:1 (review was folded into blocked).
+/// the server's five job states 1:1 (review was folded into blocked), plus
+/// ARCHIVED as a sixth pager page (the web board shows archived jobs in a
+/// collapsible drawer instead; on the phone an extra page is cheaper).
 enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
-    case draft, queued, working, blocked, done
+    case draft, queued, working, blocked, done, archived
 
     var id: String { rawValue }
 
@@ -121,10 +135,11 @@ enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
         case .working: return "WORKING"
         case .blocked: return "BLOCKED"
         case .done: return "DONE"
+        case .archived: return "ARCHIVED"
         }
     }
 
-    /// Truncated for the always-visible overview strip, where five columns
+    /// Truncated for the always-visible overview strip, where six columns
     /// have to fit in one row.
     var shortTitle: String {
         switch self {
@@ -133,12 +148,13 @@ enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
         case .working: return "WORK"
         case .blocked: return "BLOCK"
         case .done: return "DONE"
+        case .archived: return "ARCH"
         }
     }
 }
 
 enum BoardTheme {
-    // Exact 1:1 mapping to the server's five job states — no aliases, no
+    // Exact 1:1 mapping to the server's job states — no aliases, no
     // prefix matching. See BoardColumn's doc comment.
     private static let columnStates: [BoardColumn: [String]] = [
         .draft: ["draft"],
@@ -146,6 +162,7 @@ enum BoardTheme {
         .working: ["working"],
         .blocked: ["blocked"],
         .done: ["done"],
+        .archived: ["archived"],
     ]
 
     /// Which column a job belongs on. Mirrors app.js's render(): a job with
@@ -162,7 +179,7 @@ enum BoardTheme {
     }
 
     /// State → color. working=active (green), blocked=attention (red),
-    /// queued=neutral (accent), draft/done=muted.
+    /// queued=neutral (accent), draft/done/archived=muted.
     static func color(forState state: String) -> Color {
         switch state {
         case "working":
@@ -171,7 +188,7 @@ enum BoardTheme {
             return KTheme.counter
         case "queued":
             return KTheme.accent
-        case "draft", "done":
+        case "draft", "done", "archived":
             return KTheme.text2
         default:
             return KTheme.text2

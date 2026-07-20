@@ -156,6 +156,13 @@ func (d *daemon) tick() (int, error) {
 		isLive := live[cellSession(j)]
 		if isLive {
 			cells++
+			// eager session stamp: zeus' session id lands in the job file
+			// within a tick of the cell coming up (and re-lands if it ever
+			// changes), so even a job whose cell later dies uncleanly stays
+			// reactivatable
+			if err := stampSession(j, all); err != nil {
+				dlog("session stamp %s failed: %v", j.Slug, err)
+			}
 		}
 
 		// health first, independent of state derivation below: an API-errored

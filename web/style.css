@@ -86,12 +86,48 @@ body {
 /* ---- board ---- */
 .board {
   display: grid;
-  grid-template-columns: repeat(6, minmax(200px, 1fr));
+  grid-template-columns: repeat(5, minmax(200px, 1fr));
   gap: 14px;
-  padding: 18px 16px 40px;
+  padding: 18px 16px 12px;
   align-items: start;
   overflow-x: auto;
 }
+
+/* ---- archived drawer: collapsible, tucked under the DONE column ---- */
+.archive-drawer { margin-top: 18px; }
+.archive-head {
+  display: flex; align-items: baseline; gap: 7px;
+  width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: none;
+  border-bottom: 1px solid var(--hairline);
+  padding: 0 2px 6px;
+  color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 2.5px;
+}
+.archive-head:hover { color: var(--text); }
+.archive-head .tri { font-size: 9px; letter-spacing: 0; }
+.archive-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
+.archive-cards {
+  display: flex; flex-direction: column; gap: 10px;
+  padding-top: 10px;
+}
+.card.archived { opacity: 0.75; }
+.card.archived:hover { opacity: 1; }
+.btn.unarchive {
+  background: transparent; color: var(--accent);
+  border: 1px solid var(--accent-soft);
+}
+.btn.unarchive:hover { border-color: var(--accent); box-shadow: var(--glow); }
+.btn.delete {
+  background: transparent; color: var(--counter);
+  border: 1px solid var(--counter-soft);
+}
+.btn.delete:hover { border-color: var(--counter); box-shadow: var(--glow-hot); }
+.btn.reactivate {
+  margin-top: 8px;
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed-soft);
+}
+.btn.reactivate:hover { border-color: var(--revealed); box-shadow: 0 0 10px rgba(245, 184, 77, 0.3); }
 .col { min-height: 120px; }
 .col-head {
   display: flex; justify-content: space-between; align-items: baseline;

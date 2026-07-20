@@ -27,8 +27,8 @@ func jobStateColor(state string) string {
 }
 
 // stateRank orders the job board: live cells first (working/blocked need
-// attention), then queued, then draft paperwork, then done. Within a rank,
-// loadJobs' slug order holds.
+// attention), then queued, then draft paperwork, then done, with archived
+// jobs last. Within a rank, loadJobs' slug order holds.
 func stateRank(state string) int {
 	switch state {
 	case "working", "blocked":
@@ -37,8 +37,10 @@ func stateRank(state string) int {
 		return 1
 	case "draft":
 		return 2
-	default: // done
+	case "done":
 		return 3
+	default: // archived
+		return 4
 	}
 }
 
@@ -74,6 +76,7 @@ func cmdJobs(args []string) {
 		}
 	}
 	jobs := loadJobs()
+	archived := loadArchivedJobs()
 	bySlug := map[string]*Job{}
 	for _, j := range jobs {
 		bySlug[j.Slug] = j
@@ -93,6 +96,9 @@ func cmdJobs(args []string) {
 			}
 			out = append(out, jobOut{Job: j, DisplayState: displayState(j, bySlug), Cell: cell})
 		}
+		for _, a := range archived {
+			out = append(out, jobOut{Job: a, DisplayState: "archived"})
+		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
 			die("marshal: %v", err)
@@ -100,7 +106,7 @@ func cmdJobs(args []string) {
 		fmt.Println(string(data))
 		return
 	}
-	if len(jobs) == 0 {
+	if len(jobs) == 0 && len(archived) == 0 {
 		fmt.Printf("no jobs in %s (create one with {{name}} in a pluto note)\n", plutoDir())
 		return
 	}
@@ -148,6 +154,34 @@ func cmdJobs(args []string) {
 			repo,
 			prereqCell(j, bySlug, color),
 			cell,
+			art,
+			paint(color, dim, ageStr),
+		})
+	}
+	// archived jobs ride last: identity is the numbered archive file base
+	// (what k unarchive takes), shown alongside the original slug when the
+	// archive numbering renamed it
+	for i, a := range archived {
+		name := a.ArchivedName
+		if slugify(a.Slug) != a.ArchivedName {
+			name += " (" + a.Slug + ")"
+		}
+		art := paint(color, dim, "-")
+		if n := len(archivedArtifactPaths(a)); n > 0 {
+			art = fmt.Sprintf("%d", n)
+		}
+		ageStr := ""
+		if !a.ModTime.IsZero() {
+			ageStr = age(now.Sub(a.ModTime))
+		}
+		rows = append(rows, []string{
+			paint(color, dim, fmt.Sprintf("%2d", len(ordered)+i+1)),
+			paint(color, gray, "● archived"),
+			paint(color, dim, name),
+			a.Type,
+			a.Repo,
+			paint(color, dim, "-"),
+			paint(color, dim, "-"),
 			art,
 			paint(color, dim, ageStr),
 		})
