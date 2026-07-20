@@ -96,7 +96,6 @@ type snapshotMsg struct {
 	shells   []*Peer
 	usage    string
 	jobs     []*Job
-	escs     []*Escalation
 	live     map[string]bool
 	health   map[string]string
 	daemonSt daemonStatus
@@ -131,15 +130,15 @@ type viewerModel struct {
 	// never collide and a view toggle clears it.
 	pendingKill string
 	// jobs view state
-	jrows          []jobsRow
+	jrows          []*Job
 	rawJobs        []*Job
-	rawEscs        []*Escalation
 	liveSessionSet map[string]bool
 	healthBySlug   map[string]string
 	daemonSt       daemonStatus
 	daemonOK       bool
-	// inline answer input: non-nil while typing an escalation answer
-	answering *Escalation
+	// inline answer input: non-nil while typing a steering message that gets
+	// delivered to a blocked job's zeus pane
+	answering *Job
 	input     string
 }
 
@@ -161,29 +160,16 @@ func tickCmd() tea.Cmd {
 }
 
 // refreshCmd runs discovery off the UI goroutine; it only reads, all model
-// state stays owned by Update. Job/inbox/daemon reads ride along — they're
+// state stays owned by Update. Job/daemon reads ride along — they're
 // cheap file scans next to discovery's ps/tmux walk.
 func refreshCmd() tea.Cmd {
 	return func() tea.Msg {
 		peers, shells := discoverAll()
 		jobs := loadJobs()
-		escs := loadEscalations(jobs)
 		live := liveSessions()
 		st, ok := readDaemonStatus()
 		// cell health shells out to tmux per live cell — computed here, once
 		// per tick, never in the render path
-		byName := map[string]*Peer{}
-		for _, p := range peers {
-			if p.Name != "" {
-				byName[p.Name] = p
-			}
-		}
-		openBySlug := map[string]bool{}
-		for _, e := range escs {
-			if e.Status == "open" {
-				openBySlug[e.JobSlug] = true
-			}
-		}
 		health := map[string]string{}
 		for _, j := range jobs {
 			if j.started() && j.State != "done" && live[cellSession(j)] {
@@ -194,7 +180,7 @@ func refreshCmd() tea.Cmd {
 		}
 		return snapshotMsg{
 			peers: peers, shells: shells, usage: usageHeader(true),
-			jobs: jobs, escs: escs, live: live, health: health,
+			jobs: jobs, live: live, health: health,
 			daemonSt: st, daemonOK: ok,
 		}
 	}
@@ -218,7 +204,7 @@ func (m *viewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loaded = true
 		m.usage = msg.usage
 		m.rawPeers, m.rawShells = msg.peers, msg.shells
-		m.rawJobs, m.rawEscs, m.liveSessionSet = msg.jobs, msg.escs, msg.live
+		m.rawJobs, m.liveSessionSet = msg.jobs, msg.live
 		m.healthBySlug = msg.health
 		m.daemonSt, m.daemonOK = msg.daemonSt, msg.daemonOK
 		m.rebuild()
@@ -395,11 +381,8 @@ func peerKey(p *Peer) string {
 }
 
 // jobRowKey identifies a jobs-view row across snapshots (cursor anchoring).
-func jobRowKey(r jobsRow) string {
-	if r.esc != nil {
-		return "esc:" + r.esc.File
-	}
-	return "job:" + r.job.Slug
+func jobRowKey(j *Job) string {
+	return "job:" + j.Slug
 }
 
 // rebuild derives the display (groups, selectable rows) from the raw snapshot
@@ -408,13 +391,13 @@ func jobRowKey(r jobsRow) string {
 func (m *viewerModel) rebuild() {
 	if m.view == "jobs" {
 		anchor := ""
-		if r := m.jselected(); r != nil {
-			anchor = jobRowKey(*r)
+		if j := m.jselected(); j != nil {
+			anchor = jobRowKey(j)
 		}
-		m.jrows = buildJobRows(m.rawJobs, m.rawEscs, m.healthBySlug)
+		m.jrows = buildJobRows(m.rawJobs)
 		if anchor != "" {
-			for i, r := range m.jrows {
-				if jobRowKey(r) == anchor {
+			for i, j := range m.jrows {
+				if jobRowKey(j) == anchor {
 					m.setCursor(i)
 					return
 				}
@@ -647,7 +630,7 @@ func highlightRow(line string, width int) string {
 
 var viewerHints = paint(true, dim, "j/k move · g/G top/bottom · enter/click open · b branch · dd kill · t group · J jobs · r refresh · q quit")
 
-var jobsHints = paint(true, dim, "j/k move · g/G top/bottom · enter drill/answer · a answer · s start · A artifact · xx abandon · J sessions · r refresh · q quit")
+var jobsHints = paint(true, dim, "j/k move · g/G top/bottom · enter drill · a answer · s start · A artifact · xx abandon · J sessions · r refresh · q quit")
 
 func (m *viewerModel) noteLine() string {
 	if m.note == "" {

@@ -16,13 +16,13 @@ import (
 // one block scalar, a list of prereq maps) parsed by hand — and parsed
 // STRICTLY: any construct the parser doesn't fully understand (unknown or
 // duplicate keys, bad booleans, stray lines, malformed prereqs) marks the job
-// Err. An erred job never runs, and the error is surfaced on the board (and
-// the escalation inbox, once the phase-3 bus exists). Parsing never crashes —
+// Err. An erred job never runs, and the error is surfaced on the board.
+// Parsing never crashes —
 // strict means loud, not fragile.
 type Job struct {
 	Slug string `json:"slug"`
 	File string `json:"file"`
-	Type string `json:"type"` // build | explore | question
+	Type string `json:"type"` // build | info (legacy explore/question parse as info)
 	Repo string `json:"repo"`
 	// Base is the ref the cell's worktree branches from; empty means the
 	// default (origin/main, falling back to main).
@@ -55,11 +55,10 @@ func plutoDir() string {
 	return filepath.Join(home(), "Documents", "pluto")
 }
 
-// started reports whether the job has ever entered a cell. "failed" counts as
-// not started: failure returns the job to carl for respec, and a manual
-// k start is the retry.
+// started reports whether the job has ever entered a cell: "" means never
+// started; "working", "blocked", and "done" all count as started.
 func (j *Job) started() bool {
-	return j.State != "" && j.State != "failed"
+	return j.State == "working" || j.State == "blocked" || j.State == "done"
 }
 
 // stripComment drops an inline "  # ..." comment from a frontmatter value.
@@ -96,7 +95,7 @@ func isFence(s string) bool {
 }
 
 // addErr accumulates parse problems; the first one decides the board's
-// error note, but all of them ride along for the inbox.
+// error note, but all of them ride along for detail views.
 func (j *Job) addErr(msg string) {
 	if j.Err == "" {
 		j.Err = msg
@@ -120,14 +119,12 @@ func (j *Job) boolField(key, val string) bool {
 	}
 }
 
-// validStates is everything kraken itself writes; a hand-mangled state must
-// error rather than silently reading as never-started. "queued" and "failed"
-// are accepted but currently hand-authored only — kraken produces neither yet
-// (failure handling stays with zeus/carl; "queued" is reserved for display).
+// validStates: kraken itself writes working/blocked/done; draft and queued
+// are derived for display and never written to a job file, so hand-authoring
+// either is a dead end rather than a valid starting point. A hand-mangled
+// state must error rather than silently reading as never-started.
 var validStates = map[string]bool{
-	"queued": true, "planning": true, "plan-review": true, "executing": true,
-	"blocked": true, "testing": true, "pr-open": true, "merged": true,
-	"done": true, "failed": true, "abandoned": true,
+	"working": true, "blocked": true, "done": true,
 }
 
 // parseJob parses one job file's bytes. name is the file's base name, used to
@@ -187,8 +184,11 @@ func parseJob(name string, data []byte) *Job {
 			}
 		case "type":
 			switch val {
-			case "build", "explore", "question":
+			case "build", "info":
 				j.Type = val
+			case "explore", "question":
+				// legacy values: existing pluto job files must keep working
+				j.Type = "info"
 			case "":
 			default:
 				j.addErr(fmt.Sprintf("unknown type %q", val))
@@ -312,7 +312,7 @@ func parsePrereqs(j *Job, fm []string, i *int) []Prereq {
 func jobTemplate(slug string) string {
 	return "---\n" +
 		"job: " + slug + " # slug; this file is " + slug + ".job.md\n" +
-		"type: build               # build | explore | question\n" +
+		"type: build               # build | info\n" +
 		"repo: monolith            # substring-matched against existing repos (alphabetic tiebreak);\n" +
 		"                          # no match → job errors, surfaced in the viewer\n" +
 		"# base: origin/main       # optional: ref the worktree branches from (default origin/main, else main)\n" +
@@ -320,7 +320,7 @@ func jobTemplate(slug string) string {
 		"prereqs: []               # - job: other-slug\n" +
 		"                          #   gated: true   → when it completes, you review its outcome\n" +
 		"                          #                   in the TUI and release this job (human gate)\n" +
-		"solo: false               # true → zeus executes alone, no subagent crew\n" +
+		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
 		"auto-approve: false       # true → skip the plan-approval gate (default: plan is gated)\n" +
 		"success: |\n" +
 		"  what \"done\" looks like\n" +
@@ -470,11 +470,24 @@ func unmetPrereqs(j *Job, bySlug map[string]*Job) []Prereq {
 	return unmet
 }
 
-// displayState derives the job-board state: the kraken-managed state when
-// started, otherwise draft/ready/waiting shaped by the ready flag and DAG.
+// displayState derives the job-board's five-state model: a terminal "done"
+// wins even over a parse error (a job that finished successfully before
+// picking up an unrelated error still shows done). Otherwise an erred job
+// (even one that's Ready) surfaces as "draft" — the board's draft column
+// shows the error detail. A kraken-managed State always wins next. Otherwise
+// !Ready is "draft", and everything else — unmet prereqs, a gated prereq
+// waiting on human release, or a ready job with no cell yet — collapses to
+// "queued": ready-but-not-yet-startable is still just queued.
+//
+// Shared precedence (kept in lockstep with deriveState in status.go): done
+// wins first, then an error reads as draft, then any kraken-managed state
+// wins, then !Ready reads as draft, else queued.
 func displayState(j *Job, bySlug map[string]*Job) string {
+	if j.State == "done" {
+		return "done"
+	}
 	if j.Err != "" {
-		return "error"
+		return "draft"
 	}
 	if j.State != "" {
 		return j.State
@@ -482,20 +495,28 @@ func displayState(j *Job, bySlug map[string]*Job) string {
 	if !j.Ready {
 		return "draft"
 	}
-	if unmet := unmetPrereqs(j, bySlug); len(unmet) > 0 {
-		if unmet[0].Gated {
-			return "gated:" + unmet[0].Job
-		}
-		return "waits:" + unmet[0].Job
+	return "queued"
+}
+
+// startable reports whether j is ready for kraken to auto-start into a cell
+// right now: no error, ready, never started, every prereq met, and no prereq
+// is gated. A gated prereq — even one whose dep is done — parks the job for a
+// human to release by hand (k start / the board); startable() must return
+// false there so the daemon never auto-starts a gated job, matching the
+// pre-five-state gate-review-never-auto-starts rule.
+func startable(j *Job, bySlug map[string]*Job) bool {
+	if j.Err != "" || !j.Ready || j.State != "" {
+		return false
 	}
-	// all prereqs done, but a human gate parks the job until carl reviews the
-	// prereq's outcome and releases it (k start is the release in phase 2)
+	if len(unmetPrereqs(j, bySlug)) > 0 {
+		return false
+	}
 	for _, p := range j.Prereqs {
 		if p.Gated {
-			return "gate-review"
+			return false
 		}
 	}
-	return "ready"
+	return true
 }
 
 // --- state write-back ---

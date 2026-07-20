@@ -4,9 +4,9 @@ import UIKit
 
 // MARK: - markdown → HTML, ported from web/app.js's esc()/inlineMD()/renderMD()
 //
-// Shared by ArtifactView (.md artifacts, full-screen) and any inline escalation
-// body (JobDetailView's EscalationCard, AnswerView's picker) — one renderer,
-// one dark shell, so a markdown body reads the same wherever it's opened.
+// Shared by ArtifactView (.md artifacts, full-screen) and any inline body
+// text (JobDetailView's DetailCard) — one renderer, one dark shell, so a
+// markdown body reads the same wherever it's opened.
 //
 // Escaping happens FIRST inside inlineMarkdown, exactly like esc() does in
 // app.js's inlineMD() — the inline-pattern regexes below only ever run over
@@ -382,9 +382,8 @@ struct MarkdownWebView: UIViewRepresentable {
 
 /// Convenience wrapper owning its own height state: drop `MarkdownBody(markdown:)`
 /// into any layout and it sizes itself to its content. `maxHeight`, when set,
-/// clamps the frame and enables internal scrolling — used for compact previews
-/// (AnswerView's escalation picker) as opposed to a fully expanded card
-/// (JobDetailView's open/expanded escalation).
+/// clamps the frame and enables internal scrolling — used for compact
+/// previews as opposed to a fully expanded card (JobDetailView's DetailCard).
 struct MarkdownBody: View {
     let markdown: String
     var maxHeight: CGFloat?

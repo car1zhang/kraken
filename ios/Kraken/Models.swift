@@ -53,7 +53,13 @@ struct WebJob: Decodable, Identifiable {
     let cell: String?
     let live: Bool
     let prereqs: [WebPrereq]?
-    let escalations: [WebEsc]?
+    // The cell's last words / blocked reason — freeform prose, markdown-rendered.
+    let detail: String?
+    // A pending interactive question (e.g. an AskUserQuestion tool call)
+    // blocking the cell, if any.
+    let question: WebQuestion?
+    // Live subagents currently working the cell, if any.
+    let roster: [WebRosterAgent]?
     let artifacts: [WebArtifact]?
     let health: String?
     let mtime: Int64
@@ -67,15 +73,51 @@ struct WebPrereq: Decodable {
     let done: Bool
 }
 
-// webEsc carries the escalation body (the board-list Escalation type omits
-// it); mtime is the escalation file's modtime as a unix seconds int64.
-struct WebEsc: Decodable {
-    let file: String
-    let status: String
-    let category: String
-    let title: String
-    let body: String
-    let mtime: Int64
+// WebQuestion mirrors job.go's pending-question shape: one tool call id and
+// one or more questions, each with its own header and answer options.
+struct WebQuestion: Decodable {
+    let toolUseID: String
+    let questions: [WebQuestionItem]
+
+    enum CodingKeys: String, CodingKey {
+        case toolUseID = "tool_use_id"
+        case questions
+    }
+}
+
+struct WebQuestionItem: Decodable {
+    let question: String
+    let header: String
+    // `multi_select` follows the same omitempty-is-Optional convention as
+    // Prereq.gated above (a Go `false` may be entirely absent on the wire),
+    // so it's decoded defensively rather than via the synthesized initializer.
+    let multiSelect: Bool
+    let options: [WebQuestionOption]
+
+    enum CodingKeys: String, CodingKey {
+        case question, header
+        case multiSelect = "multi_select"
+        case options
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        question = try c.decode(String.self, forKey: .question)
+        header = try c.decode(String.self, forKey: .header)
+        multiSelect = try c.decodeIfPresent(Bool.self, forKey: .multiSelect) ?? false
+        options = try c.decode([WebQuestionOption].self, forKey: .options)
+    }
+}
+
+struct WebQuestionOption: Decodable {
+    let label: String
+    let description: String
+}
+
+// WebRosterAgent mirrors one live subagent entry in job.go's roster list.
+struct WebRosterAgent: Decodable {
+    let name: String
+    let model: String
 }
 
 struct WebArtifact: Decodable, Identifiable {
@@ -170,9 +212,12 @@ struct SlugRequest: Encodable {
     let slug: String
 }
 
-struct AnswerRequest: Encodable {
+// QuestionAnswerRequest mirrors POST /api/question, which decodes the same
+// webReq{slug,text} shape as every other board action (queue/done/steer) —
+// the answer is carried as `text`, a single "1"-"9" digit string, not a
+// separate `digit` field the Go handler doesn't know about.
+struct QuestionAnswerRequest: Encodable {
     let slug: String
-    let file: String
     let text: String
 }
 

@@ -114,7 +114,6 @@ struct JobDetailView: View {
     @State private var isBusy = false
     @State private var errorMessage: String?
     @State private var showingKillConfirm = false
-    @State private var showingAnswer = false
     @State private var showingEdit = false
     @State private var showingSteer = false
     @State private var showingSteerToast = false
@@ -122,7 +121,6 @@ struct JobDetailView: View {
 
     private var column: BoardColumn { BoardTheme.column(for: job) }
     private var isUnhealthy: Bool { !(job.health ?? "").isEmpty }
-    private var openEscalations: [WebEsc] { (job.escalations ?? []).filter { $0.status == "open" } }
     private var isEditable: Bool {
         !job.live && [BoardColumn.draft, .queued, .done].contains(column)
     }
@@ -133,18 +131,19 @@ struct JobDetailView: View {
         return !(health.contains("is gone") || health.contains("startup prompt"))
     }
     // webKill 409s unless the job is actually started and not done; mirrors
-    // app.js's `["working", "blocked", "review"].includes(col) && j.live`.
+    // app.js's `["working", "blocked"].includes(col) && j.live`.
     private var canKill: Bool {
-        job.live && [BoardColumn.working, .blocked, .review].contains(column)
+        job.live && [BoardColumn.working, .blocked].contains(column)
     }
     // webQueue 409s on an unparseable job even though it renders in draft.
     private var canQueue: Bool {
         column == .draft && (job.err ?? "").isEmpty
     }
-    // webAnswer 409s unless displayState is blocked/plan-review, both of
-    // which map to .blocked here.
-    private var canAnswer: Bool {
-        column == .blocked && !openEscalations.isEmpty
+    // review was folded into blocked — mark-done now lives there, alongside
+    // the inline pending-question buttons rendered in the Form itself (see
+    // the Question section below — answering is a direct tap, not a sheet).
+    private var canMarkDone: Bool {
+        column == .blocked
     }
     // Same visibility rule as Kill minus the column restriction: any live
     // cell can take free-text steering, regardless of which of the three
@@ -153,7 +152,7 @@ struct JobDetailView: View {
         job.live
     }
     private var hasAnyAction: Bool {
-        canQueue || canRetry || column == .review || canAnswer || canSteer || isEditable || canKill
+        canQueue || canRetry || canMarkDone || canSteer || isEditable || canKill
     }
 
     var body: some View {
@@ -206,10 +205,41 @@ struct JobDetailView: View {
                         }
                     }
                 }
-                if let escalations = job.escalations, !escalations.isEmpty {
-                    kSection("Escalations") {
-                        ForEach(escalations, id: \.file) { e in
-                            EscalationCard(e: e)
+                if let roster = job.roster, !roster.isEmpty {
+                    kSection("Roster") {
+                        ForEach(Array(roster.enumerated()), id: \.offset) { _, agent in
+                            Text("\(agent.name) (\(agent.model))")
+                                .font(.data(12))
+                                .foregroundStyle(KTheme.text2)
+                        }
+                    }
+                }
+                if let detail = job.detail, !detail.isEmpty {
+                    kSection("Detail") {
+                        DetailCard(text: detail, stateColor: BoardTheme.color(forState: job.state))
+                    }
+                }
+                if let question = job.question {
+                    kSection("Question") {
+                        // Tappable option buttons only work for a single,
+                        // single-select question: the server answers with one
+                        // digit keystroke, so a multi-select or multi-question
+                        // prompt can't be reduced to that (and the server now
+                        // rejects the attempt). Those render read-only, with a
+                        // pointer to answer from the pane instead.
+                        if question.questions.count == 1, let only = question.questions.first, !only.multiSelect {
+                            QuestionCard(item: only) { digit in
+                                answerQuestion(digit: digit)
+                            }
+                        } else {
+                            ForEach(Array(question.questions.enumerated()), id: \.offset) { _, q in
+                                QuestionSummary(item: q)
+                            }
+                            Text("answer in the pane — k o \(job.cell ?? job.slug)")
+                                .font(.voice(11))
+                                .foregroundStyle(KTheme.text2)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
+                                .listRowBackground(Color.clear)
                         }
                     }
                 }
@@ -239,8 +269,12 @@ struct JobDetailView: View {
             // a deep link like kraken://job/<slug>/steer lands here with the
             // follow-on action still pending — consume it once
             switch router.pendingJobAction {
-            case .answer where canAnswer:
-                showingAnswer = true
+            case .answer:
+                // Answering is now an inline tap on the Question section's
+                // option buttons (see body) rather than a separate sheet —
+                // this deep link just needs the detail view open, which it
+                // already is by the time onAppear runs.
+                break
             case .steer where canSteer:
                 showingSteer = true
             case .artifact(let name):
@@ -268,15 +302,6 @@ struct JobDetailView: View {
                 runAction { try await APIClient.shared.killJob(baseURL: baseURL, slug: job.slug) }
             }
             Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $showingAnswer) {
-            NavigationStack {
-                AnswerView(job: job, baseURL: baseURL) {
-                    showingAnswer = false
-                    onUpdate()
-                    dismiss()
-                }
-            }
         }
         .sheet(isPresented: $showingEdit) {
             NavigationStack {
@@ -338,7 +363,7 @@ struct JobDetailView: View {
                     .accessibilityLabel("Retry")
                     .tint(KTheme.revealed)
                 }
-                if column == .review {
+                if canMarkDone {
                     Button {
                         runAction { try await APIClient.shared.markDone(baseURL: baseURL, slug: job.slug) }
                     } label: {
@@ -347,20 +372,6 @@ struct JobDetailView: View {
                     .labelStyle(.iconOnly)
                     .accessibilityLabel("Mark Done")
                     .tint(KTheme.solved)
-                }
-                if canAnswer {
-                    Button {
-                        showingAnswer = true
-                    } label: {
-                        Label("Answer", systemImage: "bubble.left.fill")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Answer")
-                    .tint(KTheme.counter)
-                    // Answer is the primary action when a job is blocked —
-                    // carl flagged it as too small, so make it prominent
-                    // (filled) and it stands out from the bordered siblings.
-                    .buttonStyle(.borderedProminent)
                 }
                 if canSteer {
                     Button {
@@ -438,185 +449,96 @@ struct JobDetailView: View {
             showingSteerToast = false
         }
     }
-}
 
-/// One escalation, styled like the web UI's answer modal (title bold sans,
-/// category tag in mono counter-color, body markdown-rendered). Open
-/// escalations stay expanded and prominent (counterSoft row fill, counter
-/// category tag — no left border; carl: "escalations don't need that red
-/// line"); answered/closed ones collapse to a single dim row by default —
-/// tap to expand and read the resolved body.
-private struct EscalationCard: View {
-    let e: WebEsc
-
-    @State private var expanded: Bool
-
-    init(e: WebEsc) {
-        self.e = e
-        _expanded = State(initialValue: e.status == "open")
-    }
-
-    private var isOpen: Bool { e.status == "open" }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                if !isOpen { expanded.toggle() }
-            } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(e.category)
-                                .font(.data(10, weight: .semibold))
-                                .foregroundStyle(isOpen ? KTheme.counter : KTheme.text2)
-                            if isOpen {
-                                Text("open").font(.data(9)).foregroundStyle(KTheme.counter)
-                            } else {
-                                Text("answered").font(.data(9)).foregroundStyle(KTheme.text2)
-                            }
-                        }
-                        Text(e.title)
-                            .font(.voice(13, weight: isOpen ? .semibold : .regular))
-                            .foregroundStyle(isOpen ? KTheme.text : KTheme.text2)
-                    }
-                    Spacer()
-                    if !isOpen {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.voice(11))
-                            .foregroundStyle(KTheme.text2)
-                    }
-                }
-                .padding(10)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isOpen)
-
-            if expanded {
-                MarkdownBody(markdown: e.body)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
-            }
-        }
-        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-        .listRowBackground(isOpen ? KTheme.counterSoft : Color.clear)
+    // Tapping an option in the Question section sends its 1-based index
+    // within that question's own options — same busy/error/dismiss handling
+    // as every other action.
+    private func answerQuestion(digit: Int) {
+        runAction { try await APIClient.shared.answerQuestion(baseURL: baseURL, slug: job.slug, digit: digit) }
     }
 }
 
-/// The blocked → working move: pick an open escalation, compose an answer,
-/// send. Embedded here (rather than its own file) since it's only ever
-/// reached from JobDetailView.
-private struct AnswerView: View {
-    let job: WebJob
-    let baseURL: String
-    var onSent: () -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @Environment(DraftStore.self) private var draftStore
-    @FocusState private var textFocused: Bool
-    @State private var selectedFile: String?
-    @State private var text = ""
-    @State private var isBusy = false
-    @State private var errorMessage: String?
-
-    private var openEscalations: [WebEsc] { (job.escalations ?? []).filter { $0.status == "open" } }
-
-    // Keyed per-escalation (not per-job) — carl may draft answers to
-    // several open escalations before sending any of them, and each
-    // should keep its own text independently.
-    private func draftKey(for file: String) -> String { "answer:\(file)" }
+/// The `detail` field: the cell's last words / blocked reason, rendered
+/// as a markdown card in the state color — replaces the old escalation body
+/// card now that escalations are gone from the wire.
+private struct DetailCard: View {
+    let text: String
+    let stateColor: Color
 
     var body: some View {
-        Form {
-            kSection("Open escalations") {
-                ForEach(openEscalations, id: \.file) { e in
+        MarkdownBody(markdown: text)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardBackground(stateColor: stateColor)
+            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+            .listRowBackground(Color.clear)
+    }
+}
+
+/// One pending question (header + prose + option buttons). Tapping an option
+/// answers with its 1-based index within THIS question's own options list —
+/// there's no free-text composer anymore, the tap IS the answer, sent
+/// straight to POST /api/question.
+private struct QuestionCard: View {
+    let item: WebQuestionItem
+    var onSelect: (Int) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(item.header)
+                .font(.data(10, weight: .semibold))
+                .foregroundStyle(KTheme.counter)
+            Text(item.question)
+                .font(.voice(13, weight: .semibold))
+                .foregroundStyle(KTheme.text)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(item.options.enumerated()), id: \.offset) { index, option in
                     Button {
-                        selectedFile = e.file
+                        onSelect(index + 1)
                     } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(e.category).font(.data(10, weight: .semibold)).foregroundStyle(KTheme.counter)
-                                Text(e.title).font(.voice(13, weight: .semibold)).foregroundStyle(KTheme.text)
-                                Spacer()
-                                if selectedFile == e.file || (selectedFile == nil && e.file == openEscalations.first?.file) {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(KTheme.accent)
-                                }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.label)
+                                .font(.voice(13, weight: .semibold))
+                                .foregroundStyle(KTheme.text)
+                            if !option.description.isEmpty {
+                                Text(option.description)
+                                    .font(.voice(11))
+                                    .foregroundStyle(KTheme.text2)
                             }
-                            MarkdownBody(markdown: e.body, maxHeight: 180)
                         }
                         .padding(10)
-                        .overlay(Rectangle().stroke(selectedFile == e.file ? KTheme.counter : KTheme.hairline, lineWidth: 1))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-                    .listRowBackground(Color.clear)
                 }
             }
-            kSection("Answer") {
-                TextEditor(text: $text)
-                    .focused($textFocused)
-                    .scrollContentBackground(.hidden)
-                    .kField(focused: textFocused, minHeight: 120)
-                    .listRowBackground(Color.clear)
-            }
-            if let errorMessage {
-                kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
-            }
         }
-        .kListStyle()
-        .navigationTitle("Answer \(job.slug)")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                SheetCloseButton(label: "Cancel") { dismiss() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button {
-                    send()
-                } label: {
-                    Label("Send", systemImage: "paperplane.fill")
-                }
-                .labelStyle(.iconOnly)
-                .accessibilityLabel("Send")
-                .buttonStyle(.borderedProminent)
-                .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .disabled(isBusy)
-        .onAppear {
-            if selectedFile == nil { selectedFile = openEscalations.first?.file }
-        }
-        // Selecting a different escalation swaps in ITS draft (each open
-        // escalation keeps its own text); every keystroke saves the current
-        // one, so switching away and back — or dismissing the sheet
-        // entirely — never loses what was typed.
-        .onChange(of: selectedFile) {
-            text = selectedFile.map { draftStore.get(draftKey(for: $0)) } ?? ""
-        }
-        .onChange(of: text) {
-            if let selectedFile { draftStore.set(draftKey(for: selectedFile), text) }
-        }
+        .padding(10)
+        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        .listRowBackground(KTheme.counterSoft)
     }
+}
 
-    private func send() {
-        guard let file = selectedFile ?? openEscalations.first?.file else { return }
-        isBusy = true
-        errorMessage = nil
-        Task {
-            do {
-                try await APIClient.shared.answer(baseURL: baseURL, slug: job.slug, file: file, text: text)
-                isBusy = false
-                draftStore.clear(draftKey(for: file))
-                text = ""
-                onSent()
-            } catch {
-                isBusy = false
-                // A failed send (409, etc.) keeps the draft — only a
-                // confirmed post clears it.
-                errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
-            }
+/// A multi-select or multi-question question's header + prose, read-only —
+/// no option buttons, since a single digit keystroke can't answer it (see
+/// the count/multiSelect gate above QuestionCard's call site).
+private struct QuestionSummary: View {
+    let item: WebQuestionItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(item.header)
+                .font(.data(10, weight: .semibold))
+                .foregroundStyle(KTheme.counter)
+            Text(item.question)
+                .font(.voice(13, weight: .semibold))
+                .foregroundStyle(KTheme.text)
         }
+        .padding(10)
+        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        .listRowBackground(KTheme.counterSoft)
     }
 }
 

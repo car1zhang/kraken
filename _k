@@ -13,10 +13,11 @@ _k() {
         'n:new shell window, optionally running a command'
         'c:new named claude window with a prompt'
         'j:job board (every *.job.md in pluto)'
-        'start:start a job manually (worktree + cell + crew)'
+        'start:start a job manually (worktree + cell + zeus)'
         'reap:tear down cells whose PR merged'
         'done:manually complete a started job'
         'daemon:run the scheduler loop in the foreground'
+        'migrate:migrate jobs stuck in the old crew model states (terminal -> done, in-flight -> torn down)'
         'help:show help'
     )
 

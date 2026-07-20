@@ -12,42 +12,33 @@ import (
 
 // --- k j ---
 
-// jobStateColor maps job-board states to the shared palette. Derived states
-// ("waits:x", "gated:x") color by their prefix.
+// jobStateColor maps the five-state job board model to the shared palette.
 func jobStateColor(state string) string {
-	switch {
-	case state == "executing", state == "planning":
+	switch state {
+	case "working":
 		return green
-	case state == "ready", state == "queued":
+	case "queued":
 		return cyan
-	case state == "pr-open", state == "testing", state == "merged", state == "plan-review", state == "blocked":
+	case "blocked":
 		return yellow
-	case state == "failed", state == "error":
-		return red
-	case state == "gate-review", strings.HasPrefix(state, "waits:"), strings.HasPrefix(state, "gated:"):
-		return magenta
 	default: // draft, done
 		return gray
 	}
 }
 
-// stateRank orders the job board: live cells first, then actionable, then
-// paperwork. Within a rank, loadJobs' slug order holds.
+// stateRank orders the job board: live cells first (working/blocked need
+// attention), then queued, then draft paperwork, then done. Within a rank,
+// loadJobs' slug order holds.
 func stateRank(state string) int {
-	switch {
-	case state == "executing", state == "planning", state == "plan-review",
-		state == "blocked", state == "testing", state == "pr-open", state == "merged":
+	switch state {
+	case "working", "blocked":
 		return 0
-	case state == "ready", state == "queued", state == "gate-review":
+	case "queued":
 		return 1
-	case strings.HasPrefix(state, "waits:"), strings.HasPrefix(state, "gated:"):
+	case "draft":
 		return 2
-	case state == "draft":
-		return 3
-	case state == "error", state == "failed":
-		return 4
 	default: // done
-		return 5
+		return 3
 	}
 }
 

@@ -250,6 +250,71 @@ func TestClipLine(t *testing.T) {
 	}
 }
 
+// TestBuildJobLinesFiveStates renders one job per board state (draft ·
+// queued · working · blocked · done) and checks each state label shows up
+// as its own selectable row, keyed to its position in m.jrows.
+func TestBuildJobLinesFiveStates(t *testing.T) {
+	jobs := []*Job{
+		{Slug: "d1", Type: "build", Ready: false}, // never started, not ready
+		{Slug: "q1", Type: "build", Ready: true},  // ready, never started
+		{Slug: "w1", Type: "build", Ready: true, State: "working"},
+		{Slug: "b1", Type: "build", Ready: true, State: "blocked"},
+		{Slug: "done1", Type: "build", Ready: true, State: "done"},
+	}
+	m := &viewerModel{
+		view: "jobs", loaded: true, width: 100, height: 40,
+		jrows: jobs, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
+	}
+	lines := m.buildJobLines()
+	var joined strings.Builder
+	rows := 0
+	for _, l := range lines {
+		joined.WriteString(l.text)
+		joined.WriteString("\n")
+		if l.row >= 0 {
+			rows++
+		}
+	}
+	text := joined.String()
+	for _, want := range []string{"draft", "queued", "working", "blocked", "done"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("board missing state %q:\n%s", want, text)
+		}
+	}
+	if rows != len(jobs) {
+		t.Errorf("want %d selectable rows, got %d", len(jobs), rows)
+	}
+	// row indexes must map 1:1 back onto m.jrows in order
+	idx := 0
+	for _, l := range lines {
+		if l.row < 0 {
+			continue
+		}
+		if l.row != idx {
+			t.Errorf("row %d text %q has viewLine.row = %d, want %d", idx, l.text, l.row, idx)
+		}
+		idx++
+	}
+}
+
+func TestJobRowKeyAnchorsCursorAcrossRefresh(t *testing.T) {
+	a := &Job{Slug: "a", Type: "build", Ready: true}
+	b := &Job{Slug: "b", Type: "build", Ready: true}
+	m := &viewerModel{
+		view: "jobs", loaded: true, width: 100, height: 40,
+		rawJobs: []*Job{a, b}, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
+	}
+	m.rebuild()
+	m.setCursor(1) // b
+	// next snapshot: same jobs, new *Job values (as a fresh loadJobs() would
+	// produce) — the cursor must still follow slug "b"
+	m.rawJobs = []*Job{{Slug: "a", Type: "build", Ready: true}, {Slug: "b", Type: "build", Ready: true}}
+	m.rebuild()
+	if m.cursor != 1 || m.jselected().Slug != "b" {
+		t.Errorf("cursor should follow job b, got %d (%v)", m.cursor, m.jselected())
+	}
+}
+
 func TestDDChord(t *testing.T) {
 	d := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
 	j := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}

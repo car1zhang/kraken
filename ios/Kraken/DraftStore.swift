@@ -1,8 +1,8 @@
 import Observation
 
 /// In-memory-only composer drafts, keyed by a stable identity per composer
-/// (e.g. "answer:<escalation-file>", "steer:<slug>", "send:<pane>",
-/// "shell:<pane>"). Deliberately not persisted to disk — carl asked for "in
+/// (e.g. "steer:<slug>", "send:<pane>", "shell:<pane>"). Deliberately not
+/// persisted to disk — carl asked for "in
 /// memory," and drafts clearing on app kill is expected/fine — but a single
 /// instance lives above every sheet and tab (owned by KrakenApp, injected
 /// via `.environment(draftStore)`), so it survives dismissing a sheet,

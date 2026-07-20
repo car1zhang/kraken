@@ -12,12 +12,13 @@ import (
 )
 
 // k daemon — the one long-lived kraken process (launchd-managed, installed by
-// make install). It hosts the scheduler poll: queue ready jobs under the cell
-// cap, watch PRs for auto-reap, watch zeus panes for stalls (poking hermes),
-// watch escalation inboxes (notifying carl), and write a heartbeat the viewer
-// renders. It owns no state that can't be re-derived from files + discovery —
-// the in-memory dedup maps only suppress duplicate notifications, and losing
-// them on restart merely re-notifies once.
+// make install). It hosts the scheduler poll: queue startable jobs under the
+// cell cap, derive each started job's working/blocked state from live pod
+// activity, watch cells for unhealthy zeuses (auto-retrying with backoff),
+// watch PRs for auto-reap, and write a heartbeat the viewer renders. It owns
+// no state that can't be re-derived from files + discovery — the in-memory
+// dedup maps only suppress duplicate notifications, and losing them on
+// restart merely re-notifies once.
 
 const (
 	cellCap        = 5
@@ -25,9 +26,8 @@ const (
 	// PR polling is throttled to every reapEvery-th tick (~1 min): gh calls
 	// per open cell are the daemon's only rate-limited traffic.
 	reapEvery = 4
-	// a zeus sitting in "waiting" this long with no open escalation smells
-	// stalled; "question" pokes immediately.
-	stallAfter  = 5 * time.Minute
+	// backoff between auto-retry pokes of the same stalled cell, and between
+	// re-notifications of the same standing health complaint.
 	repokeAfter = 10 * time.Minute
 )
 
@@ -57,7 +57,7 @@ func processAlive(pid int) bool {
 }
 
 // notify fires a macOS notification; failures are logged, never fatal — the
-// inbox itself is the durable signal.
+// board itself is the durable signal.
 func notify(title, msg string) {
 	script := fmt.Sprintf("display notification %q with title %q", truncateOneLine(msg, 120), title)
 	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
@@ -70,8 +70,8 @@ func dlog(format string, a ...any) {
 }
 
 type daemon struct {
-	notified map[string]int64 // escalation path / err key → mtime notified
-	poked    map[string]int64 // job slug + zeus status → unix time poked
+	notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
+	poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
 	tickN    int
 }
 
@@ -132,8 +132,8 @@ func (d *daemon) tick() (int, error) {
 		bySlug[j.Slug] = j
 	}
 
-	// unparseable jobs: the "inbox gets an error" contract — one notification
-	// per file+mtime, the board carries the detail
+	// unparseable jobs: one notification per file+mtime, the board carries
+	// the detail
 	for _, j := range jobs {
 		if j.Err == "" {
 			continue
@@ -145,133 +145,122 @@ func (d *daemon) tick() (int, error) {
 		}
 	}
 
-	escs := loadEscalations(jobs)
-	for _, e := range escs {
-		if e.Status != "open" {
-			continue
-		}
-		if mt := e.ModTime.Unix(); d.notified[e.File] != mt {
-			notify("kraken ⚑ "+e.JobSlug, e.Title)
-			d.notified[e.File] = mt
-			dlog("escalation %s: %s", e.JobSlug, e.Title)
-		}
-	}
-	for _, line := range syncStatesFromInbox(jobs, escs) {
-		dlog("%s", line)
-	}
-
-	// stall watch: zeus panes in question (immediately) or long-waiting (with
-	// nothing already escalated) get hermes poked to investigate
-	openBySlug := map[string]bool{}
-	for _, e := range escs {
-		if e.Status == "open" {
-			openBySlug[e.JobSlug] = true
-		}
-	}
 	all, _ := orderAll(discoverAll())
-	peerByName := map[string]*Peer{}
-	for _, p := range all {
-		if p.Name != "" {
-			peerByName[p.Name] = p
-		}
-	}
+	times := liveSessionTimes()
 	now := time.Now()
 	cells := 0
 	for _, j := range jobs {
-		if !j.started() || j.State == "done" || !live[cellSession(j)] {
+		if !j.started() || j.State == "done" {
 			continue
 		}
-		cells++
-		// hermes' completion marker: the crew says the job is finished, so
-		// park it in the review column for carl's final drag — jobs with no
-		// PR (artifact-only, explore) have no other route out of "working"
-		if _, err := os.Stat(cellDoneMarker(j)); err == nil &&
-			(j.State == "executing" || j.State == "planning" || j.State == "blocked") {
-			if err := writeJobState(j, "testing"); err == nil {
-				notify("kraken ✓ "+j.Slug, "crew reports complete — review and drag to done")
-				dlog("%s: done marker → review column", j.Slug)
-			}
-			continue
+		isLive := live[cellSession(j)]
+		if isLive {
+			cells++
 		}
-		if openBySlug[j.Slug] || j.Err != "" {
-			continue // already waiting on carl, or not safe to touch
-		}
-		zeus, hermes := cellAgents(j, all)
-		if zeus == nil || hermes == nil {
-			continue
-		}
-		// health first: an API-errored, half-dead, or silently-idle cell needs
-		// carl's retry, not a hermes poke (hermes may be the broken half).
-		// Idle-stall dedup: the reason embeds the rounded idle duration, so
-		// key on the prefix or every tick re-notifies with a fresh number.
-		if reason := cellHealth(j, all); reason != "" {
-			key := "health:" + j.Slug + "|" + strings.SplitN(reason, " idle ", 2)[0]
-			if d.notified[key] == 0 {
-				notify("kraken ⚠ "+j.Slug, reason+" — auto-retrying; also on the board")
-				d.notified[key] = now.Unix()
-				dlog("unhealthy %s: %s", j.Slug, reason)
-			}
-			// auto-retry retryable stalls with backoff: API overload comes in
-			// waves, and a manual retry during one just eats the next 529 —
-			// keep nudging every repokeAfter until a turn survives
-			if !strings.Contains(reason, "is gone") {
-				rkey := "retry:" + j.Slug
-				if now.Unix()-d.poked[rkey] >= int64(repokeAfter/time.Second) {
-					if err := retryCell(j); err != nil {
-						dlog("auto-retry %s failed: %v", j.Slug, err)
-					} else {
-						d.poked[rkey] = now.Unix()
-						dlog("auto-retried %s (%s)", j.Slug, reason)
+
+		// health first, independent of state derivation below: an API-errored
+		// or half-dead cell needs carl's retry regardless of what state it
+		// reads as. Idle-stall dedup: the reason embeds the rounded idle
+		// duration, so key on the prefix or every tick re-notifies with a
+		// fresh number.
+		if isLive {
+			if reason := cellHealth(j, all); reason != "" {
+				key := "health:" + j.Slug + "|" + strings.SplitN(reason, " idle ", 2)[0]
+				if d.notified[key] == 0 {
+					notify("kraken ⚠ "+j.Slug, reason+" — auto-retrying; also on the board")
+					d.notified[key] = now.Unix()
+					dlog("unhealthy %s: %s", j.Slug, reason)
+				}
+				// auto-retry retryable stalls with backoff: API overload comes
+				// in waves, and a manual retry during one just eats the next
+				// 529 — keep nudging every repokeAfter until a turn survives
+				if !strings.Contains(reason, "is gone") {
+					rkey := "retry:" + j.Slug
+					if now.Unix()-d.poked[rkey] >= int64(repokeAfter/time.Second) {
+						if err := retryCell(j); err != nil {
+							dlog("auto-retry %s failed: %v", j.Slug, err)
+						} else {
+							d.poked[rkey] = now.Unix()
+							dlog("auto-retried %s (%s)", j.Slug, reason)
+						}
 					}
 				}
 			}
-			continue
 		}
-		// question prompts still route through hermes: it can often answer
-		// from plan context without waking carl
-		if zeus.Status != "question" {
-			continue
-		}
-		key := j.Slug + "|" + zeus.Status
-		if last := d.poked[key]; last > 0 && now.Unix()-last < int64(repokeAfter/time.Second) {
-			continue
-		}
-		msg := fmt.Sprintf("zeus looks blocked (status: %s) — investigate with k r %s and write an escalation if carl is needed", zeus.Status, zeusName(j))
-		if err := sendMessage(hermes, msg); err != nil {
-			dlog("poke hermes for %s failed: %v", j.Slug, err)
-			continue
-		}
-		d.poked[key] = now.Unix()
-		dlog("poked hermes for %s (zeus %s)", j.Slug, zeus.Status)
-	}
 
-	// PR watch (throttled): reap merged cells
-	if d.tickN%reapEvery == 0 {
-		for _, j := range jobs {
-			if j.Err != "" || !j.started() || j.State == "done" {
+		// state derivation: working ⇄ blocked, driven off pod activity.
+		repo, err := resolveRepo(j.Repo)
+		if err != nil {
+			// surfaces on the board as repo?; notify once per file version
+			key := "repo:" + j.File
+			if mt := j.ModTime.Unix(); d.notified[key] != mt {
+				notify("kraken: job error", j.Slug+": "+err.Error())
+				d.notified[key] = mt
+			}
+			continue
+		}
+		wt := existingWorktree(j, repo)
+		if wt == "" {
+			wt = cellWorktree(j, repo) // no worktree yet/gone: podLastActivity degrades to zero mtime
+		}
+		lastActivity := podLastActivity(wt)
+		// a live session is at least as fresh as its own creation — covers
+		// pre-first-transcript startup and stale transcripts left over from a
+		// previous run at the same worktree path
+		if created, ok := times[cellSession(j)]; ok && created.After(lastActivity) {
+			lastActivity = created
+		}
+		st := deriveState(j, isLive, lastActivity, now)
+		// the dedup key must clear whenever the DERIVED state reads as
+		// working, not only when the daemon itself performs the write below:
+		// web/TUI actions (answering a question, steering, /send) write
+		// "working" directly, so gating the delete on "a write happened here"
+		// left it permanently stuck after the first such action — every later
+		// block on the same job would then never notify again.
+		if st == "working" {
+			delete(d.notified, "blocked:"+j.Slug)
+		}
+		if (st == "working" || st == "blocked") && st != j.State {
+			prev := j.State
+			if err := writeJobState(j, st); err != nil {
+				dlog("write state %s for %s failed: %v", st, j.Slug, err)
 				continue
 			}
-			if j.State == "pr-open" || j.State == "executing" || j.State == "testing" {
-				msg, changed := reapOne(j, live)
-				if changed {
-					dlog("%s: %s", j.Slug, msg)
-					if j.State == "merged" {
-						notify("kraken ✓ "+j.Slug, "PR merged — review and drag to done")
-					}
+			dlog("%s: %s → %s", j.Slug, prev, st)
+			if st == "blocked" {
+				key := "blocked:" + j.Slug
+				if d.notified[key] == 0 {
+					notify("kraken ⏸ "+j.Slug, "blocked — see the board")
+					d.notified[key] = now.Unix()
 				}
 			}
 		}
 	}
 
-	// queue: start ready jobs under the cap. displayState "ready" is exactly
-	// the auto-startable condition — gate-review (human release) never
-	// auto-starts, matching the human-gate decision.
+	// PR watch (throttled): reap merged build cells
+	if d.tickN%reapEvery == 0 {
+		for _, j := range jobs {
+			if j.Err != "" || j.Type != "build" || !j.started() || j.State == "done" {
+				continue
+			}
+			msg, changed := reapOne(j, live)
+			if changed {
+				dlog("%s: %s", j.Slug, msg)
+				if j.State == "done" {
+					notify("kraken ✓ "+j.Slug, "PR merged — done")
+				}
+			}
+		}
+	}
+
+	// queue: start startable jobs under the cap. startCell writes "working"
+	// itself once the cell is up.
 	var firstErr error
 	for _, j := range jobs {
 		if cells >= cellCap {
 			break
 		}
-		if displayState(j, bySlug) != "ready" {
+		if !startable(j, bySlug) {
 			continue
 		}
 		repo, err := resolveRepo(j.Repo)

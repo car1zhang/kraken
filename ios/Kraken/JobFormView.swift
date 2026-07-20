@@ -115,8 +115,7 @@ struct JobFormView: View {
             kSection("Type") {
                 Picker("Type", selection: $type) {
                     Text("build").tag("build")
-                    Text("explore").tag("explore")
-                    Text("question").tag("question")
+                    Text("info").tag("info")
                 }
                 .pickerStyle(.segmented)
             }

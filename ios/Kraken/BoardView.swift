@@ -24,11 +24,11 @@ final class BoardViewModel {
         (board?.jobs ?? []).filter { BoardTheme.column(for: $0) == column }
     }
 
-    /// Whether any job in `column` needs attention — an open escalation or a
+    /// Whether any job in `column` needs attention — a pending question or a
     /// non-empty health string — for the overview strip/sheet's flag badge.
     func hasFlag(in column: BoardColumn) -> Bool {
         jobs(in: column).contains { job in
-            !(job.escalations ?? []).filter { $0.status == "open" }.isEmpty || !(job.health ?? "").isEmpty
+            job.question != nil || !(job.health ?? "").isEmpty
         }
     }
 }
@@ -276,9 +276,7 @@ struct BoardView: View {
 private struct JobCardView: View {
     let job: WebJob
 
-    private var openEscalationCount: Int {
-        (job.escalations ?? []).filter { $0.status == "open" }.count
-    }
+    private var hasPendingQuestion: Bool { job.question != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -287,7 +285,7 @@ private struct JobCardView: View {
                     .font(.data(13, weight: .bold))
                     .foregroundStyle(KTheme.text)
                 Spacer()
-                if openEscalationCount > 0 {
+                if hasPendingQuestion {
                     Image(systemName: "flag.fill")
                         .foregroundStyle(KTheme.counter)
                         .font(.voice(10))
@@ -310,10 +308,19 @@ private struct JobCardView: View {
             if let err = job.err, !err.isEmpty {
                 Text("✕ " + err).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
+            if let roster = job.roster, !roster.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(roster.enumerated()), id: \.offset) { _, agent in
+                        Text("\(agent.name) (\(agent.model))")
+                            .font(.data(9))
+                            .foregroundStyle(KTheme.text2)
+                    }
+                }
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardBackground(stateColor: BoardTheme.color(forState: job.state), flagged: openEscalationCount > 0)
+        .cardBackground(stateColor: BoardTheme.color(forState: job.state), flagged: hasPendingQuestion)
     }
 }
 
@@ -369,7 +376,7 @@ private struct BoardOverviewSheet: View {
     }
 
     private func overviewRow(_ job: WebJob) -> some View {
-        let flagged = !(job.escalations ?? []).filter { $0.status == "open" }.isEmpty || !(job.health ?? "").isEmpty
+        let flagged = job.question != nil || !(job.health ?? "").isEmpty
         return HStack(spacing: 8) {
             Rectangle()
                 .fill(BoardTheme.color(forState: job.state))
