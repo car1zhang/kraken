@@ -668,23 +668,38 @@ function liveDisplayColumn(slug) {
   return j.health ? "blocked" : j.state;
 }
 
-// steerActionsHTML makes the modal action-complete: everything a card can do
-// to a live job is reachable from inside it too. Reuses the card's own
-// button classes (.open-tmux, .retry) so the existing delegated document
-// handlers pick them up with no new wiring; only "mark done" (.steer-done)
-// is new. Same conditions as cardHTML's equivalents.
+// steerActionsHTML makes the modal action-complete: retry + question are the
+// two card actions that only make sense while a job is actually unhealthy or
+// waiting on an answer. Tmux and mark-done moved to the panel head (static
+// buttons, filled per-open — see openSteer) since they apply to any
+// steer/unblock open regardless of these two conditions.
 function steerActionsHTML(j) {
   if (!j) return "";
-  const tmux = j.live
-    ? `<div class="review-row"><button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button></div>`
-    : "";
   const retry = j.health && !/is gone|startup prompt/.test(j.health)
     ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>`
     : "";
-  const done = liveDisplayColumn(j.slug) === "blocked"
-    ? `<button class="btn steer-done" data-slug="${esc(j.slug)}">✓ mark done</button>`
-    : "";
-  return tmux + retry + done + (j.question ? questionHTML(j) : "");
+  return retry + (j.question ? questionHTML(j) : "");
+}
+
+// specMetaHTML renders compact read-only rows from the /api/job/form payload
+// already fetched in openSteer — repo/base/solo/auto-approve/prereqs (plus
+// type), shown above the rendered spec markdown so the modal answers "what
+// is this cell running with" without leaving it.
+function specMetaHTML(d) {
+  const rows = [
+    ["type", esc(d.type || "—")],
+    ["repo", esc(d.repo || "—")],
+    ["base", esc(d.base || "origin/main")],
+    ["solo", d.solo ? "✓" : "✗"],
+    ["auto-approve", d.auto_approve ? "✓" : "✗"],
+  ];
+  const prereqs = d.prereqs || [];
+  if (prereqs.length) {
+    rows.push(["prereqs", prereqs.map((p) => esc(p.job) + (p.gated ? " gated ⚑" : "")).join(", ")]);
+  }
+  return `<div class="spec-meta">${rows
+    .map(([k, v]) => `<div class="spec-meta-row"><span class="k">${k}</span><span class="v">${v}</span></div>`)
+    .join("")}</div>`;
 }
 
 function openSteer(slug, mode = "steer") {
@@ -712,8 +727,21 @@ function openSteer(slug, mode = "steer") {
   const killable = mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
   document.getElementById("steer-kill").hidden = !killable;
 
+  // head buttons are static markup (like steer-kill) — fill data-slug and
+  // toggle visibility per open. reactivate targets a dead cell, so there's
+  // nothing on it to tmux into or mark done regardless of live/column state.
+  const tmuxBtn = document.getElementById("steer-tmux");
+  const showTmux = mode !== "reactivate" && !!jobsBySlug[slug] && jobsBySlug[slug].live;
+  tmuxBtn.hidden = !showTmux;
+  tmuxBtn.dataset.slug = slug;
+
+  const doneBtn = document.getElementById("steer-markdone");
+  const showDone = mode !== "reactivate" && liveCol === "blocked";
+  doneBtn.hidden = !showDone;
+  doneBtn.dataset.slug = slug;
+
   // action-complete only for steer/unblock — reactivate targets a dead cell,
-  // so there's nothing on it to tmux into, retry, or mark done
+  // so there's nothing on it to retry or mark done
   const actions = document.getElementById("steer-actions");
   if (mode === "steer" || mode === "unblock") {
     actions.innerHTML = steerActionsHTML(jobsBySlug[slug]);
@@ -737,7 +765,7 @@ function openSteer(slug, mode = "steer") {
         // while this fetch was in flight — a stale result must not land
         if (steerOverlay.hidden || steerSlug !== slug) return;
         if (d.error || !d.spec) return;
-        specBody.innerHTML = renderMD(d.spec);
+        specBody.innerHTML = specMetaHTML(d) + renderMD(d.spec);
         specSection.hidden = false;
       })
       .catch(() => {});
@@ -761,7 +789,6 @@ document.getElementById("steer-send").addEventListener("click", async () => {
   if (ok) steerOverlay.hidden = true;
   else document.getElementById("steer-note").textContent = "send failed — see status bar";
 });
-document.getElementById("steer-cancel").addEventListener("click", () => (steerOverlay.hidden = true));
 steerOverlay.addEventListener("click", (ev) => { if (ev.target === steerOverlay) steerOverlay.hidden = true; });
 document.getElementById("steer-text").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
@@ -1023,7 +1050,6 @@ document.getElementById("editor-archive").addEventListener("click", async () => 
   else editorNote.textContent = "archive failed — see status bar";
 });
 
-document.getElementById("editor-cancel").addEventListener("click", () => (editorOverlay.hidden = true));
 editorOverlay.addEventListener("click", (ev) => { if (ev.target === editorOverlay) editorOverlay.hidden = true; });
 document.getElementById("editor-form").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
@@ -1038,7 +1064,6 @@ document.getElementById("editor-slug").addEventListener("keydown", (ev) => {
   }
 });
 
-document.getElementById("panel-close").addEventListener("click", () => (overlay.hidden = true));
 document.getElementById("panel-open").addEventListener("click", () => {
   if (artifactURL) window.open(artifactURL, "_blank");
 });

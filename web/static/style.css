@@ -319,10 +319,13 @@ body {
   padding: 9px 11px; background: var(--raised); border: 1px solid var(--hairline-2);
 }
 /* rendered markdown, not preformatted text — normalize the block rhythm.
-   .steer-spec-body shares these rules so the frozen spec preview reads the
-   same as every other rendered-markdown surface in the modal. */
+   .steer-spec-body shares these rules so the spec preview reads the same as
+   every other rendered-markdown surface in the modal. list padding matches
+   .md's — without it, markers hug the left edge with no indent. */
 .steer-detail p, .steer-detail ul, .steer-detail ol, .steer-detail pre,
 .steer-spec-body p, .steer-spec-body ul, .steer-spec-body ol, .steer-spec-body pre { margin: 0 0 8px; }
+.steer-detail ul, .steer-detail ol, .steer-spec-body ul, .steer-spec-body ol { padding-left: 20px; }
+.steer-detail li, .steer-spec-body li { margin: 0.15em 0; }
 .steer-detail :last-child, .steer-spec-body :last-child { margin-bottom: 0; }
 .steer-detail h1, .steer-detail h2, .steer-detail h3,
 .steer-spec-body h1, .steer-spec-body h2, .steer-spec-body h3 { font-size: 12.5px; margin: 10px 0 6px; color: var(--text); }
@@ -332,28 +335,26 @@ body {
    let it wrap instead of inheriting the card's one-line ellipsis */
 .steer-context .last-sent { white-space: pre-wrap; overflow: visible; text-overflow: clip; }
 
-/* action-complete row: whatever tmux/retry/mark-done/question buttons the
-   card itself would show for this job, so the modal never sends carl back
-   to the board to do something the card could — kill spacing between the
-   already-gapped children and each button's own card-context margin-top */
+/* action-complete row: retry/question buttons the card itself would show for
+   this job — tmux and mark-done live in the panel head instead (see
+   index.html/openSteer) since they apply regardless of health/blocked state.
+   kill spacing between the already-gapped children and each button's own
+   card-context margin-top */
 .steer-actions {
   display: flex; flex-direction: column; gap: 8px;
   margin-bottom: 2px;
 }
-.steer-actions > .review-row,
 .steer-actions > .btn.retry,
-.steer-actions > .btn.steer-done,
 .steer-actions > .question { margin-top: 0; }
 
-/* frozen spec preview: collapsed by default, expandable to a read-only
-   render of the job's initial prompt — the dashed left edge plus the ❄
-   header text (see index.html) are the two cues that this is display-only,
-   never an editable surface like the job editor's spec textarea. */
+/* spec preview: collapsed by default, expandable to a read-only render of
+   the job's initial prompt plus its meta (repo/base/solo/etc, see
+   specMetaHTML in app.js) — always display-only, never an editable surface
+   like the job editor's spec textarea. */
 .steer-spec {
   margin-bottom: 2px;
   background: var(--raised);
   border: 1px solid var(--hairline-2);
-  border-left: 2px dashed var(--hairline-2);
 }
 .steer-spec-head {
   display: flex; align-items: center; gap: 6px;
@@ -370,6 +371,15 @@ body {
   max-height: 40vh; overflow-y: auto;
   color: var(--text-2); font-size: 11.5px; line-height: 1.5;
 }
+.spec-meta {
+  display: flex; flex-direction: column; gap: 3px;
+  margin-bottom: 10px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline);
+  font: 11px var(--mono);
+}
+.spec-meta-row { display: flex; gap: 8px; }
+.spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
+.spec-meta-row .v { color: var(--text); }
 .panel {
   background: var(--surface);
   border: 1px solid var(--hairline-2);
@@ -401,6 +411,14 @@ body {
 .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
 .btn.ghost.danger { color: var(--counter); border-color: var(--counter); }
 .btn.ghost.danger:hover { box-shadow: var(--glow-hot); }
+/* primary composer action — bigger than the standard .btn so it reads as
+   the one thing to do once the message is written */
+.btn-big {
+  display: block; width: 100%;
+  padding: 11px 0; margin-top: 2px;
+  font-size: 13px; font-weight: 700; letter-spacing: 0.5px;
+}
+.btn-big:hover { box-shadow: var(--glow); }
 .btn.retry {
   display: block; width: 100%; margin-top: 8px;
   background: var(--revealed-soft); color: var(--revealed);
@@ -415,6 +433,16 @@ body {
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
 .btn.steer-done:hover { box-shadow: var(--glow-ok); }
+/* panel-head instance is subtler than the card/actions variant above — a
+   ghost button, not a filled full-width one; specificity (not source order)
+   is what wins here since both rules match two classes */
+.panel-head .btn.steer-done {
+  display: inline-block; width: auto; margin-top: 0;
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--hairline-2);
+  font-size: 10px; letter-spacing: 1px; padding: 4px 11px;
+}
+.panel-head .btn.steer-done:hover { color: var(--solved); border-color: var(--solved); box-shadow: none; }
 #steer-text {
   font: 12px/1.5 var(--sans);
   background: var(--raised); color: var(--text);
