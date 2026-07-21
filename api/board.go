@@ -23,7 +23,9 @@ import (
 // never bump it, since old clients already ignore fields they don't know.
 // v2: the success criteria field was removed (webJob.success on /api/board,
 // success on the job form GET/POST).
-const apiContract = 2
+// v3: the auto-approve feature was deleted (auto_approve removed from the
+// job form GET/POST shapes, auto-approve: frontmatter no longer written).
+const apiContract = 3
 
 type webArtifact struct {
 	Name string `json:"name"`

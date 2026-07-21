@@ -35,7 +35,6 @@ struct JobFormView: View {
     @State private var base = ""
     @State private var ready = false
     @State private var solo = false
-    @State private var autoApprove = false
     @State private var prereqRows: [PrereqRow] = []
     @State private var spec = ""
     @State private var mtime: Int64 = 0
@@ -166,9 +165,6 @@ struct JobFormView: View {
                 Toggle("Solo (no subagent crew)", isOn: $solo)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
-                Toggle("Auto-approve plan", isOn: $autoApprove)
-                    .font(.voice(13))
-                    .foregroundStyle(KTheme.text)
             }
             kSection("Prereqs") {
                 ForEach($prereqRows) { $row in
@@ -282,7 +278,7 @@ struct JobFormView: View {
     // once, the same idiom SpecSection uses for its `.task(id:)` key.
     private var autosaveSnapshotKey: String {
         let prereqsPart = prereqRows.map { "\($0.job)=\($0.gated)" }.joined(separator: ",")
-        return "\(type)|\(repo)|\(base)|\(solo)|\(autoApprove)|\(prereqsPart)|\(spec)"
+        return "\(type)|\(repo)|\(base)|\(solo)|\(prereqsPart)|\(spec)"
     }
 
     private func load() async {
@@ -295,7 +291,6 @@ struct JobFormView: View {
             base = f.base
             ready = f.ready
             solo = f.solo
-            autoApprove = f.autoApprove
             prereqRows = f.prereqs.map { PrereqRow(job: $0.job, gated: $0.gated) }
             spec = f.spec
             mtime = f.mtime
@@ -348,7 +343,7 @@ struct JobFormView: View {
         syncState = .syncing
         let req = JobFormSaveRequest(
             slug: slug, type: type, repo: repo, base: base,
-            ready: ready, solo: solo, autoApprove: autoApprove,
+            ready: ready, solo: solo,
             prereqs: prereqRows.map { Prereq(job: $0.job, gated: $0.gated) },
             spec: spec, mtime: 0
         )

@@ -532,20 +532,19 @@ var jobRawSpec = map[string]fieldSpec{
 }
 
 var jobFormSpec = map[string]fieldSpec{
-	"slug":         {kind: wireString, required: true},
-	"type":         {kind: wireString, required: true},
-	"repo":         {kind: wireString, required: true},
-	"base":         {kind: wireString, required: true},
-	"ready":        {kind: wireBool, required: true},
-	"solo":         {kind: wireBool, required: true},
-	"auto_approve": {kind: wireBool, required: true},
-	"prereqs":      {kind: wireArray, required: true},
-	"spec":         {kind: wireString, required: true},
-	"mtime":        {kind: wireNumber, required: true},
-	"editable":     {kind: wireBool, required: true},
-	"err":          {kind: wireString, required: true},
-	"slugs":        {kind: wireArray, required: true, nullable: true},
-	"repos":        {kind: wireArray, required: true, nullable: true},
+	"slug":     {kind: wireString, required: true},
+	"type":     {kind: wireString, required: true},
+	"repo":     {kind: wireString, required: true},
+	"base":     {kind: wireString, required: true},
+	"ready":    {kind: wireBool, required: true},
+	"solo":     {kind: wireBool, required: true},
+	"prereqs":  {kind: wireArray, required: true},
+	"spec":     {kind: wireString, required: true},
+	"mtime":    {kind: wireNumber, required: true},
+	"editable": {kind: wireBool, required: true},
+	"err":      {kind: wireString, required: true},
+	"slugs":    {kind: wireArray, required: true, nullable: true},
+	"repos":    {kind: wireArray, required: true, nullable: true},
 }
 
 var jobSaveFormSpec = map[string]fieldSpec{

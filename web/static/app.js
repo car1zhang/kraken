@@ -740,16 +740,15 @@ function steerActionsHTML(j) {
 }
 
 // specMetaHTML renders compact read-only rows from the /api/job/form payload
-// already fetched in openSteer — repo/base/solo/auto-approve/prereqs (plus
-// type), shown above the rendered spec markdown so the modal answers "what
-// is this cell running with" without leaving it.
+// already fetched in openSteer — repo/base/solo/prereqs (plus type), shown
+// above the rendered spec markdown so the modal answers "what is this cell
+// running with" without leaving it.
 function specMetaHTML(d) {
   const rows = [
     ["type", esc(d.type || "—")],
     ["repo", esc(d.repo || "—")],
     ["base", esc(d.base || "origin/main")],
     ["solo", d.solo ? "✓" : "✗"],
-    ["auto-approve", d.auto_approve ? "✓" : "✗"],
   ];
   const prereqs = d.prereqs || [];
   if (prereqs.length) {
@@ -936,7 +935,6 @@ function fillForm(d) {
   document.getElementById("f-base").value = d.base || "";
   editorReady = !!d.ready;
   document.getElementById("f-solo").checked = !!d.solo;
-  document.getElementById("f-auto").checked = !!d.auto_approve;
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
   document.getElementById("job-list").innerHTML = (d.slugs || []).map((x) => `<option value="${esc(x)}">`).join("");
@@ -956,7 +954,6 @@ function readForm() {
     base: document.getElementById("f-base").value.trim(),
     ready: editorReady,
     solo: document.getElementById("f-solo").checked,
-    auto_approve: document.getElementById("f-auto").checked,
     prereqs,
     spec: editorText.value,
     mtime: editorMTime,
@@ -972,7 +969,6 @@ function setFormReadOnly(readOnly) {
   document.getElementById("f-repo").disabled = readOnly;
   document.getElementById("f-base").disabled = readOnly;
   document.getElementById("f-solo").disabled = readOnly;
-  document.getElementById("f-auto").disabled = readOnly;
   document.getElementById("f-add-prereq").disabled = readOnly;
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));

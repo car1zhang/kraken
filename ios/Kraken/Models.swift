@@ -191,7 +191,6 @@ struct JobForm: Decodable {
     let base: String
     let ready: Bool
     let solo: Bool
-    let autoApprove: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -202,7 +201,6 @@ struct JobForm: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
-        case autoApprove = "auto_approve"
         case prereqs, spec, mtime, editable, err, slugs, repos
     }
 }
@@ -237,14 +235,12 @@ struct JobFormSaveRequest: Encodable {
     let base: String
     let ready: Bool
     let solo: Bool
-    let autoApprove: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
-        case autoApprove = "auto_approve"
         case prereqs, spec, mtime
     }
 }

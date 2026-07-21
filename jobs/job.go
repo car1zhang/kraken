@@ -30,11 +30,10 @@ type Job struct {
 	Repo string `json:"repo"`
 	// Base is the ref the cell's worktree branches from; empty means the
 	// default (origin/main, falling back to main).
-	Base        string   `json:"base,omitempty"`
-	Ready       bool     `json:"ready"`
-	Solo        bool     `json:"solo"`
-	AutoApprove bool     `json:"auto_approve"`
-	Prereqs     []Prereq `json:"prereqs,omitempty"`
+	Base    string   `json:"base,omitempty"`
+	Ready   bool     `json:"ready"`
+	Solo    bool     `json:"solo"`
+	Prereqs []Prereq `json:"prereqs,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
 	State   string `json:"state,omitempty"`
@@ -235,7 +234,10 @@ func ParseJob(name string, data []byte) *Job {
 		case "solo":
 			j.Solo = j.boolField(k, val)
 		case "auto-approve":
-			j.AutoApprove = j.boolField(k, val)
+			// legacy field: removed from the schema, but existing pluto job
+			// files still carry auto-approve: keys (always a scalar). Keep
+			// consuming the line so those files still parse with Err == "" —
+			// just discard the value.
 		case "state":
 			if val != "" && !validStates[val] {
 				j.addErr(fmt.Sprintf("unknown state %q", val))
@@ -439,7 +441,6 @@ func JobTemplate(slug string) string {
 		"                          #   gated: true   → when it completes, you review its outcome\n" +
 		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
-		"auto-approve: false       # true → skip the plan-approval gate (default: plan is gated)\n" +
 		"---\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n"
 }
 

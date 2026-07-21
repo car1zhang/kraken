@@ -271,8 +271,8 @@ func StartCell(j *Job, repo string) error {
 	// fresh worktree paths trigger claude's folder-trust dialog, which blocks
 	// startup until answered
 	acceptTrustPrompts(sess)
-	// always "working": there is no plan gate to sit in — AutoApprove only
-	// changes what zeus' brief tells it to do once it starts
+	// always "working": there is no plan gate to sit in — every build job
+	// waits on /send before phase 2, but that's zeus' own brief, not a state
 	if err := WriteJobState(j, "working"); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: cell is up but state write failed: %v\n", err)
 	}

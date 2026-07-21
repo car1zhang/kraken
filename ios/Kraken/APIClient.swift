@@ -27,7 +27,7 @@ actor APIClient {
 
     // Mirrors web.go's apiContract constant — bump together, breaking
     // changes only (additive fields don't need a bump). See ios/API.md.
-    static let expectedContract = 2
+    static let expectedContract = 3
 
     private let session: URLSession
     private let decoder = JSONDecoder()

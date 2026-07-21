@@ -10,8 +10,8 @@ import (
 // crew_test.go — zeus' brief content matrix. There is no hermes pane agent
 // and no escalation-file relay any more: hermes is only a per-diagram
 // subagent name inside zeus' own brief. These tests assert that contract
-// across the build/info workflows and the solo/auto-approve flags, in the
-// same string-contains style as the rest of the job tests.
+// across the build/info workflows and the solo flag, in the same
+// string-contains style as the rest of the job tests.
 
 func TestZeusBriefBuild(t *testing.T) {
 	j := &Job{Slug: "x", Type: "build"}
@@ -83,20 +83,6 @@ func TestZeusBriefSolo(t *testing.T) {
 				t.Errorf("solo %s brief should not mention %q (no doc pipeline)", typ, unwanted)
 			}
 		}
-	}
-}
-
-func TestZeusBriefAutoApprove(t *testing.T) {
-	gated := zeusBrief(&Job{Slug: "w", Type: "build"})
-	auto := zeusBrief(&Job{Slug: "w", Type: "build", AutoApprove: true})
-	if !strings.Contains(auto, "without stopping") {
-		t.Error("auto-approve brief missing the proceed-without-stopping sentence")
-	}
-	if strings.Contains(gated, "without stopping") {
-		t.Error("non-auto-approve brief should not proceed without stopping")
-	}
-	if auto == gated {
-		t.Error("auto-approve and gated briefs must differ")
 	}
 }
 

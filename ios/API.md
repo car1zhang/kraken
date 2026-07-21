@@ -5,9 +5,11 @@ consumes. Source of truth is the Go code (`web.go`, `webpeers.go`,
 `daemon.go`, `job.go`, `status.go`); this doc transcribes it, it does not
 define it independently.
 
-**Current contract**: `apiContract = 2` (web.go), mirrored by
+**Current contract**: `apiContract = 3` (web.go), mirrored by
 `APIClient.expectedContract` (APIClient.swift). `/api/health` and
-`/api/board` both serve `contract` (int) + `stale` (bool).
+`/api/board` both serve `contract` (int) + `stale` (bool). v3 bumped when
+the auto-approve feature (and `auto_approve` on the job form GET/POST) was
+removed.
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
 retyped, renamed, or removed. Additive keys never bump it: old clients
@@ -190,7 +192,6 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
-| `auto_approve` | bool | always | |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -203,7 +204,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `auto_approve` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
