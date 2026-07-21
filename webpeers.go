@@ -136,7 +136,10 @@ func peersReadHandler(source peerSource) http.HandlerFunc {
 // peersSendHandler mirrors k s for agents and k s's shell behavior for shells:
 // an agent target goes through sendToPeer's full guard chain, a shell target
 // through sendToShell (types the line and runs it). The app composer posts here
-// for both; the peer's role decides which path.
+// for both; the peer's role decides which path. A request may instead set
+// "key" (mutually exclusive with "message") to send a single named key —
+// Esc, Ctrl-<letter>, arrows, Tab, Enter — via sendKey, for a keyboard that
+// can't type them (e.g. iOS).
 func peersSendHandler(source peerSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// TODO: same drive-by CORS-simple-request weakness as the spawn/kill/
@@ -149,6 +152,7 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 		var req struct {
 			Pane    string `json:"pane"`
 			Message string `json:"message"`
+			Key     string `json:"key"`
 		}
 		// --tailnet widens the audience beyond loopback; cap the body so a
 		// misbehaving client can't buffer arbitrary bytes through us
@@ -156,9 +160,21 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 			return
 		}
+		if req.Message != "" && req.Key != "" {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "send either message or key, not both"})
+			return
+		}
 		p := findPeerByPane(source(), req.Pane)
 		if p == nil {
 			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", req.Pane)})
+			return
+		}
+		if req.Key != "" {
+			if err := sendKey(p, req.Key); err != nil {
+				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			webJSON(w, http.StatusOK, map[string]any{"ok": true, "key": true})
 			return
 		}
 		if p.Role == "shell" {

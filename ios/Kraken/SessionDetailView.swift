@@ -61,6 +61,19 @@ final class SessionDetailViewModel {
         }
     }
 
+    /// Sends a single named key (esc, tab, an arrow, ctrl-<letter>...)
+    /// instead of typed text. Errors route into the same `sendError` the
+    /// message composer uses; the text draft is left untouched either way —
+    /// a key press isn't "what carl was typing."
+    func sendKey(baseURL: String, pane: String, key: String) async {
+        do {
+            _ = try await APIClient.shared.sendKey(baseURL: baseURL, pane: pane, key: key)
+            sendError = nil
+        } catch {
+            sendError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     private func showToast(_ message: String) {
         toastMessage = message
         Task {
@@ -213,6 +226,10 @@ struct SessionDetailView: View {
                 }
             }
             Rectangle().fill(KTheme.hairline).frame(height: 1)
+            if peer.pane?.isEmpty == false {
+                keyBar
+                Rectangle().fill(KTheme.hairline).frame(height: 1)
+            }
             composer
         }
         .background(KTheme.ground)
@@ -376,6 +393,51 @@ struct SessionDetailView: View {
             // **bold**/lists/`code`/links/headings show up properly instead
             // of raw markdown syntax.
             MarkdownBody(markdown: block.text)
+        }
+    }
+
+    // (label, key-name) pairs for the key bar — key-name is what the server's
+    // namedKeys whitelist (actions.go) expects. Visible for both agent and
+    // shell panes: the whole point is keys a phone keyboard can't type,
+    // which applies equally to interrupting an agent's turn and to
+    // navigating a shell.
+    private static let keyBarItems: [(label: String, key: String)] = [
+        ("esc", "esc"), ("tab", "tab"), ("⏎", "enter"),
+        ("↑", "up"), ("↓", "down"), ("←", "left"), ("→", "right"),
+        ("^C", "ctrl-c"), ("^D", "ctrl-d"), ("^U", "ctrl-u"),
+        ("^Z", "ctrl-z"), ("^R", "ctrl-r"), ("^L", "ctrl-l"),
+    ]
+
+    @ViewBuilder
+    private var keyBar: some View {
+        if let pane = peer.pane, !pane.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Self.keyBarItems, id: \.key) { item in
+                        Button {
+                            sendKey(pane: pane, key: item.key)
+                        } label: {
+                            Text(item.label)
+                                .font(.data(11))
+                                .foregroundStyle(KTheme.text)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(KTheme.raised)
+                                .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+            }
+            .background(KTheme.surface)
+        }
+    }
+
+    private func sendKey(pane: String, key: String) {
+        Task {
+            await vm.sendKey(baseURL: baseURL, pane: pane, key: key)
         }
     }
 

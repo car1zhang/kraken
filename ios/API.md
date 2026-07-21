@@ -235,10 +235,14 @@ Errors: 404 (no session in pane), 409 (capture failure).
 
 ### `POST /api/peers/send`
 
-Request: `{"pane": string, "message": string}`.
-Response (agent target): `{"ok": true, "queued": bool}`.
-Response (shell target): `{"ok": true, "queued": false, "shell": true}`.
-Errors: 404 (no session in pane), 409 (send refusal).
+Request: `{"pane": string, "message": string}`, or `{"pane": string, "key": string}` to send a single named key instead of typed text — `message` and `key` are mutually exclusive (400 if both are non-empty).
+
+`key` allowed values: `esc`/`escape`, `enter`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-a`…`ctrl-z`. Works for both agent and shell panes; sends exactly one key via `tmux send-keys` with no trailing Enter (e.g. `ctrl-c` sends only `C-c`, `enter` sends only `Enter`) — the deliberate way to interrupt a running turn or navigate a permission/question prompt from a keyboard that can't type these keys.
+
+Response (message, agent target): `{"ok": true, "queued": bool}`.
+Response (message, shell target): `{"ok": true, "queued": false, "shell": true}`.
+Response (key): `{"ok": true, "key": true}`.
+Errors: 400 (both `message` and `key` set), 404 (no session in pane), 409 (send refusal, or unsupported key name).
 
 ### `POST /api/peers/spawn`
 

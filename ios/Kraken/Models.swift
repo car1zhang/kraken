@@ -367,9 +367,15 @@ struct ReadResponse: Decodable {
     let counted: Int
 }
 
+// `key` is mutually exclusive with `message` server-side (a named key like
+// "esc"/"ctrl-c" sent via tmux send-keys instead of typed text) — nil by
+// default so every existing SendRequest(pane:message:) call site keeps
+// compiling and omits the key on the wire (JSONEncoder skips nil Optionals
+// in synthesized Encodable, same as SpawnRequest above).
 struct SendRequest: Encodable {
     let pane: String
     let message: String
+    var key: String? = nil
 }
 
 struct SendResponse: Decodable {
@@ -378,6 +384,8 @@ struct SendResponse: Decodable {
     // Present + true when the target peer was a shell: the server typed the
     // line and ran it as a command rather than routing it to an agent.
     let shell: Bool?
+    // Present + true when this was a key-send rather than a message-send.
+    let key: Bool?
 }
 
 // GET /api/peers/capture?pane= — raw tmux capture-pane text for a shell (or
