@@ -18,8 +18,12 @@
 		6C7EAAA0C1815B5E8BEE5458 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */; };
 		6DF35773AABE18B8D1CEEC30 /* DraftPersistenceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32C2F4A42CBC2D123B55AC4E /* DraftPersistenceUITests.swift */; };
 		7F53B4F4BE9C944368D05543 /* MarkdownHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */; };
+		8DCE80061C02793DEFC49C0D /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71F5D2794B798146B0453D4 /* MarkdownParser.swift */; };
+		8ED3FDEA37C23328E9AD32CF /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */; };
+		9A8EFAF4AA6DBDC088CF875F /* MarkdownHTMLParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF39E397D495995DF61C69ED /* MarkdownHTMLParityTests.swift */; };
 		9E5FE98C26F364D41BF72C34 /* ArtifactView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */; };
 		A1BC1C2D352EF2176BF263BB /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */; };
+		AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */; };
 		B0B74A169D8836ECF27810EE /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA8587CFE1F0023DA53E96B2 /* Models.swift */; };
 		BEA8E83AC97A1349F501B82B /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F80ED1D258C4D24F4AE6965 /* Theme.swift */; };
 		C75916514378EDDC362B3CD5 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153DA91C335FCC8EBFE26F95 /* NotificationManager.swift */; };
@@ -29,6 +33,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		00230EEB6AA081F0009A7916 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0231E9A1A5F81B579E4C54D9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D326E20B6091BCD7B8534C40;
+			remoteInfo = Kraken;
+		};
 		49AAD9EFF8B3A3EE9814371A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 0231E9A1A5F81B579E4C54D9 /* Project object */;
@@ -46,13 +57,18 @@
 		3AD0EAC25E6D5338647D5729 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		4936914ABA5DBD9E4D304398 /* KrakenApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakenApp.swift; sourceTree = "<group>"; };
 		4FF9D9DA885804C0FEC0248E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5117FF8926CD3DAFCE9CC2FE /* KrakenTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6790EB0668AC92E70C34E1CB /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactView.swift; sourceTree = "<group>"; };
 		6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewJobSheet.swift; sourceTree = "<group>"; };
 		7F80ED1D258C4D24F4AE6965 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		830497A2C99EE12325B9FBD6 /* Kraken.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraken.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHTML.swift; sourceTree = "<group>"; };
+		8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
+		8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
 		AEF9ED32FC58893C4F52D844 /* KrakenUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakenUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AF39E397D495995DF61C69ED /* MarkdownHTMLParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHTMLParityTests.swift; sourceTree = "<group>"; };
+		B71F5D2794B798146B0453D4 /* MarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParser.swift; sourceTree = "<group>"; };
 		BA367B655DF24A06788B2CD3 /* AppRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouter.swift; sourceTree = "<group>"; };
 		C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
 		C99F884263C78D3B9FD03D5D /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
@@ -67,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				830497A2C99EE12325B9FBD6 /* Kraken.app */,
+				5117FF8926CD3DAFCE9CC2FE /* KrakenTests.xctest */,
 				AEF9ED32FC58893C4F52D844 /* KrakenUITests.xctest */,
 			);
 			name = Products;
@@ -76,9 +93,19 @@
 			isa = PBXGroup;
 			children = (
 				ACAA0493A0D5C5A907F9A05F /* Kraken */,
+				A7D9A2A66784BEB948E05519 /* KrakenTests */,
 				BA4F5731FC379A08A398B7D3 /* KrakenUITests */,
 				28399B406D991BD3EFC5DEBF /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		A7D9A2A66784BEB948E05519 /* KrakenTests */ = {
+			isa = PBXGroup;
+			children = (
+				AF39E397D495995DF61C69ED /* MarkdownHTMLParityTests.swift */,
+				8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */,
+			);
+			path = KrakenTests;
 			sourceTree = "<group>";
 		};
 		ACAA0493A0D5C5A907F9A05F /* Kraken */ = {
@@ -95,6 +122,8 @@
 				D29F1852BBFA1274A0BFE991 /* JobFormView.swift */,
 				4936914ABA5DBD9E4D304398 /* KrakenApp.swift */,
 				88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */,
+				B71F5D2794B798146B0453D4 /* MarkdownParser.swift */,
+				8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */,
 				FA8587CFE1F0023DA53E96B2 /* Models.swift */,
 				6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */,
 				153DA91C335FCC8EBFE26F95 /* NotificationManager.swift */,
@@ -117,6 +146,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		02C83298B9FFF76A804AF9E9 /* KrakenTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9E349AE1EED3DD8CF5D9EAF5 /* Build configuration list for PBXNativeTarget "KrakenTests" */;
+			buildPhases = (
+				2706F68B4DBBC1BE30E1E8E1 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				418E60BCE8B21239315C0FF9 /* PBXTargetDependency */,
+			);
+			name = KrakenTests;
+			packageProductDependencies = (
+			);
+			productName = KrakenTests;
+			productReference = 5117FF8926CD3DAFCE9CC2FE /* KrakenTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		D326E20B6091BCD7B8534C40 /* Kraken */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = CAD19C154A5BF623E35D8D5D /* Build configuration list for PBXNativeTarget "Kraken" */;
@@ -162,6 +209,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					02C83298B9FFF76A804AF9E9 = {
+						TestTargetID = D326E20B6091BCD7B8534C40;
+					};
 					D326E20B6091BCD7B8534C40 = {
 						DevelopmentTeam = DDUUFX5L3W;
 						ProvisioningStyle = Automatic;
@@ -187,6 +237,7 @@
 			targets = (
 				D326E20B6091BCD7B8534C40 /* Kraken */,
 				D3F24B2C2A8A1F56BEBE63AC /* KrakenUITests */,
+				02C83298B9FFF76A804AF9E9 /* KrakenTests */,
 			);
 		};
 /* End PBXProject section */
@@ -204,6 +255,15 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		2706F68B4DBBC1BE30E1E8E1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A8EFAF4AA6DBDC088CF875F /* MarkdownHTMLParityTests.swift in Sources */,
+				AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7F966C1033E21B0EF3D7EFF4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -225,6 +285,8 @@
 				15E03CF28FC165A2AC64ED88 /* JobFormView.swift in Sources */,
 				54994C7136E33E7D02D336C4 /* KrakenApp.swift in Sources */,
 				7F53B4F4BE9C944368D05543 /* MarkdownHTML.swift in Sources */,
+				8DCE80061C02793DEFC49C0D /* MarkdownParser.swift in Sources */,
+				8ED3FDEA37C23328E9AD32CF /* MarkdownText.swift in Sources */,
 				B0B74A169D8836ECF27810EE /* Models.swift in Sources */,
 				200A598DE7D246E25CF248F0 /* NewJobSheet.swift in Sources */,
 				C75916514378EDDC362B3CD5 /* NotificationManager.swift in Sources */,
@@ -242,6 +304,11 @@
 			isa = PBXTargetDependency;
 			target = D326E20B6091BCD7B8534C40 /* Kraken */;
 			targetProxy = 49AAD9EFF8B3A3EE9814371A /* PBXContainerItemProxy */;
+		};
+		418E60BCE8B21239315C0FF9 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D326E20B6091BCD7B8534C40 /* Kraken */;
+			targetProxy = 00230EEB6AA081F0009A7916 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -338,6 +405,46 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		C2DA74B1F559FE92D2A9FC8E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraken.app/Kraken";
+				TEST_TARGET_NAME = Kraken;
+			};
+			name = Debug;
+		};
+		C549CD05EE32C894D294186C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraken.app/Kraken";
+				TEST_TARGET_NAME = Kraken;
 			};
 			name = Release;
 		};
@@ -446,6 +553,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		9E349AE1EED3DD8CF5D9EAF5 /* Build configuration list for PBXNativeTarget "KrakenTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C2DA74B1F559FE92D2A9FC8E /* Debug */,
+				C549CD05EE32C894D294186C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		CAD19C154A5BF623E35D8D5D /* Build configuration list for PBXNativeTarget "Kraken" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

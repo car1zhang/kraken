@@ -29,6 +29,20 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "02C83298B9FFF76A804AF9E9"
+               BuildableName = "KrakenTests.xctest"
+               BlueprintName = "KrakenTests"
+               ReferencedContainer = "container:Kraken.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "D3F24B2C2A8A1F56BEBE63AC"
                BuildableName = "KrakenUITests.xctest"
                BlueprintName = "KrakenUITests"
@@ -61,6 +75,17 @@
                BlueprintIdentifier = "D3F24B2C2A8A1F56BEBE63AC"
                BuildableName = "KrakenUITests.xctest"
                BlueprintName = "KrakenUITests"
+               ReferencedContainer = "container:Kraken.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "02C83298B9FFF76A804AF9E9"
+               BuildableName = "KrakenTests.xctest"
+               BlueprintName = "KrakenTests"
                ReferencedContainer = "container:Kraken.xcodeproj">
             </BuildableReference>
          </TestableReference>

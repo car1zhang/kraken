@@ -195,26 +195,25 @@ struct SessionDetailView: View {
                 }
                 .background(KTheme.ground)
                 // Bottom-anchor scroll-to-bottom, both modes. Transcript's
-                // blocks are self-sizing WKWebViews (MarkdownBody) that
-                // measure their height async, so a scroll fired the instant
-                // data arrives can land on still-zero-height content — the
-                // first non-empty render after a load (oldCount == 0) retries
-                // a few times, staggered further apart, as heights settle;
-                // a later append (poll picked up new turns, prior content's
-                // heights already known) only needs the one delayed retry
-                // the old comment described. Terminal has no incremental
-                // block count to key off (capture-pane always replaces the
-                // whole screen), so it lands at the bottom once content first
-                // arrives, and again on every switch into Terminal — the
-                // transcript/terminal Group above share one ScrollView, so
-                // switching modes leaves the offset wherever the other mode's
-                // very differently sized content last put it. `userScrolled`
-                // (set by the drag gesture below) opts a reader out of every
-                // programmatic scroll here the moment they've taken the
-                // position into their own hands.
+                // blocks are native MarkdownText views that lay out
+                // synchronously, so a scroll fired the instant data arrives
+                // already sees final content sizes — but the ScrollView's
+                // own content-size measurement can lag a frame behind SwiftUI
+                // committing the new rows, so every scroll (initial landing
+                // or a later append) still pairs an immediate scroll with one
+                // ~350ms delayed retry as cheap insurance. Terminal has no
+                // incremental block count to key off (capture-pane always
+                // replaces the whole screen), so it lands at the bottom once
+                // content first arrives, and again on every switch into
+                // Terminal — the transcript/terminal Group above share one
+                // ScrollView, so switching modes leaves the offset wherever
+                // the other mode's very differently sized content last put
+                // it. `userScrolled` (set by the drag gesture below) opts a
+                // reader out of every programmatic scroll here the moment
+                // they've taken the position into their own hands.
                 .onChange(of: vm.blocks.count) { oldCount, newCount in
                     guard mode == .transcript, newCount > oldCount, !userScrolled else { return }
-                    scrollToBottomRetrying(proxy: proxy, immediate: oldCount == 0)
+                    scrollToBottomRetrying(proxy: proxy)
                 }
                 .onChange(of: vm.terminalContent) { oldValue, newValue in
                     guard mode == .terminal, oldValue.isEmpty, !newValue.isEmpty, !userScrolled else { return }
@@ -223,7 +222,7 @@ struct SessionDetailView: View {
                 .onChange(of: mode) { _, newMode in
                     userScrolled = false
                     if newMode == .transcript, !vm.blocks.isEmpty {
-                        scrollToBottomRetrying(proxy: proxy, immediate: true)
+                        scrollToBottomRetrying(proxy: proxy)
                     } else if newMode == .terminal, !vm.terminalContent.isEmpty {
                         withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
                     }
@@ -341,11 +340,10 @@ struct SessionDetailView: View {
 
     private var transcriptContent: some View {
         // A plain VStack, not LazyVStack: the blocks are capped to the last 20
-        // by the `n: 20` fetch, so realizing them all up front is cheap — and
-        // it's what makes scroll-to-bottom reliable. A LazyVStack only builds
-        // visible rows, so a programmatic scrollTo(bottom) into not-yet-built
-        // MarkdownBody web views landed on empty space; realizing every row
-        // means their async heights are all known by the time we scroll.
+        // by the `n: 20` fetch (native MarkdownText rows, cheap to realize
+        // even all at once), and a LazyVStack only builds visible rows — a
+        // programmatic scrollTo(bottom) into not-yet-built rows would land on
+        // empty space. Realizing every row up front keeps scroll-to-bottom exact.
         VStack(alignment: .leading, spacing: 8) {
             if peer.pane == nil {
                 Text("no pane — nothing to read")
@@ -403,7 +401,7 @@ struct SessionDetailView: View {
                 Text("❯ user")
                     .font(.data(10))
                     .foregroundStyle(KTheme.accent)
-                MarkdownBody(markdown: block.text)
+                MarkdownText(markdown: block.text)
             }
         case "thinking":
             Text(block.text)
@@ -427,7 +425,7 @@ struct SessionDetailView: View {
                         Text("⇄ " + from)
                             .font(.data(10))
                             .foregroundStyle(KTheme.accent)
-                        MarkdownBody(markdown: block.text)
+                        MarkdownText(markdown: block.text)
                     }
                 } else {
                     Text("⇄ \(from) — \(block.text)")
@@ -437,13 +435,13 @@ struct SessionDetailView: View {
             } else {
                 // No `from` — fall back to the same plain rendering as an
                 // unrecognized/default block below.
-                MarkdownBody(markdown: block.text)
+                MarkdownText(markdown: block.text)
             }
         default:
             // Assistant prose — the only block kind rendered as markdown, so
             // **bold**/lists/`code`/links/headings show up properly instead
             // of raw markdown syntax.
-            MarkdownBody(markdown: block.text)
+            MarkdownText(markdown: block.text)
         }
     }
 
@@ -492,16 +490,17 @@ struct SessionDetailView: View {
         }
     }
 
-    // Fires the bottom-anchor scroll immediately, then — only for an initial
-    // landing (`immediate == true`: first non-empty render, or a mode switch
-    // back into Transcript) — a few more times as MarkdownBody's async
-    // WKWebView heights settle. A later append gets a single 350ms-delayed
-    // retry, matching the original single-shot behavior. Every retry
-    // rechecks `userScrolled` right before it fires, not just once up front,
-    // so a drag that happens mid-retry-sequence still cancels the rest.
-    private func scrollToBottomRetrying(proxy: ScrollViewProxy, immediate: Bool) {
-        let delaysMs = immediate ? [0, 350, 1000, 2000] : [350]
-        for delayMs in delaysMs {
+    // Fires the bottom-anchor scroll immediately, then once more after a
+    // ~350ms delay as cheap insurance while the ScrollView's own content-size
+    // measurement catches up to the native MarkdownText rows SwiftUI just
+    // committed. Same two-fire shape for both callers (initial landing and a
+    // later append) — native blocks lay out synchronously, so neither case
+    // needs the old multi-rung ladder that waited out async web-view heights.
+    // Every retry rechecks `userScrolled` right before it fires, not just
+    // once up front, so a drag that happens mid-retry-sequence still cancels
+    // the rest.
+    private func scrollToBottomRetrying(proxy: ScrollViewProxy) {
+        for delayMs in [0, 350] {
             Task {
                 if delayMs > 0 {
                     try? await Task.sleep(for: .milliseconds(delayMs))

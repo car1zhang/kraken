@@ -695,7 +695,7 @@ private struct DetailCard: View {
     let stateColor: Color
 
     var body: some View {
-        MarkdownBody(markdown: text)
+        MarkdownText(markdown: text)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardBackground(stateColor: stateColor)
