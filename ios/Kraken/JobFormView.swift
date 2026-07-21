@@ -27,7 +27,6 @@ struct JobFormView: View {
     @State private var ready = false
     @State private var solo = false
     @State private var autoApprove = false
-    @State private var success = ""
     @State private var prereqRows: [PrereqRow] = []
     @State private var spec = ""
     @State private var mtime: Int64 = 0
@@ -162,12 +161,6 @@ struct JobFormView: View {
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
             }
-            kSection("Success criterion") {
-                TextEditor(text: $success)
-                    .scrollContentBackground(.hidden)
-                    .kField(minHeight: 80)
-                    .listRowBackground(Color.clear)
-            }
             kSection("Prereqs") {
                 ForEach($prereqRows) { $row in
                     HStack {
@@ -269,7 +262,6 @@ struct JobFormView: View {
             ready = f.ready
             solo = f.solo
             autoApprove = f.autoApprove
-            success = f.success
             prereqRows = f.prereqs.map { PrereqRow(job: $0.job, gated: $0.gated) }
             spec = f.spec
             mtime = f.mtime
@@ -306,7 +298,6 @@ struct JobFormView: View {
         let req = JobFormSaveRequest(
             slug: slug, type: type, repo: repo, base: base,
             ready: ready, solo: solo, autoApprove: autoApprove,
-            success: success,
             prereqs: prereqRows.map { Prereq(job: $0.job, gated: $0.gated) },
             spec: spec, mtime: mtime
         )

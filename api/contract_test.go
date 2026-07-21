@@ -163,7 +163,6 @@ var webJobSpec = map[string]fieldSpec{
 	"state":         {kind: wireString, required: true},
 	"err":           {kind: wireString, required: false},
 	"outcome":       {kind: wireString, required: false},
-	"success":       {kind: wireString, required: false},
 	"cell":          {kind: wireString, required: false},
 	"live":          {kind: wireBool, required: true},
 	"prereqs":       {kind: wireArray, required: false},
@@ -235,7 +234,7 @@ func TestWebJobWireShapeEmpty(t *testing.T) {
 func TestWebJobWireShapePopulated(t *testing.T) {
 	wj := webJob{
 		Slug: "x", Type: "build", Repo: "monolith", State: "blocked", Live: true,
-		Err: "e", Outcome: "o", Success: "s", Cell: "cell-x",
+		Err: "e", Outcome: "o", Cell: "cell-x",
 		Prereqs:   []webPrereq{{Job: "y", Gated: true, Done: false}},
 		Artifacts: []webArtifact{{Name: "a", URL: "/api/artifact/x/cell/a"}},
 		Detail:    "zeus said something",
@@ -540,7 +539,6 @@ var jobFormSpec = map[string]fieldSpec{
 	"ready":        {kind: wireBool, required: true},
 	"solo":         {kind: wireBool, required: true},
 	"auto_approve": {kind: wireBool, required: true},
-	"success":      {kind: wireString, required: true},
 	"prereqs":      {kind: wireArray, required: true},
 	"spec":         {kind: wireString, required: true},
 	"mtime":        {kind: wireNumber, required: true},

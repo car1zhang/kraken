@@ -62,7 +62,6 @@ struct WebJob: Decodable, Identifiable {
     let state: String
     let err: String?
     let outcome: String?
-    let success: String?
     let cell: String?
     let live: Bool
     let prereqs: [WebPrereq]?
@@ -96,7 +95,7 @@ struct WebJob: Decodable, Identifiable {
     var title: String { displaySlug ?? slug }
 
     enum CodingKeys: String, CodingKey {
-        case slug, type, repo, state, err, outcome, success, cell, live
+        case slug, type, repo, state, err, outcome, cell, live
         case prereqs, detail, question, roster, artifacts, health, mtime
         case archived
         case displaySlug = "display_slug"
@@ -193,7 +192,6 @@ struct JobForm: Decodable {
     let ready: Bool
     let solo: Bool
     let autoApprove: Bool
-    let success: String
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -205,7 +203,7 @@ struct JobForm: Decodable {
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
         case autoApprove = "auto_approve"
-        case success, prereqs, spec, mtime, editable, err, slugs, repos
+        case prereqs, spec, mtime, editable, err, slugs, repos
     }
 }
 
@@ -240,7 +238,6 @@ struct JobFormSaveRequest: Encodable {
     let ready: Bool
     let solo: Bool
     let autoApprove: Bool
-    let success: String
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -248,7 +245,7 @@ struct JobFormSaveRequest: Encodable {
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
         case autoApprove = "auto_approve"
-        case success, prereqs, spec, mtime
+        case prereqs, spec, mtime
     }
 }
 

@@ -12,11 +12,11 @@ import (
 // same string-contains style as the rest of the job tests.
 
 func TestZeusBriefBuild(t *testing.T) {
-	j := &Job{Slug: "x", Type: "build", Success: "tests pass"}
+	j := &Job{Slug: "x", Type: "build"}
 	brief := zeusBrief(j)
 	for _, want := range []string{
 		"zeus", "hephaestus", "athena", "/send", "PR", "manual test ready",
-		"tests pass", "AskUserQuestion", CellArtifacts(j), "TaskStop",
+		"AskUserQuestion", CellArtifacts(j), "TaskStop",
 		// a merged PR is never job completion; follow-ups recycle the branch
 		"never ends the job", "checkout -B " + CellBranch(j) + " origin/main",
 	} {
@@ -24,7 +24,7 @@ func TestZeusBriefBuild(t *testing.T) {
 			t.Errorf("build brief missing %q", want)
 		}
 	}
-	for _, unwanted := range []string{"plan.md", "done.md", "hermes pane", "relay"} {
+	for _, unwanted := range []string{"plan.md", "done.md", "hermes pane", "relay", "Success criteria"} {
 		if strings.Contains(brief, unwanted) {
 			t.Errorf("build brief still mentions %q", unwanted)
 		}
@@ -37,14 +37,14 @@ func TestZeusBriefBuild(t *testing.T) {
 }
 
 func TestZeusBriefInfo(t *testing.T) {
-	j := &Job{Slug: "y", Type: "info", Success: "explains the system"}
+	j := &Job{Slug: "y", Type: "info"}
 	brief := zeusBrief(j)
 	for _, want := range []string{"zeus", "/info", "No PR", "AskUserQuestion", CellArtifacts(j), "TaskStop"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("info brief missing %q", want)
 		}
 	}
-	for _, unwanted := range []string{"plan.md", "done.md", "open a PR with gh", "hermes pane", "relay"} {
+	for _, unwanted := range []string{"plan.md", "done.md", "open a PR with gh", "hermes pane", "relay", "Success criteria"} {
 		if strings.Contains(brief, unwanted) {
 			t.Errorf("info brief still mentions %q", unwanted)
 		}

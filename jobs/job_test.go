@@ -44,9 +44,8 @@ func TestParseJobFull(t *testing.T) {
 	if len(j.Prereqs) != 2 || j.Prereqs[0] != want[0] || j.Prereqs[1] != want[1] {
 		t.Fatalf("prereqs: %+v", j.Prereqs)
 	}
-	if j.Success != "dupes collapse in the dashboard\nunit tests pass" {
-		t.Fatalf("success: %q", j.Success)
-	}
+	// success is a retired field: legacy files still carry it, and the
+	// block-scalar lines must still be fully consumed (Err == "", body intact)
 	if !strings.Contains(j.Body, "# Spec") || strings.Contains(j.Body, "ready:") {
 		t.Fatalf("body: %q", j.Body)
 	}
@@ -79,8 +78,22 @@ success: |
 	if j.Ready {
 		t.Fatal("template must not be ready")
 	}
-	if j.Success != `what "done" looks like` {
-		t.Fatalf("success: %q", j.Success)
+}
+
+func TestJobTemplateClean(t *testing.T) {
+	// JobTemplate is the actual skeleton `k n`/nvim expand: it must parse
+	// clean and its body must be blank above the mid-run log — no leftover
+	// "# Spec" heading and no prompt text to send zeus on an unedited job.
+	src := JobTemplate("x")
+	if strings.Contains(src, "# Spec") {
+		t.Fatalf("template body should have no # Spec heading:\n%s", src)
+	}
+	j := ParseJob("x.job.md", []byte(src))
+	if j.Err != "" {
+		t.Fatalf("unexpected err: %s", j.Err)
+	}
+	if got := jobPrompt(j); got != "" {
+		t.Fatalf("template prompt should be empty, got %q", got)
 	}
 }
 
@@ -220,15 +233,19 @@ func TestStripComment(t *testing.T) {
 }
 
 func TestParseJobIndentedFenceInBlockScalar(t *testing.T) {
-	// an indented --- inside a success block scalar is content, not the
-	// closing fence: fields after it must still parse
+	// an indented --- inside a legacy success block scalar is content, not
+	// the closing fence: the fence must not terminate early, and fields
+	// after the block must still parse
 	src := "---\njob: x\nsuccess: |\n  part one\n  ---\n  part two\nrepo: monolith\nready: true\n---\n\n# Spec\n"
 	j := ParseJob("x.job.md", []byte(src))
+	if j.Err != "" {
+		t.Fatalf("unexpected err: %s", j.Err)
+	}
 	if j.Repo != "monolith" || !j.Ready {
 		t.Fatalf("fields after indented --- dropped: repo=%q ready=%v", j.Repo, j.Ready)
 	}
-	if !strings.Contains(j.Success, "---") || !strings.Contains(j.Success, "part two") {
-		t.Fatalf("block scalar truncated: %q", j.Success)
+	if !strings.Contains(j.Body, "# Spec") {
+		t.Fatalf("body truncated: %q", j.Body)
 	}
 }
 
@@ -237,9 +254,6 @@ func TestParseJobCRLF(t *testing.T) {
 	j := ParseJob("yelp-dedupe.job.md", []byte(src))
 	if j.Err != "" || !j.Ready || j.Repo != "monolith" {
 		t.Fatalf("CRLF parse degraded: err=%q ready=%v repo=%q", j.Err, j.Ready, j.Repo)
-	}
-	if strings.Contains(j.Success, "\r") {
-		t.Fatalf("carriage return baked into success: %q", j.Success)
 	}
 }
 
@@ -627,10 +641,10 @@ func TestPatchPRs(t *testing.T) {
 	}
 }
 
-// A success: | block scalar whose CONTENT line starts with "prs:" must never
-// be mistaken for the prs: key — the tracker rewrites the block every tick,
-// and a trimmed-prefix match would silently eat that success line (athena
-// finding on the first cut of patchPRs).
+// A legacy success: | block scalar whose CONTENT line starts with "prs:"
+// must never be mistaken for the prs: key — the tracker rewrites the block
+// every tick, and a trimmed-prefix match would silently eat that content
+// line (athena finding on the first cut of patchPRs).
 func TestPatchPRsSkipsBlockScalarContent(t *testing.T) {
 	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nsuccess: |\n  prs: shown on the board\nstate: working\n---\nbody\n"
 	got, err := patchPRs(src, []JobPR{{URL: "https://x/pull/1", State: "open"}})
@@ -641,7 +655,7 @@ func TestPatchPRsSkipsBlockScalarContent(t *testing.T) {
 		t.Fatalf("success block scalar content eaten: %q", got)
 	}
 	j := ParseJob("x.job.md", []byte(got))
-	if j.Err != "" || j.Success != "prs: shown on the board" || len(j.PRs) != 1 {
-		t.Fatalf("round-trip: err=%q success=%q prs=%+v", j.Err, j.Success, j.PRs)
+	if j.Err != "" || len(j.PRs) != 1 {
+		t.Fatalf("round-trip: err=%q prs=%+v", j.Err, j.PRs)
 	}
 }

@@ -58,9 +58,6 @@ func zeusBrief(j *Job) string {
 			docSourcePath(j), docFragmentsDir(j), docArtifactPath(j))
 	}
 	fmt.Fprintf(&b, "Every final deliverable — including anything published elsewhere (claude.ai artifacts, PRs, dashboards) — must land in %s: the file itself when it's a file, plus a short <name>.link.md with the URL when it lives elsewhere. That dir is what carl's board shows; work that isn't there is invisible to him.\n", CellArtifacts(j))
-	if j.Success != "" {
-		fmt.Fprintf(&b, "Success criteria: %s\n", j.Success)
-	}
 	if j.Solo {
 		b.WriteString("Work entirely alone: no subagents at all — no implementation crew and no diagram subagents; write a prose-only doc with no figure slots.\n")
 	} else {

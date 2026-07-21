@@ -291,9 +291,6 @@ struct JobDetailView: View {
                 if let outcome = job.outcome, !outcome.isEmpty {
                     kSection("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
                 }
-                if let success = job.success, !success.isEmpty {
-                    kSection("Success criterion") { Text(success).font(.voice(13)).foregroundStyle(KTheme.text) }
-                }
                 if let prereqs = job.prereqs, !prereqs.isEmpty {
                     kSection("Prereqs") {
                         ForEach(prereqs, id: \.job) { p in

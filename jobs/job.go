@@ -35,7 +35,6 @@ type Job struct {
 	Solo        bool     `json:"solo"`
 	AutoApprove bool     `json:"auto_approve"`
 	Prereqs     []Prereq `json:"prereqs,omitempty"`
-	Success     string   `json:"success,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
 	State   string `json:"state,omitempty"`
@@ -122,7 +121,8 @@ func stripComment(s string) string {
 
 // isFence matches a frontmatter fence: an UNINDENTED "---" (trailing
 // whitespace tolerated). Indentation disqualifies it on purpose — an indented
-// "  ---" inside a success block scalar is content, not the closing fence.
+// "  ---" inside a legacy success: | block scalar is content, not the
+// closing fence.
 func isFence(s string) bool {
 	return strings.TrimRight(s, " \t\r") == "---"
 }
@@ -257,15 +257,14 @@ func ParseJob(name string, data []byte) *Job {
 				j.Run = n
 			}
 		case "success":
+			// legacy field: removed from the schema, but existing pluto job
+			// files still carry success: keys (scalar or "success: |" block
+			// scalar). Keep consuming the same lines so those files still
+			// parse with Err == "" — just discard the value.
 			if val == "|" || val == "" {
-				var b []string
 				for i+1 < len(fm) && (strings.HasPrefix(fm[i+1], "  ") || strings.TrimSpace(fm[i+1]) == "") {
 					i++
-					b = append(b, strings.TrimPrefix(fm[i], "  "))
 				}
-				j.Success = strings.TrimSpace(strings.Join(b, "\n"))
-			} else {
-				j.Success = val
 			}
 		case "prereqs":
 			switch val {
@@ -441,9 +440,7 @@ func JobTemplate(slug string) string {
 		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
 		"auto-approve: false       # true → skip the plan-approval gate (default: plan is gated)\n" +
-		"success: |\n" +
-		"  what \"done\" looks like\n" +
-		"---\n\n# Spec\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n"
+		"---\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n"
 }
 
 // LoadJobs reads every *.job.md in the pluto dir, sorted by slug. Missing dir
@@ -694,8 +691,9 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 			return strings.Join(append(out, lines[i:]...), "\n"), nil
 		}
 		// column-0 match only: an indented "prs:"-prefixed line can be a
-		// success: | block scalar's CONTENT, and healing it like patchField
-		// heals indented keys would silently eat that line every tracker tick
+		// legacy success: | block scalar's CONTENT, and healing it like
+		// patchField heals indented keys would silently eat that line every
+		// tracker tick
 		if strings.HasPrefix(lines[i], "prs:") {
 			end := i + 1
 			for end < len(lines) && !isFence(lines[end]) {

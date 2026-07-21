@@ -5,7 +5,7 @@ consumes. Source of truth is the Go code (`web.go`, `webpeers.go`,
 `daemon.go`, `job.go`, `status.go`); this doc transcribes it, it does not
 define it independently.
 
-**Current contract**: `apiContract = 1` (web.go), mirrored by
+**Current contract**: `apiContract = 2` (web.go), mirrored by
 `APIClient.expectedContract` (APIClient.swift). `/api/health` and
 `/api/board` both serve `contract` (int) + `stale` (bool).
 
@@ -73,7 +73,6 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `state` | string | always | draft/queued/working/blocked/done/archived |
 | `err` | string | omitempty | |
 | `outcome` | string | omitempty | |
-| `success` | string | omitempty | |
 | `cell` | string | omitempty | tmux session name |
 | `live` | bool | always | |
 | `prereqs` | array (`webPrereq`) | omitempty | |
@@ -168,7 +167,6 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `ready` | bool | always | |
 | `solo` | bool | always | |
 | `auto_approve` | bool | always | |
-| `success` | string | always | |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -181,7 +179,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `auto_approve` (bool), `success` (string, optional to send), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `auto_approve` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
