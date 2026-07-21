@@ -104,6 +104,40 @@ private struct ArtifactRow: View {
     }
 }
 
+/// Caps a top-level artifact listing at 3 rows, revealing the rest behind a
+/// "show all (N)" toggle. N counts top-level nodes only — a folder counts as
+/// one row here even though it may hold many files, and a folder that's
+/// visible (whether in the first 3 or revealed by the toggle) keeps its own
+/// DisclosureGroup, unaffected by this view's expand state.
+private struct CollapsedArtifactList: View {
+    let artifacts: [WebArtifact]
+    let onOpen: (WebArtifact) -> Void
+
+    @State private var expanded = false
+
+    private var nodes: [ArtifactNode] { artifactTree(artifacts) }
+
+    var body: some View {
+        let visible = expanded ? nodes : Array(nodes.prefix(3))
+        ForEach(visible) { node in
+            ArtifactRow(node: node, onOpen: onOpen)
+        }
+        if nodes.count > 3 {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Text(expanded ? "show less" : "show all (\(nodes.count))")
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.data(12))
+            .foregroundStyle(KTheme.accent)
+        }
+    }
+}
+
 /// One PR chip — "#<N> <state>", tappable to open the PR in the browser.
 /// Not private: BoardView's JobCardView renders the same chip on the board
 /// card, so both call sites share one styling/parsing source of truth.
@@ -352,9 +386,7 @@ struct JobDetailView: View {
                 }
                 if let artifacts = job.artifacts, !artifacts.isEmpty {
                     kSection("Artifacts") {
-                        ForEach(artifactTree(artifacts)) { node in
-                            ArtifactRow(node: node, onOpen: { showingArtifact = $0 })
-                        }
+                        CollapsedArtifactList(artifacts: artifacts, onOpen: { showingArtifact = $0 })
                     }
                 }
 
@@ -863,9 +895,7 @@ private struct SteerView: View {
             }
             if let artifacts = job.artifacts, !artifacts.isEmpty {
                 kSection("Artifacts") {
-                    ForEach(artifactTree(artifacts)) { node in
-                        ArtifactRow(node: node, onOpen: { showingArtifact = $0 })
-                    }
+                    CollapsedArtifactList(artifacts: artifacts, onOpen: { showingArtifact = $0 })
                 }
             }
             kSection("Message") {
