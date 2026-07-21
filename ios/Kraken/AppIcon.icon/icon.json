@@ -1,0 +1,19 @@
+{
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "name" : "kraken",
+      "layers" : [
+        {
+          "image-name" : "kraken-glyph.png",
+          "name" : "kraken-glyph",
+          "glass" : true
+        }
+      ],
+      "specular" : true
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
