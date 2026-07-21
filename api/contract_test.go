@@ -21,11 +21,12 @@ import (
 //   - /api/board's HTTP handler itself (webBoard's marshaled shape is
 //     covered directly; wiring it through discovery/daemon state would drag
 //     in tmux/process-table dependencies this file avoids).
-//   - webAction-wrapped endpoints (/api/queue, /api/done, /api/retry,
-//     /api/kill, /api/archive, /api/unarchive, /api/delete, /api/question,
-//     /api/steer, /api/reactivate): all share the trivial {"ok": true} success
-//     shape or {"error": string} failure shape, already covered by the
-//     generic error-response convention documented in ios/API.md.
+//   - webAction-wrapped endpoints (/api/queue, /api/dequeue, /api/done,
+//     /api/retry, /api/kill, /api/archive, /api/unarchive, /api/delete,
+//     /api/question, /api/steer, /api/reactivate): all share the trivial
+//     {"ok": true} success shape or {"error": string} failure shape, already
+//     covered by the generic error-response convention documented in
+//     ios/API.md.
 //   - /api/peers/* action endpoints (spawn, send, kill, open, capture): need
 //     real tmux panes/sessions to reach their success path.
 //   - /api/job/create and /api/job/save: exercised for behavior elsewhere

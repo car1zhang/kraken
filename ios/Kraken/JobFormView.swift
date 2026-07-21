@@ -60,6 +60,17 @@ struct JobFormView: View {
     // replaced on every edit (scheduleAutosave) or run immediately
     // (flushAutosave), so at most one saveform call is ever in flight.
     @State private var autosaveTask: Task<Void, Never>?
+    // Monotonic id for the task above: Task is a struct (no identity), so a
+    // finishing closure needs this to know it's still the *latest* task
+    // before nilling autosaveTask — a stale closure clearing a newer task
+    // would re-open the canQueueForm debounce gap it exists to close.
+    @State private var autosaveGeneration = 0
+    @State private var isQueueing = false
+    // Surfaced inline near the sync status, separate from loadError (the
+    // job's own parse problem) and fetchError (a failed initial load) — this
+    // is specifically a failed queue attempt, e.g. the server's 409 on an
+    // empty spec.
+    @State private var queueError: String?
 
     var body: some View {
         Group {
@@ -107,7 +118,7 @@ struct JobFormView: View {
         Form {
             if isNew {
                 kSection {
-                    Text("Created — fill in the spec below; it autosaves as you type. It stays a draft until you flip Ready or queue it from the board.")
+                    Text("Created — fill in the spec below; it autosaves as you type. Queue arms once it's synced.")
                         .font(.voice(12))
                         .foregroundStyle(KTheme.text2)
                 }
@@ -224,6 +235,9 @@ struct JobFormView: View {
             if syncState != .idle {
                 kSection { syncStatusRow }
             }
+            if let queueError, !queueError.isEmpty {
+                kSection { Text(queueError).font(.voice(12)).foregroundStyle(KTheme.counter) }
+            }
         }
         .kListStyle()
         .navigationTitle(slug)
@@ -231,6 +245,22 @@ struct JobFormView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 SheetCloseButton(label: "Cancel") { dismiss() }
+            }
+            // Explicit, tap-only arming — no auto-queue on type. Disabled
+            // until the spec has real content and the latest edit has
+            // actually landed server-side (not mid-flight, not failed), so a
+            // tap can never race a still-syncing keystroke.
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    queueTapped()
+                } label: {
+                    Label("Queue", systemImage: "play.fill")
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Queue")
+                .buttonStyle(.borderedProminent)
+                .tint(KTheme.accent)
+                .disabled(!canQueueForm || isQueueing)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button {
@@ -271,6 +301,20 @@ struct JobFormView: View {
         }
         .font(.voice(12))
         .foregroundStyle(color)
+    }
+
+    // Gates the toolbar Queue button: editable, real spec content, and no
+    // autosave still in flight or waiting out its debounce (autosaveTask
+    // non-nil covers the debounce gap; the syncState checks cover the
+    // in-flight request itself and a just-failed one) — a tap can only ever
+    // fire against a spec the server has already accepted.
+    private var canQueueForm: Bool {
+        guard editable, !spec.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard autosaveTask == nil else { return false }
+        switch syncState {
+        case .syncing, .failed: return false
+        case .idle, .synced: return true
+        }
     }
 
     // Every autosaved field except `ready` (see the dedicated onChange
@@ -318,10 +362,13 @@ struct JobFormView: View {
     private func scheduleAutosave() {
         guard editable else { return }
         autosaveTask?.cancel()
+        autosaveGeneration += 1
+        let generation = autosaveGeneration
         autosaveTask = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
             await performAutosave()
+            if autosaveGeneration == generation { autosaveTask = nil }
         }
     }
 
@@ -331,7 +378,12 @@ struct JobFormView: View {
     private func flushAutosave() {
         guard editable else { return }
         autosaveTask?.cancel()
-        autosaveTask = Task { await performAutosave() }
+        autosaveGeneration += 1
+        let generation = autosaveGeneration
+        autosaveTask = Task {
+            await performAutosave()
+            if autosaveGeneration == generation { autosaveTask = nil }
+        }
     }
 
     // Always sends mtime: 0 — this is a deliberate, permanent choice for
@@ -356,6 +408,36 @@ struct JobFormView: View {
         } catch {
             guard !Task.isCancelled else { return }
             syncState = .failed((error as? KrakenError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    // The toolbar's Queue action: flushes any pending edit via the same
+    // immediate-save path the Ready toggle uses, waits for that specific
+    // save to land, then queues — matching the web's queue-then-close
+    // behavior. A 409 (e.g. an empty spec slipping through a race, or a
+    // server-side rule the client doesn't know about) surfaces inline next
+    // to the sync status rather than dismissing.
+    private func queueTapped() {
+        guard canQueueForm, !isQueueing else { return }
+        queueError = nil
+        isQueueing = true
+        flushAutosave()
+        let pending = autosaveTask
+        Task {
+            await pending?.value
+            if case .failed(let message) = syncState {
+                isQueueing = false
+                queueError = "autosave failed, can't queue: \(message)"
+                return
+            }
+            do {
+                try await APIClient.shared.queueJob(baseURL: baseURL, slug: slug)
+                isQueueing = false
+                onSaved()
+            } catch {
+                isQueueing = false
+                queueError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 

@@ -58,10 +58,41 @@ func webQueue(req webReq) error {
 	if state := jobs.DisplayState(j, bySlug); state != "draft" {
 		return fmt.Errorf("%s is %s — only drafts can be queued", j.Slug, state)
 	}
+	spec, _ := splitBodyLog(j.Body)
+	if strings.TrimSpace(spec) == "" {
+		return fmt.Errorf("%s has an empty spec — write one before queueing", j.Slug)
+	}
 	if err := jobs.WriteJobFields(j, "ready", "true"); err != nil {
 		return err
 	}
 	return nil
+}
+
+// webDequeue is the queued→draft reverse move: it's legal precisely because
+// no cell exists yet for a queued-but-not-started job, so there's nothing to
+// tear down — just flip ready back off. The server re-derives the display
+// state itself rather than trusting the browser's (possibly stale) column,
+// so a board that hasn't refreshed can't cancel a job that has since
+// actually started; the 409 in that case names kill as the correct recovery
+// instead. Note DisplayState collapses a ready job still waiting on unmet or
+// gated prereqs to "queued" too — those are dequeueable by the same logic,
+// since they likewise have no cell yet.
+func webDequeue(req webReq) error {
+	j, bySlug, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	if j.Err != "" {
+		return fmt.Errorf("%s is unparseable (%s) — fix the file first", j.Slug, j.Err)
+	}
+	state := jobs.DisplayState(j, bySlug)
+	if j.Started() && j.State != "done" {
+		return fmt.Errorf("%s already started — kill instead", j.Slug)
+	}
+	if state != "queued" {
+		return fmt.Errorf("%s is %s — only queued jobs can be cancelled", j.Slug, state)
+	}
+	return jobs.WriteJobFields(j, "ready", "false")
 }
 
 // webDone is the blocked→done drag: complete the job with the fixed
@@ -162,10 +193,13 @@ func webRetry(req webReq) error {
 }
 
 // webSteer delivers a mid-run instruction directly to zeus — there's no
-// intermediary anymore, so the message goes straight into its pane. Also
-// appended to the job's mid-run log (the durable trail) and, on successful
-// delivery, marks the job working (a steer is carl acting, which un-stalls
-// a blocked cell same as an answered question would).
+// intermediary anymore, so the message goes straight into its pane exactly
+// as typed, with no "from carl:" prefix. That means text starting with "/"
+// invokes a real slash command in zeus' Claude session (e.g. /send) — that's
+// intentional, not a leak. Also appended to the job's mid-run log (the
+// durable trail) and, on successful delivery, marks the job working (a steer
+// is carl acting, which un-stalls a blocked cell same as an answered
+// question would).
 func webSteer(req webReq) error {
 	j, _, err := webJobFor(req.Slug)
 	if err != nil {
@@ -186,7 +220,7 @@ func webSteer(req webReq) error {
 	if err := jobs.AppendMidRunLog(j, "me→zeus", jobs.OneLine(text)); err != nil {
 		return fmt.Errorf("mid-run log append failed: %v", err)
 	}
-	if err := core.SendMessage(zeus, "from carl: "+text); err != nil {
+	if err := core.SendMessage(zeus, text); err != nil {
 		return fmt.Errorf("logged, but delivery failed: %v", err)
 	}
 	if err := jobs.WriteJobState(j, "working"); err != nil {

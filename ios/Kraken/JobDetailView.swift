@@ -260,6 +260,11 @@ struct JobDetailView: View {
     private var canQueue: Bool {
         column == .draft && (job.err ?? "").isEmpty
     }
+    // webDequeue 409s once the cell has actually started, so this only shows
+    // for a job that's queued but still waiting — not yet live.
+    private var canDequeue: Bool {
+        !isArchived && !job.live && column == .queued
+    }
     // review was folded into blocked — mark-done now lives there, alongside
     // the inline pending-question buttons rendered in the Form itself (see
     // the Question section below — answering is a direct tap, not a sheet).
@@ -293,7 +298,7 @@ struct JobDetailView: View {
         !isArchived && column == .done && job.reactivatable == true
     }
     private var hasAnyAction: Bool {
-        canQueue || canRetry || canMarkDone || canSteer || isEditable || canKill
+        canQueue || canDequeue || canRetry || canMarkDone || canSteer || isEditable || canKill
             || canArchive || canReactivate || isArchived
     }
 
@@ -553,6 +558,16 @@ struct JobDetailView: View {
                     .labelStyle(.iconOnly)
                     .accessibilityLabel("Queue")
                     .tint(KTheme.accent)
+                }
+                if canDequeue {
+                    Button {
+                        runAction { try await APIClient.shared.dequeueJob(baseURL: baseURL, slug: job.slug) }
+                    } label: {
+                        Label("Cancel Queue", systemImage: "xmark.circle")
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Cancel Queue")
+                    .tint(KTheme.text2)
                 }
                 if canRetry {
                     Button {

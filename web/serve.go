@@ -40,7 +40,15 @@ func Serve(opts Options) error {
 		return fmt.Errorf("embedded assets: %v", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(static)))
+	// no-cache: embed.FS files carry a zero mod time, so FileServer sends no
+	// Last-Modified/ETag validators — browsers fall back to heuristic caching
+	// and keep serving a stale SPA across binary upgrades. Force revalidation
+	// (a full refetch, given no validators); the assets are tiny and local.
+	staticFiles := http.FileServer(http.FS(static))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		staticFiles.ServeHTTP(w, r)
+	}))
 	api.Register(mux)
 	// /api/artifact/<slug>/<cell|pluto>/<name>
 	mux.HandleFunc("/api/artifact/", func(w http.ResponseWriter, r *http.Request) {

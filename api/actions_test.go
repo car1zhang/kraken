@@ -1,11 +1,25 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"kraken/jobs"
 )
+
+// writeTestJobBody writes a job file with a caller-chosen body (spec text),
+// unlike writeTestJob which always seeds "# Spec\n" — needed for the
+// empty-spec queue guard tests below.
+func writeTestJobBody(t *testing.T, slug, extraFrontmatter, body string) {
+	t.Helper()
+	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\nready: false\n" +
+		extraFrontmatter + "---\n\n" + body
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestWebAnswerQuestionBadDigit(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
@@ -86,5 +100,95 @@ func TestWebSteerEmptyMessage(t *testing.T) {
 	writeTestJob(t, "steer-empty", "state: blocked\n")
 	if err := webSteer(webReq{Slug: "steer-empty", Text: "   "}); err == nil {
 		t.Fatal("empty steering message should be rejected")
+	}
+}
+
+// --- webQueue: server-side empty-spec guard ---
+
+func TestWebQueueEmptySpec(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJobBody(t, "queue-empty-spec", "", "")
+	if err := webQueue(webReq{Slug: "queue-empty-spec"}); err == nil || !strings.Contains(err.Error(), "empty spec") {
+		t.Fatalf("expected 'empty spec' error, got %v", err)
+	}
+}
+
+func TestWebQueueWithSpec(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJobBody(t, "queue-with-spec", "", "Some real spec content.\n")
+	if err := webQueue(webReq{Slug: "queue-with-spec"}); err != nil {
+		t.Fatalf("queue with a real spec should succeed, got %v", err)
+	}
+	j := jobs.JobBySlug(jobs.LoadJobs(), "queue-with-spec")
+	if j == nil || !j.Ready {
+		t.Fatalf("expected job to be re-parsed as ready, got %+v", j)
+	}
+}
+
+// --- webDequeue: queued→draft reverse move ---
+
+func TestWebDequeue(t *testing.T) {
+	cases := []struct {
+		name        string
+		slug        string
+		frontmatter string
+		asDraft     bool   // true: use writeTestJobBody (ready: false); false: writeTestJob (ready: true)
+		wantErrSub  string // empty means success
+	}{
+		{"queued job dequeues", "dequeue-ready", "", false, ""},
+		{"draft job refused", "dequeue-draft", "", true, "queued"},
+		{"started job refused", "dequeue-working", "state: working\n", false, "kill"},
+		{"done job refused", "dequeue-done", "state: done\n", false, "queued"},
+		{"unparseable job refused", "dequeue-bad", "ready: false\n", false, "unparseable"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+			if c.asDraft {
+				writeTestJobBody(t, c.slug, c.frontmatter, "some spec\n")
+			} else {
+				writeTestJob(t, c.slug, c.frontmatter)
+			}
+			err := webDequeue(webReq{Slug: c.slug})
+			if c.wantErrSub == "" {
+				if err != nil {
+					t.Fatalf("expected dequeue to succeed, got %v", err)
+				}
+				j := jobs.JobBySlug(jobs.LoadJobs(), c.slug)
+				if j == nil || j.Ready {
+					t.Fatalf("expected ready to flip false on disk, got %+v", j)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErrSub) {
+				t.Fatalf("expected error containing %q, got %v", c.wantErrSub, err)
+			}
+		})
+	}
+}
+
+// TestWebQueueDequeueRoundTrip exercises queue→dequeue→queue through the
+// real job file, confirming each move's on-disk effect survives a re-parse
+// before the next move is attempted.
+func TestWebQueueDequeueRoundTrip(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJobBody(t, "roundtrip", "", "a real spec\n")
+	if err := webQueue(webReq{Slug: "roundtrip"}); err != nil {
+		t.Fatalf("initial queue: %v", err)
+	}
+	if j := jobs.JobBySlug(jobs.LoadJobs(), "roundtrip"); j == nil || !j.Ready {
+		t.Fatalf("expected ready after queue, got %+v", j)
+	}
+	if err := webDequeue(webReq{Slug: "roundtrip"}); err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if j := jobs.JobBySlug(jobs.LoadJobs(), "roundtrip"); j == nil || j.Ready {
+		t.Fatalf("expected ready false after dequeue, got %+v", j)
+	}
+	if err := webQueue(webReq{Slug: "roundtrip"}); err != nil {
+		t.Fatalf("re-queue: %v", err)
+	}
+	if j := jobs.JobBySlug(jobs.LoadJobs(), "roundtrip"); j == nil || !j.Ready {
+		t.Fatalf("expected ready true after re-queue, got %+v", j)
 	}
 }

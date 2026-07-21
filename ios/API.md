@@ -111,9 +111,22 @@ rides on the wire), `options` (array of `webQuestionOption`, always).
 `webWakeup`: `reason` (string, always), `fires_at` (number, always — unix millis). Distinct from `Wakeup` on the peer wire shape only in that it drops `delay_seconds` — the client only needs `fires_at` for its countdown.
 
 ### `POST /api/queue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
+### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
 Request: `webReq` — `slug` (string, required), `text` (string, omitempty, unused by these).
 Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure (409 for validation conflicts).
+
+`/api/queue` refuses (409) a job whose spec body is empty — "queued" is
+supposed to mean there's real content for a cell to pick up, so an empty
+spec never reaches the daemon.
+
+`/api/dequeue` is the queued→draft reverse move: legal only for a job that
+is queued (or ready-but-blocked-on-prereqs, which `DisplayState` also shows
+as queued) and has never started a cell — there's nothing to tear down yet,
+so it's just a `ready` flip back to `false`. The server re-derives state
+itself rather than trusting the board's snapshot, so a stale board can't
+cancel a job that has since actually started: that case 409s with a message
+naming `/api/kill` as the correct recovery instead.
 
 ### `POST /api/question`
 
@@ -124,6 +137,10 @@ Response: same as above.
 
 Request: `webReq` — `slug` (string), `text` (string: free-text message, required non-empty).
 Response: same as above.
+
+`text` is delivered to zeus' pane verbatim — no `"from carl: "` prefix — so
+a message starting with `/` invokes a real slash command in zeus' Claude
+session (e.g. `/send`) rather than being typed as plain conversation text.
 
 ### `POST /api/reactivate`
 
