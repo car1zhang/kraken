@@ -66,12 +66,28 @@ targets:
         SWIFT_VERSION: "5.10"
         TEST_TARGET_NAME: Kraken
         GENERATE_INFOPLIST_FILE: YES
+  KrakenTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: KrakenTests
+    dependencies:
+      - target: Kraken
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.carl.KrakenTests
+        SWIFT_VERSION: "5.10"
+        TEST_TARGET_NAME: Kraken
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   Kraken:
     build:
       targets:
         Kraken: all
         KrakenUITests: [test]
+        KrakenTests: [test]
     test:
       targets:
         - KrakenUITests
+        - KrakenTests
