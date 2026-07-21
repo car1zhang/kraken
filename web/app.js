@@ -28,6 +28,16 @@ const STATE_COLOR = {
 let jobsBySlug = {};
 let dragging = null; // { slug, from }
 
+// serialized board.jobs of the last DOM rebuild — refresh() skips rebuilding
+// #board while it still matches, so any client-side state change that
+// affects markup (but doesn't itself change the jobs payload) must call
+// invalidateBoard() before its next refresh().
+let boardSnapshot = "";
+
+function invalidateBoard() {
+  boardSnapshot = "";
+}
+
 // per-slug detail-expanded state, persisted the same way archiveOpen is
 // (see archiveOpen below) so it survives the 3s poll re-render, which
 // rebuilds #board innerHTML and would otherwise wipe any .expanded class
@@ -146,7 +156,7 @@ function cardHTML(j, col) {
       <span>${esc(j.type)}</span>
       <span>${esc(j.repo)}</span>
       ${j.live ? `<span>${esc(j.cell)}</span>` : ""}
-      <span>${age(j.mtime)}</span>
+      <span data-age="${j.mtime}">${age(j.mtime)}</span>
       ${prereqs ? `<span class="prereq">${prereqs}</span>` : ""}
     </div>
     ${j.live ? `<div class="review-row"><button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button></div>` : ""}
@@ -194,6 +204,10 @@ function checkStaleModals() {
   }
 }
 
+// render does the cheap, always-correct-regardless-of-payload-change work:
+// rebuilds jobsBySlug, closes stale modals, and refreshes the status bar.
+// Returns the column buckets so the caller can decide whether the (much
+// pricier) #board innerHTML rebuild is actually warranted — see refresh().
 function render(board) {
   jobsBySlug = {};
   const byCol = Object.fromEntries(COLUMNS.map((c) => [c.key, []]));
@@ -212,16 +226,6 @@ function render(board) {
     if (j.health) flags++;
   }
   checkStaleModals();
-  document.getElementById("board").innerHTML = COLUMNS.map(
-    (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
-      <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
-      <div class="col-cards">
-        ${c.key === "draft" ? '<button class="btn-new" id="new-job">+ NEW JOB</button>' : ""}
-        ${byCol[c.key].map((j) => cardHTML(j, c.key)).join("") || (c.key === "draft" ? "" : '<div class="empty">·</div>')}
-      </div>
-      ${c.key === "done" ? archiveDrawerHTML(archived) : ""}
-    </section>`,
-  ).join("");
 
   const led = document.getElementById("daemon-led");
   const stat = document.getElementById("daemon-stat");
@@ -250,6 +254,33 @@ function render(board) {
   } else {
     banner.hidden = true;
   }
+
+  return { byCol, archived };
+}
+
+// renderBoardDOM is the expensive part of render(): only called when
+// board.jobs actually changed (see refresh()).
+function renderBoardDOM(byCol, archived) {
+  document.getElementById("board").innerHTML = COLUMNS.map(
+    (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
+      <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
+      <div class="col-cards">
+        ${c.key === "draft" ? '<button class="btn-new" id="new-job">+ NEW JOB</button>' : ""}
+        ${byCol[c.key].map((j) => cardHTML(j, c.key)).join("") || (c.key === "draft" ? "" : '<div class="empty">·</div>')}
+      </div>
+      ${c.key === "done" ? archiveDrawerHTML(archived) : ""}
+    </section>`,
+  ).join("");
+}
+
+// updateAges refreshes the age chips in place without touching the rest of
+// the DOM — runs every poll (see refresh()), including polls that skip the
+// full board rebuild, so "3m" keeps ticking toward "4m" even when nothing
+// else changed. textContent only — never innerHTML.
+function updateAges() {
+  document.querySelectorAll("[data-age]").forEach((el) => {
+    el.textContent = age(+el.dataset.age);
+  });
 }
 
 // ---- archived drawer (collapsible, lives under the DONE column) ----
@@ -274,7 +305,7 @@ function archivedCardHTML(j) {
     <div class="meta">
       <span>${esc(j.type)}</span>
       <span>${esc(j.repo)}</span>
-      <span>${age(j.mtime)}</span>
+      <span data-age="${j.mtime}">${age(j.mtime)}</span>
     </div>
     ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
@@ -355,10 +386,14 @@ async function post(url, body) {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.status);
+    // server state changed and the current DOM may show disabled buttons —
+    // force a rebuild even if the jobs payload happens to match
+    invalidateBoard();
     await refresh();
     return true;
   } catch (e) {
     document.getElementById("tick-stat").textContent = "✕ " + e.message;
+    invalidateBoard();
     await refresh();
     return false;
   }
@@ -503,6 +538,7 @@ document.addEventListener("click", (ev) => {
   if (archiveToggle) {
     archiveOpen = !archiveOpen;
     localStorage.setItem("kraken-archive-open", archiveOpen ? "1" : "0");
+    invalidateBoard(); // archiveOpen changed — markup differs even if jobs didn't
     refresh();
     return;
   }
@@ -797,6 +833,7 @@ document.getElementById("editor-create").addEventListener("click", async () => {
     if (!r.ok) throw new Error(d.error || r.status);
     await loadForm(d.slug);
     editorText.focus();
+    invalidateBoard();
     refresh();
   } catch (e) {
     editorNote.textContent = String(e.message || e);
@@ -833,6 +870,7 @@ async function saveForm(force) {
     editorMTime = d.mtime;
     editorNote.textContent = d.warn ? "saved — but won't run: " + d.warn : "saved ✓";
     editorNote.style.color = d.warn ? "" : "var(--solved)";
+    invalidateBoard();
     refresh();
   } catch (e) {
     editorNote.style.color = "";
@@ -913,6 +951,7 @@ document.querySelectorAll(".viewtab").forEach((tab) =>
       t.classList.toggle("active", t.dataset.view === view));
     document.getElementById("board").hidden = view !== "board";
     document.getElementById("dag").hidden = view !== "dag";
+    invalidateBoard(); // switching to dag must render it even though jobs are unchanged
     refresh();
   }));
 
@@ -1022,20 +1061,38 @@ document.getElementById("dag-nodes").addEventListener("click", (ev) => {
   if (node && !window.getSelection().toString()) openEditor(node.dataset.slug);
 });
 
-// ---- poll (paused while dragging so the board doesn't rebuild mid-drag) ----
+// ---- poll (paused while dragging so the board doesn't rebuild mid-drag,
+// and while the tab is hidden — nothing is watching it either way) ----
 
 async function refresh() {
   if (dragging) return;
+  if (document.hidden) return;
   try {
     const r = await fetch("/api/board");
     const board = await r.json();
-    render(board);
-    if (view === "dag") renderDag(board);
+    // always: cheap, correctness-critical bookkeeping regardless of whether
+    // the jobs payload itself changed since the last rebuild
+    const { byCol, archived } = render(board);
+    // board.daemon.last_tick changes every daemon tick, so compare jobs only
+    // — a whole-payload compare would defeat the point of this check
+    const snap = JSON.stringify(board.jobs || []);
+    if (snap !== boardSnapshot) {
+      boardSnapshot = snap;
+      renderBoardDOM(byCol, archived);
+      if (view === "dag") renderDag(board);
+    } else {
+      updateAges(); // a rebuild renders fresh ages itself
+    }
   } catch {
     document.getElementById("daemon-stat").textContent = "kraken web server unreachable";
     document.getElementById("daemon-led").className = "led";
   }
 }
+// returning to the tab refreshes immediately instead of waiting out the rest
+// of the current 3s tick
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
 applyView();
 refresh();
 setInterval(refresh, 3000);

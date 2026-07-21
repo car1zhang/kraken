@@ -178,6 +178,7 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
+			webBoardCache.invalidate()
 			webJSON(w, http.StatusOK, map[string]any{"ok": true, "key": true})
 			return
 		}
@@ -186,6 +187,7 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
+			webBoardCache.invalidate()
 			webJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": false, "shell": true})
 			return
 		}
@@ -194,6 +196,7 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
+		webBoardCache.invalidate()
 		webJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": queued})
 	}
 }
@@ -278,6 +281,7 @@ func peersSpawnHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
+	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "at": at})
 }
 
@@ -318,6 +322,7 @@ func peersKillHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
+		webBoardCache.invalidate()
 		webJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
