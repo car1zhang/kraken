@@ -583,16 +583,13 @@ body {
 
 /* open the cell's tmux pane in Ghostty — review-row name predates the
    removal of the nvim/code review buttons it used to sit alongside.
-   tmux is a SOLID button in yellow: filled, borderless, glow-only hover —
-   same treatment as the accent-filled .btn, different fill. accent-ink
-   contrasts revealed the same way it contrasts accent in both themes
-   (light fill/dark ink in dark mode, dark fill/light ink in light). */
+   wireframe like every other outline button, in yellow. */
 .btn.tmux-open {
-  background: var(--revealed); color: var(--accent-ink);
-  border: none;
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed-soft);
   font-size: 10px; letter-spacing: 1px;
 }
-.btn.tmux-open:hover { box-shadow: var(--glow-warn); }
+.btn.tmux-open:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
 .review-row { display: flex; gap: 8px; margin-top: 8px; }
 .review-row .btn.tmux-open { flex: 1; padding: 5px 0; }
 
