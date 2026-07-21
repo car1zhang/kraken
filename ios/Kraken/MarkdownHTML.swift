@@ -263,7 +263,7 @@ private func markdownToHTML(_ src: String) -> String {
 /// size. `transparent` drops the ground background/padding for content
 /// meant to sit inline inside a SwiftUI card instead of filling a screen.
 private func documentShell(body: String, transparent: Bool) -> String {
-    let background = transparent ? "transparent" : "#0A0E14"
+    let background = transparent ? "transparent" : "var(--ground)"
     let padding = transparent ? "0" : "16px"
     return """
     <!doctype html>
@@ -272,37 +272,61 @@ private func documentShell(body: String, transparent: Bool) -> String {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: light dark;
+        --ground: #0A0E14;
+        --raised: #151C28;
+        --hairline: #1E2836;
+        --hairline2: #2A3A50;
+        --text: #D7E2EC;
+        --text2: #6B7A8C;
+        --accent: #9E7BFF;
+        --revealed: #F5B84D;
+        --zebra: rgba(255, 255, 255, 0.02);
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --ground: #EEF2F7;
+          --raised: #E3E9F1;
+          --hairline: #D8E0EA;
+          --hairline2: #B9C6D6;
+          --text: #1C2733;
+          --text2: #5D6C7E;
+          --accent: #6B3FE0;
+          --revealed: #8A5106;
+          --zebra: rgba(0, 0, 0, 0.025);
+        }
+      }
       * { box-sizing: border-box; -webkit-text-size-adjust: 100%; }
       html, body { background: \(background); }
       body {
         margin: 0; padding: \(padding);
-        color: #D7E2EC;
+        color: var(--text);
         font: 15px/1.55 -apple-system, "Avenir Next", "Helvetica Neue", sans-serif;
       }
       h1, h2, h3, h4 { margin: 1.1em 0 0.4em; font-weight: 600; }
       h1:first-child, h2:first-child, h3:first-child, h4:first-child, p:first-child { margin-top: 0; }
-      h1 { font-size: 20px; color: #9E7BFF; }
-      h2 { font-size: 17px; border-bottom: 1px solid #1E2836; padding-bottom: 3px; }
+      h1 { font-size: 20px; color: var(--accent); }
+      h2 { font-size: 17px; border-bottom: 1px solid var(--hairline); padding-bottom: 3px; }
       h3 { font-size: 16px; }
       h4 { font-size: 15px; }
       p, ul, ol { margin: 0.55em 0; }
       ul, ol { padding-left: 20px; }
       li { margin: 0.15em 0; }
-      code { font: 13px "SF Mono", Menlo, monospace; background: #151C28; color: #F5B84D; padding: 1px 4px; }
+      code { font: 13px "SF Mono", Menlo, monospace; background: var(--raised); color: var(--revealed); padding: 1px 4px; }
       pre {
-        background: #0A0E14; border: 1px solid #1E2836; padding: 10px 12px;
+        background: var(--ground); border: 1px solid var(--hairline); padding: 10px 12px;
         overflow-x: auto; margin: 0.7em 0; white-space: pre-wrap; word-break: break-word;
       }
-      pre code { background: none; padding: 0; color: #D7E2EC; }
-      a { color: #9E7BFF; }
-      strong { color: #D7E2EC; font-weight: 600; }
-      blockquote { border-left: 2px solid #2A3A50; padding-left: 10px; color: #6B7A8C; margin: 0.55em 0; }
+      pre code { background: none; padding: 0; color: var(--text); }
+      a { color: var(--accent); }
+      strong { color: var(--text); font-weight: 600; }
+      blockquote { border-left: 2px solid var(--hairline2); padding-left: 10px; color: var(--text2); margin: 0.55em 0; }
       table { border-collapse: collapse; width: 100%; margin: 0.7em 0; font-size: 14px; }
-      th, td { border: 1px solid #1E2836; padding: 6px 10px; }
-      th { background: #151C28; color: #D7E2EC; font-weight: 600; text-align: left; }
-      td { color: #D7E2EC; }
-      tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+      th, td { border: 1px solid var(--hairline); padding: 6px 10px; }
+      th { background: var(--raised); color: var(--text); font-weight: 600; text-align: left; }
+      td { color: var(--text); }
+      tr:nth-child(even) td { background: var(--zebra); }
     </style>
     </head>
     <body>

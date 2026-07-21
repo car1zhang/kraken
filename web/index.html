@@ -4,6 +4,37 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>kraken</title>
+  <script>
+    // pre-paint theme stamp: preference (localStorage kraken-theme: "light" |
+    // "dark", absent = follow system) resolves against prefers-color-scheme
+    // and lands on <html data-theme>; failure modes fall through to the dark
+    // :root defaults. window.krakenTheme is the toggle's tiny API (app.js).
+    (function () {
+      // storage can throw (blocked cookies, sandboxed context) — a dead
+      // store must still leave the theme working for this page load
+      var pref;
+      try { pref = localStorage.getItem("kraken-theme"); } catch (e) {}
+      if (pref !== "light" && pref !== "dark") pref = "system";
+      var mq = window.matchMedia("(prefers-color-scheme: light)");
+      function stamp() {
+        document.documentElement.dataset.theme =
+          pref === "system" ? (mq.matches ? "light" : "dark") : pref;
+      }
+      stamp();
+      window.krakenTheme = {
+        get: function () { return pref; },
+        set: function (p) {
+          pref = p === "light" || p === "dark" ? p : "system";
+          stamp();
+          try {
+            if (pref === "system") localStorage.removeItem("kraken-theme");
+            else localStorage.setItem("kraken-theme", pref);
+          } catch (e) {}
+        },
+      };
+      mq.addEventListener("change", function () { if (pref === "system") stamp(); });
+    })();
+  </script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,6 +51,7 @@
       <button class="viewtab" data-view="dag">DAG</button>
     </span>
     <span class="spacer"></span>
+    <button class="theme-btn" id="theme-toggle" title="theme: system → light → dark"></button>
     <span class="stat dim" id="tick-stat"></span>
   </header>
   <div class="stale-banner" id="stale-banner" hidden></div>
