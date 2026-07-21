@@ -29,8 +29,8 @@ private struct ArtifactWebView: UIViewRepresentable {
         // left exactly as the server renders it; the markdown/plain path
         // builds its own dark-themed shell (MarkdownHTML.swift) instead.
         webView.isOpaque = false
-        webView.backgroundColor = UIColor(KTheme.ground)
-        webView.scrollView.backgroundColor = UIColor(KTheme.ground)
+        webView.backgroundColor = KTheme.groundUI
+        webView.scrollView.backgroundColor = KTheme.groundUI
         return webView
     }
 

@@ -8,6 +8,15 @@ struct KrakenApp: App {
     // survives dismissing a sheet or switching tabs — see DraftStore.swift.
     @State private var draftStore = DraftStore()
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("appearance") private var appearance = "system"
+
+    private var preferredScheme: ColorScheme? {
+        switch appearance {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
 
     init() {
         KTheme.applyGlobalAppearance()
@@ -31,7 +40,7 @@ struct KrakenApp: App {
             RootTabView()
                 .environment(router)
                 .environment(draftStore)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredScheme)
                 .tint(KTheme.accent)
                 .onAppear {
                     // launch-argument route (simctl launch ... -KrakenRoute
