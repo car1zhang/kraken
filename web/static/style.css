@@ -233,6 +233,17 @@ body {
   margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* dequeue affordance on a queued-but-not-yet-started card — deliberately not
+   .chip (that class is claimed by the delegated click handler that opens an
+   artifact panel) */
+.queue-cancel {
+  font: 10px var(--mono); line-height: 1;
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--hairline-2);
+  padding: 2px 6px; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.queue-cancel:hover { background: var(--counter-soft); border-color: var(--counter); color: var(--counter); box-shadow: var(--glow-hot); }
 /* PR chips: one linked badge per open/merged/closed PR on the job, styled
    like .chip but color-coded by PR state instead of the uniform accent */
 .prs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }

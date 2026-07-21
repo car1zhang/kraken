@@ -13,6 +13,10 @@ import Observation
 /// an app kill or reinstall — carl's "in memory" ask covered same-session
 /// continuity, this covers the rest. Pane-scoped keys ("send:<pane>",
 /// "shell:<pane>") have no server-side counterpart and stay purely local.
+/// Each debounced sync re-checks the draft's identity right before it POSTs
+/// (see scheduleSync) so a send's clear() — which cancels the task, but
+/// can't stop one already past that cancellation check — always wins over a
+/// stale write instead of racing it back onto the server.
 @Observable
 final class DraftStore {
     private static let jobKeyPrefix = "steer:"
@@ -47,15 +51,31 @@ final class DraftStore {
         syncTasks.removeValue(forKey: key)
     }
 
+    /// Whether `text` is still the live value stored at `key` — the wake-time
+    /// guard a debounced sync re-checks right before it POSTs (see
+    /// scheduleSync). Pulled out as its own pure, internal-visibility check
+    /// so the race it closes (a send's clear() landing after a sleeping
+    /// task's cancellation check but before it POSTs) is directly testable
+    /// without depending on the 600ms task timing.
+    func isCurrent(key: String, text: String) -> Bool {
+        drafts[key] == text
+    }
+
     private func scheduleSync(key: String, text: String) {
         let slug = String(key.dropFirst(Self.jobKeyPrefix.count))
         syncTasks[key]?.cancel()
         syncTasks[key] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
+            // Wake-time identity re-check: cancellation only stops a task
+            // that hasn't yet passed the check above. A task already past it
+            // when clear() (or another edit) landed would otherwise still
+            // POST this now-stale text over whatever won since — isCurrent
+            // re-reads the live value and this bails unless it's unchanged.
+            guard let self, self.isCurrent(key: key, text: text) else { return }
             let baseURL = UserDefaults.standard.string(forKey: "serverURL") ?? KrakenDefaults.serverURL
             try? await APIClient.shared.postDraft(baseURL: baseURL, slug: slug, text: text)
-            self?.syncTasks.removeValue(forKey: key)
+            self.syncTasks.removeValue(forKey: key)
         }
     }
 

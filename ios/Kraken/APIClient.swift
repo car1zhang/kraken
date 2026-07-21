@@ -175,6 +175,12 @@ actor APIClient {
         let _: OkResponse = try await post(baseURL: baseURL, path: "/api/queue", body: SlugRequest(slug: slug))
     }
 
+    /// Cancels a queued-but-unstarted job back to draft. Server 409s if the
+    /// job isn't actually queued or already has a cell coming up.
+    func dequeueJob(baseURL: String, slug: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/dequeue", body: SlugRequest(slug: slug))
+    }
+
     func markDone(baseURL: String, slug: String) async throws {
         let _: OkResponse = try await post(baseURL: baseURL, path: "/api/done", body: SlugRequest(slug: slug))
     }

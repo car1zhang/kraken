@@ -15,7 +15,7 @@ const COLUMNS = [
   { key: "done", title: "DONE", states: ["done"] },
 ];
 
-const MOVES = { draft: ["queued"], blocked: ["done"] };
+const MOVES = { draft: ["queued"], queued: ["draft"], blocked: ["done"] };
 
 const STATE_COLOR = {
   working: "var(--solved)",
@@ -196,6 +196,7 @@ function cardHTML(j, col) {
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
+      ${col === "queued" && !j.live ? `<button class="queue-cancel" data-slug="${esc(j.slug)}" title="cancel — return to draft (spec is kept)">✕</button>` : ""}
     </div>
     ${wakeupChipHTML(j)}
     ${prs ? `<div class="prs">${prs}</div>` : ""}
@@ -248,6 +249,9 @@ function checkStaleModals() {
       flushEditorAutosave();
       editorOverlay.hidden = true;
     }
+    // freshest jobsBySlug just landed — e.g. a just-created job finally
+    // showing up, or an err clearing — re-derive arming from it
+    if (!editorOverlay.hidden) updateEditorQueue();
   }
 }
 
@@ -420,6 +424,7 @@ document.addEventListener("drop", async (ev) => {
   const to = col.dataset.col;
   if (!(MOVES[from] || []).includes(to)) return;
   if (from === "draft" && to === "queued") await post("/api/queue", { slug });
+  else if (from === "queued" && to === "draft") await post("/api/dequeue", { slug });
   else if (from === "blocked" && to === "done") await post("/api/done", { slug });
 });
 
@@ -627,6 +632,16 @@ document.addEventListener("click", (ev) => {
   if (retry) {
     retry.disabled = true;
     post("/api/retry", { slug: retry.dataset.slug });
+    return;
+  }
+  // must come before the card-open fallback below — it's inside the card's
+  // clickable area and would otherwise also open the editor. Non-destructive
+  // (no confirm): the spec survives a dequeue, so this just posts straight
+  // through, matching the queued→draft drag move above.
+  const cancelQueue = ev.target.closest(".queue-cancel");
+  if (cancelQueue) {
+    cancelQueue.disabled = true;
+    post("/api/dequeue", { slug: cancelQueue.dataset.slug });
     return;
   }
   const archiveToggle = ev.target.closest("#archive-toggle");
@@ -884,13 +899,22 @@ document.getElementById("steer-send").addEventListener("click", async () => {
   }
   const btn = document.getElementById("steer-send");
   btn.disabled = true;
-  const ok = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug: steerSlug, text });
+  const slug = steerSlug;
+  // cancel first — a debounce firing mid-send would land after the server's
+  // clear and resurrect the sent message
+  postDraft.cancel();
+  const ok = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug, text });
   btn.disabled = false;
   if (ok) {
-    postDraft.cancel(); // server already cleared the draft — flushing would resurrect it
+    // cancel again — a keystroke during the in-flight send would have
+    // scheduled a fresh sync that the pre-send cancel never saw
+    postDraft.cancel();
     steerOverlay.hidden = true;
   } else {
     document.getElementById("steer-note").textContent = "send failed — see status bar";
+    // failed send — re-arm the draft sync with the composer's raw value
+    // (matching the input handler, which never trims)
+    postDraft(slug, document.getElementById("steer-text").value);
   }
 });
 document.getElementById("steer-text").addEventListener("input", (ev) => {
@@ -941,6 +965,9 @@ let editorReady = false; // captured from the last loaded form; the ready row is
 // the map yet" as a state change.
 let editorOpenState = undefined;
 let editorStateCaptured = false;
+// true when the freshest save/load says the current spec won't run (loadForm's
+// d.err, or doEditorSave's d.warn) — one of updateEditorQueue's arming gates
+let editorSyncWarn = false;
 
 function prereqRowHTML(p) {
   return `<div class="prereq-row">
@@ -1011,6 +1038,50 @@ function setFormReadOnly(readOnly) {
   document.getElementById("editor-hint").textContent = readOnly ? "read-only — cell in flight" : "";
 }
 
+// updateEditorQueue is the reactive replacement for computing editor-queue's
+// visibility once in loadForm — that one-shot snapshot read a stale board
+// that could be missing a job created moments ago, forcing a close/reopen
+// before carl could queue it. Called from every path that can change what
+// "armed" depends on: form load, autosave completion, live typing, and the
+// board catching up on the next poll.
+function updateEditorQueue() {
+  const btn = document.getElementById("editor-queue");
+  const deq = document.getElementById("editor-dequeue");
+  const hint = document.getElementById("editor-hint");
+  if (!editorSlug || document.getElementById("editor-form").hidden || editorText.readOnly) {
+    btn.hidden = true;
+    deq.hidden = true;
+    return; // readOnly already carries its own hint text (see setFormReadOnly) — don't stomp it
+  }
+  const j = jobsBySlug[editorSlug];
+  // missing from jobsBySlug means the job was just created and the board
+  // hasn't polled it in yet — treat that as a fresh draft, not "unarmable"
+  const state = j ? j.state : "draft";
+  const live = j ? !!j.live : false;
+  const boardErr = j ? !!j.err : false; // board-level err (e.g. unhealthy cell) — distinct from editorSyncWarn's form-level d.err/d.warn
+  if (state === "queued" && !live) {
+    // queued: the modal offers the reverse move instead of the forward one
+    btn.hidden = true;
+    deq.hidden = false;
+    hint.textContent = "queued — cancel returns it to draft";
+    return;
+  }
+  deq.hidden = true;
+  if (state !== "draft" || live) {
+    btn.hidden = true;
+    hint.textContent = "";
+    return;
+  }
+  // a draft's queue button is always present — merely disabled until the
+  // spec is non-empty and clean, so the affordance is discoverable from the
+  // first moment the modal opens
+  btn.hidden = false;
+  const armed = editorText.value.trim() !== "" && !editorSyncWarn && !boardErr;
+  btn.disabled = !armed;
+  hint.textContent = armed ? "synced ✓ — queueable"
+    : editorText.value.trim() === "" ? "write a spec to queue" : "";
+}
+
 async function loadForm(slug) {
   const r = await fetch("/api/job/form?slug=" + encodeURIComponent(slug));
   const d = await r.json();
@@ -1029,12 +1100,13 @@ async function loadForm(slug) {
   document.getElementById("editor-form").hidden = false;
   setFormReadOnly(!d.editable);
   // board-action parity: the drag/board moves for editable jobs live here
-  // too — queue for an err-free draft, reactivate for a resumable done job
+  // too — queue for an err-free draft (arming is reactive, see
+  // updateEditorQueue), reactivate for a resumable done job
   const j = jobsBySlug[slug];
-  document.getElementById("editor-queue").hidden =
-    !(j && !j.live && j.state === "draft" && !j.err && !d.err);
   document.getElementById("editor-reactivate").hidden =
     !(j && !j.archived && j.state === "done" && j.reactivatable);
+  editorSyncWarn = !!d.err;
+  updateEditorQueue();
   if (d.err) editorNote.textContent = "current file won't run: " + d.err;
 }
 
@@ -1043,6 +1115,7 @@ function openEditor(slug) {
   editorMTime = 0;
   editorReady = false;
   editorStateCaptured = false;
+  editorSyncWarn = false;
   editorNote.textContent = "";
   editorNote.style.color = "";
   const isNew = !slug;
@@ -1051,6 +1124,7 @@ function openEditor(slug) {
   document.getElementById("editor-form").hidden = true;
   document.getElementById("editor-archive").hidden = true;
   document.getElementById("editor-queue").hidden = true;
+  document.getElementById("editor-dequeue").hidden = true;
   document.getElementById("editor-reactivate").hidden = true;
   document.getElementById("editor-hint").textContent = "";
   document.getElementById("editor-slug").value = "";
@@ -1068,9 +1142,37 @@ document.getElementById("editor-queue").addEventListener("click", async () => {
   btn.disabled = true;
   await flushEditorAutosave(); // land any edit still sitting in the debounce window before queueing
   const ok = await post("/api/queue", { slug: editorSlug });
-  btn.disabled = false;
-  if (ok) editorOverlay.hidden = true;
-  else editorNote.textContent = "queue failed — see status bar";
+  if (ok) {
+    editorOverlay.hidden = true;
+  } else {
+    editorNote.textContent = "queue failed — see status bar";
+    updateEditorQueue(); // re-derive disabled instead of blindly re-enabling
+  }
+});
+
+// the modal twin of the queued card's ✕: return the job to draft without
+// leaving the editor — the buttons flip back to queue via updateEditorQueue
+// on the refresh that post() triggers
+document.getElementById("editor-dequeue").addEventListener("click", async () => {
+  if (!editorSlug) return;
+  const deq = document.getElementById("editor-dequeue");
+  deq.disabled = true;
+  // rebase the staleness baseline BEFORE posting: post() awaits the board
+  // refresh, so checkStaleModals runs against the new queued→draft state
+  // while we're still awaiting — a stale "queued" baseline there would read
+  // our own action as someone else's change and close the editor
+  const prevState = editorOpenState;
+  const prevCaptured = editorStateCaptured;
+  editorOpenState = "draft";
+  editorStateCaptured = true;
+  const ok = await post("/api/dequeue", { slug: editorSlug });
+  deq.disabled = false;
+  if (!ok) {
+    editorOpenState = prevState;
+    editorStateCaptured = prevCaptured;
+    editorNote.textContent = "cancel failed — see status bar";
+  }
+  updateEditorQueue();
 });
 
 // reactivate is a composer flow, not a one-shot post — hand off to the
@@ -1133,6 +1235,7 @@ function onEditorFormChange() {
   editorNote.style.color = "var(--text-2)";
   editorNote.textContent = "syncing…";
   editorAutosave();
+  updateEditorQueue(); // e.g. spec just went empty/non-empty — reflect it immediately, don't wait on the round trip
 }
 
 async function doEditorSave() {
@@ -1148,6 +1251,8 @@ async function doEditorSave() {
     editorMTime = d.mtime;
     editorNote.style.color = d.warn ? "" : "var(--solved)";
     editorNote.textContent = d.warn ? "synced — won't run: " + d.warn : "synced ✓";
+    editorSyncWarn = !!d.warn;
+    updateEditorQueue();
     invalidateBoard();
     refresh();
   } catch (e) {
@@ -1173,7 +1278,7 @@ document.getElementById("editor-form").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
     ev.preventDefault();
     const readyBtn = document.getElementById("editor-queue");
-    if (!readyBtn.hidden) readyBtn.click();
+    if (!readyBtn.hidden && !readyBtn.disabled) readyBtn.click();
   }
 });
 document.getElementById("editor-slug").addEventListener("keydown", (ev) => {
