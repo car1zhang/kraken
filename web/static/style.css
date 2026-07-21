@@ -213,15 +213,6 @@ body {
   font: 9.5px var(--mono); letter-spacing: 0.5px;
   color: var(--state, var(--text-2));
 }
-.kill {
-  background: none; border: none; cursor: pointer;
-  font: 11px var(--mono); color: var(--text-2);
-  opacity: 0; transition: opacity 80ms var(--ease), color 80ms var(--ease);
-  padding: 0 2px;
-}
-.card:hover .kill { opacity: 0.6; }
-.kill:hover { opacity: 1 !important; color: var(--counter); text-shadow: var(--glow-hot); }
-
 /* PR chips: one linked badge per open/merged/closed PR on the job, styled
    like .chip but color-coded by PR state instead of the uniform accent */
 .prs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
@@ -294,6 +285,8 @@ body {
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
 .chip:hover { box-shadow: var(--glow); border-color: var(--accent); }
+.chip-more { color: var(--text-2); border: 1px dashed var(--hairline-2); }
+.chip-more:hover { box-shadow: none; border-color: var(--text-2); color: var(--text); }
 
 .prereq span { font: 10px var(--mono); }
 .prereq .ok { color: var(--solved); }
@@ -325,15 +318,58 @@ body {
   max-height: 40vh; overflow-y: auto;
   padding: 9px 11px; background: var(--raised); border: 1px solid var(--hairline-2);
 }
-/* rendered markdown, not preformatted text — normalize the block rhythm */
-.steer-detail p, .steer-detail ul, .steer-detail ol, .steer-detail pre { margin: 0 0 8px; }
-.steer-detail :last-child { margin-bottom: 0; }
-.steer-detail h1, .steer-detail h2, .steer-detail h3 { font-size: 12.5px; margin: 10px 0 6px; color: var(--text); }
-.steer-detail code { background: var(--surface); padding: 1px 4px; }
-.steer-detail pre { white-space: pre-wrap; }
+/* rendered markdown, not preformatted text — normalize the block rhythm.
+   .steer-spec-body shares these rules so the frozen spec preview reads the
+   same as every other rendered-markdown surface in the modal. */
+.steer-detail p, .steer-detail ul, .steer-detail ol, .steer-detail pre,
+.steer-spec-body p, .steer-spec-body ul, .steer-spec-body ol, .steer-spec-body pre { margin: 0 0 8px; }
+.steer-detail :last-child, .steer-spec-body :last-child { margin-bottom: 0; }
+.steer-detail h1, .steer-detail h2, .steer-detail h3,
+.steer-spec-body h1, .steer-spec-body h2, .steer-spec-body h3 { font-size: 12.5px; margin: 10px 0 6px; color: var(--text); }
+.steer-detail code, .steer-spec-body code { background: var(--surface); padding: 1px 4px; }
+.steer-detail pre, .steer-spec-body pre { white-space: pre-wrap; }
 /* in the modal the last-sent line is decision context, not a card ornament —
    let it wrap instead of inheriting the card's one-line ellipsis */
 .steer-context .last-sent { white-space: pre-wrap; overflow: visible; text-overflow: clip; }
+
+/* action-complete row: whatever tmux/retry/mark-done/question buttons the
+   card itself would show for this job, so the modal never sends carl back
+   to the board to do something the card could — kill spacing between the
+   already-gapped children and each button's own card-context margin-top */
+.steer-actions {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-bottom: 2px;
+}
+.steer-actions > .review-row,
+.steer-actions > .btn.retry,
+.steer-actions > .btn.steer-done,
+.steer-actions > .question { margin-top: 0; }
+
+/* frozen spec preview: collapsed by default, expandable to a read-only
+   render of the job's initial prompt — the dashed left edge plus the ❄
+   header text (see index.html) are the two cues that this is display-only,
+   never an editable surface like the job editor's spec textarea. */
+.steer-spec {
+  margin-bottom: 2px;
+  background: var(--raised);
+  border: 1px solid var(--hairline-2);
+  border-left: 2px dashed var(--hairline-2);
+}
+.steer-spec-head {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: none;
+  padding: 8px 11px;
+  color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.steer-spec-head:hover { color: var(--text); }
+.steer-spec-head .tri { font-size: 9px; letter-spacing: 0; }
+.steer-spec-body {
+  padding: 0 11px 11px;
+  max-height: 40vh; overflow-y: auto;
+  color: var(--text-2); font-size: 11.5px; line-height: 1.5;
+}
 .panel {
   background: var(--surface);
   border: 1px solid var(--hairline-2);
@@ -372,13 +408,13 @@ body {
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
 .btn.retry:hover { box-shadow: var(--glow-warn); }
-.btn.steer {
+.btn.steer-done {
   display: block; width: 100%; margin-top: 8px;
-  background: transparent; color: var(--accent);
-  border: 1px solid var(--accent-soft);
+  background: var(--solved-soft); color: var(--solved);
+  border: 1px solid var(--solved);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.btn.steer:hover { border-color: var(--accent); box-shadow: var(--glow); }
+.btn.steer-done:hover { box-shadow: var(--glow-ok); }
 #steer-text {
   font: 12px/1.5 var(--sans);
   background: var(--raised); color: var(--text);
@@ -472,6 +508,7 @@ body {
   padding: 12px 14px; resize: vertical;
   min-height: 32vh; tab-size: 2;
 }
+
 .btn-new {
   width: 100%; padding: 13px 0;
   background: transparent; color: var(--accent);
@@ -519,14 +556,15 @@ body {
   background: #fff;
 }
 
-/* pr-review handoff */
+/* open the cell's tmux pane in Ghostty — review-row name predates the
+   removal of the nvim/code review buttons it used to sit alongside */
 .review-row { display: flex; gap: 8px; margin-top: 8px; }
-.review-row .btn.review-open, .review-row .btn.tmux-open {
+.review-row .btn.tmux-open {
   flex: 1; background: transparent; color: var(--revealed);
   border: 1px solid var(--revealed-soft);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.review-row .btn.review-open:hover, .review-row .btn.tmux-open:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.review-row .btn.tmux-open:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
 
 /* honor the OS-level motion preference — kills the remaining finite
    animations/transitions (panel-in, glitch, hover fades) outright */

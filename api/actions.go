@@ -189,45 +189,6 @@ func webSteer(req webReq) error {
 	return jobs.WriteJobState(j, "working")
 }
 
-// webReview is the PR-review handoff: open the cell's worktree in an editor
-// to flash through the final diff. nvim gets a new tmux window in the cell
-// session (LSP picks up the worktree root) raised in ghostty; VS Code opens
-// the folder directly. req.Text carries the editor choice.
-func webReview(req webReq) error {
-	j, _, err := webJobFor(req.Slug)
-	if err != nil {
-		return err
-	}
-	repo, err := jobs.ResolveRepo(j.Repo)
-	if err != nil {
-		return fmt.Errorf("job %s: %v", j.Slug, err)
-	}
-	wt := jobs.ExistingWorktree(j, repo)
-	if wt == "" {
-		return fmt.Errorf("%s has no worktree to review (already torn down?)", j.Slug)
-	}
-	switch req.Text {
-	case "code":
-		if err := exec.Command("code", wt).Run(); err != nil {
-			return fmt.Errorf("open VS Code: %v", err)
-		}
-		return nil
-	default: // nvim
-		sess := jobs.CellSession(j)
-		if !jobs.LiveSessions()[sess] {
-			return fmt.Errorf("cell session %s is gone — open the worktree manually: nvim %s", sess, wt)
-		}
-		if err := exec.Command("tmux", "new-window", "-t", sess+":", "-n", "review",
-			"-c", wt, "nvim", ".").Run(); err != nil {
-			return fmt.Errorf("tmux new-window: %v", err)
-		}
-		if _, err := core.RaiseSession(sess); err != nil {
-			return fmt.Errorf("nvim is open in %s, but %v", sess, err)
-		}
-		return nil
-	}
-}
-
 // webKill tears down a live job's cell and returns the job to draft. The
 // browser confirms before posting; the server still validates the job is
 // actually started and not done.

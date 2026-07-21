@@ -124,8 +124,6 @@ Response: same as above.
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
 
-### `POST /api/review` — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
-
 ---
 
 ## Job editor

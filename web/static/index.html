@@ -79,12 +79,18 @@
   </div>
 
   <!-- message zeus: mid-run instructions to a live cell; the same modal
-       doubles as the reactivate prompt (optional message) -->
+       doubles as the reactivate prompt (optional message), and is also what
+       clicking into a live working/blocked job's card opens — its frozen
+       spec renders alongside the composer, collapsed by default. for
+       steer/unblock modes it's action-complete: #steer-actions holds
+       whatever tmux/retry/mark-done/question buttons the card itself would
+       show, so nothing is card-only -->
   <div class="overlay" id="steer-overlay" hidden>
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title" id="steer-title"></span>
         <span class="spacer"></span>
+        <button class="btn ghost danger" id="steer-kill" hidden>✕ cancel job</button>
         <button class="btn ghost" id="steer-cancel">cancel</button>
         <button class="btn" id="steer-send">send ⌘⏎</button>
       </div>
@@ -94,6 +100,11 @@
           <div class="last-sent" id="steer-lastsent" hidden></div>
           <div class="chips" id="steer-chips" hidden></div>
         </div>
+        <div class="steer-actions" id="steer-actions" hidden></div>
+        <div class="steer-spec" id="steer-spec" hidden>
+          <button class="steer-spec-head" id="steer-spec-toggle"><span class="tri">▸</span> spec — ❄ frozen while the cell runs · display only</button>
+          <div class="steer-spec-body" id="steer-spec-body" hidden></div>
+        </div>
         <textarea id="steer-text" rows="4"
           placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
         <div class="answer-note" id="steer-note"></div>
@@ -101,7 +112,8 @@
     </div>
   </div>
 
-  <!-- job editor: draft + spec authoring in the browser -->
+  <!-- job editor: draft + spec authoring in the browser; also the read-only
+       viewer for a started-but-dead job (no live cell to steer) -->
   <div class="overlay" id="editor-overlay" hidden>
     <div class="panel">
       <div class="panel-head">
@@ -109,6 +121,10 @@
         <span class="stat dim" id="editor-hint"></span>
         <span class="spacer"></span>
         <button class="btn ghost danger" id="editor-force" hidden>overwrite disk</button>
+        <button class="btn ghost" id="editor-queue" hidden
+          title="queue this draft — same move as dragging the card to QUEUED">▶ queue</button>
+        <button class="btn ghost" id="editor-reactivate" hidden
+          title="resume this done job's original zeus session in a fresh cell">↺ reactivate</button>
         <button class="btn ghost" id="editor-archive" hidden
           title="move this job (and its preserved artifacts) into the archive — frees the slug; reversible from the ARCHIVED drawer under DONE">archive</button>
         <button class="btn ghost" id="editor-cancel">cancel</button>
@@ -126,7 +142,7 @@
                 <option>build</option><option>info</option>
               </select>
             </label>
-            <label>repo <input id="f-repo" list="repo-list" spellcheck="false"></label>
+            <label>repo <select id="f-repo"></select></label>
             <label>base <input id="f-base" placeholder="origin/main" spellcheck="false"></label>
             <span class="f-toggles">
               <label class="check"><input type="checkbox" id="f-ready"> ready</label>
@@ -144,7 +160,6 @@
         </div>
         <div class="answer-note" id="editor-note"></div>
       </div>
-      <datalist id="repo-list"></datalist>
       <datalist id="job-list"></datalist>
     </div>
   </div>

@@ -22,7 +22,6 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/retry", webAction(webRetry))
 	mux.HandleFunc("/api/kill", webAction(webKill))
 	mux.HandleFunc("/api/steer", webAction(webSteer))
-	mux.HandleFunc("/api/review", webAction(webReview))
 	mux.HandleFunc("/api/archive", webAction(webArchive))
 	mux.HandleFunc("/api/unarchive", webAction(webUnarchive))
 	mux.HandleFunc("/api/delete", webAction(webDelete))

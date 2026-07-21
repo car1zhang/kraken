@@ -1,10 +1,11 @@
 // kraken web — kanban over /api/board with two legal drag moves:
 //   draft → queued   (flips ready: true in the job file)
 //   blocked → done    (completes the job)
-// Un-stalling a blocked cell (answering a question, messaging zeus)
-// happens via card buttons, not drag — those are actions on the cell, not a
-// board-state assertion the browser is making. Everything else is read-only;
-// the daemon drives working/blocked itself from live pod activity.
+// Un-stalling a blocked cell (answering a question, messaging zeus, marking
+// it done) happens via the card click → steer modal, not drag — those are
+// actions on the cell, not a board-state assertion the browser is making.
+// Everything else is read-only; the daemon drives working/blocked itself
+// from live pod activity.
 
 const COLUMNS = [
   { key: "draft", title: "DRAFT", states: ["draft"] },
@@ -42,6 +43,10 @@ function invalidateBoard() {
 // (see archiveOpen below) so it survives the 3s poll re-render, which
 // rebuilds #board innerHTML and would otherwise wipe any .expanded class
 let expandedDetails = new Set(JSON.parse(localStorage.getItem("kraken-expanded-details") || "[]"));
+
+// per-slug artifact-chips-expanded state, same persistence pattern as
+// expandedDetails above
+let expandedArtifacts = new Set(JSON.parse(localStorage.getItem("kraken-expanded-artifacts") || "[]"));
 
 function columnFor(state) {
   for (const c of COLUMNS) {
@@ -122,6 +127,28 @@ function prChipHTML(pr) {
   return `<a class="pr-chip ${cls}" href="${esc(pr.url)}" target="_blank" rel="noreferrer">${esc(label)}</a>`;
 }
 
+// chipsHTML renders a job's artifact chips, collapsing to the first 3 (plus
+// a "+N more" toggle) unless slug is in expandedArtifacts — slug keys the
+// expanded state, label prefixes each chip's data-name (differs from slug
+// for a renamed archived job)
+function chipsHTML(artifacts, slug, label) {
+  const list = artifacts || [];
+  if (!list.length) return "";
+  const expanded = expandedArtifacts.has(slug);
+  const shown = expanded ? list : list.slice(0, 3);
+  const chips = shown
+    .map(
+      (a) =>
+        `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(label)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
+    )
+    .join("");
+  const toggle =
+    list.length > 3
+      ? `<button class="chip chip-more" data-slug="${esc(slug)}">${expanded ? "less" : `+${list.length - 3} more`}</button>`
+      : "";
+  return chips + toggle;
+}
+
 function cardHTML(j, col) {
   const color = stateColor(j.state);
   const movable = !!MOVES[col];
@@ -133,23 +160,16 @@ function cardHTML(j, col) {
       return `<span class="${cls}">${esc(p.job)}${mark}</span>`;
     })
     .join(" ");
-  const chips = (j.artifacts || [])
-    .map(
-      (a) =>
-        `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(j.slug)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
-    )
-    .join("");
+  const chips = chipsHTML(j.artifacts, j.slug, j.slug);
   const roster = (j.roster || [])
     .map((r) => `<div class="roster-row">${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
-  const killable = ["working", "blocked"].includes(col) && j.live;
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
   return `<div class="card editable ${j.question || j.health ? "flagged" : ""}" style="--state:${color}"
       draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
-      ${killable ? `<button class="kill" data-slug="${esc(j.slug)}" title="kill cell → back to draft">✕</button>` : ""}
     </div>
     ${prs ? `<div class="prs">${prs}</div>` : ""}
     <div class="meta">
@@ -170,11 +190,6 @@ function cardHTML(j, col) {
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
     ${col === "done" && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
-    ${col === "blocked" && j.live && j.type === "build" ? `<div class="review-row">
-      <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="nvim">⌨ nvim</button>
-      <button class="btn review-open" data-slug="${esc(j.slug)}" data-editor="code">⌨ code</button>
-    </div>` : ""}
-    ${killable ? `<button class="btn steer" data-slug="${esc(j.slug)}" data-mode="${col === "blocked" ? "unblock" : "steer"}">${col === "blocked" ? "⚡ unblock" : "➤ message zeus"}</button>` : ""}
   </div>`;
 }
 
@@ -290,12 +305,7 @@ let archiveOpen = localStorage.getItem("kraken-archive-open") === "1";
 function archivedCardHTML(j) {
   const label = j.display_slug || j.slug;
   const renamed = j.display_slug && j.display_slug !== j.slug;
-  const chips = (j.artifacts || [])
-    .map(
-      (a) =>
-        `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(label)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
-    )
-    .join("");
+  const chips = chipsHTML(j.artifacts, j.slug, label);
   return `<div class="card archived" style="--state:var(--text-2)" data-slug="${esc(j.slug)}">
     <div class="card-top">
       <span class="slug">${esc(label)}</span>
@@ -517,6 +527,21 @@ function openArtifact(url, name) {
 }
 
 document.addEventListener("click", (ev) => {
+  // must come before the .chip branch below — chip-more also matches .chip
+  // (it needs the same size/padding) but must never open an artifact
+  const chipMore = ev.target.closest(".chip-more");
+  if (chipMore) {
+    const slug = chipMore.dataset.slug;
+    if (expandedArtifacts.has(slug)) expandedArtifacts.delete(slug);
+    else expandedArtifacts.add(slug);
+    localStorage.setItem("kraken-expanded-artifacts", JSON.stringify([...expandedArtifacts]));
+    invalidateBoard();
+    refresh();
+    if (!steerOverlay.hidden && steerSlug === slug) {
+      fillSteerContext(jobsBySlug[steerSlug], steerMode);
+    }
+    return;
+  }
   const chip = ev.target.closest(".chip");
   if (chip) {
     openArtifact(chip.dataset.url, chip.dataset.name);
@@ -560,17 +585,13 @@ document.addEventListener("click", (ev) => {
     openSteer(reactivate.dataset.slug, "reactivate");
     return;
   }
-  const kill = ev.target.closest(".kill");
-  if (kill) {
-    const slug = kill.dataset.slug;
-    if (confirm(`kill ${slug}? the cell is torn down (artifacts preserved) and the job returns to draft.`)) {
-      post("/api/kill", { slug });
-    }
-    return;
-  }
-  const steer = ev.target.closest(".steer");
-  if (steer) {
-    openSteer(steer.dataset.slug, steer.dataset.mode || "steer");
+  const steerDone = ev.target.closest(".steer-done");
+  if (steerDone) {
+    steerDone.disabled = true;
+    post("/api/done", { slug: steerDone.dataset.slug }).then((ok) => {
+      if (ok) steerOverlay.hidden = true;
+      else steerDone.disabled = false;
+    });
     return;
   }
   const detail = ev.target.closest(".detail.clampable");
@@ -586,20 +607,21 @@ document.addEventListener("click", (ev) => {
     post("/api/peers/open", { slug: tmuxOpen.dataset.slug });
     return;
   }
-  const review = ev.target.closest(".review-open:not(.open-tmux)");
-  if (review) {
-    post("/api/review", { slug: review.dataset.slug, text: review.dataset.editor });
-    return;
-  }
   if (ev.target.closest("#new-job")) {
     openEditor(null);
     return;
   }
-  // all cards open their spec on plain click (buttons/chips above already
-  // returned first); loadForm renders read-only when the server says the
-  // job isn't editable
+  // all cards open something on plain click (buttons/chips above already
+  // returned first): a live working/blocked job opens the steer/unblock
+  // modal on itself, everything else opens the editor — which renders
+  // read-only when the server says the job isn't editable
   const card = ev.target.closest(".card[data-editable]");
-  if (card && !window.getSelection().toString()) openEditor(card.dataset.slug);
+  if (card && !window.getSelection().toString()) {
+    const slug = card.dataset.slug;
+    const liveCol = liveDisplayColumn(slug);
+    if (liveCol === "working" || liveCol === "blocked") openSteer(slug, liveCol === "blocked" ? "unblock" : "steer");
+    else openEditor(slug);
+  }
 });
 
 // ---- steer: mid-run instructions ----
@@ -631,16 +653,38 @@ function fillSteerContext(j, mode) {
   lastSentEl.textContent = lastSent ? `me→zeus: ${lastSent}` : "";
 
   chipsEl.hidden = !artifacts;
-  chipsEl.innerHTML = artifacts
-    ? artifacts
-        .map(
-          (a) =>
-            `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(j.slug)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
-        )
-        .join("")
-    : "";
+  chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, j.slug, j.slug) : "";
 
   container.hidden = !detail && !lastSent && !artifacts;
+}
+
+// liveDisplayColumn mirrors render()'s column bucketing for a single job:
+// an unhealthy live cell displays as blocked regardless of its file state.
+// Returns null for a job that isn't live (or doesn't exist) — the caller
+// treats that as "not cancellable/steerable".
+function liveDisplayColumn(slug) {
+  const j = jobsBySlug[slug];
+  if (!j || !j.live) return null;
+  return j.health ? "blocked" : j.state;
+}
+
+// steerActionsHTML makes the modal action-complete: everything a card can do
+// to a live job is reachable from inside it too. Reuses the card's own
+// button classes (.open-tmux, .retry) so the existing delegated document
+// handlers pick them up with no new wiring; only "mark done" (.steer-done)
+// is new. Same conditions as cardHTML's equivalents.
+function steerActionsHTML(j) {
+  if (!j) return "";
+  const tmux = j.live
+    ? `<div class="review-row"><button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button></div>`
+    : "";
+  const retry = j.health && !/is gone|startup prompt/.test(j.health)
+    ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>`
+    : "";
+  const done = liveDisplayColumn(j.slug) === "blocked"
+    ? `<button class="btn steer-done" data-slug="${esc(j.slug)}">✓ mark done</button>`
+    : "";
+  return tmux + retry + done + (j.question ? questionHTML(j) : "");
 }
 
 function openSteer(slug, mode = "steer") {
@@ -663,6 +707,42 @@ function openSteer(slug, mode = "steer") {
   document.getElementById("steer-send").textContent =
     mode === "reactivate" ? "reactivate ⌘⏎" : mode === "unblock" ? "unblock ⌘⏎" : "send ⌘⏎";
   fillSteerContext(jobsBySlug[slug], mode);
+
+  const liveCol = liveDisplayColumn(slug);
+  const killable = mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
+  document.getElementById("steer-kill").hidden = !killable;
+
+  // action-complete only for steer/unblock — reactivate targets a dead cell,
+  // so there's nothing on it to tmux into, retry, or mark done
+  const actions = document.getElementById("steer-actions");
+  if (mode === "steer" || mode === "unblock") {
+    actions.innerHTML = steerActionsHTML(jobsBySlug[slug]);
+    actions.hidden = !actions.innerHTML;
+  } else {
+    actions.hidden = true;
+    actions.innerHTML = "";
+  }
+
+  const specSection = document.getElementById("steer-spec");
+  const specBody = document.getElementById("steer-spec-body");
+  specSection.hidden = true;
+  specBody.hidden = true;
+  specBody.innerHTML = "";
+  document.querySelector("#steer-spec-toggle .tri").textContent = "▸";
+  if (mode === "steer" || mode === "unblock") {
+    fetch("/api/job/form?slug=" + encodeURIComponent(slug))
+      .then((r) => r.json())
+      .then((d) => {
+        // the modal may have closed, or reopened for a different slug,
+        // while this fetch was in flight — a stale result must not land
+        if (steerOverlay.hidden || steerSlug !== slug) return;
+        if (d.error || !d.spec) return;
+        specBody.innerHTML = renderMD(d.spec);
+        specSection.hidden = false;
+      })
+      .catch(() => {});
+  }
+
   steerOverlay.hidden = false;
   text.focus();
 }
@@ -689,6 +769,22 @@ document.getElementById("steer-text").addEventListener("keydown", (ev) => {
     document.getElementById("steer-send").click();
   }
 });
+document.getElementById("steer-kill").addEventListener("click", async () => {
+  if (!steerSlug) return;
+  if (!confirm(`kill ${steerSlug}? the cell is torn down (artifacts preserved) and the job returns to draft.`)) return;
+  const btn = document.getElementById("steer-kill");
+  btn.disabled = true;
+  const ok = await post("/api/kill", { slug: steerSlug });
+  btn.disabled = false;
+  if (ok) steerOverlay.hidden = true;
+  else document.getElementById("steer-note").textContent = "cancel failed — see status bar";
+});
+document.getElementById("steer-spec-toggle").addEventListener("click", () => {
+  const body = document.getElementById("steer-spec-body");
+  const opening = body.hidden;
+  body.hidden = !opening;
+  document.querySelector("#steer-spec-toggle .tri").textContent = opening ? "▾" : "▸";
+});
 
 // ---- job editor (draft + spec in the browser) ----
 
@@ -713,16 +809,26 @@ function prereqRowHTML(p) {
   </div>`;
 }
 
+// repoSelectHTML lists the actually-existing checkouts (d.repos, from
+// /api/job/form) as real options instead of a free-text field with a
+// datalist caret that did nothing. d.repo is appended as an extra option
+// when it's set but not among d.repos, so an existing job with an unusual
+// repo still round-trips instead of silently resetting to "—".
 function fillForm(d) {
   document.getElementById("f-type").value = d.type || "build";
-  document.getElementById("f-repo").value = d.repo || "";
+  const repos = d.repos || [];
+  const repoSel = document.getElementById("f-repo");
+  repoSel.innerHTML =
+    `<option value="">—</option>` +
+    repos.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join("") +
+    (d.repo && !repos.includes(d.repo) ? `<option value="${esc(d.repo)}">${esc(d.repo)}</option>` : "");
+  repoSel.value = d.repo || "";
   document.getElementById("f-base").value = d.base || "";
   document.getElementById("f-ready").checked = !!d.ready;
   document.getElementById("f-solo").checked = !!d.solo;
   document.getElementById("f-auto").checked = !!d.auto_approve;
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
-  document.getElementById("repo-list").innerHTML = (d.repos || []).map((x) => `<option value="${esc(x)}">`).join("");
   document.getElementById("job-list").innerHTML = (d.slugs || []).map((x) => `<option value="${esc(x)}">`).join("");
 }
 
@@ -787,6 +893,13 @@ async function loadForm(slug) {
   document.getElementById("editor-form").hidden = false;
   document.getElementById("editor-save").disabled = false;
   setFormReadOnly(!d.editable);
+  // board-action parity: the drag/board moves for editable jobs live here
+  // too — queue for an err-free draft, reactivate for a resumable done job
+  const j = jobsBySlug[slug];
+  document.getElementById("editor-queue").hidden =
+    !(j && !j.live && j.state === "draft" && !j.err && !d.err);
+  document.getElementById("editor-reactivate").hidden =
+    !(j && !j.archived && j.state === "done" && j.reactivatable);
   if (d.err) editorNote.textContent = "current file won't run: " + d.err;
 }
 
@@ -804,6 +917,8 @@ function openEditor(slug) {
   document.getElementById("editor-save").disabled = true;
   document.getElementById("editor-force").hidden = true;
   document.getElementById("editor-archive").hidden = true;
+  document.getElementById("editor-queue").hidden = true;
+  document.getElementById("editor-reactivate").hidden = true;
   document.getElementById("editor-hint").textContent = "";
   document.getElementById("editor-slug").value = "";
   editorOverlay.hidden = false;
@@ -813,6 +928,25 @@ function openEditor(slug) {
   }
   loadForm(slug).catch((e) => { editorNote.textContent = String(e.message || e); });
 }
+
+document.getElementById("editor-queue").addEventListener("click", async () => {
+  if (!editorSlug) return;
+  const btn = document.getElementById("editor-queue");
+  btn.disabled = true;
+  const ok = await post("/api/queue", { slug: editorSlug });
+  btn.disabled = false;
+  if (ok) editorOverlay.hidden = true;
+  else editorNote.textContent = "queue failed — see status bar";
+});
+
+// reactivate is a composer flow, not a one-shot post — hand off to the
+// steer modal in reactivate mode (optional message folded into the resume
+// prompt), same as the card's ↺ button
+document.getElementById("editor-reactivate").addEventListener("click", () => {
+  if (!editorSlug) return;
+  editorOverlay.hidden = true;
+  openSteer(editorSlug, "reactivate");
+});
 
 document.getElementById("editor-create").addEventListener("click", async () => {
   const slug = document.getElementById("editor-slug").value.trim();
@@ -1055,7 +1189,11 @@ function renderDag(board) {
 
 document.getElementById("dag-nodes").addEventListener("click", (ev) => {
   const node = ev.target.closest(".dag-node");
-  if (node && !window.getSelection().toString()) openEditor(node.dataset.slug);
+  if (!node || window.getSelection().toString()) return;
+  const slug = node.dataset.slug;
+  const liveCol = liveDisplayColumn(slug);
+  if (liveCol === "working" || liveCol === "blocked") openSteer(slug, liveCol === "blocked" ? "unblock" : "steer");
+  else openEditor(slug);
 });
 
 // ---- poll (paused while dragging so the board doesn't rebuild mid-drag,
