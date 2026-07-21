@@ -1,4 +1,4 @@
-package main
+package api
 
 // contract_test.go transcribes ios/API.md into executable wire-shape
 // assertions: whenever a JSON shape served to or accepted from the iOS
