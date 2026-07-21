@@ -11,9 +11,42 @@
   --revealed: #F5B84D; --revealed-soft: #33260E;
   --glow: 0 0 12px rgba(158, 123, 255, 0.30), 0 0 2px rgba(158, 123, 255, 0.7);
   --glow-hot: 0 0 10px rgba(255, 77, 157, 0.28), 0 0 2px rgba(255, 77, 157, 0.7);
+  --scanline-ink: rgba(255, 255, 255, 0.011);
+  --scrim: rgba(10, 14, 20, 0.82);
+  --drop-tint: rgba(158, 123, 255, 0.03);
+  --drop-tint-hover: rgba(158, 123, 255, 0.07);
+  --glow-ok: 0 0 8px rgba(74, 222, 128, 0.45);
+  --glow-warn: 0 0 10px rgba(245, 184, 77, 0.3);
+  --zebra: rgba(255, 255, 255, 0.02);
+  --text-glow: 0 0 1px var(--accent), 0 0 9px var(--accent);
   --sans: "Avenir Next", "Helvetica Neue", -apple-system, sans-serif;
   --mono: "SF Mono", "Menlo", monospace;
   --ease: cubic-bezier(0.9, 0, 0.1, 1);
+  color-scheme: dark;
+}
+
+/* light palette — :root above stays the dark default so any failure mode
+   (missing data-theme, JS error before the pre-paint stamp runs, unset var)
+   lands on dark rather than an unreadable mixed state */
+:root[data-theme="light"] {
+  --ground: #EEF2F7; --surface: #FFFFFF; --raised: #E3E9F1;
+  --hairline: #D8E0EA; --hairline-2: #B9C6D6;
+  --text: #1C2733; --text-2: #5D6C7E;
+  --accent: #6B3FE0; --accent-ink: #FFFFFF; --accent-soft: #E7DFFB;
+  --counter: #C0105F; --counter-soft: #FBDFEC;
+  --solved: #178A44; --solved-soft: #DCF3E4;
+  --revealed: #8A5106; --revealed-soft: #F7ECD4;
+  --glow: 0 1px 6px rgba(107, 63, 224, 0.25);
+  --glow-hot: 0 1px 6px rgba(192, 16, 95, 0.22);
+  --glow-ok: 0 1px 4px rgba(23, 138, 68, 0.3);
+  --glow-warn: 0 1px 5px rgba(138, 81, 6, 0.25);
+  --scanline-ink: rgba(0, 0, 0, 0.012);
+  --scrim: rgba(28, 39, 51, 0.45);
+  --drop-tint: rgba(107, 63, 224, 0.04);
+  --drop-tint-hover: rgba(107, 63, 224, 0.08);
+  --zebra: rgba(0, 0, 0, 0.025);
+  --text-glow: none;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -44,7 +77,7 @@ body {
 .scan {
   position: fixed; inset: 0; pointer-events: none; z-index: 9;
   background: repeating-linear-gradient(to bottom,
-    transparent 0, transparent 2px, rgba(255, 255, 255, 0.011) 3px);
+    transparent 0, transparent 2px, var(--scanline-ink) 3px);
 }
 
 /* ---- chrome ---- */
@@ -59,10 +92,10 @@ body {
 .mark { font-weight: 700; letter-spacing: 3px; font-size: 12px; }
 .mark i {
   font-style: normal; color: var(--accent);
-  text-shadow: 0 0 1px var(--accent), 0 0 9px var(--accent);
+  text-shadow: var(--text-glow);
 }
 .led { width: 7px; height: 7px; background: var(--counter); box-shadow: var(--glow-hot); }
-.led.ok { background: var(--solved); box-shadow: 0 0 8px rgba(74, 222, 128, 0.45); }
+.led.ok { background: var(--solved); box-shadow: var(--glow-ok); }
 .stat { color: var(--text-2); }
 .stat.hot { color: var(--counter); text-shadow: var(--glow-hot); }
 .stat.hot:empty { display: none; }
@@ -76,6 +109,12 @@ body {
 }
 .viewtab.active { color: var(--accent); border-color: var(--accent-soft); text-shadow: var(--glow); }
 .viewtab:hover:not(.active) { color: var(--text); }
+.theme-btn {
+  background: none; border: none; cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 2px;
+  color: var(--text-2); padding: 3px 8px;
+}
+.theme-btn:hover { color: var(--text); }
 
 .stale-banner {
   display: flex; align-items: center; gap: 8px;
@@ -131,7 +170,7 @@ body {
   background: transparent; color: var(--revealed);
   border: 1px solid var(--revealed-soft);
 }
-.btn.reactivate:hover { border-color: var(--revealed); box-shadow: 0 0 10px rgba(245, 184, 77, 0.3); }
+.btn.reactivate:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
 .col { min-height: 120px; }
 .col-head {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -151,9 +190,9 @@ body {
 .col.droptarget .col-cards {
   outline: 1px dashed var(--accent);
   outline-offset: 4px;
-  background: rgba(158, 123, 255, 0.03);
+  background: var(--drop-tint);
 }
-.col.drophover .col-cards { background: rgba(158, 123, 255, 0.07); }
+.col.drophover .col-cards { background: var(--drop-tint-hover); }
 
 /* ---- cards ---- */
 .card {
@@ -194,7 +233,7 @@ body {
 .pr-chip.pr-merged { color: var(--accent); border-color: var(--accent-soft); }
 .pr-chip.pr-merged:hover { box-shadow: var(--glow); border-color: var(--accent); }
 .pr-chip.pr-open { color: var(--solved); border-color: var(--solved-soft); }
-.pr-chip.pr-open:hover { box-shadow: 0 0 8px rgba(74, 222, 128, 0.35); border-color: var(--solved); }
+.pr-chip.pr-open:hover { box-shadow: var(--glow-ok); border-color: var(--solved); }
 .pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
 .pr-chip.pr-closed:hover { opacity: 1; border-color: var(--counter); }
 
@@ -266,7 +305,7 @@ body {
 /* ---- overlays ---- */
 .overlay {
   position: fixed; inset: 0; z-index: 20;
-  background: rgba(10, 14, 20, 0.82);
+  background: var(--scrim);
   display: flex; justify-content: center; align-items: flex-start;
   padding: 6vh 4vw;
 }
@@ -332,7 +371,7 @@ body {
   border: 1px solid var(--revealed);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.btn.retry:hover { box-shadow: 0 0 10px rgba(245, 184, 77, 0.3); }
+.btn.retry:hover { box-shadow: var(--glow-warn); }
 .btn.steer {
   display: block; width: 100%; margin-top: 8px;
   background: transparent; color: var(--accent);
@@ -372,7 +411,7 @@ body {
 .md th, .md td { border: 1px solid var(--hairline); padding: 5px 9px; }
 .md th { background: var(--raised); color: var(--text); font-weight: 600; text-align: left; }
 .md td { color: var(--text); }
-.md tbody tr:nth-child(even) td, .md tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+.md tbody tr:nth-child(even) td, .md tr:nth-child(even) td { background: var(--zebra); }
 
 /* ---- steer/editor note styling, shared by the message-zeus and job-editor
    overlays ---- */
@@ -487,7 +526,7 @@ body {
   border: 1px solid var(--revealed-soft);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.review-row .btn.review-open:hover, .review-row .btn.tmux-open:hover { border-color: var(--revealed); box-shadow: 0 0 10px rgba(245, 184, 77, 0.3); }
+.review-row .btn.review-open:hover, .review-row .btn.tmux-open:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
 
 /* honor the OS-level motion preference — kills the remaining finite
    animations/transitions (panel-in, glitch, hover fades) outright */

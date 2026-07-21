@@ -1096,3 +1096,18 @@ document.addEventListener("visibilitychange", () => {
 applyView();
 refresh();
 setInterval(refresh, 3000);
+
+// ---- theme toggle: system → light → dark → system ----
+
+const THEME_CYCLE = { system: "light", light: "dark", dark: "system" };
+
+function themeLabel() {
+  return "◐ " + window.krakenTheme.get().toUpperCase();
+}
+
+const themeToggle = document.getElementById("theme-toggle");
+themeToggle.textContent = themeLabel();
+themeToggle.addEventListener("click", () => {
+  window.krakenTheme.set(THEME_CYCLE[window.krakenTheme.get()]);
+  themeToggle.textContent = themeLabel();
+});

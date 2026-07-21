@@ -2,13 +2,19 @@ import SwiftUI
 import UIKit
 
 // KTheme ports kraken web's "socrat cyber-dark" design system (web/style.css)
-// to SwiftUI: one calm dark surface, mono for data, sans for prose, sharp
-// corners on cards/fields/sections, neon only where something is hot or
-// interactive. Buttons are the one deliberate exception — native
-// .bordered/.borderedProminent with SF Symbol icons and their normal rounded
-// geometry, per carl's device-test feedback; everything else should still
-// build on the pieces here rather than reach for
-// .primary/.secondary/systemBackground/RoundedRectangle.
+// to SwiftUI: one calm surface, mono for data, sans for prose, sharp corners
+// on cards/fields/sections, neon only where something is hot or interactive.
+// Buttons are the one deliberate exception — native .bordered/.borderedProminent
+// with SF Symbol icons and their normal rounded geometry, per carl's
+// device-test feedback; everything else should still build on the pieces
+// here rather than reach for .primary/.secondary/systemBackground/RoundedRectangle.
+//
+// The palette is adaptive: every entry below is a dynamic light/dark UIColor
+// (built via dyn()) plus the SwiftUI Color derived from it, so the whole app
+// re-resolves on a light/dark scheme flip with no call-site changes. Dark
+// stays exactly the original cyber-dark hex values; light is its sibling
+// palette, chosen to match in feel rather than reused from the web UI (which
+// has no light mode).
 
 extension Color {
     init(hex: UInt32) {
@@ -20,24 +26,58 @@ extension Color {
     }
 }
 
+extension UIColor {
+    convenience init(hex: UInt32) {
+        self.init(
+            red: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
+
 enum KTheme {
-    // --- palette (exact hex from style.css's :root custom properties) ---
-    static let ground = Color(hex: 0x0A0E14)
-    static let surface = Color(hex: 0x10151E)
-    static let raised = Color(hex: 0x151C28)
-    static let hairline = Color(hex: 0x1E2836)
-    static let hairline2 = Color(hex: 0x2A3A50)
-    static let text = Color(hex: 0xD7E2EC)
-    static let text2 = Color(hex: 0x6B7A8C)
-    static let accent = Color(hex: 0x9E7BFF)
-    static let accentInk = Color(hex: 0x0A0E14) // == ground; on-accent text
-    static let accentSoft = Color(hex: 0x221844)
-    static let counter = Color(hex: 0xFF4D9D)
-    static let counterSoft = Color(hex: 0x3D1428)
-    static let solved = Color(hex: 0x4ADE80)
-    static let solvedSoft = Color(hex: 0x0F2E1D)
-    static let revealed = Color(hex: 0xF5B84D)
-    static let revealedSoft = Color(hex: 0x33260E)
+    /// Builds a dynamic UIColor that resolves to `light` or `dark` hex per
+    /// the current trait collection's userInterfaceStyle.
+    private static func dyn(light: UInt32, dark: UInt32) -> UIColor {
+        UIColor { $0.userInterfaceStyle == .light ? UIColor(hex: light) : UIColor(hex: dark) }
+    }
+
+    // --- palette (dark hex matches style.css's :root custom properties
+    // exactly; light is the adaptive sibling — see file header) ---
+    static let groundUI = dyn(light: 0xEEF2F7, dark: 0x0A0E14)
+    static let ground = Color(uiColor: groundUI)
+    static let surfaceUI = dyn(light: 0xFFFFFF, dark: 0x10151E)
+    static let surface = Color(uiColor: surfaceUI)
+    static let raisedUI = dyn(light: 0xE3E9F1, dark: 0x151C28)
+    static let raised = Color(uiColor: raisedUI)
+    static let hairlineUI = dyn(light: 0xD8E0EA, dark: 0x1E2836)
+    static let hairline = Color(uiColor: hairlineUI)
+    static let hairline2UI = dyn(light: 0xB9C6D6, dark: 0x2A3A50)
+    static let hairline2 = Color(uiColor: hairline2UI)
+    static let textUI = dyn(light: 0x1C2733, dark: 0xD7E2EC)
+    static let text = Color(uiColor: textUI)
+    static let text2UI = dyn(light: 0x5D6C7E, dark: 0x6B7A8C)
+    static let text2 = Color(uiColor: text2UI)
+    static let accentUI = dyn(light: 0x6B3FE0, dark: 0x9E7BFF)
+    static let accent = Color(uiColor: accentUI)
+    static let accentInkUI = dyn(light: 0xFFFFFF, dark: 0x0A0E14) // on-accent text
+    static let accentInk = Color(uiColor: accentInkUI)
+    static let accentSoftUI = dyn(light: 0xE7DFFB, dark: 0x221844)
+    static let accentSoft = Color(uiColor: accentSoftUI)
+    static let counterUI = dyn(light: 0xC0105F, dark: 0xFF4D9D)
+    static let counter = Color(uiColor: counterUI)
+    static let counterSoftUI = dyn(light: 0xFBDFEC, dark: 0x3D1428)
+    static let counterSoft = Color(uiColor: counterSoftUI)
+    static let solvedUI = dyn(light: 0x178A44, dark: 0x4ADE80)
+    static let solved = Color(uiColor: solvedUI)
+    static let solvedSoftUI = dyn(light: 0xDCF3E4, dark: 0x0F2E1D)
+    static let solvedSoft = Color(uiColor: solvedSoftUI)
+    static let revealedUI = dyn(light: 0x8A5106, dark: 0xF5B84D)
+    static let revealed = Color(uiColor: revealedUI)
+    static let revealedSoftUI = dyn(light: 0xF7ECD4, dark: 0x33260E)
+    static let revealedSoft = Color(uiColor: revealedSoftUI)
 
     // --- global chrome (nav bar / tab bar / page dots) ---
     // Configured once via UIKit appearance proxies rather than threading
@@ -46,10 +86,10 @@ enum KTheme {
     static func applyGlobalAppearance() {
         let nav = UINavigationBarAppearance()
         nav.configureWithOpaqueBackground()
-        nav.backgroundColor = UIColor(surface)
-        nav.shadowColor = UIColor(hairline)
-        nav.titleTextAttributes = [.foregroundColor: UIColor(text)]
-        nav.largeTitleTextAttributes = [.foregroundColor: UIColor(text)]
+        nav.backgroundColor = surfaceUI
+        nav.shadowColor = hairlineUI
+        nav.titleTextAttributes = [.foregroundColor: textUI]
+        nav.largeTitleTextAttributes = [.foregroundColor: textUI]
         // The at-rest (scroll-edge) bar must be TRANSPARENT: with an opaque
         // scroll-edge appearance, iOS 26 paints the bar background over the
         // large-title text whenever the stack root is scrollable (List /
@@ -60,34 +100,34 @@ enum KTheme {
         // (standardAppearance), which is the only time it's visible anyway.
         let navEdge = UINavigationBarAppearance()
         navEdge.configureWithTransparentBackground()
-        navEdge.titleTextAttributes = [.foregroundColor: UIColor(text)]
-        navEdge.largeTitleTextAttributes = [.foregroundColor: UIColor(text)]
+        navEdge.titleTextAttributes = [.foregroundColor: textUI]
+        navEdge.largeTitleTextAttributes = [.foregroundColor: textUI]
         UINavigationBar.appearance().standardAppearance = nav
         UINavigationBar.appearance().scrollEdgeAppearance = navEdge
         UINavigationBar.appearance().compactAppearance = nav
-        UINavigationBar.appearance().tintColor = UIColor(accent)
+        UINavigationBar.appearance().tintColor = accentUI
 
         let tab = UITabBarAppearance()
         tab.configureWithOpaqueBackground()
-        tab.backgroundColor = UIColor(surface)
-        tab.shadowColor = UIColor(hairline)
+        tab.backgroundColor = surfaceUI
+        tab.shadowColor = hairlineUI
         UITabBar.appearance().standardAppearance = tab
         UITabBar.appearance().scrollEdgeAppearance = tab
-        UITabBar.appearance().tintColor = UIColor(accent)
-        UITabBar.appearance().unselectedItemTintColor = UIColor(text2)
+        UITabBar.appearance().tintColor = accentUI
+        UITabBar.appearance().unselectedItemTintColor = text2UI
 
-        UIPageControl.appearance().currentPageIndicatorTintColor = UIColor(accent)
-        UIPageControl.appearance().pageIndicatorTintColor = UIColor(hairline2)
+        UIPageControl.appearance().currentPageIndicatorTintColor = accentUI
+        UIPageControl.appearance().pageIndicatorTintColor = hairline2UI
 
-        UISwitch.appearance().onTintColor = UIColor(accent)
+        UISwitch.appearance().onTintColor = accentUI
 
         let segmented = UISegmentedControl.appearance()
-        segmented.backgroundColor = UIColor(raised)
-        segmented.selectedSegmentTintColor = UIColor(accent)
-        segmented.setTitleTextAttributes([.foregroundColor: UIColor(text2)], for: .normal)
-        segmented.setTitleTextAttributes([.foregroundColor: UIColor(accentInk)], for: .selected)
+        segmented.backgroundColor = raisedUI
+        segmented.selectedSegmentTintColor = accentUI
+        segmented.setTitleTextAttributes([.foregroundColor: text2UI], for: .normal)
+        segmented.setTitleTextAttributes([.foregroundColor: accentInkUI], for: .selected)
 
-        UITextField.appearance().tintColor = UIColor(accent)
+        UITextField.appearance().tintColor = accentUI
     }
 }
 

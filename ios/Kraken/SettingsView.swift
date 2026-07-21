@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @AppStorage("notifyBlocked") private var notifyBlocked = false
+    @AppStorage("appearance") private var appearance = "system"
     @FocusState private var serverURLFocused: Bool
     @State private var testResult: String?
     @State private var testIsError = false
@@ -18,6 +19,24 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Appearance").kLabelStyle()
+
+                        Picker("Appearance", selection: $appearance) {
+                            Text("System").tag("system")
+                            Text("Light").tag("light")
+                            Text("Dark").tag("dark")
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("System follows the iOS appearance, including scheduled dark mode.")
+                            .font(.voice(11))
+                            .foregroundStyle(KTheme.text2)
+                    }
+                    .padding(12)
+                    .background(KTheme.surface)
+                    .overlay(Rectangle().stroke(KTheme.hairline, lineWidth: 1))
+
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Server").kLabelStyle()
 
