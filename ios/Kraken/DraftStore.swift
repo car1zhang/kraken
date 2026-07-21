@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// Composer drafts, keyed by a stable identity per composer (e.g.
