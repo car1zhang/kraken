@@ -3,6 +3,8 @@ package jobs
 import (
 	"strings"
 	"testing"
+
+	"kraken/util"
 )
 
 // crew_test.go — zeus' brief content matrix. There is no hermes pane agent
@@ -19,10 +21,17 @@ func TestZeusBriefBuild(t *testing.T) {
 		"AskUserQuestion", CellArtifacts(j), "TaskStop",
 		// a merged PR is never job completion; follow-ups recycle the branch
 		"never ends the job", "checkout -B " + CellBranch(j) + " origin/main",
+		// hermes briefs must carry the style contract verbatim and be lint-gated
+		"hermes-contract.md", "lint_svg.py", "--marker-id",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("build brief missing %q", want)
 		}
+	}
+	// the contract path must be built home-relative via util.Home(), never a
+	// bare ~ or a literal /Users/<name>
+	if contract := hermesContractPath(); !strings.HasPrefix(contract, util.Home()) || !strings.Contains(brief, contract) {
+		t.Errorf("build brief does not reference a home-relative contract path (got %q)", contract)
 	}
 	for _, unwanted := range []string{"plan.md", "done.md", "hermes pane", "relay", "Success criteria"} {
 		if strings.Contains(brief, unwanted) {
@@ -66,6 +75,13 @@ func TestZeusBriefSolo(t *testing.T) {
 		}
 		if strings.Contains(brief, "hermes") {
 			t.Errorf("solo %s brief should not mention hermes (no diagram subagents)", typ)
+		}
+		// solo jobs have no doc pipeline paragraph at all, so neither the
+		// contract nor the lint gate should appear
+		for _, unwanted := range []string{"hermes-contract.md", "lint_svg.py"} {
+			if strings.Contains(brief, unwanted) {
+				t.Errorf("solo %s brief should not mention %q (no doc pipeline)", typ, unwanted)
+			}
 		}
 	}
 }

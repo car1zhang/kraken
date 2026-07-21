@@ -44,6 +44,20 @@ func docArtifactPath(j *Job) string {
 	return filepath.Join(CellArtifacts(j), util.Slugify(j.Slug)+"."+docExt(j)+".html")
 }
 
+// hermesContractPath is the parts-kit style contract (markup patterns, class
+// vocabulary, geometry/animation rules, ban list) that every hermes brief
+// must paste in verbatim. It lives in the doc skill, not the repo (D1):
+// single source of truth, so crew.go only ever references its path.
+func hermesContractPath() string {
+	return filepath.Join(util.Home(), ".claude", "skills", "doc", "assets", "hermes-contract.md")
+}
+
+// lintSvgPath is the stdlib-python fragment linter zeus runs against every
+// hermes-rendered fragment before it may be flattened into the artifact.
+func lintSvgPath() string {
+	return filepath.Join(util.Home(), ".claude", "skills", "doc", "assets", "lint_svg.py")
+}
+
 // zeusBrief builds zeus' system prompt: sole agent for the job, direct human
 // comms, the doc pipeline, and a workflow-branched (build vs info) execution
 // plan.
@@ -54,8 +68,11 @@ func zeusBrief(j *Job) string {
 	b.WriteString("carl's messages arrive directly in your pane. There is no intermediary and no escalation file: whatever you write as your FINAL message before going idle is what carl sees on the job board as this cell's status detail — so end every working session by stating plainly what is ready, what you need, or what you decided. Kraken derives working/blocked from your activity automatically; never write status anywhere.\n")
 	b.WriteString("For a decision that genuinely blocks you and cannot be defaulted, you may use AskUserQuestion — kraken surfaces the options to carl's board as buttons. Otherwise prefer baking open questions into the doc artifact and continuing with the recommended default.\n")
 	if !j.Solo {
-		fmt.Fprintf(&b, "Doc pipeline: your doc source is %s, written with permanent `<!-- DIAGRAM: <id> -->` placeholder comments. Each diagram is designed AND rendered by a subagent you name hermes, run on the OPUS model, one per diagram, writing one complete <svg> fragment to %s/<id>.svg, then it terminates — you never read or write SVG bodies yourself. Every hermes brief must include the anti-artifact rules: no overlapping elements; text measured (~7px/char at 13px) and tspan-wrapped before it can overflow its box; edges attach to box borders and route AROUND other boxes; every coordinate inside the viewBox; generous whitespace. After each edit round, mechanically flatten (placeholder → fragment file contents) into %s — the flattened artifacts copy is the ONLY board-visible doc. Never run `open`.\n",
-			docSourcePath(j), docFragmentsDir(j), docArtifactPath(j))
+		fmt.Fprintf(&b, "Doc pipeline: your doc source is %s, written with permanent `<!-- DIAGRAM: <id> -->` placeholder comments. Each diagram is designed AND rendered by a subagent you name hermes, run on the OPUS model, one per diagram, writing one complete <svg> fragment to %s/<id>.svg, then it terminates — you never read or write SVG bodies yourself.\n",
+			docSourcePath(j), docFragmentsDir(j))
+		fmt.Fprintf(&b, "Every hermes brief must include, VERBATIM, the full contents of %s (the parts-kit style contract) plus that diagram's own assignment: its purpose/content, a doc-unique arrow marker id like `arrow-<id>`, an id prefix, and its exact output path.\n", hermesContractPath())
+		fmt.Fprintf(&b, "After each render, run `python3 %s <fragment> --marker-id arrow-<id> --prefix <prefix>`. On violations, start a fresh hermes fix round with the line-numbered output — at most 2 rounds, after which you may read and fix the fragment source directly. Only lint-clean fragments get flattened.\n", lintSvgPath())
+		fmt.Fprintf(&b, "Mechanically flatten (placeholder → fragment file contents) into %s — the flattened artifacts copy is the ONLY board-visible doc. Never run `open`.\n", docArtifactPath(j))
 	}
 	fmt.Fprintf(&b, "Every final deliverable — including anything published elsewhere (claude.ai artifacts, PRs, dashboards) — must land in %s: the file itself when it's a file, plus a short <name>.link.md with the URL when it lives elsewhere. That dir is what carl's board shows; work that isn't there is invisible to him.\n", CellArtifacts(j))
 	if j.Solo {
