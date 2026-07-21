@@ -377,6 +377,15 @@ private struct JobCardView: View {
                 if job.live, let cell = job.cell {
                     Text("· \(cell)").font(.data(10)).foregroundStyle(KTheme.text2)
                 }
+                if let wakeup = job.wakeup, job.state == "working" {
+                    WakeupChip(wakeup: wakeup)
+                }
+            }
+            if let wakeup = job.wakeup, !wakeup.reason.isEmpty, job.state == "working" {
+                Text("↻ " + wakeup.reason)
+                    .font(.data(10))
+                    .foregroundStyle(KTheme.text2)
+                    .lineLimit(1)
             }
             if let prs = job.prs, !prs.isEmpty {
                 HStack(spacing: 6) {

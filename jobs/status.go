@@ -34,9 +34,12 @@ import (
 //
 // Active iff either:
 //  1. a pane agent in the cell (TmuxSession == sess, claude or codex) is
-//     "running" AND its pane isn't showing an open question — a question
-//     is waiting-for-carl, i.e. blocked, even though the session file stays
-//     "busy" while the AskUserQuestion tool call is in flight.
+//     "running" or "polling" AND its pane isn't showing an open question —
+//     a question is waiting-for-carl, i.e. blocked, even though the session
+//     file stays "busy" while the AskUserQuestion tool call is in flight.
+//     "polling" means the agent is mid poll-loop (a pending ScheduleWakeup),
+//     idle between ticks by design rather than genuinely waiting at its
+//     prompt — it counts as live work, same as "running".
 //  2. a live non-lead teammate, cross-checked by backend: a tmux-backed
 //     member counts only if its pane is currently occupied by a peer whose
 //     Status is "running" — mere pane existence would also match an idle
@@ -49,7 +52,7 @@ import (
 //     from the config) is filtered up front.
 func cellActive(sess string, peers []*core.Peer, members []core.TeamMember, paneQuestion func(string) bool) bool {
 	for _, p := range peers {
-		if p.TmuxSession != sess || p.Status != "running" {
+		if p.TmuxSession != sess || (p.Status != "running" && p.Status != "polling") {
 			continue
 		}
 		if p.Agent != "claude" && p.Agent != "codex" {
@@ -60,8 +63,8 @@ func cellActive(sess string, peers []*core.Peer, members []core.TeamMember, pane
 		}
 		// refineStatus is the real gate (it sets Status to "question" the
 		// moment it sees an open AskUserQuestion, which already fails the
-		// Status != "running" check above); this callback is belt-and-braces
-		// for a capture-pane race between that refinement and this call.
+		// running/polling check above); this callback is belt-and-braces for
+		// a capture-pane race between that refinement and this call.
 		if paneQuestion != nil && paneQuestion(p.Pane) {
 			continue
 		}

@@ -81,6 +81,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `artifacts` | array (`webArtifact`) | omitempty | |
 | `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 chars |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
+| `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
 | `roster` | array (`webAgent`) | omitempty | live nested subagents |
 | `health` | string | omitempty | "" (absent) = healthy |
 | `mtime` | number | always | unix millis |
@@ -106,6 +107,8 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 rides on the wire), `options` (array of `webQuestionOption`, always).
 
 `webQuestionOption`: `label` (string, always), `description` (string, always).
+
+`webWakeup`: `reason` (string, always), `fires_at` (number, always — unix millis). Distinct from `Wakeup` on the peer wire shape only in that it drops `delay_seconds` — the client only needs `fires_at` for its countdown.
 
 ### `POST /api/queue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
@@ -229,8 +232,9 @@ Errors: 400 (bad type), 404 (no such job), 409 (not editable, or mtime conflict)
 | `session_id` | string | omitempty | |
 | `name` | string | omitempty | |
 | `cwd` | string | omitempty | |
-| `status` | string | always | |
+| `status` | string | always | includes `"polling"` — a claude mid poll-loop (`/loop`, `/poll-pr`) on a pending `ScheduleWakeup`, distinct from `"waiting"` |
 | `status_at` | number | omitempty | |
+| `wakeup` | object (`Wakeup`) | omitempty | present only when `status` is `"polling"`; additive, no contract bump |
 | `session_id_guessed` | bool | omitempty | |
 | `branch` | string | omitempty | |
 | `model` | string | omitempty | |
@@ -246,6 +250,8 @@ Errors: 400 (bad type), 404 (no such job), 409 (not editable, or mtime conflict)
 | `messageable` | bool | always | |
 
 `peers` itself is always present and `[]` (never `null`) — `peersHandler` substitutes an empty slice when the source returns `nil`.
+
+`Wakeup` (peer.go/wakeup.go): `reason` (string, always), `delay_seconds` (number, always), `fires_at` (number, always — unix millis). A pending `ScheduleWakeup` tool call pulled from the peer's own transcript; the client renders a countdown to `fires_at`.
 
 ### `GET /api/peers/read?pane=&n=` → map literal (webpeers.go)
 

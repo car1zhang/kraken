@@ -169,6 +169,7 @@ var webJobSpec = map[string]fieldSpec{
 	"artifacts":     {kind: wireArray, required: false},
 	"detail":        {kind: wireString, required: false},
 	"question":      {kind: wireObject, required: false},
+	"wakeup":        {kind: wireObject, required: false},
 	"roster":        {kind: wireArray, required: false},
 	"health":        {kind: wireString, required: false},
 	"mtime":         {kind: wireNumber, required: true},
@@ -246,6 +247,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 				Options: []webQuestionOption{{Label: "A", Description: "do A"}},
 			}},
 		},
+		Wakeup:        &webWakeup{Reason: "poll PR checks", FiresAt: 1234567890},
 		Roster:        []webAgent{{Name: "hephaestus-x", Model: "sonnet"}},
 		Health:        "unhealthy",
 		PRs:           []jobs.JobPR{{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"}},
@@ -389,6 +391,21 @@ func TestWebQuestionWireShape(t *testing.T) {
 	assertShape(t, "webQuestionOption", optData, webQuestionOptionSpec)
 }
 
+// --- webWakeup (board.go) ---
+
+var webWakeupSpec = map[string]fieldSpec{
+	"reason":   {kind: wireString, required: true},
+	"fires_at": {kind: wireNumber, required: true},
+}
+
+func TestWebWakeupWireShape(t *testing.T) {
+	data, err := json.Marshal(webWakeup{Reason: "poll PR checks", FiresAt: 1234567890})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webWakeup", data, webWakeupSpec)
+}
+
 // --- Peer wire shape (webpeers.go/peer.go) ---
 
 var peerSpec = map[string]fieldSpec{
@@ -402,6 +419,7 @@ var peerSpec = map[string]fieldSpec{
 	"cwd":                {kind: wireString, required: false},
 	"status":             {kind: wireString, required: true},
 	"status_at":          {kind: wireNumber, required: false},
+	"wakeup":             {kind: wireObject, required: false},
 	"session_id_guessed": {kind: wireBool, required: false},
 	"branch":             {kind: wireString, required: false},
 	"model":              {kind: wireString, required: false},
@@ -439,6 +457,33 @@ func TestPeerWireShapePopulated(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "Peer (populated)", data, peerSpec)
+}
+
+// core.Wakeup mirrors status "polling" over the wire on Peer.Wakeup — its
+// own dedicated spec since peerSpec only asserts the field is an object.
+var wakeupSpec = map[string]fieldSpec{
+	"reason":        {kind: wireString, required: true},
+	"delay_seconds": {kind: wireNumber, required: true},
+	"fires_at":      {kind: wireNumber, required: true},
+}
+
+func TestPeerWireShapePolling(t *testing.T) {
+	p := core.Peer{
+		Index: 1, Pane: "%3", TmuxSession: "cell-x", WindowIdx: 0,
+		Status: "polling", Role: "agent", Agent: "claude", Messageable: true,
+		Wakeup: &core.Wakeup{Reason: "poll PR checks", DelaySeconds: 300, FiresAt: 1234567890},
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "Peer (polling)", data, peerSpec)
+
+	wakeupData, err := json.Marshal(p.Wakeup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "core.Wakeup", wakeupData, wakeupSpec)
 }
 
 // --- /api/peers/read block element (webpeers.go peersReadHandler) ---

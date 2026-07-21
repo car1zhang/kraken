@@ -83,6 +83,22 @@ type webAgent struct {
 	Model string `json:"model"`
 }
 
+// webWakeup mirrors core.Wakeup for the wire, minus DelaySeconds — the
+// client derives its countdown from FiresAt against wall-clock time, it
+// doesn't need the original delay.
+type webWakeup struct {
+	Reason  string `json:"reason"`
+	FiresAt int64  `json:"fires_at"`
+}
+
+// webWakeupFrom converts a pending core.Wakeup into the board's DTO.
+func webWakeupFrom(w *core.Wakeup) *webWakeup {
+	if w == nil {
+		return nil
+	}
+	return &webWakeup{Reason: w.Reason, FiresAt: w.FiresAt}
+}
+
 type webJob struct {
 	Slug      string        `json:"slug"`
 	Type      string        `json:"type"`
@@ -105,6 +121,11 @@ type webJob struct {
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
+	// Wakeup mirrors the zeus peer's own pending ScheduleWakeup call and is
+	// present only while the cell is polling (mid /loop or /poll-pr-style
+	// tick). The client renders a countdown chip from it; the cell still
+	// counts as "working".
+	Wakeup *webWakeup `json:"wakeup,omitempty"`
 	// Roster lists the cell's live subagents (nested claude peers).
 	Roster []webAgent `json:"roster,omitempty"`
 	// Health is a computed condition on the live cell ("" = healthy): API
@@ -377,9 +398,12 @@ func buildWebBoard() webBoard {
 			if j.Started() && j.State != "done" {
 				board.LiveCells++
 				wj.Health = jobs.CellHealth(j, all)
-				if _, transcript := cellZeusTranscript(j, all); transcript != "" {
+				if zeus, transcript := cellZeusTranscript(j, all); transcript != "" {
 					wj.Detail = lastAssistantText(transcript)
 					wj.Question = webQuestionFrom(jobs.FindPendingQuestion(transcript))
+					if zeus != nil && zeus.Status == "polling" && zeus.Wakeup != nil {
+						wj.Wakeup = webWakeupFrom(zeus.Wakeup)
+					}
 				}
 				sess := jobs.CellSession(j)
 				for _, p := range all {

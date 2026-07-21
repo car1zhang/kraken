@@ -72,6 +72,14 @@ function age(unix) {
   return Math.floor(s / 86400) + "d";
 }
 
+// countdown formats a whole number of seconds as "Xm Ys", floored at 0.
+function countdown(seconds) {
+  const clamped = Math.max(0, seconds);
+  const m = Math.floor(clamped / 60);
+  const s = clamped % 60;
+  return `${m}m ${s}s`;
+}
+
 // ---- render ----
 
 // questionHTML renders a card's pending AskUserQuestion. Option buttons only
@@ -103,6 +111,24 @@ function questionHTML(j) {
     ${q.header && q.question ? `<div class="q-text">${esc(q.question)}</div>` : ""}
     <div class="q-opts">${opts}</div>
   </div>`;
+}
+
+// wakeupChipHTML renders a live cell's poll-timer chip: a countdown to its
+// next ScheduleWakeup tick, computed from wakeup.fires_at against wall-clock
+// time. The full board rebuild is skipped when the payload hasn't changed —
+// exactly the idle-between-ticks window this chip exists for — so the chip
+// carries data-wakeup-fires and updateAges() re-ticks it in place on every
+// poll, the same pattern as the age chips. Once fires_at is past (kraken
+// hasn't caught the next discovery pass yet), it reads as "due" rather than
+// a negative countdown.
+function wakeupLabel(firesAt) {
+  const remainingS = Math.floor((firesAt - Date.now()) / 1000);
+  return remainingS <= 0 ? "due" : countdown(remainingS);
+}
+
+function wakeupChipHTML(j) {
+  if (!j.wakeup || j.state !== "working") return "";
+  return `<div class="wakeup-row"><span class="chip-wakeup" data-wakeup-fires="${+j.wakeup.fires_at}">⏱ next check in ${esc(wakeupLabel(j.wakeup.fires_at))}</span></div>`;
 }
 
 // detailClampable heuristically decides whether a detail block is long
@@ -171,6 +197,7 @@ function cardHTML(j, col) {
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
     </div>
+    ${wakeupChipHTML(j)}
     ${prs ? `<div class="prs">${prs}</div>` : ""}
     <div class="meta">
       <span>${esc(j.type)}</span>
@@ -184,6 +211,7 @@ function cardHTML(j, col) {
     ${j.health ? `<div class="err">⚠ ${esc(j.health)}</div>` : ""}
     ${j.last_sent ? `<div class="last-sent">me→zeus: ${esc(j.last_sent)}</div>` : ""}
     ${j.detail ? `<div class="detail${detailClampable(j.detail) ? " clampable" : ""}${expandedDetails.has(j.slug) ? " expanded" : ""}">${esc(j.detail)}</div>` : ""}
+    ${j.wakeup && j.wakeup.reason && j.state === "working" ? `<div class="wakeup-reason">↻ ${esc(j.wakeup.reason)}</div>` : ""}
     ${roster ? `<div class="roster">${roster}</div>` : ""}
     ${j.outcome && col === "done" ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
@@ -292,13 +320,17 @@ function renderBoardDOM(byCol, archived) {
   ).join("");
 }
 
-// updateAges refreshes the age chips in place without touching the rest of
-// the DOM — runs every poll (see refresh()), including polls that skip the
-// full board rebuild, so "3m" keeps ticking toward "4m" even when nothing
-// else changed. textContent only — never innerHTML.
+// updateAges refreshes the age chips and wakeup countdowns in place without
+// touching the rest of the DOM — runs every poll (see refresh()), including
+// polls that skip the full board rebuild, so "3m" keeps ticking toward "4m"
+// (and "next check in 1m 32s" keeps counting down) even when nothing else
+// changed. textContent only — never innerHTML.
 function updateAges() {
   document.querySelectorAll("[data-age]").forEach((el) => {
     el.textContent = age(+el.dataset.age);
+  });
+  document.querySelectorAll("[data-wakeup-fires]").forEach((el) => {
+    el.textContent = `⏱ next check in ${wakeupLabel(+el.dataset.wakeupFires)}`;
   });
 }
 
