@@ -87,8 +87,11 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `display_slug` | string | omitempty | original slug, archived jobs only |
 | `reactivatable` | bool | omitempty | done + has a recorded zeus session |
 | `last_sent` | string | omitempty | carl's last free-text message; question-answer entries excluded, started + non-done jobs only |
+| `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
+
+`jobPR`: `url` (string, always), `state` (string, always: `open` \| `merged` \| `closed`). The PR number for display derives from the url's trailing `/pull/<n>`.
 
 `webArtifact`: `name` (string, always), `url` (string, always).
 
@@ -224,8 +227,12 @@ Errors: 400 (bad type), 404 (no such job), 409 (not editable, or mtime conflict)
 
 | key | type | optionality |
 |---|---|---|
-| `blocks` | array of `{"kind": string, "text": string}` | always (`[]` not `null`) |
+| `blocks` | array of `{"kind": string, "text": string, "from": string?}` | always (`[]` not `null`) |
 | `counted` | number | always |
+
+Block kinds: `user`, `thinking`, `text`, `tool`, `teammate`. `from` rides only
+on `teammate` blocks (the sending teammate's id); idle notifications arrive
+pre-summarized as e.g. `idle (available)`.
 
 Errors: 404 (no session in pane), 409 (readTranscriptPath refusal), 500 (I/O failure).
 

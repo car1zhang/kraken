@@ -97,9 +97,25 @@ function detailClampable(text) {
   return text.length > 240 || (text.match(/\n/g) || []).length >= 6;
 }
 
+// prChipHTML renders one linked chip for a job's PR: "#<N> <state>" parsed
+// from the URL's trailing "/pull/<N>", falling back to the state alone if
+// the URL doesn't match that shape (still a valid, clickable link).
+function prChipHTML(pr) {
+  const m = /\/pull\/(\d+)(?:[/?#]|$)/.exec(pr.url || "");
+  const label = m ? `#${m[1]} ${pr.state}` : pr.state;
+  const cls = pr.state === "merged" ? "pr-merged" : pr.state === "open" ? "pr-open" : "pr-closed";
+  // job files are hand-editable, so only linkify http(s) urls — esc() stops
+  // attribute breakout but not a javascript: scheme
+  if (!/^https?:\/\//i.test(pr.url || "")) {
+    return `<span class="pr-chip ${cls}">${esc(label)}</span>`;
+  }
+  return `<a class="pr-chip ${cls}" href="${esc(pr.url)}" target="_blank" rel="noreferrer">${esc(label)}</a>`;
+}
+
 function cardHTML(j, col) {
   const color = stateColor(j.state);
   const movable = !!MOVES[col];
+  const prs = (j.prs || []).map(prChipHTML).join("");
   const prereqs = (j.prereqs || [])
     .map((p) => {
       const cls = p.done ? "ok" : p.gated ? "gate" : "pend";
@@ -125,6 +141,7 @@ function cardHTML(j, col) {
       <span class="state">● ${esc(j.state)}</span>
       ${killable ? `<button class="kill" data-slug="${esc(j.slug)}" title="kill cell → back to draft">✕</button>` : ""}
     </div>
+    ${prs ? `<div class="prs">${prs}</div>` : ""}
     <div class="meta">
       <span>${esc(j.type)}</span>
       <span>${esc(j.repo)}</span>
@@ -151,6 +168,32 @@ function cardHTML(j, col) {
   </div>`;
 }
 
+// checkStaleModals closes job-scoped modals (steer/unblock/reactivate,
+// job editor) when the poll shows the job they're open for has moved to a
+// different state since the modal was opened — the card behind it already
+// reflects the new state, so a stale modal is just confusing (e.g. an
+// "unblock" composer sitting on top of a job that unblocked itself). Not
+// wired to the artifact overlay: that one isn't scoped to a job's state.
+function checkStaleModals() {
+  if (steerOverlay && !steerOverlay.hidden && steerSlug) {
+    const j = jobsBySlug[steerSlug];
+    if (!j || j.state !== steerOpenState) steerOverlay.hidden = true;
+  }
+  if (editorOverlay && !editorOverlay.hidden && editorSlug) {
+    const j = jobsBySlug[editorSlug];
+    if (!editorStateCaptured) {
+      // freshly-created job: take the baseline as soon as the board catches
+      // up instead of comparing against "not captured yet"
+      if (j) {
+        editorOpenState = j.state;
+        editorStateCaptured = true;
+      }
+    } else if (!j || j.state !== editorOpenState) {
+      editorOverlay.hidden = true;
+    }
+  }
+}
+
 function render(board) {
   jobsBySlug = {};
   const byCol = Object.fromEntries(COLUMNS.map((c) => [c.key, []]));
@@ -168,6 +211,7 @@ function render(board) {
     if (j.question) flags++;
     if (j.health) flags++;
   }
+  checkStaleModals();
   document.getElementById("board").innerHTML = COLUMNS.map(
     (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
       <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
@@ -527,6 +571,8 @@ document.addEventListener("click", (ev) => {
 const steerOverlay = document.getElementById("steer-overlay");
 let steerSlug = null;
 let steerMode = "steer"; // "steer" | "reactivate" | "unblock" — same modal, different endpoint
+// job.state captured at open time — see checkStaleModals below
+let steerOpenState = undefined;
 
 // steer context: the cell's last message, carl's last sent message, and its
 // artifact chips — populated for "steer"/"unblock" (the data is there either
@@ -564,6 +610,7 @@ function fillSteerContext(j, mode) {
 function openSteer(slug, mode = "steer") {
   steerSlug = slug;
   steerMode = mode;
+  steerOpenState = jobsBySlug[slug] ? jobsBySlug[slug].state : undefined;
   document.getElementById("steer-title").textContent =
     mode === "reactivate" ? slug + " — reactivate (same zeus session)"
     : mode === "unblock" ? slug + " — unblock"
@@ -614,6 +661,13 @@ const editorText = document.getElementById("editor-text");
 const editorNote = document.getElementById("editor-note");
 let editorSlug = null;
 let editorMTime = 0;
+// job.state captured at open time — see checkStaleModals below. Capture is
+// lazy (editorStateCaptured) because a freshly-created job isn't in
+// jobsBySlug yet when loadForm first runs for it — the very next poll fills
+// it in, and that's when we take the baseline instead of misreading "not in
+// the map yet" as a state change.
+let editorOpenState = undefined;
+let editorStateCaptured = false;
 
 function prereqRowHTML(p) {
   return `<div class="prereq-row">
@@ -688,6 +742,12 @@ async function loadForm(slug) {
   if (d.error) throw new Error(d.error);
   editorSlug = slug;
   editorMTime = d.mtime;
+  if (jobsBySlug[slug]) {
+    editorOpenState = jobsBySlug[slug].state;
+    editorStateCaptured = true;
+  } else {
+    editorStateCaptured = false;
+  }
   fillForm(d);
   document.getElementById("editor-title").textContent = slug + ".job.md";
   document.getElementById("editor-newrow").hidden = true;
@@ -700,6 +760,7 @@ async function loadForm(slug) {
 function openEditor(slug) {
   editorSlug = slug;
   editorMTime = 0;
+  editorStateCaptured = false;
   editorNote.textContent = "";
   editorNote.style.color = "";
   const isNew = !slug;

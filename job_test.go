@@ -541,3 +541,107 @@ func TestParseJobBase(t *testing.T) {
 		t.Fatalf("base should default empty, got %q", j.Base)
 	}
 }
+
+// --- prs: list (kraken-owned PR record) ---
+
+func TestParseJobPRs(t *testing.T) {
+	src := `---
+job: x
+type: build
+repo: kraken
+ready: true
+state: working
+prs:
+  - url: https://github.com/car1zhang/kraken/pull/7
+    state: merged
+  - url: https://github.com/car1zhang/kraken/pull/9
+    state: open
+---
+body`
+	j := parseJob("x.job.md", []byte(src))
+	if j.Err != "" {
+		t.Fatalf("unexpected err: %s", j.Err)
+	}
+	want := []JobPR{
+		{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"},
+		{URL: "https://github.com/car1zhang/kraken/pull/9", State: "open"},
+	}
+	if len(j.PRs) != 2 || j.PRs[0] != want[0] || j.PRs[1] != want[1] {
+		t.Fatalf("prs: %+v", j.PRs)
+	}
+}
+
+func TestParseJobPRsStrict(t *testing.T) {
+	cases := []struct {
+		name, block string
+	}{
+		{"missing url", "prs:\n  - state: merged"},
+		{"missing state", "prs:\n  - url: https://x/pull/1"},
+		{"bad state", "prs:\n  - url: https://x/pull/1\n    state: reopened"},
+		{"unknown key", "prs:\n  - url: https://x/pull/1\n    state: open\n    title: nope"},
+		{"scalar value", "prs: https://x/pull/1"},
+	}
+	for _, c := range cases {
+		src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\n" + c.block + "\n---\nbody"
+		if j := parseJob("x.job.md", []byte(src)); j.Err == "" {
+			t.Errorf("%s: expected parse error, got none (prs=%+v)", c.name, j.PRs)
+		}
+	}
+}
+
+func TestPatchPRs(t *testing.T) {
+	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\n---\nbody\n"
+	prs := []JobPR{{URL: "https://x/pull/1", State: "open"}}
+
+	// insert before the closing fence when absent
+	got, err := patchPRs(src, prs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "prs:\n  - url: https://x/pull/1\n    state: open\n---") {
+		t.Fatalf("insert: %q", got)
+	}
+	if !strings.Contains(got, "state: working") || !strings.Contains(got, "body") {
+		t.Fatalf("insert clobbered neighbors: %q", got)
+	}
+
+	// replace in place on a later write, and round-trip through the parser
+	prs[0].State = "merged"
+	prs = append(prs, JobPR{URL: "https://x/pull/2", State: "open"})
+	got2, err := patchPRs(got, prs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(got2, "prs:") != 1 {
+		t.Fatalf("replace duplicated the block: %q", got2)
+	}
+	// what patchPRs wrote must round-trip through the strict parser
+	j := parseJob("x.job.md", []byte(got2))
+	if j.Err != "" || len(j.PRs) != 2 || j.PRs[0].State != "merged" || j.PRs[1].URL != "https://x/pull/2" {
+		t.Fatalf("round-trip: err=%q prs=%+v\n%s", j.Err, j.PRs, got2)
+	}
+
+	// no frontmatter refuses
+	if _, err := patchPRs("no fences here", prs); err == nil {
+		t.Error("expected error on missing frontmatter")
+	}
+}
+
+// A success: | block scalar whose CONTENT line starts with "prs:" must never
+// be mistaken for the prs: key — the tracker rewrites the block every tick,
+// and a trimmed-prefix match would silently eat that success line (athena
+// finding on the first cut of patchPRs).
+func TestPatchPRsSkipsBlockScalarContent(t *testing.T) {
+	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nsuccess: |\n  prs: shown on the board\nstate: working\n---\nbody\n"
+	got, err := patchPRs(src, []JobPR{{URL: "https://x/pull/1", State: "open"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "  prs: shown on the board") {
+		t.Fatalf("success block scalar content eaten: %q", got)
+	}
+	j := parseJob("x.job.md", []byte(got))
+	if j.Err != "" || j.Success != "prs: shown on the board" || len(j.PRs) != 1 {
+		t.Fatalf("round-trip: err=%q success=%q prs=%+v", j.Err, j.Success, j.PRs)
+	}
+}

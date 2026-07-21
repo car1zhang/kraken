@@ -109,8 +109,8 @@ func allArtifactPaths(j *Job) []string {
 }
 
 // branchForRun names the branch for a given cell run: the bare slug branch
-// for a first run, -rN for later runs (reactivations, or a re-queue whose
-// original branch still exists — worktree teardown never deletes branches).
+// normally, -rN only for fallback runs (an existing branch with unmerged
+// commits that a forced reuse would orphan — see ensureUsableBranch).
 func branchForRun(slug string, run int) string {
 	if run >= 2 {
 		return fmt.Sprintf("carl/%s-r%d", slugify(slug), run)
@@ -122,23 +122,31 @@ func cellBranch(j *Job) string {
 	return branchForRun(j.Slug, j.Run)
 }
 
-// ensureFreshBranch advances the job's run until cellBranch names a branch
-// that doesn't exist yet in repo, persisting the new run so every later
-// cellBranch reader (reap's PR watch, the zeus brief, the board) agrees.
-// No-op when the current branch name is free — a first run stays on
-// carl/<slug> with no run field written.
-func ensureFreshBranch(j *Job, repo string) error {
-	run := j.Run
-	for refExists(repo, branchForRun(j.Slug, run)) {
+// ensureUsableBranch makes cellBranch(j) safe to (re)create the worktree on
+// and returns the git worktree-add branch flag to use: "-b" when the branch
+// doesn't exist, "-B" (reset) when it exists but is fully merged into base —
+// its commits are already in the base, so the name recycles (many PRs share
+// one head-branch name over a job's life; the prs: record, not the branch,
+// is the history). Only a branch holding unmerged commits advances run to
+// the next -rN name, persisting it so every later cellBranch reader (the PR
+// tracker, the zeus brief, the board) agrees.
+func ensureUsableBranch(j *Job, repo, base string) (string, error) {
+	for {
+		br := cellBranch(j)
+		if !refExists(repo, br) {
+			return "-b", nil
+		}
+		if exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", br, base).Run() == nil {
+			return "-B", nil
+		}
+		run := j.Run
 		if run < 1 {
 			run = 1
 		}
-		run++
+		if err := writeJobFields(j, "run", strconv.Itoa(run+1)); err != nil {
+			return "", err
+		}
 	}
-	if run == j.Run {
-		return nil
-	}
-	return writeJobFields(j, "run", strconv.Itoa(run))
 }
 
 // cellPalette: tmux 256-color indices picked for contrast against a dark
@@ -282,9 +290,10 @@ func startCell(j *Job, repo string) error {
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
-	// a leftover branch from a killed or reaped earlier run would make the
-	// -b worktree add below fail; every cell run gets a fresh branch
-	if err := ensureFreshBranch(j, repo); err != nil {
+	// a leftover branch from a killed or done earlier run: reuse it (reset
+	// off base) when fully merged, else fall back to a fresh -rN name
+	branchFlag, err := ensureUsableBranch(j, repo, base)
+	if err != nil {
 		return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
 	}
 	for _, d := range []string{cellDir(j), cellArtifacts(j)} {
@@ -292,7 +301,7 @@ func startCell(j *Job, repo string) error {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
-	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, "-b", cellBranch(j), base).CombinedOutput()
+	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, cellBranch(j), base).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 	}
@@ -322,24 +331,36 @@ func startCell(j *Job, repo string) error {
 	return nil
 }
 
-// --- k reap ---
+// --- PR listing ---
 
-// prState asks gh for the PR state of a cell's branch. Any failure (no PR
-// yet, auth, rate limit) degrades to "" — unknown must never tear down.
-func prState(dir, branch string) string {
-	cmd := exec.Command("gh", "pr", "view", branch, "--json", "state")
+// listBranchPRs asks gh for every PR (any state) whose head is the cell's
+// branch. ok=false on any failure (auth, rate limit, no gh) — unknown must
+// never touch the recorded history. States are normalized to lowercase
+// open|merged|closed; anything else is dropped.
+func listBranchPRs(dir, branch string) ([]JobPR, bool) {
+	cmd := exec.Command("gh", "pr", "list", "--head", branch, "--state", "all",
+		"--limit", "50", "--json", "url,state")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		return nil, false
 	}
-	var rec struct {
+	var recs []struct {
+		URL   string `json:"url"`
 		State string `json:"state"`
 	}
-	if json.Unmarshal(out, &rec) != nil {
-		return ""
+	if json.Unmarshal(out, &recs) != nil {
+		return nil, false
 	}
-	return rec.State
+	var prs []JobPR
+	for _, r := range recs {
+		state := strings.ToLower(r.State)
+		if r.URL == "" || (state != "open" && state != "merged" && state != "closed") {
+			continue
+		}
+		prs = append(prs, JobPR{URL: r.URL, State: state})
+	}
+	return prs, true
 }
 
 // verifyCellSession confirms a tmux session is the cell kraken created for
@@ -355,98 +376,23 @@ func verifyCellSession(sess, slug string) error {
 	return nil
 }
 
-func cmdReap(args []string) {
-	if len(args) != 0 {
-		die("usage: k reap")
-	}
-	jobs := loadJobs()
-	live := liveSessions()
-	reaped, checked := 0, 0
-	for _, j := range jobs {
-		if j.Err != "" {
-			// strict parsing: never act on a job kraken can't fully read —
-			// but a live cell behind it deserves a loud line, not silence
-			if j.started() || live[cellSession(j)] {
-				fmt.Printf("%-24s unparseable (%s) — fix the frontmatter, then rerun\n", j.Slug, j.Err)
-			}
-			continue
-		}
-		if !j.started() || j.State == "done" {
-			continue
-		}
-		checked++
-		msg, changed := reapOne(j, live)
-		fmt.Printf("%-24s %s\n", j.Slug, msg)
-		if changed {
-			reaped++
-		}
-	}
-	switch {
-	case checked == 0:
-		fmt.Println("no started jobs to check")
-	case reaped == 0:
-		fmt.Println("nothing to reap")
-	}
-}
-
-// reapOne checks one started job's PR and tears its cell down when merged.
-// Shared by k reap and the daemon; returns a status line and whether the job
-// converged to done. Unknown PR state must never tear down.
-func reapOne(j *Job, live map[string]bool) (string, bool) {
-	repo, err := resolveRepo(j.Repo)
-	if err != nil {
-		return fmt.Sprintf("%s (repo unresolved: %v)", j.State, err), false
-	}
-	dir := existingWorktree(j, repo)
-	if dir == "" {
-		// worktree already gone: still ask in the repo so state converges
-		dir = repo
-	}
-	switch prState(dir, cellBranch(j)) {
-	case "MERGED":
-		stampSessionBeforeTeardown(j)              // last chance to record zeus' session id
-		copied, perr := preserveArtifacts(j, repo) // before teardown deletes the sources
-		if perr != nil {
-			return fmt.Sprintf("merged, but artifact preservation failed (%v) — NOT tearing down", perr), false
-		}
-		if err := teardownCell(j, repo, live, false); err != nil {
-			return fmt.Sprintf("merged, but teardown incomplete: %v", err), false
-		}
-		// the merge is the completion signal: done is the terminal state, no
-		// intermediate review column to park in
-		if err := writeJobState(j, "done"); err != nil {
-			return fmt.Sprintf("merged + torn down, but state write failed: %v", err), false
-		}
-		if j.Outcome == "" {
-			if err := writeJobFields(j, "outcome", "PR merged"); err != nil {
-				return fmt.Sprintf("merged + torn down, but outcome write failed: %v", err), false
-			}
-		}
-		msg := "merged → cell torn down, done"
-		if len(copied) > 0 {
-			msg += fmt.Sprintf(" (%d artifacts preserved)", len(copied))
-		}
-		return msg, true
-	case "OPEN":
-		// no state write: PR-open still derives to "working" or "blocked" from
-		// transcript activity, matching the five-state model
-		return "PR open", false
-	case "CLOSED":
-		return "PR closed without merge — decide manually (k done / respec)", false
-	default:
-		return fmt.Sprintf("%s (no PR found or gh unavailable — leaving alone)", j.State), false
-	}
-}
-
 // teardownCell shuts a job's cell down: verified tmux session kill, then
 // worktree removal. Partial teardown returns an error so the caller leaves
 // the job's state alone for a retry.
 //
-// force distinguishes the two callers: k done is an explicit human sign-off
-// (artifacts already preserved), so a dirty worktree — usually just the
-// artifact itself — is listed and force-removed; k reap runs unattended, so
-// it refuses dirt and leaves the worktree for a human look.
+// All-or-nothing: when not forcing, worktree dirt is checked BEFORE the
+// session kill and refuses the whole teardown up front — killing first and
+// failing on the dirty worktree left a dead cell stuck in "working" (the
+// demo-job incident). force is the explicit human sign-off (k done, kill),
+// where dirt is listed and discarded instead.
 func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
+	if !force {
+		if wt := existingWorktree(j, repo); wt != "" {
+			if dirt, err := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); err == nil && len(strings.TrimSpace(string(dirt))) > 0 {
+				return fmt.Errorf("worktree %s has uncommitted changes — not touching the cell (k done force-discards them)", wt)
+			}
+		}
+	}
 	sess := cellSession(j)
 	if live[sess] {
 		if err := verifyCellSession(sess, slugify(j.Slug)); err != nil {
@@ -768,8 +714,9 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 	return copied, firstErr
 }
 
-// cmdDone marks a started job done by hand: the phase-2 stand-in for artifact
-// acceptance (explore/question jobs have no PR for k reap to notice).
+// cmdDone marks a started job done by hand: the acceptance path for every
+// job type — info jobs have no PR at all, and build jobs' merges are only
+// tracked (prs: chips), never auto-completed.
 func cmdDone(args []string) {
 	if len(args) < 1 {
 		die("usage: k done <job-slug> [outcome...]")
@@ -845,12 +792,12 @@ func oneLine(s string) string {
 // reactivateJob resurrects a done job into its original zeus session for
 // adjustments: the worktree is recreated at the SAME path (the claude
 // project dir — and with it the transcript history — is keyed on that
-// path), the branch is a fresh -rN (the old branch's PR is already merged,
-// and reap watching a merged branch would tear the new cell down on its
-// next pass), and claude is resumed with -r <session> rather than started
-// fresh. session overrides the recorded id (hand-rescue for jobs done
-// before kraken stamped session ids); message rides along in the resume
-// prompt as carl's steering.
+// path), the branch recycles per ensureUsableBranch (reset off the base
+// when the old one is fully merged, -rN only for unmerged leftovers), and
+// claude is resumed with -r <session> rather than started fresh. session
+// overrides the recorded id (hand-rescue for jobs done before kraken
+// stamped session ids); message rides along in the resume prompt as carl's
+// steering.
 func reactivateJob(j *Job, session, message string) error {
 	if j.Err != "" {
 		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
@@ -875,20 +822,15 @@ func reactivateJob(j *Job, session, message string) error {
 	if old := existingWorktree(j, repo); old != "" {
 		return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", old, repo, old)
 	}
-	// always advance the run, even when the old branch was deleted locally:
-	// gh pr view <branch> would still find the old MERGED PR by name
-	run := j.Run
-	if run < 1 {
-		run = 1
-	}
-	run++
-	for refExists(repo, branchForRun(j.Slug, run)) {
-		run++
-	}
-	j.Run = run // cellBranch below must see it; persisted right after the worktree lands
 	base, err := baseRef(j, repo)
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	// recycle the branch when its PRs are all merged into the base; only
+	// unmerged leftovers force a fresh -rN name (persisted inside)
+	branchFlag, err := ensureUsableBranch(j, repo, base)
+	if err != nil {
+		return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
 	}
 	for _, d := range []string{cellDir(j), cellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -896,14 +838,11 @@ func reactivateJob(j *Job, session, message string) error {
 		}
 	}
 	wt := cellWorktree(j, repo)
-	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, "-b", cellBranch(j), base).CombinedOutput()
+	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, cellBranch(j), base).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 	}
-	if err := writeJobFields(j, "run", strconv.Itoa(run)); err != nil {
-		return fmt.Errorf("worktree is up but run write failed: %v — fix %s by hand (run: %d) or reap will watch the wrong branch", err, filepath.Base(j.File), run)
-	}
-	prompt := "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, but a FRESH branch " + cellBranch(j) + " off " + base + ". Your previous branch's PR is already merged — never push to it; your earlier changes are already in the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
+	prompt := "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + cellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
 	if message != "" {
 		prompt += "\nsteering from carl: " + message
 	}

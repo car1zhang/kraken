@@ -127,7 +127,11 @@ func peersReadHandler(source peerSource) http.HandlerFunc {
 		}
 		out := make([]map[string]string, 0, len(blocks))
 		for _, b := range blocks {
-			out = append(out, map[string]string{"kind": b.kind, "text": b.text})
+			m := map[string]string{"kind": b.kind, "text": b.text}
+			if b.from != "" {
+				m["from"] = b.from
+			}
+			out = append(out, m)
 		}
 		webJSON(w, http.StatusOK, map[string]any{"blocks": out, "counted": counted})
 	}

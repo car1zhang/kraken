@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -12,9 +13,17 @@ import (
 // --- k r ---
 
 type block struct {
-	kind string // "user" | "thinking" | "text" | "tool"
+	kind string // "user" | "thinking" | "text" | "tool" | "teammate"
 	text string
+	from string // teammate_id, set only for kind "teammate"
 }
+
+// teammateMsgRe matches the harness-wrapped envelope another kraken cell's
+// zeus injects into a user turn when messaging this session (see
+// SendMessage's tool description). Attribute order/extras beyond
+// teammate_id are tolerated; a wrapper missing teammate_id simply fails to
+// match, so callers fall back to treating the text as a plain user block.
+var teammateMsgRe = regexp.MustCompile(`(?s)<teammate-message[^>]*\bteammate_id="([^"]+)"[^>]*>\s*(.*?)\s*</teammate-message>`)
 
 func cmdRead(args []string) {
 	if len(args) == 0 {
@@ -58,6 +67,9 @@ func cmdRead(args []string) {
 			fmt.Println(b.text)
 		case "thinking":
 			fmt.Println(paint(color, dim, "· thinking"))
+			fmt.Println(paint(color, dim, b.text))
+		case "teammate":
+			fmt.Println(paint(color, dim, "⇄ "+b.from))
 			fmt.Println(paint(color, dim, b.text))
 		case "tool":
 			fmt.Println(paint(color, dim, "→ "+b.text))
@@ -177,15 +189,15 @@ func parseBlocks(lines []string) []block {
 			switch pm["type"] {
 			case "thinking":
 				if s, _ := pm["thinking"].(string); strings.TrimSpace(s) != "" {
-					blocks = append(blocks, block{"thinking", s})
+					blocks = append(blocks, block{kind: "thinking", text: s})
 				}
 			case "text":
 				if s, _ := pm["text"].(string); strings.TrimSpace(s) != "" {
-					blocks = append(blocks, block{"text", s})
+					blocks = append(blocks, block{kind: "text", text: s})
 				}
 			case "tool_use":
 				name, _ := pm["name"].(string)
-				blocks = append(blocks, block{"tool", name + "(" + summarizeInput(pm["input"]) + ")"})
+				blocks = append(blocks, block{kind: "tool", text: name + "(" + summarizeInput(pm["input"]) + ")"})
 			}
 		}
 	}
@@ -202,7 +214,11 @@ func userBlocks(content any) []block {
 		if strings.TrimSpace(s) == "" || strings.HasPrefix(strings.TrimSpace(s), "<system-reminder>") {
 			return
 		}
-		blocks = append(blocks, block{"user", s})
+		if b, ok := teammateBlock(s); ok {
+			blocks = append(blocks, b)
+			return
+		}
+		blocks = append(blocks, block{kind: "user", text: s})
 	}
 	switch c := content.(type) {
 	case string:
@@ -218,6 +234,35 @@ func userBlocks(content any) []block {
 		}
 	}
 	return blocks
+}
+
+// teammateBlock detects a harness-wrapped teammate message inside a user
+// text part and, if found, renders it as a "teammate" block. idle
+// notifications (the JSON idle-poll heartbeat teams exchange) collapse to
+// a one-line summary; anything else is a real message and is kept
+// verbatim, since it's often markdown meant to be read as-is. Returns
+// ok=false — and the caller falls back to a plain "user" block — when the
+// wrapper tag is present but missing teammate_id, or absent entirely.
+func teammateBlock(s string) (block, bool) {
+	m := teammateMsgRe.FindStringSubmatch(s)
+	if m == nil {
+		return block{}, false
+	}
+	from, payload := m[1], strings.TrimSpace(m[2])
+	if from == "" {
+		return block{}, false
+	}
+	text := payload
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(payload), &rec); err == nil {
+		if t, _ := rec["type"].(string); t == "idle_notification" {
+			text = "idle"
+			if reason, _ := rec["idleReason"].(string); reason != "" {
+				text = fmt.Sprintf("idle (%s)", reason)
+			}
+		}
+	}
+	return block{kind: "teammate", text: text, from: from}, true
 }
 
 func summarizeInput(input any) string {
