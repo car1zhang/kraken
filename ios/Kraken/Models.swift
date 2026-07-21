@@ -191,7 +191,6 @@ struct JobForm: Decodable {
     let base: String
     let ready: Bool
     let solo: Bool
-    let autoApprove: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -202,7 +201,6 @@ struct JobForm: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
-        case autoApprove = "auto_approve"
         case prereqs, spec, mtime, editable, err, slugs, repos
     }
 }
@@ -237,14 +235,12 @@ struct JobFormSaveRequest: Encodable {
     let base: String
     let ready: Bool
     let solo: Bool
-    let autoApprove: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
-        case autoApprove = "auto_approve"
         case prereqs, spec, mtime
     }
 }
@@ -271,6 +267,28 @@ struct SteerRequest: Encodable {
 
 struct CreateJobRequest: Encodable {
     let slug: String
+}
+
+// GET/POST /api/draft — a job-scoped composer draft, synced upstream so a
+// typed-but-unsent steer/reactivate message survives an app kill, a
+// reinstall, or switching devices. `text` is always present on the wire
+// ("" means no draft stored); the server clears a job's draft itself after
+// a successful steer/reactivate/done/archive/delete, so clients never need
+// to post an empty-text clear after one of those actions succeeds.
+struct DraftResponse: Decodable {
+    let slug: String
+    let text: String
+    let updatedAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case slug, text
+        case updatedAt = "updated_at"
+    }
+}
+
+struct DraftRequest: Encodable {
+    let slug: String
+    let text: String
 }
 
 // webAction's uniform success body is always {"ok": true}; errors arrive as

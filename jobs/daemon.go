@@ -36,6 +36,10 @@ const (
 	// regardless of the ROLL-CALL — claude is still launching before any
 	// session file or pane signal exists yet.
 	sessionCreateGrace = 2 * time.Minute
+	// autoArchiveAfter: a done job left untouched this long gets swept into
+	// the archive on its own, so the board doesn't accumulate accepted work
+	// forever — carl can still unarchive it any time.
+	autoArchiveAfter = 24 * time.Hour
 )
 
 type DaemonStatus struct {
@@ -303,6 +307,21 @@ func (d *daemonState) tick() (int, error) {
 		}
 	}
 
+	// auto-archive: done jobs left untouched for a day sweep themselves into
+	// the archive, so the board doesn't accumulate accepted work forever.
+	// !live is the same safety net ArchiveJob itself re-checks — a job
+	// stamped done but whose cell somehow lingers is left alone here.
+	archivedSlugs := autoArchivePass(jobs, live, now)
+	switch n := len(archivedSlugs); {
+	case n == 0:
+	case n <= 3:
+		for _, slug := range archivedSlugs {
+			notify("kraken 📦 "+slug, "auto-archived (done > 24h)")
+		}
+	default:
+		notify("kraken 📦", fmt.Sprintf("auto-archived %d done jobs (> 24h)", n))
+	}
+
 	// queue: start startable jobs under the cap. StartCell writes "working"
 	// itself once the cell is up.
 	var firstErr error
@@ -335,6 +354,27 @@ func (d *daemonState) tick() (int, error) {
 		notify("kraken ▶ "+j.Slug, "cell started")
 	}
 	return cells, firstErr
+}
+
+// autoArchivePass sweeps jobs eligible under autoArchivable into the
+// archive, returning the slugs it moved. No dedup map is needed: archiving
+// moves the file out of LoadJobs' namespace, so an archived job can't
+// reappear here on a later tick to re-trigger.
+func autoArchivePass(jobs []*Job, live map[string]bool, now time.Time) []string {
+	var archived []string
+	for _, j := range jobs {
+		if !autoArchivable(j, now) || live[CellSession(j)] {
+			continue
+		}
+		name, err := ArchiveJob(j, live)
+		if err != nil {
+			dlog("auto-archive %s failed: %v", j.Slug, err)
+			continue
+		}
+		dlog("%s: auto-archived as %s (done > 24h)", j.Slug, name)
+		archived = append(archived, j.Slug)
+	}
+	return archived
 }
 
 // trackPRs reconciles one build job's recorded prs: list against what gh

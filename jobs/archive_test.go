@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeArchiveFixture writes a minimal parseable job file into dir.
@@ -143,6 +144,29 @@ func TestDeleteArchivedJob(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo-2.doc.html")); err != nil {
 		t.Fatal("delete of foo took foo-2's artifact with it")
+	}
+}
+
+func TestAutoArchivable(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		j    *Job
+		want bool
+	}{
+		{"done 25h old", &Job{State: "done", ModTime: now.Add(-25 * time.Hour)}, true},
+		{"done 23h old", &Job{State: "done", ModTime: now.Add(-23 * time.Hour)}, false},
+		{"done exactly 24h old", &Job{State: "done", ModTime: now.Add(-24 * time.Hour)}, false},
+		{"working, old mtime", &Job{State: "working", ModTime: now.Add(-48 * time.Hour)}, false},
+		{"blocked, old mtime", &Job{State: "blocked", ModTime: now.Add(-48 * time.Hour)}, false},
+		{"never started, old mtime", &Job{State: "", ModTime: now.Add(-48 * time.Hour)}, false},
+		{"done, old, with parse err", &Job{State: "done", ModTime: now.Add(-48 * time.Hour), Err: "duplicate slug"}, true},
+		{"done, zero ModTime", &Job{State: "done"}, false},
+	}
+	for _, c := range cases {
+		if got := autoArchivable(c.j, now); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

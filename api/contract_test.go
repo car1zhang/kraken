@@ -532,20 +532,19 @@ var jobRawSpec = map[string]fieldSpec{
 }
 
 var jobFormSpec = map[string]fieldSpec{
-	"slug":         {kind: wireString, required: true},
-	"type":         {kind: wireString, required: true},
-	"repo":         {kind: wireString, required: true},
-	"base":         {kind: wireString, required: true},
-	"ready":        {kind: wireBool, required: true},
-	"solo":         {kind: wireBool, required: true},
-	"auto_approve": {kind: wireBool, required: true},
-	"prereqs":      {kind: wireArray, required: true},
-	"spec":         {kind: wireString, required: true},
-	"mtime":        {kind: wireNumber, required: true},
-	"editable":     {kind: wireBool, required: true},
-	"err":          {kind: wireString, required: true},
-	"slugs":        {kind: wireArray, required: true, nullable: true},
-	"repos":        {kind: wireArray, required: true, nullable: true},
+	"slug":     {kind: wireString, required: true},
+	"type":     {kind: wireString, required: true},
+	"repo":     {kind: wireString, required: true},
+	"base":     {kind: wireString, required: true},
+	"ready":    {kind: wireBool, required: true},
+	"solo":     {kind: wireBool, required: true},
+	"prereqs":  {kind: wireArray, required: true},
+	"spec":     {kind: wireString, required: true},
+	"mtime":    {kind: wireNumber, required: true},
+	"editable": {kind: wireBool, required: true},
+	"err":      {kind: wireString, required: true},
+	"slugs":    {kind: wireArray, required: true, nullable: true},
+	"repos":    {kind: wireArray, required: true, nullable: true},
 }
 
 var jobSaveFormSpec = map[string]fieldSpec{
@@ -605,6 +604,45 @@ func TestJobSaveFormWireShape(t *testing.T) {
 	if _, ok := resp["mtime"].(json.Number); !ok {
 		t.Errorf("mtime = %#v, want json.Number", resp["mtime"])
 	}
+}
+
+// --- draft: /api/draft GET/POST (draft.go) ---
+
+var webDraftSpec = map[string]fieldSpec{
+	"slug":       {kind: wireString, required: true},
+	"text":       {kind: wireString, required: true},
+	"updated_at": {kind: wireNumber, required: true},
+}
+
+func TestDraftGetWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "contract-draft", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/draft?slug=contract-draft", nil)
+	rec := httptest.NewRecorder()
+	draftHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("draftHandler (GET): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/draft (GET)", rec.Body.Bytes(), webDraftSpec)
+}
+
+var draftPostOKSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+func TestDraftPostWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "contract-draft-post", "")
+
+	body := mustJSON(t, webReq{Slug: "contract-draft-post", Text: "hello"})
+	req := httptest.NewRequest(http.MethodPost, "/api/draft", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	draftHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("draftHandler (POST): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/draft (POST)", rec.Body.Bytes(), draftPostOKSpec)
 }
 
 // jobSaveFormConflictSpec is the 409 shape webJobSaveForm returns for a

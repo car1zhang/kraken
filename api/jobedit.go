@@ -142,15 +142,14 @@ func splitBodyLog(body string) (spec, log string) {
 }
 
 type jobFormFields struct {
-	Slug        string        `json:"slug"`
-	Type        string        `json:"type"`
-	Repo        string        `json:"repo"`
-	Base        string        `json:"base"`
-	Ready       bool          `json:"ready"`
-	Solo        bool          `json:"solo"`
-	AutoApprove bool          `json:"auto_approve"`
-	Prereqs     []jobs.Prereq `json:"prereqs"`
-	Spec        string        `json:"spec"`
+	Slug    string        `json:"slug"`
+	Type    string        `json:"type"`
+	Repo    string        `json:"repo"`
+	Base    string        `json:"base"`
+	Ready   bool          `json:"ready"`
+	Solo    bool          `json:"solo"`
+	Prereqs []jobs.Prereq `json:"prereqs"`
+	Spec    string        `json:"spec"`
 	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
 	// legacy client still sending the old string encoding round-trips too.
 	MTime mtimeToken `json:"mtime"`
@@ -182,7 +181,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 	}
 	webJSON(w, http.StatusOK, map[string]any{
 		"slug": j.Slug, "type": j.Type, "repo": j.Repo, "base": j.Base,
-		"ready": j.Ready, "solo": j.Solo, "auto_approve": j.AutoApprove,
+		"ready": j.Ready, "solo": j.Solo,
 		"prereqs": prereqs,
 		"spec":    strings.TrimSpace(spec),
 		"mtime":   jobMTime(fi), "editable": editableJob(j),
@@ -216,7 +215,6 @@ func serializeJobFile(f jobFormFields, state, outcome, session string, run int, 
 		}
 	}
 	fmt.Fprintf(&b, "solo: %t\n", f.Solo)
-	fmt.Fprintf(&b, "auto-approve: %t\n", f.AutoApprove)
 	if state != "" {
 		fmt.Fprintf(&b, "state: %s\n", state)
 	}

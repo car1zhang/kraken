@@ -121,14 +121,12 @@
         <span class="panel-title" id="editor-title"></span>
         <span class="stat dim" id="editor-hint"></span>
         <span class="spacer"></span>
-        <button class="btn ghost danger" id="editor-force" hidden>overwrite disk</button>
-        <button class="btn ghost" id="editor-queue" hidden
-          title="queue this draft — same move as dragging the card to QUEUED">▶ queue</button>
         <button class="btn ghost" id="editor-reactivate" hidden
           title="resume this done job's original zeus session in a fresh cell">↺ reactivate</button>
         <button class="btn ghost" id="editor-archive" hidden
           title="move this job (and its preserved artifacts) into the archive — frees the slug; reversible from the ARCHIVED drawer under DONE">archive</button>
-        <button class="btn" id="editor-save">save ⌘⏎</button>
+        <button class="btn" id="editor-queue" hidden
+          title="mark this job ready and queue it — same move as dragging the card to QUEUED">ready ⌘⏎</button>
       </div>
       <div class="panel-body editor-body">
         <div class="editor-newrow" id="editor-newrow" hidden>
@@ -145,9 +143,7 @@
             <label>repo <select id="f-repo"></select></label>
             <label>base <input id="f-base" placeholder="origin/main" spellcheck="false"></label>
             <span class="f-toggles">
-              <label class="check"><input type="checkbox" id="f-ready"> ready</label>
               <label class="check"><input type="checkbox" id="f-solo"> solo</label>
-              <label class="check"><input type="checkbox" id="f-auto"> auto-approve</label>
             </span>
           </div>
           <div class="f-block">

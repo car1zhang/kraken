@@ -1,13 +1,43 @@
 package jobs
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // daemon_test.go — the PR tracker's pure reconciliation. The tracker's whole
 // safety story is here: recorded history never shrinks, notifications fire
 // exactly on the transition to merged, and an unchanged fetch is a no-op.
+
+func TestAutoArchivePass(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	stale := writeArchiveFixture(t, PlutoDir(), "stale.job.md", "job: stale\nrepo: x\nready: true\nstate: done\n")
+	old := time.Now().Add(-25 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	writeArchiveFixture(t, PlutoDir(), "fresh.job.md", "job: fresh\nrepo: x\nready: true\nstate: done\n")
+
+	jobs := LoadJobs()
+	archived := autoArchivePass(jobs, map[string]bool{}, time.Now())
+
+	if len(archived) != 1 || archived[0] != "stale" {
+		t.Fatalf("archived: got %v, want [stale]", archived)
+	}
+	if _, err := os.Stat(filepath.Join(ArchiveDir(), "stale.job.md")); err != nil {
+		t.Fatal("stale job didn't land in archive/")
+	}
+	if _, err := os.Stat(filepath.Join(PlutoDir(), "fresh.job.md")); err != nil {
+		t.Fatal("fresh done job was archived too early")
+	}
+	remaining := LoadJobs()
+	if len(remaining) != 1 || remaining[0].Slug != "fresh" {
+		t.Fatalf("active jobs after sweep: got %+v, want just fresh", remaining)
+	}
+}
 
 func TestReconcilePRs(t *testing.T) {
 	pr := func(n, state string) JobPR { return JobPR{URL: "https://x/pull/" + n, State: state} }

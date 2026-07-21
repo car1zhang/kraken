@@ -5,9 +5,11 @@ consumes. Source of truth is the Go code (`web.go`, `webpeers.go`,
 `daemon.go`, `job.go`, `status.go`); this doc transcribes it, it does not
 define it independently.
 
-**Current contract**: `apiContract = 2` (web.go), mirrored by
+**Current contract**: `apiContract = 3` (web.go), mirrored by
 `APIClient.expectedContract` (APIClient.swift). `/api/health` and
-`/api/board` both serve `contract` (int) + `stale` (bool).
+`/api/board` both serve `contract` (int) + `stale` (bool). v3 bumped when
+the auto-approve feature (and `auto_approve` on the job form GET/POST) was
+removed.
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
 retyped, renamed, or removed. Additive keys never bump it: old clients
@@ -124,6 +126,32 @@ Response: same as above.
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
 
+### `GET /api/draft?slug=` / `POST /api/draft` → `webDraft` (draft.go)
+
+Per-job prompt-composer draft text, kept in an in-memory store on the `k web`
+process — additive (contract stays 2), nothing here is written to disk, so
+drafts are lost across a `k web` restart. Last-save-event-wins: no merge,
+no history, a POST simply overwrites whatever was there. The stored draft is
+cleared automatically on the success path of `/api/steer`, `/api/reactivate`,
+`/api/done`, `/api/archive`, and `/api/delete` (NOT `/api/kill` or
+`/api/question`), and lazily on any `GET /api/draft` for a slug that no
+longer matches an active job.
+
+GET request: `slug` query param (required; missing/empty → 400).
+GET response:
+
+| key | type | optionality |
+|---|---|---|
+| `slug` | string | always |
+| `text` | string | always (`""` if no draft stored) |
+| `updated_at` | number | always (unix millis; `0` if no draft stored) |
+
+POST request: `webReq` — `slug` (string, required — empty → 400), `text`
+(string: the draft text; empty clears the stored entry).
+POST response: `{"ok": true}` on success; non-2xx `{"error": string}` on
+failure (400 for bad JSON or missing slug; 405 for methods other than
+GET/POST).
+
 ---
 
 ## Job editor
@@ -164,7 +192,6 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
-| `auto_approve` | bool | always | |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -177,7 +204,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `auto_approve` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.

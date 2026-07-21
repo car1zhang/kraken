@@ -9,6 +9,15 @@ private struct PrereqRow: Identifiable {
     var gated: Bool
 }
 
+/// Autosave's compact status readout — idle until the first real edit after
+/// load, then syncing/synced/failed as each debounced saveform round-trips.
+private enum SyncState: Equatable {
+    case idle
+    case syncing
+    case synced
+    case failed(String)
+}
+
 /// Structured spec editor: SwiftUI Form bound to GET /api/job/form,
 /// saved back via POST /api/job/saveform. Used both for editing an existing
 /// job (from JobDetailView) and, chained after creation, for a brand new one
@@ -26,15 +35,13 @@ struct JobFormView: View {
     @State private var base = ""
     @State private var ready = false
     @State private var solo = false
-    @State private var autoApprove = false
     @State private var prereqRows: [PrereqRow] = []
     @State private var spec = ""
     @State private var mtime: Int64 = 0
-    // Defaults to false on purpose: the form (and Save) must stay hidden
-    // until a load actually succeeds, so a transient network failure can
-    // never render an editable form with blank fields and mtime 0 — saving
-    // that would skip the server's optimistic lock (web.go's saveform only
-    // checks the mtime when it's non-zero) and wipe the real file.
+    // Defaults to false on purpose: the form (and autosave, gated on
+    // `editable` below) must stay inert until a load actually succeeds, so a
+    // transient network failure can never render an editable-looking form
+    // with blank fields and silently autosave them over the real file.
     @State private var editable = false
     @State private var loaded = false
     // The job's own parse problem (JobForm.err) — "saved but won't run".
@@ -48,10 +55,11 @@ struct JobFormView: View {
     @State private var repoSuggestions: [String] = []
 
     @State private var isLoading = true
-    @State private var isSaving = false
-    @State private var note: String?
-    @State private var noteIsWarning = false
-    @State private var showingConflict = false
+    @State private var syncState: SyncState = .idle
+    // The in-flight or pending debounced autosave, if any — cancelled and
+    // replaced on every edit (scheduleAutosave) or run immediately
+    // (flushAutosave), so at most one saveform call is ever in flight.
+    @State private var autosaveTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -99,7 +107,7 @@ struct JobFormView: View {
         Form {
             if isNew {
                 kSection {
-                    Text("Created — fill in the spec below, then Save. It stays a draft until you flip Ready or queue it from the board.")
+                    Text("Created — fill in the spec below; it autosaves as you type. It stays a draft until you flip Ready or queue it from the board.")
                         .font(.voice(12))
                         .foregroundStyle(KTheme.text2)
                 }
@@ -155,9 +163,6 @@ struct JobFormView: View {
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
                 Toggle("Solo (no subagent crew)", isOn: $solo)
-                    .font(.voice(13))
-                    .foregroundStyle(KTheme.text)
-                Toggle("Auto-approve plan", isOn: $autoApprove)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
             }
@@ -216,10 +221,8 @@ struct JobFormView: View {
                     Text(loadError).font(.voice(12)).foregroundStyle(KTheme.counter)
                 }
             }
-            if let note {
-                kSection {
-                    Text(note).font(.voice(12)).foregroundStyle(noteIsWarning ? KTheme.revealed : KTheme.solved)
-                }
+            if syncState != .idle {
+                kSection { syncStatusRow }
             }
         }
         .kListStyle()
@@ -231,24 +234,51 @@ struct JobFormView: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button {
-                    save()
+                    finishEditing()
                 } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
+                    Label("Done", systemImage: "checkmark")
                 }
                 .labelStyle(.iconOnly)
-                .accessibilityLabel("Save")
+                .accessibilityLabel("Done")
                 .buttonStyle(.borderedProminent)
-                .disabled(isSaving || !editable || mtime == 0)
             }
         }
-        .disabled(isSaving)
-        .confirmationDialog(
-            "The file changed on disk since you opened it. Reload to discard your edits and see the latest version.",
-            isPresented: $showingConflict, titleVisibility: .visible
-        ) {
-            Button("Reload") { Task { await load() } }
-            Button("Cancel", role: .cancel) {}
+        // autosaveSnapshotKey covers every field except `ready`, which gets
+        // its own immediate flush below — toggling "queue on save" should
+        // act right away rather than wait out the debounce.
+        .onChange(of: autosaveSnapshotKey) { scheduleAutosave() }
+        .onChange(of: ready) { flushAutosave() }
+    }
+
+    @ViewBuilder
+    private var syncStatusRow: some View {
+        switch syncState {
+        case .idle:
+            EmptyView()
+        case .syncing:
+            statusLabel("arrow.triangle.2.circlepath", "syncing…", KTheme.text2)
+        case .synced:
+            statusLabel("checkmark.circle.fill", "synced", KTheme.solved)
+        case .failed(let message):
+            statusLabel("exclamationmark.triangle.fill", "sync failed: \(message)", KTheme.counter)
         }
+    }
+
+    private func statusLabel(_ icon: String, _ text: String, _ color: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+            Text(text)
+        }
+        .font(.voice(12))
+        .foregroundStyle(color)
+    }
+
+    // Every autosaved field except `ready` (see the dedicated onChange
+    // above) — a snapshot string so a single onChange can watch them all at
+    // once, the same idiom SpecSection uses for its `.task(id:)` key.
+    private var autosaveSnapshotKey: String {
+        let prereqsPart = prereqRows.map { "\($0.job)=\($0.gated)" }.joined(separator: ",")
+        return "\(type)|\(repo)|\(base)|\(solo)|\(prereqsPart)|\(spec)"
     }
 
     private func load() async {
@@ -261,7 +291,6 @@ struct JobFormView: View {
             base = f.base
             ready = f.ready
             solo = f.solo
-            autoApprove = f.autoApprove
             prereqRows = f.prereqs.map { PrereqRow(job: $0.job, gated: $0.gated) }
             spec = f.spec
             mtime = f.mtime
@@ -269,7 +298,7 @@ struct JobFormView: View {
             loadError = f.err.isEmpty ? nil : f.err
             slugSuggestions = f.slugs ?? []
             repoSuggestions = f.repos ?? []
-            note = nil
+            syncState = .idle
             loaded = true
         } catch {
             // Leave editable/mtime at their safe defaults (false / 0) rather
@@ -283,47 +312,65 @@ struct JobFormView: View {
         isLoading = false
     }
 
-    private func save() {
-        // Second line of defense behind the disabled Save button: mtime == 0
-        // is exactly the condition under which web.go's optimistic-lock
-        // check (`req.MTime != 0 && ...`) is skipped server-side, so a save
-        // here would silently overwrite the file with whatever's on screen.
-        guard mtime != 0 else {
-            note = "can't save — reload the job first"
-            noteIsWarning = true
-            return
+    // Debounced path: cancels any pending/in-flight autosave and schedules a
+    // fresh one 600ms out, so a burst of typing collapses into one saveform
+    // call after the user pauses rather than one per keystroke.
+    private func scheduleAutosave() {
+        guard editable else { return }
+        autosaveTask?.cancel()
+        autosaveTask = Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            await performAutosave()
         }
-        isSaving = true
-        note = nil
+    }
+
+    // Immediate path: same cancel-and-replace, but no debounce delay — used
+    // for the Ready toggle (queueing shouldn't wait out the debounce) and
+    // for the Done button flushing any pending edit before closing.
+    private func flushAutosave() {
+        guard editable else { return }
+        autosaveTask?.cancel()
+        autosaveTask = Task { await performAutosave() }
+    }
+
+    // Always sends mtime: 0 — this is a deliberate, permanent choice for
+    // autosave (never the loaded mtime, never `force`): the optimistic lock
+    // that guards a manual Save against a stale copy doesn't apply to a
+    // continuously-syncing editor, same reasoning as the job-scoped draft
+    // sync being last-write-wins.
+    private func performAutosave() async {
+        syncState = .syncing
         let req = JobFormSaveRequest(
             slug: slug, type: type, repo: repo, base: base,
-            ready: ready, solo: solo, autoApprove: autoApprove,
+            ready: ready, solo: solo,
             prereqs: prereqRows.map { Prereq(job: $0.job, gated: $0.gated) },
-            spec: spec, mtime: mtime
+            spec: spec, mtime: 0
         )
+        do {
+            let resp = try await APIClient.shared.saveJobForm(baseURL: baseURL, form: req)
+            guard !Task.isCancelled else { return }
+            mtime = resp.mtime
+            loadError = resp.warn.isEmpty ? nil : resp.warn
+            syncState = .synced
+        } catch {
+            guard !Task.isCancelled else { return }
+            syncState = .failed((error as? KrakenError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    // The toolbar's Done action: flushes any pending edit immediately (so
+    // the last few keystrokes before closing aren't left stranded behind the
+    // debounce timer) before handing back to the caller, which dismisses.
+    private func finishEditing() {
+        autosaveTask?.cancel()
+        guard editable else {
+            onSaved()
+            return
+        }
         Task {
-            do {
-                let resp = try await APIClient.shared.saveJobForm(baseURL: baseURL, form: req)
-                isSaving = false
-                mtime = resp.mtime
-                if resp.warn.isEmpty {
-                    note = "saved"
-                    noteIsWarning = false
-                    onSaved()
-                } else {
-                    note = "saved — but won't run: \(resp.warn)"
-                    noteIsWarning = true
-                }
-            } catch {
-                isSaving = false
-                let message = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
-                if message.lowercased().contains("changed on disk") {
-                    showingConflict = true
-                } else {
-                    note = message
-                    noteIsWarning = true
-                }
-            }
+            await performAutosave()
+            onSaved()
         }
     }
 }

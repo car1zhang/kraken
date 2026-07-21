@@ -27,7 +27,7 @@ actor APIClient {
 
     // Mirrors web.go's apiContract constant — bump together, breaking
     // changes only (additive fields don't need a bump). See ios/API.md.
-    static let expectedContract = 2
+    static let expectedContract = 3
 
     private let session: URLSession
     private let decoder = JSONDecoder()
@@ -232,6 +232,19 @@ actor APIClient {
             baseURL: baseURL, path: "/api/reactivate",
             body: SteerRequest(slug: slug, text: text)
         )
+    }
+
+    // MARK: - drafts
+
+    /// A job-scoped composer draft (empty `text` means none stored).
+    func getDraft(baseURL: String, slug: String) async throws -> DraftResponse {
+        try await get(baseURL: baseURL, path: "/api/draft", query: [("slug", slug)])
+    }
+
+    /// Uploads the current draft text for a job; empty text clears it
+    /// server-side. Last write wins.
+    func postDraft(baseURL: String, slug: String, text: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/draft", body: DraftRequest(slug: slug, text: text))
     }
 
     // MARK: - job authoring
