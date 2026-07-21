@@ -222,11 +222,11 @@ body {
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
 .pr-chip.pr-merged { color: var(--accent); border-color: var(--accent-soft); }
-.pr-chip.pr-merged:hover { box-shadow: var(--glow); border-color: var(--accent); }
+.pr-chip.pr-merged:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
 .pr-chip.pr-open { color: var(--solved); border-color: var(--solved-soft); }
-.pr-chip.pr-open:hover { box-shadow: var(--glow-ok); border-color: var(--solved); }
+.pr-chip.pr-open:hover { background: var(--solved-soft); box-shadow: var(--glow-ok); border-color: var(--solved); }
 .pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
-.pr-chip.pr-closed:hover { opacity: 1; border-color: var(--counter); }
+.pr-chip.pr-closed:hover { background: var(--counter-soft); opacity: 1; border-color: var(--counter); }
 
 .meta {
   color: var(--text-2); margin-top: 3px;
@@ -270,10 +270,10 @@ body {
 .q-opt {
   font: 10px var(--mono);
   background: transparent; color: var(--counter);
-  border: 1px solid var(--counter);
+  border: 1px solid var(--counter-soft);
   padding: 3px 8px; cursor: pointer;
 }
-.q-opt:hover { box-shadow: var(--glow-hot); }
+.q-opt:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
 .q-opt:disabled { opacity: 0.4; cursor: default; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
@@ -284,9 +284,9 @@ body {
   padding: 2px 7px; cursor: pointer;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
-.chip:hover { box-shadow: var(--glow); border-color: var(--accent); }
+.chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
 .chip-more { color: var(--text-2); border: 1px dashed var(--hairline-2); }
-.chip-more:hover { box-shadow: none; border-color: var(--text-2); color: var(--text); }
+.chip-more:hover { background: var(--raised); box-shadow: none; border-color: var(--text-2); color: var(--text); }
 
 .prereq span { font: 10px var(--mono); }
 .prereq .ok { color: var(--solved); }
@@ -583,14 +583,16 @@ body {
 
 /* open the cell's tmux pane in Ghostty — review-row name predates the
    removal of the nvim/code review buttons it used to sit alongside.
-   tmux is the system's one exception: its yellow border stays SOLID at
-   rest in every context (card row and panel head alike). */
+   tmux is a SOLID button in yellow: filled, borderless, glow-only hover —
+   same treatment as the accent-filled .btn, different fill. accent-ink
+   contrasts revealed the same way it contrasts accent in both themes
+   (light fill/dark ink in dark mode, dark fill/light ink in light). */
 .btn.tmux-open {
-  background: transparent; color: var(--revealed);
-  border: 1px solid var(--revealed);
+  background: var(--revealed); color: var(--accent-ink);
+  border: none;
   font-size: 10px; letter-spacing: 1px;
 }
-.btn.tmux-open:hover { background: var(--revealed-soft); box-shadow: var(--glow-warn); }
+.btn.tmux-open:hover { box-shadow: var(--glow-warn); }
 .review-row { display: flex; gap: 8px; margin-top: 8px; }
 .review-row .btn.tmux-open { flex: 1; padding: 5px 0; }
 
