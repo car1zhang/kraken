@@ -48,7 +48,7 @@ A header shows your Claude usage-limit windows (and Codex rate limits when codex
 
 ### Jobs
 
-Jobs live as `<slug>.job.md` files in `~/Documents/pluto` (typing `{{name}}` in a pluto note creates one from a template). A job names a repo, a `type` (`build` or `info`), success criteria, prereqs (which form a DAG — a `gated: true` prereq parks the job for your sign-off after the prereq's outcome lands), and a `ready` flag.
+Jobs live as `<slug>.job.md` files in `~/Documents/pluto` (typing `{{name}}` in a pluto note creates one from a template). A job names a repo, a `type` (`build` or `info`), prereqs (which form a DAG — a `gated: true` prereq parks the job for your sign-off after the prereq's outcome lands), and a `ready` flag.
 
 Every job sits in one of five states: **draft** (not ready, or unparseable — the board shows the parse error), **queued** (ready, no cell yet), **working**, **blocked**, or **done**. Kraken derives working/blocked itself, straight from the cell's transcript activity — nobody writes status by hand: if a cell hasn't produced any new transcript output in a few minutes, it's blocked, and the board's detail column shows whatever zeus last said before going idle. There's no status file and no escalation inbox to check separately.
 

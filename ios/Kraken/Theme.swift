@@ -150,7 +150,7 @@ extension Font {
         .system(size: bumped(size), weight: weight, design: .monospaced)
     }
 
-    /// The voice: system sans. Prose — spec/success text, job detail bodies,
+    /// The voice: system sans. Prose — spec text, job detail bodies,
     /// transcript text blocks.
     static func voice(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: bumped(size), weight: weight, design: .default)

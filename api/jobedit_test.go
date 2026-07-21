@@ -247,7 +247,7 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 }
 
 func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
-	f := jobFormFields{Slug: "x", Type: "build", Repo: "r", Success: "works"}
+	f := jobFormFields{Slug: "x", Type: "build", Repo: "r"}
 	content := serializeJobFile(f, "done", "shipped", "abc-123", 2, nil, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {

@@ -1,6 +1,6 @@
 // kraken web — kanban over /api/board with two legal drag moves:
 //   draft → queued   (flips ready: true in the job file)
-//   blocked → done    (completes the job, outcome auto-filled from success)
+//   blocked → done    (completes the job)
 // Un-stalling a blocked cell (answering a question, messaging zeus)
 // happens via card buttons, not drag — those are actions on the cell, not a
 // board-state assertion the browser is making. Everything else is read-only;
@@ -720,7 +720,6 @@ function fillForm(d) {
   document.getElementById("f-ready").checked = !!d.ready;
   document.getElementById("f-solo").checked = !!d.solo;
   document.getElementById("f-auto").checked = !!d.auto_approve;
-  document.getElementById("f-success").value = d.success || "";
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
   document.getElementById("repo-list").innerHTML = (d.repos || []).map((x) => `<option value="${esc(x)}">`).join("");
@@ -742,7 +741,6 @@ function readForm() {
     ready: document.getElementById("f-ready").checked,
     solo: document.getElementById("f-solo").checked,
     auto_approve: document.getElementById("f-auto").checked,
-    success: document.getElementById("f-success").value,
     prereqs,
     spec: editorText.value,
     mtime: editorMTime,
@@ -760,7 +758,6 @@ function setFormReadOnly(readOnly) {
   document.getElementById("f-ready").disabled = readOnly;
   document.getElementById("f-solo").disabled = readOnly;
   document.getElementById("f-auto").disabled = readOnly;
-  document.getElementById("f-success").disabled = readOnly;
   document.getElementById("f-add-prereq").disabled = readOnly;
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));

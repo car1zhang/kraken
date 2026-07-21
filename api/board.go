@@ -21,7 +21,9 @@ import (
 // mirrored by the iOS app's expected value (see ios/API.md). Bump ONLY on a
 // breaking change (a JSON key retyped, removed, or renamed) — additive keys
 // never bump it, since old clients already ignore fields they don't know.
-const apiContract = 1
+// v2: the success criteria field was removed (webJob.success on /api/board,
+// success on the job form GET/POST).
+const apiContract = 2
 
 type webArtifact struct {
 	Name string `json:"name"`
@@ -86,7 +88,6 @@ type webJob struct {
 	State     string        `json:"state"`
 	Err       string        `json:"err,omitempty"`
 	Outcome   string        `json:"outcome,omitempty"`
-	Success   string        `json:"success,omitempty"`
 	Cell      string        `json:"cell,omitempty"`
 	Live      bool          `json:"live"`
 	Prereqs   []webPrereq   `json:"prereqs,omitempty"`
@@ -355,7 +356,7 @@ func buildWebBoard() webBoard {
 		wj := webJob{
 			Slug: j.Slug, Type: j.Type, Repo: j.Repo,
 			State: jobs.DisplayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
-			Success: j.Success, Prereqs: prereqs, Artifacts: jobArtifacts(j),
+			Prereqs: prereqs, Artifacts: jobArtifacts(j),
 			ModTime:       j.ModTime.Unix(),
 			Reactivatable: j.State == "done" && j.Session != "",
 			PRs:           j.PRs,
@@ -389,7 +390,7 @@ func buildWebBoard() webBoard {
 		board.Jobs = append(board.Jobs, webJob{
 			Slug: a.ArchivedName, Type: a.Type, Repo: a.Repo,
 			State: "archived", Archived: true, DisplaySlug: a.Slug,
-			Err: a.Err, Outcome: a.Outcome, Success: a.Success,
+			Err: a.Err, Outcome: a.Outcome,
 			Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
 		})
 	}

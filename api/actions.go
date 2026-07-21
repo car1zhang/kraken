@@ -64,9 +64,9 @@ func webQueue(req webReq) error {
 	return nil
 }
 
-// webDone is the blocked→done drag: complete the job, auto-filling the
-// outcome from its success criterion (the exit criterion, per the board
-// contract) since there's no crew-authored done marker anymore. Validation
+// webDone is the blocked→done drag: complete the job with the fixed
+// outcome "accepted" — there's no crew-authored done marker and no
+// success criterion anymore, accepting IS the exit criterion. Validation
 // mirrors cmdDone (started, not already done) rather than the board's
 // currently-displayed column: the board can be a tick fresher than the job
 // file (see buildWebBoard's derive-ahead), so gating on a stale "blocked"
@@ -83,11 +83,7 @@ func webDone(req webReq) error {
 	if j.State == "done" {
 		return fmt.Errorf("%s is already done", j.Slug)
 	}
-	outcome := "accepted"
-	if j.Success != "" {
-		outcome = "met: " + jobs.OneLine(j.Success)
-	}
-	_, err = jobs.DoneJob(j, core.TruncateOneLine(outcome, 200))
+	_, err = jobs.DoneJob(j, "accepted")
 	return err
 }
 

@@ -149,7 +149,6 @@ type jobFormFields struct {
 	Ready       bool          `json:"ready"`
 	Solo        bool          `json:"solo"`
 	AutoApprove bool          `json:"auto_approve"`
-	Success     string        `json:"success"`
 	Prereqs     []jobs.Prereq `json:"prereqs"`
 	Spec        string        `json:"spec"`
 	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
@@ -184,9 +183,9 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 	webJSON(w, http.StatusOK, map[string]any{
 		"slug": j.Slug, "type": j.Type, "repo": j.Repo, "base": j.Base,
 		"ready": j.Ready, "solo": j.Solo, "auto_approve": j.AutoApprove,
-		"success": j.Success, "prereqs": prereqs,
-		"spec":  strings.TrimSpace(spec),
-		"mtime": jobMTime(fi), "editable": editableJob(j),
+		"prereqs": prereqs,
+		"spec":    strings.TrimSpace(spec),
+		"mtime":   jobMTime(fi), "editable": editableJob(j),
 		"err": j.Err, "slugs": slugs, "repos": jobs.RepoCandidates(),
 	})
 }
@@ -218,12 +217,6 @@ func serializeJobFile(f jobFormFields, state, outcome, session string, run int, 
 	}
 	fmt.Fprintf(&b, "solo: %t\n", f.Solo)
 	fmt.Fprintf(&b, "auto-approve: %t\n", f.AutoApprove)
-	if s := strings.TrimSpace(f.Success); s != "" {
-		b.WriteString("success: |\n")
-		for _, line := range strings.Split(s, "\n") {
-			b.WriteString("  " + line + "\n")
-		}
-	}
 	if state != "" {
 		fmt.Fprintf(&b, "state: %s\n", state)
 	}
