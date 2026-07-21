@@ -249,17 +249,19 @@ func TestDeriveState(t *testing.T) {
 			want: "queued",
 		},
 		{
-			name: "started but cell not live: trust the job file's state",
+			name: "started but cell not live: dead cell reads blocked",
 			j:    &Job{Ready: true, State: "blocked"},
 			live: false,
 			want: "blocked",
 		},
 		{
-			name:   "started but cell not live, job file says working: trust it too",
+			// a gone cell must never echo a stale "working" — that's how the
+			// status-investigation self-decapitation sat invisible on the board
+			name:   "started but cell not live, job file says working: still blocked",
 			j:      &Job{Ready: true, State: "working"},
 			live:   false,
 			active: false, // irrelevant while !live
-			want:   "working",
+			want:   "blocked",
 		},
 		{
 			name:   "live and active -> working",

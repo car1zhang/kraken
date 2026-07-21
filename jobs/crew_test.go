@@ -114,6 +114,24 @@ func TestZeusBriefSubagentHygiene(t *testing.T) {
 	}
 }
 
+func TestZeusBriefSelfDestructiveGuard(t *testing.T) {
+	// every job type — solo included — carries the never-target-your-own-slug
+	// rule: the status-investigation incident was a zeus confirming a test
+	// build's /api/done against its own live job and decapitating itself
+	for _, j := range []*Job{
+		{Slug: "g-build", Type: "build"},
+		{Slug: "g-info", Type: "info"},
+		{Slug: "g-solo", Type: "build", Solo: true},
+	} {
+		brief := zeusBrief(j)
+		for _, want := range []string{"OWN job's slug", "scratch job fixture", "decapitates"} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s (solo=%v) brief missing %q", j.Type, j.Solo, want)
+			}
+		}
+	}
+}
+
 func TestZeusBriefUniquePerJob(t *testing.T) {
 	a := zeusBrief(&Job{Slug: "a", Type: "build"})
 	b := zeusBrief(&Job{Slug: "b", Type: "build"})

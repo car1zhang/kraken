@@ -153,6 +153,26 @@ func TestParseJobStateAndOutcome(t *testing.T) {
 	}
 }
 
+func TestParseJobTeardownMarker(t *testing.T) {
+	src := "---\njob: x\nready: true\nstate: working\nteardown: done:accepted\n---\nbody"
+	j := ParseJob("x.job.md", []byte(src))
+	if j.Err != "" {
+		t.Fatalf("teardown marker must parse cleanly, got err %q", j.Err)
+	}
+	if j.Teardown != "done:accepted" {
+		t.Fatalf("teardown = %q, want %q", j.Teardown, "done:accepted")
+	}
+	// clearing the marker removes the line entirely (patchField's empty-val
+	// removal), so finished teardowns leave no residue in hand-read files
+	out, err := patchField(src, "teardown", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "teardown") {
+		t.Fatalf("cleared marker still present:\n%s", out)
+	}
+}
+
 func TestParseJobType(t *testing.T) {
 	cases := map[string]struct {
 		wantType string

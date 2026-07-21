@@ -82,6 +82,7 @@ func zeusBrief(j *Job) string {
 		b.WriteString("Subagent hygiene: the moment a subagent or teammate finishes its task, stop it (TaskStop) and free its slot/pane — always; never leave done agents resident.\n")
 	}
 	b.WriteString("Never declare the job done — accepting or merging is carl's (or kraken's) move, never yours.\n")
+	b.WriteString("Never invoke destructive kraken commands or endpoints (k done, k k, /api/done, /api/kill — including test builds of them) against your OWN job's slug: your cell IS that job, and a confirmed teardown decapitates you mid-run. Test destructive flows only against a scratch job fixture, and 'skipping' a destructive call means not executing it — an echo claiming it was skipped does not count.\n")
 	switch j.Type {
 	case "build":
 		b.WriteString("Phase 1: research the repo, then produce a /doc SPEC-MODE artifact per the /doc skill (invoke the doc skill; you inherit carl's user skills) with the cell deltas above. Bake ALL open questions into the doc's tables with recommended defaults — never block waiting on answers. When the artifact is flattened into artifacts/, say 'doc ready for review: <artifact path>' plus the open P0s in one line, and STOP.\n")

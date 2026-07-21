@@ -80,7 +80,12 @@ struct WebJob: Decodable, Identifiable {
     // `displaySlug` carries the original slug for rendering.
     let archived: Bool?
     let displaySlug: String?
-    // A done job whose zeus session id is recorded — the only ones the
+    // A started, non-done job whose tmux session vanished: the worktree
+    // (uncommitted work included) is still on disk, and reactivate is the
+    // recovery that preserves it. Additive key, absent on older servers.
+    let cellGone: Bool?
+    // A job whose zeus session id is recorded and whose cell is resumable
+    // (done jobs, plus gone-cell started jobs) — the only ones the
     // reactivate action can actually resume.
     let reactivatable: Bool?
     // carl's own most recent message to the cell (the last me→zeus mid-run
@@ -99,6 +104,7 @@ struct WebJob: Decodable, Identifiable {
         case prereqs, detail, question, roster, artifacts, health, mtime
         case archived
         case displaySlug = "display_slug"
+        case cellGone = "cell_gone"
         case reactivatable
         case lastSent = "last_sent"
         case prs

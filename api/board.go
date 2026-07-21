@@ -116,8 +116,15 @@ type webJob struct {
 	// carries the original slug for rendering.
 	Archived    bool   `json:"archived,omitempty"`
 	DisplaySlug string `json:"display_slug,omitempty"`
-	// Reactivatable marks a done job whose zeus session id is recorded, so
-	// the UIs only offer the reactivate action where it can actually work.
+	// CellGone marks a started, non-done job whose tmux session vanished
+	// (killed by hand, tmux restart, a teardown that died mid-flight): the
+	// worktree — uncommitted work included — is still on disk, and reactivate
+	// is the recovery that preserves it. Additive key; clients without it
+	// just miss the chip.
+	CellGone bool `json:"cell_gone,omitempty"`
+	// Reactivatable marks a job whose zeus session id is recorded and whose
+	// cell is resumable — done jobs, plus gone-cell started jobs — so the UIs
+	// only offer the reactivate action where it can actually work.
 	Reactivatable bool `json:"reactivatable,omitempty"`
 	// PRs mirrors the job file's kraken-owned prs: list — every PR the
 	// cell ever shipped, rendered by the clients as linked state chips.
@@ -357,9 +364,8 @@ func buildWebBoard() webBoard {
 			Slug: j.Slug, Type: j.Type, Repo: j.Repo,
 			State: jobs.DisplayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
 			Prereqs: prereqs, Artifacts: jobArtifacts(j),
-			ModTime:       j.ModTime.Unix(),
-			Reactivatable: j.State == "done" && j.Session != "",
-			PRs:           j.PRs,
+			ModTime: j.ModTime.Unix(),
+			PRs:     j.PRs,
 		}
 		if j.Started() && j.State != "done" {
 			wj.LastSent = lastSentMessage(j.Body)
@@ -380,7 +386,19 @@ func buildWebBoard() webBoard {
 					}
 				}
 			}
+		} else if j.Started() && j.State != "done" {
+			// dead cell: the session is gone but the worktree (and any
+			// uncommitted WIP) is still on disk. Health routes the card into
+			// BLOCKED immediately — a tick ahead of the daemon persisting the
+			// blocked state — and the transcript's last words still surface,
+			// located by the stamped session id since no live peer exists.
+			wj.CellGone = true
+			wj.Health = "cell session is gone — reactivate to resume; done/kill discard the worktree"
+			if transcript := core.TranscriptPathForSession(j.Session); transcript != "" {
+				wj.Detail = lastAssistantText(transcript)
+			}
 		}
+		wj.Reactivatable = (j.State == "done" || wj.CellGone) && j.Session != ""
 		board.Jobs = append(board.Jobs, wj)
 	}
 	// archived jobs ride the same list under state "archived": no cell, no

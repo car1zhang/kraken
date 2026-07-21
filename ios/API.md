@@ -84,7 +84,8 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `mtime` | number | always | unix millis |
 | `archived` | bool | omitempty | |
 | `display_slug` | string | omitempty | original slug, archived jobs only |
-| `reactivatable` | bool | omitempty | done + has a recorded zeus session |
+| `cell_gone` | bool | omitempty | started + non-done + tmux session vanished; worktree (incl. uncommitted WIP) still on disk — reactivate preserves it, done/kill discard it |
+| `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
 | `last_sent` | string | omitempty | carl's last free-text message; question-answer entries excluded, started + non-done jobs only |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
 
