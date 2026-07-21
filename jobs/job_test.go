@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"strings"
@@ -30,7 +30,7 @@ Dedupe yelp listings.
 `
 
 func TestParseJobFull(t *testing.T) {
-	j := parseJob("yelp-dedupe.job.md", []byte(sampleJob))
+	j := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
 	if j.Err != "" {
 		t.Fatalf("unexpected err: %s", j.Err)
 	}
@@ -69,7 +69,7 @@ success: |
 
 # Spec
 `
-	j := parseJob("name.job.md", []byte(src))
+	j := ParseJob("name.job.md", []byte(src))
 	if j.Err != "" {
 		t.Fatalf("unexpected err: %s", j.Err)
 	}
@@ -103,39 +103,39 @@ func TestParseJobStrict(t *testing.T) {
 		"bad gated bool":     "---\nprereqs:\n  - job: dep\n    gated: yep\n---\n",
 	}
 	for name, src := range cases {
-		j := parseJob("f.job.md", []byte(src))
+		j := ParseJob("f.job.md", []byte(src))
 		if j == nil {
 			t.Fatalf("%s: nil job (must never crash)", name)
 		}
 		if j.Err == "" {
 			t.Errorf("%s: expected Err, got clean parse: %+v", name, j)
 		}
-		if got := displayState(j, nil); got != "draft" {
+		if got := DisplayState(j, nil); got != "draft" {
 			t.Errorf("%s: erred job must display draft, got %q", name, got)
 		}
 	}
 	// errors accumulate rather than overwriting
-	j := parseJob("f.job.md", []byte("---\nready: yes\nraedy: true\n---\n"))
+	j := ParseJob("f.job.md", []byte("---\nready: yes\nraedy: true\n---\n"))
 	if !strings.Contains(j.Err, ";") {
 		t.Errorf("errors should accumulate: %q", j.Err)
 	}
 	// empty file: no frontmatter, still a valid (erred) job value
-	if j := parseJob("f.job.md", []byte("")); j.Err == "" || j.Slug != "f" {
+	if j := ParseJob("f.job.md", []byte("")); j.Err == "" || j.Slug != "f" {
 		t.Errorf("empty file: err=%q slug=%q", j.Err, j.Slug)
 	}
 	// empty bool value reads as absent, not an error
-	if j := parseJob("f.job.md", []byte("---\nready:\n---\n")); j.Err != "" || j.Ready {
+	if j := ParseJob("f.job.md", []byte("---\nready:\n---\n")); j.Err != "" || j.Ready {
 		t.Errorf("empty bool value: err=%q ready=%v", j.Err, j.Ready)
 	}
 }
 
 func TestParseJobStateAndOutcome(t *testing.T) {
 	src := "---\njob: x\nready: true\nstate: working\noutcome: went well\n---\nbody"
-	j := parseJob("x.job.md", []byte(src))
+	j := ParseJob("x.job.md", []byte(src))
 	if j.State != "working" || j.Outcome != "went well" {
 		t.Fatalf("state/outcome: %q %q", j.State, j.Outcome)
 	}
-	if !j.started() {
+	if !j.Started() {
 		t.Fatal("working should count as started")
 	}
 }
@@ -154,7 +154,7 @@ func TestParseJobType(t *testing.T) {
 		"---\ntype: garbage\n---\n":  {"build", true},
 	}
 	for src, want := range cases {
-		j := parseJob("x.job.md", []byte(src))
+		j := ParseJob("x.job.md", []byte(src))
 		if j.Type != want.wantType {
 			t.Errorf("%q: type = %q, want %q", src, j.Type, want.wantType)
 		}
@@ -166,7 +166,7 @@ func TestParseJobType(t *testing.T) {
 
 func TestValidStates(t *testing.T) {
 	for _, s := range []string{"working", "blocked", "done"} {
-		j := parseJob("x.job.md", []byte("---\nstate: "+s+"\n---\n"))
+		j := ParseJob("x.job.md", []byte("---\nstate: "+s+"\n---\n"))
 		if j.Err != "" {
 			t.Errorf("state %q should be valid, got err %q", s, j.Err)
 		}
@@ -176,7 +176,7 @@ func TestValidStates(t *testing.T) {
 	// startable() also false), so they must now be rejected like any other
 	// unknown state.
 	for _, s := range []string{"queued", "draft", "planning", "plan-review", "executing", "testing", "pr-open", "merged", "failed", "abandoned"} {
-		j := parseJob("x.job.md", []byte("---\nstate: "+s+"\n---\n"))
+		j := ParseJob("x.job.md", []byte("---\nstate: "+s+"\n---\n"))
 		if j.Err == "" {
 			t.Errorf("state %q should now be unknown, got clean parse", s)
 		}
@@ -196,7 +196,7 @@ func TestStarted(t *testing.T) {
 	}
 	for _, c := range cases {
 		j := &Job{State: c.state}
-		if got := j.started(); got != c.want {
+		if got := j.Started(); got != c.want {
 			t.Errorf("started() with state %q = %v, want %v", c.state, got, c.want)
 		}
 	}
@@ -223,7 +223,7 @@ func TestParseJobIndentedFenceInBlockScalar(t *testing.T) {
 	// an indented --- inside a success block scalar is content, not the
 	// closing fence: fields after it must still parse
 	src := "---\njob: x\nsuccess: |\n  part one\n  ---\n  part two\nrepo: monolith\nready: true\n---\n\n# Spec\n"
-	j := parseJob("x.job.md", []byte(src))
+	j := ParseJob("x.job.md", []byte(src))
 	if j.Repo != "monolith" || !j.Ready {
 		t.Fatalf("fields after indented --- dropped: repo=%q ready=%v", j.Repo, j.Ready)
 	}
@@ -234,7 +234,7 @@ func TestParseJobIndentedFenceInBlockScalar(t *testing.T) {
 
 func TestParseJobCRLF(t *testing.T) {
 	src := strings.ReplaceAll(sampleJob, "\n", "\r\n")
-	j := parseJob("yelp-dedupe.job.md", []byte(src))
+	j := ParseJob("yelp-dedupe.job.md", []byte(src))
 	if j.Err != "" || !j.Ready || j.Repo != "monolith" {
 		t.Fatalf("CRLF parse degraded: err=%q ready=%v repo=%q", j.Err, j.Ready, j.Repo)
 	}
@@ -245,7 +245,7 @@ func TestParseJobCRLF(t *testing.T) {
 
 func TestParsePrereqsTabIndent(t *testing.T) {
 	src := "---\njob: x\nready: true\nprereqs:\n\t- job: dep\n\t  gated: true\n---\n"
-	j := parseJob("x.job.md", []byte(src))
+	j := ParseJob("x.job.md", []byte(src))
 	if len(j.Prereqs) != 1 || !j.Prereqs[0].Gated {
 		t.Fatalf("tab-indented gated flag lost: %+v", j.Prereqs)
 	}
@@ -260,7 +260,7 @@ func TestPatchStateHealsIndented(t *testing.T) {
 	if strings.Count(out, "state:") != 1 {
 		t.Fatalf("indented state line not healed:\n%s", out)
 	}
-	if j := parseJob("x.job.md", []byte(out)); j.State != "done" {
+	if j := ParseJob("x.job.md", []byte(out)); j.State != "done" {
 		t.Fatalf("state after heal: %q", j.State)
 	}
 }
@@ -271,11 +271,11 @@ func TestPatchState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j := parseJob("yelp-dedupe.job.md", []byte(out))
+	j := ParseJob("yelp-dedupe.job.md", []byte(out))
 	if j.State != "working" {
 		t.Fatalf("state after insert: %q", j.State)
 	}
-	orig := parseJob("yelp-dedupe.job.md", []byte(sampleJob))
+	orig := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
 	if j.Body != orig.Body {
 		t.Fatal("patchState changed the body")
 	}
@@ -287,7 +287,7 @@ func TestPatchState(t *testing.T) {
 	if strings.Count(out2, "\nstate:") != 1 {
 		t.Fatalf("state line duplicated:\n%s", out2)
 	}
-	if j2 := parseJob("x.job.md", []byte(out2)); j2.State != "done" {
+	if j2 := ParseJob("x.job.md", []byte(out2)); j2.State != "done" {
 		t.Fatalf("state after replace: %q", j2.State)
 	}
 	// malformed input errors
@@ -302,7 +302,7 @@ func TestPatchFieldOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j := parseJob("x.job.md", []byte(out))
+	j := ParseJob("x.job.md", []byte(out))
 	if j.Err != "" || j.Outcome != "approach A works" || j.State != "working" {
 		t.Fatalf("outcome insert: err=%q outcome=%q state=%q", j.Err, j.Outcome, j.State)
 	}
@@ -316,8 +316,8 @@ func TestPatchFieldOutcome(t *testing.T) {
 }
 
 func TestOneLine(t *testing.T) {
-	if got := oneLine("a\nb\tc\x1b[31m"); got != "a b c[31m" {
-		t.Fatalf("oneLine: %q", got)
+	if got := OneLine("a\nb\tc\x1b[31m"); got != "a b c[31m" {
+		t.Fatalf("OneLine: %q", got)
 	}
 }
 
@@ -352,21 +352,21 @@ func TestDisplayState(t *testing.T) {
 	}
 	bySlug := slugMap(done, pending)
 	for _, c := range cases {
-		if got := displayState(c.j, bySlug); got != c.want {
-			t.Errorf("displayState(%+v) = %q, want %q", c.j, got, c.want)
+		if got := DisplayState(c.j, bySlug); got != c.want {
+			t.Errorf("DisplayState(%+v) = %q, want %q", c.j, got, c.want)
 		}
 	}
 	// erred job displays draft (the draft column surfaces the error detail),
 	// even though it's Ready
 	broken := mkJob("b", "", true)
 	broken.Err = "prereq cycle"
-	if got := displayState(broken, bySlug); got != "draft" {
+	if got := DisplayState(broken, bySlug); got != "draft" {
 		t.Errorf("erred job should display draft: %q", got)
 	}
 	// a done job with a parse error still shows done: terminal beats broken
 	doneButErred := mkJob("c", "done", true)
 	doneButErred.Err = "whatever"
-	if got := displayState(doneButErred, bySlug); got != "done" {
+	if got := DisplayState(doneButErred, bySlug); got != "done" {
 		t.Errorf("done should win even over an error: %q", got)
 	}
 }
@@ -430,18 +430,18 @@ func TestPickRepo(t *testing.T) {
 		{"nomatch", ""},
 	}
 	for _, c := range cases {
-		if got := pickRepo(c[0], candidates); got != c[1] {
-			t.Errorf("pickRepo(%q) = %q, want %q", c[0], got, c[1])
+		if got := PickRepo(c[0], candidates); got != c[1] {
+			t.Errorf("PickRepo(%q) = %q, want %q", c[0], got, c[1])
 		}
 	}
 }
 
 func TestJobBySlug(t *testing.T) {
 	jobs := []*Job{mkJob("a", "", true), mkJob("b-c", "", true)}
-	if jobBySlug(jobs, "b-c") == nil || jobBySlug(jobs, "b-c.job.md") == nil {
+	if JobBySlug(jobs, "b-c") == nil || JobBySlug(jobs, "b-c.job.md") == nil {
 		t.Fatal("slug lookup (with and without suffix) failed")
 	}
-	if jobBySlug(jobs, "nope") != nil {
+	if JobBySlug(jobs, "nope") != nil {
 		t.Fatal("phantom job")
 	}
 }
@@ -473,7 +473,7 @@ func TestStripCommentControlChars(t *testing.T) {
 }
 
 func TestJobPrompt(t *testing.T) {
-	j := parseJob("yelp-dedupe.job.md", []byte(sampleJob))
+	j := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
 	prompt := jobPrompt(j)
 	if !strings.Contains(prompt, "Dedupe yelp listings") {
 		t.Fatalf("spec text missing: %q", prompt)
@@ -521,23 +521,23 @@ func TestStateRankOrdering(t *testing.T) {
 
 func TestCellNaming(t *testing.T) {
 	j := &Job{Slug: "Weird Slug!"}
-	if got := cellSession(j); got != "cell-weird-slug" {
-		t.Fatalf("cellSession: %q", got)
+	if got := CellSession(j); got != "cell-weird-slug" {
+		t.Fatalf("CellSession: %q", got)
 	}
-	if got := cellBranch(j); got != "carl/weird-slug" {
-		t.Fatalf("cellBranch: %q", got)
+	if got := CellBranch(j); got != "carl/weird-slug" {
+		t.Fatalf("CellBranch: %q", got)
 	}
-	if got := cellWorktree(j, "/Users/car1zhang/Developer/monolith"); !strings.HasSuffix(got, "/weird-slug/wt-monolith") {
-		t.Fatalf("cellWorktree: %q", got)
+	if got := CellWorktree(j, "/Users/car1zhang/Developer/monolith"); !strings.HasSuffix(got, "/weird-slug/wt-monolith") {
+		t.Fatalf("CellWorktree: %q", got)
 	}
 }
 
 func TestParseJobBase(t *testing.T) {
-	j := parseJob("x.job.md", []byte("---\njob: x\nbase: origin/develop\n---\n"))
+	j := ParseJob("x.job.md", []byte("---\njob: x\nbase: origin/develop\n---\n"))
 	if j.Err != "" || j.Base != "origin/develop" {
 		t.Fatalf("base parse: err=%q base=%q", j.Err, j.Base)
 	}
-	if j := parseJob("x.job.md", []byte("---\njob: x\n---\n")); j.Base != "" {
+	if j := ParseJob("x.job.md", []byte("---\njob: x\n---\n")); j.Base != "" {
 		t.Fatalf("base should default empty, got %q", j.Base)
 	}
 }
@@ -558,7 +558,7 @@ prs:
     state: open
 ---
 body`
-	j := parseJob("x.job.md", []byte(src))
+	j := ParseJob("x.job.md", []byte(src))
 	if j.Err != "" {
 		t.Fatalf("unexpected err: %s", j.Err)
 	}
@@ -583,7 +583,7 @@ func TestParseJobPRsStrict(t *testing.T) {
 	}
 	for _, c := range cases {
 		src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\n" + c.block + "\n---\nbody"
-		if j := parseJob("x.job.md", []byte(src)); j.Err == "" {
+		if j := ParseJob("x.job.md", []byte(src)); j.Err == "" {
 			t.Errorf("%s: expected parse error, got none (prs=%+v)", c.name, j.PRs)
 		}
 	}
@@ -616,7 +616,7 @@ func TestPatchPRs(t *testing.T) {
 		t.Fatalf("replace duplicated the block: %q", got2)
 	}
 	// what patchPRs wrote must round-trip through the strict parser
-	j := parseJob("x.job.md", []byte(got2))
+	j := ParseJob("x.job.md", []byte(got2))
 	if j.Err != "" || len(j.PRs) != 2 || j.PRs[0].State != "merged" || j.PRs[1].URL != "https://x/pull/2" {
 		t.Fatalf("round-trip: err=%q prs=%+v\n%s", j.Err, j.PRs, got2)
 	}
@@ -640,7 +640,7 @@ func TestPatchPRsSkipsBlockScalarContent(t *testing.T) {
 	if !strings.Contains(got, "  prs: shown on the board") {
 		t.Fatalf("success block scalar content eaten: %q", got)
 	}
-	j := parseJob("x.job.md", []byte(got))
+	j := ParseJob("x.job.md", []byte(got))
 	if j.Err != "" || j.Success != "prs: shown on the board" || len(j.PRs) != 1 {
 		t.Fatalf("round-trip: err=%q success=%q prs=%+v", j.Err, j.Success, j.PRs)
 	}

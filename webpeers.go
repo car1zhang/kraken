@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"kraken/core"
+	"kraken/jobs"
 	"kraken/util"
 )
 
@@ -363,12 +364,12 @@ func peersOpenHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusOK, map[string]bool{"ok": true})
 			return
 		}
-		j := jobBySlug(loadJobs(), req.Slug)
+		j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
 		if j == nil {
 			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no job %q", req.Slug)})
 			return
 		}
-		zeus := cellZeus(j, source())
+		zeus := jobs.CellZeus(j, source())
 		if zeus == nil {
 			webJSON(w, http.StatusConflict, map[string]string{"error": "no live cell agent"})
 			return

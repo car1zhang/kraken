@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"os"
@@ -29,7 +29,7 @@ func toolResultFor(id string) string {
 
 func TestPendingQuestionPending(t *testing.T) {
 	path := writeTranscript(t, askUserQuestionAsk)
-	pq := pendingQuestion(path)
+	pq := FindPendingQuestion(path)
 	if pq == nil {
 		t.Fatal("want a pending question, got nil")
 	}
@@ -46,7 +46,7 @@ func TestPendingQuestionPending(t *testing.T) {
 
 func TestPendingQuestionAnswered(t *testing.T) {
 	path := writeTranscript(t, askUserQuestionAsk, toolResultFor("toolu_1"))
-	if pq := pendingQuestion(path); pq != nil {
+	if pq := FindPendingQuestion(path); pq != nil {
 		t.Errorf("want no pending question once answered, got %+v", pq)
 	}
 }
@@ -57,21 +57,21 @@ func TestPendingQuestionOnlyLastCallMatters(t *testing.T) {
 
 	// first answered, second (the last one) left open: still pending, on the second
 	path := writeTranscript(t, first, toolResultFor("toolu_1"), second)
-	pq := pendingQuestion(path)
+	pq := FindPendingQuestion(path)
 	if pq == nil || pq.ToolUseID != "toolu_2" || pq.Questions[0].Question != "second?" {
 		t.Fatalf("got %+v", pq)
 	}
 
 	// both answered: nothing pending
 	path2 := writeTranscript(t, first, toolResultFor("toolu_1"), second, toolResultFor("toolu_2"))
-	if pq2 := pendingQuestion(path2); pq2 != nil {
+	if pq2 := FindPendingQuestion(path2); pq2 != nil {
 		t.Errorf("want no pending question, got %+v", pq2)
 	}
 
 	// a stray result for the superseded first call, arriving AFTER the second
 	// ask, must not be mistaken for an answer to the second
 	path3 := writeTranscript(t, first, second, toolResultFor("toolu_1"))
-	pq3 := pendingQuestion(path3)
+	pq3 := FindPendingQuestion(path3)
 	if pq3 == nil || pq3.ToolUseID != "toolu_2" {
 		t.Fatalf("stray result for a superseded call should not clear the current one: %+v", pq3)
 	}
@@ -86,7 +86,7 @@ func TestPendingQuestionMalformedLinesInterleaved(t *testing.T) {
 		askUserQuestionAsk,
 		`{"type":"garbage`,
 	)
-	pq := pendingQuestion(path)
+	pq := FindPendingQuestion(path)
 	if pq == nil || pq.ToolUseID != "toolu_1" {
 		t.Fatalf("garbage lines should be skipped, not fatal: %+v", pq)
 	}
@@ -98,7 +98,7 @@ func TestPendingQuestionHugeLine(t *testing.T) {
 	pad := strings.Repeat("x", 200*1024)
 	huge := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_other","text":"` + pad + `"}]}}`
 	path := writeTranscript(t, askUserQuestionAsk, huge)
-	pq := pendingQuestion(path)
+	pq := FindPendingQuestion(path)
 	// the huge line is an unrelated tool_result (wrong id) — must still be
 	// scanned successfully (not choke/truncate) and correctly ignored
 	if pq == nil || pq.ToolUseID != "toolu_1" {
@@ -107,13 +107,13 @@ func TestPendingQuestionHugeLine(t *testing.T) {
 
 	answeringHuge := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1"}]},"pad":"` + pad + `"}`
 	path2 := writeTranscript(t, askUserQuestionAsk, answeringHuge)
-	if pq2 := pendingQuestion(path2); pq2 != nil {
+	if pq2 := FindPendingQuestion(path2); pq2 != nil {
 		t.Errorf("huge answering line should still be parsed and clear pending, got %+v", pq2)
 	}
 }
 
 func TestPendingQuestionMissingFile(t *testing.T) {
-	if pq := pendingQuestion(filepath.Join(t.TempDir(), "nope.jsonl")); pq != nil {
+	if pq := FindPendingQuestion(filepath.Join(t.TempDir(), "nope.jsonl")); pq != nil {
 		t.Errorf("missing transcript should read as no pending question, got %+v", pq)
 	}
 }
@@ -127,7 +127,7 @@ func TestPendingQuestionOverFourMBLineWithinNewBuffer(t *testing.T) {
 	pad := strings.Repeat("x", 5*1024*1024) // >4MB, comfortably under 16MB
 	filler := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_other","text":"` + pad + `"}]}}`
 	path := writeTranscript(t, askUserQuestionAsk, filler, toolResultFor("toolu_1"))
-	if pq := pendingQuestion(path); pq != nil {
+	if pq := FindPendingQuestion(path); pq != nil {
 		t.Fatalf("answered question after a >4MB line should not report pending, got %+v", pq)
 	}
 }
@@ -142,7 +142,7 @@ func TestPendingQuestionOverSixteenMBLineFailsClosed(t *testing.T) {
 	pad := strings.Repeat("x", 17*1024*1024) // >16MB: overflows the scanner buffer
 	oversized := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_other","text":"` + pad + `"}]}}`
 	path := writeTranscript(t, askUserQuestionAsk, oversized)
-	if pq := pendingQuestion(path); pq != nil {
+	if pq := FindPendingQuestion(path); pq != nil {
 		t.Fatalf("oversized line should fail closed to nil, got phantom pending %+v", pq)
 	}
 }
@@ -154,7 +154,7 @@ func TestPendingQuestionNewerAskWithBadInputWins(t *testing.T) {
 	// looking pending forever.
 	newerBadAsk := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"AskUserQuestion","input":"not-an-object"}]}}`
 	path := writeTranscript(t, askUserQuestionAsk, newerBadAsk)
-	if pq := pendingQuestion(path); pq != nil {
+	if pq := FindPendingQuestion(path); pq != nil {
 		t.Fatalf("newer ask with undecodable input should supersede the older ask, not leave it pending: %+v", pq)
 	}
 }
@@ -186,7 +186,7 @@ func TestPendingQuestionMemoizedByStat(t *testing.T) {
 	if err := os.Chtimes(path, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	pq1 := pendingQuestion(path)
+	pq1 := FindPendingQuestion(path)
 	if pq1 == nil || pq1.ToolUseID != "toolu_1" {
 		t.Fatalf("want pending toolu_1, got %+v", pq1)
 	}
@@ -200,7 +200,7 @@ func TestPendingQuestionMemoizedByStat(t *testing.T) {
 	if err := os.Chtimes(path, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	pq2 := pendingQuestion(path)
+	pq2 := FindPendingQuestion(path)
 	if pq2 == nil || pq2.ToolUseID != "toolu_1" {
 		t.Fatalf("unchanged (size, mtime) should return the cached stale verdict, got %+v", pq2)
 	}
@@ -211,7 +211,7 @@ func TestPendingQuestionMemoizedByStat(t *testing.T) {
 	if err := os.Chtimes(path, newMtime, newMtime); err != nil {
 		t.Fatal(err)
 	}
-	if pq3 := pendingQuestion(path); pq3 != nil {
+	if pq3 := FindPendingQuestion(path); pq3 != nil {
 		t.Fatalf("changed mtime should invalidate the cache and rescan, got %+v", pq3)
 	}
 }
@@ -434,7 +434,7 @@ func TestCellActive(t *testing.T) {
 	}
 }
 
-// --- appendMidRunLog ---
+// --- AppendMidRunLog ---
 
 func TestAppendMidRunLogHeadingPresent(t *testing.T) {
 	dir := t.TempDir()
@@ -444,7 +444,7 @@ func TestAppendMidRunLogHeadingPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := &Job{File: path}
-	if err := appendMidRunLog(j, "me→zeus", "answer to x.md: yes"); err != nil {
+	if err := AppendMidRunLog(j, "me→zeus", "answer to x.md: yes"); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -473,7 +473,7 @@ func TestAppendMidRunLogHeadingMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := &Job{File: path}
-	if err := appendMidRunLog(j, "me→zeus", "first entry"); err != nil {
+	if err := AppendMidRunLog(j, "me→zeus", "first entry"); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -504,7 +504,7 @@ func TestAppendMidRunLogFrontmatterByteForByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := &Job{File: path}
-	if err := appendMidRunLog(j, "me→zeus", "note"); err != nil {
+	if err := AppendMidRunLog(j, "me→zeus", "note"); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -526,7 +526,7 @@ func TestAppendMidRunLogHeadingInFrontmatter(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := &Job{Slug: "x", File: path}
-	if err := appendMidRunLog(j, "me→zeus", "first entry"); err != nil {
+	if err := AppendMidRunLog(j, "me→zeus", "first entry"); err != nil {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(path)
@@ -535,23 +535,23 @@ func TestAppendMidRunLogHeadingInFrontmatter(t *testing.T) {
 		t.Fatalf("real heading not added:\n%s", body)
 	}
 	// second append must not duplicate the heading
-	if err := appendMidRunLog(j, "me→zeus", "second entry"); err != nil {
+	if err := AppendMidRunLog(j, "me→zeus", "second entry"); err != nil {
 		t.Fatal(err)
 	}
 	out, _ = os.ReadFile(path)
 	if strings.Count(string(out), "## Mid-run log") != 2 { // 1 in success scalar + 1 real
 		t.Fatalf("heading count wrong:\n%s", out)
 	}
-	if p := jobPrompt(parseJob("x.job.md", out)); strings.Contains(p, "first entry") {
+	if p := jobPrompt(ParseJob("x.job.md", out)); strings.Contains(p, "first entry") {
 		t.Fatalf("log leaked into zeus prompt: %q", p)
 	}
 }
 
-// --- listArtifacts ---
+// --- ListArtifacts ---
 
 func TestListArtifactsMissingDir(t *testing.T) {
 	j := &Job{Slug: "ghost-job-" + t.Name()}
-	if got := listArtifacts(j); got != nil {
+	if got := ListArtifacts(j); got != nil {
 		t.Errorf("missing artifacts dir should return nil, got %v", got)
 	}
 }
@@ -560,7 +560,7 @@ func TestListArtifactsSorted(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	j := &Job{Slug: "sorted-artifacts"}
-	adir := cellArtifacts(j)
+	adir := CellArtifacts(j)
 	if err := os.MkdirAll(adir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -569,7 +569,7 @@ func TestListArtifactsSorted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := listArtifacts(j)
+	got := ListArtifacts(j)
 	want := []string{
 		filepath.Join(adir, "a.md"),
 		filepath.Join(adir, "b.md"),

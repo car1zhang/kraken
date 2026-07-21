@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"encoding/json"
@@ -24,8 +24,8 @@ import (
 // restart merely re-notifies once.
 
 const (
-	cellCap        = 5
-	daemonInterval = 15 * time.Second
+	CellCap        = 5
+	DaemonInterval = 15 * time.Second
 	// PR tracking is throttled to every reapEvery-th tick (~1 min): gh
 	// calls per open cell are the daemon's only rate-limited traffic.
 	reapEvery = 4
@@ -38,7 +38,7 @@ const (
 	sessionCreateGrace = 2 * time.Minute
 )
 
-type daemonStatus struct {
+type DaemonStatus struct {
 	PID       int    `json:"pid"`
 	StartedAt int64  `json:"started_at"`
 	LastTick  int64  `json:"last_tick"`
@@ -53,8 +53,8 @@ func daemonStatusPath() string {
 	return filepath.Join(util.Home(), ".kraken", "daemon.json")
 }
 
-func readDaemonStatus() (daemonStatus, bool) {
-	var st daemonStatus
+func ReadDaemonStatus() (DaemonStatus, bool) {
+	var st DaemonStatus
 	data, err := os.ReadFile(daemonStatusPath())
 	if err != nil || json.Unmarshal(data, &st) != nil {
 		return st, false
@@ -62,7 +62,7 @@ func readDaemonStatus() (daemonStatus, bool) {
 	return st, true
 }
 
-func processAlive(pid int) bool {
+func ProcessAlive(pid int) bool {
 	return pid > 0 && syscall.Kill(pid, 0) == nil
 }
 
@@ -79,26 +79,32 @@ func dlog(format string, a ...any) {
 	fmt.Printf("%s "+format+"\n", append([]any{time.Now().Format("15:04:05")}, a...)...)
 }
 
-type daemon struct {
-	notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
-	poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
+// daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
+// one; tick runs a single scheduler pass.
+type daemonState struct {
+	Notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
+	Poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
 	tickN    int
 }
 
-func cmdDaemon(args []string) {
-	if len(args) != 0 {
-		util.Die("usage: k daemon")
-	}
-	if st, ok := readDaemonStatus(); ok && st.PID != os.Getpid() && processAlive(st.PID) {
+func newDaemon() *daemonState {
+	return &daemonState{Notified: map[string]int64{}, Poked: map[string]int64{}}
+}
+
+// RunDaemon runs the scheduler loop in the foreground: queue startable jobs,
+// derive live state, watch for unhealthy cells, track PRs, write a heartbeat.
+// Never returns.
+func RunDaemon() {
+	if st, ok := ReadDaemonStatus(); ok && st.PID != os.Getpid() && ProcessAlive(st.PID) {
 		util.Die("daemon already running (pid %d)", st.PID)
 	}
 	if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
 		util.Die("mkdir %s: %v", filepath.Dir(daemonStatusPath()), err)
 	}
 	util.InitSelfCheck()
-	d := &daemon{notified: map[string]int64{}, poked: map[string]int64{}}
-	st := daemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
-	dlog("daemon up (pid %d, cap %d cells, tick %s)", st.PID, cellCap, daemonInterval)
+	d := newDaemon()
+	st := DaemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
+	dlog("daemon up (pid %d, cap %d cells, tick %s)", st.PID, CellCap, DaemonInterval)
 	// TCC watchdog: reading ~/Documents from a launchd process blocks in
 	// open() until macOS consent is granted — and every reinstall changes the
 	// binary's code hash, revoking the previous grant. A silently-hung first
@@ -128,16 +134,16 @@ func cmdDaemon(args []string) {
 		if data, err := json.Marshal(st); err == nil {
 			_ = util.AtomicWrite(daemonStatusPath(), string(data))
 		}
-		time.Sleep(daemonInterval)
+		time.Sleep(DaemonInterval)
 	}
 }
 
-// tick is one scheduler pass. Each concern is independent: an error in one
+// Tick is one scheduler pass. Each concern is independent: an error in one
 // (reported via return for the status file) never blocks the others.
-func (d *daemon) tick() (int, error) {
+func (d *daemonState) tick() (int, error) {
 	d.tickN++
-	jobs := loadJobs()
-	live := liveSessions()
+	jobs := LoadJobs()
+	live := LiveSessions()
 	bySlug := map[string]*Job{}
 	for _, j := range jobs {
 		bySlug[j.Slug] = j
@@ -150,9 +156,9 @@ func (d *daemon) tick() (int, error) {
 			continue
 		}
 		key := "err:" + j.File
-		if mt := j.ModTime.Unix(); d.notified[key] != mt {
+		if mt := j.ModTime.Unix(); d.Notified[key] != mt {
 			notify("kraken: job error", j.Slug+": "+j.Err)
-			d.notified[key] = mt
+			d.Notified[key] = mt
 		}
 	}
 
@@ -161,10 +167,10 @@ func (d *daemon) tick() (int, error) {
 	now := time.Now()
 	cells := 0
 	for _, j := range jobs {
-		if !j.started() || j.State == "done" {
+		if !j.Started() || j.State == "done" {
 			continue
 		}
-		isLive := live[cellSession(j)]
+		isLive := live[CellSession(j)]
 		if isLive {
 			cells++
 			// eager session stamp: zeus' session id lands in the job file
@@ -174,7 +180,7 @@ func (d *daemon) tick() (int, error) {
 			if err := stampSession(j, all); err != nil {
 				dlog("session stamp %s failed: %v", j.Slug, err)
 			}
-			delete(d.notified, "gone:"+j.Slug)
+			delete(d.Notified, "gone:"+j.Slug)
 		} else {
 			// dead-cell watch: a started job whose tmux session vanished
 			// (killed by hand, tmux server restart) would otherwise sit on
@@ -183,10 +189,10 @@ func (d *daemon) tick() (int, error) {
 			// recovery stays carl's explicit kill/done/reactivate, and the
 			// file state is deliberately left alone.
 			key := "gone:" + j.Slug
-			if d.notified[key] == 0 {
+			if d.Notified[key] == 0 {
 				notify("kraken ⚠ "+j.Slug, "cell session is gone — kill to requeue, or done to accept")
-				dlog("%s: cell %s is gone (state %s kept)", j.Slug, cellSession(j), j.State)
-				d.notified[key] = now.Unix()
+				dlog("%s: cell %s is gone (state %s kept)", j.Slug, CellSession(j), j.State)
+				d.Notified[key] = now.Unix()
 			}
 		}
 
@@ -196,11 +202,11 @@ func (d *daemon) tick() (int, error) {
 		// duration, so key on the prefix or every tick re-notifies with a
 		// fresh number.
 		if isLive {
-			if reason := cellHealth(j, all); reason != "" {
+			if reason := CellHealth(j, all); reason != "" {
 				key := "health:" + j.Slug + "|" + strings.SplitN(reason, " idle ", 2)[0]
-				if d.notified[key] == 0 {
+				if d.Notified[key] == 0 {
 					notify("kraken ⚠ "+j.Slug, reason+" — auto-retrying; also on the board")
-					d.notified[key] = now.Unix()
+					d.Notified[key] = now.Unix()
 					dlog("unhealthy %s: %s", j.Slug, reason)
 				}
 				// auto-retry retryable stalls with backoff: API overload comes
@@ -208,11 +214,11 @@ func (d *daemon) tick() (int, error) {
 				// 529 — keep nudging every repokeAfter until a turn survives
 				if !strings.Contains(reason, "is gone") {
 					rkey := "retry:" + j.Slug
-					if now.Unix()-d.poked[rkey] >= int64(repokeAfter/time.Second) {
-						if err := retryCell(j); err != nil {
+					if now.Unix()-d.Poked[rkey] >= int64(repokeAfter/time.Second) {
+						if err := RetryCell(j); err != nil {
 							dlog("auto-retry %s failed: %v", j.Slug, err)
 						} else {
-							d.poked[rkey] = now.Unix()
+							d.Poked[rkey] = now.Unix()
 							dlog("auto-retried %s (%s)", j.Slug, reason)
 						}
 					}
@@ -221,15 +227,15 @@ func (d *daemon) tick() (int, error) {
 		}
 
 		// state derivation: working ⇄ blocked, driven off a live ROLL-CALL of
-		// the cell's pane agents and team members (resolveRepo stays here
+		// the cell's pane agents and team members (ResolveRepo stays here
 		// only for its error-notification side effect — state derivation
 		// itself no longer needs the worktree).
-		if _, err := resolveRepo(j.Repo); err != nil {
+		if _, err := ResolveRepo(j.Repo); err != nil {
 			// surfaces on the board as repo?; notify once per file version
 			key := "repo:" + j.File
-			if mt := j.ModTime.Unix(); d.notified[key] != mt {
+			if mt := j.ModTime.Unix(); d.Notified[key] != mt {
 				notify("kraken: job error", j.Slug+": "+err.Error())
-				d.notified[key] = mt
+				d.Notified[key] = mt
 			}
 			continue
 		}
@@ -238,10 +244,10 @@ func (d *daemon) tick() (int, error) {
 			// a session just created is at least as fresh as its own
 			// creation — covers pre-first-transcript startup before any pane
 			// or team-config signal exists yet
-			if created, ok := times[cellSession(j)]; ok && now.Sub(created) < sessionCreateGrace {
+			if created, ok := times[CellSession(j)]; ok && now.Sub(created) < sessionCreateGrace {
 				active = true
 			} else {
-				zeus := cellZeus(j, all)
+				zeus := CellZeus(j, all)
 				// prefer the LIVE discovered zeus peer's session id over the
 				// job file's stamped one: right after a daemon restart (or a
 				// reactivation onto a fresh run), j.Session can lag a tick
@@ -254,7 +260,7 @@ func (d *daemon) tick() (int, error) {
 				if zeus != nil && zeus.SessionID != "" && !zeus.SessionIDGuessed {
 					sessionID = zeus.SessionID
 				}
-				active = cellActive(cellSession(j), all, core.TeamMembersForLead(sessionID), core.PaneShowsQuestion)
+				active = cellActive(CellSession(j), all, core.TeamMembersForLead(sessionID), core.PaneShowsQuestion)
 			}
 		}
 		st := deriveState(j, isLive, active)
@@ -265,20 +271,20 @@ func (d *daemon) tick() (int, error) {
 		// left it permanently stuck after the first such action — every later
 		// block on the same job would then never notify again.
 		if st == "working" {
-			delete(d.notified, "blocked:"+j.Slug)
+			delete(d.Notified, "blocked:"+j.Slug)
 		}
 		if (st == "working" || st == "blocked") && st != j.State {
 			prev := j.State
-			if err := writeJobState(j, st); err != nil {
+			if err := WriteJobState(j, st); err != nil {
 				dlog("write state %s for %s failed: %v", st, j.Slug, err)
 				continue
 			}
 			dlog("%s: %s → %s", j.Slug, prev, st)
 			if st == "blocked" {
 				key := "blocked:" + j.Slug
-				if d.notified[key] == 0 {
+				if d.Notified[key] == 0 {
 					notify("kraken ⏸ "+j.Slug, "blocked — see the board")
-					d.notified[key] = now.Unix()
+					d.Notified[key] = now.Unix()
 				}
 			}
 		}
@@ -290,34 +296,34 @@ func (d *daemon) tick() (int, error) {
 	// carl's explicit accept (k done / board Done).
 	if d.tickN%reapEvery == 0 {
 		for _, j := range jobs {
-			if j.Err != "" || j.Type != "build" || !j.started() || j.State == "done" {
+			if j.Err != "" || j.Type != "build" || !j.Started() || j.State == "done" {
 				continue
 			}
 			d.trackPRs(j)
 		}
 	}
 
-	// queue: start startable jobs under the cap. startCell writes "working"
+	// queue: start startable jobs under the cap. StartCell writes "working"
 	// itself once the cell is up.
 	var firstErr error
 	for _, j := range jobs {
-		if cells >= cellCap {
+		if cells >= CellCap {
 			break
 		}
 		if !startable(j, bySlug) {
 			continue
 		}
-		repo, err := resolveRepo(j.Repo)
+		repo, err := ResolveRepo(j.Repo)
 		if err != nil {
 			// surfaces on the board as repo?; notify once per file version
 			key := "repo:" + j.File
-			if mt := j.ModTime.Unix(); d.notified[key] != mt {
+			if mt := j.ModTime.Unix(); d.Notified[key] != mt {
 				notify("kraken: job error", j.Slug+": "+err.Error())
-				d.notified[key] = mt
+				d.Notified[key] = mt
 			}
 			continue
 		}
-		if err := startCell(j, repo); err != nil {
+		if err := StartCell(j, repo); err != nil {
 			dlog("start %s failed: %v", j.Slug, err)
 			if firstErr == nil {
 				firstErr = err
@@ -325,7 +331,7 @@ func (d *daemon) tick() (int, error) {
 			continue
 		}
 		cells++
-		dlog("started %s (cell %s, %d/%d cells)", j.Slug, cellSession(j), cells, cellCap)
+		dlog("started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
 		notify("kraken ▶ "+j.Slug, "cell started")
 	}
 	return cells, firstErr
@@ -336,25 +342,25 @@ func (d *daemon) tick() (int, error) {
 // state. Every outcome worth noting gets a dlog line unconditionally (the
 // old reap loop logged only on state change, which is how a failing
 // teardown stayed invisible).
-func (d *daemon) trackPRs(j *Job) {
-	repo, err := resolveRepo(j.Repo)
+func (d *daemonState) trackPRs(j *Job) {
+	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return // surfaced already by the state-derivation pass this tick
 	}
-	dir := existingWorktree(j, repo)
+	dir := ExistingWorktree(j, repo)
 	if dir == "" {
 		dir = repo // worktree gone: still ask in the repo so history converges
 	}
-	fetched, ok := listBranchPRs(dir, cellBranch(j))
+	fetched, ok := listBranchPRs(dir, CellBranch(j))
 	if !ok {
 		// log the outage once per stretch, not every minute
-		if key := "ghfail:" + j.Slug; d.notified[key] == 0 {
+		if key := "ghfail:" + j.Slug; d.Notified[key] == 0 {
 			dlog("%s: gh pr list failed — leaving prs alone", j.Slug)
-			d.notified[key] = time.Now().Unix()
+			d.Notified[key] = time.Now().Unix()
 		}
 		return
 	}
-	delete(d.notified, "ghfail:"+j.Slug)
+	delete(d.Notified, "ghfail:"+j.Slug)
 	updated, newlyMerged, changed := reconcilePRs(j.PRs, fetched)
 	if !changed {
 		return

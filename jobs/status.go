@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"bufio"
@@ -166,7 +166,7 @@ type pendingQuestionCacheEntry struct {
 // for any other id is irrelevant (it answered a since-superseded question,
 // or something else entirely) and is ignored. Whatever the last call's
 // answered state is when the file ends is the verdict.
-func pendingQuestion(transcript string) *PendingQuestion {
+func FindPendingQuestion(transcript string) *PendingQuestion {
 	info, statErr := os.Stat(transcript)
 	if statErr == nil {
 		pendingQuestionCacheMu.Lock()
@@ -261,7 +261,7 @@ func scanPendingQuestion(transcript string) *PendingQuestion {
 // deriveState maps a job to the five-state board model: draft · queued ·
 // working · blocked · done.
 //
-// Shared precedence (kept in lockstep with displayState in job.go): done
+// Shared precedence (kept in lockstep with DisplayState in job.go): done
 // wins first, then an error reads as draft, then any kraken-managed state
 // wins, then !Ready reads as draft, else queued.
 //
@@ -305,12 +305,12 @@ func deriveState(j *Job, live bool, active bool) string {
 
 // --- job file writes ---
 
-// appendMidRunLog appends one line to a job file's "## Mid-run log" section
+// AppendMidRunLog appends one line to a job file's "## Mid-run log" section
 // (adding the heading if the file doesn't have one yet), touching nothing
 // above it — the frontmatter and human-authored spec body are never rewritten
-// by this path. Atomic temp+rename, same as writeJobFields. Used for logging
+// by this path. Atomic temp+rename, same as WriteJobFields. Used for logging
 // carl's direct messages/steering to zeus.
-func appendMidRunLog(j *Job, actor, text string) error {
+func AppendMidRunLog(j *Job, actor, text string) error {
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return err
@@ -349,14 +349,14 @@ func appendMidRunLog(j *Job, actor, text string) error {
 	return util.AtomicWrite(j.File, newContent)
 }
 
-// listArtifacts lists a cell's artifact files, sorted by name. Missing dir
+// ListArtifacts lists a cell's artifact files, sorted by name. Missing dir
 // (no cell, or nothing produced yet) reads as no artifacts, not an error.
-// listArtifacts returns absolute paths of every file under the cell's
+// ListArtifacts returns absolute paths of every file under the cell's
 // artifacts dir, recursing into subdirectories (an artifact can be organized
 // into folders, e.g. icon-variations/) so the board and the app can list and
 // navigate them. Hidden files and dirs are skipped.
-func listArtifacts(j *Job) []string {
-	root := cellArtifacts(j)
+func ListArtifacts(j *Job) []string {
+	root := CellArtifacts(j)
 	var out []string
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

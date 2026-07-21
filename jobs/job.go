@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"fmt"
@@ -79,9 +79,9 @@ type JobPR struct {
 	State string `json:"state"`
 }
 
-const jobSuffix = ".job.md"
+const JobSuffix = ".job.md"
 
-func plutoDir() string {
+func PlutoDir() string {
 	if d := os.Getenv("KRAKEN_PLUTO_DIR"); d != "" {
 		return d // tests point at a temp dir; daily use never sets this
 	}
@@ -90,7 +90,7 @@ func plutoDir() string {
 
 // started reports whether the job has ever entered a cell: "" means never
 // started; "working", "blocked", and "done" all count as started.
-func (j *Job) started() bool {
+func (j *Job) Started() bool {
 	return j.State == "working" || j.State == "blocked" || j.State == "done"
 }
 
@@ -160,10 +160,10 @@ var validStates = map[string]bool{
 	"working": true, "blocked": true, "done": true,
 }
 
-// parseJob parses one job file's bytes. name is the file's base name, used to
+// ParseJob parses one job file's bytes. name is the file's base name, used to
 // derive the slug when the frontmatter omits or mangles `job:`.
-func parseJob(name string, data []byte) *Job {
-	j := &Job{Slug: strings.TrimSuffix(name, jobSuffix), Type: "build"}
+func ParseJob(name string, data []byte) *Job {
+	j := &Job{Slug: strings.TrimSuffix(name, JobSuffix), Type: "build"}
 	// CRLF-saved files would otherwise bake \r into values (and straight into
 	// the zeus prompt); job files are line-oriented text, so normalize
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
@@ -286,7 +286,7 @@ func parseJob(name string, data []byte) *Job {
 		}
 	}
 	if j.Slug == "" {
-		j.Slug = strings.TrimSuffix(name, jobSuffix)
+		j.Slug = strings.TrimSuffix(name, JobSuffix)
 	}
 	return j
 }
@@ -425,10 +425,10 @@ func parsePrereqs(j *Job, fm []string, i *int) []Prereq {
 	return out
 }
 
-// jobTemplate is the fill-in skeleton for a new job — kept in lockstep with
+// JobTemplate is the fill-in skeleton for a new job — kept in lockstep with
 // the {{name}} expansion in ~/.config/nvim/lua/config/pluto.lua (the nvim
 // authoring path) and the spec doc.
-func jobTemplate(slug string) string {
+func JobTemplate(slug string) string {
 	return "---\n" +
 		"job: " + slug + " # slug; this file is " + slug + ".job.md\n" +
 		"type: build               # build | info\n" +
@@ -446,24 +446,24 @@ func jobTemplate(slug string) string {
 		"---\n\n# Spec\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n"
 }
 
-// loadJobs reads every *.job.md in the pluto dir, sorted by slug. Missing dir
+// LoadJobs reads every *.job.md in the pluto dir, sorted by slug. Missing dir
 // or unreadable files degrade to an empty/partial list, never an error.
-func loadJobs() []*Job {
-	entries, err := os.ReadDir(plutoDir())
+func LoadJobs() []*Job {
+	entries, err := os.ReadDir(PlutoDir())
 	if err != nil {
 		return nil
 	}
 	var jobs []*Job
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), jobSuffix) {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), JobSuffix) {
 			continue
 		}
-		path := filepath.Join(plutoDir(), e.Name())
+		path := filepath.Join(PlutoDir(), e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		j := parseJob(e.Name(), data)
+		j := ParseJob(e.Name(), data)
 		j.File = path
 		if info, err := e.Info(); err == nil {
 			j.ModTime = info.ModTime()
@@ -471,7 +471,7 @@ func loadJobs() []*Job {
 		jobs = append(jobs, j)
 	}
 	// stable: for duplicate slugs the ReadDir filename order decides which
-	// file jobBySlug resolves — surfaced as an Err either way, but stable
+	// file JobBySlug resolves — surfaced as an Err either way, but stable
 	sort.SliceStable(jobs, func(a, b int) bool { return jobs[a].Slug < jobs[b].Slug })
 	markSlugIssues(jobs)
 	markPrereqCycles(jobs)
@@ -482,7 +482,7 @@ func loadJobs() []*Job {
 // identity (worktree path, tmux session, branch, @kraken-job marker) is
 // keyed on util.Slugify(Slug), so an empty result would alias the cells root and
 // a collision would let one job's teardown kill another's live cell —
-// defeating verifyCellSession entirely.
+// defeating VerifyCellSession entirely.
 func markSlugIssues(jobs []*Job) {
 	bySlugified := map[string][]*Job{}
 	for _, j := range jobs {
@@ -502,12 +502,12 @@ func markSlugIssues(jobs []*Job) {
 			// keeps its identity, the newcomers get flagged
 			started := 0
 			for _, j := range group {
-				if j.started() {
+				if j.Started() {
 					started++
 				}
 			}
 			for _, j := range group {
-				if j.Err == "" && (!j.started() || started > 1) {
+				if j.Err == "" && (!j.Started() || started > 1) {
 					j.Err = "duplicate slug"
 				}
 			}
@@ -515,10 +515,10 @@ func markSlugIssues(jobs []*Job) {
 	}
 }
 
-// jobBySlug resolves a user-given slug (with or without the .job.md suffix)
+// JobBySlug resolves a user-given slug (with or without the .job.md suffix)
 // against the loaded jobs.
-func jobBySlug(jobs []*Job, slug string) *Job {
-	slug = strings.TrimSuffix(slug, jobSuffix)
+func JobBySlug(jobs []*Job, slug string) *Job {
+	slug = strings.TrimSuffix(slug, JobSuffix)
 	for _, j := range jobs {
 		if j.Slug == slug {
 			return j
@@ -576,9 +576,9 @@ func markPrereqCycles(jobs []*Job) {
 	}
 }
 
-// unmetPrereqs returns j's prereqs whose job is not done (missing prereq
+// UnmetPrereqs returns j's prereqs whose job is not done (missing prereq
 // files count as unmet — a typo must block, not unblock).
-func unmetPrereqs(j *Job, bySlug map[string]*Job) []Prereq {
+func UnmetPrereqs(j *Job, bySlug map[string]*Job) []Prereq {
 	var unmet []Prereq
 	for _, p := range j.Prereqs {
 		dep := bySlug[p.Job]
@@ -589,7 +589,7 @@ func unmetPrereqs(j *Job, bySlug map[string]*Job) []Prereq {
 	return unmet
 }
 
-// displayState derives the job-board's five-state model: a terminal "done"
+// DisplayState derives the job-board's five-state model: a terminal "done"
 // wins even over a parse error (a job that finished successfully before
 // picking up an unrelated error still shows done). Otherwise an erred job
 // (even one that's Ready) surfaces as "draft" — the board's draft column
@@ -601,7 +601,7 @@ func unmetPrereqs(j *Job, bySlug map[string]*Job) []Prereq {
 // Shared precedence (kept in lockstep with deriveState in status.go): done
 // wins first, then an error reads as draft, then any kraken-managed state
 // wins, then !Ready reads as draft, else queued.
-func displayState(j *Job, bySlug map[string]*Job) string {
+func DisplayState(j *Job, bySlug map[string]*Job) string {
 	if j.State == "done" {
 		return "done"
 	}
@@ -627,7 +627,7 @@ func startable(j *Job, bySlug map[string]*Job) bool {
 	if j.Err != "" || !j.Ready || j.State != "" {
 		return false
 	}
-	if len(unmetPrereqs(j, bySlug)) > 0 {
+	if len(UnmetPrereqs(j, bySlug)) > 0 {
 		return false
 	}
 	for _, p := range j.Prereqs {
@@ -678,7 +678,7 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 	if len(prs) > 0 {
 		block = append(block, "prs:")
 		for _, p := range prs {
-			block = append(block, "  - url: "+oneLine(p.URL), "    state: "+oneLine(p.State))
+			block = append(block, "  - url: "+OneLine(p.URL), "    state: "+OneLine(p.State))
 		}
 	}
 	lines := strings.Split(content, "\n")
@@ -713,7 +713,7 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 }
 
 // writeJobPRs persists the tracker's PR record atomically, mirroring
-// writeJobFields' re-read-then-patch pattern so a concurrent editor save
+// WriteJobFields' re-read-then-patch pattern so a concurrent editor save
 // isn't clobbered with stale bytes.
 func writeJobPRs(j *Job, prs []JobPR) error {
 	data, err := os.ReadFile(j.File)
@@ -731,10 +731,10 @@ func writeJobPRs(j *Job, prs []JobPR) error {
 	return nil
 }
 
-// writeJobFields patches kraken-owned fields atomically (temp file + rename
+// WriteJobFields patches kraken-owned fields atomically (temp file + rename
 // in the same dir), re-reading the file first so a concurrent nvim save isn't
 // clobbered with stale bytes. keyvals alternates key, value.
-func writeJobFields(j *Job, keyvals ...string) error {
+func WriteJobFields(j *Job, keyvals ...string) error {
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return err
@@ -766,8 +766,8 @@ func writeJobFields(j *Job, keyvals ...string) error {
 	return nil
 }
 
-func writeJobState(j *Job, state string) error {
-	return writeJobFields(j, "state", state)
+func WriteJobState(j *Job, state string) error {
+	return WriteJobFields(j, "state", state)
 }
 
 // --- repo resolution ---
@@ -782,11 +782,11 @@ func isGitRepo(dir string) bool {
 	return err == nil
 }
 
-// pickRepo applies the matching rule to candidate dir basenames: an exact
+// PickRepo applies the matching rule to candidate dir basenames: an exact
 // name match wins outright (repo: kraken must never resolve to
 // another-kraken), otherwise the job's repo field must be a substring
 // (case-insensitive) of the dir name, ties breaking alphabetically.
-func pickRepo(name string, candidates []string) string {
+func PickRepo(name string, candidates []string) string {
 	name = strings.ToLower(name)
 	var hits []string
 	for _, c := range candidates {
@@ -805,10 +805,10 @@ func pickRepo(name string, candidates []string) string {
 	return hits[0]
 }
 
-// resolveRepo maps a job's repo field to a git checkout under ~/Developer:
+// ResolveRepo maps a job's repo field to a git checkout under ~/Developer:
 // substring match on the dir name, alphabetic tiebreak, error when nothing
 // matches (the job errors — kraken never creates repos).
-func resolveRepo(name string) (string, error) {
+func ResolveRepo(name string) (string, error) {
 	if strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("job has no repo")
 	}
@@ -826,7 +826,7 @@ func resolveRepo(name string) (string, error) {
 			candidates = append(candidates, e.Name())
 		}
 	}
-	hit := pickRepo(name, candidates)
+	hit := PickRepo(name, candidates)
 	if hit == "" {
 		return "", fmt.Errorf("no repo under %s matches %q", repoRoot(), name)
 	}

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"kraken/core"
+	"kraken/jobs"
 )
 
 // Endpoints deliberately NOT shape-tested here, and why:
@@ -134,7 +135,7 @@ func assertShape(t *testing.T, label string, data []byte, spec map[string]fieldS
 	}
 }
 
-// --- board: webBoard / webJob / daemonStatus (web.go, daemon.go) ---
+// --- board: webBoard / webJob / jobs.DaemonStatus (web.go, daemon.go) ---
 
 var daemonStatusSpec = map[string]fieldSpec{
 	"pid":        {kind: wireNumber, required: true},
@@ -180,22 +181,22 @@ var webJobSpec = map[string]fieldSpec{
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
-	data, err := json.Marshal(daemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4})
+	data, err := json.Marshal(jobs.DaemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertShape(t, "daemonStatus (empty optionals)", data, daemonStatusSpec)
+	assertShape(t, "jobs.DaemonStatus (empty optionals)", data, daemonStatusSpec)
 
-	data, err = json.Marshal(daemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4, LastError: "boom", Stale: true})
+	data, err = json.Marshal(jobs.DaemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4, LastError: "boom", Stale: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertShape(t, "daemonStatus (populated)", data, daemonStatusSpec)
+	assertShape(t, "jobs.DaemonStatus (populated)", data, daemonStatusSpec)
 }
 
 func TestWebBoardWireShape(t *testing.T) {
 	board := webBoard{
-		Daemon:   daemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4},
+		Daemon:   jobs.DaemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4},
 		Jobs:     []webJob{},
 		Contract: apiContract,
 	}
@@ -247,7 +248,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		},
 		Roster:        []webAgent{{Name: "hephaestus-x", Model: "sonnet"}},
 		Health:        "unhealthy",
-		PRs:           []JobPR{{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"}},
+		PRs:           []jobs.JobPR{{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"}},
 		ModTime:       123,
 		Archived:      true,
 		DisplaySlug:   "x-orig",
@@ -281,14 +282,14 @@ var webAgentSpec = map[string]fieldSpec{
 	"model": {kind: wireString, required: true},
 }
 
-// jobPRSpec covers job.go's JobPR, the elements of webJob's "prs" array —
+// jobPRSpec covers job.go's jobs.JobPR, the elements of webJob's "prs" array —
 // the daemon-tracked record of every PR shipped from the cell branch.
 var jobPRSpec = map[string]fieldSpec{
 	"url":   {kind: wireString, required: true},
 	"state": {kind: wireString, required: true},
 }
 
-// prereqSpec covers job.go's Prereq, the form-editor's element type (distinct
+// prereqSpec covers job.go's jobs.Prereq, the form-editor's element type (distinct
 // from webPrereq above: no computed "done", and "gated" is omitempty).
 var prereqSpec = map[string]fieldSpec{
 	"job":   {kind: wireString, required: true},
@@ -320,25 +321,25 @@ func TestWebAgentWireShape(t *testing.T) {
 }
 
 func TestJobPRWireShape(t *testing.T) {
-	data, err := json.Marshal(JobPR{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"})
+	data, err := json.Marshal(jobs.JobPR{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertShape(t, "JobPR", data, jobPRSpec)
+	assertShape(t, "jobs.JobPR", data, jobPRSpec)
 }
 
 func TestPrereqWireShape(t *testing.T) {
-	data, err := json.Marshal(Prereq{Job: "y", Gated: true})
+	data, err := json.Marshal(jobs.Prereq{Job: "y", Gated: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertShape(t, "Prereq (gated)", data, prereqSpec)
+	assertShape(t, "jobs.Prereq (gated)", data, prereqSpec)
 
-	data, err = json.Marshal(Prereq{Job: "y"})
+	data, err = json.Marshal(jobs.Prereq{Job: "y"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertShape(t, "Prereq (empty optionals)", data, prereqSpec)
+	assertShape(t, "jobs.Prereq (empty optionals)", data, prereqSpec)
 }
 
 // --- webQuestion / webQuestionItem / webQuestionOption (web.go) ---

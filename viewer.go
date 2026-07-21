@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kraken/core"
+	"kraken/jobs"
 	"kraken/util"
 )
 
@@ -98,10 +99,10 @@ type snapshotMsg struct {
 	peers    []*core.Peer
 	shells   []*core.Peer
 	usage    string
-	jobs     []*Job
+	jobs     []*jobs.Job
 	live     map[string]bool
 	health   map[string]string
-	daemonSt daemonStatus
+	daemonSt jobs.DaemonStatus
 	daemonOK bool
 }
 
@@ -133,15 +134,15 @@ type viewerModel struct {
 	// never collide and a view toggle clears it.
 	pendingKill string
 	// jobs view state
-	jrows          []*Job
-	rawJobs        []*Job
+	jrows          []*jobs.Job
+	rawJobs        []*jobs.Job
 	liveSessionSet map[string]bool
 	healthBySlug   map[string]string
-	daemonSt       daemonStatus
+	daemonSt       jobs.DaemonStatus
 	daemonOK       bool
 	// inline answer input: non-nil while typing a steering message that gets
 	// delivered to a blocked job's zeus pane
-	answering *Job
+	answering *jobs.Job
 	input     string
 }
 
@@ -168,22 +169,22 @@ func tickCmd() tea.Cmd {
 func refreshCmd() tea.Cmd {
 	return func() tea.Msg {
 		peers, shells := core.DiscoverAll()
-		jobs := loadJobs()
-		live := liveSessions()
-		st, ok := readDaemonStatus()
+		js := jobs.LoadJobs()
+		live := jobs.LiveSessions()
+		st, ok := jobs.ReadDaemonStatus()
 		// cell health shells out to tmux per live cell — computed here, once
 		// per tick, never in the render path
 		health := map[string]string{}
-		for _, j := range jobs {
-			if j.started() && j.State != "done" && live[cellSession(j)] {
-				if reason := cellHealth(j, peers); reason != "" {
+		for _, j := range js {
+			if j.Started() && j.State != "done" && live[jobs.CellSession(j)] {
+				if reason := jobs.CellHealth(j, peers); reason != "" {
 					health[j.Slug] = reason
 				}
 			}
 		}
 		return snapshotMsg{
 			peers: peers, shells: shells, usage: core.UsageHeader(true),
-			jobs: jobs, live: live, health: health,
+			jobs: js, live: live, health: health,
 			daemonSt: st, daemonOK: ok,
 		}
 	}
@@ -384,7 +385,7 @@ func peerKey(p *core.Peer) string {
 }
 
 // jobRowKey identifies a jobs-view row across snapshots (cursor anchoring).
-func jobRowKey(j *Job) string {
+func jobRowKey(j *jobs.Job) string {
 	return "job:" + j.Slug
 }
 

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"kraken/jobs"
 	"kraken/util"
 )
 
@@ -106,7 +107,7 @@ func TestArtifactPathSubdirsAndTraversal(t *testing.T) {
 	writeF(filepath.Join("icon-variations", "icon-v1.png"))
 	writeF(filepath.Join("icon-variations", ".hidden"))
 
-	// cellArtifacts derives from cellDir(j); fake it by pointing the job's
+	// jobs.CellArtifacts derives from cellDir(j); fake it by pointing the job's
 	// cell resolution at our temp dir via a stub is overkill — instead test
 	// the pure guard against a known root.
 	root := filepath.Join(dir, "artifacts")
@@ -208,11 +209,11 @@ func TestWebQuestionFromNil(t *testing.T) {
 }
 
 func TestWebQuestionFromMirrorsFields(t *testing.T) {
-	pq := &PendingQuestion{
+	pq := &jobs.PendingQuestion{
 		ToolUseID: "tu_2",
-		Questions: []QuestionItem{{
+		Questions: []jobs.QuestionItem{{
 			Question: "q", Header: "h", MultiSelect: true,
-			Options: []QuestionOption{{Label: "l1", Description: "d1"}},
+			Options: []jobs.QuestionOption{{Label: "l1", Description: "d1"}},
 		}},
 	}
 	got := webQuestionFrom(pq)
@@ -292,7 +293,7 @@ func writeTestJob(t *testing.T, slug, extraFrontmatter string) {
 	t.Helper()
 	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\nready: true\n" +
 		extraFrontmatter + "---\n\n# Spec\n"
-	if err := os.WriteFile(filepath.Join(plutoDir(), slug+jobSuffix), []byte(src), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -326,14 +327,14 @@ func TestWebAnswerQuestionNotLive(t *testing.T) {
 func TestAnswerableSingleDigit(t *testing.T) {
 	cases := []struct {
 		name string
-		q    *PendingQuestion
+		q    *jobs.PendingQuestion
 		want bool
 	}{
 		{"nil question", nil, false},
-		{"single, not multi-select", &PendingQuestion{Questions: []QuestionItem{{Question: "q"}}}, true},
-		{"single, multi-select", &PendingQuestion{Questions: []QuestionItem{{Question: "q", MultiSelect: true}}}, false},
-		{"multiple questions", &PendingQuestion{Questions: []QuestionItem{{Question: "q1"}, {Question: "q2"}}}, false},
-		{"zero questions", &PendingQuestion{Questions: nil}, false},
+		{"single, not multi-select", &jobs.PendingQuestion{Questions: []jobs.QuestionItem{{Question: "q"}}}, true},
+		{"single, multi-select", &jobs.PendingQuestion{Questions: []jobs.QuestionItem{{Question: "q", MultiSelect: true}}}, false},
+		{"multiple questions", &jobs.PendingQuestion{Questions: []jobs.QuestionItem{{Question: "q1"}, {Question: "q2"}}}, false},
+		{"zero questions", &jobs.PendingQuestion{Questions: nil}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -381,7 +382,7 @@ func TestWebSteerEmptyMessage(t *testing.T) {
 
 func TestWebJobSaveFormTypeValidation(t *testing.T) {
 	// build/info are the only two accepted values now; legacy explore/question
-	// values (still parseable from disk, per parseJob) must be refused on save
+	// values (still parseable from disk, per jobs.ParseJob) must be refused on save
 	// so new job files can't be written with them.
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "form-type", "")
@@ -751,12 +752,12 @@ func TestHealthHandlerContractAndStale(t *testing.T) {
 // re-notify on its next tick.
 func TestSerializeJobFilePreservesPRs(t *testing.T) {
 	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Ready: true}
-	prs := []JobPR{
+	prs := []jobs.JobPR{
 		{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"},
 		{URL: "https://github.com/car1zhang/kraken/pull/9", State: "open"},
 	}
 	content := serializeJobFile(f, "working", "", "", 0, prs, "")
-	j := parseJob("x.job.md", []byte(content))
+	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
 		t.Fatalf("serialized file does not round-trip: %s\n%s", j.Err, content)
 	}
@@ -844,5 +845,64 @@ func TestBoardCacheSingleFlight(t *testing.T) {
 	wg.Wait()
 	if got := atomic.LoadInt32(&builds); got != 1 {
 		t.Fatalf("builds = %d, want 1 — %d concurrent misses on a cold cache must single-flight", got, n)
+	}
+}
+
+func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
+	f := jobFormFields{Slug: "x", Type: "build", Repo: "r", Success: "works"}
+	content := serializeJobFile(f, "done", "shipped", "abc-123", 2, nil, "")
+	j := jobs.ParseJob("x.job.md", []byte(content))
+	if j.Err != "" {
+		t.Fatalf("round-trip err: %s", j.Err)
+	}
+	if j.State != "done" || j.Outcome != "shipped" || j.Session != "abc-123" || j.Run != 2 {
+		t.Fatalf("kraken-owned fields lost: %+v", j)
+	}
+	// and absent fields stay absent
+	content = serializeJobFile(f, "", "", "", 0, nil, "")
+	if strings.Contains(content, "session:") || strings.Contains(content, "run:") {
+		t.Fatalf("empty session/run serialized anyway:\n%s", content)
+	}
+}
+
+// writeArchiveFixture writes a minimal parseable job file into dir.
+func writeArchiveFixture(t *testing.T, dir, name, frontmatter string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	content := "---\n" + frontmatter + "---\n\n# Spec\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestArchivedArtifactServing(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	if err := os.MkdirAll(jobs.ArchiveDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeArchiveFixture(t, jobs.ArchiveDir(), "foo-2.job.md", "job: foo\nrepo: x\n")
+	if err := os.WriteFile(filepath.Join(jobs.ArchiveDir(), "foo-2.report.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), "foo-2")
+	arts := archivedWebArtifacts(a)
+	if len(arts) != 1 || arts[0].Name != "report.md" || arts[0].URL != "/api/artifact/foo-2/archive/report.md" {
+		t.Fatalf("unexpected artifacts: %+v", arts)
+	}
+	if p, ok := artifactPath(a, "archive", "report.md"); !ok || p != filepath.Join(jobs.ArchiveDir(), "foo-2.report.md") {
+		t.Fatalf("artifactPath archive: %q %v", p, ok)
+	}
+	// traversal and job files are refused
+	if _, ok := artifactPath(a, "archive", "../foo-2.report.md"); ok {
+		t.Fatal("traversal allowed")
+	}
+	if _, ok := artifactPath(a, "archive", "job.md"); ok {
+		// foo-2.job.md must not be reachable as artifact "job.md"
+		t.Fatal("job file served as artifact")
+	}
+	// an active job (no ArchivedName) never resolves in the archive home
+	if _, ok := artifactPath(&jobs.Job{Slug: "foo"}, "archive", "report.md"); ok {
+		t.Fatal("active job resolved in archive home")
 	}
 }

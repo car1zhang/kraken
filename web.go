@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"kraken/core"
+	"kraken/jobs"
 	"kraken/util"
 )
 
@@ -46,7 +47,7 @@ type webPrereq struct {
 }
 
 // webQuestionOption/webQuestionItem/webQuestion mirror status.go's
-// QuestionOption/QuestionItem/PendingQuestion for the wire: those types carry
+// QuestionOption/QuestionItem/jobs.PendingQuestion for the wire: those types carry
 // json tags matched to Claude's AskUserQuestion tool-call input shape
 // (multiSelect etc, decoded straight from the transcript), which isn't the
 // API's own naming convention — so the board gets its own DTO instead of
@@ -68,8 +69,8 @@ type webQuestion struct {
 	Questions []webQuestionItem `json:"questions"`
 }
 
-// webQuestionFrom converts status.go's PendingQuestion into the board's DTO.
-func webQuestionFrom(pq *PendingQuestion) *webQuestion {
+// webQuestionFrom converts status.go's jobs.PendingQuestion into the board's DTO.
+func webQuestionFrom(pq *jobs.PendingQuestion) *webQuestion {
 	if pq == nil {
 		return nil
 	}
@@ -131,16 +132,16 @@ type webJob struct {
 	Reactivatable bool `json:"reactivatable,omitempty"`
 	// PRs mirrors the job file's kraken-owned prs: list — every PR the
 	// cell ever shipped, rendered by the clients as linked state chips.
-	PRs []JobPR `json:"prs,omitempty"`
+	PRs []jobs.JobPR `json:"prs,omitempty"`
 }
 
 type webBoard struct {
-	Daemon    daemonStatus `json:"daemon"`
-	DaemonOK  bool         `json:"daemon_ok"`
-	CellCap   int          `json:"cell_cap"`
-	LiveCells int          `json:"live_cells"`
-	Jobs      []webJob     `json:"jobs"`
-	Contract  int          `json:"contract"`
+	Daemon    jobs.DaemonStatus `json:"daemon"`
+	DaemonOK  bool              `json:"daemon_ok"`
+	CellCap   int               `json:"cell_cap"`
+	LiveCells int               `json:"live_cells"`
+	Jobs      []webJob          `json:"jobs"`
+	Contract  int               `json:"contract"`
 	// Stale is this k web process' own self-check (see selfcheck.go) — the
 	// daemon's equivalent rides Daemon.Stale.
 	Stale bool `json:"stale"`
@@ -148,10 +149,10 @@ type webBoard struct {
 
 // jobArtifacts collects a job's viewable artifacts from both homes: the live
 // cell's artifacts dir and the preserved <slug>.<name> copies in pluto.
-func jobArtifacts(j *Job) []webArtifact {
+func jobArtifacts(j *jobs.Job) []webArtifact {
 	var out []webArtifact
-	root := cellArtifacts(j)
-	for _, p := range listArtifacts(j) {
+	root := jobs.CellArtifacts(j)
+	for _, p := range jobs.ListArtifacts(j) {
 		// name is the path relative to the artifacts dir, so nested files
 		// read as "icon-variations/icon-v1.png" and clients can group by dir
 		name := filepath.Base(p)
@@ -161,13 +162,13 @@ func jobArtifacts(j *Job) []webArtifact {
 		out = append(out, webArtifact{Name: name, URL: "/api/artifact/" + j.Slug + "/cell/" + name})
 	}
 	prefix := util.Slugify(j.Slug) + "."
-	entries, err := os.ReadDir(plutoDir())
+	entries, err := os.ReadDir(jobs.PlutoDir())
 	if err != nil {
 		return out
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, prefix) || strings.HasSuffix(name, jobSuffix) {
+		if e.IsDir() || !strings.HasPrefix(name, prefix) || strings.HasSuffix(name, jobs.JobSuffix) {
 			continue
 		}
 		out = append(out, webArtifact{Name: strings.TrimPrefix(name, prefix), URL: "/api/artifact/" + j.Slug + "/pluto/" + strings.TrimPrefix(name, prefix)})
@@ -180,7 +181,7 @@ func jobArtifacts(j *Job) []webArtifact {
 // any local process can hit the port). A cell name may be a subpath
 // (icon-variations/icon-v1.png) so folders are navigable, but every segment is
 // validated against traversal and hidden files.
-func artifactPath(j *Job, home, name string) (string, bool) {
+func artifactPath(j *jobs.Job, home, name string) (string, bool) {
 	name = strings.TrimPrefix(name, "/")
 	if name == "" {
 		return "", false
@@ -193,28 +194,28 @@ func artifactPath(j *Job, home, name string) (string, bool) {
 	var p, root string
 	switch home {
 	case "cell":
-		root = cellArtifacts(j)
+		root = jobs.CellArtifacts(j)
 		p = filepath.Join(root, name)
 	case "pluto":
 		// pluto copies are flat (<slug>.<name>), never nested
 		if strings.Contains(name, "/") {
 			return "", false
 		}
-		root = plutoDir()
+		root = jobs.PlutoDir()
 		p = filepath.Join(root, util.Slugify(j.Slug)+"."+name)
 	case "archive":
 		// archived copies are flat under the numbered archive prefix
 		if j.ArchivedName == "" || strings.Contains(name, "/") {
 			return "", false
 		}
-		root = archiveDir()
+		root = jobs.ArchiveDir()
 		p = filepath.Join(root, j.ArchivedName+"."+name)
 	default:
 		return "", false
 	}
 	// the flat homes join <prefix>.<name>, so a name like "job.md" would
 	// reassemble the job FILE's own path — job files are never artifacts
-	if strings.HasSuffix(p, jobSuffix) {
+	if strings.HasSuffix(p, jobs.JobSuffix) {
 		return "", false
 	}
 	// belt-and-suspenders: the cleaned path must still sit under its home
@@ -256,8 +257,8 @@ func artifactContentType(p string) string {
 // and question fields, and the question-answer action. An unresolvable
 // transcript (fresh fork, no session file yet) reads as "" rather than an
 // error — the board field is just omitted.
-func cellZeusTranscript(j *Job, all []*core.Peer) (zeus *core.Peer, transcript string) {
-	zeus = cellZeus(j, all)
+func cellZeusTranscript(j *jobs.Job, all []*core.Peer) (zeus *core.Peer, transcript string) {
+	zeus = jobs.CellZeus(j, all)
 	if zeus == nil {
 		return nil, ""
 	}
@@ -310,7 +311,7 @@ func truncateText(s string, limit int) string {
 }
 
 // lastSentMessage returns the text of the most recent me→zeus entry in a
-// job body's "## Mid-run log" section (see appendMidRunLog for the entry
+// job body's "## Mid-run log" section (see jobs.AppendMidRunLog for the entry
 // format: "- [2006-01-02 15:04 actor] text"), timestamp and actor stripped.
 // "" when the body has no log section or no me→zeus entry in it. Entries
 // kraken generated itself from a question-answer click ("answered question:
@@ -372,16 +373,16 @@ func (c *boardCache) invalidate() {
 var webBoardCache = &boardCache{ttl: 2 * time.Second, now: time.Now, build: buildWebBoard}
 
 func buildWebBoard() webBoard {
-	jobs := loadJobs()
-	bySlug := map[string]*Job{}
-	for _, j := range jobs {
+	js := jobs.LoadJobs()
+	bySlug := map[string]*jobs.Job{}
+	for _, j := range js {
 		bySlug[j.Slug] = j
 	}
-	live := liveSessions()
-	st, ok := readDaemonStatus()
+	live := jobs.LiveSessions()
+	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
-	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale()}
-	for _, j := range jobs {
+	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale()}
+	for _, j := range js {
 		var prereqs []webPrereq
 		for _, p := range j.Prereqs {
 			dep := bySlug[p.Job]
@@ -389,25 +390,25 @@ func buildWebBoard() webBoard {
 		}
 		wj := webJob{
 			Slug: j.Slug, Type: j.Type, Repo: j.Repo,
-			State: displayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
+			State: jobs.DisplayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
 			Success: j.Success, Prereqs: prereqs, Artifacts: jobArtifacts(j),
 			ModTime:       j.ModTime.Unix(),
 			Reactivatable: j.State == "done" && j.Session != "",
 			PRs:           j.PRs,
 		}
-		if j.started() && j.State != "done" {
+		if j.Started() && j.State != "done" {
 			wj.LastSent = lastSentMessage(j.Body)
 		}
-		if live[cellSession(j)] {
-			wj.Cell, wj.Live = cellSession(j), true
-			if j.started() && j.State != "done" {
+		if live[jobs.CellSession(j)] {
+			wj.Cell, wj.Live = jobs.CellSession(j), true
+			if j.Started() && j.State != "done" {
 				board.LiveCells++
-				wj.Health = cellHealth(j, all)
+				wj.Health = jobs.CellHealth(j, all)
 				if _, transcript := cellZeusTranscript(j, all); transcript != "" {
 					wj.Detail = lastAssistantText(transcript)
-					wj.Question = webQuestionFrom(pendingQuestion(transcript))
+					wj.Question = webQuestionFrom(jobs.FindPendingQuestion(transcript))
 				}
-				sess := cellSession(j)
+				sess := jobs.CellSession(j)
 				for _, p := range all {
 					if p.Agent == "claude" && p.TmuxSession == sess && p.Depth > 0 {
 						wj.Roster = append(wj.Roster, webAgent{Name: p.Name, Model: p.Model})
@@ -420,7 +421,7 @@ func buildWebBoard() webBoard {
 	// archived jobs ride the same list under state "archived": no cell, no
 	// prereqs, no derivation — just the file, its artifacts, and the two
 	// actions (unarchive, delete) keyed on the archive file base
-	for _, a := range loadArchivedJobs() {
+	for _, a := range jobs.LoadArchivedJobs() {
 		board.Jobs = append(board.Jobs, webJob{
 			Slug: a.ArchivedName, Type: a.Type, Repo: a.Repo,
 			State: "archived", Archived: true, DisplaySlug: a.Slug,
@@ -433,9 +434,9 @@ func buildWebBoard() webBoard {
 
 // archivedWebArtifacts lists an archived job's artifact copies for the
 // wire, served from the archive home.
-func archivedWebArtifacts(a *Job) []webArtifact {
+func archivedWebArtifacts(a *jobs.Job) []webArtifact {
 	var out []webArtifact
-	for _, p := range archivedArtifactPaths(a) {
+	for _, p := range jobs.ArchivedArtifactPaths(a) {
 		name := strings.TrimPrefix(filepath.Base(p), a.ArchivedName+".")
 		out = append(out, webArtifact{Name: name, URL: "/api/artifact/" + a.ArchivedName + "/archive/" + name})
 	}
@@ -476,14 +477,14 @@ func webAction(f func(webReq) error) http.HandlerFunc {
 	}
 }
 
-func webJobFor(slug string) (*Job, map[string]*Job, error) {
-	jobs := loadJobs()
-	j := jobBySlug(jobs, slug)
+func webJobFor(slug string) (*jobs.Job, map[string]*jobs.Job, error) {
+	js := jobs.LoadJobs()
+	j := jobs.JobBySlug(js, slug)
 	if j == nil {
 		return nil, nil, fmt.Errorf("no job %q", slug)
 	}
-	bySlug := map[string]*Job{}
-	for _, x := range jobs {
+	bySlug := map[string]*jobs.Job{}
+	for _, x := range js {
 		bySlug[x.Slug] = x
 	}
 	return j, bySlug, nil
@@ -499,10 +500,10 @@ func webQueue(req webReq) error {
 	if j.Err != "" {
 		return fmt.Errorf("%s is unparseable (%s) — fix the file first", j.Slug, j.Err)
 	}
-	if state := displayState(j, bySlug); state != "draft" {
+	if state := jobs.DisplayState(j, bySlug); state != "draft" {
 		return fmt.Errorf("%s is %s — only drafts can be queued", j.Slug, state)
 	}
-	if err := writeJobFields(j, "ready", "true"); err != nil {
+	if err := jobs.WriteJobFields(j, "ready", "true"); err != nil {
 		return err
 	}
 	return nil
@@ -521,7 +522,7 @@ func webDone(req webReq) error {
 	if err != nil {
 		return err
 	}
-	if !j.started() {
+	if !j.Started() {
 		return fmt.Errorf("%s hasn't started — nothing to complete", j.Slug)
 	}
 	if j.State == "done" {
@@ -529,9 +530,9 @@ func webDone(req webReq) error {
 	}
 	outcome := "accepted"
 	if j.Success != "" {
-		outcome = "met: " + oneLine(j.Success)
+		outcome = "met: " + jobs.OneLine(j.Success)
 	}
-	_, err = doneJob(j, core.TruncateOneLine(outcome, 200))
+	_, err = jobs.DoneJob(j, core.TruncateOneLine(outcome, 200))
 	return err
 }
 
@@ -549,38 +550,38 @@ func webAnswerQuestion(req webReq) error {
 	if len(digit) != 1 || digit[0] < '1' || digit[0] > '9' {
 		return fmt.Errorf("answer must be a single digit 1-9")
 	}
-	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
+	if !j.Started() || j.State == "done" || !jobs.LiveSessions()[jobs.CellSession(j)] {
 		return fmt.Errorf("%s has no live cell to answer", j.Slug)
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	zeus, transcript := cellZeusTranscript(j, all)
 	if zeus == nil {
-		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
+		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, jobs.CellSession(j))
 	}
 	if transcript == "" {
 		return fmt.Errorf("%s has no pending question — refresh the board", j.Slug)
 	}
-	pq := pendingQuestion(transcript)
+	pq := jobs.FindPendingQuestion(transcript)
 	if pq == nil {
 		return fmt.Errorf("%s has no pending question — refresh the board", j.Slug)
 	}
 	if !answerableSingleDigit(pq) {
-		return fmt.Errorf("this question needs the pane — answer with k o %s", cellSession(j))
+		return fmt.Errorf("this question needs the pane — answer with k o %s", jobs.CellSession(j))
 	}
 	if err := sendDigit(zeus, digit); err != nil {
 		return fmt.Errorf("send digit: %v", err)
 	}
-	if err := appendMidRunLog(j, "me→zeus", "answered question: option "+digit); err != nil {
+	if err := jobs.AppendMidRunLog(j, "me→zeus", "answered question: option "+digit); err != nil {
 		return fmt.Errorf("delivered, but mid-run log append failed: %v", err)
 	}
-	return writeJobState(j, "working")
+	return jobs.WriteJobState(j, "working")
 }
 
 // answerableSingleDigit reports whether a pending question can be answered by
 // a single-digit board button: exactly one question, and it isn't
 // multi-select. A multi-question or multi-select prompt packs more choice
 // into the payload than one digit can carry — those need the actual pane.
-func answerableSingleDigit(q *PendingQuestion) bool {
+func answerableSingleDigit(q *jobs.PendingQuestion) bool {
 	return q != nil && len(q.Questions) == 1 && !q.Questions[0].MultiSelect
 }
 
@@ -597,13 +598,13 @@ func sendDigit(p *core.Peer, digit string) error {
 	return exec.Command("tmux", "send-keys", "-l", "-t", p.Pane, digit).Run()
 }
 
-// webRetry pokes an unhealthy cell agent; shared core in retryCell.
+// webRetry pokes an unhealthy cell agent; shared core in jobs.RetryCell.
 func webRetry(req webReq) error {
 	j, _, err := webJobFor(req.Slug)
 	if err != nil {
 		return err
 	}
-	return retryCell(j)
+	return jobs.RetryCell(j)
 }
 
 // webSteer delivers a mid-run instruction directly to zeus — there's no
@@ -620,21 +621,21 @@ func webSteer(req webReq) error {
 	if text == "" {
 		return fmt.Errorf("empty message")
 	}
-	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
+	if !j.Started() || j.State == "done" || !jobs.LiveSessions()[jobs.CellSession(j)] {
 		return fmt.Errorf("%s has no live cell to steer", j.Slug)
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
-	zeus := cellZeus(j, all)
+	zeus := jobs.CellZeus(j, all)
 	if zeus == nil {
-		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
+		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, jobs.CellSession(j))
 	}
-	if err := appendMidRunLog(j, "me→zeus", oneLine(text)); err != nil {
+	if err := jobs.AppendMidRunLog(j, "me→zeus", jobs.OneLine(text)); err != nil {
 		return fmt.Errorf("mid-run log append failed: %v", err)
 	}
 	if err := core.SendMessage(zeus, "from carl: "+text); err != nil {
 		return fmt.Errorf("logged, but delivery failed: %v", err)
 	}
-	return writeJobState(j, "working")
+	return jobs.WriteJobState(j, "working")
 }
 
 // webReview is the PR-review handoff: open the cell's worktree in an editor
@@ -646,11 +647,11 @@ func webReview(req webReq) error {
 	if err != nil {
 		return err
 	}
-	repo, err := resolveRepo(j.Repo)
+	repo, err := jobs.ResolveRepo(j.Repo)
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
-	wt := existingWorktree(j, repo)
+	wt := jobs.ExistingWorktree(j, repo)
 	if wt == "" {
 		return fmt.Errorf("%s has no worktree to review (already torn down?)", j.Slug)
 	}
@@ -661,8 +662,8 @@ func webReview(req webReq) error {
 		}
 		return nil
 	default: // nvim
-		sess := cellSession(j)
-		if !liveSessions()[sess] {
+		sess := jobs.CellSession(j)
+		if !jobs.LiveSessions()[sess] {
 			return fmt.Errorf("cell session %s is gone — open the worktree manually: nvim %s", sess, wt)
 		}
 		if err := exec.Command("tmux", "new-window", "-t", sess+":", "-n", "review",
@@ -684,44 +685,44 @@ func webKill(req webReq) error {
 	if err != nil {
 		return err
 	}
-	if !j.started() || j.State == "done" {
+	if !j.Started() || j.State == "done" {
 		return fmt.Errorf("%s has no live work to kill", j.Slug)
 	}
-	_, err = killJob(j)
+	_, err = jobs.KillJob(j)
 	return err
 }
 
 // webArchive moves a job into the archive. Server-side revalidation
-// mirrors archiveJob's own checks; the error text spells out the kill→draft
+// mirrors jobs.ArchiveJob's own checks; the error text spells out the kill→draft
 // two-step for live jobs since that's the UX carl approved.
 func webArchive(req webReq) error {
 	j, _, err := webJobFor(req.Slug)
 	if err != nil {
 		return err
 	}
-	_, err = archiveJob(j, liveSessions())
+	_, err = jobs.ArchiveJob(j, jobs.LiveSessions())
 	return err
 }
 
 // webUnarchive restores an archived job (by archive file base) to the
 // active dir under its original slug.
 func webUnarchive(req webReq) error {
-	a := archivedJobByName(loadArchivedJobs(), req.Slug)
+	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), req.Slug)
 	if a == nil {
 		return fmt.Errorf("no archived job %q", req.Slug)
 	}
-	return unarchiveJob(a)
+	return jobs.UnarchiveJob(a)
 }
 
 // webDelete permanently removes an archived job (file + archived artifact
 // copies). The browser confirms before posting; only archive names ever
 // resolve here, so nothing active can be deleted.
 func webDelete(req webReq) error {
-	a := archivedJobByName(loadArchivedJobs(), req.Slug)
+	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), req.Slug)
 	if a == nil {
 		return fmt.Errorf("no archived job %q", req.Slug)
 	}
-	return deleteArchivedJob(a)
+	return jobs.DeleteArchivedJob(a)
 }
 
 // webReactivate resumes a done job's zeus session for adjustments; req.Text
@@ -731,7 +732,7 @@ func webReactivate(req webReq) error {
 	if err != nil {
 		return err
 	}
-	return reactivateJob(j, "", oneLine(req.Text))
+	return jobs.ReactivateJob(j, "", jobs.OneLine(req.Text))
 }
 
 // --- job authoring (draft + spec directly in the browser) ---
@@ -739,8 +740,8 @@ func webReactivate(req webReq) error {
 // editable jobs are ones with no lifecycle in flight: drafts, errored files,
 // waiting/queued jobs, and finished ones being respec'd. A live cell's file
 // is kraken's and the crew's to write.
-func editableJob(j *Job) bool {
-	return !j.started() || j.State == "done"
+func editableJob(j *jobs.Job) bool {
+	return !j.Started() || j.State == "done"
 }
 
 func webJSON(w http.ResponseWriter, status int, v any) {
@@ -793,7 +794,7 @@ func (t *mtimeToken) UnmarshalJSON(data []byte) error {
 // webJobRaw returns a job file's full content + mtime (the editor's load and
 // its optimistic-lock token).
 func webJobRaw(w http.ResponseWriter, r *http.Request) {
-	j := jobBySlug(loadJobs(), r.URL.Query().Get("slug"))
+	j := jobs.JobBySlug(jobs.LoadJobs(), r.URL.Query().Get("slug"))
 	if j == nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 		return
@@ -827,12 +828,12 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "slug must contain letters or digits"})
 		return
 	}
-	path := filepath.Join(plutoDir(), slug+jobSuffix)
+	path := filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix)
 	if _, err := os.Stat(path); err == nil {
 		webJSON(w, http.StatusConflict, map[string]string{"error": slug + " already exists"})
 		return
 	}
-	content := jobTemplate(slug)
+	content := jobs.JobTemplate(slug)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -860,7 +861,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	j := jobBySlug(loadJobs(), req.Slug)
+	j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
 	if j == nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 		return
@@ -878,7 +879,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fi, _ := os.Stat(j.File)
-	parsed := parseJob(filepath.Base(j.File), []byte(req.Content))
+	parsed := jobs.ParseJob(filepath.Base(j.File), []byte(req.Content))
 	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
 }
@@ -898,16 +899,16 @@ func splitBodyLog(body string) (spec, log string) {
 }
 
 type jobFormFields struct {
-	Slug        string   `json:"slug"`
-	Type        string   `json:"type"`
-	Repo        string   `json:"repo"`
-	Base        string   `json:"base"`
-	Ready       bool     `json:"ready"`
-	Solo        bool     `json:"solo"`
-	AutoApprove bool     `json:"auto_approve"`
-	Success     string   `json:"success"`
-	Prereqs     []Prereq `json:"prereqs"`
-	Spec        string   `json:"spec"`
+	Slug        string        `json:"slug"`
+	Type        string        `json:"type"`
+	Repo        string        `json:"repo"`
+	Base        string        `json:"base"`
+	Ready       bool          `json:"ready"`
+	Solo        bool          `json:"solo"`
+	AutoApprove bool          `json:"auto_approve"`
+	Success     string        `json:"success"`
+	Prereqs     []jobs.Prereq `json:"prereqs"`
+	Spec        string        `json:"spec"`
 	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
 	// legacy client still sending the old string encoding round-trips too.
 	MTime mtimeToken `json:"mtime"`
@@ -919,8 +920,8 @@ type jobFormFields struct {
 // webJobForm returns a job parsed into form fields, plus the datalists the
 // form offers (existing slugs for prereqs, repo candidates).
 func webJobForm(w http.ResponseWriter, r *http.Request) {
-	jobs := loadJobs()
-	j := jobBySlug(jobs, r.URL.Query().Get("slug"))
+	js := jobs.LoadJobs()
+	j := jobs.JobBySlug(js, r.URL.Query().Get("slug"))
 	if j == nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 		return
@@ -928,14 +929,14 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 	spec, _ := splitBodyLog(j.Body)
 	fi, _ := os.Stat(j.File)
 	var slugs []string
-	for _, x := range jobs {
+	for _, x := range js {
 		if x.Slug != j.Slug {
 			slugs = append(slugs, x.Slug)
 		}
 	}
 	prereqs := j.Prereqs
 	if prereqs == nil {
-		prereqs = []Prereq{}
+		prereqs = []jobs.Prereq{}
 	}
 	webJSON(w, http.StatusOK, map[string]any{
 		"slug": j.Slug, "type": j.Type, "repo": j.Repo, "base": j.Base,
@@ -943,7 +944,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 		"success": j.Success, "prereqs": prereqs,
 		"spec":  strings.TrimSpace(spec),
 		"mtime": jobMTime(fi), "editable": editableJob(j),
-		"err": j.Err, "slugs": slugs, "repos": repoCandidates(),
+		"err": j.Err, "slugs": slugs, "repos": jobs.RepoCandidates(),
 	})
 }
 
@@ -951,14 +952,14 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 // spec + the preserved kraken-owned tail (state, outcome, session, run,
 // prs — the form can't touch them by construction). Round-trips through
 // the strict parser by construction.
-func serializeJobFile(f jobFormFields, state, outcome, session string, run int, prs []JobPR, logSection string) string {
+func serializeJobFile(f jobFormFields, state, outcome, session string, run int, prs []jobs.JobPR, logSection string) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "job: %s\n", f.Slug)
 	fmt.Fprintf(&b, "type: %s\n", f.Type)
-	fmt.Fprintf(&b, "repo: %s\n", oneLine(f.Repo))
+	fmt.Fprintf(&b, "repo: %s\n", jobs.OneLine(f.Repo))
 	if f.Base != "" {
-		fmt.Fprintf(&b, "base: %s\n", oneLine(f.Base))
+		fmt.Fprintf(&b, "base: %s\n", jobs.OneLine(f.Base))
 	}
 	fmt.Fprintf(&b, "ready: %t\n", f.Ready)
 	if len(f.Prereqs) == 0 {
@@ -966,7 +967,7 @@ func serializeJobFile(f jobFormFields, state, outcome, session string, run int, 
 	} else {
 		b.WriteString("prereqs:\n")
 		for _, p := range f.Prereqs {
-			fmt.Fprintf(&b, "  - job: %s\n", oneLine(p.Job))
+			fmt.Fprintf(&b, "  - job: %s\n", jobs.OneLine(p.Job))
 			if p.Gated {
 				b.WriteString("    gated: true\n")
 			}
@@ -995,7 +996,7 @@ func serializeJobFile(f jobFormFields, state, outcome, session string, run int, 
 	if len(prs) > 0 {
 		b.WriteString("prs:\n")
 		for _, p := range prs {
-			fmt.Fprintf(&b, "  - url: %s\n    state: %s\n", oneLine(p.URL), oneLine(p.State))
+			fmt.Fprintf(&b, "  - url: %s\n    state: %s\n", jobs.OneLine(p.URL), jobs.OneLine(p.State))
 		}
 	}
 	b.WriteString("---\n\n")
@@ -1028,7 +1029,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be build or info"})
 		return
 	}
-	j := jobBySlug(loadJobs(), req.Slug)
+	j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
 	if j == nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 		return
@@ -1051,7 +1052,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fi, _ := os.Stat(j.File)
-	parsed := parseJob(filepath.Base(j.File), []byte(content))
+	parsed := jobs.ParseJob(filepath.Base(j.File), []byte(content))
 	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
 }
@@ -1183,11 +1184,11 @@ func cmdWeb(args []string) {
 		}
 		// the home decides the namespace the job resolves in: an archived
 		// "foo-2" and an active job slugged "foo-2" are different files
-		var j *Job
+		var j *jobs.Job
 		if parts[1] == "archive" {
-			j = archivedJobByName(loadArchivedJobs(), parts[0])
+			j = jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), parts[0])
 		} else {
-			j = jobBySlug(loadJobs(), parts[0])
+			j = jobs.JobBySlug(jobs.LoadJobs(), parts[0])
 		}
 		if j == nil {
 			http.NotFound(w, r)

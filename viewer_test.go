@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kraken/core"
+	"kraken/jobs"
 	"kraken/util"
 )
 
@@ -257,7 +258,7 @@ func TestClipLine(t *testing.T) {
 // queued · working · blocked · done) and checks each state label shows up
 // as its own selectable row, keyed to its position in m.jrows.
 func TestBuildJobLinesFiveStates(t *testing.T) {
-	jobs := []*Job{
+	js := []*jobs.Job{
 		{Slug: "d1", Type: "build", Ready: false}, // never started, not ready
 		{Slug: "q1", Type: "build", Ready: true},  // ready, never started
 		{Slug: "w1", Type: "build", Ready: true, State: "working"},
@@ -266,7 +267,7 @@ func TestBuildJobLinesFiveStates(t *testing.T) {
 	}
 	m := &viewerModel{
 		view: "jobs", loaded: true, width: 100, height: 40,
-		jrows: jobs, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
+		jrows: js, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
 	}
 	lines := m.buildJobLines()
 	var joined strings.Builder
@@ -284,8 +285,8 @@ func TestBuildJobLinesFiveStates(t *testing.T) {
 			t.Errorf("board missing state %q:\n%s", want, text)
 		}
 	}
-	if rows != len(jobs) {
-		t.Errorf("want %d selectable rows, got %d", len(jobs), rows)
+	if rows != len(js) {
+		t.Errorf("want %d selectable rows, got %d", len(js), rows)
 	}
 	// row indexes must map 1:1 back onto m.jrows in order
 	idx := 0
@@ -301,17 +302,17 @@ func TestBuildJobLinesFiveStates(t *testing.T) {
 }
 
 func TestJobRowKeyAnchorsCursorAcrossRefresh(t *testing.T) {
-	a := &Job{Slug: "a", Type: "build", Ready: true}
-	b := &Job{Slug: "b", Type: "build", Ready: true}
+	a := &jobs.Job{Slug: "a", Type: "build", Ready: true}
+	b := &jobs.Job{Slug: "b", Type: "build", Ready: true}
 	m := &viewerModel{
 		view: "jobs", loaded: true, width: 100, height: 40,
-		rawJobs: []*Job{a, b}, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
+		rawJobs: []*jobs.Job{a, b}, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
 	}
 	m.rebuild()
 	m.setCursor(1) // b
-	// next snapshot: same jobs, new *Job values (as a fresh loadJobs() would
+	// next snapshot: same jobs, new *jobs.Job values (as a fresh LoadJobs() would
 	// produce) — the cursor must still follow slug "b"
-	m.rawJobs = []*Job{{Slug: "a", Type: "build", Ready: true}, {Slug: "b", Type: "build", Ready: true}}
+	m.rawJobs = []*jobs.Job{{Slug: "a", Type: "build", Ready: true}, {Slug: "b", Type: "build", Ready: true}}
 	m.rebuild()
 	if m.cursor != 1 || m.jselected().Slug != "b" {
 		t.Errorf("cursor should follow job b, got %d (%v)", m.cursor, m.jselected())

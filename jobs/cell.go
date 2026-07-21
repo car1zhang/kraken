@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"encoding/json"
@@ -30,10 +30,10 @@ func cellDir(j *Job) string {
 	return filepath.Join(cellsRoot(), util.Slugify(j.Slug))
 }
 
-// cellWorktree names the worktree wt-<repo>: the dir basename is what shows
+// CellWorktree names the worktree wt-<repo>: the dir basename is what shows
 // up as the PROJECT label and editor root inside the cell, so it must read as
 // the repo, not as "wt".
-func cellWorktree(j *Job, repo string) string {
+func CellWorktree(j *Job, repo string) string {
 	return filepath.Join(cellDir(j), "wt-"+filepath.Base(repo))
 }
 
@@ -68,11 +68,11 @@ func refExists(repo, ref string) bool {
 	return exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", ref).Run() == nil
 }
 
-// existingWorktree finds the cell's worktree on disk, tolerating the legacy
+// ExistingWorktree finds the cell's worktree on disk, tolerating the legacy
 // bare "wt" name from cells created before worktrees were named wt-<repo>.
 // Empty means no worktree exists.
-func existingWorktree(j *Job, repo string) string {
-	wt := cellWorktree(j, repo)
+func ExistingWorktree(j *Job, repo string) string {
+	wt := CellWorktree(j, repo)
 	if _, err := os.Stat(wt); err == nil {
 		return wt
 	}
@@ -83,29 +83,29 @@ func existingWorktree(j *Job, repo string) string {
 	return ""
 }
 
-func cellSession(j *Job) string {
+func CellSession(j *Job) string {
 	return "cell-" + util.Slugify(j.Slug)
 }
 
-func cellArtifacts(j *Job) string {
+func CellArtifacts(j *Job) string {
 	return filepath.Join(cellDir(j), "artifacts")
 }
 
-// allArtifactPaths lists a job's artifacts from both homes: the live cell's
+// AllArtifactPaths lists a job's artifacts from both homes: the live cell's
 // artifacts dir and the preserved <slug>.<name> copies in pluto (which are
 // all that remain after teardown).
-func allArtifactPaths(j *Job) []string {
-	out := listArtifacts(j)
+func AllArtifactPaths(j *Job) []string {
+	out := ListArtifacts(j)
 	prefix := util.Slugify(j.Slug) + "."
-	entries, err := os.ReadDir(plutoDir())
+	entries, err := os.ReadDir(PlutoDir())
 	if err != nil {
 		return out
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || strings.HasSuffix(e.Name(), jobSuffix) {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || strings.HasSuffix(e.Name(), JobSuffix) {
 			continue
 		}
-		out = append(out, filepath.Join(plutoDir(), e.Name()))
+		out = append(out, filepath.Join(PlutoDir(), e.Name()))
 	}
 	return out
 }
@@ -120,21 +120,21 @@ func branchForRun(slug string, run int) string {
 	return "carl/" + util.Slugify(slug)
 }
 
-func cellBranch(j *Job) string {
+func CellBranch(j *Job) string {
 	return branchForRun(j.Slug, j.Run)
 }
 
-// ensureUsableBranch makes cellBranch(j) safe to (re)create the worktree on
+// ensureUsableBranch makes CellBranch(j) safe to (re)create the worktree on
 // and returns the git worktree-add branch flag to use: "-b" when the branch
 // doesn't exist, "-B" (reset) when it exists but is fully merged into base —
 // its commits are already in the base, so the name recycles (many PRs share
 // one head-branch name over a job's life; the prs: record, not the branch,
 // is the history). Only a branch holding unmerged commits advances run to
-// the next -rN name, persisting it so every later cellBranch reader (the PR
+// the next -rN name, persisting it so every later CellBranch reader (the PR
 // tracker, the zeus brief, the board) agrees.
 func ensureUsableBranch(j *Job, repo, base string) (string, error) {
 	for {
-		br := cellBranch(j)
+		br := CellBranch(j)
 		if !refExists(repo, br) {
 			return "-b", nil
 		}
@@ -145,7 +145,7 @@ func ensureUsableBranch(j *Job, repo, base string) (string, error) {
 		if run < 1 {
 			run = 1
 		}
-		if err := writeJobFields(j, "run", strconv.Itoa(run+1)); err != nil {
+		if err := WriteJobFields(j, "run", strconv.Itoa(run+1)); err != nil {
 			return "", err
 		}
 	}
@@ -166,7 +166,7 @@ func jobColor(slug string) int {
 // liveSessionTimes snapshots current tmux session names along with each
 // one's creation time (tmux's session_created, unix seconds); no tmux server
 // reads as no sessions. One tmux call covers both liveness and freshness —
-// callers that only need liveness use the liveSessions() wrapper below.
+// callers that only need liveness use the LiveSessions() wrapper below.
 func liveSessionTimes() map[string]time.Time {
 	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name} #{session_created}").Output()
 	if err != nil {
@@ -190,9 +190,9 @@ func liveSessionTimes() map[string]time.Time {
 	return live
 }
 
-// liveSessions snapshots current tmux session names; a thin bool-only view
+// LiveSessions snapshots current tmux session names; a thin bool-only view
 // over liveSessionTimes for the many callers that just need liveness.
-func liveSessions() map[string]bool {
+func LiveSessions() map[string]bool {
 	live := map[string]bool{}
 	for name := range liveSessionTimes() {
 		live[name] = true
@@ -221,73 +221,19 @@ func jobPrompt(j *Job) string {
 	return strings.TrimSpace(body)
 }
 
-// --- k start ---
-
-func cmdStart(args []string) {
-	if len(args) != 1 {
-		util.Die("usage: k start <job-slug>")
-	}
-	jobs := loadJobs()
-	j := jobBySlug(jobs, args[0])
-	if j == nil {
-		util.Die("no job %q in %s (k j lists them)", args[0], plutoDir())
-	}
-	if j.Err != "" {
-		util.Die("job %s is unparseable: %s", j.Slug, j.Err)
-	}
-	if !j.Ready {
-		util.Die("job %s is not ready (flip ready: true in %s)", j.Slug, j.File)
-	}
-	if j.started() {
-		util.Die("job %s already started (state: %s)", j.Slug, j.State)
-	}
-	bySlug := map[string]*Job{}
-	for _, dep := range jobs {
-		bySlug[dep.Slug] = dep
-	}
-	if unmet := unmetPrereqs(j, bySlug); len(unmet) > 0 {
-		var names []string
-		for _, p := range unmet {
-			names = append(names, p.Job)
-		}
-		util.Die("job %s has unmet prereqs: %s", j.Slug, strings.Join(names, ", "))
-	}
-	// starting a gate-parked job is the human release: show what's being
-	// signed off so the outcome review is explicit, not accidental
-	for _, p := range j.Prereqs {
-		if p.Gated {
-			outcome := "(no outcome recorded)"
-			if dep := bySlug[p.Job]; dep != nil && dep.Outcome != "" {
-				outcome = dep.Outcome
-			}
-			fmt.Printf("releasing gate on %s — outcome: %s\n", p.Job, outcome)
-		}
-	}
-	repo, err := resolveRepo(j.Repo)
-	if err != nil {
-		util.Die("job %s: %v", j.Slug, err)
-	}
-	if err := startCell(j, repo); err != nil {
-		util.Die("%v", err)
-	}
-	fmt.Printf("started %s: worktree %s (branch %s), zeus in tmux session %s, state: working\n",
-		j.Slug, cellWorktree(j, repo), cellBranch(j), cellSession(j))
-	fmt.Printf("attach: tmux attach -t %s  (or k o %s)\n", cellSession(j), cellSession(j))
-}
-
-// startCell creates a job's cell: worktree off the base ref, tmux session,
+// StartCell creates a job's cell: worktree off the base ref, tmux session,
 // zeus pane, identity marker, state write. Callers have validated the job
 // (parseable, ready, unstarted, prereqs met) — this owns mechanics only, and
 // is shared by k start and the daemon.
-func startCell(j *Job, repo string) error {
-	sess := cellSession(j)
-	if liveSessions()[sess] {
+func StartCell(j *Job, repo string) error {
+	sess := CellSession(j)
+	if LiveSessions()[sess] {
 		return fmt.Errorf("cell %s is already live (k o %s to jump in)", sess, sess)
 	}
-	if old := existingWorktree(j, repo); old != "" {
+	if old := ExistingWorktree(j, repo); old != "" {
 		return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", old, repo, old)
 	}
-	wt := cellWorktree(j, repo)
+	wt := CellWorktree(j, repo)
 	base, err := baseRef(j, repo)
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
@@ -298,18 +244,18 @@ func startCell(j *Job, repo string) error {
 	if err != nil {
 		return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
 	}
-	for _, d := range []string{cellDir(j), cellArtifacts(j)} {
+	for _, d := range []string{cellDir(j), CellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
-	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, cellBranch(j), base).CombinedOutput()
+	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, CellBranch(j), base).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 	}
 	// gate passed: from here on, failures must report the worktree so a
 	// half-built cell is cleanable by hand
-	argv := append(cellClaudeArgs(), "--name", zeusName(j),
+	argv := append(cellClaudeArgs(), "--name", ZeusName(j),
 		"--append-system-prompt", zeusBrief(j))
 	if prompt := jobPrompt(j); prompt != "" {
 		argv = append(argv, "--", prompt)
@@ -327,7 +273,7 @@ func startCell(j *Job, repo string) error {
 	acceptTrustPrompts(sess)
 	// always "working": there is no plan gate to sit in — AutoApprove only
 	// changes what zeus' brief tells it to do once it starts
-	if err := writeJobState(j, "working"); err != nil {
+	if err := WriteJobState(j, "working"); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: cell is up but state write failed: %v\n", err)
 	}
 	return nil
@@ -365,9 +311,9 @@ func listBranchPRs(dir, branch string) ([]JobPR, bool) {
 	return prs, true
 }
 
-// verifyCellSession confirms a tmux session is the cell kraken created for
+// VerifyCellSession confirms a tmux session is the cell kraken created for
 // this job (via the @kraken-job marker) before killing it.
-func verifyCellSession(sess, slug string) error {
+func VerifyCellSession(sess, slug string) error {
 	out, err := exec.Command("tmux", "show-options", "-t", sess, "-v", "@kraken-job").Output()
 	if err != nil {
 		return fmt.Errorf("session %s has no @kraken-job marker — not killing it; investigate manually", sess)
@@ -389,22 +335,22 @@ func verifyCellSession(sess, slug string) error {
 // where dirt is listed and discarded instead.
 func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if !force {
-		if wt := existingWorktree(j, repo); wt != "" {
+		if wt := ExistingWorktree(j, repo); wt != "" {
 			if dirt, err := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); err == nil && len(strings.TrimSpace(string(dirt))) > 0 {
 				return fmt.Errorf("worktree %s has uncommitted changes — not touching the cell (k done force-discards them)", wt)
 			}
 		}
 	}
-	sess := cellSession(j)
+	sess := CellSession(j)
 	if live[sess] {
-		if err := verifyCellSession(sess, util.Slugify(j.Slug)); err != nil {
+		if err := VerifyCellSession(sess, util.Slugify(j.Slug)); err != nil {
 			return err
 		}
 		if err := exec.Command("tmux", "kill-session", "-t", sess).Run(); err != nil {
 			return fmt.Errorf("tmux kill-session: %v", err)
 		}
 	}
-	if wt := existingWorktree(j, repo); wt != "" {
+	if wt := ExistingWorktree(j, repo); wt != "" {
 		args := []string{"-C", repo, "worktree", "remove"}
 		if force {
 			if dirt, err := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); err == nil && len(strings.TrimSpace(string(dirt))) > 0 {
@@ -462,16 +408,16 @@ func acceptTrustPrompts(sess string) {
 	}
 }
 
-// cellZeus finds a cell's zeus: by session-file name when claude has fully
+// CellZeus finds a cell's zeus: by session-file name when claude has fully
 // started, positionally otherwise — a single-pane cell means the fallback is
 // simply the lowest-pane-id depth-0 claude in the cell session. Name-only
 // lookup reads a still-starting agent as "gone", which is how a trust dialog
 // once became "zeus process is gone".
-func cellZeus(j *Job, all []*core.Peer) *core.Peer {
-	sess := cellSession(j)
+func CellZeus(j *Job, all []*core.Peer) *core.Peer {
+	sess := CellSession(j)
 	var inSess []*core.Peer
 	for _, p := range all {
-		if p.Name == zeusName(j) && p.Depth == 0 && p.TmuxSession == sess {
+		if p.Name == ZeusName(j) && p.Depth == 0 && p.TmuxSession == sess {
 			return p
 		}
 		if p.TmuxSession == sess && p.Agent == "claude" && p.Depth == 0 {
@@ -498,11 +444,11 @@ func cellZeus(j *Job, all []*core.Peer) *core.Peer {
 // resuming a guessed id later could resume some other claude's session.
 // Returns nil when there's nothing new to write.
 func stampSession(j *Job, all []*core.Peer) error {
-	zeus := cellZeus(j, all)
+	zeus := CellZeus(j, all)
 	if zeus == nil || zeus.SessionID == "" || zeus.SessionIDGuessed || zeus.SessionID == j.Session {
 		return nil
 	}
-	return writeJobFields(j, "session", zeus.SessionID)
+	return WriteJobFields(j, "session", zeus.SessionID)
 }
 
 // stampSessionBeforeTeardown is the best-effort teardown-path variant of
@@ -516,7 +462,7 @@ func stampSessionBeforeTeardown(j *Job) {
 	}
 }
 
-// cellHealth reports why a live cell looks unhealthy ("" = healthy).
+// CellHealth reports why a live cell looks unhealthy ("" = healthy).
 // Conditions, in order: zeus' process must exist; no API-error banner may be
 // the last thing in its transcript. Idleness comes from the PANE ("esc to
 // interrupt" absent), never from the session file — an API error that kills
@@ -524,16 +470,16 @@ func stampSessionBeforeTeardown(j *Job) {
 // banner itself scrolls out of view once subagent rosters grow, so neither
 // signal alone can be trusted. Every reason except "is gone" is retryable: a
 // poke resumes a claude sitting at its prompt.
-func cellHealth(j *Job, all []*core.Peer) string {
-	zeus := cellZeus(j, all)
+func CellHealth(j *Job, all []*core.Peer) string {
+	zeus := CellZeus(j, all)
 	if zeus == nil {
 		return "zeus process is gone — restart the cell (kill session + k start after cleanup)"
 	}
 	// found positionally but not yet named: claude is still starting — a
 	// lingering startup prompt needs a human, plain slowness needs patience
-	if zeus.Name != zeusName(j) {
+	if zeus.Name != ZeusName(j) {
 		if zeus.Status == "question" {
-			return "cell agent is stuck on a startup prompt — k o " + cellSession(j) + " to answer it"
+			return "cell agent is stuck on a startup prompt — k o " + CellSession(j) + " to answer it"
 		}
 		return ""
 	}
@@ -556,35 +502,35 @@ func cellHealth(j *Job, all []*core.Peer) string {
 	return ""
 }
 
-// retryCell pokes a stalled cell agent: a nudge message resumes a claude
+// RetryCell pokes a stalled cell agent: a nudge message resumes a claude
 // sitting at its prompt after an errored or interrupted turn. Dead processes
 // can't be poked — that's reported, not papered over. Shared by the web
 // board's retry and the viewer's health rows.
-func retryCell(j *Job) error {
-	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
+func RetryCell(j *Job) error {
+	if !j.Started() || j.State == "done" || !LiveSessions()[CellSession(j)] {
 		return fmt.Errorf("%s has no live cell to retry", j.Slug)
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
-	reason := cellHealth(j, all)
+	reason := CellHealth(j, all)
 	if strings.Contains(reason, "is gone") {
 		return fmt.Errorf("%s: %s", j.Slug, reason)
 	}
 	// a plain nudge resumes a claude sitting at its prompt after an errored
 	// or abandoned turn
-	zeus := cellZeus(j, all)
+	zeus := CellZeus(j, all)
 	if zeus == nil {
 		return fmt.Errorf("%s: agent not found — rerun discovery", j.Slug)
 	}
 	return core.SendMessage(zeus, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
 }
 
-// killJob tears a live job's cell down completely and returns the job to
+// KillJob tears a live job's cell down completely and returns the job to
 // draft: state cleared AND ready flipped false — leaving ready: true would
 // hand the job straight back to the daemon's queue loop. Artifacts are
 // preserved first; the worktree goes too (a draft re-queued later needs a
-// clean startCell).
-func killJob(j *Job) ([]string, error) {
-	repo, err := resolveRepo(j.Repo)
+// clean StartCell).
+func KillJob(j *Job) ([]string, error) {
+	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %v", j.Slug, err)
 	}
@@ -597,10 +543,10 @@ func killJob(j *Job) ([]string, error) {
 	if perr != nil {
 		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down", perr)
 	}
-	if err := teardownCell(j, repo, liveSessions(), true); err != nil {
+	if err := teardownCell(j, repo, LiveSessions(), true); err != nil {
 		return msgs, fmt.Errorf("%v (job left in state %s)", err, j.State)
 	}
-	if err := writeJobFields(j, "state", "", "ready", "false"); err != nil {
+	if err := WriteJobFields(j, "state", "", "ready", "false"); err != nil {
 		return msgs, fmt.Errorf("cell torn down, but state write failed: %v", err)
 	}
 	return append(msgs, "killed "+j.Slug+" — back to draft"), nil
@@ -625,7 +571,7 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 			}
 			return
 		}
-		dst := filepath.Join(plutoDir(), util.Slugify(j.Slug)+"."+name)
+		dst := filepath.Join(PlutoDir(), util.Slugify(j.Slug)+"."+name)
 		if _, err := os.Stat(dst); err == nil {
 			return // never overwrite an earlier copy
 		}
@@ -637,17 +583,17 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 		}
 		copied = append(copied, dst)
 	}
-	if entries, err := os.ReadDir(cellArtifacts(j)); err == nil {
+	if entries, err := os.ReadDir(CellArtifacts(j)); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() {
-				keep(filepath.Join(cellArtifacts(j), e.Name()), e.Name())
+				keep(filepath.Join(CellArtifacts(j), e.Name()), e.Name())
 			}
 		}
 	}
 	if j.Type == "build" {
 		return copied, firstErr // build deliverables travel via the PR
 	}
-	wt := existingWorktree(j, repo)
+	wt := ExistingWorktree(j, repo)
 	if wt == "" {
 		return copied, firstErr
 	}
@@ -671,41 +617,11 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 	return copied, firstErr
 }
 
-// cmdDone marks a started job done by hand: the acceptance path for every
-// job type — info jobs have no PR at all, and build jobs' merges are only
-// tracked (prs: chips), never auto-completed.
-func cmdDone(args []string) {
-	if len(args) < 1 {
-		util.Die("usage: k done <job-slug> [outcome...]")
-	}
-	jobs := loadJobs()
-	j := jobBySlug(jobs, args[0])
-	if j == nil {
-		util.Die("no job %q in %s (k j lists them)", args[0], plutoDir())
-	}
-	if j.Err != "" {
-		util.Die("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
-	}
-	if !j.started() {
-		util.Die("job %s hasn't started — nothing to complete", j.Slug)
-	}
-	if j.State == "done" {
-		util.Die("job %s is already done", j.Slug)
-	}
-	msgs, err := doneJob(j, oneLine(strings.Join(args[1:], " ")))
-	for _, m := range msgs {
-		fmt.Println(m)
-	}
-	if err != nil {
-		util.Die("%v", err)
-	}
-}
-
-// doneJob completes a started job: preserve artifacts, force-teardown the
+// DoneJob completes a started job: preserve artifacts, force-teardown the
 // cell, stamp state done + outcome. Shared by k done and the web UI's
 // review→done move. The caller has validated the job is started and not done.
-func doneJob(j *Job, outcome string) ([]string, error) {
-	repo, err := resolveRepo(j.Repo)
+func DoneJob(j *Job, outcome string) ([]string, error) {
+	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %v", j.Slug, err)
 	}
@@ -718,21 +634,21 @@ func doneJob(j *Job, outcome string) ([]string, error) {
 	if perr != nil {
 		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down (teardown deletes the source)", perr)
 	}
-	if err := teardownCell(j, repo, liveSessions(), true); err != nil {
+	if err := teardownCell(j, repo, LiveSessions(), true); err != nil {
 		return msgs, fmt.Errorf("%v (job left in state %s)", err, j.State)
 	}
 	fields := []string{"state", "done"}
 	if outcome != "" {
 		fields = append(fields, "outcome", outcome)
 	}
-	if err := writeJobFields(j, fields...); err != nil {
+	if err := WriteJobFields(j, fields...); err != nil {
 		return msgs, fmt.Errorf("cell torn down, but state write failed: %v", err)
 	}
 	return append(msgs, "done "+j.Slug+": cell torn down, state: done"), nil
 }
 
-// oneLine flattens arbitrary text into a single frontmatter-safe scalar line.
-func oneLine(s string) string {
+// OneLine flattens arbitrary text into a single frontmatter-safe scalar line.
+func OneLine(s string) string {
 	return strings.TrimSpace(strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
 			return ' '
@@ -746,7 +662,7 @@ func oneLine(s string) string {
 
 // --- k reactivate ---
 
-// reactivateJob resurrects a done job into its original zeus session for
+// ReactivateJob resurrects a done job into its original zeus session for
 // adjustments: the worktree is recreated at the SAME path (the claude
 // project dir — and with it the transcript history — is keyed on that
 // path), the branch recycles per ensureUsableBranch (reset off the base
@@ -755,7 +671,7 @@ func oneLine(s string) string {
 // overrides the recorded id (hand-rescue for jobs done before kraken
 // stamped session ids); message rides along in the resume prompt as carl's
 // steering.
-func reactivateJob(j *Job, session, message string) error {
+func ReactivateJob(j *Job, session, message string) error {
 	if j.Err != "" {
 		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
 	}
@@ -768,15 +684,15 @@ func reactivateJob(j *Job, session, message string) error {
 	if session == "" {
 		return fmt.Errorf("%s has no recorded zeus session (done before kraken stamped session ids) — pass one explicitly: k reactivate %s --session <uuid>", j.Slug, j.Slug)
 	}
-	sess := cellSession(j)
-	if liveSessions()[sess] {
+	sess := CellSession(j)
+	if LiveSessions()[sess] {
 		return fmt.Errorf("cell %s is already live (k o %s to jump in)", sess, sess)
 	}
-	repo, err := resolveRepo(j.Repo)
+	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
-	if old := existingWorktree(j, repo); old != "" {
+	if old := ExistingWorktree(j, repo); old != "" {
 		return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", old, repo, old)
 	}
 	base, err := baseRef(j, repo)
@@ -789,21 +705,21 @@ func reactivateJob(j *Job, session, message string) error {
 	if err != nil {
 		return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
 	}
-	for _, d := range []string{cellDir(j), cellArtifacts(j)} {
+	for _, d := range []string{cellDir(j), CellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
-	wt := cellWorktree(j, repo)
-	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, cellBranch(j), base).CombinedOutput()
+	wt := CellWorktree(j, repo)
+	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, CellBranch(j), base).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 	}
-	prompt := "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + cellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
+	prompt := "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + CellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
 	if message != "" {
 		prompt += "\nsteering from carl: " + message
 	}
-	argv := append(cellClaudeArgs(), "--name", zeusName(j), "-r", session, "--", prompt)
+	argv := append(cellClaudeArgs(), "--name", ZeusName(j), "-r", session, "--", prompt)
 	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
 		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)
@@ -815,51 +731,22 @@ func reactivateJob(j *Job, session, message string) error {
 	// folder trust normally persists — but a fresh machine or cleared
 	// config would block startup on the dialog just like a first start
 	acceptTrustPrompts(sess)
-	if err := writeJobState(j, "working"); err != nil {
+	if err := WriteJobState(j, "working"); err != nil {
 		return fmt.Errorf("cell is up but state write failed: %v", err)
 	}
 	return nil
 }
 
-func cmdReactivate(args []string) {
-	session := ""
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--session" {
-			i++
-			if i >= len(args) {
-				util.Die("--session needs a session uuid")
-			}
-			session = args[i]
-			continue
-		}
-		rest = append(rest, args[i])
-	}
-	if len(rest) < 1 {
-		util.Die("usage: k reactivate <job-slug> [--session <uuid>] [message...]")
-	}
-	j := jobBySlug(loadJobs(), rest[0])
-	if j == nil {
-		util.Die("no job %q in %s (k j lists them)", rest[0], plutoDir())
-	}
-	if err := reactivateJob(j, session, oneLine(strings.Join(rest[1:], " "))); err != nil {
-		util.Die("%v", err)
-	}
-	fmt.Printf("reactivated %s: zeus session resumed in tmux session %s (branch %s), state: working\n",
-		j.Slug, cellSession(j), cellBranch(j))
-	fmt.Printf("attach: tmux attach -t %s  (or k o %s)\n", cellSession(j), cellSession(j))
-}
-
 // --- k migrate ---
 
-// oldJobState re-reads a job file's raw frontmatter `state:` value directly,
+// OldJobState re-reads a job file's raw frontmatter `state:` value directly,
 // bypassing the strict parser that already rejected it into j.Err. This is
 // more robust than trying to regexp the old value back out of the error
 // string: cmdMigrate needs the ACTUAL old value to branch correctly (a
 // terminal "merged"/"abandoned"/"failed" must never be re-run; only the
 // in-flight old states should requeue), and the file is the one place that
 // value still lives. "" (not found) reads as not-found, never an error.
-func oldJobState(j *Job) (string, bool) {
+func OldJobState(j *Job) (string, bool) {
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return "", false
@@ -884,12 +771,12 @@ func oldJobState(j *Job) (string, bool) {
 	return "", false
 }
 
-// migrateTerminal handles an old state that already meant the job was done
+// MigrateTerminal handles an old state that already meant the job was done
 // (merged/abandoned/failed): any leftover cell is torn down (verified,
 // forced) and the job is stamped state: done. ready is never touched — these
 // jobs are finished, not requeued.
-func migrateTerminal(j *Job, live map[string]bool, defaultOutcome string) error {
-	repo, err := resolveRepo(j.Repo)
+func MigrateTerminal(j *Job, live map[string]bool, defaultOutcome string) error {
+	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return err
 	}
@@ -900,20 +787,20 @@ func migrateTerminal(j *Job, live map[string]bool, defaultOutcome string) error 
 	if j.Outcome == "" {
 		fields = append(fields, "outcome", defaultOutcome)
 	}
-	if err := writeJobFields(j, fields...); err != nil {
+	if err := WriteJobFields(j, fields...); err != nil {
 		return fmt.Errorf("teardown ok, but state write failed: %v", err)
 	}
 	return nil
 }
 
-// migrateInFlight handles an old state that meant the job's cell was still
+// MigrateInFlight handles an old state that meant the job's cell was still
 // mid-run (planning/plan-review/executing/testing/pr-open) under the
 // pre-five-state model: preserve whatever the old cell produced, force-tear
 // it down, and clear state back to "" — NOT touching ready, since a file
 // already ready: true requeues naturally under the daemon and a hand-set
 // ready: false correctly stays parked in draft.
-func migrateInFlight(j *Job, live map[string]bool) error {
-	repo, err := resolveRepo(j.Repo)
+func MigrateInFlight(j *Job, live map[string]bool) error {
+	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return err
 	}
@@ -927,95 +814,26 @@ func migrateInFlight(j *Job, live map[string]bool) error {
 	if err := teardownCell(j, repo, live, true); err != nil {
 		return fmt.Errorf("teardown failed: %v", err)
 	}
-	if err := writeJobFields(j, "state", ""); err != nil {
+	if err := WriteJobFields(j, "state", ""); err != nil {
 		return fmt.Errorf("teardown ok, but state write failed: %v", err)
 	}
 	return nil
 }
 
-// migrateQueued handles an old "queued" state: just clear state back to "" (no
+// MigrateQueued handles an old "queued" state: just clear state back to "" (no
 // ready write — a queued job was already ready: true by definition under the
 // old model). No teardown is expected — a queued job never had a cell — but
 // one runs defensively anyway in case reality drifted from the file.
-func migrateQueued(j *Job, live map[string]bool) error {
-	repo, err := resolveRepo(j.Repo)
+func MigrateQueued(j *Job, live map[string]bool) error {
+	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return err
 	}
 	if err := teardownCell(j, repo, live, true); err != nil {
 		return fmt.Errorf("defensive teardown failed: %v", err)
 	}
-	if err := writeJobFields(j, "state", ""); err != nil {
+	if err := WriteJobFields(j, "state", ""); err != nil {
 		return fmt.Errorf("state write failed: %v", err)
 	}
 	return nil
-}
-
-// cmdMigrate requeues jobs left behind by the pre-five-state model: their
-// frontmatter state (e.g. "planning", "executing", "pr-open", "merged") no
-// longer parses under validStates, so loadJobs marks them Err "unknown state
-// ..." and they sit inert — invisible to the daemon, unstartable, un-reapable.
-// oldJobState recovers the actual old value (the parser only left it in the
-// error string) and cmdMigrate branches on it:
-//   - merged/abandoned/failed (the old model's terminal states): any leftover
-//     cell is torn down and the job is stamped done — never re-run, ready
-//     untouched.
-//   - planning/plan-review/executing/testing/pr-open (still in flight):
-//     artifacts preserved, cell torn down, state cleared to "" — ready
-//     untouched, so the job's own ready flag decides whether/when it requeues.
-//   - queued: state cleared to "" only; no ready write.
-//   - anything else unrecognized: skipped untouched, printed loudly, since a
-//     value this function doesn't know isn't safe to guess at.
-func cmdMigrate(args []string) {
-	if len(args) != 0 {
-		util.Die("usage: k migrate")
-	}
-	jobs := loadJobs()
-	live := liveSessions()
-	migrated := 0
-	for _, j := range jobs {
-		if !strings.Contains(j.Err, "unknown state") {
-			continue
-		}
-		old, ok := oldJobState(j)
-		if !ok {
-			fmt.Printf("%-24s skipped: could not read the old state: line from %s\n", j.Slug, j.File)
-			continue
-		}
-		switch old {
-		case "merged":
-			if err := migrateTerminal(j, live, "PR merged"); err != nil {
-				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
-				continue
-			}
-			fmt.Printf("%-24s migrated: was merged, marked done\n", j.Slug)
-			migrated++
-		case "abandoned", "failed":
-			if err := migrateTerminal(j, live, "migrated: was "+old); err != nil {
-				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
-				continue
-			}
-			fmt.Printf("%-24s migrated: was %s, marked done\n", j.Slug, old)
-			migrated++
-		case "planning", "plan-review", "executing", "testing", "pr-open":
-			if err := migrateInFlight(j, live); err != nil {
-				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
-				continue
-			}
-			fmt.Printf("%-24s migrated: old cell torn down, state cleared — requeues via its own ready flag\n", j.Slug)
-			migrated++
-		case "queued":
-			if err := migrateQueued(j, live); err != nil {
-				fmt.Printf("%-24s skipped: %v\n", j.Slug, err)
-				continue
-			}
-			fmt.Printf("%-24s migrated: state cleared\n", j.Slug)
-			migrated++
-		default:
-			fmt.Printf("%-24s skipped: unrecognized old state %q\n", j.Slug, old)
-		}
-	}
-	if migrated == 0 {
-		fmt.Println("nothing to migrate")
-	}
 }

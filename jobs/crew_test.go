@@ -1,4 +1,4 @@
-package main
+package jobs
 
 import (
 	"strings"
@@ -16,9 +16,9 @@ func TestZeusBriefBuild(t *testing.T) {
 	brief := zeusBrief(j)
 	for _, want := range []string{
 		"zeus", "hephaestus", "athena", "/send", "PR", "manual test ready",
-		"tests pass", "AskUserQuestion", cellArtifacts(j), "TaskStop",
+		"tests pass", "AskUserQuestion", CellArtifacts(j), "TaskStop",
 		// a merged PR is never job completion; follow-ups recycle the branch
-		"never ends the job", "checkout -B " + cellBranch(j) + " origin/main",
+		"never ends the job", "checkout -B " + CellBranch(j) + " origin/main",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("build brief missing %q", want)
@@ -39,7 +39,7 @@ func TestZeusBriefBuild(t *testing.T) {
 func TestZeusBriefInfo(t *testing.T) {
 	j := &Job{Slug: "y", Type: "info", Success: "explains the system"}
 	brief := zeusBrief(j)
-	for _, want := range []string{"zeus", "/info", "No PR", "AskUserQuestion", cellArtifacts(j), "TaskStop"} {
+	for _, want := range []string{"zeus", "/info", "No PR", "AskUserQuestion", CellArtifacts(j), "TaskStop"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("info brief missing %q", want)
 		}
