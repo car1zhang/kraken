@@ -377,6 +377,70 @@ func sendToShell(p *Peer, cmd string) error {
 	return nil
 }
 
+// namedKeys maps the lowercase key names the HTTP API and iOS app accept to
+// the tmux send-keys key name they translate to — a whitelist so an
+// arbitrary client-supplied string can never reach tmux as a raw key
+// argument. "ctrl-a".."ctrl-z" are generated below rather than written out.
+var namedKeys = map[string]string{
+	"esc":       "Escape",
+	"escape":    "Escape",
+	"enter":     "Enter",
+	"tab":       "Tab",
+	"backspace": "BSpace",
+	"up":        "Up",
+	"down":      "Down",
+	"left":      "Left",
+	"right":     "Right",
+}
+
+func init() {
+	for c := byte('a'); c <= 'z'; c++ {
+		namedKeys["ctrl-"+string(c)] = "C-" + string(c)
+	}
+}
+
+// tmuxKeyName is sendKey's pure whitelist lookup, split out so it's testable
+// without shelling out to tmux.
+func tmuxKeyName(name string) (string, bool) {
+	key, ok := namedKeys[name]
+	return key, ok
+}
+
+// sendKey sends a single named key (Escape, Enter, arrows, Ctrl-<letter>...)
+// to p's pane via tmux send-keys, with no trailing Enter — the counterpart to
+// sendMessage/sendToShell for a keyboard that can't type these keys (e.g.
+// iOS), used to interrupt a running turn or navigate a prompt. Deliberately
+// has no question-prompt or status guard: pressing Esc/arrows at a question
+// prompt or mid-turn is exactly the use case.
+func sendKey(p *Peer, name string) error {
+	key, ok := tmuxKeyName(name)
+	if !ok {
+		return fmt.Errorf("unsupported key %q", name)
+	}
+	if p.Role == "shell" {
+		// verifyKillTarget's shell branch is the same verify-before-acting
+		// check sendToShell uses: pane still exists, same root process, no
+		// agent claimed it
+		if err := verifyKillTarget(p); err != nil {
+			return err
+		}
+	} else {
+		if !p.Messageable || p.Pane == "" {
+			return fmt.Errorf("%s is an in-process teammate — message its lead instead", displayName(p))
+		}
+		if p.Depth > 0 {
+			return fmt.Errorf("%s is not the foreground agent in pane %s — keys would land in the nested one", displayName(p), p.Pane)
+		}
+		if err := checkSendTarget(p); err != nil {
+			return err
+		}
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", p.Pane, key).Run(); err != nil {
+		return fmt.Errorf("tmux send-keys: %v", err)
+	}
+	return nil
+}
+
 // capturePane returns a pane's visible content (tmux capture-pane), the live
 // view the app shows for shells and for agents where the transcript doesn't
 // cover raw terminal I/O. Read-only; safe on any pane.
@@ -400,10 +464,6 @@ func capturePane(pane string) (string, error) {
 func sendMessage(p *Peer, msg string) error {
 	if err := checkSendTarget(p); err != nil {
 		return err
-	}
-	if p.Status == "shell" {
-		// text typed at the ! prompt executes as a shell command on Enter
-		return fmt.Errorf("%s is in shell mode — sending now would run the message as a shell command", displayName(p))
 	}
 	// re-check right before typing: a permission/question prompt has an option
 	// pre-highlighted, so our trailing Enter would answer it for the user

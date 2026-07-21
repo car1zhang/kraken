@@ -93,29 +93,32 @@ func refineStatus(p *Peer) {
 	if p.Pane == "" {
 		return
 	}
-	// shell mode wins: never let a question marker in the visible scrollback
-	// hide that Enter would execute the sent text as a shell command
-	if p.Status == "shell" {
-		return
-	}
 	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", p.Pane).Output()
 	if err != nil {
 		return
 	}
-	text := string(out)
-	if containsQuestionMarker(text) {
-		p.Status = "question"
-		return
+	p.Status = refinedStatus(p.Status, string(out))
+}
+
+// refinedStatus is refineStatus's pure decision logic, split out for testing
+// without shelling out to tmux. The CLI reports "shell" while any background
+// Bash-tool shell is alive (verified against CLI 2.1.216) — that says nothing
+// about the input line, so "shell" is refined from the pane content exactly
+// like "unknown" rather than trusted at face value.
+func refinedStatus(current, paneText string) string {
+	if containsQuestionMarker(paneText) {
+		return "question"
 	}
-	if p.Status == "unknown" {
-		// no session file (teammates): the TUI shows "esc to interrupt" for
-		// the whole turn, so its absence means the claude is at its prompt
-		if strings.Contains(text, "esc to interrupt") {
-			p.Status = "running"
-		} else {
-			p.Status = "waiting"
+	if current == "unknown" || current == "shell" {
+		// no session file (teammates), or a background shell muddying the
+		// reported status: the TUI shows "esc to interrupt" for the whole
+		// turn, so its absence means the claude is at its prompt
+		if strings.Contains(paneText, "esc to interrupt") {
+			return "running"
 		}
+		return "waiting"
 	}
+	return current
 }
 
 func containsQuestionMarker(text string) bool {
