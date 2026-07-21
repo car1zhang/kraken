@@ -793,6 +793,13 @@ func newestTranscriptSession(cwd string) string {
 	return newest
 }
 
+// TranscriptPathForSession is transcriptPath for callers outside core that
+// only hold a session id — e.g. the board reading a dead cell's last words,
+// where no live Peer exists to hand ReadTranscriptPath.
+func TranscriptPathForSession(sessionID string) string {
+	return transcriptPath(sessionID)
+}
+
 // transcriptPath locates a session's transcript by globbing all project dirs —
 // more robust than re-deriving the cwd encoding.
 func transcriptPath(sessionID string) string {

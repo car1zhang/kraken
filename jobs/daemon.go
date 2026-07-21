@@ -186,16 +186,29 @@ func (d *daemonState) tick() (int, error) {
 			}
 			delete(d.Notified, "gone:"+j.Slug)
 		} else {
+			// interrupted teardown: a surviving teardown: marker means a done/
+			// kill died between its first destructive step and its final state
+			// write (e.g. the teardown process lived inside the session it
+			// killed). The marker's provenance is carl's explicit action, so
+			// finishing it — worktree discard included — is sanctioned.
+			if j.Teardown != "" {
+				if err := ResumeTeardown(j); err != nil {
+					dlog("%s: finish interrupted teardown failed: %v", j.Slug, err)
+				} else {
+					dlog("%s: finished interrupted teardown (%s)", j.Slug, j.Teardown)
+				}
+				continue
+			}
 			// dead-cell watch: a started job whose tmux session vanished
 			// (killed by hand, tmux server restart) would otherwise sit on
 			// its file state forever, looking healthy in the state column —
 			// the other half of the demo-job incident. Detection only:
-			// recovery stays carl's explicit kill/done/reactivate, and the
-			// file state is deliberately left alone.
+			// recovery stays carl's explicit reactivate/done/kill — reactivate
+			// is the one that preserves the worktree's uncommitted work.
 			key := "gone:" + j.Slug
 			if d.Notified[key] == 0 {
-				notify("kraken ⚠ "+j.Slug, "cell session is gone — kill to requeue, or done to accept")
-				dlog("%s: cell %s is gone (state %s kept)", j.Slug, CellSession(j), j.State)
+				notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
+				dlog("%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
 				d.Notified[key] = now.Unix()
 			}
 		}

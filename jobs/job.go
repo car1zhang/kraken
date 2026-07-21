@@ -43,6 +43,15 @@ type Job struct {
 	// id. It is what makes a done job reactivatable into the same
 	// conversation after its cell is long gone.
 	Session string `json:"session,omitempty"`
+	// Teardown is the kraken-managed teardown-intent marker: written by
+	// DoneJob/KillJob after artifact preservation but BEFORE the first
+	// destructive step ("done:<outcome>" or "kill"), and cleared by the same
+	// call's final state write. A surviving marker means a teardown was
+	// interrupted mid-flight (crash, ^C, the process dying with the session);
+	// the daemon finishes it on a later tick once the cell session is gone.
+	// The marker only ever exists downstream of carl's explicit done/kill, so
+	// completing it — including the force worktree discard — is carl-sanctioned.
+	Teardown string `json:"teardown,omitempty"`
 	// Run is the kraken-managed cell-run counter for branch versioning:
 	// 0/1 → carl/<slug>, N≥2 → carl/<slug>-rN. Since branch recycling
 	// (checkout -B off the base once the old branch is fully merged) it is
@@ -248,6 +257,8 @@ func ParseJob(name string, data []byte) *Job {
 			j.Outcome = val
 		case "session":
 			j.Session = val
+		case "teardown":
+			j.Teardown = val
 		case "run":
 			if val == "" {
 				break
@@ -765,6 +776,8 @@ func WriteJobFields(j *Job, keyvals ...string) error {
 			j.Outcome = keyvals[i+1]
 		case "session":
 			j.Session = keyvals[i+1]
+		case "teardown":
+			j.Teardown = keyvals[i+1]
 		case "run":
 			if n, err := strconv.Atoi(keyvals[i+1]); err == nil {
 				j.Run = n

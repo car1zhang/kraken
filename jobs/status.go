@@ -270,8 +270,9 @@ func scanPendingQuestion(transcript string) *PendingQuestion {
 //   - j.Err != ""                               → "draft" (unparseable job; error is the detail)
 //   - j.State == "" && !j.Ready                 → "draft" (not ready, never started)
 //   - j.State == "" && j.Ready                  → "queued" (ready, never started)
-//   - started (state working/blocked) but !live → j.State (trust the file; the cell may just
-//     be between daemon restarts)
+//   - started (state working/blocked) but !live → "blocked" (the cell is gone — a dead cell
+//     always needs carl; echoing a stale "working" is how the status-investigation
+//     self-decapitation sat invisible on the board)
 //   - live && active                            → "working"
 //   - live && !active                           → "blocked"
 //
@@ -295,7 +296,7 @@ func deriveState(j *Job, live bool, active bool) string {
 		return "queued"
 	}
 	if !live {
-		return j.State
+		return "blocked"
 	}
 	if active {
 		return "working"

@@ -174,6 +174,7 @@ var webJobSpec = map[string]fieldSpec{
 	"mtime":         {kind: wireNumber, required: true},
 	"archived":      {kind: wireBool, required: false},
 	"display_slug":  {kind: wireString, required: false},
+	"cell_gone":     {kind: wireBool, required: false},
 	"reactivatable": {kind: wireBool, required: false},
 	"last_sent":     {kind: wireString, required: false},
 	"prs":           {kind: wireArray, required: false},
@@ -251,6 +252,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		ModTime:       123,
 		Archived:      true,
 		DisplaySlug:   "x-orig",
+		CellGone:      true,
 		Reactivatable: true,
 		LastSent:      "pivot to plan B",
 	}

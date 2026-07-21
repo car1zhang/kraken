@@ -324,6 +324,37 @@ func VerifyCellSession(sess, slug string) error {
 	return nil
 }
 
+// ownTmuxSession names the tmux session the current process runs inside, ""
+// when outside tmux (or when tmux can't be asked). Every descendant of a pane
+// inherits $TMUX/$TMUX_PANE — including servers and test builds an agent
+// launches from its own pane.
+func ownTmuxSession() string {
+	if os.Getenv("TMUX") == "" {
+		return ""
+	}
+	pane := os.Getenv("TMUX_PANE")
+	if pane == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{session_name}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// guardSelfTeardown refuses to kill the tmux session the calling process
+// lives in: killing it takes the caller down mid-teardown, stranding the job
+// between states (the status-investigation incident — a cell-resident test
+// web server confirmed /api/done against its own job and decapitated itself
+// before the worktree removal and state write could run).
+func guardSelfTeardown(target, own string) error {
+	if own != "" && own == target {
+		return fmt.Errorf("refusing to tear down %s from inside it — run k done/k k from outside the cell (or use the board)", target)
+	}
+	return nil
+}
+
 // teardownCell shuts a job's cell down: verified tmux session kill, then
 // worktree removal. Partial teardown returns an error so the caller leaves
 // the job's state alone for a retry.
@@ -334,6 +365,9 @@ func VerifyCellSession(sess, slug string) error {
 // demo-job incident). force is the explicit human sign-off (k done, kill),
 // where dirt is listed and discarded instead.
 func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
+	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
+		return err
+	}
 	if !force {
 		if wt := ExistingWorktree(j, repo); wt != "" {
 			if dirt, err := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); err == nil && len(strings.TrimSpace(string(dirt))) > 0 {
@@ -543,10 +577,18 @@ func KillJob(j *Job) ([]string, error) {
 	if perr != nil {
 		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down", perr)
 	}
+	// guard before the intent write: a refused self-teardown must not leave a
+	// dangling marker on a live cell for the daemon to act on later
+	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
+		return msgs, err
+	}
+	if err := WriteJobFields(j, "teardown", "kill"); err != nil {
+		return msgs, fmt.Errorf("teardown-intent write failed: %v — not tearing down", err)
+	}
 	if err := teardownCell(j, repo, LiveSessions(), true); err != nil {
 		return msgs, fmt.Errorf("%v (job left in state %s)", err, j.State)
 	}
-	if err := WriteJobFields(j, "state", "", "ready", "false"); err != nil {
+	if err := WriteJobFields(j, "state", "", "ready", "false", "teardown", ""); err != nil {
 		return msgs, fmt.Errorf("cell torn down, but state write failed: %v", err)
 	}
 	return append(msgs, "killed "+j.Slug+" — back to draft"), nil
@@ -617,9 +659,52 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 	return copied, firstErr
 }
 
+// teardownFinalFields maps a teardown-intent marker to the WriteJobFields
+// args that finish it: the final state, plus clearing the marker itself.
+// Pure, so the daemon's interrupted-teardown completion is testable without
+// disk. ok is false for markers this binary doesn't understand — those are
+// left alone rather than guessed at.
+func teardownFinalFields(marker string) ([]string, bool) {
+	switch {
+	case marker == "kill":
+		return []string{"state", "", "ready", "false", "teardown", ""}, true
+	case marker == "done":
+		return []string{"state", "done", "teardown", ""}, true
+	case strings.HasPrefix(marker, "done:"):
+		fields := []string{"state", "done"}
+		if outcome := strings.TrimPrefix(marker, "done:"); outcome != "" {
+			fields = append(fields, "outcome", outcome)
+		}
+		return append(fields, "teardown", ""), true
+	}
+	return nil, false
+}
+
+// ResumeTeardown finishes an interrupted teardown recorded by a surviving
+// teardown: marker. The caller (the daemon's dead-cell watch) has verified
+// the cell session is gone — the destructive part left is worktree removal,
+// which the marker's provenance (carl's explicit done/kill) sanctions.
+func ResumeTeardown(j *Job) error {
+	fields, ok := teardownFinalFields(j.Teardown)
+	if !ok {
+		return fmt.Errorf("unknown teardown marker %q — clear it by hand", j.Teardown)
+	}
+	repo, err := ResolveRepo(j.Repo)
+	if err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	if err := teardownCell(j, repo, LiveSessions(), true); err != nil {
+		return err
+	}
+	return WriteJobFields(j, fields...)
+}
+
 // DoneJob completes a started job: preserve artifacts, force-teardown the
 // cell, stamp state done + outcome. Shared by k done and the web UI's
 // review→done move. The caller has validated the job is started and not done.
+// The teardown intent lands in the job file before the first destructive step
+// so an interrupted run is resumable (ResumeTeardown) instead of stranding
+// the job between states.
 func DoneJob(j *Job, outcome string) ([]string, error) {
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
@@ -634,6 +719,14 @@ func DoneJob(j *Job, outcome string) ([]string, error) {
 	if perr != nil {
 		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down (teardown deletes the source)", perr)
 	}
+	// guard before the intent write: a refused self-teardown must not leave a
+	// dangling marker on a live cell for the daemon to act on later
+	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
+		return msgs, err
+	}
+	if err := WriteJobFields(j, "teardown", "done:"+outcome); err != nil {
+		return msgs, fmt.Errorf("teardown-intent write failed: %v — not tearing down", err)
+	}
 	if err := teardownCell(j, repo, LiveSessions(), true); err != nil {
 		return msgs, fmt.Errorf("%v (job left in state %s)", err, j.State)
 	}
@@ -641,6 +734,7 @@ func DoneJob(j *Job, outcome string) ([]string, error) {
 	if outcome != "" {
 		fields = append(fields, "outcome", outcome)
 	}
+	fields = append(fields, "teardown", "")
 	if err := WriteJobFields(j, fields...); err != nil {
 		return msgs, fmt.Errorf("cell torn down, but state write failed: %v", err)
 	}
@@ -662,21 +756,46 @@ func OneLine(s string) string {
 
 // --- k reactivate ---
 
-// ReactivateJob resurrects a done job into its original zeus session for
-// adjustments: the worktree is recreated at the SAME path (the claude
-// project dir — and with it the transcript history — is keyed on that
-// path), the branch recycles per ensureUsableBranch (reset off the base
-// when the old one is fully merged, -rN only for unmerged leftovers), and
-// claude is resumed with -r <session> rather than started fresh. session
+// reactivateMode decides which reactivation applies — pure, so the
+// state × worktree matrix is testable without git or tmux:
+//   - a done job gets "recreate": fresh worktree at the same path, branch
+//     recycled off the base (an existing worktree refuses — done jobs were
+//     torn down, leftovers need a human look);
+//   - a started, non-done job whose cell died gets "resume": the existing
+//     worktree is reused EXACTLY as the dead zeus left it — uncommitted WIP
+//     preserved, branch untouched (missing worktree falls back to recreate);
+//   - anything else refuses.
+func reactivateMode(state string, worktreeExists bool) (string, error) {
+	switch state {
+	case "done":
+		if worktreeExists {
+			return "", fmt.Errorf("worktree already exists — clean it up first")
+		}
+		return "recreate", nil
+	case "working", "blocked":
+		if worktreeExists {
+			return "resume", nil
+		}
+		return "recreate", nil
+	}
+	return "", fmt.Errorf("job has never started — k start it instead")
+}
+
+// ReactivateJob resurrects a job into its original zeus session. For a done
+// job: the worktree is recreated at the SAME path (the claude project dir —
+// and with it the transcript history — is keyed on that path), the branch
+// recycles per ensureUsableBranch (reset off the base when the old one is
+// fully merged, -rN only for unmerged leftovers), and claude is resumed with
+// -r <session> rather than started fresh. For a started job whose cell died
+// mid-run (hand-killed session, tmux restart, interrupted teardown): the
+// existing worktree — dirty files and all — is reused in place, so the one
+// recovery path that preserves WIP is also the one-command one. session
 // overrides the recorded id (hand-rescue for jobs done before kraken
 // stamped session ids); message rides along in the resume prompt as carl's
 // steering.
 func ReactivateJob(j *Job, session, message string) error {
 	if j.Err != "" {
 		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
-	}
-	if j.State != "done" {
-		return fmt.Errorf("%s is not done (state %q) — only done jobs reactivate", j.Slug, j.State)
 	}
 	if session == "" {
 		session = j.Session
@@ -692,30 +811,44 @@ func ReactivateJob(j *Job, session, message string) error {
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
-	if old := ExistingWorktree(j, repo); old != "" {
-		return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", old, repo, old)
-	}
-	base, err := baseRef(j, repo)
+	wt := ExistingWorktree(j, repo)
+	mode, err := reactivateMode(j.State, wt != "")
 	if err != nil {
-		return fmt.Errorf("job %s: %v", j.Slug, err)
-	}
-	// recycle the branch when its PRs are all merged into the base; only
-	// unmerged leftovers force a fresh -rN name (persisted inside)
-	branchFlag, err := ensureUsableBranch(j, repo, base)
-	if err != nil {
-		return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
+		if wt != "" && j.State == "done" {
+			return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", wt, repo, wt)
+		}
+		return fmt.Errorf("%s: %v", j.Slug, err)
 	}
 	for _, d := range []string{cellDir(j), CellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
-	wt := CellWorktree(j, repo)
-	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, CellBranch(j), base).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
+	var prompt string
+	if mode == "resume" {
+		prompt = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."
+	} else {
+		base, err := baseRef(j, repo)
+		if err != nil {
+			return fmt.Errorf("job %s: %v", j.Slug, err)
+		}
+		// recycle the branch when its PRs are all merged into the base; only
+		// unmerged leftovers force a fresh -rN name (persisted inside)
+		branchFlag, err := ensureUsableBranch(j, repo, base)
+		if err != nil {
+			return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
+		}
+		wt = CellWorktree(j, repo)
+		out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, CellBranch(j), base).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
+		}
+		if j.State == "done" {
+			prompt = "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + CellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
+		} else {
+			prompt = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + CellBranch(j) + " reset off " + base + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
+		}
 	}
-	prompt := "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + CellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
 	if message != "" {
 		prompt += "\nsteering from carl: " + message
 	}
