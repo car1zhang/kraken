@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // mobileSession is the dedicated tmux session the HTTP spawn endpoint targets
@@ -21,10 +24,10 @@ const mobileSession = "mobile"
 // k s use, exposed over HTTP so the iOS app (reachable via --tailnet) can
 // list, read and message live sessions. peerSource is swapped out in tests
 // so handlers don't have to shell out to tmux/ps to be exercised.
-type peerSource func() []*Peer
+type peerSource func() []*core.Peer
 
-func defaultPeerSource() []*Peer {
-	all, _ := orderAll(discoverAll())
+func defaultPeerSource() []*core.Peer {
+	all, _ := core.OrderAll(core.DiscoverAll())
 	return all
 }
 
@@ -32,7 +35,7 @@ func defaultPeerSource() []*Peer {
 // matches, even though in-process teammates also carry Pane "" — a caller
 // that forgot the query param must get "not found", not an arbitrary
 // unaddressable teammate.
-func findPeerByPane(peers []*Peer, pane string) *Peer {
+func findPeerByPane(peers []*core.Peer, pane string) *core.Peer {
 	if pane == "" {
 		return nil
 	}
@@ -74,18 +77,18 @@ func isCellPane(session string) bool {
 
 // paneSessionFunc resolves a pane's live tmux session; swapped out in tests
 // so peersKillHandler's fresh re-verify doesn't have to shell out to tmux.
-var paneSessionFunc = currentPaneSession
+var paneSessionFunc = core.CurrentPaneSession
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "host": host, "contract": apiContract, "stale": isSelfStale()})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "host": host, "contract": apiContract, "stale": util.IsSelfStale()})
 }
 
 func peersHandler(source peerSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		peers := source()
 		if peers == nil {
-			peers = []*Peer{}
+			peers = []*core.Peer{}
 		}
 		webJSON(w, http.StatusOK, map[string]any{"peers": peers})
 	}
@@ -113,12 +116,12 @@ func peersReadHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", pane)})
 			return
 		}
-		path, err := readTranscriptPath(p)
+		path, err := core.ReadTranscriptPath(p)
 		if err != nil {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
-		blocks, counted, err := lastBlocks(path, n)
+		blocks, counted, err := core.LastBlocks(path, n)
 		if err != nil {
 			// unlike the pre-flight refusals above, this is an I/O failure
 			// (transcript vanished mid-request), not a peer-state conflict
@@ -127,9 +130,9 @@ func peersReadHandler(source peerSource) http.HandlerFunc {
 		}
 		out := make([]map[string]string, 0, len(blocks))
 		for _, b := range blocks {
-			m := map[string]string{"kind": b.kind, "text": b.text}
-			if b.from != "" {
-				m["from"] = b.from
+			m := map[string]string{"kind": b.Kind, "text": b.Text}
+			if b.From != "" {
+				m["from"] = b.From
 			}
 			out = append(out, m)
 		}
@@ -174,7 +177,7 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 			return
 		}
 		if req.Key != "" {
-			if err := sendKey(p, req.Key); err != nil {
+			if err := core.SendKey(p, req.Key); err != nil {
 				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -183,7 +186,7 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 			return
 		}
 		if p.Role == "shell" {
-			if err := sendToShell(p, req.Message); err != nil {
+			if err := core.SendToShell(p, req.Message); err != nil {
 				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -191,7 +194,7 @@ func peersSendHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": false, "shell": true})
 			return
 		}
-		queued, err := sendToPeer(p, req.Message)
+		queued, err := core.SendToPeer(p, req.Message)
 		if err != nil {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
@@ -212,7 +215,7 @@ func peersCaptureHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", pane)})
 			return
 		}
-		text, err := capturePane(p.Pane)
+		text, err := core.CapturePane(p.Pane)
 		if err != nil {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
@@ -242,11 +245,11 @@ func peersSpawnHandler(w http.ResponseWriter, r *http.Request) {
 	dir := req.Dir
 	switch {
 	case dir == "":
-		dir = home()
+		dir = util.Home()
 	case dir == "~":
-		dir = home()
+		dir = util.Home()
 	case strings.HasPrefix(dir, "~/"):
-		dir = filepath.Join(home(), strings.TrimPrefix(dir, "~/"))
+		dir = filepath.Join(util.Home(), strings.TrimPrefix(dir, "~/"))
 	default:
 		// the mobile client has no way to know the server's cwd, so a bare
 		// relative path can only be a client mistake, not something to resolve
@@ -255,27 +258,27 @@ func peersSpawnHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	argv, err := buildSpawnArgv(req.Kind, req.Name, req.Prompt, req.Cmd)
+	argv, err := core.BuildSpawnArgv(req.Kind, req.Name, req.Prompt, req.Cmd)
 	if err != nil {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := checkSpawnDir(dir); err != nil {
+	if err := core.CheckSpawnDir(dir); err != nil {
 		// a bad dir is a malformed client parameter — fail before ensureSession
 		// does any tmux work for a request that's doomed anyway
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := ensureSession(mobileSession, home()); err != nil {
+	if err := core.EnsureSession(mobileSession, util.Home()); err != nil {
 		webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	at, err := newWindowIn(mobileSession, dir, argv)
+	at, err := core.NewWindowIn(mobileSession, dir, argv)
 	if err != nil {
 		// still guard the (unreachable in practice, but defensive) case where
 		// newWindowIn's own dir check disagrees with checkSpawnDir above
 		status := http.StatusConflict
-		if errors.Is(err, errBadSpawnDir) {
+		if errors.Is(err, core.ErrBadSpawnDir) {
 			status = http.StatusBadRequest
 		}
 		webJSON(w, status, map[string]string{"error": err.Error()})
@@ -315,10 +318,10 @@ func peersKillHandler(source peerSource) http.HandlerFunc {
 			return
 		}
 		if isCellPane(session) {
-			webJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("%s belongs to job cell %s — use the job's Kill action", displayName(p), session)})
+			webJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("%s belongs to job cell %s — use the job's Kill action", core.DisplayName(p), session)})
 			return
 		}
-		if _, err := killPeer(p); err != nil {
+		if _, err := core.KillPeer(p); err != nil {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
@@ -353,7 +356,7 @@ func peersOpenHandler(source peerSource) http.HandlerFunc {
 				webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", req.Pane)})
 				return
 			}
-			if _, err := openPeer(p); err != nil {
+			if _, err := core.OpenPeer(p); err != nil {
 				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -370,7 +373,7 @@ func peersOpenHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusConflict, map[string]string{"error": "no live cell agent"})
 			return
 		}
-		if _, err := openPeer(zeus); err != nil {
+		if _, err := core.OpenPeer(zeus); err != nil {
 			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}

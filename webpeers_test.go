@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"kraken/core"
 )
 
 // getJSON builds a GET request whose query values are properly percent-
@@ -37,7 +39,7 @@ func TestHealthHandler(t *testing.T) {
 }
 
 func TestPeersHandlerEmptyIsArrayNotNull(t *testing.T) {
-	h := peersHandler(func() []*Peer { return nil })
+	h := peersHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest(http.MethodGet, "/api/peers", nil))
 	if w.Code != http.StatusOK {
@@ -49,11 +51,11 @@ func TestPeersHandlerEmptyIsArrayNotNull(t *testing.T) {
 }
 
 func TestPeersHandlerListsPeers(t *testing.T) {
-	h := peersHandler(func() []*Peer { return []*Peer{{Pane: "%1", Name: "lead", Status: "running"}} })
+	h := peersHandler(func() []*core.Peer { return []*core.Peer{{Pane: "%1", Name: "lead", Status: "running"}} })
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest(http.MethodGet, "/api/peers", nil))
 	var resp struct {
-		Peers []Peer `json:"peers"`
+		Peers []core.Peer `json:"peers"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
@@ -66,14 +68,14 @@ func TestPeersHandlerListsPeers(t *testing.T) {
 func TestFindPeerByPaneEmptyNeverMatches(t *testing.T) {
 	// in-process teammates also carry Pane "" — an omitted query param must
 	// not accidentally resolve to one of them
-	peers := []*Peer{{Pane: "", AgentName: "in-process-mate", Messageable: false}}
+	peers := []*core.Peer{{Pane: "", AgentName: "in-process-mate", Messageable: false}}
 	if p := findPeerByPane(peers, ""); p != nil {
 		t.Errorf("empty pane matched %+v, want nil", p)
 	}
 }
 
 func TestPeersReadHandlerUnknownPane(t *testing.T) {
-	source := func() []*Peer { return []*Peer{{Pane: "%1", Name: "lead"}} }
+	source := func() []*core.Peer { return []*core.Peer{{Pane: "%1", Name: "lead"}} }
 	h := peersReadHandler(source)
 	w := httptest.NewRecorder()
 	h(w, getJSON("/api/peers/read", url.Values{"pane": {"%2"}, "n": {"3"}}))
@@ -86,7 +88,7 @@ func TestPeersReadHandlerUnknownPane(t *testing.T) {
 }
 
 func TestPeersReadHandlerShellPaneRefused(t *testing.T) {
-	source := func() []*Peer { return []*Peer{{Pane: "%3", Role: "shell", Name: "sh"}} }
+	source := func() []*core.Peer { return []*core.Peer{{Pane: "%3", Role: "shell", Name: "sh"}} }
 	h := peersReadHandler(source)
 	w := httptest.NewRecorder()
 	h(w, getJSON("/api/peers/read", url.Values{"pane": {"%3"}}))
@@ -101,7 +103,7 @@ func TestPeersReadHandlerShellPaneRefused(t *testing.T) {
 func TestPeersReadHandlerNDefaultAndClamp(t *testing.T) {
 	// no session id → 409 before n ever reaches lastBlocks, but the handler
 	// must still parse/clamp n without panicking on garbage input
-	source := func() []*Peer { return []*Peer{{Pane: "%5", Name: "noid"}} }
+	source := func() []*core.Peer { return []*core.Peer{{Pane: "%5", Name: "noid"}} }
 	h := peersReadHandler(source)
 	w := httptest.NewRecorder()
 	h(w, getJSON("/api/peers/read", url.Values{"pane": {"%5"}, "n": {"not-a-number"}}))
@@ -114,7 +116,7 @@ func TestPeersReadHandlerNDefaultAndClamp(t *testing.T) {
 }
 
 func TestPeersSendHandlerUnknownPane(t *testing.T) {
-	h := peersSendHandler(func() []*Peer { return nil })
+	h := peersSendHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`{"pane":"%9","message":"hi"}`))
 	h(w, req)
@@ -131,7 +133,7 @@ func TestPeersSendHandlerUnknownPane(t *testing.T) {
 // deterministic guard we can assert without a live tmux pane — and crucially
 // the error must NOT be the old "shell pane" refusal.
 func TestPeersSendHandlerShellRoutedNotRefused(t *testing.T) {
-	source := func() []*Peer { return []*Peer{{Pane: "%4", Role: "shell", Name: "sh"}} }
+	source := func() []*core.Peer { return []*core.Peer{{Pane: "%4", Role: "shell", Name: "sh"}} }
 	h := peersSendHandler(source)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`{"pane":"%4","message":"  "}`))
@@ -148,7 +150,7 @@ func TestPeersSendHandlerShellRoutedNotRefused(t *testing.T) {
 }
 
 func TestPeersSendHandlerEmptyMessageRefused(t *testing.T) {
-	source := func() []*Peer { return []*Peer{{Pane: "%6", Name: "lead", Messageable: true}} }
+	source := func() []*core.Peer { return []*core.Peer{{Pane: "%6", Name: "lead", Messageable: true}} }
 	h := peersSendHandler(source)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`{"pane":"%6","message":"   "}`))
@@ -162,7 +164,7 @@ func TestPeersSendHandlerEmptyMessageRefused(t *testing.T) {
 }
 
 func TestPeersSendHandlerMethodNotAllowed(t *testing.T) {
-	h := peersSendHandler(func() []*Peer { return nil })
+	h := peersSendHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest(http.MethodGet, "/api/peers/send", nil))
 	if w.Code != http.StatusMethodNotAllowed {
@@ -171,7 +173,7 @@ func TestPeersSendHandlerMethodNotAllowed(t *testing.T) {
 }
 
 func TestPeersSendHandlerBadJSON(t *testing.T) {
-	h := peersSendHandler(func() []*Peer { return nil })
+	h := peersSendHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`not json`))
 	h(w, req)
@@ -181,7 +183,7 @@ func TestPeersSendHandlerBadJSON(t *testing.T) {
 }
 
 func TestPeersCaptureUnknownPane404(t *testing.T) {
-	h := peersCaptureHandler(func() []*Peer { return []*Peer{{Pane: "%1", Role: "shell"}} })
+	h := peersCaptureHandler(func() []*core.Peer { return []*core.Peer{{Pane: "%1", Role: "shell"}} })
 	w := httptest.NewRecorder()
 	h(w, getJSON("/api/peers/capture", url.Values{"pane": {"%9"}}))
 	if w.Code != http.StatusNotFound {
@@ -194,7 +196,7 @@ func TestPeersCaptureUnknownPane404(t *testing.T) {
 
 func TestPeersCaptureMissingPane404(t *testing.T) {
 	// an omitted pane param must miss, never resolve a Pane-"" teammate
-	h := peersCaptureHandler(func() []*Peer { return []*Peer{{Pane: "", Role: "teammate"}} })
+	h := peersCaptureHandler(func() []*core.Peer { return []*core.Peer{{Pane: "", Role: "teammate"}} })
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest(http.MethodGet, "/api/peers/capture", nil))
 	if w.Code != http.StatusNotFound {
@@ -203,7 +205,7 @@ func TestPeersCaptureMissingPane404(t *testing.T) {
 }
 
 func TestPeersSendUnknownPane404(t *testing.T) {
-	h := peersSendHandler(func() []*Peer { return []*Peer{{Pane: "%1", Role: "shell"}} })
+	h := peersSendHandler(func() []*core.Peer { return []*core.Peer{{Pane: "%1", Role: "shell"}} })
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest(http.MethodPost, "/api/peers/send", strings.NewReader(`{"pane":"%9","message":"ls"}`)))
 	if w.Code != http.StatusNotFound {
@@ -213,13 +215,13 @@ func TestPeersSendUnknownPane404(t *testing.T) {
 
 func TestSendToShellRejectsAgent(t *testing.T) {
 	// sendToShell must refuse a non-shell peer before any tmux exec
-	if err := sendToShell(&Peer{Pane: "%1", Role: "main", Agent: "claude"}, "ls"); err == nil {
+	if err := core.SendToShell(&core.Peer{Pane: "%1", Role: "main", Agent: "claude"}, "ls"); err == nil {
 		t.Error("want error for non-shell target")
 	}
 }
 
 func TestSendToShellRejectsEmpty(t *testing.T) {
-	if err := sendToShell(&Peer{Pane: "%1", Role: "shell"}, "  "); err == nil {
+	if err := core.SendToShell(&core.Peer{Pane: "%1", Role: "shell"}, "  "); err == nil {
 		t.Error("want error for empty command")
 	}
 }
@@ -294,7 +296,7 @@ func TestBuildSpawnArgv(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			argv, err := buildSpawnArgv(c.kind, c.argName, c.prompt, c.cmd)
+			argv, err := core.BuildSpawnArgv(c.kind, c.argName, c.prompt, c.cmd)
 			if c.wantErr {
 				if err == nil {
 					t.Fatal("want error, got nil")
@@ -313,7 +315,7 @@ func TestBuildSpawnArgv(t *testing.T) {
 }
 
 func TestPeersKillHandlerMissingPane(t *testing.T) {
-	h := peersKillHandler(func() []*Peer { return nil })
+	h := peersKillHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/kill", strings.NewReader(`{"pane":"%9"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -327,8 +329,8 @@ func TestPeersKillHandlerCellSessionRefused(t *testing.T) {
 	// TmuxSession on the stale snapshot is deliberately NOT "cell-foo" here —
 	// the handler must refuse based on the freshly re-read session, not the
 	// snapshot, so paneSessionFunc is what decides this test's outcome
-	source := func() []*Peer {
-		return []*Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
+	source := func() []*core.Peer {
+		return []*core.Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
 	}
 	old := paneSessionFunc
 	paneSessionFunc = func(pane string) (string, error) { return "cell-foo", nil }
@@ -347,8 +349,8 @@ func TestPeersKillHandlerCellSessionRefused(t *testing.T) {
 }
 
 func TestPeersKillHandlerPaneGoneOnFreshCheck(t *testing.T) {
-	source := func() []*Peer {
-		return []*Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
+	source := func() []*core.Peer {
+		return []*core.Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
 	}
 	old := paneSessionFunc
 	paneSessionFunc = func(pane string) (string, error) { return "", fmt.Errorf("pane %s is gone", pane) }
@@ -364,7 +366,7 @@ func TestPeersKillHandlerPaneGoneOnFreshCheck(t *testing.T) {
 }
 
 func TestPeersKillHandlerMethodNotAllowed(t *testing.T) {
-	h := peersKillHandler(func() []*Peer { return nil })
+	h := peersKillHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest(http.MethodGet, "/api/peers/kill", nil))
 	if w.Code != http.StatusMethodNotAllowed {
@@ -373,7 +375,7 @@ func TestPeersKillHandlerMethodNotAllowed(t *testing.T) {
 }
 
 func TestPeersOpenHandlerNeitherPaneNorSlug(t *testing.T) {
-	h := peersOpenHandler(func() []*Peer { return nil })
+	h := peersOpenHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -384,7 +386,7 @@ func TestPeersOpenHandlerNeitherPaneNorSlug(t *testing.T) {
 }
 
 func TestPeersOpenHandlerBothPaneAndSlug(t *testing.T) {
-	h := peersOpenHandler(func() []*Peer { return nil })
+	h := peersOpenHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", strings.NewReader(`{"pane":"%1","slug":"foo"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -395,7 +397,7 @@ func TestPeersOpenHandlerBothPaneAndSlug(t *testing.T) {
 }
 
 func TestPeersOpenHandlerUnknownPane(t *testing.T) {
-	h := peersOpenHandler(func() []*Peer { return nil })
+	h := peersOpenHandler(func() []*core.Peer { return nil })
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", strings.NewReader(`{"pane":"%9"}`))
 	req.Header.Set("Content-Type", "application/json")

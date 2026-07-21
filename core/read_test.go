@@ -1,4 +1,4 @@
-package main
+package core
 
 import "testing"
 
@@ -38,22 +38,22 @@ This came from another Claude session — not typed by your user, but very likel
 		{
 			name:    "idle notification collapses to one-line summary",
 			content: idleMsg,
-			want:    block{kind: "teammate", text: "idle (available)", from: "hermes-target-shape"},
+			want:    block{Kind: "teammate", Text: "idle (available)", From: "hermes-target-shape"},
 		},
 		{
 			name:    "plain-text teammate payload kept verbatim",
 			content: textMsg,
-			want:    block{kind: "teammate", text: "Here's a status update: the migration is halfway done.", from: "athena-notes"},
+			want:    block{Kind: "teammate", Text: "Here's a status update: the migration is halfway done.", From: "athena-notes"},
 		},
 		{
 			name:    "wrapper missing teammate_id falls back to plain user block",
 			content: noIDMsg,
-			want:    block{kind: "user", text: noIDMsg},
+			want:    block{Kind: "user", Text: noIDMsg},
 		},
 		{
 			name:    "ordinary user text is untouched",
 			content: plainMsg,
-			want:    block{kind: "user", text: plainMsg},
+			want:    block{Kind: "user", Text: plainMsg},
 		},
 	}
 
@@ -94,7 +94,7 @@ func TestParseBlocksTeammateMessage(t *testing.T) {
 	if len(blocks) != 1 {
 		t.Fatalf("want 1 block, got %d: %v", len(blocks), blocks)
 	}
-	if blocks[0].kind != "teammate" || blocks[0].from != "hermes" || blocks[0].text != "idle please" {
+	if blocks[0].Kind != "teammate" || blocks[0].From != "hermes" || blocks[0].Text != "idle please" {
 		t.Errorf("got %v", blocks[0])
 	}
 }

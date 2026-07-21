@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"encoding/json"
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"kraken/util"
 )
 
 // A Peer is one live claude process found in a tmux pane, an in-process
@@ -49,6 +51,27 @@ type Peer struct {
 	Teammates   []*Peer `json:"-"`
 }
 
+// DisplayName is a peer's best human-readable identity: its agent name (a
+// teammate's --agent-name), else its session name, else "-".
+func DisplayName(p *Peer) string {
+	if p.AgentName != "" {
+		return p.AgentName
+	}
+	if p.Name != "" {
+		return p.Name
+	}
+	return "-"
+}
+
+// ProjectLabel is a peer's project directory basename, "~" for a root/empty cwd.
+func ProjectLabel(p *Peer) string {
+	base := filepath.Base(p.CWD)
+	if base == "" || base == "/" || base == "." {
+		return "~"
+	}
+	return base
+}
+
 // sessionFile mirrors ~/.claude/sessions/<pid>.json, maintained by Claude Code
 // itself (created at startup, status live-updated, removed on exit).
 type sessionFile struct {
@@ -64,10 +87,10 @@ type sessionFile struct {
 type teamConfig struct {
 	Name          string       `json:"name"`
 	LeadSessionID string       `json:"leadSessionId"`
-	Members       []teamMember `json:"members"`
+	Members       []TeamMember `json:"members"`
 }
 
-type teamMember struct {
+type TeamMember struct {
 	AgentID     string `json:"agentId"`
 	Name        string `json:"name"`
 	AgentType   string `json:"agentType"`
@@ -135,22 +158,22 @@ func containsQuestionMarker(text string) bool {
 	return false
 }
 
-func paneShowsQuestion(pane string) bool {
+func PaneShowsQuestion(pane string) bool {
 	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
 	return err == nil && containsQuestionMarker(string(out))
 }
 
-// teamMembersForLead loads the members of the team config whose
+// TeamMembersForLead loads the members of the team config whose
 // leadSessionId matches sessionID — the cell's zeus session, for the
 // ROLL-CALL blocked probe in status.go. Defensive like nestTeams: a missing
 // teams dir, an unreadable/malformed config, or no team with that lead all
-// read as no members, never an error. Shares nestTeams' teamConfig/teamMember
+// read as no members, never an error. Shares nestTeams' teamConfig/TeamMember
 // JSON shape rather than re-declaring it.
-func teamMembersForLead(sessionID string) []teamMember {
+func TeamMembersForLead(sessionID string) []TeamMember {
 	if sessionID == "" {
 		return nil
 	}
-	configs, _ := filepath.Glob(filepath.Join(home(), ".claude", "teams", "*", "config.json"))
+	configs, _ := filepath.Glob(filepath.Join(util.Home(), ".claude", "teams", "*", "config.json"))
 	for _, cf := range configs {
 		data, err := os.ReadFile(cf)
 		if err != nil {
@@ -170,7 +193,7 @@ func teamMembersForLead(sessionID string) []teamMember {
 // --- team nesting ---
 
 func nestTeams(peers []*Peer) {
-	configs, _ := filepath.Glob(filepath.Join(home(), ".claude", "teams", "*", "config.json"))
+	configs, _ := filepath.Glob(filepath.Join(util.Home(), ".claude", "teams", "*", "config.json"))
 	bySession := map[string]*Peer{}
 	byPane := map[string]*Peer{}
 	for _, p := range peers {
@@ -247,9 +270,9 @@ func nestTeams(peers []*Peer) {
 	}
 }
 
-// orderPeers flattens peers into display order (teammates right after their
+// OrderPeers flattens peers into display order (teammates right after their
 // lead) and assigns 1-based indexes. Only this order is a valid selector target.
-func orderPeers(peers []*Peer) []*Peer {
+func OrderPeers(peers []*Peer) []*Peer {
 	nested := map[*Peer]bool{}
 	for _, p := range peers {
 		for _, t := range p.Teammates {
@@ -285,11 +308,11 @@ func orderPeers(peers []*Peer) []*Peer {
 	return ordered
 }
 
-// orderAll orders claudes and appends shell panes with continued numbering —
+// OrderAll orders claudes and appends shell panes with continued numbering —
 // one selector space across both tables. Callers rendering the tables
 // separately split the result on nPeers.
-func orderAll(peers, shells []*Peer) (all []*Peer, nPeers int) {
-	ordered := orderPeers(peers)
+func OrderAll(peers, shells []*Peer) (all []*Peer, nPeers int) {
+	ordered := OrderPeers(peers)
 	// Type grouping renders agents in separate tables. Keep the underlying
 	// selector order in that same Claude-then-Codex order so row numbers read
 	// monotonically from top to bottom.

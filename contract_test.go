@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"kraken/core"
 )
 
 // Endpoints deliberately NOT shape-tested here, and why:
@@ -414,7 +416,7 @@ var peerSpec = map[string]fieldSpec{
 }
 
 func TestPeerWireShapeEmpty(t *testing.T) {
-	data, err := json.Marshal(Peer{Status: "running", Role: "shell"})
+	data, err := json.Marshal(core.Peer{Status: "running", Role: "shell"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +424,7 @@ func TestPeerWireShapeEmpty(t *testing.T) {
 }
 
 func TestPeerWireShapePopulated(t *testing.T) {
-	p := Peer{
+	p := core.Peer{
 		Index: 1, Pane: "%3", TmuxSession: "cell-x", WindowIdx: 0,
 		PID: 123, SessionID: "sid", Name: "zeus", CWD: "/x",
 		Status: "running", StatusAt: 456, SessionIDGuessed: true,

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"kraken/util"
 )
 
 // archive.go — archived jobs. Archiving moves a job file into
@@ -131,13 +133,13 @@ func archiveJob(j *Job, live map[string]bool) (string, error) {
 	if err := os.MkdirAll(archiveDir(), 0o755); err != nil {
 		return "", fmt.Errorf("mkdir %s: %v", archiveDir(), err)
 	}
-	name := freeArchiveName(slugify(j.Slug))
+	name := freeArchiveName(util.Slugify(j.Slug))
 	if err := os.Rename(j.File, filepath.Join(archiveDir(), name+jobSuffix)); err != nil {
 		return "", fmt.Errorf("archive %s: %v", filepath.Base(j.File), err)
 	}
 	// artifacts follow the job file; a skipped one is loud, not fatal —
 	// the job file move (the namespace release) already happened
-	_, skipped := movePrefixed(plutoDir(), slugify(j.Slug), archiveDir(), name)
+	_, skipped := movePrefixed(plutoDir(), util.Slugify(j.Slug), archiveDir(), name)
 	for _, s := range skipped {
 		fmt.Fprintf(os.Stderr, "kraken: artifact not moved (target exists or move failed): %s\n", s)
 	}
@@ -148,7 +150,7 @@ func archiveJob(j *Job, live map[string]bool) (string, error) {
 // its original slug, refusing when that slug is taken again — the caller
 // archives (or renames) the newer job first.
 func unarchiveJob(a *Job) error {
-	slug := slugify(a.Slug)
+	slug := util.Slugify(a.Slug)
 	if slug == "" {
 		return fmt.Errorf("%s has an unusable slug — fix the job: line in %s first", a.ArchivedName, a.File)
 	}
@@ -216,29 +218,29 @@ func archivedArtifactPaths(a *Job) []string {
 
 func cmdArchive(args []string) {
 	if len(args) != 1 {
-		die("usage: k archive <job-slug>")
+		util.Die("usage: k archive <job-slug>")
 	}
 	j := jobBySlug(loadJobs(), args[0])
 	if j == nil {
-		die("no job %q in %s (k j lists them)", args[0], plutoDir())
+		util.Die("no job %q in %s (k j lists them)", args[0], plutoDir())
 	}
 	name, err := archiveJob(j, liveSessions())
 	if err != nil {
-		die("%v", err)
+		util.Die("%v", err)
 	}
 	fmt.Printf("archived %s → %s (k unarchive %s restores it)\n", j.Slug, filepath.Join(archiveDir(), name+jobSuffix), name)
 }
 
 func cmdUnarchive(args []string) {
 	if len(args) != 1 {
-		die("usage: k unarchive <archived-name>   (k j lists archived jobs last)")
+		util.Die("usage: k unarchive <archived-name>   (k j lists archived jobs last)")
 	}
 	a := archivedJobByName(loadArchivedJobs(), args[0])
 	if a == nil {
-		die("no archived job %q in %s", args[0], archiveDir())
+		util.Die("no archived job %q in %s", args[0], archiveDir())
 	}
 	if err := unarchiveJob(a); err != nil {
-		die("%v", err)
+		util.Die("%v", err)
 	}
-	fmt.Printf("unarchived %s → %s (state %q preserved)\n", a.ArchivedName, filepath.Join(plutoDir(), slugify(a.Slug)+jobSuffix), a.State)
+	fmt.Printf("unarchived %s → %s (state %q preserved)\n", a.ArchivedName, filepath.Join(plutoDir(), util.Slugify(a.Slug)+jobSuffix), a.State)
 }

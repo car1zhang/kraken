@@ -1,10 +1,12 @@
-package main
+package core
 
 import (
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"kraken/util"
 )
 
 // --- selection ---
@@ -31,11 +33,11 @@ func tokenize(s string) []string {
 
 func peerHaystack(p *Peer) string {
 	return strings.ToLower(strings.Join([]string{
-		p.Name, p.AgentName, projectLabel(p), p.TmuxSession, p.Pane, p.Team,
+		p.Name, p.AgentName, ProjectLabel(p), p.TmuxSession, p.Pane, p.Team,
 	}, " "))
 }
 
-func currentPanePeer(ordered []*Peer) *Peer {
+func CurrentPanePeer(ordered []*Peer) *Peer {
 	pane := os.Getenv("TMUX_PANE")
 	if pane == "" {
 		return nil
@@ -48,18 +50,18 @@ func currentPanePeer(ordered []*Peer) *Peer {
 	return nil
 }
 
-func selectPeer(sel string, ordered []*Peer) *Peer {
+func SelectPeer(sel string, ordered []*Peer) *Peer {
 	if sel == "" {
-		die("selector required")
+		util.Die("selector required")
 	}
 	if len(ordered) == 0 {
-		die("no live sessions")
+		util.Die("no live sessions")
 	}
 	if sel == "." {
-		if p := currentPanePeer(ordered); p != nil {
+		if p := CurrentPanePeer(ordered); p != nil {
 			return p
 		}
-		die("no session found in the current pane (is $TMUX_PANE set?)")
+		util.Die("no session found in the current pane (is $TMUX_PANE set?)")
 	}
 	// exact pane id (%3): the one churn-proof selector — indexes shift as
 	// sessions come and go, pane ids never do
@@ -69,7 +71,7 @@ func selectPeer(sel string, ordered []*Peer) *Peer {
 				return p
 			}
 		}
-		die("no session in pane %s", sel)
+		util.Die("no session in pane %s", sel)
 	}
 	if n, err := strconv.Atoi(sel); err == nil && n >= 1 && n <= len(ordered) {
 		return ordered[n-1]
@@ -89,7 +91,7 @@ func selectPeer(sel string, ordered []*Peer) *Peer {
 	}
 	tokens := tokenize(sel)
 	if len(tokens) == 0 {
-		die("no session matches %q", sel)
+		util.Die("no session matches %q", sel)
 	}
 	var matches []*Peer
 	for _, p := range ordered {
@@ -107,14 +109,14 @@ func selectPeer(sel string, ordered []*Peer) *Peer {
 	}
 	switch len(matches) {
 	case 0:
-		die("no session matches %q", sel)
+		util.Die("no session matches %q", sel)
 	case 1:
 		return matches[0]
 	}
 	var names []string
 	for _, m := range matches {
-		names = append(names, fmt.Sprintf("%d:%s", m.Index, displayName(m)))
+		names = append(names, fmt.Sprintf("%d:%s", m.Index, DisplayName(m)))
 	}
-	die("%q matches %d sessions: %s", sel, len(matches), strings.Join(names, ", "))
+	util.Die("%q matches %d sessions: %s", sel, len(matches), strings.Join(names, ", "))
 	return nil
 }

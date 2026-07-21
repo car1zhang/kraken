@@ -15,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // k web — a localhost web UI over the same file-derived state as k j and the
@@ -157,7 +160,7 @@ func jobArtifacts(j *Job) []webArtifact {
 		}
 		out = append(out, webArtifact{Name: name, URL: "/api/artifact/" + j.Slug + "/cell/" + name})
 	}
-	prefix := slugify(j.Slug) + "."
+	prefix := util.Slugify(j.Slug) + "."
 	entries, err := os.ReadDir(plutoDir())
 	if err != nil {
 		return out
@@ -198,7 +201,7 @@ func artifactPath(j *Job, home, name string) (string, bool) {
 			return "", false
 		}
 		root = plutoDir()
-		p = filepath.Join(root, slugify(j.Slug)+"."+name)
+		p = filepath.Join(root, util.Slugify(j.Slug)+"."+name)
 	case "archive":
 		// archived copies are flat under the numbered archive prefix
 		if j.ArchivedName == "" || strings.Contains(name, "/") {
@@ -253,12 +256,12 @@ func artifactContentType(p string) string {
 // and question fields, and the question-answer action. An unresolvable
 // transcript (fresh fork, no session file yet) reads as "" rather than an
 // error — the board field is just omitted.
-func cellZeusTranscript(j *Job, all []*Peer) (zeus *Peer, transcript string) {
+func cellZeusTranscript(j *Job, all []*core.Peer) (zeus *core.Peer, transcript string) {
 	zeus = cellZeus(j, all)
 	if zeus == nil {
 		return nil, ""
 	}
-	path, err := readTranscriptPath(zeus)
+	path, err := core.ReadTranscriptPath(zeus)
 	if err != nil {
 		return zeus, ""
 	}
@@ -271,13 +274,13 @@ func cellZeusTranscript(j *Job, all []*Peer) (zeus *Peer, transcript string) {
 // fast. "" when the file is unreadable or has no assistant text within the
 // lookback window.
 func lastAssistantText(path string) string {
-	blocks, _, err := lastBlocks(path, 20)
+	blocks, _, err := core.LastBlocks(path, 20)
 	if err != nil {
 		return ""
 	}
 	for i := len(blocks) - 1; i >= 0; i-- {
-		if blocks[i].kind == "text" {
-			return truncateText(blocks[i].text, 4000)
+		if blocks[i].Kind == "text" {
+			return truncateText(blocks[i].Text, 4000)
 		}
 	}
 	return ""
@@ -376,8 +379,8 @@ func buildWebBoard() webBoard {
 	}
 	live := liveSessions()
 	st, ok := readDaemonStatus()
-	all, _ := orderAll(discoverAll())
-	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}, Contract: apiContract, Stale: isSelfStale()}
+	all, _ := core.OrderAll(core.DiscoverAll())
+	board := webBoard{Daemon: st, DaemonOK: ok && processAlive(st.PID), CellCap: cellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale()}
 	for _, j := range jobs {
 		var prereqs []webPrereq
 		for _, p := range j.Prereqs {
@@ -528,7 +531,7 @@ func webDone(req webReq) error {
 	if j.Success != "" {
 		outcome = "met: " + oneLine(j.Success)
 	}
-	_, err = doneJob(j, truncateOneLine(outcome, 200))
+	_, err = doneJob(j, core.TruncateOneLine(outcome, 200))
 	return err
 }
 
@@ -549,7 +552,7 @@ func webAnswerQuestion(req webReq) error {
 	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
 		return fmt.Errorf("%s has no live cell to answer", j.Slug)
 	}
-	all, _ := orderAll(discoverAll())
+	all, _ := core.OrderAll(core.DiscoverAll())
 	zeus, transcript := cellZeusTranscript(j, all)
 	if zeus == nil {
 		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
@@ -582,13 +585,13 @@ func answerableSingleDigit(q *PendingQuestion) bool {
 }
 
 // sendDigit types a single literal keystroke into a pane with no trailing
-// Enter — sendMessage() always appends Enter, which would double-submit past
+// Enter — core.SendMessage() always appends Enter, which would double-submit past
 // an AskUserQuestion dialog into whatever the agent does next. Verify before
 // acting, mirroring sendMessage's own re-check right before typing — inverted,
 // since sendDigit needs the question prompt to still be showing (sendMessage
 // refuses when one is; here the digit is meaningless without one).
-func sendDigit(p *Peer, digit string) error {
-	if !paneShowsQuestion(p.Pane) {
+func sendDigit(p *core.Peer, digit string) error {
+	if !core.PaneShowsQuestion(p.Pane) {
 		return fmt.Errorf("the pane no longer shows the question — refresh the board")
 	}
 	return exec.Command("tmux", "send-keys", "-l", "-t", p.Pane, digit).Run()
@@ -620,7 +623,7 @@ func webSteer(req webReq) error {
 	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
 		return fmt.Errorf("%s has no live cell to steer", j.Slug)
 	}
-	all, _ := orderAll(discoverAll())
+	all, _ := core.OrderAll(core.DiscoverAll())
 	zeus := cellZeus(j, all)
 	if zeus == nil {
 		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, cellSession(j))
@@ -628,7 +631,7 @@ func webSteer(req webReq) error {
 	if err := appendMidRunLog(j, "me→zeus", oneLine(text)); err != nil {
 		return fmt.Errorf("mid-run log append failed: %v", err)
 	}
-	if err := sendMessage(zeus, "from carl: "+text); err != nil {
+	if err := core.SendMessage(zeus, "from carl: "+text); err != nil {
 		return fmt.Errorf("logged, but delivery failed: %v", err)
 	}
 	return writeJobState(j, "working")
@@ -666,7 +669,7 @@ func webReview(req webReq) error {
 			"-c", wt, "nvim", ".").Run(); err != nil {
 			return fmt.Errorf("tmux new-window: %v", err)
 		}
-		if _, err := raiseSession(sess); err != nil {
+		if _, err := core.RaiseSession(sess); err != nil {
 			return fmt.Errorf("nvim is open in %s, but %v", sess, err)
 		}
 		return nil
@@ -819,7 +822,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	slug := slugify(req.Slug)
+	slug := util.Slugify(req.Slug)
 	if slug == "" {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "slug must contain letters or digits"})
 		return
@@ -870,7 +873,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
 		return
 	}
-	if err := atomicWrite(j.File, req.Content); err != nil {
+	if err := util.AtomicWrite(j.File, req.Content); err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1043,7 +1046,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	req.Slug = j.Slug // slug is the filename; immutable here
 	_, logSection := splitBodyLog(j.Body)
 	content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Run, j.PRs, logSection)
-	if err := atomicWrite(j.File, content); err != nil {
+	if err := util.AtomicWrite(j.File, content); err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1102,7 +1105,7 @@ func detectTailscaleIP() (string, error) {
 }
 
 func cmdWeb(args []string) {
-	initSelfCheck()
+	util.InitSelfCheck()
 	port := "7777"
 	tailnet := false
 	explicitAddr := ""
@@ -1111,7 +1114,7 @@ func cmdWeb(args []string) {
 		case "-p", "--port":
 			i++
 			if i >= len(args) {
-				die("-p needs a port")
+				util.Die("-p needs a port")
 			}
 			port = args[i]
 		case "--tailnet":
@@ -1119,18 +1122,18 @@ func cmdWeb(args []string) {
 		case "-addr":
 			i++
 			if i >= len(args) {
-				die("-addr needs a host:port")
+				util.Die("-addr needs a host:port")
 			}
 			explicitAddr = args[i]
 		default:
-			die("unknown argument: %s (usage: k web [-p port] [--tailnet] [-addr host:port])", args[i])
+			util.Die("unknown argument: %s (usage: k web [-p port] [--tailnet] [-addr host:port])", args[i])
 		}
 	}
 	addr := "127.0.0.1:" + port
 	if tailnet {
 		ip, err := detectTailscaleIP()
 		if err != nil {
-			die("%v", err)
+			util.Die("%v", err)
 		}
 		addr = ip + ":" + port
 	}
@@ -1139,7 +1142,7 @@ func cmdWeb(args []string) {
 	}
 	static, err := fs.Sub(webAssets, "web")
 	if err != nil {
-		die("embedded assets: %v", err)
+		util.Die("embedded assets: %v", err)
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(static)))
@@ -1205,6 +1208,6 @@ func cmdWeb(args []string) {
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil {
-		die("web server: %v", err)
+		util.Die("web server: %v", err)
 	}
 }

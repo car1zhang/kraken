@@ -1,8 +1,10 @@
-package main
+package util
 
 import (
+	"fmt"
 	"os"
 	"sync/atomic"
+	"time"
 )
 
 // selfcheck detects a stale running binary: make install replaces the
@@ -14,15 +16,15 @@ import (
 // (board banner, daemon status field) and never auto-restarts anything.
 
 var (
-	selfBinaryPath  string
-	selfBinaryStart os.FileInfo
+	SelfBinaryPath  string
+	SelfBinaryStart os.FileInfo
 	staleWarned     atomic.Bool
 )
 
-// initSelfCheck records the running executable's identity. Best-effort: any
-// failure leaves selfBinaryStart nil, so isSelfStale reads false forever —
+// InitSelfCheck records the running executable's identity. Best-effort: any
+// failure leaves SelfBinaryStart nil, so IsSelfStale reads false forever —
 // a missing baseline is never an error (defensive-read convention).
-func initSelfCheck() {
+func InitSelfCheck() {
 	path, err := os.Executable()
 	if err != nil {
 		return
@@ -31,35 +33,35 @@ func initSelfCheck() {
 	if err != nil {
 		return
 	}
-	selfBinaryPath, selfBinaryStart = path, fi
+	SelfBinaryPath, SelfBinaryStart = path, fi
 }
 
-// binaryStale is the pure comparison behind isSelfStale, split out so it's
+// BinaryStale is the pure comparison behind IsSelfStale, split out so it's
 // testable without shelling out or touching the filesystem: either side nil
 // (no recorded baseline, or a failed re-stat) reads as not-stale.
-func binaryStale(start, now os.FileInfo) bool {
+func BinaryStale(start, now os.FileInfo) bool {
 	if start == nil || now == nil {
 		return false
 	}
 	return !start.ModTime().Equal(now.ModTime()) || start.Size() != now.Size()
 }
 
-// isSelfStale re-stats the running binary's own path and compares it against
+// IsSelfStale re-stats the running binary's own path and compares it against
 // the identity recorded at startup. Called concurrently from net/http
 // handlers and the daemon tick, so the once-only log uses atomic.Bool's
 // CompareAndSwap rather than a plain bool. Logs once on first detection,
 // never again — this is a surface-only signal, not an error condition.
-func isSelfStale() bool {
-	if selfBinaryStart == nil {
+func IsSelfStale() bool {
+	if SelfBinaryStart == nil {
 		return false
 	}
-	now, err := os.Stat(selfBinaryPath)
+	now, err := os.Stat(SelfBinaryPath)
 	if err != nil {
 		return false
 	}
-	stale := binaryStale(selfBinaryStart, now)
+	stale := BinaryStale(SelfBinaryStart, now)
 	if stale && staleWarned.CompareAndSwap(false, true) {
-		dlog("binary on disk changed since this process started (reinstalled?) — restart to pick up the new build")
+		fmt.Printf("%s binary on disk changed since this process started (reinstalled?) — restart to pick up the new build\n", time.Now().Format("15:04:05"))
 	}
 	return stale
 }

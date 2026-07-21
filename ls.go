@@ -3,141 +3,23 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // --- k ls ---
-
-const (
-	reset   = "\x1b[0m"
-	dim     = "\x1b[2m"
-	cyan    = "\x1b[36m"
-	green   = "\x1b[32m"
-	yellow  = "\x1b[33m"
-	magenta = "\x1b[35m"
-	red     = "\x1b[31m"
-	gray    = "\x1b[90m"
-)
-
-func useColor() bool {
-	if os.Getenv("NO_COLOR") != "" {
-		return false
-	}
-	if os.Getenv("TERM") == "dumb" {
-		return false
-	}
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
-}
-
-func paint(on bool, code, s string) string {
-	if !on {
-		return s
-	}
-	return code + s + reset
-}
-
-func statusColor(status string) string {
-	switch status {
-	case "running":
-		return green
-	case "question", "shell":
-		return yellow
-	case "waiting":
-		return red
-	default:
-		return gray
-	}
-}
-
-var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
-
-// visWidth is a cell's on-screen width: ANSI codes are invisible to the
-// terminal but not to a byte-counting aligner like tabwriter.
-func visWidth(s string) int {
-	return len([]rune(ansiRe.ReplaceAllString(s, "")))
-}
-
-// formatTableLines aligns rows into columns (ANSI-aware) and returns one
-// string per row, without trailing newlines.
-func formatTableLines(rows [][]string) []string {
-	if len(rows) == 0 {
-		return nil
-	}
-	widths := make([]int, len(rows[0]))
-	for _, r := range rows {
-		for i, c := range r {
-			if w := visWidth(c); w > widths[i] {
-				widths[i] = w
-			}
-		}
-	}
-	lines := make([]string, 0, len(rows))
-	for _, r := range rows {
-		var b strings.Builder
-		for i, c := range r {
-			b.WriteString(c)
-			if i < len(r)-1 {
-				b.WriteString(strings.Repeat(" ", widths[i]-visWidth(c)+2))
-			}
-		}
-		lines = append(lines, b.String())
-	}
-	return lines
-}
-
-func printTable(rows [][]string) {
-	for _, line := range formatTableLines(rows) {
-		fmt.Println(line)
-	}
-}
-
-func age(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
-}
-
-func displayName(p *Peer) string {
-	if p.AgentName != "" {
-		return p.AgentName
-	}
-	if p.Name != "" {
-		return p.Name
-	}
-	return "-"
-}
-
-func projectLabel(p *Peer) string {
-	base := filepath.Base(p.CWD)
-	if base == "" || base == "/" || base == "." {
-		return "~"
-	}
-	return base
-}
 
 func parseGroupMode(s string) string {
 	switch s {
 	case "type", "session", "none":
 		return s
 	}
-	die("unknown grouping %q (type, session, none)", s)
+	util.Die("unknown grouping %q (type, session, none)", s)
 	return ""
 }
 
@@ -151,27 +33,27 @@ func cmdLs(args []string) {
 		case "-g", "--group":
 			i++
 			if i >= len(args) {
-				die("-g needs a value: type, session, or none")
+				util.Die("-g needs a value: type, session, or none")
 			}
 			mode = parseGroupMode(args[i])
 		default:
-			die("unknown argument: %s (usage: k ls [--json] [-g type|session|none])", args[i])
+			util.Die("unknown argument: %s (usage: k ls [--json] [-g type|session|none])", args[i])
 		}
 	}
-	all, nPeers := orderAll(discoverAll())
+	all, nPeers := core.OrderAll(core.DiscoverAll())
 	if jsonOut {
 		if all == nil {
-			all = []*Peer{}
+			all = []*core.Peer{}
 		}
 		out, err := json.MarshalIndent(all, "", "  ")
 		if err != nil {
-			die("marshal: %v", err)
+			util.Die("marshal: %v", err)
 		}
 		fmt.Println(string(out))
 		return
 	}
-	color := useColor()
-	usage := usageHeader(color)
+	color := util.UseColor()
+	usage := core.UsageHeader(color)
 	if len(all) == 0 {
 		fmt.Println("no live sessions")
 		return
@@ -182,25 +64,25 @@ func cmdLs(args []string) {
 			fmt.Println()
 		}
 		if g.title != "" {
-			fmt.Println(paint(color, g.titleColor(), strings.ToUpper(g.title)))
+			fmt.Println(util.Paint(color, g.titleColor(), strings.ToUpper(g.title)))
 		}
-		for _, line := range usageForAgent(usage, g.title, color) {
+		for _, line := range core.UsageForAgent(usage, g.title, color) {
 			fmt.Println(line)
 		}
 		header := groupHeader(g.kind)
 		for i, h := range header {
-			header[i] = paint(color, cyan, strings.ToUpper(h))
+			header[i] = util.Paint(color, util.Cyan, strings.ToUpper(h))
 		}
 		rows := [][]string{header}
 		parent := parentMap(g.rows)
 		for _, p := range g.rows {
 			rows = append(rows, groupCells(g.kind, p, parent[p], color, now))
 		}
-		aligned := formatTableLines(rows)
+		aligned := util.FormatTableLines(rows)
 		fmt.Println(aligned[0])
 		for i, line := range aligned[1:] {
 			if st, ok := g.subtitles[i]; ok {
-				fmt.Println(paint(color, dim, " "+st))
+				fmt.Println(util.Paint(color, util.Dim, " "+st))
 			}
 			fmt.Println(line)
 		}
@@ -212,16 +94,16 @@ func cmdLs(args []string) {
 // A displayGroup is one rendered table: k ls prints them in order; the viewer
 // stacks them in a single scroll region.
 type displayGroup struct {
-	title string  // "" for the untitled leading group
-	kind  string  // "claudes" | "shells" | "session" | "mixed" — column schema
-	rows  []*Peer // display order; teammates directly follow their lead
+	title string       // "" for the untitled leading group
+	kind  string       // "claudes" | "shells" | "session" | "mixed" — column schema
+	rows  []*core.Peer // display order; teammates directly follow their lead
 	// subtitles[i] renders as a sub-header line right before rows[i] —
 	// session grouping uses it for "window N" breaks
 	subtitles map[int]string
 }
 
 func (g displayGroup) titleColor() string {
-	return cyan
+	return util.Cyan
 }
 
 // displayGroups shapes the combined list for a grouping mode:
@@ -229,7 +111,7 @@ func (g displayGroup) titleColor() string {
 //	type:    claudes table + labelled shells table (the default)
 //	session: one mixed table per tmux session, "window N" sub-headers inside
 //	none:    everything in one table
-func displayGroups(mode string, all []*Peer, nPeers int) []displayGroup {
+func displayGroups(mode string, all []*core.Peer, nPeers int) []displayGroup {
 	agents, shells := all[:nPeers], all[nPeers:]
 	switch mode {
 	case "session":
@@ -241,7 +123,7 @@ func displayGroups(mode string, all []*Peer, nPeers int) []displayGroup {
 		return []displayGroup{{kind: "mixed", rows: all}}
 	default: // "type"
 		var groups []displayGroup
-		var claudes, codexes []*Peer
+		var claudes, codexes []*core.Peer
 		for _, p := range agents {
 			if p.Agent == "codex" {
 				codexes = append(codexes, p)
@@ -266,10 +148,10 @@ func displayGroups(mode string, all []*Peer, nPeers int) []displayGroup {
 // A lead and its nested teammates travel as one unit positioned by the lead's
 // window (a teammate may live in another window or even session). Claudes
 // sort before shells within the same window.
-func sessionGroups(claudes, shells []*Peer) []displayGroup {
+func sessionGroups(claudes, shells []*core.Peer) []displayGroup {
 	type unit struct {
 		win  int
-		rows []*Peer
+		rows []*core.Peer
 	}
 	units := map[string][]unit{}
 	var sessions []string
@@ -289,14 +171,14 @@ func sessionGroups(claudes, shells []*Peer) []displayGroup {
 		i = j
 	}
 	for _, s := range shells {
-		add(s.TmuxSession, unit{win: s.WindowIdx, rows: []*Peer{s}})
+		add(s.TmuxSession, unit{win: s.WindowIdx, rows: []*core.Peer{s}})
 	}
-	sort.SliceStable(sessions, func(i, j int) bool { return sessionLess(sessions[i], sessions[j]) })
+	sort.SliceStable(sessions, func(i, j int) bool { return core.SessionLess(sessions[i], sessions[j]) })
 	var groups []displayGroup
 	for _, sess := range sessions {
 		us := units[sess]
 		sort.SliceStable(us, func(i, j int) bool { return us[i].win < us[j].win })
-		var rows []*Peer
+		var rows []*core.Peer
 		subtitles := map[int]string{}
 		lastWin := -1
 		for _, u := range us {
@@ -330,11 +212,11 @@ func groupHeader(kind string) []string {
 
 // groupCells renders one row under a group's schema; lead comes from
 // parentMap over the group's rows and drives teammate indent/dittos.
-func groupCells(kind string, p, lead *Peer, color bool, now time.Time) []string {
+func groupCells(kind string, p, lead *core.Peer, color bool, now time.Time) []string {
 	switch kind {
 	case "claudes":
 		c := peerCells(p, lead, color, now)
-		return []string{c[0], c[1], c[2], c[3], c[4], c[5], paint(color, dim, p.Pane), c[6], c[7]}
+		return []string{c[0], c[1], c[2], c[3], c[4], c[5], util.Paint(color, util.Dim, p.Pane), c[6], c[7]}
 	case "shells":
 		return shellCells(p, color)
 	default:
@@ -344,43 +226,43 @@ func groupCells(kind string, p, lead *Peer, color bool, now time.Time) []string 
 
 // mixedCells renders a row for the schemas that put claudes and shells in one
 // table: shells show "-" for NAME and fill CMD; claudes leave CMD empty.
-func mixedCells(kind string, p, lead *Peer, color bool, now time.Time) []string {
+func mixedCells(kind string, p, lead *core.Peer, color bool, now time.Time) []string {
 	var cells []string
 	if p.Role == "shell" {
-		cmd, ageStr := paint(color, dim, "-"), ""
+		cmd, ageStr := util.Paint(color, util.Dim, "-"), ""
 		if p.Cmd != "" {
-			cmd = paint(color, green, truncateOneLine(p.Cmd, 60))
-			ageStr = paint(color, dim, age(time.Duration(p.CmdSeconds)*time.Second))
+			cmd = util.Paint(color, util.Green, core.TruncateOneLine(p.Cmd, 60))
+			ageStr = util.Paint(color, util.Dim, util.Age(time.Duration(p.CmdSeconds)*time.Second))
 		}
 		cmd += selfMark(p, color) // even when idle: JSON self and display must agree
 		cells = []string{
-			paint(color, dim, fmt.Sprintf("%2d", p.Index)),
-			paint(color, statusColor(p.Status), "● "+p.Status),
-			paint(color, dim, "-"),
-			projectLabel(p),
-			paint(color, magenta, truncTail(p.Branch, 28)),
+			util.Paint(color, util.Dim, fmt.Sprintf("%2d", p.Index)),
+			util.Paint(color, util.StatusColor(p.Status), "● "+p.Status),
+			util.Paint(color, util.Dim, "-"),
+			core.ProjectLabel(p),
+			util.Paint(color, util.Magenta, core.TruncTail(p.Branch, 28)),
 			"", // model
 			cmd,
 			ageStr,
-			paint(color, dim, p.Pane),
+			util.Paint(color, util.Dim, p.Pane),
 		}
 	} else {
 		c := peerCells(p, lead, color, now)
-		cells = []string{c[0], c[1], c[2], c[3], c[4], c[5], "", c[7], paint(color, dim, p.Pane)}
+		cells = []string{c[0], c[1], c[2], c[3], c[4], c[5], "", c[7], util.Paint(color, util.Dim, p.Pane)}
 	}
 	if kind == "session" {
 		return cells // session lives in the group title, window in sub-headers
 	}
-	return append(cells, paint(color, dim, sessWin(p)))
+	return append(cells, util.Paint(color, util.Dim, sessWin(p)))
 }
 
 // selfMark tags the pane this kraken invocation runs in — the viewer's own
 // pane would otherwise read as just another shell.
-func selfMark(p *Peer, color bool) string {
+func selfMark(p *core.Peer, color bool) string {
 	if !p.Self {
 		return ""
 	}
-	return paint(color, cyan, " ← me")
+	return util.Paint(color, util.Cyan, " ← me")
 }
 
 // shellFolder renders a shell pane's cwd ~-abbreviated: unlike claudes, the
@@ -389,7 +271,7 @@ func shellFolder(cwd string) string {
 	if cwd == "" {
 		return "-"
 	}
-	h := home()
+	h := util.Home()
 	if cwd == h {
 		return "~"
 	}
@@ -404,29 +286,29 @@ func shellHeader() []string {
 }
 
 // shellCells renders one shells-table row, shared by k ls and the viewer.
-func shellCells(p *Peer, color bool) []string {
-	cmd, ageStr := paint(color, dim, "-"), ""
+func shellCells(p *core.Peer, color bool) []string {
+	cmd, ageStr := util.Paint(color, util.Dim, "-"), ""
 	if p.Cmd != "" {
-		cmd = paint(color, green, truncateOneLine(p.Cmd, 60))
-		ageStr = paint(color, dim, age(time.Duration(p.CmdSeconds)*time.Second))
+		cmd = util.Paint(color, util.Green, core.TruncateOneLine(p.Cmd, 60))
+		ageStr = util.Paint(color, util.Dim, util.Age(time.Duration(p.CmdSeconds)*time.Second))
 	}
 	cmd += selfMark(p, color) // even when idle: JSON self and display must agree
 	return []string{
-		paint(color, dim, fmt.Sprintf("%2d", p.Index)),
-		paint(color, statusColor(p.Status), "● "+p.Status),
-		truncTail(shellFolder(p.CWD), 40),
+		util.Paint(color, util.Dim, fmt.Sprintf("%2d", p.Index)),
+		util.Paint(color, util.StatusColor(p.Status), "● "+p.Status),
+		core.TruncTail(shellFolder(p.CWD), 40),
 		cmd,
 		ageStr,
-		paint(color, dim, p.Pane),
-		paint(color, dim, sessWin(p)),
+		util.Paint(color, util.Dim, p.Pane),
+		util.Paint(color, util.Dim, sessWin(p)),
 	}
 }
 
 // parentMap maps each nested teammate to its lead — the peer whose Teammates
 // list claimed it. Positional inference (previous non-teammate row) is wrong
 // for orphaned teammates and sub-teams, so rendering keys off this instead.
-func parentMap(peers []*Peer) map[*Peer]*Peer {
-	m := map[*Peer]*Peer{}
+func parentMap(peers []*core.Peer) map[*core.Peer]*core.Peer {
+	m := map[*core.Peer]*core.Peer{}
 	for _, p := range peers {
 		for _, t := range p.Teammates {
 			if _, ok := m[t]; !ok {
@@ -441,12 +323,12 @@ func parentMap(peers []*Peer) map[*Peer]*Peer {
 // #, status, name, project, branch, model, tmux, age. lead is the peer's
 // actual team lead (nil for top-level peers): teammates indent with ditto
 // marks where they match their lead — the eye only catches what differs.
-func peerCells(p, lead *Peer, color bool, now time.Time) []string {
-	name := displayName(p)
-	project, branch := projectLabel(p), p.Branch
+func peerCells(p, lead *core.Peer, color bool, now time.Time) []string {
+	name := core.DisplayName(p)
+	project, branch := core.ProjectLabel(p), p.Branch
 	if lead != nil {
 		name = "  └ " + name
-		if project == projectLabel(lead) {
+		if project == core.ProjectLabel(lead) {
 			project = "·"
 		}
 		if branch == lead.Branch {
@@ -455,23 +337,23 @@ func peerCells(p, lead *Peer, color bool, now time.Time) []string {
 	}
 	ageStr := ""
 	if p.StatusAt > 0 {
-		ageStr = age(now.Sub(time.UnixMilli(p.StatusAt)))
+		ageStr = util.Age(now.Sub(time.UnixMilli(p.StatusAt)))
 	}
 	return []string{
-		paint(color, dim, fmt.Sprintf("%2d", p.Index)),
-		paint(color, statusColor(p.Status), "● "+p.Status),
-		paint(color, cyan, name) + selfMark(p, color),
+		util.Paint(color, util.Dim, fmt.Sprintf("%2d", p.Index)),
+		util.Paint(color, util.StatusColor(p.Status), "● "+p.Status),
+		util.Paint(color, util.Cyan, name) + selfMark(p, color),
 		project,
-		paint(color, magenta, truncTail(branch, 28)),
-		paint(color, dim, p.Model),
-		paint(color, dim, sessWin(p)),
-		paint(color, dim, ageStr),
+		util.Paint(color, util.Magenta, core.TruncTail(branch, 28)),
+		util.Paint(color, util.Dim, p.Model),
+		util.Paint(color, util.Dim, sessWin(p)),
+		util.Paint(color, util.Dim, ageStr),
 	}
 }
 
 // sessWin is a pane's tmux address, session:window; in-process teammates have
 // no pane, so just the session.
-func sessWin(p *Peer) string {
+func sessWin(p *core.Peer) string {
 	if p.Pane == "" {
 		return p.TmuxSession
 	}

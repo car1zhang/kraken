@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"kraken/core"
 )
 
 // --- pendingQuestion ---
@@ -294,28 +296,28 @@ func TestCellActive(t *testing.T) {
 	cases := []struct {
 		name         string
 		sess         string
-		peers        []*Peer
-		members      []teamMember
+		peers        []*core.Peer
+		members      []core.TeamMember
 		paneQuestion func(string) bool
 		want         bool
 	}{
 		{
 			name:  "zeus running alone -> true",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"}},
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"}},
 			want:  true,
 		},
 		{
 			name:         "zeus running but pane shows an open question -> false",
 			sess:         "cell-x",
-			peers:        []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"}},
+			peers:        []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"}},
 			paneQuestion: yesQuestion,
 			want:         false,
 		},
 		{
 			name:  "codex running -> true",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "codex", Status: "running", Pane: "%1"}},
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "codex", Status: "running", Pane: "%1"}},
 			want:  true,
 		},
 		{
@@ -323,7 +325,7 @@ func TestCellActive(t *testing.T) {
 			// blocked-on-carl, not working, even with no teammates at all.
 			name:  "zeus with Status question (open AskUserQuestion) -> false",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "question", Pane: "%1"}},
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "question", Pane: "%1"}},
 			want:  false,
 		},
 		{
@@ -331,7 +333,7 @@ func TestCellActive(t *testing.T) {
 			// the same as any other running claude in the cell session.
 			name: "nested subagent (Depth>0) running in zeus' session -> true",
 			sess: "cell-x",
-			peers: []*Peer{
+			peers: []*core.Peer{
 				{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1", Depth: 0},
 				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1", Depth: 1},
 			},
@@ -340,8 +342,8 @@ func TestCellActive(t *testing.T) {
 		{
 			name:  "zeus waiting + tmux teammate with a running pane -> true",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "running"}},
-			members: []teamMember{
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "running"}},
+			members: []core.TeamMember{
 				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
 				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
 			},
@@ -353,8 +355,8 @@ func TestCellActive(t *testing.T) {
 			// not vote the cell into working forever.
 			name:  "zeus waiting + tmux teammate whose pane is idle (not running) -> false",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "waiting"}},
-			members: []teamMember{
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "waiting"}},
+			members: []core.TeamMember{
 				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
 				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
 			},
@@ -363,8 +365,8 @@ func TestCellActive(t *testing.T) {
 		{
 			name:  "zeus waiting + tmux teammate whose pane is gone -> false",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
-			members: []teamMember{
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []core.TeamMember{
 				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
 				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
 			},
@@ -377,8 +379,8 @@ func TestCellActive(t *testing.T) {
 			// liveness signal (their pane's status).
 			name:  "zeus waiting + in-process member, isActive nil -> false",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
-			members: []teamMember{
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []core.TeamMember{
 				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
 				{AgentID: "mate@1", BackendType: "in-process"},
 			},
@@ -387,8 +389,8 @@ func TestCellActive(t *testing.T) {
 		{
 			name:  "zeus waiting + in-process member, isActive true -> true",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
-			members: []teamMember{
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []core.TeamMember{
 				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
 				{AgentID: "mate@1", BackendType: "in-process", IsActive: boolPtr(true)},
 			},
@@ -397,8 +399,8 @@ func TestCellActive(t *testing.T) {
 		{
 			name:  "in-process member, isActive false -> false",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
-			members: []teamMember{
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []core.TeamMember{
 				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
 				{AgentID: "mate@1", BackendType: "in-process", IsActive: boolPtr(false)},
 			},
@@ -407,8 +409,8 @@ func TestCellActive(t *testing.T) {
 		{
 			name:  "lead-only members -> false",
 			sess:  "cell-x",
-			peers: []*Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
-			members: []teamMember{
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}},
+			members: []core.TeamMember{
 				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
 			},
 			want: false,
@@ -429,37 +431,6 @@ func TestCellActive(t *testing.T) {
 				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
-	}
-}
-
-// --- atomicWrite ---
-
-func TestAtomicWrite(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "f.txt")
-	if err := atomicWrite(path, "hello"); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "hello" {
-		t.Errorf("got %q", got)
-	}
-	if err := atomicWrite(path, "world"); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	got, _ = os.ReadFile(path)
-	if string(got) != "world" {
-		t.Errorf("overwrite: got %q", got)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Errorf("no leftover temp file expected, got %v", entries)
 	}
 }
 

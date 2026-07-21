@@ -11,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // status.go — cell status, derived by kraken rather than declared by any
@@ -44,7 +47,7 @@ import (
 //     only liveness signal available, and an absent value must not default
 //     to active. Either way isActive:false (finished without being removed
 //     from the config) is filtered up front.
-func cellActive(sess string, peers []*Peer, members []teamMember, paneQuestion func(string) bool) bool {
+func cellActive(sess string, peers []*core.Peer, members []core.TeamMember, paneQuestion func(string) bool) bool {
 	for _, p := range peers {
 		if p.TmuxSession != sess || p.Status != "running" {
 			continue
@@ -302,21 +305,6 @@ func deriveState(j *Job, live bool, active bool) string {
 
 // --- job file writes ---
 
-// atomicWrite writes content to path via temp file + rename in the same dir —
-// the same crash-safe pattern writeJobFields uses — so a reader never
-// observes a half-written file.
-func atomicWrite(path, content string) error {
-	tmp := path + ".kraken.tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
-}
-
 // appendMidRunLog appends one line to a job file's "## Mid-run log" section
 // (adding the heading if the file doesn't have one yet), touching nothing
 // above it — the frontmatter and human-authored spec body are never rewritten
@@ -358,7 +346,7 @@ func appendMidRunLog(j *Job, actor, text string) error {
 	} else {
 		newContent = trimmed + "\n\n## Mid-run log\n" + entry + "\n"
 	}
-	return atomicWrite(j.File, newContent)
+	return util.AtomicWrite(j.File, newContent)
 }
 
 // listArtifacts lists a cell's artifact files, sorted by name. Missing dir

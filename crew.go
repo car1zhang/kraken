@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"kraken/util"
 )
 
 // crew.go — zeus' brief. A cell runs exactly one pane-backed agent, zeus;
@@ -13,7 +15,7 @@ import (
 // including those subagents, gets its own unique system prompt; there is no
 // shared generic brief.
 
-func zeusName(j *Job) string { return "zeus-" + slugify(j.Slug) }
+func zeusName(j *Job) string { return "zeus-" + util.Slugify(j.Slug) }
 
 // docExt is the doc pipeline's file extension for j's workflow: build jobs
 // produce a SPEC-MODE doc, info jobs an EXPLAIN-MODE doc.
@@ -27,7 +29,7 @@ func docExt(j *Job) string {
 // docSourcePath is the doc pipeline's editable source: placeholders live
 // here until flattened into the board-visible artifacts copy.
 func docSourcePath(j *Job) string {
-	return filepath.Join(cellDir(j), "doc", slugify(j.Slug)+"."+docExt(j)+".html")
+	return filepath.Join(cellDir(j), "doc", util.Slugify(j.Slug)+"."+docExt(j)+".html")
 }
 
 // docFragmentsDir holds one rendered <svg> fragment per diagram placeholder,
@@ -39,7 +41,7 @@ func docFragmentsDir(j *Job) string {
 // docArtifactPath is the flattened, board-visible copy of the doc — the ONLY
 // one carl's board ever renders.
 func docArtifactPath(j *Job) string {
-	return filepath.Join(cellArtifacts(j), slugify(j.Slug)+"."+docExt(j)+".html")
+	return filepath.Join(cellArtifacts(j), util.Slugify(j.Slug)+"."+docExt(j)+".html")
 }
 
 // zeusBrief builds zeus' system prompt: sole agent for the job, direct human

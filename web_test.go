@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"kraken/util"
 )
 
 func ipNet(ip string, bits int) *net.IPNet {
@@ -677,8 +679,8 @@ func TestBinaryStale(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := binaryStale(c.start, c.now); got != c.want {
-				t.Errorf("binaryStale(%v, %v) = %v, want %v", c.start, c.now, got, c.want)
+			if got := util.BinaryStale(c.start, c.now); got != c.want {
+				t.Errorf("util.BinaryStale(%v, %v) = %v, want %v", c.start, c.now, got, c.want)
 			}
 		})
 	}
@@ -686,7 +688,7 @@ func TestBinaryStale(t *testing.T) {
 
 // TestIsSelfStaleDetectsChange exercises isSelfStale end to end (rather than
 // just its pure binaryStale helper): TestHealthHandlerContractAndStale can
-// only ever observe stale=false since selfBinaryStart is nil in tests, so
+// only ever observe stale=false since util.SelfBinaryStart is nil in tests, so
 // this drives the package state directly to cover the true branch too.
 func TestIsSelfStaleDetectsChange(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kraken")
@@ -698,12 +700,12 @@ func TestIsSelfStaleDetectsChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origPath, origStart := selfBinaryPath, selfBinaryStart
-	selfBinaryPath, selfBinaryStart = path, fi
-	t.Cleanup(func() { selfBinaryPath, selfBinaryStart = origPath, origStart })
+	origPath, origStart := util.SelfBinaryPath, util.SelfBinaryStart
+	util.SelfBinaryPath, util.SelfBinaryStart = path, fi
+	t.Cleanup(func() { util.SelfBinaryPath, util.SelfBinaryStart = origPath, origStart })
 
-	if isSelfStale() {
-		t.Fatal("isSelfStale() = true before any change, want false")
+	if util.IsSelfStale() {
+		t.Fatal("util.IsSelfStale() = true before any change, want false")
 	}
 
 	if err := os.WriteFile(path, []byte("v1 plus more bytes"), 0o644); err != nil {
@@ -714,8 +716,8 @@ func TestIsSelfStaleDetectsChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !isSelfStale() {
-		t.Fatal("isSelfStale() = false after binary changed, want true")
+	if !util.IsSelfStale() {
+		t.Fatal("util.IsSelfStale() = false after binary changed, want true")
 	}
 }
 

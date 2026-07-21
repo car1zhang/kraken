@@ -6,14 +6,17 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 func TestPinBlocked(t *testing.T) {
-	mate := &Peer{AgentName: "helper", Role: "teammate", Status: "question"}
-	calm := &Peer{Name: "calm", Status: "running"}
-	lead := &Peer{Name: "lead", Status: "running", Teammates: []*Peer{mate}}
-	shelly := &Peer{Name: "shelly", Status: "shell"}
-	ordered := orderPeers(pinBlocked([]*Peer{calm, lead, mate, shelly}))
+	mate := &core.Peer{AgentName: "helper", Role: "teammate", Status: "question"}
+	calm := &core.Peer{Name: "calm", Status: "running"}
+	lead := &core.Peer{Name: "lead", Status: "running", Teammates: []*core.Peer{mate}}
+	shelly := &core.Peer{Name: "shelly", Status: "shell"}
+	ordered := core.OrderPeers(pinBlocked([]*core.Peer{calm, lead, mate, shelly}))
 	if len(ordered) != 4 {
 		t.Fatalf("want 4 rows, got %d", len(ordered))
 	}
@@ -21,7 +24,7 @@ func TestPinBlocked(t *testing.T) {
 	// status; both keep their relative order; calm sinks below
 	if ordered[0] != lead || ordered[1] != mate || ordered[2] != shelly || ordered[3] != calm {
 		t.Errorf("wrong pin order: %s %s %s %s",
-			displayName(ordered[0]), displayName(ordered[1]), displayName(ordered[2]), displayName(ordered[3]))
+			core.DisplayName(ordered[0]), core.DisplayName(ordered[1]), core.DisplayName(ordered[2]), core.DisplayName(ordered[3]))
 	}
 	for i, p := range ordered {
 		if p.Index != i+1 {
@@ -31,9 +34,9 @@ func TestPinBlocked(t *testing.T) {
 }
 
 func TestPinBlockedStableWhenNoneBlocked(t *testing.T) {
-	a := &Peer{Name: "a", Status: "running"}
-	b := &Peer{Name: "b", Status: "waiting"}
-	ordered := orderPeers(pinBlocked([]*Peer{a, b}))
+	a := &core.Peer{Name: "a", Status: "running"}
+	b := &core.Peer{Name: "b", Status: "waiting"}
+	ordered := core.OrderPeers(pinBlocked([]*core.Peer{a, b}))
 	if ordered[0] != a || ordered[1] != b {
 		t.Errorf("order changed with nothing blocked")
 	}
@@ -41,36 +44,36 @@ func TestPinBlockedStableWhenNoneBlocked(t *testing.T) {
 
 func TestPinBlockedNestingCycle(t *testing.T) {
 	// two leads nested under each other must not hang or vanish
-	a := &Peer{Name: "a", Status: "question"}
-	b := &Peer{Name: "b", Status: "running"}
-	a.Teammates = []*Peer{b}
-	b.Teammates = []*Peer{a}
-	ordered := orderPeers(pinBlocked([]*Peer{a, b}))
+	a := &core.Peer{Name: "a", Status: "question"}
+	b := &core.Peer{Name: "b", Status: "running"}
+	a.Teammates = []*core.Peer{b}
+	b.Teammates = []*core.Peer{a}
+	ordered := core.OrderPeers(pinBlocked([]*core.Peer{a, b}))
 	if len(ordered) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(ordered))
 	}
 }
 
 func TestPeerKeyInProcessTeammate(t *testing.T) {
-	p := &Peer{Team: "csr", AgentName: "reviewer"}
-	q := &Peer{Team: "csr", AgentName: "tests"}
+	p := &core.Peer{Team: "csr", AgentName: "reviewer"}
+	q := &core.Peer{Team: "csr", AgentName: "tests"}
 	if peerKey(p) == peerKey(q) {
 		t.Errorf("distinct in-process teammates must not share a key")
 	}
 }
 
-func mkPeers(n int) []*Peer {
-	peers := make([]*Peer, n)
+func mkPeers(n int) []*core.Peer {
+	peers := make([]*core.Peer, n)
 	for i := range peers {
-		peers[i] = &Peer{Name: "p" + strconv.Itoa(i), TmuxSession: "0", WindowIdx: i, Pane: "%" + strconv.Itoa(i), PID: i + 1}
+		peers[i] = &core.Peer{Name: "p" + strconv.Itoa(i), TmuxSession: "0", WindowIdx: i, Pane: "%" + strconv.Itoa(i), PID: i + 1}
 	}
 	return peers
 }
 
-func mkShells(n int) []*Peer {
-	shells := make([]*Peer, n)
+func mkShells(n int) []*core.Peer {
+	shells := make([]*core.Peer, n)
 	for i := range shells {
-		shells[i] = &Peer{
+		shells[i] = &core.Peer{
 			Pane: "%" + strconv.Itoa(50+i), TmuxSession: "0", WindowIdx: 50 + i,
 			PID: 100 + i, CWD: "/tmp/x", Role: "shell",
 		}
@@ -78,26 +81,26 @@ func mkShells(n int) []*Peer {
 	return shells
 }
 
-func testModel(mode string, peers, shells []*Peer, usage string, w, h int) *viewerModel {
+func testModel(mode string, peers, shells []*core.Peer, usage string, w, h int) *viewerModel {
 	m := &viewerModel{mode: mode, rawPeers: peers, rawShells: shells, usage: usage, width: w, height: h, loaded: true}
 	m.rebuild()
 	return m
 }
 
 func TestRebuildAnchorsCursor(t *testing.T) {
-	a := &Peer{Name: "a", Pane: "%1", PID: 10}
-	b := &Peer{Name: "b", Pane: "%2", PID: 20}
-	m := testModel("type", []*Peer{a, b}, nil, "", 80, 30)
+	a := &core.Peer{Name: "a", Pane: "%1", PID: 10}
+	b := &core.Peer{Name: "b", Pane: "%2", PID: 20}
+	m := testModel("type", []*core.Peer{a, b}, nil, "", 80, 30)
 	m.setCursor(1) // b
 	// next snapshot: b blocks on a question and pins to the top; the cursor
 	// must follow it
-	m.rawPeers = []*Peer{{Name: "a", Pane: "%1", PID: 10}, {Name: "b", Pane: "%2", PID: 20, Status: "question"}}
+	m.rawPeers = []*core.Peer{{Name: "a", Pane: "%1", PID: 10}, {Name: "b", Pane: "%2", PID: 20, Status: "question"}}
 	m.rebuild()
-	if m.cursor != 0 || displayName(m.selected()) != "b" {
-		t.Errorf("cursor should follow b to index 0, got %d (%v)", m.cursor, displayName(m.selected()))
+	if m.cursor != 0 || core.DisplayName(m.selected()) != "b" {
+		t.Errorf("cursor should follow b to index 0, got %d (%v)", m.cursor, core.DisplayName(m.selected()))
 	}
 	// selected peer gone: clamp
-	m.rawPeers = []*Peer{{Name: "a", Pane: "%1", PID: 10}}
+	m.rawPeers = []*core.Peer{{Name: "a", Pane: "%1", PID: 10}}
 	m.rebuild()
 	if m.cursor != 0 {
 		t.Errorf("cursor should clamp, got %d", m.cursor)
@@ -154,18 +157,18 @@ func TestMultilineUsageLayout(t *testing.T) {
 	if m.usageLines() != 0 {
 		t.Fatalf("grouped usage should not reserve global header lines, got %d", m.usageLines())
 	}
-	view := ansiRe.ReplaceAllString(m.View(), "")
+	view := util.AnsiRe.ReplaceAllString(m.View(), "")
 	if !strings.HasPrefix(view, "CLAUDE\n  5h 10%\n  7d 20%\n") {
 		t.Fatalf("usage lines should render below their table title:\n%s", view)
 	}
 }
 
 func TestBuildLinesSessionMode(t *testing.T) {
-	peers := []*Peer{
+	peers := []*core.Peer{
 		{Name: "a", TmuxSession: "0", WindowIdx: 1, Pane: "%1", PID: 1},
 		{Name: "b", TmuxSession: "api", WindowIdx: 0, Pane: "%2", PID: 2},
 	}
-	shells := []*Peer{{TmuxSession: "0", WindowIdx: 0, Pane: "%3", PID: 3, Role: "shell", CWD: "/tmp"}}
+	shells := []*core.Peer{{TmuxSession: "0", WindowIdx: 0, Pane: "%3", PID: 3, Role: "shell", CWD: "/tmp"}}
 	m := testModel("session", peers, shells, "", 80, 40)
 	// groups: "0" (shell win 0, claude win 1), "api" (claude)
 	if len(m.groups) != 2 || m.groups[0].title != "session 0" || m.groups[1].title != "session api" {
@@ -206,11 +209,11 @@ func TestScrollFollowsCursorLines(t *testing.T) {
 }
 
 func TestModeCycleKeepsCursor(t *testing.T) {
-	peers := []*Peer{
+	peers := []*core.Peer{
 		{Name: "a", TmuxSession: "0", WindowIdx: 0, Pane: "%1", PID: 1},
 		{Name: "b", TmuxSession: "api", WindowIdx: 0, Pane: "%2", PID: 2},
 	}
-	shells := []*Peer{{TmuxSession: "0", WindowIdx: 5, Pane: "%3", PID: 3, Role: "shell", CWD: "/tmp"}}
+	shells := []*core.Peer{{TmuxSession: "0", WindowIdx: 5, Pane: "%3", PID: 3, Role: "shell", CWD: "/tmp"}}
 	m := testModel("type", peers, shells, "", 80, 40)
 	m.setCursor(2) // the shell
 	d := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}}
@@ -233,19 +236,19 @@ func TestClipLine(t *testing.T) {
 		t.Errorf("short line changed: %q", got)
 	}
 	got := clipLine("abcdefghij", 5)
-	if vw := visWidth(got); vw != 5 {
+	if vw := util.VisWidth(got); vw != 5 {
 		t.Errorf("clipped width = %d, want 5 (%q)", vw, got)
 	}
-	if !strings.HasSuffix(got, "…"+reset) {
-		t.Errorf("clip must end with ellipsis+reset: %q", got)
+	if !strings.HasSuffix(got, "…"+util.Reset) {
+		t.Errorf("clip must end with ellipsis+util.Reset: %q", got)
 	}
 	// ANSI codes are preserved, not counted
-	colored := cyan + "abcdef" + reset + "ghij"
+	colored := util.Cyan + "abcdef" + util.Reset + "ghij"
 	got = clipLine(colored, 5)
-	if vw := visWidth(got); vw != 5 {
+	if vw := util.VisWidth(got); vw != 5 {
 		t.Errorf("ansi clip width = %d, want 5 (%q)", vw, got)
 	}
-	if !strings.Contains(got, cyan) {
+	if !strings.Contains(got, util.Cyan) {
 		t.Errorf("ansi prefix dropped: %q", got)
 	}
 }
@@ -318,7 +321,7 @@ func TestJobRowKeyAnchorsCursorAcrossRefresh(t *testing.T) {
 func TestDDChord(t *testing.T) {
 	d := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
 	j := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}
-	peers := []*Peer{{Name: "c", Pane: "%1", PID: 10, Role: "main"}}
+	peers := []*core.Peer{{Name: "c", Pane: "%1", PID: 10, Role: "main"}}
 	m := testModel("type", peers, mkShells(2), "", 80, 30)
 
 	// d arms on a claude too (kill applies to both kinds now)

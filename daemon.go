@@ -9,6 +9,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // k daemon — the one long-lived kraken process (launchd-managed, installed by
@@ -47,7 +50,7 @@ type daemonStatus struct {
 }
 
 func daemonStatusPath() string {
-	return filepath.Join(home(), ".kraken", "daemon.json")
+	return filepath.Join(util.Home(), ".kraken", "daemon.json")
 }
 
 func readDaemonStatus() (daemonStatus, bool) {
@@ -66,7 +69,7 @@ func processAlive(pid int) bool {
 // notify fires a macOS notification; failures are logged, never fatal — the
 // board itself is the durable signal.
 func notify(title, msg string) {
-	script := fmt.Sprintf("display notification %q with title %q", truncateOneLine(msg, 120), title)
+	script := fmt.Sprintf("display notification %q with title %q", core.TruncateOneLine(msg, 120), title)
 	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
 		dlog("osascript notify failed: %v", err)
 	}
@@ -84,15 +87,15 @@ type daemon struct {
 
 func cmdDaemon(args []string) {
 	if len(args) != 0 {
-		die("usage: k daemon")
+		util.Die("usage: k daemon")
 	}
 	if st, ok := readDaemonStatus(); ok && st.PID != os.Getpid() && processAlive(st.PID) {
-		die("daemon already running (pid %d)", st.PID)
+		util.Die("daemon already running (pid %d)", st.PID)
 	}
 	if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
-		die("mkdir %s: %v", filepath.Dir(daemonStatusPath()), err)
+		util.Die("mkdir %s: %v", filepath.Dir(daemonStatusPath()), err)
 	}
-	initSelfCheck()
+	util.InitSelfCheck()
 	d := &daemon{notified: map[string]int64{}, poked: map[string]int64{}}
 	st := daemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
 	dlog("daemon up (pid %d, cap %d cells, tick %s)", st.PID, cellCap, daemonInterval)
@@ -117,13 +120,13 @@ func cmdDaemon(args []string) {
 			close(firstTick)
 			first = false
 		}
-		st.LastTick, st.Cells, st.LastError, st.Stale = time.Now().Unix(), cells, "", isSelfStale()
+		st.LastTick, st.Cells, st.LastError, st.Stale = time.Now().Unix(), cells, "", util.IsSelfStale()
 		if err != nil {
 			st.LastError = err.Error()
 			dlog("tick error: %v", err)
 		}
 		if data, err := json.Marshal(st); err == nil {
-			_ = atomicWrite(daemonStatusPath(), string(data))
+			_ = util.AtomicWrite(daemonStatusPath(), string(data))
 		}
 		time.Sleep(daemonInterval)
 	}
@@ -153,7 +156,7 @@ func (d *daemon) tick() (int, error) {
 		}
 	}
 
-	all, _ := orderAll(discoverAll())
+	all, _ := core.OrderAll(core.DiscoverAll())
 	times := liveSessionTimes()
 	now := time.Now()
 	cells := 0
@@ -251,7 +254,7 @@ func (d *daemon) tick() (int, error) {
 				if zeus != nil && zeus.SessionID != "" && !zeus.SessionIDGuessed {
 					sessionID = zeus.SessionID
 				}
-				active = cellActive(cellSession(j), all, teamMembersForLead(sessionID), paneShowsQuestion)
+				active = cellActive(cellSession(j), all, core.TeamMembersForLead(sessionID), core.PaneShowsQuestion)
 			}
 		}
 		st := deriveState(j, isLive, active)

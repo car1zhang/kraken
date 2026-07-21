@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"kraken/util"
 )
 
 // --- usage limits header ---
@@ -50,11 +52,11 @@ type codexRateLimits struct {
 func usageColor(pct int) string {
 	switch {
 	case pct >= 80:
-		return red
+		return util.Red
 	case pct >= 50:
-		return yellow
+		return util.Yellow
 	default:
-		return green
+		return util.Green
 	}
 }
 
@@ -167,23 +169,23 @@ func codexUsageLine(color bool, seg func(string, float64, string) string) string
 	for i, part := range parts {
 		prefix := "        "
 		if i == 0 {
-			prefix = paint(color, cyan, "codex") + "   "
+			prefix = util.Paint(color, util.Cyan, "codex") + "   "
 		}
 		lines[i] = prefix + part
 	}
 	return strings.Join(lines, "\n")
 }
 
-func usageHeader(color bool) string {
-	path := filepath.Join(home(), ".claude", ".usage-cache.json")
+func UsageHeader(color bool) string {
+	path := filepath.Join(util.Home(), ".claude", ".usage-cache.json")
 	data, err := os.ReadFile(path)
 	var uc usageCache
 	claudeOK := err == nil && json.Unmarshal(data, &uc) == nil
 	seg := func(label string, pct float64, reset string) string {
 		p := int(pct)
-		s := paint(color, dim, label+" ") + paint(color, usageColor(p), fmt.Sprintf("%d%%", p))
+		s := util.Paint(color, util.Dim, label+" ") + util.Paint(color, usageColor(p), fmt.Sprintf("%d%%", p))
 		if reset != "" {
-			s += paint(color, dim, " · "+reset)
+			s += util.Paint(color, util.Dim, " · "+reset)
 		}
 		return s
 	}
@@ -202,13 +204,13 @@ func usageHeader(color bool) string {
 		for i, part := range segs {
 			prefix := "        "
 			if i == 0 {
-				prefix = paint(color, cyan, "claude") + "  "
+				prefix = util.Paint(color, util.Cyan, "claude") + "  "
 			}
 			claudeLines[i] = prefix + part
 		}
 		if info, err := os.Stat(path); err == nil {
 			if stale := time.Since(info.ModTime()); stale > 10*time.Minute {
-				claudeLines[0] += paint(color, dim, fmt.Sprintf("   (stale %s)", age(stale)))
+				claudeLines[0] += util.Paint(color, util.Dim, fmt.Sprintf("   (stale %s)", util.Age(stale)))
 			}
 		}
 		lines = append(lines, claudeLines...)
@@ -222,15 +224,15 @@ func usageHeader(color bool) string {
 // usageForAgent extracts one agent's limit rows from the combined usage
 // snapshot and removes the repeated agent label; the surrounding table title
 // already supplies that context.
-func usageForAgent(usage, agent string, color bool) []string {
+func UsageForAgent(usage, agent string, color bool) []string {
 	if usage == "" || (agent != "claude" && agent != "codex") {
 		return nil
 	}
-	marker := paint(color, cyan, agent)
+	marker := util.Paint(color, util.Cyan, agent)
 	var rows []string
 	inBlock := false
 	for _, line := range strings.Split(usage, "\n") {
-		plain := ansiRe.ReplaceAllString(line, "")
+		plain := util.AnsiRe.ReplaceAllString(line, "")
 		if strings.HasPrefix(plain, agent+strings.Repeat(" ", 8-len(agent))) {
 			inBlock = true
 			line = strings.TrimPrefix(line, marker)

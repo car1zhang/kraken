@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // --- cells ---
@@ -21,11 +23,11 @@ import (
 // reap); the daemon takes over creation and teardown in phase 3.
 
 func cellsRoot() string {
-	return filepath.Join(home(), ".kraken", "cells")
+	return filepath.Join(util.Home(), ".kraken", "cells")
 }
 
 func cellDir(j *Job) string {
-	return filepath.Join(cellsRoot(), slugify(j.Slug))
+	return filepath.Join(cellsRoot(), util.Slugify(j.Slug))
 }
 
 // cellWorktree names the worktree wt-<repo>: the dir basename is what shows
@@ -82,7 +84,7 @@ func existingWorktree(j *Job, repo string) string {
 }
 
 func cellSession(j *Job) string {
-	return "cell-" + slugify(j.Slug)
+	return "cell-" + util.Slugify(j.Slug)
 }
 
 func cellArtifacts(j *Job) string {
@@ -94,7 +96,7 @@ func cellArtifacts(j *Job) string {
 // all that remain after teardown).
 func allArtifactPaths(j *Job) []string {
 	out := listArtifacts(j)
-	prefix := slugify(j.Slug) + "."
+	prefix := util.Slugify(j.Slug) + "."
 	entries, err := os.ReadDir(plutoDir())
 	if err != nil {
 		return out
@@ -113,9 +115,9 @@ func allArtifactPaths(j *Job) []string {
 // commits that a forced reuse would orphan — see ensureUsableBranch).
 func branchForRun(slug string, run int) string {
 	if run >= 2 {
-		return fmt.Sprintf("carl/%s-r%d", slugify(slug), run)
+		return fmt.Sprintf("carl/%s-r%d", util.Slugify(slug), run)
 	}
-	return "carl/" + slugify(slug)
+	return "carl/" + util.Slugify(slug)
 }
 
 func cellBranch(j *Job) string {
@@ -203,7 +205,7 @@ func liveSessions() map[string]bool {
 // bypass permissions from birth. tmux commands never see shell aliases, so the
 // flags are spelled out here.
 func cellClaudeArgs() []string {
-	return []string{claudeLauncher(), "--dangerously-skip-permissions", "--rc"}
+	return []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
 }
 
 // jobPrompt is the spec portion of the job body — everything up to the
@@ -223,21 +225,21 @@ func jobPrompt(j *Job) string {
 
 func cmdStart(args []string) {
 	if len(args) != 1 {
-		die("usage: k start <job-slug>")
+		util.Die("usage: k start <job-slug>")
 	}
 	jobs := loadJobs()
 	j := jobBySlug(jobs, args[0])
 	if j == nil {
-		die("no job %q in %s (k j lists them)", args[0], plutoDir())
+		util.Die("no job %q in %s (k j lists them)", args[0], plutoDir())
 	}
 	if j.Err != "" {
-		die("job %s is unparseable: %s", j.Slug, j.Err)
+		util.Die("job %s is unparseable: %s", j.Slug, j.Err)
 	}
 	if !j.Ready {
-		die("job %s is not ready (flip ready: true in %s)", j.Slug, j.File)
+		util.Die("job %s is not ready (flip ready: true in %s)", j.Slug, j.File)
 	}
 	if j.started() {
-		die("job %s already started (state: %s)", j.Slug, j.State)
+		util.Die("job %s already started (state: %s)", j.Slug, j.State)
 	}
 	bySlug := map[string]*Job{}
 	for _, dep := range jobs {
@@ -248,7 +250,7 @@ func cmdStart(args []string) {
 		for _, p := range unmet {
 			names = append(names, p.Job)
 		}
-		die("job %s has unmet prereqs: %s", j.Slug, strings.Join(names, ", "))
+		util.Die("job %s has unmet prereqs: %s", j.Slug, strings.Join(names, ", "))
 	}
 	// starting a gate-parked job is the human release: show what's being
 	// signed off so the outcome review is explicit, not accidental
@@ -263,10 +265,10 @@ func cmdStart(args []string) {
 	}
 	repo, err := resolveRepo(j.Repo)
 	if err != nil {
-		die("job %s: %v", j.Slug, err)
+		util.Die("job %s: %v", j.Slug, err)
 	}
 	if err := startCell(j, repo); err != nil {
-		die("%v", err)
+		util.Die("%v", err)
 	}
 	fmt.Printf("started %s: worktree %s (branch %s), zeus in tmux session %s, state: working\n",
 		j.Slug, cellWorktree(j, repo), cellBranch(j), cellSession(j))
@@ -313,13 +315,13 @@ func startCell(j *Job, repo string) error {
 		argv = append(argv, "--", prompt)
 	}
 	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
-		"-n", slugify(j.Slug), shellCmdString(argv)).Run(); err != nil {
+		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)
 	}
 	// cell identity marker: reap verifies it before any teardown
-	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", slugify(j.Slug)).Run()
+	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", util.Slugify(j.Slug)).Run()
 	_ = exec.Command("tmux", "set-window-option", "-t", sess+":0",
-		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(slugify(j.Slug)))).Run()
+		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(util.Slugify(j.Slug)))).Run()
 	// fresh worktree paths trigger claude's folder-trust dialog, which blocks
 	// startup until answered
 	acceptTrustPrompts(sess)
@@ -395,7 +397,7 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	}
 	sess := cellSession(j)
 	if live[sess] {
-		if err := verifyCellSession(sess, slugify(j.Slug)); err != nil {
+		if err := verifyCellSession(sess, util.Slugify(j.Slug)); err != nil {
 			return err
 		}
 		if err := exec.Command("tmux", "kill-session", "-t", sess).Run(); err != nil {
@@ -427,24 +429,6 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 
 // --- cell health ---
 
-// apiErrorRe matches the error banners Claude Code paints into its pane when
-// the API is unhappy (overload, rate limit, connectivity). Scoped to obvious
-// phrasings — a false positive only surfaces a retry button, never acts.
-var apiErrorRe = regexp.MustCompile(`(?i)API Error|overloaded|rate.?limit(ed)?|connection (error|refused|reset)|network error`)
-
-// paneTail returns the last visible lines of a pane ("" on any failure).
-func paneTail(pane string, n int) string {
-	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
-}
-
 // acceptTrustPrompts answers claude's folder-trust dialog in a cell's fresh
 // (single) pane. The worktree is kraken-made from a repo carl queued a job
 // on — that IS the trust decision — and an unanswered dialog blocks startup
@@ -460,7 +444,7 @@ func acceptTrustPrompts(sess string) {
 		sawDialog := false
 		rendered := 0
 		for _, pane := range strings.Fields(string(out)) {
-			text := paneTail(pane, 30)
+			text := core.PaneTail(pane, 30)
 			if strings.Contains(text, "Is this a project you created or one you trust") {
 				sawDialog = true
 				// "Yes, I trust this folder" is the pre-selected option
@@ -483,9 +467,9 @@ func acceptTrustPrompts(sess string) {
 // simply the lowest-pane-id depth-0 claude in the cell session. Name-only
 // lookup reads a still-starting agent as "gone", which is how a trust dialog
 // once became "zeus process is gone".
-func cellZeus(j *Job, all []*Peer) *Peer {
+func cellZeus(j *Job, all []*core.Peer) *core.Peer {
 	sess := cellSession(j)
-	var inSess []*Peer
+	var inSess []*core.Peer
 	for _, p := range all {
 		if p.Name == zeusName(j) && p.Depth == 0 && p.TmuxSession == sess {
 			return p
@@ -513,7 +497,7 @@ func cellZeus(j *Job, all []*Peer) *Peer {
 // Guessed ids (cwd + newest-transcript inference) are never written —
 // resuming a guessed id later could resume some other claude's session.
 // Returns nil when there's nothing new to write.
-func stampSession(j *Job, all []*Peer) error {
+func stampSession(j *Job, all []*core.Peer) error {
 	zeus := cellZeus(j, all)
 	if zeus == nil || zeus.SessionID == "" || zeus.SessionIDGuessed || zeus.SessionID == j.Session {
 		return nil
@@ -526,37 +510,10 @@ func stampSession(j *Job, all []*Peer) error {
 // only warns on failure — the cell is going away either way, and the
 // daemon has normally stamped the id long before this point.
 func stampSessionBeforeTeardown(j *Job) {
-	all, _ := orderAll(discoverAll())
+	all, _ := core.OrderAll(core.DiscoverAll())
 	if err := stampSession(j, all); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: session stamp for %s failed: %v\n", j.Slug, err)
 	}
-}
-
-// chromeLineRe matches claude's UI furniture: task lists, agent roster,
-// recaps, spinners, separators, the input box, status bars, update nags.
-// Everything it matches is presentation, not transcript content.
-var chromeLineRe = regexp.MustCompile(`^\s*(✔|◼|◯|⧉|※|✻|✘|⏵⏵|📂|❯|↓|─|⎿|⏺ main$|\d+ tasks? \(|Jump to bottom)`)
-
-// transcriptTail returns the last n content lines of a pane's transcript:
-// the visible text minus chrome. Used to decide whether an error banner is
-// the LAST thing the agent said (a dead turn) or old history that later
-// output has superseded (an agent that recovered and finished).
-func transcriptTail(pane string, n int) []string {
-	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
-	if err != nil {
-		return nil
-	}
-	var content []string
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) == "" || chromeLineRe.MatchString(line) {
-			continue
-		}
-		content = append(content, line)
-	}
-	if len(content) > n {
-		content = content[len(content)-n:]
-	}
-	return content
 }
 
 // cellHealth reports why a live cell looks unhealthy ("" = healthy).
@@ -567,7 +524,7 @@ func transcriptTail(pane string, n int) []string {
 // banner itself scrolls out of view once subagent rosters grow, so neither
 // signal alone can be trusted. Every reason except "is gone" is retryable: a
 // poke resumes a claude sitting at its prompt.
-func cellHealth(j *Job, all []*Peer) string {
+func cellHealth(j *Job, all []*core.Peer) string {
 	zeus := cellZeus(j, all)
 	if zeus == nil {
 		return "zeus process is gone — restart the cell (kill session + k start after cleanup)"
@@ -585,13 +542,13 @@ func cellHealth(j *Job, all []*Peer) string {
 	// banners, and a visible-but-superseded error must not flag forever.
 	// (The session file can't arbitrate: observed stuck on busy for 20h
 	// across both crashes and clean turns.)
-	erroredLast := func(p *Peer) bool {
-		full := paneTail(p.Pane, 200)
+	erroredLast := func(p *core.Peer) bool {
+		full := core.PaneTail(p.Pane, 200)
 		if full == "" || strings.Contains(full, "esc to interrupt") {
 			return false // mid-turn = recovering, not stuck
 		}
-		tail := strings.Join(transcriptTail(p.Pane, 6), "\n")
-		return apiErrorRe.MatchString(tail)
+		tail := strings.Join(core.TranscriptTail(p.Pane, 6), "\n")
+		return core.ApiErrorRe.MatchString(tail)
 	}
 	if erroredLast(zeus) {
 		return "zeus hit an API error"
@@ -607,7 +564,7 @@ func retryCell(j *Job) error {
 	if !j.started() || j.State == "done" || !liveSessions()[cellSession(j)] {
 		return fmt.Errorf("%s has no live cell to retry", j.Slug)
 	}
-	all, _ := orderAll(discoverAll())
+	all, _ := core.OrderAll(core.DiscoverAll())
 	reason := cellHealth(j, all)
 	if strings.Contains(reason, "is gone") {
 		return fmt.Errorf("%s: %s", j.Slug, reason)
@@ -618,7 +575,7 @@ func retryCell(j *Job) error {
 	if zeus == nil {
 		return fmt.Errorf("%s: agent not found — rerun discovery", j.Slug)
 	}
-	return sendMessage(zeus, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
+	return core.SendMessage(zeus, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
 }
 
 // killJob tears a live job's cell down completely and returns the job to
@@ -668,7 +625,7 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 			}
 			return
 		}
-		dst := filepath.Join(plutoDir(), slugify(j.Slug)+"."+name)
+		dst := filepath.Join(plutoDir(), util.Slugify(j.Slug)+"."+name)
 		if _, err := os.Stat(dst); err == nil {
 			return // never overwrite an earlier copy
 		}
@@ -719,28 +676,28 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 // tracked (prs: chips), never auto-completed.
 func cmdDone(args []string) {
 	if len(args) < 1 {
-		die("usage: k done <job-slug> [outcome...]")
+		util.Die("usage: k done <job-slug> [outcome...]")
 	}
 	jobs := loadJobs()
 	j := jobBySlug(jobs, args[0])
 	if j == nil {
-		die("no job %q in %s (k j lists them)", args[0], plutoDir())
+		util.Die("no job %q in %s (k j lists them)", args[0], plutoDir())
 	}
 	if j.Err != "" {
-		die("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
+		util.Die("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
 	}
 	if !j.started() {
-		die("job %s hasn't started — nothing to complete", j.Slug)
+		util.Die("job %s hasn't started — nothing to complete", j.Slug)
 	}
 	if j.State == "done" {
-		die("job %s is already done", j.Slug)
+		util.Die("job %s is already done", j.Slug)
 	}
 	msgs, err := doneJob(j, oneLine(strings.Join(args[1:], " ")))
 	for _, m := range msgs {
 		fmt.Println(m)
 	}
 	if err != nil {
-		die("%v", err)
+		util.Die("%v", err)
 	}
 }
 
@@ -848,12 +805,12 @@ func reactivateJob(j *Job, session, message string) error {
 	}
 	argv := append(cellClaudeArgs(), "--name", zeusName(j), "-r", session, "--", prompt)
 	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
-		"-n", slugify(j.Slug), shellCmdString(argv)).Run(); err != nil {
+		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)
 	}
-	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", slugify(j.Slug)).Run()
+	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", util.Slugify(j.Slug)).Run()
 	_ = exec.Command("tmux", "set-window-option", "-t", sess+":0",
-		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(slugify(j.Slug)))).Run()
+		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(util.Slugify(j.Slug)))).Run()
 	// the worktree path is the same as the previous run's, so claude's
 	// folder trust normally persists — but a fresh machine or cleared
 	// config would block startup on the dialog just like a first start
@@ -871,7 +828,7 @@ func cmdReactivate(args []string) {
 		if args[i] == "--session" {
 			i++
 			if i >= len(args) {
-				die("--session needs a session uuid")
+				util.Die("--session needs a session uuid")
 			}
 			session = args[i]
 			continue
@@ -879,14 +836,14 @@ func cmdReactivate(args []string) {
 		rest = append(rest, args[i])
 	}
 	if len(rest) < 1 {
-		die("usage: k reactivate <job-slug> [--session <uuid>] [message...]")
+		util.Die("usage: k reactivate <job-slug> [--session <uuid>] [message...]")
 	}
 	j := jobBySlug(loadJobs(), rest[0])
 	if j == nil {
-		die("no job %q in %s (k j lists them)", rest[0], plutoDir())
+		util.Die("no job %q in %s (k j lists them)", rest[0], plutoDir())
 	}
 	if err := reactivateJob(j, session, oneLine(strings.Join(rest[1:], " "))); err != nil {
-		die("%v", err)
+		util.Die("%v", err)
 	}
 	fmt.Printf("reactivated %s: zeus session resumed in tmux session %s (branch %s), state: working\n",
 		j.Slug, cellSession(j), cellBranch(j))
@@ -1011,7 +968,7 @@ func migrateQueued(j *Job, live map[string]bool) error {
 //     value this function doesn't know isn't safe to guess at.
 func cmdMigrate(args []string) {
 	if len(args) != 0 {
-		die("usage: k migrate")
+		util.Die("usage: k migrate")
 	}
 	jobs := loadJobs()
 	live := liveSessions()

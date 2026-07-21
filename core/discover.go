@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"encoding/json"
@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kraken/util"
 )
 
 // --- discovery ---
@@ -290,7 +292,7 @@ func readCodexSession(pid int, cmd string) (codexSession, bool) {
 				} `json:"payload"`
 			}
 			if json.Unmarshal([]byte(line), &rec) == nil && rec.Payload.Type == "user_message" {
-				out.Name = truncateOneLine(rec.Payload.Message, 48)
+				out.Name = TruncateOneLine(rec.Payload.Message, 48)
 			}
 		}
 		if strings.Contains(line, `"type":"turn_context"`) {
@@ -359,7 +361,7 @@ func readCodexModelTail(path string) string {
 // generated or renamed, so the last valid record wins.
 func readCodexNames() map[string]string {
 	names := map[string]string{}
-	data, err := os.ReadFile(filepath.Join(home(), ".codex", "session_index.jsonl"))
+	data, err := os.ReadFile(filepath.Join(util.Home(), ".codex", "session_index.jsonl"))
 	if err != nil {
 		return names
 	}
@@ -380,7 +382,7 @@ func readCodexNames() map[string]string {
 
 func readSessionFile(pid int) (sessionFile, bool) {
 	var sf sessionFile
-	data, err := os.ReadFile(filepath.Join(home(), ".claude", "sessions", strconv.Itoa(pid)+".json"))
+	data, err := os.ReadFile(filepath.Join(util.Home(), ".claude", "sessions", strconv.Itoa(pid)+".json"))
 	if err != nil {
 		return sf, false
 	}
@@ -441,11 +443,11 @@ func paneCommand(root int, children map[int][]int, cmds map[int]string, etimes m
 	return cmds[best], etimes[best]
 }
 
-// discoverAll is the shared entrypoint: every command works off its output.
+// DiscoverAll is the shared entrypoint: every command works off its output.
 // Read-only; kraken keeps no state of its own. Panes with no agent in them
 // come back as shell Peers (Role "shell") so selection, k o, k k work on them.
 // Both lists are grouped by tmux session, then window.
-func discoverAll() ([]*Peer, []*Peer) {
+func DiscoverAll() ([]*Peer, []*Peer) {
 	panes := listTmuxPanes()
 	children, cmds, etimes := psSnapshot()
 	if os.Getenv("KRAKEN_DEBUG") != "" {
@@ -486,7 +488,7 @@ func discoverAll() ([]*Peer, []*Peer) {
 			if cmd != "" {
 				sp.Status = "running"
 			}
-			sp.Name = projectLabel(sp)
+			sp.Name = ProjectLabel(sp)
 			sp.Branch = gitBranch(sp.CWD)
 			shells = append(shells, sp)
 			continue
@@ -524,7 +526,7 @@ func discoverAll() ([]*Peer, []*Peer) {
 				peer.SessionID = sf.SessionID
 				// names render raw into table lines: control chars or a
 				// newline would break the one-row-per-line layout
-				peer.Name = truncateOneLine(sf.Name, 80)
+				peer.Name = TruncateOneLine(sf.Name, 80)
 				peer.CWD = sf.CWD
 				peer.Kind = sf.Kind
 				peer.StatusAt = sf.StatusUpdatedAt
@@ -581,18 +583,18 @@ func discoverAll() ([]*Peer, []*Peer) {
 func sortBySessionWindow(list []*Peer) {
 	sort.SliceStable(list, func(i, j int) bool {
 		if list[i].TmuxSession != list[j].TmuxSession {
-			return sessionLess(list[i].TmuxSession, list[j].TmuxSession)
+			return SessionLess(list[i].TmuxSession, list[j].TmuxSession)
 		}
 		return list[i].WindowIdx < list[j].WindowIdx
 	})
 }
 
-// sessionLess orders session names numerically first (default tmux names are
+// SessionLess orders session names numerically first (default tmux names are
 // "0", "1", ..., where "10" must sort after "9"), then everything else by
 // string. Numbers-before-names keeps the ordering total — comparing a number
 // with a name by string would be intransitive ("9"<"10" numeric but
 // "10"<"5a"<"9" by string), and sort's output is unspecified on such cycles.
-func sessionLess(a, b string) bool {
+func SessionLess(a, b string) bool {
 	ai, aerr := strconv.Atoi(a)
 	bi, berr := strconv.Atoi(b)
 	switch {
@@ -769,7 +771,7 @@ func projectDirName(cwd string) string {
 }
 
 func newestTranscriptSession(cwd string) string {
-	dir := filepath.Join(home(), ".claude", "projects", projectDirName(cwd))
+	dir := filepath.Join(util.Home(), ".claude", "projects", projectDirName(cwd))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
@@ -797,7 +799,7 @@ func transcriptPath(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	matches, _ := filepath.Glob(filepath.Join(home(), ".claude", "projects", "*", sessionID+".jsonl"))
+	matches, _ := filepath.Glob(filepath.Join(util.Home(), ".claude", "projects", "*", sessionID+".jsonl"))
 	if len(matches) == 0 {
 		return ""
 	}

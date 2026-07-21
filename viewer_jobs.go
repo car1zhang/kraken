@@ -7,6 +7,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // viewer_jobs.go — the J-toggled job board inside k v: every job with state,
@@ -29,15 +32,15 @@ func buildJobRows(jobs []*Job) []*Job {
 // daemonHeader renders daemon health for the jobs view header line.
 func daemonHeader(st daemonStatus, ok bool) string {
 	if !ok || !processAlive(st.PID) {
-		return paint(true, red, "daemon ○ not running") + paint(true, dim, " (make install loads it)")
+		return util.Paint(true, util.Red, "daemon ○ not running") + util.Paint(true, util.Dim, " (make install loads it)")
 	}
 	age := time.Since(time.Unix(st.LastTick, 0))
 	if age > 3*daemonInterval {
-		return paint(true, red, fmt.Sprintf("daemon ● stale (last tick %s ago)", age.Round(time.Second)))
+		return util.Paint(true, util.Red, fmt.Sprintf("daemon ● stale (last tick %s ago)", age.Round(time.Second)))
 	}
-	s := paint(true, green, "daemon ●") + paint(true, dim, fmt.Sprintf(" tick %s ago", age.Round(time.Second)))
+	s := util.Paint(true, util.Green, "daemon ●") + util.Paint(true, util.Dim, fmt.Sprintf(" tick %s ago", age.Round(time.Second)))
 	if st.LastError != "" {
-		s += paint(true, red, " !"+truncateOneLine(st.LastError, 40))
+		s += util.Paint(true, util.Red, " !"+core.TruncateOneLine(st.LastError, 40))
 	}
 	return s
 }
@@ -45,11 +48,11 @@ func daemonHeader(st daemonStatus, ok bool) string {
 // buildJobLines renders the jobs view; viewLine.row indexes m.jrows.
 func (m *viewerModel) buildJobLines() []viewLine {
 	if !m.loaded {
-		return []viewLine{{text: paint(true, dim, "discovering…"), row: -1}}
+		return []viewLine{{text: util.Paint(true, util.Dim, "discovering…"), row: -1}}
 	}
 	var lines []viewLine
 	head := daemonHeader(m.daemonSt, m.daemonOK)
-	head += paint(true, dim, fmt.Sprintf(" · cells %d/%d", m.liveCells(), cellCap))
+	head += util.Paint(true, util.Dim, fmt.Sprintf(" · cells %d/%d", m.liveCells(), cellCap))
 	lines = append(lines, viewLine{text: head, row: -1}, viewLine{row: -1})
 	if len(m.jrows) == 0 {
 		lines = append(lines, viewLine{text: "no jobs in " + plutoDir() + " ({{name}} in a pluto note creates one)", row: -1})
@@ -58,10 +61,10 @@ func (m *viewerModel) buildJobLines() []viewLine {
 
 	bySlug := m.jobsBySlug()
 	now := time.Now()
-	lines = append(lines, viewLine{text: paint(true, cyan, "JOBS"), row: -1})
+	lines = append(lines, viewLine{text: util.Paint(true, util.Cyan, "JOBS"), row: -1})
 	header := []string{"  #", "STATE", "JOB", "TYPE", "REPO", "PREREQS", "CELL", "ART", "AGE"}
 	for i, h := range header {
-		header[i] = paint(true, cyan, h)
+		header[i] = util.Paint(true, util.Cyan, h)
 	}
 	table := [][]string{header}
 	repos := repoCandidates()
@@ -79,43 +82,43 @@ func (m *viewerModel) buildJobLines() []viewLine {
 		// there's no separate inbox to carry the detail anymore.
 		stateMark := ""
 		if reason := m.healthBySlug[j.Slug]; reason != "" {
-			stateMark = paint(color, red, " ⚠")
+			stateMark = util.Paint(color, util.Red, " ⚠")
 		} else if j.Err != "" {
-			stateMark = paint(color, red, " ⚠")
+			stateMark = util.Paint(color, util.Red, " ⚠")
 		}
-		repo := paint(color, dim, "-")
+		repo := util.Paint(color, util.Dim, "-")
 		if j.Repo != "" {
 			if hit := pickRepo(j.Repo, repos); hit != "" {
 				repo = hit
 			} else {
-				repo = paint(color, red, j.Repo+"?")
+				repo = util.Paint(color, util.Red, j.Repo+"?")
 			}
 		}
-		cell := paint(color, dim, "-")
+		cell := util.Paint(color, util.Dim, "-")
 		if live[cellSession(j)] {
 			cell = cellSession(j)
 		}
 		ageStr := ""
 		if !j.ModTime.IsZero() {
-			ageStr = age(now.Sub(j.ModTime))
+			ageStr = util.Age(now.Sub(j.ModTime))
 		}
-		art := paint(color, dim, "-")
+		art := util.Paint(color, util.Dim, "-")
 		if n := len(allArtifactPaths(j)); n > 0 {
 			art = fmt.Sprintf("%d", n)
 		}
 		table = append(table, []string{
-			marker + paint(color, dim, fmt.Sprintf("%2d", idx+1)),
-			paint(color, jobStateColor(state), "● "+state) + stateMark,
-			paint(color, cyan, j.Slug),
+			marker + util.Paint(color, util.Dim, fmt.Sprintf("%2d", idx+1)),
+			util.Paint(color, jobStateColor(state), "● "+state) + stateMark,
+			util.Paint(color, util.Cyan, j.Slug),
 			j.Type,
 			repo,
 			prereqCell(j, bySlug, color),
 			cell,
 			art,
-			paint(color, dim, ageStr),
+			util.Paint(color, util.Dim, ageStr),
 		})
 	}
-	aligned := formatTableLines(table)
+	aligned := util.FormatTableLines(table)
 	lines = append(lines, viewLine{text: aligned[0], row: -1})
 	for i, l := range aligned[1:] {
 		lines = append(lines, viewLine{text: l, row: i})
@@ -145,7 +148,7 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 		}
 		// drill into the cell: zeus pane
 		if p := m.peerNamed(zeusName(j)); p != nil {
-			return m, m.jobsActionCmd("opening "+j.Slug, func() (string, error) { return openPeer(p) })
+			return m, m.jobsActionCmd("opening "+j.Slug, func() (string, error) { return core.OpenPeer(p) })
 		}
 		m.note, m.noteIsErr = "no live cell for "+j.Slug, true
 	case "a":
@@ -235,7 +238,7 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 func abandonJob(j *Job) (string, error) {
 	sess := cellSession(j)
 	if liveSessions()[sess] {
-		if err := verifyCellSession(sess, slugify(j.Slug)); err != nil {
+		if err := verifyCellSession(sess, util.Slugify(j.Slug)); err != nil {
 			return "", err
 		}
 		if err := exec.Command("tmux", "kill-session", "-t", sess).Run(); err != nil {
@@ -256,7 +259,7 @@ func (m *viewerModel) jobsBySlug() map[string]*Job {
 	return bySlug
 }
 
-func (m *viewerModel) peerNamed(name string) *Peer {
+func (m *viewerModel) peerNamed(name string) *core.Peer {
 	for _, p := range m.rawPeers {
 		if p.Name == name && p.Messageable && p.Depth == 0 {
 			return p
@@ -313,7 +316,7 @@ func (m *viewerModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.jobsActionCmd("answering "+j.Slug, func() (string, error) {
-			if err := sendMessage(zeus, text); err != nil {
+			if err := core.SendMessage(zeus, text); err != nil {
 				return "", err
 			}
 			if err := appendMidRunLog(j, "me→zeus", oneLine(text)); err != nil {
@@ -339,5 +342,5 @@ func (m *viewerModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // answerPromptLine renders the inline input while steering a blocked job.
 func (m *viewerModel) answerPromptLine() string {
-	return paint(true, yellow, "steer "+m.answering.Slug+" → zeus ") + m.input + paint(true, dim, "▏(enter send · esc cancel)")
+	return util.Paint(true, util.Yellow, "steer "+m.answering.Slug+" → zeus ") + m.input + util.Paint(true, util.Dim, "▏(enter send · esc cancel)")
 }

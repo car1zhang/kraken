@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 // --- jobs ---
@@ -82,7 +85,7 @@ func plutoDir() string {
 	if d := os.Getenv("KRAKEN_PLUTO_DIR"); d != "" {
 		return d // tests point at a temp dir; daily use never sets this
 	}
-	return filepath.Join(home(), "Documents", "pluto")
+	return filepath.Join(util.Home(), "Documents", "pluto")
 }
 
 // started reports whether the job has ever entered a cell: "" means never
@@ -192,12 +195,12 @@ func parseJob(name string, data []byte) *Job {
 			continue
 		}
 		if line[0] == ' ' || line[0] == '\t' {
-			j.addErr(fmt.Sprintf("stray indented line %q", truncateOneLine(trimmed, 24)))
+			j.addErr(fmt.Sprintf("stray indented line %q", core.TruncateOneLine(trimmed, 24)))
 			continue
 		}
 		key, rest, ok := strings.Cut(line, ":")
 		if !ok {
-			j.addErr(fmt.Sprintf("bad line %q", truncateOneLine(trimmed, 24)))
+			j.addErr(fmt.Sprintf("bad line %q", core.TruncateOneLine(trimmed, 24)))
 			continue
 		}
 		k := strings.TrimSpace(key)
@@ -306,7 +309,7 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 		}
 		if !strings.HasPrefix(trimmed, "- ") && trimmed != "-" {
 			*i++
-			j.addErr(fmt.Sprintf("bad prs line %q", truncateOneLine(trimmed, 40)))
+			j.addErr(fmt.Sprintf("bad prs line %q", core.TruncateOneLine(trimmed, 40)))
 			continue
 		}
 		*i++
@@ -315,7 +318,7 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 		if k, v, ok := strings.Cut(item, ":"); ok && strings.TrimSpace(k) == "url" {
 			p.URL = strings.TrimSpace(v)
 		} else if item != "" {
-			j.addErr(fmt.Sprintf("bad prs item %q", truncateOneLine(item, 40)))
+			j.addErr(fmt.Sprintf("bad prs item %q", core.TruncateOneLine(item, 40)))
 		}
 		for *i+1 < len(fm) {
 			next := strings.TrimSpace(fm[*i+1])
@@ -329,7 +332,7 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 			}
 			k, v, ok := strings.Cut(next, ":")
 			if !ok {
-				j.addErr(fmt.Sprintf("bad prs line %q", truncateOneLine(next, 40)))
+				j.addErr(fmt.Sprintf("bad prs line %q", core.TruncateOneLine(next, 40)))
 				continue
 			}
 			switch strings.TrimSpace(k) {
@@ -347,7 +350,7 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 		case p.URL == "":
 			j.addErr("prs entry missing url")
 		case p.State != "open" && p.State != "merged" && p.State != "closed":
-			j.addErr(fmt.Sprintf("bad prs state %q for %s", p.State, truncateOneLine(p.URL, 40)))
+			j.addErr(fmt.Sprintf("bad prs state %q for %s", p.State, core.TruncateOneLine(p.URL, 40)))
 		default:
 			out = append(out, p)
 		}
@@ -378,7 +381,7 @@ func parsePrereqs(j *Job, fm []string, i *int) []Prereq {
 			if k, v, ok := strings.Cut(item, ":"); ok && strings.TrimSpace(k) == "job" {
 				p.Job = strings.TrimSpace(v)
 			} else if item != "" {
-				j.addErr(fmt.Sprintf("bad prereq item %q", truncateOneLine(item, 24)))
+				j.addErr(fmt.Sprintf("bad prereq item %q", core.TruncateOneLine(item, 24)))
 			}
 			// continuation lines: indented key: value pairs under this item
 			// (tab indentation counts — a tab-indented gated: true silently
@@ -395,7 +398,7 @@ func parsePrereqs(j *Job, fm []string, i *int) []Prereq {
 				}
 				k, v, ok := strings.Cut(next, ":")
 				if !ok {
-					j.addErr(fmt.Sprintf("bad prereq line %q", truncateOneLine(next, 24)))
+					j.addErr(fmt.Sprintf("bad prereq line %q", core.TruncateOneLine(next, 24)))
 					continue
 				}
 				switch strings.TrimSpace(k) {
@@ -417,7 +420,7 @@ func parsePrereqs(j *Job, fm []string, i *int) []Prereq {
 			continue
 		}
 		*i++
-		j.addErr(fmt.Sprintf("bad prereq line %q", truncateOneLine(trimmed, 24)))
+		j.addErr(fmt.Sprintf("bad prereq line %q", core.TruncateOneLine(trimmed, 24)))
 	}
 	return out
 }
@@ -477,13 +480,13 @@ func loadJobs() []*Job {
 
 // markSlugIssues flags jobs whose slug can't safely name a cell: cell
 // identity (worktree path, tmux session, branch, @kraken-job marker) is
-// keyed on slugify(Slug), so an empty result would alias the cells root and
+// keyed on util.Slugify(Slug), so an empty result would alias the cells root and
 // a collision would let one job's teardown kill another's live cell —
 // defeating verifyCellSession entirely.
 func markSlugIssues(jobs []*Job) {
 	bySlugified := map[string][]*Job{}
 	for _, j := range jobs {
-		bySlugified[slugify(j.Slug)] = append(bySlugified[slugify(j.Slug)], j)
+		bySlugified[util.Slugify(j.Slug)] = append(bySlugified[util.Slugify(j.Slug)], j)
 	}
 	for key, group := range bySlugified {
 		switch {
@@ -721,7 +724,7 @@ func writeJobPRs(j *Job, prs []JobPR) error {
 	if err != nil {
 		return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
 	}
-	if err := atomicWrite(j.File, content); err != nil {
+	if err := util.AtomicWrite(j.File, content); err != nil {
 		return err
 	}
 	j.PRs = prs
@@ -743,7 +746,7 @@ func writeJobFields(j *Job, keyvals ...string) error {
 			return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
 		}
 	}
-	if err := atomicWrite(j.File, content); err != nil {
+	if err := util.AtomicWrite(j.File, content); err != nil {
 		return err
 	}
 	for i := 0; i+1 < len(keyvals); i += 2 {
@@ -770,7 +773,7 @@ func writeJobState(j *Job, state string) error {
 // --- repo resolution ---
 
 func repoRoot() string {
-	return filepath.Join(home(), "Developer")
+	return filepath.Join(util.Home(), "Developer")
 }
 
 // isGitRepo reports whether dir is a git checkout (.git dir or worktree file).

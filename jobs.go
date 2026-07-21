@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"kraken/util"
 )
 
 // --- k j ---
@@ -16,13 +18,13 @@ import (
 func jobStateColor(state string) string {
 	switch state {
 	case "working":
-		return green
+		return util.Green
 	case "queued":
-		return cyan
+		return util.Cyan
 	case "blocked":
-		return yellow
+		return util.Yellow
 	default: // draft, done
-		return gray
+		return util.Gray
 	}
 }
 
@@ -48,18 +50,18 @@ func stateRank(state string) int {
 // ⚑ pending human gate).
 func prereqCell(j *Job, bySlug map[string]*Job, color bool) string {
 	if len(j.Prereqs) == 0 {
-		return paint(color, dim, "-")
+		return util.Paint(color, util.Dim, "-")
 	}
 	var parts []string
 	for _, p := range j.Prereqs {
 		dep := bySlug[p.Job]
 		switch {
 		case dep != nil && dep.State == "done":
-			parts = append(parts, paint(color, dim, p.Job+"✓"))
+			parts = append(parts, util.Paint(color, util.Dim, p.Job+"✓"))
 		case p.Gated:
-			parts = append(parts, paint(color, magenta, p.Job+"⚑"))
+			parts = append(parts, util.Paint(color, util.Magenta, p.Job+"⚑"))
 		default:
-			parts = append(parts, paint(color, yellow, p.Job+"✗"))
+			parts = append(parts, util.Paint(color, util.Yellow, p.Job+"✗"))
 		}
 	}
 	return strings.Join(parts, " ")
@@ -72,7 +74,7 @@ func cmdJobs(args []string) {
 		case "--json":
 			jsonOut = true
 		default:
-			die("unknown argument: %s (usage: k j [--json])", a)
+			util.Die("unknown argument: %s (usage: k j [--json])", a)
 		}
 	}
 	jobs := loadJobs()
@@ -101,7 +103,7 @@ func cmdJobs(args []string) {
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
-			die("marshal: %v", err)
+			util.Die("marshal: %v", err)
 		}
 		fmt.Println(string(data))
 		return
@@ -110,52 +112,52 @@ func cmdJobs(args []string) {
 		fmt.Printf("no jobs in %s (create one with {{name}} in a pluto note)\n", plutoDir())
 		return
 	}
-	color := useColor()
+	color := util.UseColor()
 	live := liveSessions()
 	repos := repoCandidates()
 	rows := [][]string{{" #", "STATE", "JOB", "TYPE", "REPO", "PREREQS", "CELL", "ART", "AGE"}}
 	for i, h := range rows[0] {
-		rows[0][i] = paint(color, cyan, h)
+		rows[0][i] = util.Paint(color, util.Cyan, h)
 	}
 	ordered := append([]*Job(nil), jobs...)
 	sortJobs(ordered, bySlug)
 	now := time.Now()
 	for i, j := range ordered {
 		state := displayState(j, bySlug)
-		repo := paint(color, dim, "-")
+		repo := util.Paint(color, util.Dim, "-")
 		if j.Repo != "" {
 			if hit := pickRepo(j.Repo, repos); hit != "" {
 				repo = hit
 			} else {
-				repo = paint(color, red, j.Repo+"?")
+				repo = util.Paint(color, util.Red, j.Repo+"?")
 			}
 		}
-		cell := paint(color, dim, "-")
+		cell := util.Paint(color, util.Dim, "-")
 		if live[cellSession(j)] {
 			cell = cellSession(j)
 		}
 		ageStr := ""
 		if !j.ModTime.IsZero() {
-			ageStr = age(now.Sub(j.ModTime))
+			ageStr = util.Age(now.Sub(j.ModTime))
 		}
-		stateCell := paint(color, jobStateColor(state), "● "+state)
+		stateCell := util.Paint(color, jobStateColor(state), "● "+state)
 		if j.Err != "" {
-			stateCell += paint(color, red, " ("+j.Err+")")
+			stateCell += util.Paint(color, util.Red, " ("+j.Err+")")
 		}
-		art := paint(color, dim, "-")
+		art := util.Paint(color, util.Dim, "-")
 		if n := len(allArtifactPaths(j)); n > 0 {
 			art = fmt.Sprintf("%d", n)
 		}
 		rows = append(rows, []string{
-			paint(color, dim, fmt.Sprintf("%2d", i+1)),
+			util.Paint(color, util.Dim, fmt.Sprintf("%2d", i+1)),
 			stateCell,
-			paint(color, cyan, j.Slug),
+			util.Paint(color, util.Cyan, j.Slug),
 			j.Type,
 			repo,
 			prereqCell(j, bySlug, color),
 			cell,
 			art,
-			paint(color, dim, ageStr),
+			util.Paint(color, util.Dim, ageStr),
 		})
 	}
 	// archived jobs ride last: identity is the numbered archive file base
@@ -163,30 +165,30 @@ func cmdJobs(args []string) {
 	// archive numbering renamed it
 	for i, a := range archived {
 		name := a.ArchivedName
-		if slugify(a.Slug) != a.ArchivedName {
+		if util.Slugify(a.Slug) != a.ArchivedName {
 			name += " (" + a.Slug + ")"
 		}
-		art := paint(color, dim, "-")
+		art := util.Paint(color, util.Dim, "-")
 		if n := len(archivedArtifactPaths(a)); n > 0 {
 			art = fmt.Sprintf("%d", n)
 		}
 		ageStr := ""
 		if !a.ModTime.IsZero() {
-			ageStr = age(now.Sub(a.ModTime))
+			ageStr = util.Age(now.Sub(a.ModTime))
 		}
 		rows = append(rows, []string{
-			paint(color, dim, fmt.Sprintf("%2d", len(ordered)+i+1)),
-			paint(color, gray, "● archived"),
-			paint(color, dim, name),
+			util.Paint(color, util.Dim, fmt.Sprintf("%2d", len(ordered)+i+1)),
+			util.Paint(color, util.Gray, "● archived"),
+			util.Paint(color, util.Dim, name),
 			a.Type,
 			a.Repo,
-			paint(color, dim, "-"),
-			paint(color, dim, "-"),
+			util.Paint(color, util.Dim, "-"),
+			util.Paint(color, util.Dim, "-"),
 			art,
-			paint(color, dim, ageStr),
+			util.Paint(color, util.Dim, ageStr),
 		})
 	}
-	printTable(rows)
+	util.PrintTable(rows)
 }
 
 // sortJobs orders the board by lifecycle rank, keeping slug order within a
