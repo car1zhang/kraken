@@ -76,6 +76,58 @@ private enum ArtifactKind {
     }
 }
 
+/// Cap on a fetched text artifact before it's handed to plainTextHTML/
+/// markdownHTML. loadHTMLString's escape-then-load path transiently holds
+/// several multiples of the input's size in memory (escaped copy + the HTML
+/// string + WKWebView's own parse), so an oversized .log/.md artifact can
+/// push the app over its memory limit on its own. Tail-truncating bounds the
+/// artifact path regardless of the underlying file size — approved default
+/// per spec Q6.
+private let textArtifactByteCap = 1_000_000
+
+/// Tail-truncates `text` to `textArtifactByteCap` UTF-8 bytes if it's over
+/// the cap, cutting on a Unicode-scalar boundary (always valid UTF-8; at
+/// worst the first kept character loses leading combining marks, and the
+/// newline trim below usually discards that line anyway), then through the
+/// first newline so the kept tail starts at a whole line rather than
+/// mid-sentence. When truncated, prefixes a one-line plain-text banner to
+/// the returned text itself — plainTextHTML/markdownHTML both render a full
+/// document shell with no separate slot for one, and this keeps the change
+/// contained to this file.
+private func truncatedForRender(_ text: String) -> String {
+    let byteCount = text.utf8.count
+    guard byteCount > textArtifactByteCap else { return text }
+
+    // Single reverse pass accumulating each scalar's UTF-8 width until the
+    // next one would cross the cap — O(kept), and unlike a Character-based
+    // walk it can't degenerate on a pathological megabyte-wide grapheme
+    // cluster, so the memory bound holds unconditionally.
+    let scalars = text.unicodeScalars
+    var kept = 0
+    var cut = scalars.endIndex
+    while cut > scalars.startIndex {
+        let prev = scalars.index(before: cut)
+        let v = scalars[prev].value
+        let width = v < 0x80 ? 1 : v < 0x800 ? 2 : v < 0x1_0000 ? 3 : 4
+        if kept + width > textArtifactByteCap { break }
+        kept += width
+        cut = prev
+    }
+
+    var tail = scalars[cut...]
+    // Drop through the first "\n" so the visible text opens on a whole line.
+    // Scalar-level on purpose: a CRLF file's "\r\n" is a single Character,
+    // so a Character-level search would never match. A no-op when the kept
+    // tail has no newline (e.g. one giant line).
+    if let newline = tail.firstIndex(of: "\n") {
+        tail = tail[tail.index(after: newline)...]
+    }
+
+    let totalMB = Double(byteCount) / 1_000_000
+    let banner = String(format: "… truncated: showing last 1 MB of %.1f MB …\n\n", totalMB)
+    return banner + String(tail)
+}
+
 /// Artifact viewer reached from a job's Artifacts list. `path` is
 /// webArtifact.url — already a full server-relative path like
 /// "/api/artifact/<slug>/cell/<name>" — joined with `baseURL` here.
@@ -139,14 +191,16 @@ struct ArtifactView: View {
         case .plain:
             do {
                 let text = try await APIClient.shared.fetchArtifactText(baseURL: baseURL, path: path)
-                content = .html(plainTextHTML(text))
+                let rendered = truncatedForRender(text)
+                content = .html(plainTextHTML(rendered))
             } catch {
                 errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
         case .markdown:
             do {
                 let text = try await APIClient.shared.fetchArtifactText(baseURL: baseURL, path: path)
-                content = .html(markdownHTML(text))
+                let rendered = truncatedForRender(text)
+                content = .html(markdownHTML(rendered))
             } catch {
                 errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
