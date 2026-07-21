@@ -23,8 +23,8 @@ import (
 const (
 	cellCap        = 5
 	daemonInterval = 15 * time.Second
-	// PR polling is throttled to every reapEvery-th tick (~1 min): gh calls
-	// per open cell are the daemon's only rate-limited traffic.
+	// PR tracking is throttled to every reapEvery-th tick (~1 min): gh
+	// calls per open cell are the daemon's only rate-limited traffic.
 	reapEvery = 4
 	// backoff between auto-retry pokes of the same stalled cell, and between
 	// re-notifications of the same standing health complaint.
@@ -171,6 +171,20 @@ func (d *daemon) tick() (int, error) {
 			if err := stampSession(j, all); err != nil {
 				dlog("session stamp %s failed: %v", j.Slug, err)
 			}
+			delete(d.notified, "gone:"+j.Slug)
+		} else {
+			// dead-cell watch: a started job whose tmux session vanished
+			// (killed by hand, tmux server restart) would otherwise sit on
+			// its file state forever, looking healthy in the state column —
+			// the other half of the demo-job incident. Detection only:
+			// recovery stays carl's explicit kill/done/reactivate, and the
+			// file state is deliberately left alone.
+			key := "gone:" + j.Slug
+			if d.notified[key] == 0 {
+				notify("kraken ⚠ "+j.Slug, "cell session is gone — kill to requeue, or done to accept")
+				dlog("%s: cell %s is gone (state %s kept)", j.Slug, cellSession(j), j.State)
+				d.notified[key] = now.Unix()
+			}
 		}
 
 		// health first, independent of state derivation below: an API-errored
@@ -267,19 +281,16 @@ func (d *daemon) tick() (int, error) {
 		}
 	}
 
-	// PR watch (throttled): reap merged build cells
+	// PR tracker (throttled): record every PR shipped from a cell branch
+	// into the job's prs: list. A merge is a signal — one notification and
+	// a board chip — NEVER a teardown trigger; teardown lives only behind
+	// carl's explicit accept (k done / board Done).
 	if d.tickN%reapEvery == 0 {
 		for _, j := range jobs {
 			if j.Err != "" || j.Type != "build" || !j.started() || j.State == "done" {
 				continue
 			}
-			msg, changed := reapOne(j, live)
-			if changed {
-				dlog("%s: %s", j.Slug, msg)
-				if j.State == "done" {
-					notify("kraken ✓ "+j.Slug, "PR merged — done")
-				}
-			}
+			d.trackPRs(j)
 		}
 	}
 
@@ -315,4 +326,81 @@ func (d *daemon) tick() (int, error) {
 		notify("kraken ▶ "+j.Slug, "cell started")
 	}
 	return cells, firstErr
+}
+
+// trackPRs reconciles one build job's recorded prs: list against what gh
+// reports for the cell branch. Job-file writes only — never tmux, git, or
+// state. Every outcome worth noting gets a dlog line unconditionally (the
+// old reap loop logged only on state change, which is how a failing
+// teardown stayed invisible).
+func (d *daemon) trackPRs(j *Job) {
+	repo, err := resolveRepo(j.Repo)
+	if err != nil {
+		return // surfaced already by the state-derivation pass this tick
+	}
+	dir := existingWorktree(j, repo)
+	if dir == "" {
+		dir = repo // worktree gone: still ask in the repo so history converges
+	}
+	fetched, ok := listBranchPRs(dir, cellBranch(j))
+	if !ok {
+		// log the outage once per stretch, not every minute
+		if key := "ghfail:" + j.Slug; d.notified[key] == 0 {
+			dlog("%s: gh pr list failed — leaving prs alone", j.Slug)
+			d.notified[key] = time.Now().Unix()
+		}
+		return
+	}
+	delete(d.notified, "ghfail:"+j.Slug)
+	updated, newlyMerged, changed := reconcilePRs(j.PRs, fetched)
+	if !changed {
+		return
+	}
+	if err := writeJobPRs(j, updated); err != nil {
+		dlog("%s: prs write failed: %v", j.Slug, err)
+		return
+	}
+	for _, pr := range updated {
+		dlog("%s: pr %s %s", j.Slug, pr.State, pr.URL)
+	}
+	for _, url := range newlyMerged {
+		dlog("%s: merged %s — cell left alone", j.Slug, url)
+		notify("kraken ✓ "+j.Slug, "PR merged — accept from the board when the job is finished")
+	}
+}
+
+// reconcilePRs merges freshly fetched PR states into the recorded list.
+// Pure, so it's table-testable. Recorded entries never disappear (the list
+// is job history — gh may stop returning PRs from recycled -rN branches);
+// unseen fetched entries append in fetch order. newlyMerged carries the
+// URLs whose recorded state just became merged — including first-sight
+// merges (a PR that merged before kraken ever saw it still deserves its one
+// notification). Dedup across daemon restarts is the recorded state itself.
+func reconcilePRs(recorded, fetched []JobPR) (out []JobPR, newlyMerged []string, changed bool) {
+	out = append(out, recorded...)
+	index := map[string]int{}
+	for i, p := range out {
+		index[p.URL] = i
+	}
+	for _, f := range fetched {
+		i, seen := index[f.URL]
+		if !seen {
+			out = append(out, f)
+			index[f.URL] = len(out) - 1
+			changed = true
+			if f.State == "merged" {
+				newlyMerged = append(newlyMerged, f.URL)
+			}
+			continue
+		}
+		if out[i].State == f.State {
+			continue
+		}
+		if f.State == "merged" && out[i].State != "merged" {
+			newlyMerged = append(newlyMerged, f.URL)
+		}
+		out[i].State = f.State
+		changed = true
+	}
+	return out, newlyMerged, changed
 }

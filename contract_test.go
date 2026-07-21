@@ -174,6 +174,7 @@ var webJobSpec = map[string]fieldSpec{
 	"display_slug":  {kind: wireString, required: false},
 	"reactivatable": {kind: wireBool, required: false},
 	"last_sent":     {kind: wireString, required: false},
+	"prs":           {kind: wireArray, required: false},
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
@@ -244,6 +245,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		},
 		Roster:        []webAgent{{Name: "hephaestus-x", Model: "sonnet"}},
 		Health:        "unhealthy",
+		PRs:           []JobPR{{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"}},
 		ModTime:       123,
 		Archived:      true,
 		DisplaySlug:   "x-orig",
@@ -277,6 +279,13 @@ var webAgentSpec = map[string]fieldSpec{
 	"model": {kind: wireString, required: true},
 }
 
+// jobPRSpec covers job.go's JobPR, the elements of webJob's "prs" array —
+// the daemon-tracked record of every PR shipped from the cell branch.
+var jobPRSpec = map[string]fieldSpec{
+	"url":   {kind: wireString, required: true},
+	"state": {kind: wireString, required: true},
+}
+
 // prereqSpec covers job.go's Prereq, the form-editor's element type (distinct
 // from webPrereq above: no computed "done", and "gated" is omitempty).
 var prereqSpec = map[string]fieldSpec{
@@ -306,6 +315,14 @@ func TestWebAgentWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webAgent", data, webAgentSpec)
+}
+
+func TestJobPRWireShape(t *testing.T) {
+	data, err := json.Marshal(JobPR{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "JobPR", data, jobPRSpec)
 }
 
 func TestPrereqWireShape(t *testing.T) {
@@ -430,6 +447,8 @@ func TestPeerWireShapePopulated(t *testing.T) {
 var peersReadBlockSpec = map[string]fieldSpec{
 	"kind": {kind: wireString, required: true},
 	"text": {kind: wireString, required: true},
+	// present only on kind "teammate": the sending teammate's id
+	"from": {kind: wireString, required: false},
 }
 
 func TestPeersReadBlockWireShape(t *testing.T) {
@@ -438,6 +457,12 @@ func TestPeersReadBlockWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "/api/peers/read block", data, peersReadBlockSpec)
+
+	data, err = json.Marshal(map[string]string{"kind": "teammate", "text": "idle (available)", "from": "hermes-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "/api/peers/read block (teammate)", data, peersReadBlockSpec)
 }
 
 // --- /api/peers/send key-send response (webpeers.go peersSendHandler) ---

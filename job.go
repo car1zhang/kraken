@@ -43,11 +43,17 @@ type Job struct {
 	// conversation after its cell is long gone.
 	Session string `json:"session,omitempty"`
 	// Run is the kraken-managed cell-run counter for branch versioning:
-	// 0/1 → carl/<slug>, N≥2 → carl/<slug>-rN. A reactivated (or re-run)
-	// job must ship on a fresh branch — the old branch's PR is already
-	// merged, and reap watching a merged branch would tear the new cell
-	// down instantly.
+	// 0/1 → carl/<slug>, N≥2 → carl/<slug>-rN. Since branch recycling
+	// (checkout -B off the base once the old branch is fully merged) it is
+	// only a fallback: run advances only when an existing branch still
+	// holds unmerged commits that a forced reset would orphan.
 	Run int `json:"run,omitempty"`
+	// PRs is the kraken-managed record of every PR shipped from the job's
+	// cell branch: appended and state-updated by the daemon's PR tracker,
+	// never cleared — it is the job's shipping history across branch
+	// recycles and reactivations. A merge here is a signal (board chip +
+	// one notification), never a teardown trigger.
+	PRs []JobPR `json:"prs,omitempty"`
 	// ArchivedName is set only on jobs loaded from the archive dir: the
 	// numbered file base (e.g. "foo-2") that uniquely identifies the
 	// archived file even when its Slug collides with an active job's.
@@ -60,6 +66,14 @@ type Job struct {
 type Prereq struct {
 	Job   string `json:"job"`
 	Gated bool   `json:"gated,omitempty"`
+}
+
+// JobPR is one PR shipped from a job's cell branch: url + state
+// (open|merged|closed), kraken-owned like state/session/run. The PR number
+// clients display is derived from the URL, so nothing else is stored.
+type JobPR struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
 }
 
 const jobSuffix = ".job.md"
@@ -257,6 +271,13 @@ func parseJob(name string, data []byte) *Job {
 			default:
 				j.addErr(fmt.Sprintf("bad prereqs value %q", val))
 			}
+		case "prs":
+			switch val {
+			case "[]", "":
+				j.PRs = parsePRs(j, fm, &i)
+			default:
+				j.addErr(fmt.Sprintf("bad prs value %q", val))
+			}
 		default:
 			j.addErr("unknown key " + k)
 		}
@@ -265,6 +286,73 @@ func parseJob(name string, data []byte) *Job {
 		j.Slug = strings.TrimSuffix(name, jobSuffix)
 	}
 	return j
+}
+
+// parsePRs consumes indented "- url: x" items (with a "state: open|merged|closed"
+// continuation line) following a prs: key at fm[*i]. Strict like parsePrereqs:
+// a half-read entry would silently break the tracker's dedup and re-notify, so
+// anything not fully understood errors the job.
+func parsePRs(j *Job, fm []string, i *int) []JobPR {
+	var out []JobPR
+	for *i+1 < len(fm) {
+		line := fm[*i+1]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			*i++
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' && !strings.HasPrefix(line, "-") {
+			return out // next top-level key
+		}
+		if !strings.HasPrefix(trimmed, "- ") && trimmed != "-" {
+			*i++
+			j.addErr(fmt.Sprintf("bad prs line %q", truncateOneLine(trimmed, 40)))
+			continue
+		}
+		*i++
+		item := stripComment(strings.TrimPrefix(trimmed, "-"))
+		var p JobPR
+		if k, v, ok := strings.Cut(item, ":"); ok && strings.TrimSpace(k) == "url" {
+			p.URL = strings.TrimSpace(v)
+		} else if item != "" {
+			j.addErr(fmt.Sprintf("bad prs item %q", truncateOneLine(item, 40)))
+		}
+		for *i+1 < len(fm) {
+			next := strings.TrimSpace(fm[*i+1])
+			indented := len(fm[*i+1]) > 0 && (fm[*i+1][0] == ' ' || fm[*i+1][0] == '\t')
+			if !indented || next == "" || strings.HasPrefix(next, "- ") {
+				break
+			}
+			*i++
+			if strings.HasPrefix(next, "#") {
+				continue
+			}
+			k, v, ok := strings.Cut(next, ":")
+			if !ok {
+				j.addErr(fmt.Sprintf("bad prs line %q", truncateOneLine(next, 40)))
+				continue
+			}
+			switch strings.TrimSpace(k) {
+			case "url":
+				if p.URL == "" {
+					p.URL = stripComment(v)
+				}
+			case "state":
+				p.State = stripComment(v)
+			default:
+				j.addErr("unknown prs key " + strings.TrimSpace(k))
+			}
+		}
+		switch {
+		case p.URL == "":
+			j.addErr("prs entry missing url")
+		case p.State != "open" && p.State != "merged" && p.State != "closed":
+			j.addErr(fmt.Sprintf("bad prs state %q for %s", p.State, truncateOneLine(p.URL, 40)))
+		default:
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // parsePrereqs consumes indented "- job: x" items (with optional "gated: true"
@@ -575,6 +663,69 @@ func patchField(content, key, val string) (string, error) {
 // patchState is patchField for the state key (the common case).
 func patchState(content, state string) (string, error) {
 	return patchField(content, "state", state)
+}
+
+// patchPRs rewrites the frontmatter prs: block wholesale (inserting it before
+// the closing fence if absent), leaving every other byte untouched — the
+// list-valued sibling of patchField. The old block (key line plus its
+// indented/dash continuation lines) is replaced in place so hand-placed key
+// ordering elsewhere survives.
+func patchPRs(content string, prs []JobPR) (string, error) {
+	var block []string
+	if len(prs) > 0 {
+		block = append(block, "prs:")
+		for _, p := range prs {
+			block = append(block, "  - url: "+oneLine(p.URL), "    state: "+oneLine(p.State))
+		}
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 || !isFence(lines[0]) {
+		return "", fmt.Errorf("no frontmatter")
+	}
+	for i := 1; i < len(lines); i++ {
+		if isFence(lines[i]) {
+			if len(block) == 0 {
+				return content, nil // nothing recorded and nothing to record
+			}
+			out := append(append([]string{}, lines[:i]...), block...)
+			return strings.Join(append(out, lines[i:]...), "\n"), nil
+		}
+		// column-0 match only: an indented "prs:"-prefixed line can be a
+		// success: | block scalar's CONTENT, and healing it like patchField
+		// heals indented keys would silently eat that line every tracker tick
+		if strings.HasPrefix(lines[i], "prs:") {
+			end := i + 1
+			for end < len(lines) && !isFence(lines[end]) {
+				t := strings.TrimSpace(lines[end])
+				if t != "" && lines[end][0] != ' ' && lines[end][0] != '\t' && !strings.HasPrefix(lines[end], "-") {
+					break // next top-level key
+				}
+				end++
+			}
+			out := append(append([]string{}, lines[:i]...), block...)
+			return strings.Join(append(out, lines[end:]...), "\n"), nil
+		}
+	}
+	return "", fmt.Errorf("unterminated frontmatter")
+}
+
+// writeJobPRs persists the tracker's PR record atomically, mirroring
+// writeJobFields' re-read-then-patch pattern so a concurrent editor save
+// isn't clobbered with stale bytes.
+func writeJobPRs(j *Job, prs []JobPR) error {
+	data, err := os.ReadFile(j.File)
+	if err != nil {
+		return err
+	}
+	content, err := patchPRs(string(data), prs)
+	if err != nil {
+		return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
+	}
+	if err := atomicWrite(j.File, content); err != nil {
+		return err
+	}
+	j.PRs = prs
+	return nil
 }
 
 // writeJobFields patches kraken-owned fields atomically (temp file + rename

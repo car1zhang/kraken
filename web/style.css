@@ -188,6 +188,22 @@ body {
 }
 .card:hover .kill { opacity: 0.6; }
 .kill:hover { opacity: 1 !important; color: var(--counter); text-shadow: var(--glow-hot); }
+
+/* PR chips: one linked badge per open/merged/closed PR on the job, styled
+   like .chip but color-coded by PR state instead of the uniform accent */
+.prs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.pr-chip {
+  font: 10px var(--mono); text-decoration: none;
+  padding: 2px 7px; border: 1px solid;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.pr-chip.pr-merged { color: var(--accent); border-color: var(--accent-soft); }
+.pr-chip.pr-merged:hover { box-shadow: var(--glow); border-color: var(--accent); }
+.pr-chip.pr-open { color: var(--solved); border-color: var(--solved-soft); }
+.pr-chip.pr-open:hover { box-shadow: 0 0 8px rgba(74, 222, 128, 0.35); border-color: var(--solved); }
+.pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
+.pr-chip.pr-closed:hover { opacity: 1; border-color: var(--counter); }
+
 .meta {
   color: var(--text-2); margin-top: 3px;
   display: flex; gap: 9px; flex-wrap: wrap;

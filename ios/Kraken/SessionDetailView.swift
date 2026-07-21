@@ -120,6 +120,12 @@ struct SessionDetailView: View {
     @State private var messageText = ""
     @State private var mode: SessionViewMode
     @State private var showingKillConfirm = false
+    // Set by the drag gesture on the transcript/terminal ScrollView the
+    // moment the user takes the scroll position into their own hands —
+    // every programmatic bottom-anchor scroll below (initial-landing
+    // retries, new-block appends, terminal arrival/mode-switch) checks this
+    // first so it never yanks a manually-scrolled-up reader back down.
+    @State private var userScrolled = false
 
     init(peer: Peer, baseURL: String, onKilled: @escaping () -> Void = {}) {
         self.peer = peer
@@ -188,23 +194,43 @@ struct SessionDetailView: View {
                     }
                 }
                 .background(KTheme.ground)
-                // Transcript scroll-to-bottom: the blocks are self-sizing
-                // WKWebViews (MarkdownBody) that measure their height async, so
-                // a scroll fired the instant data arrives lands on ~zero-height
-                // content. Fire it a beat after the block count changes — which
-                // covers both the first load (0→N) and later appends — giving
-                // the web views time to report their heights first. The
-                // terminal deliberately does NOT scroll: capture-pane returns
-                // the current fixed-size screen, so top-aligned already shows
-                // the latest output (its bottom rows), and a nested horizontal
-                // ScrollView doesn't bottom-anchor cleanly anyway.
+                // Bottom-anchor scroll-to-bottom, both modes. Transcript's
+                // blocks are self-sizing WKWebViews (MarkdownBody) that
+                // measure their height async, so a scroll fired the instant
+                // data arrives can land on still-zero-height content — the
+                // first non-empty render after a load (oldCount == 0) retries
+                // a few times, staggered further apart, as heights settle;
+                // a later append (poll picked up new turns, prior content's
+                // heights already known) only needs the one delayed retry
+                // the old comment described. Terminal has no incremental
+                // block count to key off (capture-pane always replaces the
+                // whole screen), so it lands at the bottom once content first
+                // arrives, and again on every switch into Terminal — the
+                // transcript/terminal Group above share one ScrollView, so
+                // switching modes leaves the offset wherever the other mode's
+                // very differently sized content last put it. `userScrolled`
+                // (set by the drag gesture below) opts a reader out of every
+                // programmatic scroll here the moment they've taken the
+                // position into their own hands.
                 .onChange(of: vm.blocks.count) { oldCount, newCount in
-                    guard mode == .transcript, newCount > oldCount else { return }
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(350))
+                    guard mode == .transcript, newCount > oldCount, !userScrolled else { return }
+                    scrollToBottomRetrying(proxy: proxy, immediate: oldCount == 0)
+                }
+                .onChange(of: vm.terminalContent) { oldValue, newValue in
+                    guard mode == .terminal, oldValue.isEmpty, !newValue.isEmpty, !userScrolled else { return }
+                    withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+                }
+                .onChange(of: mode) { _, newMode in
+                    userScrolled = false
+                    if newMode == .transcript, !vm.blocks.isEmpty {
+                        scrollToBottomRetrying(proxy: proxy, immediate: true)
+                    } else if newMode == .terminal, !vm.terminalContent.isEmpty {
                         withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
                     }
                 }
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 10).onChanged { _ in userScrolled = true }
+                )
                 .task(id: PollKey(phase: scenePhase, mode: mode)) {
                     guard scenePhase == .active, let pane = peer.pane else { return }
                     switch mode {
@@ -388,6 +414,31 @@ struct SessionDetailView: View {
             Text("→ " + block.text)
                 .font(.data(11))
                 .foregroundStyle(KTheme.text2)
+        case "teammate":
+            if let from = block.from, !from.isEmpty {
+                // Short one-liners (a status ping, a quick ack) read fine as a
+                // single compact row, like the tool case above. Anything
+                // longer/multi-line gets its own "⇄ <from>" header (echoing
+                // the "❯ user" header style, but in the accent color so it
+                // doesn't get mistaken for carl's own messages) followed by
+                // full markdown rendering, same as assistant prose below.
+                if block.text.contains("\n") || block.text.count > 100 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("⇄ " + from)
+                            .font(.data(10))
+                            .foregroundStyle(KTheme.accent)
+                        MarkdownBody(markdown: block.text)
+                    }
+                } else {
+                    Text("⇄ \(from) — \(block.text)")
+                        .font(.data(11))
+                        .foregroundStyle(KTheme.text2)
+                }
+            } else {
+                // No `from` — fall back to the same plain rendering as an
+                // unrecognized/default block below.
+                MarkdownBody(markdown: block.text)
+            }
         default:
             // Assistant prose — the only block kind rendered as markdown, so
             // **bold**/lists/`code`/links/headings show up properly instead
@@ -438,6 +489,26 @@ struct SessionDetailView: View {
     private func sendKey(pane: String, key: String) {
         Task {
             await vm.sendKey(baseURL: baseURL, pane: pane, key: key)
+        }
+    }
+
+    // Fires the bottom-anchor scroll immediately, then — only for an initial
+    // landing (`immediate == true`: first non-empty render, or a mode switch
+    // back into Transcript) — a few more times as MarkdownBody's async
+    // WKWebView heights settle. A later append gets a single 350ms-delayed
+    // retry, matching the original single-shot behavior. Every retry
+    // rechecks `userScrolled` right before it fires, not just once up front,
+    // so a drag that happens mid-retry-sequence still cancels the rest.
+    private func scrollToBottomRetrying(proxy: ScrollViewProxy, immediate: Bool) {
+        let delaysMs = immediate ? [0, 350, 1000, 2000] : [350]
+        for delayMs in delaysMs {
+            Task {
+                if delayMs > 0 {
+                    try? await Task.sleep(for: .milliseconds(delayMs))
+                }
+                guard !userScrolled else { return }
+                withAnimation { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+            }
         }
     }
 

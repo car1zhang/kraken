@@ -73,6 +73,7 @@ func zeusBrief(j *Job) string {
 			b.WriteString("This job is auto-approved: after the doc is up, proceed straight into phase 2 without stopping.\n")
 		}
 		fmt.Fprintf(&b, "Phase 2 (begins when a '/send' message arrives in your pane, or immediately if auto-approved): implement exactly what the doc specifies. Delegate slices to subagents named hephaestus (sonnet model), each with a focused unique brief (exact scope + file targets); review each slice with a subagent named athena (opus model) with its own reviewer brief. Run the repo's tests and linters. Then say 'manual test ready: <urls + what to try>' and STOP; when carl's reply passes the gate, shut test services down, push the branch, open a PR with gh, poll checks green (fixing failures), then report the PR URL plus a one-line outcome and STOP.\n")
+		fmt.Fprintf(&b, "PRs are per-slice, not per-job: kraken records every PR you open from %s on the job's board, and a PR merging never ends the job. If a PR of yours merges and more work arrives, recycle your branch before starting it — git fetch origin && git checkout -B %s origin/main — then ship the follow-up as a new PR.\n", cellBranch(j), cellBranch(j))
 	default: // info
 		fmt.Fprintf(&b, "Follow the /info skill (explain workflow; you inherit carl's user skills) with the cell deltas above: research, then produce/edit the explain-mode artifact into %s. When it's up, report a one-line outcome plus the artifact path and STOP. No PR — carl accepts from the board.\n", cellArtifacts(j))
 	}

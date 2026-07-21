@@ -104,6 +104,59 @@ private struct ArtifactRow: View {
     }
 }
 
+/// One PR chip — "#<N> <state>", tappable to open the PR in the browser.
+/// Not private: BoardView's JobCardView renders the same chip on the board
+/// card, so both call sites share one styling/parsing source of truth.
+/// Colors reuse KTheme rather than new hex values: merged reads like the
+/// accent purple, open like the solved green, closed like muted text2 —
+/// mirroring BoardTheme.color(forState:)'s existing semantics as closely as
+/// a 3-state PR maps onto a 5-state job.
+struct PRChip: View {
+    let pr: JobPR
+
+    // Pulls the PR number out of ".../pull/<N>" (with or without a trailing
+    // path); falls back to just the state word if the url doesn't match
+    // (e.g. a non-GitHub host), per spec.
+    private var number: String? {
+        guard let range = pr.url.range(of: "/pull/") else { return nil }
+        let digits = pr.url[range.upperBound...].prefix { $0.isNumber }
+        return digits.isEmpty ? nil : String(digits)
+    }
+
+    private var label: String {
+        if let number { return "#\(number) \(pr.state)" }
+        return pr.state
+    }
+
+    private var color: Color {
+        switch pr.state {
+        case "merged": return KTheme.accent
+        case "open": return KTheme.solved
+        case "closed": return KTheme.text2
+        default: return KTheme.text2
+        }
+    }
+
+    var body: some View {
+        Group {
+            if let url = URL(string: pr.url) {
+                Link(destination: url) { chipLabel }
+            } else {
+                chipLabel
+            }
+        }
+    }
+
+    private var chipLabel: some View {
+        Text(label)
+            .font(.data(10, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .overlay(Rectangle().stroke(color, lineWidth: 1))
+    }
+}
+
 struct JobDetailView: View {
     let job: WebJob
     let baseURL: String
@@ -196,6 +249,13 @@ struct JobDetailView: View {
                         Text(job.type)
                             .font(.data(11))
                             .foregroundStyle(KTheme.text2)
+                    }
+                    if let prs = job.prs, !prs.isEmpty {
+                        HStack(spacing: 6) {
+                            ForEach(prs, id: \.url) { pr in
+                                PRChip(pr: pr)
+                            }
+                        }
                     }
                     fieldRow("Repo", job.repo)
                     if job.live, let cell = job.cell {

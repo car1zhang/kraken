@@ -26,8 +26,7 @@ $ k
 | `k c [-c dir] <name> [prompt…]` | new named claude in a new window of the current session |
 | `k j [--json]` | job board: every `*.job.md` in `~/Documents/pluto` with state, repo, prereqs, live cell |
 | `k start <slug>` | start a job by hand: worktree on `carl/<slug>` off origin/main + tmux cell + zeus |
-| `k reap` | check started jobs' PRs; merged ones get a verified teardown and `state: done` |
-| `k done <slug> [outcome…]` | manually complete a job (the acceptance path for info jobs) |
+| `k done <slug> [outcome…]` | manually complete a job (the acceptance path for every job — a merged PR is a board chip + notification, never an auto-teardown) |
 | `k daemon` | the scheduler loop (launchd runs it at login via `make install`) |
 | `k migrate` | migrate jobs stuck in the old crew model's states: terminal ones (merged/abandoned/failed) → done; in-flight ones → cell torn down, requeuing left to the job's own `ready` flag |
 

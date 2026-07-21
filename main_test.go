@@ -118,11 +118,11 @@ func TestParseBlocks(t *testing.T) {
 	}
 	blocks := parseBlocks(lines)
 	want := []block{
-		{"thinking", "hmm"},
-		{"tool", "Bash(git status)"},
-		{"user", "hi"},
-		{"user", "follow-up"},
-		{"text", "done"},
+		{kind: "thinking", text: "hmm"},
+		{kind: "tool", text: "Bash(git status)"},
+		{kind: "user", text: "hi"},
+		{kind: "user", text: "follow-up"},
+		{kind: "text", text: "done"},
 	}
 	if len(blocks) != len(want) {
 		t.Fatalf("want %d blocks, got %d: %v", len(want), len(blocks), blocks)
@@ -154,7 +154,7 @@ func TestLastBlocks(t *testing.T) {
 		t.Fatalf("want counted=1, got %d", counted)
 	}
 	// last text block plus the tool call after it
-	if len(blocks) != 2 || blocks[0] != (block{"text", "second"}) || blocks[1].kind != "tool" {
+	if len(blocks) != 2 || blocks[0] != (block{kind: "text", text: "second"}) || blocks[1].kind != "tool" {
 		t.Errorf("n=1: got %v", blocks)
 	}
 
@@ -162,7 +162,7 @@ func TestLastBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counted != 2 || len(blocks) != 4 || blocks[0] != (block{"text", "first"}) {
+	if counted != 2 || len(blocks) != 4 || blocks[0] != (block{kind: "text", text: "first"}) {
 		t.Errorf("n=2: counted=%d blocks=%v", counted, blocks)
 	}
 
@@ -189,14 +189,14 @@ func TestLastBlocksCountsUserMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counted != 1 || len(blocks) != 1 || blocks[0] != (block{"user", "next question"}) {
+	if counted != 1 || len(blocks) != 1 || blocks[0] != (block{kind: "user", text: "next question"}) {
 		t.Errorf("n=1: counted=%d blocks=%v", counted, blocks)
 	}
 	blocks, counted, err = lastBlocks(path, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counted != 2 || len(blocks) != 2 || blocks[0] != (block{"text", "answer"}) {
+	if counted != 2 || len(blocks) != 2 || blocks[0] != (block{kind: "text", text: "answer"}) {
 		t.Errorf("n=2: counted=%d blocks=%v", counted, blocks)
 	}
 }

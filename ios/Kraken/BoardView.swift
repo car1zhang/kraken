@@ -61,6 +61,12 @@ struct BoardView: View {
     @Environment(AppRouter.self) private var router
     @State private var vm = BoardViewModel()
     @State private var selectedJob: WebJob?
+    // The presented job's `state` as of whenever it was (re-)assigned to
+    // selectedJob — the baseline the staleness check below diffs the next
+    // polling refresh against. WebJob isn't Equatable (Decodable-only), so
+    // this is captured explicitly at every assignment site rather than via
+    // .onChange(of: selectedJob).
+    @State private var presentedJobState: String?
     @State private var showingNewJob = false
     @State private var showingOverview = false
     @State private var selectedColumn: BoardColumn = .draft
@@ -108,6 +114,20 @@ struct BoardView: View {
                     }
                 }
             }
+            // Auto-dismiss the presented job sheet once the board's own
+            // polling refresh (vm.refresh, every 4s above) shows that job's
+            // `state` has moved on since it was opened — unblocked, killed,
+            // marked done, etc. from another client — so the sheet stops
+            // showing stale action buttons/question/detail against a job.go
+            // state that no longer exists. Nested sheets (steer/reactivate,
+            // presented from within JobDetailView) tear down along with
+            // their dismissed parent. DraftStore-backed drafts (e.g. a
+            // half-typed steer message) are untouched — this only clears
+            // presentation state, never calls draftStore.clear.
+            .onChange(of: vm.board?.jobs.first(where: { $0.slug == selectedJob?.slug })?.state) { _, newState in
+                guard selectedJob != nil, let presentedJobState, let newState, newState != presentedJobState else { return }
+                selectedJob = nil
+            }
             .sheet(isPresented: $showingNewJob) {
                 NavigationStack {
                     NewJobSheet(baseURL: serverURL) {
@@ -142,7 +162,7 @@ struct BoardView: View {
                         await vm.refresh(baseURL: serverURL)
                     }
                     if let job = vm.board?.jobs.first(where: { $0.slug == slug }) {
-                        selectedJob = job
+                        presentJob(job)
                         break
                     }
                     try? await Task.sleep(for: .seconds(0.5))
@@ -150,6 +170,14 @@ struct BoardView: View {
                 router.pendingJobSlug = nil
             }
         }
+    }
+
+    // Presents a job sheet and records its state as the staleness baseline
+    // — see presentedJobState's doc comment and the onChange next to the
+    // sheet(item:) modifier above.
+    private func presentJob(_ job: WebJob) {
+        selectedJob = job
+        presentedJobState = job.state
     }
 
     private func consumePendingBoardRoutes() {
@@ -304,7 +332,7 @@ struct BoardView: View {
                     LazyVStack(spacing: 10) {
                         ForEach(jobs) { job in
                             JobCardView(job: job)
-                                .onTapGesture { selectedJob = job }
+                                .onTapGesture { presentJob(job) }
                         }
                     }
                     .padding()
@@ -350,6 +378,13 @@ private struct JobCardView: View {
                     Text("· \(cell)").font(.data(10)).foregroundStyle(KTheme.text2)
                 }
             }
+            if let prs = job.prs, !prs.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(prs, id: \.url) { pr in
+                        PRChip(pr: pr)
+                    }
+                }
+            }
             if let health = job.health, !health.isEmpty {
                 Text("⚠ " + health).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
@@ -385,6 +420,11 @@ private struct BoardOverviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppRouter.self) private var router
     @State private var selectedJob: WebJob?
+    // See BoardView's identically-named property + presentJob(_:) above —
+    // same staleness-baseline pattern, duplicated here because this sheet
+    // reads `vm` directly rather than owning its own selectedJob binding at
+    // the BoardView level.
+    @State private var presentedJobState: String?
 
     var body: some View {
         List {
@@ -399,6 +439,7 @@ private struct BoardOverviewSheet: View {
                         ForEach(jobs) { job in
                             Button {
                                 selectedJob = job
+                                presentedJobState = job.state
                             } label: {
                                 overviewRow(job)
                             }
@@ -421,6 +462,13 @@ private struct BoardOverviewSheet: View {
             NavigationStack {
                 JobDetailView(job: job, baseURL: baseURL, onUpdate: onUpdate)
             }
+        }
+        // Same auto-dismiss-on-staleness as BoardView's own job sheet — this
+        // sheet reads `vm` live (see its doc comment above), so the same
+        // polling refresh drives it here too.
+        .onChange(of: vm.board?.jobs.first(where: { $0.slug == selectedJob?.slug })?.state) { _, newState in
+            guard selectedJob != nil, let presentedJobState, let newState, newState != presentedJobState else { return }
+            selectedJob = nil
         }
         // JobDetailView's Cell row switches tabs and dismisses itself, but
         // that only closes the innermost sheet — this sheet (its presenter)

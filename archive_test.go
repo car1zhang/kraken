@@ -182,7 +182,7 @@ func TestBranchForRun(t *testing.T) {
 
 func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
 	f := jobFormFields{Slug: "x", Type: "build", Repo: "r", Success: "works"}
-	content := serializeJobFile(f, "done", "shipped", "abc-123", 2, "")
+	content := serializeJobFile(f, "done", "shipped", "abc-123", 2, nil, "")
 	j := parseJob("x.job.md", []byte(content))
 	if j.Err != "" {
 		t.Fatalf("round-trip err: %s", j.Err)
@@ -191,7 +191,7 @@ func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
 		t.Fatalf("kraken-owned fields lost: %+v", j)
 	}
 	// and absent fields stay absent
-	content = serializeJobFile(f, "", "", "", 0, "")
+	content = serializeJobFile(f, "", "", "", 0, nil, "")
 	if strings.Contains(content, "session:") || strings.Contains(content, "run:") {
 		t.Fatalf("empty session/run serialized anyway:\n%s", content)
 	}

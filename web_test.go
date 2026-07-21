@@ -741,3 +741,22 @@ func TestHealthHandlerContractAndStale(t *testing.T) {
 		t.Errorf("healthHandler: stale = %#v (%T), want a bool", resp["stale"], resp["stale"])
 	}
 }
+
+// serializeJobFile must carry the kraken-owned prs: record through a web
+// edit — dropping it would lose shipping history and make the tracker
+// re-notify on its next tick.
+func TestSerializeJobFilePreservesPRs(t *testing.T) {
+	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Ready: true}
+	prs := []JobPR{
+		{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"},
+		{URL: "https://github.com/car1zhang/kraken/pull/9", State: "open"},
+	}
+	content := serializeJobFile(f, "working", "", "", 0, prs, "")
+	j := parseJob("x.job.md", []byte(content))
+	if j.Err != "" {
+		t.Fatalf("serialized file does not round-trip: %s\n%s", j.Err, content)
+	}
+	if len(j.PRs) != 2 || j.PRs[0] != prs[0] || j.PRs[1] != prs[1] {
+		t.Fatalf("prs lost in round-trip: %+v", j.PRs)
+	}
+}
