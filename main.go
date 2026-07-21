@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
+
+	"kraken/core"
+	"kraken/util"
 )
 
 func main() {
@@ -61,7 +63,7 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		die("unknown command: %s (try 'k help')", cmd)
+		util.Die("unknown command: %s (try 'k help')", cmd)
 	}
 }
 
@@ -130,46 +132,18 @@ substring match on name/project/agent/tmux-session; also a session-uuid
 prefix (>=4 chars).`)
 }
 
-func home() string {
-	h, err := os.UserHomeDir()
-	if err != nil {
-		die("home dir: %v", err)
-	}
-	return h
-}
-
-func die(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "kraken: "+format+"\n", a...)
-	os.Exit(1)
-}
-
 // --- completion ---
 
-func slugify(s string) string {
-	var out strings.Builder
-	lastDash := true
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			out.WriteRune(r)
-			lastDash = false
-		} else if !lastDash {
-			out.WriteRune('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(out.String(), "-")
-}
-
 func cmdComplete() {
-	all, _ := orderAll(discoverAll())
+	all, _ := core.OrderAll(core.DiscoverAll())
 	for _, p := range all {
-		slug := slugify(displayName(p))
+		slug := util.Slugify(core.DisplayName(p))
 		if slug == "" {
-			slug = slugify(projectLabel(p))
+			slug = util.Slugify(core.ProjectLabel(p))
 		}
 		if slug == "" {
 			slug = strconv.Itoa(p.Index)
 		}
-		fmt.Printf("%s\t%s %s %s %s\n", slug, p.Status, projectLabel(p), p.Pane, p.TmuxSession)
+		fmt.Printf("%s\t%s %s %s %s\n", slug, p.Status, core.ProjectLabel(p), p.Pane, p.TmuxSession)
 	}
 }

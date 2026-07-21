@@ -7,6 +7,10 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"kraken/core"
+	"kraken/jobs"
+	"kraken/util"
 )
 
 // k v — persistent live viewer over the same discovery the one-shot commands
@@ -17,7 +21,7 @@ import (
 // tmux session and jumps in, and dd (vim-style) kills the selected pane (claude or shell).
 // In type grouping, blocked groups (question/shell) pin to the top.
 //
-// paint() is called with color always on here: the alt screen is a tty by
+// util.Paint() is called with color always on here: the alt screen is a tty by
 // construction, so useColor()'s stdout sniff doesn't apply.
 
 const viewerTick = time.Second
@@ -29,16 +33,16 @@ func cmdViewer(args []string) {
 		case "-g", "--group":
 			i++
 			if i >= len(args) {
-				die("-g needs a value: type, session, or none")
+				util.Die("-g needs a value: type, session, or none")
 			}
 			mode = parseGroupMode(args[i])
 		default:
-			die("unknown argument: %s (usage: k v [-g type|session|none])", args[i])
+			util.Die("unknown argument: %s (usage: k v [-g type|session|none])", args[i])
 		}
 	}
 	p := tea.NewProgram(&viewerModel{mode: mode}, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
-		die("viewer: %v", err)
+		util.Die("viewer: %v", err)
 	}
 }
 
@@ -47,18 +51,18 @@ func cmdViewer(args []string) {
 // list first. Stable, so discovery's session/window grouping holds within each
 // partition. Applied in type grouping only — session/none grouping is explicit
 // and pinning would tear it apart.
-func pinBlocked(peers []*Peer) []*Peer {
-	nested := map[*Peer]bool{}
+func pinBlocked(peers []*core.Peer) []*core.Peer {
+	nested := map[*core.Peer]bool{}
 	for _, p := range peers {
 		for _, t := range p.Teammates {
 			nested[t] = true
 		}
 	}
-	blocked := func(p *Peer) bool {
+	blocked := func(p *core.Peer) bool {
 		return p.Status == "question" || p.Status == "shell"
 	}
-	var groupBlocked func(p *Peer, seen map[*Peer]bool) bool
-	groupBlocked = func(p *Peer, seen map[*Peer]bool) bool {
+	var groupBlocked func(p *core.Peer, seen map[*core.Peer]bool) bool
+	groupBlocked = func(p *core.Peer, seen map[*core.Peer]bool) bool {
 		if seen[p] {
 			return false // nesting cycle guard
 		}
@@ -73,14 +77,14 @@ func pinBlocked(peers []*Peer) []*Peer {
 		}
 		return false
 	}
-	var hot, cold, rest []*Peer
+	var hot, cold, rest []*core.Peer
 	for _, p := range peers {
 		switch {
 		case nested[p]:
 			// emitted via its lead; position only matters for the
 			// cycle-fallback pass, so keep original order at the end
 			rest = append(rest, p)
-		case groupBlocked(p, map[*Peer]bool{}):
+		case groupBlocked(p, map[*core.Peer]bool{}):
 			hot = append(hot, p)
 		default:
 			cold = append(cold, p)
@@ -92,13 +96,13 @@ func pinBlocked(peers []*Peer) []*Peer {
 type tickMsg time.Time
 
 type snapshotMsg struct {
-	peers    []*Peer
-	shells   []*Peer
+	peers    []*core.Peer
+	shells   []*core.Peer
 	usage    string
-	jobs     []*Job
+	jobs     []*jobs.Job
 	live     map[string]bool
 	health   map[string]string
-	daemonSt daemonStatus
+	daemonSt jobs.DaemonStatus
 	daemonOK bool
 }
 
@@ -108,12 +112,12 @@ type actionMsg struct {
 }
 
 type viewerModel struct {
-	rawPeers   []*Peer // last snapshot, unpinned/unnumbered
-	rawShells  []*Peer
+	rawPeers   []*core.Peer // last snapshot, unpinned/unnumbered
+	rawShells  []*core.Peer
 	mode       string // "type" | "session" | "none"
 	view       string // "sessions" | "jobs" (J toggles)
 	groups     []displayGroup
-	rows       []*Peer // selectable rows in display order (flattened groups)
+	rows       []*core.Peer // selectable rows in display order (flattened groups)
 	usage      string
 	cursor     int // index into the current view's selectable rows
 	scroll     int // first visible line of buildLines' output
@@ -130,15 +134,15 @@ type viewerModel struct {
 	// never collide and a view toggle clears it.
 	pendingKill string
 	// jobs view state
-	jrows          []*Job
-	rawJobs        []*Job
+	jrows          []*jobs.Job
+	rawJobs        []*jobs.Job
 	liveSessionSet map[string]bool
 	healthBySlug   map[string]string
-	daemonSt       daemonStatus
+	daemonSt       jobs.DaemonStatus
 	daemonOK       bool
 	// inline answer input: non-nil while typing a steering message that gets
 	// delivered to a blocked job's zeus pane
-	answering *Job
+	answering *jobs.Job
 	input     string
 }
 
@@ -164,23 +168,23 @@ func tickCmd() tea.Cmd {
 // cheap file scans next to discovery's ps/tmux walk.
 func refreshCmd() tea.Cmd {
 	return func() tea.Msg {
-		peers, shells := discoverAll()
-		jobs := loadJobs()
-		live := liveSessions()
-		st, ok := readDaemonStatus()
+		peers, shells := core.DiscoverAll()
+		js := jobs.LoadJobs()
+		live := jobs.LiveSessions()
+		st, ok := jobs.ReadDaemonStatus()
 		// cell health shells out to tmux per live cell — computed here, once
 		// per tick, never in the render path
 		health := map[string]string{}
-		for _, j := range jobs {
-			if j.started() && j.State != "done" && live[cellSession(j)] {
-				if reason := cellHealth(j, peers); reason != "" {
+		for _, j := range js {
+			if j.Started() && j.State != "done" && live[jobs.CellSession(j)] {
+				if reason := jobs.CellHealth(j, peers); reason != "" {
 					health[j.Slug] = reason
 				}
 			}
 		}
 		return snapshotMsg{
-			peers: peers, shells: shells, usage: usageHeader(true),
-			jobs: jobs, live: live, health: health,
+			peers: peers, shells: shells, usage: core.UsageHeader(true),
+			jobs: js, live: live, health: health,
 			daemonSt: st, daemonOK: ok,
 		}
 	}
@@ -281,9 +285,9 @@ func (m *viewerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuild()
 		m.note, m.noteIsErr = "grouping: "+m.mode, false
 	case "enter":
-		return m, m.actOnSelected("opening", openPeer)
+		return m, m.actOnSelected("opening", core.OpenPeer)
 	case "b":
-		return m, m.actOnSelected("forking", branchPeerWindow)
+		return m, m.actOnSelected("forking", core.BranchPeerWindow)
 	case "d":
 		p := m.selected()
 		if p == nil {
@@ -291,14 +295,14 @@ func (m *viewerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if p.Self {
-			// killPeer would refuse anyway; don't arm a kill that can't happen
+			// core.KillPeer would refuse anyway; don't arm a kill that can't happen
 			m.pendingKill = ""
 			m.note, m.noteIsErr = "that's this viewer's own pane", true
 			break
 		}
 		if m.pendingKill == peerKey(p) {
 			m.pendingKill = ""
-			return m, m.actOnSelected("killing", killPeer)
+			return m, m.actOnSelected("killing", core.KillPeer)
 		}
 		m.pendingKill = peerKey(p)
 		kind := "shell"
@@ -308,7 +312,7 @@ func (m *viewerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				kind = "claude"
 			}
 		}
-		m.note, m.noteIsErr = "d again to kill "+kind+" "+displayName(p)+" ("+p.Pane+")", false
+		m.note, m.noteIsErr = "d again to kill "+kind+" "+core.DisplayName(p)+" ("+p.Pane+")", false
 	case "r":
 		if !m.refreshing {
 			m.refreshing = true
@@ -336,7 +340,7 @@ func (m *viewerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				if m.view == "jobs" {
 					return m.handleJobsKey("enter")
 				}
-				return m, m.actOnSelected("opening", openPeer)
+				return m, m.actOnSelected("opening", core.OpenPeer)
 			}
 			m.setCursor(i)
 		}
@@ -344,23 +348,23 @@ func (m *viewerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// actOnSelected runs an action (openPeer/branchPeerWindow/killPeer) against
+// actOnSelected runs an action (core.OpenPeer/core.BranchPeerWindow/core.KillPeer) against
 // the selected peer in a Cmd goroutine so slow AppleScript never freezes the
-// UI. Safe to hand the *Peer across goroutines: discovery allocates fresh
+// UI. Safe to hand the *core.Peer across goroutines: discovery allocates fresh
 // Peers every snapshot and the actions only read them.
-func (m *viewerModel) actOnSelected(verb string, action func(*Peer) (string, error)) tea.Cmd {
+func (m *viewerModel) actOnSelected(verb string, action func(*core.Peer) (string, error)) tea.Cmd {
 	p := m.selected()
 	if p == nil {
 		return nil
 	}
-	m.note, m.noteIsErr = verb+" "+displayName(p)+"…", false
+	m.note, m.noteIsErr = verb+" "+core.DisplayName(p)+"…", false
 	return func() tea.Msg {
 		note, err := action(p)
 		return actionMsg{note, err}
 	}
 }
 
-func (m *viewerModel) selected() *Peer {
+func (m *viewerModel) selected() *core.Peer {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return nil
 	}
@@ -369,7 +373,7 @@ func (m *viewerModel) selected() *Peer {
 
 // peerKey identifies a peer across snapshots so the cursor follows it through
 // list churn (pinning, regrouping, peers appearing/exiting).
-func peerKey(p *Peer) string {
+func peerKey(p *core.Peer) string {
 	switch {
 	case p.Pane != "":
 		return "pane:" + p.Pane + ":" + strconv.Itoa(p.PID)
@@ -381,7 +385,7 @@ func peerKey(p *Peer) string {
 }
 
 // jobRowKey identifies a jobs-view row across snapshots (cursor anchoring).
-func jobRowKey(j *Job) string {
+func jobRowKey(j *jobs.Job) string {
 	return "job:" + j.Slug
 }
 
@@ -414,7 +418,7 @@ func (m *viewerModel) rebuild() {
 	if m.mode == "type" {
 		peers = pinBlocked(peers)
 	}
-	all, n := orderAll(peers, m.rawShells)
+	all, n := core.OrderAll(peers, m.rawShells)
 	m.groups = displayGroups(m.mode, all, n)
 	m.rows = m.rows[:0]
 	for _, g := range m.groups {
@@ -423,7 +427,7 @@ func (m *viewerModel) rebuild() {
 	if m.mode == "type" {
 		// pinning reorders rows but must not renumber them: a # read off the
 		// viewer has to select the same target in k s/k o/k k, which never pin
-		orderAll(m.rawPeers, m.rawShells)
+		core.OrderAll(m.rawPeers, m.rawShells)
 	}
 	if anchor != "" {
 		for i, p := range m.rows {
@@ -485,7 +489,7 @@ func (m *viewerModel) buildLines() []viewLine {
 	}
 	switch {
 	case !m.loaded:
-		return []viewLine{{text: paint(true, dim, "discovering…"), row: -1}}
+		return []viewLine{{text: util.Paint(true, util.Dim, "discovering…"), row: -1}}
 	case len(m.rows) == 0:
 		return []viewLine{{text: "no live sessions", row: -1}}
 	}
@@ -497,15 +501,15 @@ func (m *viewerModel) buildLines() []viewLine {
 			lines = append(lines, viewLine{row: -1})
 		}
 		if g.title != "" {
-			lines = append(lines, viewLine{text: paint(true, g.titleColor(), strings.ToUpper(g.title)), row: -1})
+			lines = append(lines, viewLine{text: util.Paint(true, g.titleColor(), strings.ToUpper(g.title)), row: -1})
 		}
-		for _, usage := range usageForAgent(m.usage, g.title, true) {
+		for _, usage := range core.UsageForAgent(m.usage, g.title, true) {
 			lines = append(lines, viewLine{text: usage, row: -1})
 		}
 		header := groupHeader(g.kind)
 		header[0] = " " + header[0] // marker column
 		for i, h := range header {
-			header[i] = paint(true, cyan, strings.ToUpper(h))
+			header[i] = util.Paint(true, util.Cyan, strings.ToUpper(h))
 		}
 		table := [][]string{header}
 		parent := parentMap(g.rows)
@@ -523,11 +527,11 @@ func (m *viewerModel) buildLines() []viewLine {
 			table = append(table, cells)
 			idx++
 		}
-		aligned := formatTableLines(table)
+		aligned := util.FormatTableLines(table)
 		lines = append(lines, viewLine{text: aligned[0], row: -1})
 		for i, l := range aligned[1:] {
 			if st, ok := g.subtitles[i]; ok {
-				lines = append(lines, viewLine{text: paint(true, dim, " "+st), row: -1})
+				lines = append(lines, viewLine{text: util.Paint(true, util.Dim, " "+st), row: -1})
 			}
 			lines = append(lines, viewLine{text: l, row: first + i})
 		}
@@ -622,39 +626,39 @@ func (m *viewerModel) View() string {
 
 // highlightRow wraps a rendered line in a full-width reverse-video bar.
 func highlightRow(line string, width int) string {
-	if pad := width - visWidth(line); pad > 0 {
+	if pad := width - util.VisWidth(line); pad > 0 {
 		line += strings.Repeat(" ", pad)
 	}
-	return "\x1b[7m" + line + reset
+	return "\x1b[7m" + line + util.Reset
 }
 
-var viewerHints = paint(true, dim, "j/k move · g/G top/bottom · enter/click open · b branch · dd kill · t group · J jobs · r refresh · q quit")
+var viewerHints = util.Paint(true, util.Dim, "j/k move · g/G top/bottom · enter/click open · b branch · dd kill · t group · J jobs · r refresh · q quit")
 
-var jobsHints = paint(true, dim, "j/k move · g/G top/bottom · enter drill · a answer · s start · A artifact · xx abandon · J sessions · r refresh · q quit")
+var jobsHints = util.Paint(true, util.Dim, "j/k move · g/G top/bottom · enter drill · a answer · s start · A artifact · xx abandon · J sessions · r refresh · q quit")
 
 func (m *viewerModel) noteLine() string {
 	if m.note == "" {
 		return ""
 	}
 	if m.noteIsErr {
-		return paint(true, red, m.note)
+		return util.Paint(true, util.Red, m.note)
 	}
 	return m.note
 }
 
 // clipLine truncates a line to w screen cells, ANSI-aware, always ending with
-// a reset so a cut colored cell can't bleed into the next line.
+// a util.Reset so a cut colored cell can't bleed into the next line.
 func clipLine(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if visWidth(s) <= w {
+	if util.VisWidth(s) <= w {
 		return s
 	}
 	var b strings.Builder
 	width := 0
 	for i := 0; i < len(s); {
-		if loc := ansiRe.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
+		if loc := util.AnsiRe.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
 			b.WriteString(s[i : i+loc[1]])
 			i += loc[1]
 			continue
@@ -667,5 +671,5 @@ func clipLine(s string, w int) string {
 		width++
 		i += size
 	}
-	return b.String() + "…" + reset
+	return b.String() + "…" + util.Reset
 }
