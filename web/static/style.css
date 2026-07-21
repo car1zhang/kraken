@@ -159,18 +159,18 @@ body {
   background: transparent; color: var(--accent);
   border: 1px solid var(--accent-soft);
 }
-.btn.unarchive:hover { border-color: var(--accent); box-shadow: var(--glow); }
+.btn.unarchive:hover { background: var(--accent-soft); border-color: var(--accent); box-shadow: var(--glow); }
 .btn.delete {
   background: transparent; color: var(--counter);
   border: 1px solid var(--counter-soft);
 }
-.btn.delete:hover { border-color: var(--counter); box-shadow: var(--glow-hot); }
+.btn.delete:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
 .btn.reactivate {
   margin-top: 8px;
   background: transparent; color: var(--revealed);
   border: 1px solid var(--revealed-soft);
 }
-.btn.reactivate:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.btn.reactivate:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
 .col { min-height: 120px; }
 .col-head {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -222,11 +222,11 @@ body {
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
 .pr-chip.pr-merged { color: var(--accent); border-color: var(--accent-soft); }
-.pr-chip.pr-merged:hover { box-shadow: var(--glow); border-color: var(--accent); }
+.pr-chip.pr-merged:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
 .pr-chip.pr-open { color: var(--solved); border-color: var(--solved-soft); }
-.pr-chip.pr-open:hover { box-shadow: var(--glow-ok); border-color: var(--solved); }
+.pr-chip.pr-open:hover { background: var(--solved-soft); box-shadow: var(--glow-ok); border-color: var(--solved); }
 .pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
-.pr-chip.pr-closed:hover { opacity: 1; border-color: var(--counter); }
+.pr-chip.pr-closed:hover { background: var(--counter-soft); opacity: 1; border-color: var(--counter); }
 
 .meta {
   color: var(--text-2); margin-top: 3px;
@@ -270,10 +270,10 @@ body {
 .q-opt {
   font: 10px var(--mono);
   background: transparent; color: var(--counter);
-  border: 1px solid var(--counter);
+  border: 1px solid var(--counter-soft);
   padding: 3px 8px; cursor: pointer;
 }
-.q-opt:hover { box-shadow: var(--glow-hot); }
+.q-opt:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
 .q-opt:disabled { opacity: 0.4; cursor: default; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
@@ -284,9 +284,9 @@ body {
   padding: 2px 7px; cursor: pointer;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
-.chip:hover { box-shadow: var(--glow); border-color: var(--accent); }
+.chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
 .chip-more { color: var(--text-2); border: 1px dashed var(--hairline-2); }
-.chip-more:hover { box-shadow: none; border-color: var(--text-2); color: var(--text); }
+.chip-more:hover { background: var(--raised); box-shadow: none; border-color: var(--text-2); color: var(--text); }
 
 .prereq span { font: 10px var(--mono); }
 .prereq .ok { color: var(--solved); }
@@ -319,10 +319,13 @@ body {
   padding: 9px 11px; background: var(--raised); border: 1px solid var(--hairline-2);
 }
 /* rendered markdown, not preformatted text — normalize the block rhythm.
-   .steer-spec-body shares these rules so the frozen spec preview reads the
-   same as every other rendered-markdown surface in the modal. */
+   .steer-spec-body shares these rules so the spec preview reads the same as
+   every other rendered-markdown surface in the modal. list padding matches
+   .md's — without it, markers hug the left edge with no indent. */
 .steer-detail p, .steer-detail ul, .steer-detail ol, .steer-detail pre,
 .steer-spec-body p, .steer-spec-body ul, .steer-spec-body ol, .steer-spec-body pre { margin: 0 0 8px; }
+.steer-detail ul, .steer-detail ol, .steer-spec-body ul, .steer-spec-body ol { padding-left: 20px; }
+.steer-detail li, .steer-spec-body li { margin: 0.15em 0; }
 .steer-detail :last-child, .steer-spec-body :last-child { margin-bottom: 0; }
 .steer-detail h1, .steer-detail h2, .steer-detail h3,
 .steer-spec-body h1, .steer-spec-body h2, .steer-spec-body h3 { font-size: 12.5px; margin: 10px 0 6px; color: var(--text); }
@@ -332,28 +335,26 @@ body {
    let it wrap instead of inheriting the card's one-line ellipsis */
 .steer-context .last-sent { white-space: pre-wrap; overflow: visible; text-overflow: clip; }
 
-/* action-complete row: whatever tmux/retry/mark-done/question buttons the
-   card itself would show for this job, so the modal never sends carl back
-   to the board to do something the card could — kill spacing between the
-   already-gapped children and each button's own card-context margin-top */
+/* action-complete row: retry/question buttons the card itself would show for
+   this job — tmux and mark-done live in the panel head instead (see
+   index.html/openSteer) since they apply regardless of health/blocked state.
+   kill spacing between the already-gapped children and each button's own
+   card-context margin-top */
 .steer-actions {
   display: flex; flex-direction: column; gap: 8px;
   margin-bottom: 2px;
 }
-.steer-actions > .review-row,
 .steer-actions > .btn.retry,
-.steer-actions > .btn.steer-done,
 .steer-actions > .question { margin-top: 0; }
 
-/* frozen spec preview: collapsed by default, expandable to a read-only
-   render of the job's initial prompt — the dashed left edge plus the ❄
-   header text (see index.html) are the two cues that this is display-only,
-   never an editable surface like the job editor's spec textarea. */
+/* spec preview: collapsed by default, expandable to a read-only render of
+   the job's initial prompt plus its meta (repo/base/solo/etc, see
+   specMetaHTML in app.js) — always display-only, never an editable surface
+   like the job editor's spec textarea. */
 .steer-spec {
   margin-bottom: 2px;
   background: var(--raised);
   border: 1px solid var(--hairline-2);
-  border-left: 2px dashed var(--hairline-2);
 }
 .steer-spec-head {
   display: flex; align-items: center; gap: 6px;
@@ -370,6 +371,16 @@ body {
   max-height: 40vh; overflow-y: auto;
   color: var(--text-2); font-size: 11.5px; line-height: 1.5;
 }
+.spec-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px 28px;
+  margin-bottom: 10px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline);
+  font: 11px var(--mono);
+}
+.spec-meta-row { display: flex; gap: 8px; }
+.spec-meta-row.wide { grid-column: 1 / -1; }
+.spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
+.spec-meta-row .v { color: var(--text); }
 .panel {
   background: var(--surface);
   border: 1px solid var(--hairline-2);
@@ -387,11 +398,17 @@ body {
 }
 .panel-title { font: 700 11.5px var(--mono); letter-spacing: 1px; }
 .panel-title::after { content: "▊"; color: var(--accent); margin-left: 4px; }
+/* button system: solid buttons (base .btn — accent fill) just glow on
+   hover; outline buttons (ghost/unarchive/delete/reactivate/retry/
+   steer-done) rest with a faint -soft border and no background, and on
+   hover fill with the -soft tint, solidify the border, and glow. The one
+   exception is tmux, whose border is solid yellow at all times. */
 .btn {
   font: 11px var(--mono);
   background: var(--accent); color: var(--accent-ink);
   border: none; padding: 4px 11px; cursor: pointer;
 }
+.btn:hover { box-shadow: var(--glow); }
 .btn:active { animation: glitch 120ms steps(2, end); }
 @keyframes glitch {
   0% { translate: -1px 1px; }
@@ -399,22 +416,30 @@ body {
   100% { translate: 0 0; }
 }
 .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
-.btn.ghost.danger { color: var(--counter); border-color: var(--counter); }
-.btn.ghost.danger:hover { box-shadow: var(--glow-hot); }
+.btn.ghost:hover { background: var(--raised); border-color: var(--text-2); box-shadow: none; }
+.btn.ghost.danger { color: var(--counter); border-color: var(--counter-soft); }
+.btn.ghost.danger:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
+/* primary composer action — standard .btn size, tucked under the input's
+   right edge (the .answer-body flex column makes align-self work) */
+.btn-big {
+  align-self: flex-end;
+  padding: 4px 14px; margin-top: 2px;
+  letter-spacing: 0.5px;
+}
 .btn.retry {
   display: block; width: 100%; margin-top: 8px;
-  background: var(--revealed-soft); color: var(--revealed);
-  border: 1px solid var(--revealed);
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed-soft);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.btn.retry:hover { box-shadow: var(--glow-warn); }
+.btn.retry:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+/* panel-head only — sits beside the yellow-outlined tmux button */
 .btn.steer-done {
-  display: block; width: 100%; margin-top: 8px;
-  background: var(--solved-soft); color: var(--solved);
-  border: 1px solid var(--solved);
-  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
+  background: transparent; color: var(--solved);
+  border: 1px solid var(--solved-soft);
+  font-size: 10px; letter-spacing: 1px;
 }
-.btn.steer-done:hover { box-shadow: var(--glow-ok); }
+.btn.steer-done:hover { background: var(--solved-soft); border-color: var(--solved); box-shadow: var(--glow-ok); }
 #steer-text {
   font: 12px/1.5 var(--sans);
   background: var(--raised); color: var(--text);
@@ -557,14 +582,16 @@ body {
 }
 
 /* open the cell's tmux pane in Ghostty — review-row name predates the
-   removal of the nvim/code review buttons it used to sit alongside */
-.review-row { display: flex; gap: 8px; margin-top: 8px; }
-.review-row .btn.tmux-open {
-  flex: 1; background: transparent; color: var(--revealed);
+   removal of the nvim/code review buttons it used to sit alongside.
+   wireframe like every other outline button, in yellow. */
+.btn.tmux-open {
+  background: transparent; color: var(--revealed);
   border: 1px solid var(--revealed-soft);
-  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
+  font-size: 10px; letter-spacing: 1px;
 }
-.review-row .btn.tmux-open:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.btn.tmux-open:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.review-row { display: flex; gap: 8px; margin-top: 8px; }
+.review-row .btn.tmux-open { flex: 1; padding: 5px 0; }
 
 /* honor the OS-level motion preference — kills the remaining finite
    animations/transitions (panel-in, glitch, hover fades) outright */

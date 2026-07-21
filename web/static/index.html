@@ -72,7 +72,6 @@
         <span class="spacer"></span>
         <button class="btn ghost" id="panel-open">↗ tab</button>
         <button class="btn ghost" id="panel-raw">raw</button>
-        <button class="btn" id="panel-close">close ✕</button>
       </div>
       <div class="panel-body" id="panel-body"></div>
     </div>
@@ -80,19 +79,20 @@
 
   <!-- message zeus: mid-run instructions to a live cell; the same modal
        doubles as the reactivate prompt (optional message), and is also what
-       clicking into a live working/blocked job's card opens — its frozen
-       spec renders alongside the composer, collapsed by default. for
-       steer/unblock modes it's action-complete: #steer-actions holds
-       whatever tmux/retry/mark-done/question buttons the card itself would
-       show, so nothing is card-only -->
+       clicking into a live working/blocked job's card opens — its spec
+       renders alongside the composer, collapsed by default. for
+       steer/unblock modes it's action-complete: the head's tmux/mark-done
+       buttons plus #steer-actions' retry/question buttons cover whatever the
+       card itself would show, so nothing is card-only. overlay outside-click
+       and Escape (see app.js) are the only way to close it now -->
   <div class="overlay" id="steer-overlay" hidden>
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title" id="steer-title"></span>
         <span class="spacer"></span>
+        <button class="btn tmux-open open-tmux" id="steer-tmux" hidden title="raise zeus' pane in Ghostty">⧉ tmux</button>
+        <button class="btn steer-done" id="steer-markdone" hidden title="mark this job done">✓ mark done</button>
         <button class="btn ghost danger" id="steer-kill" hidden>✕ cancel job</button>
-        <button class="btn ghost" id="steer-cancel">cancel</button>
-        <button class="btn" id="steer-send">send ⌘⏎</button>
       </div>
       <div class="panel-body answer-body">
         <div class="steer-context" id="steer-context" hidden>
@@ -102,11 +102,12 @@
         </div>
         <div class="steer-actions" id="steer-actions" hidden></div>
         <div class="steer-spec" id="steer-spec" hidden>
-          <button class="steer-spec-head" id="steer-spec-toggle"><span class="tri">▸</span> spec — ❄ frozen while the cell runs · display only</button>
+          <button class="steer-spec-head" id="steer-spec-toggle"><span class="tri">▸</span> spec</button>
           <div class="steer-spec-body" id="steer-spec-body" hidden></div>
         </div>
         <textarea id="steer-text" rows="4"
           placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
+        <button class="btn btn-big" id="steer-send">send ⌘⏎</button>
         <div class="answer-note" id="steer-note"></div>
       </div>
     </div>
@@ -127,7 +128,6 @@
           title="resume this done job's original zeus session in a fresh cell">↺ reactivate</button>
         <button class="btn ghost" id="editor-archive" hidden
           title="move this job (and its preserved artifacts) into the archive — frees the slug; reversible from the ARCHIVED drawer under DONE">archive</button>
-        <button class="btn ghost" id="editor-cancel">cancel</button>
         <button class="btn" id="editor-save">save ⌘⏎</button>
       </div>
       <div class="panel-body editor-body">

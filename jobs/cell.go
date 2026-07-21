@@ -731,7 +731,9 @@ func ReactivateJob(j *Job, session, message string) error {
 	// folder trust normally persists — but a fresh machine or cleared
 	// config would block startup on the dialog just like a first start
 	acceptTrustPrompts(sess)
-	if err := WriteJobState(j, "working"); err != nil {
+	// a reactivated job was "not truly finished" — drop the recorded outcome
+	// along with the state flip so it reads like it was never completed
+	if err := WriteJobFields(j, "state", "working", "outcome", ""); err != nil {
 		return fmt.Errorf("cell is up but state write failed: %v", err)
 	}
 	return nil

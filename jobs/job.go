@@ -641,7 +641,9 @@ func startable(j *Job, bySlug map[string]*Job) bool {
 // before the closing --- if absent), leaving every other byte of the file
 // untouched. An accidentally indented line for the key is healed to the
 // canonical unindented form — the parser rejects indented keys, so leaving it
-// would keep the job erred.
+// would keep the job erred. An empty val REMOVES the key's line instead of
+// leaving a dangling "key:" (a missing key already parses as empty, so the
+// two forms are equivalent — this just keeps hand-read files clean).
 func patchField(content, key, val string) (string, error) {
 	lines := strings.Split(content, "\n")
 	if len(lines) == 0 || !isFence(lines[0]) {
@@ -649,11 +651,18 @@ func patchField(content, key, val string) (string, error) {
 	}
 	for i := 1; i < len(lines); i++ {
 		if isFence(lines[i]) {
+			if val == "" {
+				return content, nil // clearing an absent key: nothing to do
+			}
 			lines[i] = key + ": " + val + "\n---"
 			return strings.Join(lines, "\n"), nil
 		}
 		if strings.HasPrefix(strings.TrimSpace(lines[i]), key+":") {
-			lines[i] = key + ": " + val
+			if val == "" {
+				lines = append(lines[:i], lines[i+1:]...)
+			} else {
+				lines[i] = key + ": " + val
+			}
 			return strings.Join(lines, "\n"), nil
 		}
 	}
