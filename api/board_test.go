@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"kraken/core"
 	"kraken/jobs"
 	"kraken/util"
 )
@@ -104,7 +105,7 @@ func TestWebJobJSONShapeEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(data)
-	for _, absent := range []string{"escalations", "detail", "question", "roster", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts"} {
+	for _, absent := range []string{"escalations", "detail", "question", "wakeup", "roster", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts"} {
 		if strings.Contains(s, `"`+absent+`"`) {
 			t.Errorf("empty webJob JSON unexpectedly has %q: %s", absent, s)
 		}
@@ -127,6 +128,7 @@ func TestWebJobJSONShapePopulated(t *testing.T) {
 				Options: []webQuestionOption{{Label: "A", Description: "do A"}, {Label: "B", Description: "do B"}},
 			}},
 		},
+		Wakeup: &webWakeup{Reason: "poll PR checks", FiresAt: 1234567890},
 		Roster: []webAgent{{Name: "hephaestus-x", Model: "sonnet"}},
 	}
 	data, err := json.Marshal(wj)
@@ -139,6 +141,7 @@ func TestWebJobJSONShapePopulated(t *testing.T) {
 		`"question":{"tool_use_id":"tu_1"`,
 		`"multi_select":false`,
 		`"options":[{"label":"A","description":"do A"}`,
+		`"wakeup":{"reason":"poll PR checks","fires_at":1234567890}`,
 		`"roster":[{"name":"hephaestus-x","model":"sonnet"}]`,
 	} {
 		if !strings.Contains(s, want) {
@@ -174,6 +177,20 @@ func TestWebQuestionFromMirrorsFields(t *testing.T) {
 	}
 	if q.Options[0].Label != "l1" || q.Options[0].Description != "d1" {
 		t.Fatalf("option mismatch: %+v", q.Options[0])
+	}
+}
+
+func TestWebWakeupFromNil(t *testing.T) {
+	if got := webWakeupFrom(nil); got != nil {
+		t.Fatalf("webWakeupFrom(nil) = %+v, want nil", got)
+	}
+}
+
+func TestWebWakeupFromMirrorsFields(t *testing.T) {
+	w := &core.Wakeup{Reason: "poll PR checks", DelaySeconds: 300, FiresAt: 1234567890}
+	got := webWakeupFrom(w)
+	if got == nil || got.Reason != "poll PR checks" || got.FiresAt != 1234567890 {
+		t.Fatalf("webWakeupFrom mismatch: %+v", got)
 	}
 }
 

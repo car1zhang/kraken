@@ -340,6 +340,38 @@ func TestCellActive(t *testing.T) {
 			want: true,
 		},
 		{
+			// polling (mid poll-loop, pending ScheduleWakeup) votes the cell
+			// active exactly like running: it's idle between ticks by
+			// design, not genuinely waiting at its prompt.
+			name:  "zeus polling (pending wakeup) -> true",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "polling", Pane: "%1"}},
+			want:  true,
+		},
+		{
+			// same belt-and-braces question race applies to a polling agent
+			// as to a running one.
+			name:         "zeus polling but pane shows an open question -> false",
+			sess:         "cell-x",
+			peers:        []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "polling", Pane: "%1"}},
+			paneQuestion: yesQuestion,
+			want:         false,
+		},
+		{
+			// the member cross-check (runningByPane) only recognizes
+			// "running" panes, not "polling" ones: zeus is the poller here,
+			// never a teammate, so a polling occupant must not vote a
+			// teammate pane active. Intentional — not a gap to fix.
+			name:  "zeus waiting + tmux teammate whose pane is polling (not running) -> false",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "polling"}},
+			members: []core.TeamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
+			},
+			want: false,
+		},
+		{
 			name:  "zeus waiting + tmux teammate with a running pane -> true",
 			sess:  "cell-x",
 			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "running"}},

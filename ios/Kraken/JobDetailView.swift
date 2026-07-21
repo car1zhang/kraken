@@ -191,6 +191,38 @@ struct PRChip: View {
     }
 }
 
+/// Formats seconds-until-fire as "Xm Ys", floored at 0 — mirrors app.js's
+/// countdown(). Callers compute `seconds` fresh at render time (the board
+/// already polls every few seconds, so that's enough granularity; no
+/// separate ticker).
+func wakeupCountdownLabel(secondsRemaining: Int) -> String {
+    if secondsRemaining <= 0 { return "due" }
+    let m = secondsRemaining / 60
+    let s = secondsRemaining % 60
+    return "\(m)m \(s)s"
+}
+
+/// The cell's poll-timer chip — "⏱ next check in Xm Ys" — for a job with a
+/// pending wakeup. Not private: shared between BoardView's JobCardView and
+/// JobDetailView, same reasoning as PRChip above. Cyan-tinted like
+/// SessionTheme's "polling" peer-status color.
+struct WakeupChip: View {
+    let wakeup: WebWakeup
+
+    private var secondsRemaining: Int {
+        Int((Double(wakeup.firesAt) / 1000) - Date().timeIntervalSince1970)
+    }
+
+    var body: some View {
+        Text("⏱ next check in \(wakeupCountdownLabel(secondsRemaining: secondsRemaining))")
+            .font(.data(10, weight: .semibold))
+            .foregroundStyle(KTheme.polling)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(KTheme.pollingSoft)
+    }
+}
+
 struct JobDetailView: View {
     let job: WebJob
     let baseURL: String
@@ -284,6 +316,9 @@ struct JobDetailView: View {
                             .font(.data(11))
                             .foregroundStyle(KTheme.text2)
                     }
+                    if let wakeup = job.wakeup, job.state == "working" {
+                        WakeupChip(wakeup: wakeup)
+                    }
                     if let prs = job.prs, !prs.isEmpty {
                         HStack(spacing: 6) {
                             ForEach(prs, id: \.url) { pr in
@@ -358,6 +393,13 @@ struct JobDetailView: View {
                 if let lastSent = job.lastSent, !lastSent.isEmpty {
                     kSection("Last sent") {
                         Text(lastSent)
+                            .font(.data(12))
+                            .foregroundStyle(KTheme.text2)
+                    }
+                }
+                if let wakeup = job.wakeup, !wakeup.reason.isEmpty, job.state == "working" {
+                    kSection("Poll timer") {
+                        Text("↻ " + wakeup.reason)
                             .font(.data(12))
                             .foregroundStyle(KTheme.text2)
                     }

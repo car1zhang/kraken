@@ -70,6 +70,11 @@ struct WebJob: Decodable, Identifiable {
     // A pending interactive question (e.g. an AskUserQuestion tool call)
     // blocking the cell, if any.
     let question: WebQuestion?
+    // A pending ScheduleWakeup from zeus' transcript — the cell is on a poll
+    // timer (mid /loop or /poll-pr-style tick) rather than genuinely idle.
+    // Still counts as "working"; the UI renders a countdown chip from it.
+    // Additive key, no contract bump.
+    let wakeup: WebWakeup?
     // Live subagents currently working the cell, if any.
     let roster: [WebRosterAgent]?
     let artifacts: [WebArtifact]?
@@ -96,7 +101,7 @@ struct WebJob: Decodable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, state, err, outcome, cell, live
-        case prereqs, detail, question, roster, artifacts, health, mtime
+        case prereqs, detail, question, wakeup, roster, artifacts, health, mtime
         case archived
         case displaySlug = "display_slug"
         case reactivatable
@@ -157,6 +162,21 @@ struct WebQuestionItem: Decodable {
 struct WebQuestionOption: Decodable {
     let label: String
     let description: String
+}
+
+// WebWakeup mirrors board.go's webWakeup (job wire) and peer.go's Wakeup
+// (peer wire) — both serialize `reason` + `fires_at`; the peer shape also
+// carries `delay_seconds`, which the UI doesn't need (it derives its own
+// countdown from firesAt against wall-clock time), so one Swift type covers
+// both. Hashable so it can sit on Peer, which is itself Hashable.
+struct WebWakeup: Decodable, Hashable {
+    let reason: String
+    let firesAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case reason
+        case firesAt = "fires_at"
+    }
 }
 
 // WebRosterAgent mirrors one live subagent entry in job.go's roster list.
@@ -305,6 +325,9 @@ struct Peer: Decodable, Identifiable, Hashable {
     let cwd: String?
     let status: String
     let statusAt: Int64?
+    // Present only when status is "polling": the pending ScheduleWakeup
+    // call driving it (see core/wakeup.go).
+    let wakeup: WebWakeup?
     let sessionIDGuessed: Bool?
     let branch: String?
     let model: String?
@@ -328,6 +351,7 @@ struct Peer: Decodable, Identifiable, Hashable {
         case sessionID = "session_id"
         case name, cwd, status
         case statusAt = "status_at"
+        case wakeup
         case sessionIDGuessed = "session_id_guessed"
         case branch, model, kind, agent, role, cmd
         case cmdSeconds = "cmd_seconds"
