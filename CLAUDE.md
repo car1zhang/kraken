@@ -40,6 +40,23 @@ Tests (root `main_test.go`, `viewer_test.go`, plus a `_test.go` file alongside i
 
 New code goes in the package matching its concern — CLI/rendering in root, tmux/discovery primitives in core, job/cell lifecycle in jobs, wire handlers in api, HTTP serving in web — and only exports what actually crosses a package boundary. The `util ← core ← jobs ← api ← web` direction is load-bearing: a lower package must never import a higher one, since that would both violate the layering and create an import cycle.
 
+## Filesystem Conventions
+
+Every path in the binary derives from `os.UserHomeDir()` via `util.Home()` — never hardcode `/Users/<name>` (in Go, prompts, or docs), so the same setup works on any Mac whose home directory follows this layout. The directories kraken assumes, and where each is wired in:
+
+| Path | Owner | Code |
+|---|---|---|
+| `~/Documents/pluto` (job files `*.job.md`, `archive/`) | user's pluto notes convention | `jobs/job.go` (`JobsDir`) |
+| `~/Developer` (git checkouts jobs may target) | user convention | `jobs/job.go` (`ResolveRepo`), `jobs/board.go` (`RepoCandidates`) |
+| `~/.kraken` (`cells/`, `daemon.json`) | kraken-owned | `jobs/cell.go`, `jobs/daemon.go` |
+| `~/.claude` (`sessions/`, `projects/`, `teams/`, `.usage-cache.json`) | Claude Code | `core/discover.go`, `core/peer.go`, `core/usage.go` |
+| `~/.claude/skills/doc/assets` (doc templates, `hermes-contract.md`, `lint_svg.py`) | user's doc skill; zeus briefs reference these by path | `jobs/crew.go` |
+| `~/.codex/session_index.jsonl` | Codex | `core/discover.go` |
+| `~/.config/nvim/lua/config/pluto.lua` | user nvim config (`{{name}}` expansion coupling) | noted in `jobs/job.go` |
+| `~/.local/bin` (`kraken` + `k` symlink) | install target | `Makefile` |
+
+When adding a path, express it home-relative through `util.Home()` and add it to this table.
+
 ## Conventions
 
 - Keep it stdlib-only outside the viewer; new dependencies need a strong reason.
