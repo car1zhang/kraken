@@ -17,6 +17,8 @@ func TestZeusBriefBuild(t *testing.T) {
 	for _, want := range []string{
 		"zeus", "hephaestus", "athena", "/send", "PR", "manual test ready",
 		"tests pass", "AskUserQuestion", cellArtifacts(j), "TaskStop",
+		// a merged PR is never job completion; follow-ups recycle the branch
+		"never ends the job", "checkout -B " + cellBranch(j) + " origin/main",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("build brief missing %q", want)

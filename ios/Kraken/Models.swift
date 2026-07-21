@@ -87,6 +87,9 @@ struct WebJob: Decodable, Identifiable {
     // carl's own most recent message to the cell (the last me→zeus mid-run
     // log entry), independent of whether the cell is currently live.
     let lastSent: String?
+    // Open/merged/closed PRs associated with this job, if any — additive key,
+    // absent on older servers just like every other omitempty field here.
+    let prs: [JobPR]?
 
     var id: String { slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
@@ -99,7 +102,15 @@ struct WebJob: Decodable, Identifiable {
         case displaySlug = "display_slug"
         case reactivatable
         case lastSent = "last_sent"
+        case prs
     }
+}
+
+// JobPR mirrors one entry of a job's `prs` array: a PR url plus its
+// open/merged/closed state, as returned by the board.
+struct JobPR: Decodable {
+    let url: String
+    let state: String
 }
 
 struct WebPrereq: Decodable {
@@ -360,6 +371,9 @@ struct PaneRequest: Encodable {
 struct ReadBlock: Decodable {
     let kind: String
     let text: String
+    // Present on "teammate" blocks — which teammate sent this. Additive key,
+    // absent on older servers and on every other block kind.
+    let from: String?
 }
 
 struct ReadResponse: Decodable {

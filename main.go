@@ -42,8 +42,6 @@ func main() {
 		cmdJobs(rest)
 	case "start":
 		cmdStart(rest)
-	case "reap":
-		cmdReap(rest)
 	case "done":
 		cmdDone(rest)
 	case "archive":
@@ -93,8 +91,6 @@ Commands:
   k start <slug>      start a job manually: git worktree on carl/<slug> +
                       tmux session cell-<slug> + zeus (requires ready: true
                       and prereqs done)
-  k reap              check started jobs' PRs; merged ones get their cell
-                      torn down (verified) and state stamped done
   k done <slug> [outcome...]
                       manually complete a started job (the acceptance path for
                       info jobs): preserves artifacts into pluto,
@@ -110,12 +106,14 @@ Commands:
                       slug is taken by an active job
   k reactivate <slug> [--session <uuid>] [message...]
                       resume a done job's original zeus session for
-                      adjustments: same worktree path, fresh carl/<slug>-rN
-                      branch (the old PR is merged), state back to working
+                      adjustments: same worktree path, branch recycled off
+                      the base (fresh -rN only if unmerged commits remain),
+                      state back to working
   k daemon            run the scheduler loop in the foreground (launchd runs
                       this at login via make install): queues ready jobs
                       (≤5 cells), derives working/blocked from cell activity,
-                      auto-reaps merged PRs, notifies on blocked cells,
+                      tracks each job's PRs (merge = notification + board
+                      chip, never teardown), notifies on blocked cells,
                       writes ~/.kraken/daemon.json
   k migrate           kill + requeue cells started under the old crew format
   k web [-p port] [--tailnet] [-addr host:port]

@@ -125,6 +125,9 @@ type webJob struct {
 	// Reactivatable marks a done job whose zeus session id is recorded, so
 	// the UIs only offer the reactivate action where it can actually work.
 	Reactivatable bool `json:"reactivatable,omitempty"`
+	// PRs mirrors the job file's kraken-owned prs: list — every PR the
+	// cell ever shipped, rendered by the clients as linked state chips.
+	PRs []JobPR `json:"prs,omitempty"`
 }
 
 type webBoard struct {
@@ -347,6 +350,7 @@ func buildWebBoard() webBoard {
 			Success: j.Success, Prereqs: prereqs, Artifacts: jobArtifacts(j),
 			ModTime:       j.ModTime.Unix(),
 			Reactivatable: j.State == "done" && j.Session != "",
+			PRs:           j.PRs,
 		}
 		if j.started() && j.State != "done" {
 			wj.LastSent = lastSentMessage(j.Body)
@@ -901,10 +905,10 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 }
 
 // serializeJobFile renders form fields back into canonical frontmatter +
-// spec + the preserved kraken-owned tail (state, outcome, session, run —
-// the form can't touch them by construction). Round-trips through the
-// strict parser by construction.
-func serializeJobFile(f jobFormFields, state, outcome, session string, run int, logSection string) string {
+// spec + the preserved kraken-owned tail (state, outcome, session, run,
+// prs — the form can't touch them by construction). Round-trips through
+// the strict parser by construction.
+func serializeJobFile(f jobFormFields, state, outcome, session string, run int, prs []JobPR, logSection string) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "job: %s\n", f.Slug)
@@ -944,6 +948,12 @@ func serializeJobFile(f jobFormFields, state, outcome, session string, run int, 
 	}
 	if run > 0 {
 		fmt.Fprintf(&b, "run: %d\n", run)
+	}
+	if len(prs) > 0 {
+		b.WriteString("prs:\n")
+		for _, p := range prs {
+			fmt.Fprintf(&b, "  - url: %s\n    state: %s\n", oneLine(p.URL), oneLine(p.State))
+		}
 	}
 	b.WriteString("---\n\n")
 	if spec := strings.TrimSpace(f.Spec); spec != "" {
@@ -992,7 +1002,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Slug = j.Slug // slug is the filename; immutable here
 	_, logSection := splitBodyLog(j.Body)
-	content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Run, logSection)
+	content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Run, j.PRs, logSection)
 	if err := atomicWrite(j.File, content); err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
