@@ -124,6 +124,32 @@ Response: same as above.
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
 
+### `GET /api/draft?slug=` / `POST /api/draft` → `webDraft` (draft.go)
+
+Per-job prompt-composer draft text, kept in an in-memory store on the `k web`
+process — additive (contract stays 2), nothing here is written to disk, so
+drafts are lost across a `k web` restart. Last-save-event-wins: no merge,
+no history, a POST simply overwrites whatever was there. The stored draft is
+cleared automatically on the success path of `/api/steer`, `/api/reactivate`,
+`/api/done`, `/api/archive`, and `/api/delete` (NOT `/api/kill` or
+`/api/question`), and lazily on any `GET /api/draft` for a slug that no
+longer matches an active job.
+
+GET request: `slug` query param (required; missing/empty → 400).
+GET response:
+
+| key | type | optionality |
+|---|---|---|
+| `slug` | string | always |
+| `text` | string | always (`""` if no draft stored) |
+| `updated_at` | number | always (unix millis; `0` if no draft stored) |
+
+POST request: `webReq` — `slug` (string, required — empty → 400), `text`
+(string: the draft text; empty clears the stored entry).
+POST response: `{"ok": true}` on success; non-2xx `{"error": string}` on
+failure (400 for bad JSON or missing slug; 405 for methods other than
+GET/POST).
+
 ---
 
 ## Job editor

@@ -783,10 +783,16 @@ private struct ReactivateView: View {
     var onReactivated: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(DraftStore.self) private var draftStore
     @FocusState private var textFocused: Bool
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
+
+    // Same draft slot as SteerView below — one composer draft per job,
+    // shared across steer/unblock/reactivate, since the server clears it on
+    // any of those actions succeeding.
+    private var draftKey: String { "steer:\(job.slug)" }
 
     var body: some View {
         Form {
@@ -826,6 +832,13 @@ private struct ReactivateView: View {
             }
         }
         .disabled(isBusy)
+        .task {
+            await draftStore.hydrate(slug: job.slug)
+            text = draftStore.get(draftKey)
+        }
+        .onChange(of: text) {
+            draftStore.set(draftKey, text)
+        }
     }
 
     private func send() {
@@ -838,6 +851,9 @@ private struct ReactivateView: View {
                     text: text.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
                 isBusy = false
+                // The server clears the job's draft itself on a successful
+                // reactivate — only the local copy needs clearing here.
+                draftStore.clear(draftKey)
                 onReactivated()
             } catch {
                 isBusy = false
@@ -931,7 +947,8 @@ private struct SteerView: View {
             }
         }
         .disabled(isBusy)
-        .onAppear {
+        .task {
+            await draftStore.hydrate(slug: job.slug)
             text = draftStore.get(draftKey)
         }
         .onChange(of: text) {
@@ -960,8 +977,13 @@ private struct SteerView: View {
             do {
                 try await APIClient.shared.steer(baseURL: baseURL, slug: job.slug, text: text)
                 isBusy = false
+                // The server clears the job's draft itself on a successful
+                // steer — clear() drops the local copy and cancels any pending
+                // sync, and that's the last word: deliberately NOT resetting
+                // `text` here, because that would fire .onChange -> set("") and
+                // schedule a redundant empty-text POST (the sheet dismisses via
+                // onSteered anyway, discarding the field).
                 draftStore.clear(draftKey)
-                text = ""
                 onSteered()
             } catch {
                 isBusy = false

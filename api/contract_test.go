@@ -607,6 +607,45 @@ func TestJobSaveFormWireShape(t *testing.T) {
 	}
 }
 
+// --- draft: /api/draft GET/POST (draft.go) ---
+
+var webDraftSpec = map[string]fieldSpec{
+	"slug":       {kind: wireString, required: true},
+	"text":       {kind: wireString, required: true},
+	"updated_at": {kind: wireNumber, required: true},
+}
+
+func TestDraftGetWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "contract-draft", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/draft?slug=contract-draft", nil)
+	rec := httptest.NewRecorder()
+	draftHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("draftHandler (GET): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/draft (GET)", rec.Body.Bytes(), webDraftSpec)
+}
+
+var draftPostOKSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+func TestDraftPostWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "contract-draft-post", "")
+
+	body := mustJSON(t, webReq{Slug: "contract-draft-post", Text: "hello"})
+	req := httptest.NewRequest(http.MethodPost, "/api/draft", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	draftHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("draftHandler (POST): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/draft (POST)", rec.Body.Bytes(), draftPostOKSpec)
+}
+
 // jobSaveFormConflictSpec is the 409 shape webJobSaveForm returns for a
 // stale-mtime conflict specifically — distinct from the generic {"error":
 // string} error shape (see ios/API.md) by the extra "conflict": true key,

@@ -202,7 +202,10 @@ function cardHTML(j, col) {
 function checkStaleModals() {
   if (steerOverlay && !steerOverlay.hidden && steerSlug) {
     const j = jobsBySlug[steerSlug];
-    if (!j || j.state !== steerOpenState) steerOverlay.hidden = true;
+    if (!j || j.state !== steerOpenState) {
+      flushSteerDraft(); // text survives server-side even though the modal is closing itself
+      steerOverlay.hidden = true;
+    }
   }
   if (editorOverlay && !editorOverlay.hidden && editorSlug) {
     const j = jobsBySlug[editorSlug];
@@ -214,6 +217,7 @@ function checkStaleModals() {
         editorStateCaptured = true;
       }
     } else if (!j || j.state !== editorOpenState) {
+      flushEditorAutosave();
       editorOverlay.hidden = true;
     }
   }
@@ -409,6 +413,40 @@ async function post(url, body) {
   }
 }
 
+// debounce: shared by the steer draft sync and the editor autosave below.
+// flush() fires the last pending call immediately (every modal-close path
+// uses this) and returns its result so a caller can await it; cancel() drops
+// it unfired (used when the server already applied what we'd otherwise
+// resend, so firing late would resurrect stale state).
+function debounce(fn, ms) {
+  let timer = null;
+  let pending = null;
+  const wrapped = (...args) => {
+    pending = args;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      const a = pending;
+      pending = null;
+      fn(...a);
+    }, ms);
+  };
+  wrapped.flush = () => {
+    if (timer === null) return undefined;
+    clearTimeout(timer);
+    timer = null;
+    const a = pending;
+    pending = null;
+    return fn(...a);
+  };
+  wrapped.cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    pending = null;
+  };
+  return wrapped;
+}
+
 // ---- markdown (tiny subset) ----
 
 function inlineMD(s) {
@@ -589,8 +627,12 @@ document.addEventListener("click", (ev) => {
   if (steerDone) {
     steerDone.disabled = true;
     post("/api/done", { slug: steerDone.dataset.slug }).then((ok) => {
-      if (ok) steerOverlay.hidden = true;
-      else steerDone.disabled = false;
+      if (ok) {
+        postDraft.cancel(); // done also clears the draft server-side
+        steerOverlay.hidden = true;
+      } else {
+        steerDone.disabled = false;
+      }
     });
     return;
   }
@@ -631,6 +673,22 @@ let steerSlug = null;
 let steerMode = "steer"; // "steer" | "reactivate" | "unblock" — same modal, different endpoint
 // job.state captured at open time — see checkStaleModals below
 let steerOpenState = undefined;
+
+// server-synced draft for the composer textarea — one shared draft per job
+// regardless of mode, so steer/unblock/reactivate all read and write the
+// same text. postDraft is debounced per keystroke; flushSteerDraft is called
+// from every path that closes the modal so a draft survives a reload.
+const postDraft = debounce((slug, text) => {
+  fetch("/api/draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug, text }),
+  }).catch(() => {}); // fire-and-forget; the next keystroke's debounce retries
+}, 600);
+
+function flushSteerDraft() {
+  return postDraft.flush();
+}
 
 // steer context: the cell's last message, carl's last sent message, and its
 // artifact chips — populated for "steer"/"unblock" (the data is there either
@@ -719,6 +777,16 @@ function openSteer(slug, mode = "steer") {
       ? "tell the crew how to proceed — routed straight to the cell"
       : "message zeus directly — steering / pivot instruction, delivered straight to its pane";
   text.value = "";
+  // fetch the shared draft after the composer is already showing empty —
+  // only land it if the modal is still open for this slug and the user
+  // hasn't started typing in the meantime
+  fetch("/api/draft?slug=" + encodeURIComponent(slug))
+    .then((r) => r.json())
+    .then((d) => {
+      if (steerOverlay.hidden || steerSlug !== slug) return;
+      if (text.value === "") text.value = d.text || "";
+    })
+    .catch(() => {});
   document.getElementById("steer-note").textContent = "";
   document.getElementById("steer-send").textContent =
     mode === "reactivate" ? "reactivate ⌘⏎" : mode === "unblock" ? "unblock ⌘⏎" : "send ⌘⏎";
@@ -787,10 +855,19 @@ document.getElementById("steer-send").addEventListener("click", async () => {
   btn.disabled = true;
   const ok = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug: steerSlug, text });
   btn.disabled = false;
-  if (ok) steerOverlay.hidden = true;
-  else document.getElementById("steer-note").textContent = "send failed — see status bar";
+  if (ok) {
+    postDraft.cancel(); // server already cleared the draft — flushing would resurrect it
+    steerOverlay.hidden = true;
+  } else {
+    document.getElementById("steer-note").textContent = "send failed — see status bar";
+  }
 });
-steerOverlay.addEventListener("click", (ev) => { if (ev.target === steerOverlay) steerOverlay.hidden = true; });
+document.getElementById("steer-text").addEventListener("input", (ev) => {
+  if (steerSlug) postDraft(steerSlug, ev.target.value);
+});
+steerOverlay.addEventListener("click", (ev) => {
+  if (ev.target === steerOverlay) { flushSteerDraft(); steerOverlay.hidden = true; }
+});
 document.getElementById("steer-text").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
     ev.preventDefault();
@@ -804,8 +881,12 @@ document.getElementById("steer-kill").addEventListener("click", async () => {
   btn.disabled = true;
   const ok = await post("/api/kill", { slug: steerSlug });
   btn.disabled = false;
-  if (ok) steerOverlay.hidden = true;
-  else document.getElementById("steer-note").textContent = "cancel failed — see status bar";
+  if (ok) {
+    flushSteerDraft(); // kill doesn't clear the draft server-side — preserve it
+    steerOverlay.hidden = true;
+  } else {
+    document.getElementById("steer-note").textContent = "cancel failed — see status bar";
+  }
 });
 document.getElementById("steer-spec-toggle").addEventListener("click", () => {
   const body = document.getElementById("steer-spec-body");
@@ -821,6 +902,7 @@ const editorText = document.getElementById("editor-text");
 const editorNote = document.getElementById("editor-note");
 let editorSlug = null;
 let editorMTime = 0;
+let editorReady = false; // captured from the last loaded form; the ready row is gone, sent as-is by the ready button
 // job.state captured at open time — see checkStaleModals below. Capture is
 // lazy (editorStateCaptured) because a freshly-created job isn't in
 // jobsBySlug yet when loadForm first runs for it — the very next poll fills
@@ -852,7 +934,7 @@ function fillForm(d) {
     (d.repo && !repos.includes(d.repo) ? `<option value="${esc(d.repo)}">${esc(d.repo)}</option>` : "");
   repoSel.value = d.repo || "";
   document.getElementById("f-base").value = d.base || "";
-  document.getElementById("f-ready").checked = !!d.ready;
+  editorReady = !!d.ready;
   document.getElementById("f-solo").checked = !!d.solo;
   document.getElementById("f-auto").checked = !!d.auto_approve;
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
@@ -872,7 +954,7 @@ function readForm() {
     type: document.getElementById("f-type").value,
     repo: document.getElementById("f-repo").value.trim(),
     base: document.getElementById("f-base").value.trim(),
-    ready: document.getElementById("f-ready").checked,
+    ready: editorReady,
     solo: document.getElementById("f-solo").checked,
     auto_approve: document.getElementById("f-auto").checked,
     prereqs,
@@ -889,14 +971,12 @@ function setFormReadOnly(readOnly) {
   document.getElementById("f-type").disabled = readOnly;
   document.getElementById("f-repo").disabled = readOnly;
   document.getElementById("f-base").disabled = readOnly;
-  document.getElementById("f-ready").disabled = readOnly;
   document.getElementById("f-solo").disabled = readOnly;
   document.getElementById("f-auto").disabled = readOnly;
   document.getElementById("f-add-prereq").disabled = readOnly;
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));
   editorText.readOnly = readOnly;
-  document.getElementById("editor-save").hidden = readOnly;
   // archive lives here, inside the opened job, on purpose: no card-level
   // shortcut — the server still refuses jobs with a cell in flight
   document.getElementById("editor-archive").hidden = readOnly;
@@ -919,7 +999,6 @@ async function loadForm(slug) {
   document.getElementById("editor-title").textContent = slug + ".job.md";
   document.getElementById("editor-newrow").hidden = true;
   document.getElementById("editor-form").hidden = false;
-  document.getElementById("editor-save").disabled = false;
   setFormReadOnly(!d.editable);
   // board-action parity: the drag/board moves for editable jobs live here
   // too — queue for an err-free draft, reactivate for a resumable done job
@@ -934,6 +1013,7 @@ async function loadForm(slug) {
 function openEditor(slug) {
   editorSlug = slug;
   editorMTime = 0;
+  editorReady = false;
   editorStateCaptured = false;
   editorNote.textContent = "";
   editorNote.style.color = "";
@@ -941,9 +1021,6 @@ function openEditor(slug) {
   document.getElementById("editor-title").textContent = isNew ? "new job" : slug + ".job.md";
   document.getElementById("editor-newrow").hidden = !isNew;
   document.getElementById("editor-form").hidden = true;
-  document.getElementById("editor-save").hidden = false;
-  document.getElementById("editor-save").disabled = true;
-  document.getElementById("editor-force").hidden = true;
   document.getElementById("editor-archive").hidden = true;
   document.getElementById("editor-queue").hidden = true;
   document.getElementById("editor-reactivate").hidden = true;
@@ -961,6 +1038,7 @@ document.getElementById("editor-queue").addEventListener("click", async () => {
   if (!editorSlug) return;
   const btn = document.getElementById("editor-queue");
   btn.disabled = true;
+  await flushEditorAutosave(); // land any edit still sitting in the debounce window before queueing
   const ok = await post("/api/queue", { slug: editorSlug });
   btn.disabled = false;
   if (ok) editorOverlay.hidden = true;
@@ -1005,44 +1083,53 @@ document.getElementById("f-add-prereq").addEventListener("click", () => {
   rows[rows.length - 1].querySelector("input").focus();
 });
 document.getElementById("f-prereqs").addEventListener("click", (ev) => {
-  if (ev.target.closest(".rm")) ev.target.closest(".prereq-row").remove();
+  if (ev.target.closest(".rm")) {
+    ev.target.closest(".prereq-row").remove();
+    onEditorFormChange(); // removal changes the payload immediately, unlike an empty add row
+  }
 });
 
-async function saveForm(force) {
-  if (!editorSlug || editorText.readOnly) return;
-  const forceBtn = document.getElementById("editor-force");
+// spec editor autosave: any change inside the form debounces into a
+// saveform POST with mtime: 0 (no optimistic-lock check — this is the only
+// writer of the file while the editor's open, so there's nothing to
+// conflict with). editorAutosave is the debounced call; flushEditorAutosave
+// lands it immediately on modal close or before the ready button fires.
+const editorAutosave = debounce(doEditorSave, 600);
+
+function flushEditorAutosave() {
+  return editorAutosave.flush();
+}
+
+function onEditorFormChange() {
+  if (!editorSlug || editorText.readOnly || document.getElementById("editor-form").hidden) return;
+  editorNote.style.color = "var(--text-2)";
+  editorNote.textContent = "syncing…";
+  editorAutosave();
+}
+
+async function doEditorSave() {
+  if (!editorSlug || editorText.readOnly || document.getElementById("editor-form").hidden) return;
   try {
     const r = await fetch("/api/job/saveform", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...readForm(), force: !!force }),
+      body: JSON.stringify({ ...readForm(), mtime: 0 }),
     });
     const d = await r.json();
-    if (!r.ok) {
-      if (d.conflict) {
-        forceBtn.hidden = false;
-        throw new Error(d.error + " — save again after reloading, or overwrite disk");
-      }
-      throw new Error(d.error || r.status);
-    }
-    forceBtn.hidden = true;
+    if (!r.ok) throw new Error(d.error || r.status);
     editorMTime = d.mtime;
-    editorNote.textContent = d.warn ? "saved — but won't run: " + d.warn : "saved ✓";
     editorNote.style.color = d.warn ? "" : "var(--solved)";
+    editorNote.textContent = d.warn ? "synced — won't run: " + d.warn : "synced ✓";
     invalidateBoard();
     refresh();
   } catch (e) {
     editorNote.style.color = "";
-    editorNote.textContent = String(e.message || e);
+    editorNote.textContent = "sync failed: " + (e.message || e);
   }
 }
 
-document.getElementById("editor-save").addEventListener("click", () => saveForm(false));
-document.getElementById("editor-force").addEventListener("click", () => {
-  if (confirm("overwrite " + editorSlug + ".job.md? whatever changed on disk since you opened the editor is lost.")) {
-    saveForm(true);
-  }
-});
+document.getElementById("editor-form").addEventListener("input", onEditorFormChange);
+document.getElementById("editor-form").addEventListener("change", onEditorFormChange);
 
 document.getElementById("editor-archive").addEventListener("click", async () => {
   if (!editorSlug) return;
@@ -1051,11 +1138,14 @@ document.getElementById("editor-archive").addEventListener("click", async () => 
   else editorNote.textContent = "archive failed — see status bar";
 });
 
-editorOverlay.addEventListener("click", (ev) => { if (ev.target === editorOverlay) editorOverlay.hidden = true; });
+editorOverlay.addEventListener("click", (ev) => {
+  if (ev.target === editorOverlay) { flushEditorAutosave(); editorOverlay.hidden = true; }
+});
 document.getElementById("editor-form").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
     ev.preventDefault();
-    if (!editorText.readOnly) document.getElementById("editor-save").click();
+    const readyBtn = document.getElementById("editor-queue");
+    if (!readyBtn.hidden) readyBtn.click();
   }
 });
 document.getElementById("editor-slug").addEventListener("keydown", (ev) => {
@@ -1092,8 +1182,8 @@ overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.h
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if (!overlay.hidden) { overlay.hidden = true; return; }
-  if (!steerOverlay.hidden) { steerOverlay.hidden = true; return; }
-  if (!editorOverlay.hidden) { editorOverlay.hidden = true; return; }
+  if (!steerOverlay.hidden) { flushSteerDraft(); steerOverlay.hidden = true; return; }
+  if (!editorOverlay.hidden) { flushEditorAutosave(); editorOverlay.hidden = true; return; }
 });
 
 // ---- dag view: jobs layered by dependency depth, edges = prereqs ----

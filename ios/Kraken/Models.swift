@@ -273,6 +273,28 @@ struct CreateJobRequest: Encodable {
     let slug: String
 }
 
+// GET/POST /api/draft — a job-scoped composer draft, synced upstream so a
+// typed-but-unsent steer/reactivate message survives an app kill, a
+// reinstall, or switching devices. `text` is always present on the wire
+// ("" means no draft stored); the server clears a job's draft itself after
+// a successful steer/reactivate/done/archive/delete, so clients never need
+// to post an empty-text clear after one of those actions succeeds.
+struct DraftResponse: Decodable {
+    let slug: String
+    let text: String
+    let updatedAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case slug, text
+        case updatedAt = "updated_at"
+    }
+}
+
+struct DraftRequest: Encodable {
+    let slug: String
+    let text: String
+}
+
 // webAction's uniform success body is always {"ok": true}; errors arrive as
 // a non-2xx status with {"error": "..."} and are turned into KrakenError by
 // APIClient before a caller ever sees this type.
