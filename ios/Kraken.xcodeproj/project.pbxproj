@@ -18,6 +18,8 @@
 		6C7EAAA0C1815B5E8BEE5458 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */; };
 		6DF35773AABE18B8D1CEEC30 /* DraftPersistenceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32C2F4A42CBC2D123B55AC4E /* DraftPersistenceUITests.swift */; };
 		7F53B4F4BE9C944368D05543 /* MarkdownHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */; };
+		8DCE80061C02793DEFC49C0D /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71F5D2794B798146B0453D4 /* MarkdownParser.swift */; };
+		8ED3FDEA37C23328E9AD32CF /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */; };
 		9E5FE98C26F364D41BF72C34 /* ArtifactView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */; };
 		A1BC1C2D352EF2176BF263BB /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */; };
 		B0B74A169D8836ECF27810EE /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA8587CFE1F0023DA53E96B2 /* Models.swift */; };
@@ -52,7 +54,9 @@
 		7F80ED1D258C4D24F4AE6965 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		830497A2C99EE12325B9FBD6 /* Kraken.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraken.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHTML.swift; sourceTree = "<group>"; };
+		8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		AEF9ED32FC58893C4F52D844 /* KrakenUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakenUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B71F5D2794B798146B0453D4 /* MarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParser.swift; sourceTree = "<group>"; };
 		BA367B655DF24A06788B2CD3 /* AppRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouter.swift; sourceTree = "<group>"; };
 		C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
 		C99F884263C78D3B9FD03D5D /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
@@ -95,6 +99,8 @@
 				D29F1852BBFA1274A0BFE991 /* JobFormView.swift */,
 				4936914ABA5DBD9E4D304398 /* KrakenApp.swift */,
 				88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */,
+				B71F5D2794B798146B0453D4 /* MarkdownParser.swift */,
+				8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */,
 				FA8587CFE1F0023DA53E96B2 /* Models.swift */,
 				6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */,
 				153DA91C335FCC8EBFE26F95 /* NotificationManager.swift */,
@@ -225,6 +231,8 @@
 				15E03CF28FC165A2AC64ED88 /* JobFormView.swift in Sources */,
 				54994C7136E33E7D02D336C4 /* KrakenApp.swift in Sources */,
 				7F53B4F4BE9C944368D05543 /* MarkdownHTML.swift in Sources */,
+				8DCE80061C02793DEFC49C0D /* MarkdownParser.swift in Sources */,
+				8ED3FDEA37C23328E9AD32CF /* MarkdownText.swift in Sources */,
 				B0B74A169D8836ECF27810EE /* Models.swift in Sources */,
 				200A598DE7D246E25CF248F0 /* NewJobSheet.swift in Sources */,
 				C75916514378EDDC362B3CD5 /* NotificationManager.swift in Sources */,
