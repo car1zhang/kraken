@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -758,5 +760,87 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 	}
 	if len(j.PRs) != 2 || j.PRs[0] != prs[0] || j.PRs[1] != prs[1] {
 		t.Fatalf("prs lost in round-trip: %+v", j.PRs)
+	}
+}
+
+// --- boardCache: TTL memoization + single-flight over buildWebBoard ---
+
+// countingCache builds a boardCache whose build func counts its own calls
+// and whose clock is a plain closure variable the test can advance — no
+// goroutines, no package-level state, so it can't leak into other tests.
+func countingCache(ttl time.Duration, clock *time.Time) (*boardCache, *int32) {
+	var builds int32
+	c := &boardCache{
+		ttl: ttl,
+		now: func() time.Time { return *clock },
+		build: func() webBoard {
+			atomic.AddInt32(&builds, 1)
+			return webBoard{}
+		},
+	}
+	return c, &builds
+}
+
+func TestBoardCacheTTLHit(t *testing.T) {
+	clock := time.Now()
+	c, builds := countingCache(2*time.Second, &clock)
+	c.get()
+	c.get()
+	if got := atomic.LoadInt32(builds); got != 1 {
+		t.Fatalf("builds = %d, want 1 — a second get() inside the ttl must hit the cache", got)
+	}
+}
+
+func TestBoardCacheTTLExpiry(t *testing.T) {
+	clock := time.Now()
+	c, builds := countingCache(2*time.Second, &clock)
+	c.get()
+	clock = clock.Add(3 * time.Second)
+	c.get()
+	if got := atomic.LoadInt32(builds); got != 2 {
+		t.Fatalf("builds = %d, want 2 — a get() past the ttl must rebuild", got)
+	}
+}
+
+func TestBoardCacheInvalidate(t *testing.T) {
+	clock := time.Now()
+	c, builds := countingCache(2*time.Second, &clock)
+	c.get()
+	c.invalidate()
+	c.get()
+	if got := atomic.LoadInt32(builds); got != 2 {
+		t.Fatalf("builds = %d, want 2 — invalidate() must force the next get() to rebuild", got)
+	}
+}
+
+// TestBoardCacheSingleFlight exercises the reason get() holds its lock across
+// build(): a burst of concurrent callers hitting a cold cache (several web
+// tabs + the iOS app polling at once) must collapse into exactly one
+// discovery, with the late arrivals blocking on the mutex and then reusing
+// the fresh entry rather than each triggering their own build.
+func TestBoardCacheSingleFlight(t *testing.T) {
+	clock := time.Now()
+	var builds int32
+	c := &boardCache{
+		ttl: 2 * time.Second,
+		now: func() time.Time { return clock },
+		build: func() webBoard {
+			atomic.AddInt32(&builds, 1)
+			time.Sleep(20 * time.Millisecond) // simulate a slow tmux/ps/lsof discovery
+			return webBoard{}
+		},
+	}
+	var wg sync.WaitGroup
+	const n = 10
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.get()
+		}()
+	}
+	wg.Wait()
+	if got := atomic.LoadInt32(&builds); got != 1 {
+		t.Fatalf("builds = %d, want 1 — %d concurrent misses on a cold cache must single-flight", got, n)
 	}
 }

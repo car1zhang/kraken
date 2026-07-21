@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -328,6 +329,45 @@ func lastSentMessage(body string) string {
 // the text that follows it.
 var midRunLogEntryRe = regexp.MustCompile(`^- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([^\]]+)\] (.*)$`)
 
+// boardCache memoizes buildWebBoard for a short TTL so a burst of board
+// polls (several web tabs + the iOS app) costs one discovery, not N. The
+// mutex doubles as single-flight: concurrent misses serialize and late
+// arrivals get the fresh entry. Mutations invalidate so a post-action
+// refresh never sees pre-action state.
+type boardCache struct {
+	mu    sync.Mutex
+	ttl   time.Duration
+	now   func() time.Time // injectable for tests
+	build func() webBoard  // injectable for tests
+	at    time.Time        // zero = invalid
+	board webBoard
+}
+
+// get returns the cached board if it's still within ttl, otherwise rebuilds
+// under the lock — the lock held across build is what makes concurrent
+// misses single-flight instead of a thundering herd of discoveries.
+func (c *boardCache) get() webBoard {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.at.IsZero() && c.now().Sub(c.at) < c.ttl {
+		return c.board
+	}
+	c.board = c.build()
+	c.at = c.now()
+	return c.board
+}
+
+// invalidate forces the next get() to rebuild — called after any write so a
+// client's post-action refresh never reads a pre-action snapshot.
+func (c *boardCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = time.Time{}
+}
+
+// webBoardCache is the /api/board handler's single instance.
+var webBoardCache = &boardCache{ttl: 2 * time.Second, now: time.Now, build: buildWebBoard}
+
 func buildWebBoard() webBoard {
 	jobs := loadJobs()
 	bySlug := map[string]*Job{}
@@ -428,6 +468,7 @@ func webAction(f func(webReq) error) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		webBoardCache.invalidate()
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}
 }
@@ -794,6 +835,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fi, _ := os.Stat(path)
+	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"slug": slug, "content": content, "mtime": jobMTime(fi), "editable": true})
 }
 
@@ -834,6 +876,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	parsed := parseJob(filepath.Base(j.File), []byte(req.Content))
+	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
 }
 
@@ -1006,6 +1049,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, _ := os.Stat(j.File)
 	parsed := parseJob(filepath.Base(j.File), []byte(content))
+	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
 }
 
@@ -1109,7 +1153,7 @@ func cmdWeb(args []string) {
 	mux.HandleFunc("/api/peers/open", peersOpenHandler(defaultPeerSource))
 	mux.HandleFunc("/api/board", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(buildWebBoard())
+		_ = json.NewEncoder(w).Encode(webBoardCache.get())
 	})
 	mux.HandleFunc("/api/queue", webAction(webQueue))
 	mux.HandleFunc("/api/done", webAction(webDone))
