@@ -372,12 +372,13 @@ body {
   color: var(--text-2); font-size: 11.5px; line-height: 1.5;
 }
 .spec-meta {
-  display: flex; flex-direction: column; gap: 3px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px 28px;
   margin-bottom: 10px; padding-bottom: 10px;
   border-bottom: 1px solid var(--hairline);
   font: 11px var(--mono);
 }
 .spec-meta-row { display: flex; gap: 8px; }
+.spec-meta-row.wide { grid-column: 1 / -1; }
 .spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
 .spec-meta-row .v { color: var(--text); }
 .panel {
@@ -411,12 +412,12 @@ body {
 .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
 .btn.ghost.danger { color: var(--counter); border-color: var(--counter); }
 .btn.ghost.danger:hover { box-shadow: var(--glow-hot); }
-/* primary composer action — bigger than the standard .btn so it reads as
-   the one thing to do once the message is written */
+/* primary composer action — standard .btn size, tucked under the input's
+   right edge (the .answer-body flex column makes align-self work) */
 .btn-big {
-  display: block; width: 100%;
-  padding: 11px 0; margin-top: 2px;
-  font-size: 13px; font-weight: 700; letter-spacing: 0.5px;
+  align-self: flex-end;
+  padding: 4px 14px; margin-top: 2px;
+  font-weight: 700; letter-spacing: 0.5px;
 }
 .btn-big:hover { box-shadow: var(--glow); }
 .btn.retry {
@@ -433,16 +434,17 @@ body {
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
 .btn.steer-done:hover { box-shadow: var(--glow-ok); }
-/* panel-head instance is subtler than the card/actions variant above — a
-   ghost button, not a filled full-width one; specificity (not source order)
-   is what wins here since both rules match two classes */
+/* panel-head instance sits beside the accent-filled tmux button: a faint
+   solved-tinted fill + border — quieter than tmux, louder than a ghost;
+   specificity (not source order) is what wins here since both rules match
+   two classes */
 .panel-head .btn.steer-done {
   display: inline-block; width: auto; margin-top: 0;
-  background: transparent; color: var(--text-2);
-  border: 1px solid var(--hairline-2);
+  background: var(--solved-soft); color: var(--solved);
+  border: 1px solid var(--solved);
   font-size: 10px; letter-spacing: 1px; padding: 4px 11px;
 }
-.panel-head .btn.steer-done:hover { color: var(--solved); border-color: var(--solved); box-shadow: none; }
+.panel-head .btn.steer-done:hover { box-shadow: var(--glow-ok); }
 #steer-text {
   font: 12px/1.5 var(--sans);
   background: var(--raised); color: var(--text);

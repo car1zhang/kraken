@@ -185,7 +185,7 @@ function cardHTML(j, col) {
     ${j.last_sent ? `<div class="last-sent">me→zeus: ${esc(j.last_sent)}</div>` : ""}
     ${j.detail ? `<div class="detail${detailClampable(j.detail) ? " clampable" : ""}${expandedDetails.has(j.slug) ? " expanded" : ""}">${esc(j.detail)}</div>` : ""}
     ${roster ? `<div class="roster">${roster}</div>` : ""}
-    ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
+    ${j.outcome && col === "done" ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
@@ -695,10 +695,11 @@ function specMetaHTML(d) {
   ];
   const prereqs = d.prereqs || [];
   if (prereqs.length) {
-    rows.push(["prereqs", prereqs.map((p) => esc(p.job) + (p.gated ? " gated ⚑" : "")).join(", ")]);
+    // wide: prereq lists run long, so the row spans both meta columns
+    rows.push(["prereqs", prereqs.map((p) => esc(p.job) + (p.gated ? " gated ⚑" : "")).join(", "), "wide"]);
   }
   return `<div class="spec-meta">${rows
-    .map(([k, v]) => `<div class="spec-meta-row"><span class="k">${k}</span><span class="v">${v}</span></div>`)
+    .map(([k, v, w]) => `<div class="spec-meta-row${w ? " " + w : ""}"><span class="k">${k}</span><span class="v">${v}</span></div>`)
     .join("")}</div>`;
 }
 

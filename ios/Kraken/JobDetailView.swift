@@ -322,7 +322,9 @@ struct JobDetailView: View {
                 if isUnhealthy {
                     kSection("Health") { Text(job.health ?? "").font(.voice(13)).foregroundStyle(KTheme.revealed) }
                 }
-                if let outcome = job.outcome, !outcome.isEmpty {
+                // done/archived only: a reactivated job may still carry a
+                // stale outcome in its file — it reads as never-completed
+                if let outcome = job.outcome, !outcome.isEmpty, column == .done || isArchived {
                     kSection("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
                 }
                 if let prereqs = job.prereqs, !prereqs.isEmpty {
