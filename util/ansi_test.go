@@ -2,6 +2,12 @@ package util
 
 import "testing"
 
+func TestStatusColorPolling(t *testing.T) {
+	if got := StatusColor("polling"); got != Cyan {
+		t.Errorf("polling: got %q, want Cyan", got)
+	}
+}
+
 func TestVisWidth(t *testing.T) {
 	if got := VisWidth("hello"); got != 5 {
 		t.Errorf("plain: got %d", got)

@@ -16,7 +16,6 @@ prereqs:
     gated: true
   - job: schema-migration
 solo: false               # true → zeus executes alone, no subagent crew
-auto-approve: false       # true → skip the plan-approval gate (default: plan is gated)
 success: |
   dupes collapse in the dashboard
   unit tests pass
@@ -37,8 +36,8 @@ func TestParseJobFull(t *testing.T) {
 	if j.Slug != "yelp-dedupe" || j.Type != "build" || j.Repo != "monolith" {
 		t.Fatalf("identity: %+v", j)
 	}
-	if !j.Ready || j.Solo || j.AutoApprove {
-		t.Fatalf("flags: ready=%v solo=%v auto=%v", j.Ready, j.Solo, j.AutoApprove)
+	if !j.Ready || j.Solo {
+		t.Fatalf("flags: ready=%v solo=%v", j.Ready, j.Solo)
 	}
 	want := []Prereq{{Job: "dedupe-strategy-q", Gated: true}, {Job: "schema-migration"}}
 	if len(j.Prereqs) != 2 || j.Prereqs[0] != want[0] || j.Prereqs[1] != want[1] {
@@ -48,6 +47,19 @@ func TestParseJobFull(t *testing.T) {
 	// block-scalar lines must still be fully consumed (Err == "", body intact)
 	if !strings.Contains(j.Body, "# Spec") || strings.Contains(j.Body, "ready:") {
 		t.Fatalf("body: %q", j.Body)
+	}
+}
+
+func TestParseJobAutoApproveLegacy(t *testing.T) {
+	// auto-approve is a retired field: legacy pluto job files still carry it
+	// (true or false), and the parser must keep consuming the line rather
+	// than erroring — the value itself is simply discarded.
+	for _, val := range []string{"true", "false"} {
+		src := "---\njob: x\nrepo: monolith\nready: true\nauto-approve: " + val + "\n---\n"
+		j := ParseJob("x.job.md", []byte(src))
+		if j.Err != "" {
+			t.Fatalf("auto-approve: %s: unexpected err: %s", val, j.Err)
+		}
 	}
 }
 
@@ -61,7 +73,6 @@ ready: false              # flip to true to queue
 prereqs: []               # - job: other-slug
                           #   gated: true
 solo: false
-auto-approve: false
 success: |
   what "done" looks like
 ---
@@ -150,6 +161,26 @@ func TestParseJobStateAndOutcome(t *testing.T) {
 	}
 	if !j.Started() {
 		t.Fatal("working should count as started")
+	}
+}
+
+func TestParseJobTeardownMarker(t *testing.T) {
+	src := "---\njob: x\nready: true\nstate: working\nteardown: done:accepted\n---\nbody"
+	j := ParseJob("x.job.md", []byte(src))
+	if j.Err != "" {
+		t.Fatalf("teardown marker must parse cleanly, got err %q", j.Err)
+	}
+	if j.Teardown != "done:accepted" {
+		t.Fatalf("teardown = %q, want %q", j.Teardown, "done:accepted")
+	}
+	// clearing the marker removes the line entirely (patchField's empty-val
+	// removal), so finished teardowns leave no residue in hand-read files
+	out, err := patchField(src, "teardown", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "teardown") {
+		t.Fatalf("cleared marker still present:\n%s", out)
 	}
 }
 

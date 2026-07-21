@@ -45,6 +45,8 @@ func StatusColor(status string) string {
 		return Yellow
 	case "waiting":
 		return Red
+	case "polling":
+		return Cyan
 	default:
 		return Gray
 	}

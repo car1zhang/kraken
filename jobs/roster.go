@@ -112,7 +112,9 @@ func CellCrew(sess string, zeus *core.Peer, peers []*core.Peer, members []core.T
 		var working bool
 		model := p.Model
 		if p.Pane != "" {
-			working = p.Status == "running"
+			// "polling" counts as working, in lockstep with cellActive: a
+			// poll-loop tick is live work, not idleness
+			working = p.Status == "running" || p.Status == "polling"
 		} else if m, ok := memberByName[name]; ok {
 			working = m.IsActive != nil && *m.IsActive
 			if model == "" {

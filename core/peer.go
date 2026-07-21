@@ -28,6 +28,11 @@ type Peer struct {
 	CWD       string `json:"cwd,omitempty"`
 	Status    string `json:"status"`
 	StatusAt  int64  `json:"status_at,omitempty"`
+	// Wakeup is set only when Status is "polling": the pending ScheduleWakeup
+	// call (from a /loop or /poll-pr-style tick) that upgraded this peer out
+	// of a false "waiting" read. See discover.go's DiscoverAll and
+	// FindPendingWakeup.
+	Wakeup *Wakeup `json:"wakeup,omitempty"`
 	// SessionIDGuessed marks ids inferred from cwd+newest-transcript (no
 	// session file): fine for display, unsafe for fork/read targeting.
 	SessionIDGuessed bool   `json:"session_id_guessed,omitempty"`

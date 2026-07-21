@@ -23,7 +23,9 @@ import (
 // never bump it, since old clients already ignore fields they don't know.
 // v2: the success criteria field was removed (webJob.success on /api/board,
 // success on the job form GET/POST).
-const apiContract = 2
+// v3: the auto-approve feature was deleted (auto_approve removed from the
+// job form GET/POST shapes, auto-approve: frontmatter no longer written).
+const apiContract = 3
 
 type webArtifact struct {
 	Name string `json:"name"`
@@ -86,6 +88,22 @@ type webAgent struct {
 	Working bool   `json:"working"`
 }
 
+// webWakeup mirrors core.Wakeup for the wire, minus DelaySeconds — the
+// client derives its countdown from FiresAt against wall-clock time, it
+// doesn't need the original delay.
+type webWakeup struct {
+	Reason  string `json:"reason"`
+	FiresAt int64  `json:"fires_at"`
+}
+
+// webWakeupFrom converts a pending core.Wakeup into the board's DTO.
+func webWakeupFrom(w *core.Wakeup) *webWakeup {
+	if w == nil {
+		return nil
+	}
+	return &webWakeup{Reason: w.Reason, FiresAt: w.FiresAt}
+}
+
 type webJob struct {
 	Slug      string        `json:"slug"`
 	Type      string        `json:"type"`
@@ -108,10 +126,15 @@ type webJob struct {
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
-	// ZeusStatus is zeus' own refined status (running/waiting/question),
-	// distinct from the cell's aggregate state; omitted when zeus isn't
-	// resolvable (fresh fork, no session file yet).
+	// ZeusStatus is zeus' own refined status (running/polling/waiting/
+	// question), distinct from the cell's aggregate state; omitted when zeus
+	// isn't resolvable (fresh fork, no session file yet).
 	ZeusStatus string `json:"zeus_status,omitempty"`
+	// Wakeup mirrors the zeus peer's own pending ScheduleWakeup call and is
+	// present only while the cell is polling (mid /loop or /poll-pr-style
+	// tick). The client renders a countdown chip from it; the cell still
+	// counts as "working".
+	Wakeup *webWakeup `json:"wakeup,omitempty"`
 	// Roster lists the cell's live subagents (nested claude peers).
 	Roster []webAgent `json:"roster,omitempty"`
 	// Health is a computed condition on the live cell ("" = healthy): API
@@ -125,8 +148,15 @@ type webJob struct {
 	// carries the original slug for rendering.
 	Archived    bool   `json:"archived,omitempty"`
 	DisplaySlug string `json:"display_slug,omitempty"`
-	// Reactivatable marks a done job whose zeus session id is recorded, so
-	// the UIs only offer the reactivate action where it can actually work.
+	// CellGone marks a started, non-done job whose tmux session vanished
+	// (killed by hand, tmux restart, a teardown that died mid-flight): the
+	// worktree — uncommitted work included — is still on disk, and reactivate
+	// is the recovery that preserves it. Additive key; clients without it
+	// just miss the chip.
+	CellGone bool `json:"cell_gone,omitempty"`
+	// Reactivatable marks a job whose zeus session id is recorded and whose
+	// cell is resumable — done jobs, plus gone-cell started jobs — so the UIs
+	// only offer the reactivate action where it can actually work.
 	Reactivatable bool `json:"reactivatable,omitempty"`
 	// PRs mirrors the job file's kraken-owned prs: list — every PR the
 	// cell ever shipped, rendered by the clients as linked state chips.
@@ -366,9 +396,8 @@ func buildWebBoard() webBoard {
 			Slug: j.Slug, Type: j.Type, Repo: j.Repo,
 			State: jobs.DisplayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
 			Prereqs: prereqs, Artifacts: jobArtifacts(j),
-			ModTime:       j.ModTime.Unix(),
-			Reactivatable: j.State == "done" && j.Session != "",
-			PRs:           j.PRs,
+			ModTime: j.ModTime.Unix(),
+			PRs:     j.PRs,
 		}
 		if j.Started() && j.State != "done" {
 			wj.LastSent = lastSentMessage(j.Body)
@@ -382,6 +411,9 @@ func buildWebBoard() webBoard {
 				if transcript != "" {
 					wj.Detail = lastAssistantText(transcript)
 					wj.Question = webQuestionFrom(jobs.FindPendingQuestion(transcript))
+					if zeus != nil && zeus.Status == "polling" && zeus.Wakeup != nil {
+						wj.Wakeup = webWakeupFrom(zeus.Wakeup)
+					}
 				}
 				var members []core.TeamMember
 				if zeus != nil && !zeus.SessionIDGuessed {
@@ -393,7 +425,19 @@ func buildWebBoard() webBoard {
 					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working})
 				}
 			}
+		} else if j.Started() && j.State != "done" {
+			// dead cell: the session is gone but the worktree (and any
+			// uncommitted WIP) is still on disk. Health routes the card into
+			// BLOCKED immediately — a tick ahead of the daemon persisting the
+			// blocked state — and the transcript's last words still surface,
+			// located by the stamped session id since no live peer exists.
+			wj.CellGone = true
+			wj.Health = "cell session is gone — reactivate to resume; done/kill discard the worktree"
+			if transcript := core.TranscriptPathForSession(j.Session); transcript != "" {
+				wj.Detail = lastAssistantText(transcript)
+			}
 		}
+		wj.Reactivatable = (j.State == "done" || wj.CellGone) && j.Session != ""
 		board.Jobs = append(board.Jobs, wj)
 	}
 	// archived jobs ride the same list under state "archived": no cell, no

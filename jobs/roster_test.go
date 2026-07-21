@@ -16,6 +16,7 @@ func TestCellCrewTmuxTeammateStatuses(t *testing.T) {
 		working bool
 	}{
 		{"running -> working", "running", true},
+		{"polling -> working (lockstep with cellActive)", "polling", true},
 		{"waiting -> not working", "waiting", false},
 		{"question -> not working", "question", false},
 	}

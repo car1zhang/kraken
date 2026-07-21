@@ -569,6 +569,21 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 				peer.Model = readModel(transcriptPath(peer.SessionID))
 			}
 			refineStatus(peer)
+			// A claude running a timed poll loop (/loop, /poll-pr) is idle
+			// between ticks and reads "waiting" off its session file just
+			// like one genuinely sitting at its prompt; a pending
+			// ScheduleWakeup in its own transcript is the tell that
+			// distinguishes the two. Only "waiting" ever upgrades here —
+			// "question" (waiting on the user) and "running" are left
+			// untouched — and only for a real session id: a guessed one
+			// (SessionIDGuessed) could belong to another claude entirely,
+			// so reading it would be unsafe.
+			if peer.Agent == "claude" && peer.Status == "waiting" && peer.SessionID != "" && !peer.SessionIDGuessed {
+				if w := FindPendingWakeup(transcriptPath(peer.SessionID), time.Now()); w != nil {
+					peer.Status = "polling"
+					peer.Wakeup = w
+				}
+			}
 			peers = append(peers, peer)
 		}
 	}
@@ -791,6 +806,13 @@ func newestTranscriptSession(cwd string) string {
 		}
 	}
 	return newest
+}
+
+// TranscriptPathForSession is transcriptPath for callers outside core that
+// only hold a session id — e.g. the board reading a dead cell's last words,
+// where no live Peer exists to hand ReadTranscriptPath.
+func TranscriptPathForSession(sessionID string) string {
+	return transcriptPath(sessionID)
 }
 
 // transcriptPath locates a session's transcript by globbing all project dirs —

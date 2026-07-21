@@ -210,6 +210,7 @@ struct CrewChipsView: View {
         guard let zeusStatus, !zeusStatus.isEmpty else { return nil }
         switch zeusStatus {
         case "running": return ("zeus ●", KTheme.solved)
+        case "polling": return ("zeus ↻", KTheme.polling)
         case "question": return ("zeus ⚑", KTheme.revealed)
         default: return ("zeus ○", KTheme.text2)
         }
@@ -256,6 +257,38 @@ struct CrewChipsView: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .overlay(Rectangle().stroke(color, lineWidth: 1))
+    }
+}
+
+/// Formats seconds-until-fire as "Xm Ys", floored at 0 — mirrors app.js's
+/// countdown(). Callers compute `seconds` fresh at render time (the board
+/// already polls every few seconds, so that's enough granularity; no
+/// separate ticker).
+func wakeupCountdownLabel(secondsRemaining: Int) -> String {
+    if secondsRemaining <= 0 { return "due" }
+    let m = secondsRemaining / 60
+    let s = secondsRemaining % 60
+    return "\(m)m \(s)s"
+}
+
+/// The cell's poll-timer chip — "⏱ next check in Xm Ys" — for a job with a
+/// pending wakeup. Not private: shared between BoardView's JobCardView and
+/// JobDetailView, same reasoning as PRChip above. Cyan-tinted like
+/// SessionTheme's "polling" peer-status color.
+struct WakeupChip: View {
+    let wakeup: WebWakeup
+
+    private var secondsRemaining: Int {
+        Int((Double(wakeup.firesAt) / 1000) - Date().timeIntervalSince1970)
+    }
+
+    var body: some View {
+        Text("⏱ next check in \(wakeupCountdownLabel(secondsRemaining: secondsRemaining))")
+            .font(.data(10, weight: .semibold))
+            .foregroundStyle(KTheme.polling)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(KTheme.pollingSoft)
     }
 }
 
@@ -352,6 +385,9 @@ struct JobDetailView: View {
                             .font(.data(11))
                             .foregroundStyle(KTheme.text2)
                     }
+                    if let wakeup = job.wakeup, job.state == "working" {
+                        WakeupChip(wakeup: wakeup)
+                    }
                     if let prs = job.prs, !prs.isEmpty {
                         HStack(spacing: 6) {
                             ForEach(prs, id: \.url) { pr in
@@ -431,6 +467,13 @@ struct JobDetailView: View {
                 if let lastSent = job.lastSent, !lastSent.isEmpty {
                     kSection("Last sent") {
                         Text(lastSent)
+                            .font(.data(12))
+                            .foregroundStyle(KTheme.text2)
+                    }
+                }
+                if let wakeup = job.wakeup, !wakeup.reason.isEmpty, job.state == "working" {
+                    kSection("Poll timer") {
+                        Text("↻ " + wakeup.reason)
                             .font(.data(12))
                             .foregroundStyle(KTheme.text2)
                     }
@@ -856,10 +899,16 @@ private struct ReactivateView: View {
     var onReactivated: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(DraftStore.self) private var draftStore
     @FocusState private var textFocused: Bool
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
+
+    // Same draft slot as SteerView below — one composer draft per job,
+    // shared across steer/unblock/reactivate, since the server clears it on
+    // any of those actions succeeding.
+    private var draftKey: String { "steer:\(job.slug)" }
 
     var body: some View {
         Form {
@@ -899,6 +948,13 @@ private struct ReactivateView: View {
             }
         }
         .disabled(isBusy)
+        .task {
+            await draftStore.hydrate(slug: job.slug)
+            text = draftStore.get(draftKey)
+        }
+        .onChange(of: text) {
+            draftStore.set(draftKey, text)
+        }
     }
 
     private func send() {
@@ -911,6 +967,9 @@ private struct ReactivateView: View {
                     text: text.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
                 isBusy = false
+                // The server clears the job's draft itself on a successful
+                // reactivate — only the local copy needs clearing here.
+                draftStore.clear(draftKey)
                 onReactivated()
             } catch {
                 isBusy = false
@@ -1004,7 +1063,8 @@ private struct SteerView: View {
             }
         }
         .disabled(isBusy)
-        .onAppear {
+        .task {
+            await draftStore.hydrate(slug: job.slug)
             text = draftStore.get(draftKey)
         }
         .onChange(of: text) {
@@ -1033,8 +1093,13 @@ private struct SteerView: View {
             do {
                 try await APIClient.shared.steer(baseURL: baseURL, slug: job.slug, text: text)
                 isBusy = false
+                // The server clears the job's draft itself on a successful
+                // steer — clear() drops the local copy and cancels any pending
+                // sync, and that's the last word: deliberately NOT resetting
+                // `text` here, because that would fire .onChange -> set("") and
+                // schedule a redundant empty-text POST (the sheet dismisses via
+                // onSteered anyway, discarding the field).
                 draftStore.clear(draftKey)
-                text = ""
                 onSteered()
             } catch {
                 isBusy = false

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"kraken/util"
 )
@@ -115,6 +116,14 @@ func movePrefixed(fromDir, fromPrefix, toDir, toPrefix string) (moved, skipped [
 		moved = append(moved, dst)
 	}
 	return moved, skipped
+}
+
+// autoArchivable reports whether the daemon should sweep j into the archive
+// on its own: done, with a real ModTime, older than autoArchiveAfter. An
+// unparseable job (Err set) still archives on this rule — done wins over a
+// parse error, same precedence as DisplayState/deriveState.
+func autoArchivable(j *Job, now time.Time) bool {
+	return j.State == "done" && !j.ModTime.IsZero() && now.Sub(j.ModTime) > autoArchiveAfter
 }
 
 // ArchiveJob moves an active job (file + preserved pluto artifacts) into

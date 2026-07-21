@@ -65,6 +65,9 @@ func crewCell(sum jobs.CrewSummary, color bool) string {
 	switch sum.ZeusStatus {
 	case "running":
 		parts = append(parts, util.Paint(color, util.Green, "z●"))
+	case "polling":
+		// mid poll-loop (pending ScheduleWakeup): live work, not idleness
+		parts = append(parts, util.Paint(color, util.Cyan, "z↻"))
 	case "question":
 		parts = append(parts, util.Paint(color, util.Yellow, "z⚑"))
 	case "":

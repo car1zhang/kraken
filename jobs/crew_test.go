@@ -10,8 +10,8 @@ import (
 // crew_test.go — zeus' brief content matrix. There is no hermes pane agent
 // and no escalation-file relay any more: hermes is only a per-diagram
 // subagent name inside zeus' own brief. These tests assert that contract
-// across the build/info workflows and the solo/auto-approve flags, in the
-// same string-contains style as the rest of the job tests.
+// across the build/info workflows and the solo flag, in the same
+// string-contains style as the rest of the job tests.
 
 func TestZeusBriefBuild(t *testing.T) {
 	j := &Job{Slug: "x", Type: "build"}
@@ -86,20 +86,6 @@ func TestZeusBriefSolo(t *testing.T) {
 	}
 }
 
-func TestZeusBriefAutoApprove(t *testing.T) {
-	gated := zeusBrief(&Job{Slug: "w", Type: "build"})
-	auto := zeusBrief(&Job{Slug: "w", Type: "build", AutoApprove: true})
-	if !strings.Contains(auto, "without stopping") {
-		t.Error("auto-approve brief missing the proceed-without-stopping sentence")
-	}
-	if strings.Contains(gated, "without stopping") {
-		t.Error("non-auto-approve brief should not proceed without stopping")
-	}
-	if auto == gated {
-		t.Error("auto-approve and gated briefs must differ")
-	}
-}
-
 func TestZeusBriefSubagentHygiene(t *testing.T) {
 	for _, typ := range []string{"build", "info"} {
 		brief := zeusBrief(&Job{Slug: "hygiene-" + typ, Type: typ})
@@ -111,6 +97,24 @@ func TestZeusBriefSubagentHygiene(t *testing.T) {
 	solo := zeusBrief(&Job{Slug: "hygiene-solo", Type: "build", Solo: true})
 	if strings.Contains(solo, "TaskStop") {
 		t.Error("solo brief should not mention TaskStop hygiene — it has no subagents to stop")
+	}
+}
+
+func TestZeusBriefSelfDestructiveGuard(t *testing.T) {
+	// every job type — solo included — carries the never-target-your-own-slug
+	// rule: the status-investigation incident was a zeus confirming a test
+	// build's /api/done against its own live job and decapitating itself
+	for _, j := range []*Job{
+		{Slug: "g-build", Type: "build"},
+		{Slug: "g-info", Type: "info"},
+		{Slug: "g-solo", Type: "build", Solo: true},
+	} {
+		brief := zeusBrief(j)
+		for _, want := range []string{"OWN job's slug", "scratch job fixture", "decapitates"} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s (solo=%v) brief missing %q", j.Type, j.Solo, want)
+			}
+		}
 	}
 }
 

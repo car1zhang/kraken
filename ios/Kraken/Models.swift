@@ -70,9 +70,14 @@ struct WebJob: Decodable, Identifiable {
     // A pending interactive question (e.g. an AskUserQuestion tool call)
     // blocking the cell, if any.
     let question: WebQuestion?
-    // zeus' own refined status (running/waiting/question), distinct from
-    // `state` — absent when zeus isn't resolvable yet.
+    // zeus' own refined status (running/polling/waiting/question), distinct
+    // from `state` — absent when zeus isn't resolvable yet.
     let zeusStatus: String?
+    // A pending ScheduleWakeup from zeus' transcript — the cell is on a poll
+    // timer (mid /loop or /poll-pr-style tick) rather than genuinely idle.
+    // Still counts as "working"; the UI renders a countdown chip from it.
+    // Additive key, no contract bump.
+    let wakeup: WebWakeup?
     // Live subagents currently working the cell, if any.
     let roster: [WebRosterAgent]?
     let artifacts: [WebArtifact]?
@@ -83,7 +88,12 @@ struct WebJob: Decodable, Identifiable {
     // `displaySlug` carries the original slug for rendering.
     let archived: Bool?
     let displaySlug: String?
-    // A done job whose zeus session id is recorded — the only ones the
+    // A started, non-done job whose tmux session vanished: the worktree
+    // (uncommitted work included) is still on disk, and reactivate is the
+    // recovery that preserves it. Additive key, absent on older servers.
+    let cellGone: Bool?
+    // A job whose zeus session id is recorded and whose cell is resumable
+    // (done jobs, plus gone-cell started jobs) — the only ones the
     // reactivate action can actually resume.
     let reactivatable: Bool?
     // carl's own most recent message to the cell (the last me→zeus mid-run
@@ -99,11 +109,12 @@ struct WebJob: Decodable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, state, err, outcome, cell, live
-        case prereqs, detail, question
+        case prereqs, detail, question, wakeup
         case zeusStatus = "zeus_status"
         case roster, artifacts, health, mtime
         case archived
         case displaySlug = "display_slug"
+        case cellGone = "cell_gone"
         case reactivatable
         case lastSent = "last_sent"
         case prs
@@ -164,6 +175,21 @@ struct WebQuestionOption: Decodable {
     let description: String
 }
 
+// WebWakeup mirrors board.go's webWakeup (job wire) and peer.go's Wakeup
+// (peer wire) — both serialize `reason` + `fires_at`; the peer shape also
+// carries `delay_seconds`, which the UI doesn't need (it derives its own
+// countdown from firesAt against wall-clock time), so one Swift type covers
+// both. Hashable so it can sit on Peer, which is itself Hashable.
+struct WebWakeup: Decodable, Hashable {
+    let reason: String
+    let firesAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case reason
+        case firesAt = "fires_at"
+    }
+}
+
 // WebRosterAgent mirrors one live subagent entry in job.go's roster list.
 // role/status/working are Optionals per the omitempty-is-Optional rule even
 // though the server always sends them (no omitempty tag) — older servers
@@ -202,7 +228,6 @@ struct JobForm: Decodable {
     let base: String
     let ready: Bool
     let solo: Bool
-    let autoApprove: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -213,7 +238,6 @@ struct JobForm: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
-        case autoApprove = "auto_approve"
         case prereqs, spec, mtime, editable, err, slugs, repos
     }
 }
@@ -248,14 +272,12 @@ struct JobFormSaveRequest: Encodable {
     let base: String
     let ready: Bool
     let solo: Bool
-    let autoApprove: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
-        case autoApprove = "auto_approve"
         case prereqs, spec, mtime
     }
 }
@@ -282,6 +304,28 @@ struct SteerRequest: Encodable {
 
 struct CreateJobRequest: Encodable {
     let slug: String
+}
+
+// GET/POST /api/draft — a job-scoped composer draft, synced upstream so a
+// typed-but-unsent steer/reactivate message survives an app kill, a
+// reinstall, or switching devices. `text` is always present on the wire
+// ("" means no draft stored); the server clears a job's draft itself after
+// a successful steer/reactivate/done/archive/delete, so clients never need
+// to post an empty-text clear after one of those actions succeeds.
+struct DraftResponse: Decodable {
+    let slug: String
+    let text: String
+    let updatedAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case slug, text
+        case updatedAt = "updated_at"
+    }
+}
+
+struct DraftRequest: Encodable {
+    let slug: String
+    let text: String
 }
 
 // webAction's uniform success body is always {"ok": true}; errors arrive as
@@ -316,6 +360,9 @@ struct Peer: Decodable, Identifiable, Hashable {
     let cwd: String?
     let status: String
     let statusAt: Int64?
+    // Present only when status is "polling": the pending ScheduleWakeup
+    // call driving it (see core/wakeup.go).
+    let wakeup: WebWakeup?
     let sessionIDGuessed: Bool?
     let branch: String?
     let model: String?
@@ -339,6 +386,7 @@ struct Peer: Decodable, Identifiable, Hashable {
         case sessionID = "session_id"
         case name, cwd, status
         case statusAt = "status_at"
+        case wakeup
         case sessionIDGuessed = "session_id_guessed"
         case branch, model, kind, agent, role, cmd
         case cmdSeconds = "cmd_seconds"

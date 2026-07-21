@@ -249,17 +249,19 @@ func TestDeriveState(t *testing.T) {
 			want: "queued",
 		},
 		{
-			name: "started but cell not live: trust the job file's state",
+			name: "started but cell not live: dead cell reads blocked",
 			j:    &Job{Ready: true, State: "blocked"},
 			live: false,
 			want: "blocked",
 		},
 		{
-			name:   "started but cell not live, job file says working: trust it too",
+			// a gone cell must never echo a stale "working" — that's how the
+			// status-investigation self-decapitation sat invisible on the board
+			name:   "started but cell not live, job file says working: still blocked",
 			j:      &Job{Ready: true, State: "working"},
 			live:   false,
 			active: false, // irrelevant while !live
-			want:   "working",
+			want:   "blocked",
 		},
 		{
 			name:   "live and active -> working",
@@ -338,6 +340,38 @@ func TestCellActive(t *testing.T) {
 				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1", Depth: 1},
 			},
 			want: true,
+		},
+		{
+			// polling (mid poll-loop, pending ScheduleWakeup) votes the cell
+			// active exactly like running: it's idle between ticks by
+			// design, not genuinely waiting at its prompt.
+			name:  "zeus polling (pending wakeup) -> true",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "polling", Pane: "%1"}},
+			want:  true,
+		},
+		{
+			// same belt-and-braces question race applies to a polling agent
+			// as to a running one.
+			name:         "zeus polling but pane shows an open question -> false",
+			sess:         "cell-x",
+			peers:        []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "polling", Pane: "%1"}},
+			paneQuestion: yesQuestion,
+			want:         false,
+		},
+		{
+			// the member cross-check (runningByPane) only recognizes
+			// "running" panes, not "polling" ones: zeus is the poller here,
+			// never a teammate, so a polling occupant must not vote a
+			// teammate pane active. Intentional — not a gap to fix.
+			name:  "zeus waiting + tmux teammate whose pane is polling (not running) -> false",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"}, {Pane: "%2", Status: "polling"}},
+			members: []core.TeamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
+			},
+			want: false,
 		},
 		{
 			name:  "zeus waiting + tmux teammate with a running pane -> true",

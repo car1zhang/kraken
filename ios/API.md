@@ -5,9 +5,11 @@ consumes. Source of truth is the Go code (`web.go`, `webpeers.go`,
 `daemon.go`, `job.go`, `status.go`); this doc transcribes it, it does not
 define it independently.
 
-**Current contract**: `apiContract = 2` (web.go), mirrored by
+**Current contract**: `apiContract = 3` (web.go), mirrored by
 `APIClient.expectedContract` (APIClient.swift). `/api/health` and
-`/api/board` both serve `contract` (int) + `stale` (bool).
+`/api/board` both serve `contract` (int) + `stale` (bool). v3 bumped when
+the auto-approve feature (and `auto_approve` on the job form GET/POST) was
+removed.
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
 retyped, renamed, or removed. Additive keys never bump it: old clients
@@ -79,13 +81,15 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `artifacts` | array (`webArtifact`) | omitempty | |
 | `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 chars |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
-| `zeus_status` | string | omitempty | zeus' own refined status (running/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
+| `zeus_status` | string | omitempty | zeus' own refined status (running/polling/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
+| `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
 | `roster` | array (`webAgent`) | omitempty | live crew (nested subagents), live started non-done cells only |
 | `health` | string | omitempty | "" (absent) = healthy |
 | `mtime` | number | always | unix millis |
 | `archived` | bool | omitempty | |
 | `display_slug` | string | omitempty | original slug, archived jobs only |
-| `reactivatable` | bool | omitempty | done + has a recorded zeus session |
+| `cell_gone` | bool | omitempty | started + non-done + tmux session vanished; worktree (incl. uncommitted WIP) still on disk — reactivate preserves it, done/kill discard it |
+| `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
 | `last_sent` | string | omitempty | carl's last free-text message; question-answer entries excluded, started + non-done jobs only |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
 
@@ -111,6 +115,8 @@ rides on the wire), `options` (array of `webQuestionOption`, always).
 
 `webQuestionOption`: `label` (string, always), `description` (string, always).
 
+`webWakeup`: `reason` (string, always), `fires_at` (number, always — unix millis). Distinct from `Wakeup` on the peer wire shape only in that it drops `delay_seconds` — the client only needs `fires_at` for its countdown.
+
 ### `POST /api/queue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
 Request: `webReq` — `slug` (string, required), `text` (string, omitempty, unused by these).
@@ -130,6 +136,32 @@ Response: same as above.
 
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
+
+### `GET /api/draft?slug=` / `POST /api/draft` → `webDraft` (draft.go)
+
+Per-job prompt-composer draft text, kept in an in-memory store on the `k web`
+process — additive (contract stays 2), nothing here is written to disk, so
+drafts are lost across a `k web` restart. Last-save-event-wins: no merge,
+no history, a POST simply overwrites whatever was there. The stored draft is
+cleared automatically on the success path of `/api/steer`, `/api/reactivate`,
+`/api/done`, `/api/archive`, and `/api/delete` (NOT `/api/kill` or
+`/api/question`), and lazily on any `GET /api/draft` for a slug that no
+longer matches an active job.
+
+GET request: `slug` query param (required; missing/empty → 400).
+GET response:
+
+| key | type | optionality |
+|---|---|---|
+| `slug` | string | always |
+| `text` | string | always (`""` if no draft stored) |
+| `updated_at` | number | always (unix millis; `0` if no draft stored) |
+
+POST request: `webReq` — `slug` (string, required — empty → 400), `text`
+(string: the draft text; empty clears the stored entry).
+POST response: `{"ok": true}` on success; non-2xx `{"error": string}` on
+failure (400 for bad JSON or missing slug; 405 for methods other than
+GET/POST).
 
 ---
 
@@ -171,7 +203,6 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
-| `auto_approve` | bool | always | |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -184,7 +215,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `auto_approve` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
@@ -208,8 +239,9 @@ Errors: 400 (bad type), 404 (no such job), 409 (not editable, or mtime conflict)
 | `session_id` | string | omitempty | |
 | `name` | string | omitempty | |
 | `cwd` | string | omitempty | |
-| `status` | string | always | |
+| `status` | string | always | includes `"polling"` — a claude mid poll-loop (`/loop`, `/poll-pr`) on a pending `ScheduleWakeup`, distinct from `"waiting"` |
 | `status_at` | number | omitempty | |
+| `wakeup` | object (`Wakeup`) | omitempty | present only when `status` is `"polling"`; additive, no contract bump |
 | `session_id_guessed` | bool | omitempty | |
 | `branch` | string | omitempty | |
 | `model` | string | omitempty | |
@@ -225,6 +257,8 @@ Errors: 400 (bad type), 404 (no such job), 409 (not editable, or mtime conflict)
 | `messageable` | bool | always | |
 
 `peers` itself is always present and `[]` (never `null`) — `peersHandler` substitutes an empty slice when the source returns `nil`.
+
+`Wakeup` (peer.go/wakeup.go): `reason` (string, always), `delay_seconds` (number, always), `fires_at` (number, always — unix millis). A pending `ScheduleWakeup` tool call pulled from the peer's own transcript; the client renders a countdown to `fires_at`.
 
 ### `GET /api/peers/read?pane=&n=` → map literal (webpeers.go)
 

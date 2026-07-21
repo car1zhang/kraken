@@ -75,6 +75,7 @@ func TestCrewCellZeusMarkers(t *testing.T) {
 		want       string
 	}{
 		{"running", "z●"},
+		{"polling", "z↻"},
 		{"question", "z⚑"},
 		{"waiting", "z○"},
 		{"", "-"},

@@ -83,8 +83,11 @@ func webDone(req webReq) error {
 	if j.State == "done" {
 		return fmt.Errorf("%s is already done", j.Slug)
 	}
-	_, err = jobs.DoneJob(j, "accepted")
-	return err
+	if _, err := jobs.DoneJob(j, "accepted"); err != nil {
+		return err
+	}
+	clearDraft(j.Slug)
+	return nil
 }
 
 // webAnswerQuestion is the blocked→working move for an interactive
@@ -186,7 +189,11 @@ func webSteer(req webReq) error {
 	if err := core.SendMessage(zeus, "from carl: "+text); err != nil {
 		return fmt.Errorf("logged, but delivery failed: %v", err)
 	}
-	return jobs.WriteJobState(j, "working")
+	if err := jobs.WriteJobState(j, "working"); err != nil {
+		return err
+	}
+	clearDraft(j.Slug)
+	return nil
 }
 
 // webKill tears down a live job's cell and returns the job to draft. The
@@ -212,8 +219,11 @@ func webArchive(req webReq) error {
 	if err != nil {
 		return err
 	}
-	_, err = jobs.ArchiveJob(j, jobs.LiveSessions())
-	return err
+	if _, err := jobs.ArchiveJob(j, jobs.LiveSessions()); err != nil {
+		return err
+	}
+	clearDraft(j.Slug)
+	return nil
 }
 
 // webUnarchive restores an archived job (by archive file base) to the
@@ -234,7 +244,11 @@ func webDelete(req webReq) error {
 	if a == nil {
 		return fmt.Errorf("no archived job %q", req.Slug)
 	}
-	return jobs.DeleteArchivedJob(a)
+	if err := jobs.DeleteArchivedJob(a); err != nil {
+		return err
+	}
+	clearDraft(req.Slug)
+	return nil
 }
 
 // webReactivate resumes a done job's zeus session for adjustments; req.Text
@@ -244,5 +258,9 @@ func webReactivate(req webReq) error {
 	if err != nil {
 		return err
 	}
-	return jobs.ReactivateJob(j, "", jobs.OneLine(req.Text))
+	if err := jobs.ReactivateJob(j, "", jobs.OneLine(req.Text)); err != nil {
+		return err
+	}
+	clearDraft(j.Slug)
+	return nil
 }

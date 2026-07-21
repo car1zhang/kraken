@@ -213,6 +213,26 @@ body {
   font: 9.5px var(--mono); letter-spacing: 0.5px;
   color: var(--state, var(--text-2));
 }
+/* the cell's poll-timer chip: a pending ScheduleWakeup counting down to its
+   next tick. Accent-tinted like .chip, but with a subtle filled background
+   (rather than .chip's transparent one) since it's a status readout, not a
+   clickable action. */
+.wakeup-row { margin-top: 4px; }
+.chip-wakeup {
+  display: inline-block;
+  font: 9.5px var(--mono); letter-spacing: 0.3px;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-soft);
+  padding: 2px 7px;
+}
+
+/* the poll loop's own stated reason for waiting — a muted secondary line
+   under .detail, same treatment as .last-sent */
+.wakeup-reason {
+  font: 10px var(--mono); color: var(--text-2); opacity: 0.7;
+  margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 /* PR chips: one linked badge per open/merged/closed PR on the job, styled
    like .chip but color-coded by PR state instead of the uniform accent */
 .prs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
@@ -271,6 +291,7 @@ body {
 }
 .crew-pill.run { color: var(--solved); border-color: var(--solved-soft); }
 .crew-pill.question { color: var(--counter); border-color: var(--counter-soft); }
+.crew-pill.polling { color: var(--accent); border-color: var(--accent-soft); }
 .crew-chip.active { color: var(--solved); border-color: var(--solved-soft); }
 
 /* a pending AskUserQuestion: header + option buttons, answered by a click */

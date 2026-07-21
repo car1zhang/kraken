@@ -78,6 +78,12 @@ enum KTheme {
     static let revealed = Color(uiColor: revealedUI)
     static let revealedSoftUI = dyn(light: 0xF7ECD4, dark: 0x33260E)
     static let revealedSoft = Color(uiColor: revealedSoftUI)
+    // "polling" status (a claude mid poll-loop on a pending ScheduleWakeup)
+    // — cyan, mirroring util/ansi.go's StatusColor("polling") = Cyan on the CLI side.
+    static let pollingUI = dyn(light: 0x0E7490, dark: 0x22D3EE)
+    static let polling = Color(uiColor: pollingUI)
+    static let pollingSoftUI = dyn(light: 0xD9F2F7, dark: 0x0E2E33)
+    static let pollingSoft = Color(uiColor: pollingSoftUI)
 
     // --- global chrome (nav bar / tab bar / page dots) ---
     // Configured once via UIKit appearance proxies rather than threading
@@ -238,8 +244,9 @@ enum BoardTheme {
 
 enum SessionTheme {
     /// running=solved, waiting=text2, question=revealed, blocked/error=counter,
-    /// shell=text2 — the same semantic mapping ls.go uses, expressed in the
-    /// cyber-dark palette.
+    /// polling=cyan (mid poll-loop, idle between ScheduleWakeup ticks by
+    /// design), shell=text2 — the same semantic mapping ls.go uses, expressed
+    /// in the cyber-dark palette.
     static func color(forStatus status: String, role: String) -> Color {
         if role == "shell" {
             return KTheme.text2
@@ -251,6 +258,8 @@ enum SessionTheme {
             return KTheme.text2
         case "question":
             return KTheme.revealed
+        case "polling":
+            return KTheme.polling
         case "blocked", "error":
             return KTheme.counter
         default:
