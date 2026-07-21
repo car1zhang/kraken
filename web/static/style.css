@@ -159,18 +159,18 @@ body {
   background: transparent; color: var(--accent);
   border: 1px solid var(--accent-soft);
 }
-.btn.unarchive:hover { border-color: var(--accent); box-shadow: var(--glow); }
+.btn.unarchive:hover { background: var(--accent-soft); border-color: var(--accent); box-shadow: var(--glow); }
 .btn.delete {
   background: transparent; color: var(--counter);
   border: 1px solid var(--counter-soft);
 }
-.btn.delete:hover { border-color: var(--counter); box-shadow: var(--glow-hot); }
+.btn.delete:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
 .btn.reactivate {
   margin-top: 8px;
   background: transparent; color: var(--revealed);
   border: 1px solid var(--revealed-soft);
 }
-.btn.reactivate:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.btn.reactivate:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
 .col { min-height: 120px; }
 .col-head {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -398,11 +398,17 @@ body {
 }
 .panel-title { font: 700 11.5px var(--mono); letter-spacing: 1px; }
 .panel-title::after { content: "▊"; color: var(--accent); margin-left: 4px; }
+/* button system: solid buttons (base .btn — accent fill) just glow on
+   hover; outline buttons (ghost/unarchive/delete/reactivate/retry/
+   steer-done) rest with a faint -soft border and no background, and on
+   hover fill with the -soft tint, solidify the border, and glow. The one
+   exception is tmux, whose border is solid yellow at all times. */
 .btn {
   font: 11px var(--mono);
   background: var(--accent); color: var(--accent-ink);
   border: none; padding: 4px 11px; cursor: pointer;
 }
+.btn:hover { box-shadow: var(--glow); }
 .btn:active { animation: glitch 120ms steps(2, end); }
 @keyframes glitch {
   0% { translate: -1px 1px; }
@@ -410,41 +416,30 @@ body {
   100% { translate: 0 0; }
 }
 .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
-.btn.ghost.danger { color: var(--counter); border-color: var(--counter); }
-.btn.ghost.danger:hover { box-shadow: var(--glow-hot); }
+.btn.ghost:hover { background: var(--raised); border-color: var(--text-2); box-shadow: none; }
+.btn.ghost.danger { color: var(--counter); border-color: var(--counter-soft); }
+.btn.ghost.danger:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
 /* primary composer action — standard .btn size, tucked under the input's
    right edge (the .answer-body flex column makes align-self work) */
 .btn-big {
   align-self: flex-end;
   padding: 4px 14px; margin-top: 2px;
-  font-weight: 700; letter-spacing: 0.5px;
+  letter-spacing: 0.5px;
 }
-.btn-big:hover { box-shadow: var(--glow); }
 .btn.retry {
   display: block; width: 100%; margin-top: 8px;
-  background: var(--revealed-soft); color: var(--revealed);
-  border: 1px solid var(--revealed);
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed-soft);
   font-size: 10px; letter-spacing: 1px; padding: 5px 0;
 }
-.btn.retry:hover { box-shadow: var(--glow-warn); }
+.btn.retry:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+/* panel-head only — sits beside the yellow-outlined tmux button */
 .btn.steer-done {
-  display: block; width: 100%; margin-top: 8px;
-  background: var(--solved-soft); color: var(--solved);
-  border: 1px solid var(--solved);
-  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
+  background: transparent; color: var(--solved);
+  border: 1px solid var(--solved-soft);
+  font-size: 10px; letter-spacing: 1px;
 }
-.btn.steer-done:hover { box-shadow: var(--glow-ok); }
-/* panel-head instance sits beside the accent-filled tmux button: a faint
-   solved-tinted fill + border — quieter than tmux, louder than a ghost;
-   specificity (not source order) is what wins here since both rules match
-   two classes */
-.panel-head .btn.steer-done {
-  display: inline-block; width: auto; margin-top: 0;
-  background: var(--solved-soft); color: var(--solved);
-  border: 1px solid var(--solved);
-  font-size: 10px; letter-spacing: 1px; padding: 4px 11px;
-}
-.panel-head .btn.steer-done:hover { box-shadow: var(--glow-ok); }
+.btn.steer-done:hover { background: var(--solved-soft); border-color: var(--solved); box-shadow: var(--glow-ok); }
 #steer-text {
   font: 12px/1.5 var(--sans);
   background: var(--raised); color: var(--text);
@@ -587,14 +582,17 @@ body {
 }
 
 /* open the cell's tmux pane in Ghostty — review-row name predates the
-   removal of the nvim/code review buttons it used to sit alongside */
-.review-row { display: flex; gap: 8px; margin-top: 8px; }
-.review-row .btn.tmux-open {
-  flex: 1; background: transparent; color: var(--revealed);
-  border: 1px solid var(--revealed-soft);
-  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
+   removal of the nvim/code review buttons it used to sit alongside.
+   tmux is the system's one exception: its yellow border stays SOLID at
+   rest in every context (card row and panel head alike). */
+.btn.tmux-open {
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed);
+  font-size: 10px; letter-spacing: 1px;
 }
-.review-row .btn.tmux-open:hover { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.btn.tmux-open:hover { background: var(--revealed-soft); box-shadow: var(--glow-warn); }
+.review-row { display: flex; gap: 8px; margin-top: 8px; }
+.review-row .btn.tmux-open { flex: 1; padding: 5px 0; }
 
 /* honor the OS-level motion preference — kills the remaining finite
    animations/transitions (panel-in, glitch, hover fades) outright */
