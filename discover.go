@@ -536,8 +536,10 @@ func discoverAll() ([]*Peer, []*Peer) {
 				case "":
 					// keep "unknown"
 				default:
-					// future/unmapped values (e.g. "shell" = user at the !
-					// prompt) surface verbatim rather than being hidden
+					// unmapped values surface verbatim rather than being
+					// hidden; "shell" in particular just means a background
+					// Bash-tool shell is alive, and gets refined from pane
+					// content in refineStatus like "unknown"
 					peer.Status = sf.Status
 				}
 			} else if flags := parseAgentFlags(cmds[pid]); flags.agentName != "" {

@@ -385,6 +385,30 @@ func TestContainsQuestionMarker(t *testing.T) {
 	}
 }
 
+func TestRefinedStatus(t *testing.T) {
+	cases := []struct {
+		name    string
+		current string
+		pane    string
+		want    string
+	}{
+		{"shell running", "shell", "some output\nesc to interrupt\n", "running"},
+		{"shell waiting", "shell", "just a normal prompt\n", "waiting"},
+		{"shell question", "shell", "Do you want to proceed?\n ❯ 1. Yes, proceed\n", "question"},
+		{"unknown running", "unknown", "esc to interrupt\n", "running"},
+		{"unknown waiting", "unknown", "plain output\n", "waiting"},
+		{"running unchanged", "running", "plain output\n", "running"},
+		{"waiting becomes question", "waiting", "blah\n ❯ 1. Yes\n", "question"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := refinedStatus(c.current, c.pane); got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestGitBranch(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "repo", "src", "deep")
@@ -620,6 +644,55 @@ func TestSendToPeerGuards(t *testing.T) {
 	}
 	if _, err := sendToPeer(&Peer{Name: "nested", Messageable: true, Pane: "%1", Depth: 1}, "hi"); err == nil || !strings.Contains(err.Error(), "not the foreground agent") {
 		t.Errorf("nested agent: got %v", err)
+	}
+}
+
+func TestTmuxKeyName(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"esc", "Escape"},
+		{"escape", "Escape"},
+		{"enter", "Enter"},
+		{"tab", "Tab"},
+		{"backspace", "BSpace"},
+		{"up", "Up"},
+		{"down", "Down"},
+		{"left", "Left"},
+		{"right", "Right"},
+		{"ctrl-c", "C-c"},
+		{"ctrl-a", "C-a"},
+		{"ctrl-z", "C-z"},
+	}
+	for _, c := range cases {
+		if got, ok := tmuxKeyName(c.name); !ok || got != c.want {
+			t.Errorf("tmuxKeyName(%q) = (%q, %v), want (%q, true)", c.name, got, ok, c.want)
+		}
+	}
+	if _, ok := tmuxKeyName("ctrl-1"); ok {
+		t.Errorf("tmuxKeyName(\"ctrl-1\") should be unsupported")
+	}
+	if _, ok := tmuxKeyName("pageup"); ok {
+		t.Errorf("tmuxKeyName(\"pageup\") should be unsupported")
+	}
+	if _, ok := tmuxKeyName(""); ok {
+		t.Errorf("tmuxKeyName(\"\") should be unsupported")
+	}
+}
+
+func TestSendKeyGuards(t *testing.T) {
+	// guards fire before any tmux exec, so these are safe to run anywhere;
+	// message text is asserted so a regressed guard can't pass by way of
+	// checkSendTarget/verifyKillTarget failing on the missing pane instead
+	if err := sendKey(&Peer{Role: "agent", Pane: "%1"}, "nope"); err == nil || !strings.Contains(err.Error(), "unsupported key") {
+		t.Errorf("unknown key: got %v", err)
+	}
+	if err := sendKey(&Peer{Name: "nested", Pane: "%1", Depth: 1, Messageable: true}, "esc"); err == nil || !strings.Contains(err.Error(), "not the foreground agent") {
+		t.Errorf("nested agent: got %v", err)
+	}
+	if err := sendKey(&Peer{Name: "inproc"}, "esc"); err == nil || !strings.Contains(err.Error(), "in-process teammate") {
+		t.Errorf("in-process teammate: got %v", err)
 	}
 }
 

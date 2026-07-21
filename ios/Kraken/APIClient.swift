@@ -289,6 +289,16 @@ actor APIClient {
         try await post(baseURL: baseURL, path: "/api/peers/send", body: SendRequest(pane: pane, message: message))
     }
 
+    /// Sends a single named key (esc, tab, an arrow, ctrl-<letter>...) to a
+    /// pane via tmux send-keys — no trailing Enter, for interrupting a
+    /// running turn or navigating a prompt from a keyboard that can't type
+    /// these keys. `message` is sent as "" (not omitted): the server's
+    /// mutual-exclusion check only rejects a *non-empty* message alongside a
+    /// key.
+    func sendKey(baseURL: String, pane: String, key: String) async throws -> SendResponse {
+        try await post(baseURL: baseURL, path: "/api/peers/send", body: SendRequest(pane: pane, message: "", key: key))
+    }
+
     /// Raw tmux capture-pane text — SessionDetailView's Terminal mode for
     /// shells (and the Terminal toggle for claude/codex peers). Same
     /// percent-encoding rule as readPeer's pane query param.

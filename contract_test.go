@@ -465,6 +465,27 @@ func TestPeersReadBlockWireShape(t *testing.T) {
 	assertShape(t, "/api/peers/read block (teammate)", data, peersReadBlockSpec)
 }
 
+// --- /api/peers/send key-send response (webpeers.go peersSendHandler) ---
+//
+// The message-send success shapes ({"ok":true,"queued":bool} /
+// {"ok":true,"queued":false,"shell":true}) still need a live pane to reach
+// (see the "not shape-tested" note above); the key-send response
+// ({"ok":true,"key":true}) is a static literal, so it's checked directly the
+// same way TestPeersReadBlockWireShape checks peersReadHandler's block shape.
+
+var peersSendKeySpec = map[string]fieldSpec{
+	"ok":  {kind: wireBool, required: true},
+	"key": {kind: wireBool, required: true},
+}
+
+func TestPeersSendKeyWireShape(t *testing.T) {
+	data, err := json.Marshal(map[string]any{"ok": true, "key": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "/api/peers/send (key)", data, peersSendKeySpec)
+}
+
 // --- /api/health (webpeers.go) ---
 
 var healthSpec = map[string]fieldSpec{

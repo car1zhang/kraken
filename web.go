@@ -547,9 +547,6 @@ func answerableSingleDigit(q *PendingQuestion) bool {
 // since sendDigit needs the question prompt to still be showing (sendMessage
 // refuses when one is; here the digit is meaningless without one).
 func sendDigit(p *Peer, digit string) error {
-	if p.Status == "shell" {
-		return fmt.Errorf("%s is in shell mode — sending a digit now would run it as a shell command", displayName(p))
-	}
 	if !paneShowsQuestion(p.Pane) {
 		return fmt.Errorf("the pane no longer shows the question — refresh the board")
 	}
