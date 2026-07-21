@@ -169,6 +169,7 @@ var webJobSpec = map[string]fieldSpec{
 	"artifacts":     {kind: wireArray, required: false},
 	"detail":        {kind: wireString, required: false},
 	"question":      {kind: wireObject, required: false},
+	"zeus_status":   {kind: wireString, required: false},
 	"roster":        {kind: wireArray, required: false},
 	"health":        {kind: wireString, required: false},
 	"mtime":         {kind: wireNumber, required: true},
@@ -245,7 +246,8 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 				Options: []webQuestionOption{{Label: "A", Description: "do A"}},
 			}},
 		},
-		Roster:        []webAgent{{Name: "hephaestus-x", Model: "sonnet"}},
+		ZeusStatus:    "running",
+		Roster:        []webAgent{{Name: "hephaestus-x", Model: "sonnet", Role: "hephaestus", Status: "running", Working: true}},
 		Health:        "unhealthy",
 		PRs:           []jobs.JobPR{{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"}},
 		ModTime:       123,
@@ -277,8 +279,11 @@ var webArtifactSpec = map[string]fieldSpec{
 }
 
 var webAgentSpec = map[string]fieldSpec{
-	"name":  {kind: wireString, required: true},
-	"model": {kind: wireString, required: true},
+	"name":    {kind: wireString, required: true},
+	"model":   {kind: wireString, required: true},
+	"role":    {kind: wireString, required: true},
+	"status":  {kind: wireString, required: true},
+	"working": {kind: wireBool, required: true},
 }
 
 // jobPRSpec covers job.go's jobs.JobPR, the elements of webJob's "prs" array —
@@ -312,7 +317,7 @@ func TestWebArtifactWireShape(t *testing.T) {
 }
 
 func TestWebAgentWireShape(t *testing.T) {
-	data, err := json.Marshal(webAgent{Name: "hephaestus-x", Model: "sonnet"})
+	data, err := json.Marshal(webAgent{Name: "hephaestus-x", Model: "sonnet", Role: "hephaestus", Status: "running", Working: true})
 	if err != nil {
 		t.Fatal(err)
 	}

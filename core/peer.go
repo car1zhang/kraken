@@ -97,6 +97,9 @@ type TeamMember struct {
 	TmuxPaneID  string `json:"tmuxPaneId"`
 	CWD         string `json:"cwd"`
 	BackendType string `json:"backendType"`
+	// Model is the model requested at spawn time (e.g. "haiku"); the only
+	// model source for in-process members, which have no command line.
+	Model string `json:"model"`
 	// IsActive appears on members that finished without being removed from
 	// the config (TaskStop removes a member entirely; a done-but-lingering
 	// one gets isActive: false instead). Pointer: absent must read as active,

@@ -79,6 +79,11 @@ func webQuestionFrom(pq *jobs.PendingQuestion) *webQuestion {
 type webAgent struct {
 	Name  string `json:"name"`
 	Model string `json:"model"`
+	// Role/Status/Working mirror jobs.CrewAgent — always present (no
+	// omitempty), since false/"" are meaningful roster states, not absence.
+	Role    string `json:"role"`
+	Status  string `json:"status"`
+	Working bool   `json:"working"`
 }
 
 type webJob struct {
@@ -103,6 +108,10 @@ type webJob struct {
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
+	// ZeusStatus is zeus' own refined status (running/waiting/question),
+	// distinct from the cell's aggregate state; omitted when zeus isn't
+	// resolvable (fresh fork, no session file yet).
+	ZeusStatus string `json:"zeus_status,omitempty"`
 	// Roster lists the cell's live subagents (nested claude peers).
 	Roster []webAgent `json:"roster,omitempty"`
 	// Health is a computed condition on the live cell ("" = healthy): API
@@ -369,15 +378,19 @@ func buildWebBoard() webBoard {
 			if j.Started() && j.State != "done" {
 				board.LiveCells++
 				wj.Health = jobs.CellHealth(j, all)
-				if _, transcript := cellZeusTranscript(j, all); transcript != "" {
+				zeus, transcript := cellZeusTranscript(j, all)
+				if transcript != "" {
 					wj.Detail = lastAssistantText(transcript)
 					wj.Question = webQuestionFrom(jobs.FindPendingQuestion(transcript))
 				}
-				sess := jobs.CellSession(j)
-				for _, p := range all {
-					if p.Agent == "claude" && p.TmuxSession == sess && p.Depth > 0 {
-						wj.Roster = append(wj.Roster, webAgent{Name: p.Name, Model: p.Model})
-					}
+				var members []core.TeamMember
+				if zeus != nil && !zeus.SessionIDGuessed {
+					members = core.TeamMembersForLead(zeus.SessionID)
+				}
+				crew := jobs.CellCrew(jobs.CellSession(j), zeus, all, members)
+				wj.ZeusStatus = crew.ZeusStatus
+				for _, a := range crew.Agents {
+					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working})
 				}
 			}
 		}

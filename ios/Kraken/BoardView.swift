@@ -391,12 +391,17 @@ private struct JobCardView: View {
             if let err = job.err, !err.isEmpty {
                 Text("✕ " + err).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
+            CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
             if let roster = job.roster, !roster.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(Array(roster.enumerated()), id: \.offset) { _, agent in
-                        Text("\(agent.name) (\(agent.model))")
-                            .font(.data(9))
-                            .foregroundStyle(KTheme.text2)
+                        HStack(spacing: 4) {
+                            Text(agent.working == true ? "●" : "○")
+                                .foregroundStyle(agent.working == true ? KTheme.solved : KTheme.text2)
+                            Text("\(agent.name) (\(agent.model))")
+                                .foregroundStyle(KTheme.text2)
+                        }
+                        .font(.data(9))
                     }
                 }
             }

@@ -79,7 +79,8 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `artifacts` | array (`webArtifact`) | omitempty | |
 | `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 chars |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
-| `roster` | array (`webAgent`) | omitempty | live nested subagents |
+| `zeus_status` | string | omitempty | zeus' own refined status (running/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
+| `roster` | array (`webAgent`) | omitempty | live crew (nested subagents), live started non-done cells only |
 | `health` | string | omitempty | "" (absent) = healthy |
 | `mtime` | number | always | unix millis |
 | `archived` | bool | omitempty | |
@@ -94,7 +95,13 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 
 `webArtifact`: `name` (string, always), `url` (string, always).
 
-`webAgent` (roster entry): `name` (string, always), `model` (string, always).
+`webAgent` (roster entry): `name` (string, always), `model` (string, always),
+`role` (string, always — `hephaestus`/`athena`/`hermes`/`other`), `status`
+(string, always — the entry's refined status, e.g. `running`/`waiting`/
+`question`/`in-process`), `working` (bool, always — no `omitempty`, so
+`false` still rides the wire; tmux-backed entries are working iff their pane
+reports `running`, in-process entries iff their team-config `isActive` flag
+is true).
 
 `webQuestion`: `tool_use_id` (string, always), `questions` (array of `webQuestionItem`, always).
 

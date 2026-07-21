@@ -63,6 +63,76 @@ func TestPeerKeyInProcessTeammate(t *testing.T) {
 	}
 }
 
+func TestCrewCellEmpty(t *testing.T) {
+	if got := crewCell(jobs.CrewSummary{}, false); got != "-" {
+		t.Errorf("crewCell(empty) = %q, want %q", got, "-")
+	}
+}
+
+func TestCrewCellZeusMarkers(t *testing.T) {
+	cases := []struct {
+		zeusStatus string
+		want       string
+	}{
+		{"running", "z●"},
+		{"question", "z⚑"},
+		{"waiting", "z○"},
+		{"", "-"},
+	}
+	for _, c := range cases {
+		t.Run(c.zeusStatus, func(t *testing.T) {
+			sum := jobs.CrewSummary{ZeusStatus: c.zeusStatus}
+			if got := crewCell(sum, false); got != c.want {
+				t.Errorf("crewCell(ZeusStatus=%q) = %q, want %q", c.zeusStatus, got, c.want)
+			}
+		})
+	}
+}
+
+func TestCrewCellRoleOrderingAndCounts(t *testing.T) {
+	sum := jobs.CrewSummary{
+		ZeusStatus: "running",
+		Agents: []jobs.CrewAgent{
+			{Name: "athena", Role: "athena", Working: false},
+			{Name: "other-1", Role: "other", Working: true},
+			{Name: "hermes-3", Role: "hermes", Working: false},
+			{Name: "hephaestus-1", Role: "hephaestus", Working: true},
+			{Name: "hephaestus-2", Role: "hephaestus", Working: false},
+		},
+	}
+	want := "z● h1/2 a0/1 m0/1 o1/1"
+	if got := crewCell(sum, false); got != want {
+		t.Errorf("crewCell = %q, want %q", got, want)
+	}
+}
+
+func TestCrewCellWorkingColor(t *testing.T) {
+	// with color on, a role with work in flight paints green and an idle one
+	// dim — the only assertion that would catch an inverted working>0 check,
+	// since the color-off strings differ only by a digit
+	sum := jobs.CrewSummary{
+		ZeusStatus: "running",
+		Agents: []jobs.CrewAgent{
+			{Name: "hephaestus-1", Role: "hephaestus", Working: true},
+			{Name: "athena", Role: "athena", Working: false},
+		},
+	}
+	got := crewCell(sum, true)
+	if !strings.Contains(got, util.Green+"h1/1") {
+		t.Errorf("working role should paint green: %q", got)
+	}
+	if !strings.Contains(got, util.Dim+"a0/1") {
+		t.Errorf("idle role should paint dim: %q", got)
+	}
+}
+
+func TestCrewCellQuestionZeusNoAgents(t *testing.T) {
+	sum := jobs.CrewSummary{ZeusStatus: "question"}
+	if got := crewCell(sum, false); got != "z⚑" {
+		t.Errorf("crewCell = %q, want %q", got, "z⚑")
+	}
+}
+
 func mkPeers(n int) []*core.Peer {
 	peers := make([]*core.Peer, n)
 	for i := range peers {

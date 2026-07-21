@@ -256,6 +256,22 @@ body {
 .roster { margin-top: 5px; display: flex; flex-direction: column; gap: 1px; }
 .roster-row { font: 10px var(--mono); color: var(--text-2); }
 .roster-row .dim { opacity: 0.6; }
+.roster-dot { margin-right: 2px; }
+.roster-dot.on { color: var(--solved); }
+
+/* crew line: zeus status pill + one working/total chip per subagent role.
+   Shown on both working and blocked live cards (see crewHTML) — muted by
+   default, colored only when something on the row is actually active. */
+.crew { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.steer-context .crew { margin-top: 0; }
+.crew-pill, .crew-chip {
+  font: 10px var(--mono); letter-spacing: 0.3px;
+  padding: 2px 7px; border: 1px solid var(--hairline-2);
+  color: var(--text-2);
+}
+.crew-pill.run { color: var(--solved); border-color: var(--solved-soft); }
+.crew-pill.question { color: var(--counter); border-color: var(--counter-soft); }
+.crew-chip.active { color: var(--solved); border-color: var(--solved-soft); }
 
 /* a pending AskUserQuestion: header + option buttons, answered by a click */
 .question {

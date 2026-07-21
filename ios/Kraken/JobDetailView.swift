@@ -191,6 +191,74 @@ struct PRChip: View {
     }
 }
 
+/// Zeus + crew status chips: a "zeus ●/⚑/○" pill first (only when the server
+/// sent a zeus status), then one chip per crew role present on the roster —
+/// fixed order hephaestus, athena, hermes, other — each reading "<role>
+/// <working>/<total>". Not private: both BoardView's JobCardView and
+/// JobDetailView render the same row, mirroring PRChip's sharing pattern
+/// above. Renders EmptyView when there's nothing to show, so a job with no
+/// zeus status and no roster (including servers that predate these wire
+/// fields entirely) falls back to exactly today's UI.
+struct CrewChipsView: View {
+    let zeusStatus: String?
+    let roster: [WebRosterAgent]
+
+    private static let knownRoles = ["hephaestus", "athena", "hermes"]
+    private static let chipOrder = knownRoles + ["other"]
+
+    private var zeusChip: (label: String, color: Color)? {
+        guard let zeusStatus, !zeusStatus.isEmpty else { return nil }
+        switch zeusStatus {
+        case "running": return ("zeus ●", KTheme.solved)
+        case "question": return ("zeus ⚑", KTheme.revealed)
+        default: return ("zeus ○", KTheme.text2)
+        }
+    }
+
+    // Buckets each roster entry into hephaestus/athena/hermes/other (nil or
+    // any unrecognized role lands in "other"), counting live-vs-total per
+    // bucket for the "<working>/<total>" label.
+    private var roleChips: [(role: String, working: Int, total: Int)] {
+        var counts: [String: (working: Int, total: Int)] = [:]
+        for agent in roster {
+            let role = agent.role.flatMap { Self.knownRoles.contains($0) ? $0 : nil } ?? "other"
+            var entry = counts[role] ?? (working: 0, total: 0)
+            entry.total += 1
+            if agent.working == true { entry.working += 1 }
+            counts[role] = entry
+        }
+        return Self.chipOrder.compactMap { role in
+            guard let c = counts[role] else { return nil }
+            return (role, c.working, c.total)
+        }
+    }
+
+    var body: some View {
+        let zeus = zeusChip
+        let chips = roleChips
+        if zeus != nil || !chips.isEmpty {
+            HStack(spacing: 6) {
+                if let zeus {
+                    chipLabel(zeus.label, color: zeus.color)
+                }
+                ForEach(chips, id: \.role) { chip in
+                    chipLabel("\(chip.role) \(chip.working)/\(chip.total)",
+                              color: chip.working > 0 ? KTheme.solved : KTheme.text2)
+                }
+            }
+        }
+    }
+
+    private func chipLabel(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.data(9, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .overlay(Rectangle().stroke(color, lineWidth: 1))
+    }
+}
+
 struct JobDetailView: View {
     let job: WebJob
     let baseURL: String
@@ -340,12 +408,17 @@ struct JobDetailView: View {
                         }
                     }
                 }
-                if let roster = job.roster, !roster.isEmpty {
+                if job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty {
                     kSection("Roster") {
-                        ForEach(Array(roster.enumerated()), id: \.offset) { _, agent in
-                            Text("\(agent.name) (\(agent.model))")
-                                .font(.data(12))
-                                .foregroundStyle(KTheme.text2)
+                        CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
+                        ForEach(Array((job.roster ?? []).enumerated()), id: \.offset) { _, agent in
+                            HStack(spacing: 4) {
+                                Text(agent.working == true ? "●" : "○")
+                                    .foregroundStyle(agent.working == true ? KTheme.solved : KTheme.text2)
+                                Text("\(agent.name) (\(agent.model))")
+                                    .foregroundStyle(KTheme.text2)
+                            }
+                            .font(.data(12))
                         }
                     }
                 }

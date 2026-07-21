@@ -104,7 +104,7 @@ func TestWebJobJSONShapeEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(data)
-	for _, absent := range []string{"escalations", "detail", "question", "roster", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts"} {
+	for _, absent := range []string{"escalations", "detail", "question", "roster", "zeus_status", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts"} {
 		if strings.Contains(s, `"`+absent+`"`) {
 			t.Errorf("empty webJob JSON unexpectedly has %q: %s", absent, s)
 		}
@@ -127,7 +127,7 @@ func TestWebJobJSONShapePopulated(t *testing.T) {
 				Options: []webQuestionOption{{Label: "A", Description: "do A"}, {Label: "B", Description: "do B"}},
 			}},
 		},
-		Roster: []webAgent{{Name: "hephaestus-x", Model: "sonnet"}},
+		Roster: []webAgent{{Name: "hephaestus-x", Model: "sonnet", Role: "hephaestus", Status: "running", Working: true}},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestWebJobJSONShapePopulated(t *testing.T) {
 		`"question":{"tool_use_id":"tu_1"`,
 		`"multi_select":false`,
 		`"options":[{"label":"A","description":"do A"}`,
-		`"roster":[{"name":"hephaestus-x","model":"sonnet"}]`,
+		`"roster":[{"name":"hephaestus-x","model":"sonnet","role":"hephaestus","status":"running","working":true}]`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("populated webJob JSON missing %q: %s", want, s)
