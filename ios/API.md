@@ -342,3 +342,41 @@ Not JSON — serves the raw artifact file with a `Content-Type` picked by
 extension (`artifactContentType`: html/svg/pdf/png/jpg/gif/webp get their
 real type, everything else is `text/plain; charset=utf-8`). 404 on any
 path-traversal attempt, hidden segment, unresolvable job, or missing file.
+
+### `POST /api/upload` (upload.go)
+
+Uploads an image attachment for a job — the web board's and iOS app's
+composer attachment flow. Additive, no contract bump. Modeled in the iOS app
+(`UploadResponse` in Models.swift, `uploadImage` in APIClient.swift).
+
+Request: `multipart/form-data`, fields `slug` (string, required) and `file`
+(the image, required). Body capped at 11MB total (1MB slack over the 10MB
+file cap for multipart framing/other fields).
+
+The saved extension always comes from sniffing the file's content
+(`http.DetectContentType` on the first 512 bytes), never the client-supplied
+filename — a PNG renamed `photo.jpg` still saves as `img-NNN.png`.
+Supported types: PNG, JPEG, GIF, WebP.
+
+Response (200):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `name` | string | always | saved filename, e.g. `img-001.png` |
+| `path` | string | always | absolute path on the kraken host's disk |
+| `url` | string | always | `/api/upload/<url-escaped slug>/<name>` — GET this to fetch the image |
+
+Errors: 405 (non-POST), 404 (missing/unknown `slug`), 413 (file exceeds
+10MB, or total body exceeds the 11MB ceiling), 415 (file doesn't sniff as
+PNG/JPEG/GIF/WebP), 400 (malformed multipart form, or missing `file`), 500
+(write failure).
+
+### `GET /api/upload/<slug>/<name>` (web/serve.go)
+
+Not JSON — serves the raw uploaded image file, `Content-Type` picked by
+extension via the same `artifactContentType` the artifact route uses. GET
+only (405 otherwise). `name` must exactly match the saved-name format
+(`img-NNN.<png|jpg|gif|webp>`); 404 on any path-traversal attempt, malformed
+name, unresolvable slug, or missing file — resolution goes through
+`api.UploadPath`, which does not require an active job (an upload outlives
+its job's own draft/queued/etc. state changes, same lifecycle as artifacts).

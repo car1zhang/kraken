@@ -71,6 +71,12 @@ struct JobFormView: View {
     // is specifically a failed queue attempt, e.g. the server's 409 on an
     // empty spec.
     @State private var queueError: String?
+    // Attachment upload errors and a brief post-insert confirmation, shown
+    // near the spec editor — separate from loadError/queueError since this
+    // is neither a parse problem nor a queue failure.
+    @State private var attachmentError: String?
+    @State private var insertedConfirmation: String?
+    @State private var isUploading = false
 
     var body: some View {
         Group {
@@ -226,6 +232,22 @@ struct JobFormView: View {
                     .scrollContentBackground(.hidden)
                     .kField(minHeight: 160)
                     .listRowBackground(Color.clear)
+                if editable {
+                    ImageAttachmentBar(
+                        baseURL: baseURL, slug: slug,
+                        isUploading: $isUploading,
+                        onUploaded: { insertAttachment($0) },
+                        onError: { attachmentError = $0 }
+                    )
+                    if let insertedConfirmation {
+                        Text("added \(insertedConfirmation)")
+                            .font(.voice(11))
+                            .foregroundStyle(KTheme.solved)
+                    }
+                }
+                if let attachmentError {
+                    Text(attachmentError).font(.voice(11)).foregroundStyle(KTheme.counter)
+                }
             }
             if let loadError, !loadError.isEmpty {
                 kSection("File currently won't run") {
@@ -271,6 +293,7 @@ struct JobFormView: View {
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Done")
                 .buttonStyle(.borderedProminent)
+                .disabled(isUploading)
             }
         }
         // autosaveSnapshotKey covers every field except `ready`, which gets
@@ -303,13 +326,15 @@ struct JobFormView: View {
         .foregroundStyle(color)
     }
 
-    // Gates the toolbar Queue button: editable, real spec content, and no
-    // autosave still in flight or waiting out its debounce (autosaveTask
-    // non-nil covers the debounce gap; the syncState checks cover the
-    // in-flight request itself and a just-failed one) — a tap can only ever
-    // fire against a spec the server has already accepted.
+    // Gates the toolbar Queue button: editable, real spec content, no image
+    // upload pending insert, and no autosave still in flight or waiting out
+    // its debounce (autosaveTask non-nil covers the debounce gap; the
+    // syncState checks cover the in-flight request itself and a just-failed
+    // one) — a tap can only ever fire against a spec the server has already
+    // accepted.
     private var canQueueForm: Bool {
         guard editable, !spec.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard !isUploading else { return false }
         guard autosaveTask == nil else { return false }
         switch syncState {
         case .syncing, .failed: return false
@@ -354,6 +379,25 @@ struct JobFormView: View {
             fetchError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
+    }
+
+    // Unlike SteerView's deferred chips-then-append-on-send, the spec editor
+    // inserts each uploaded image straight into the spec text as it lands
+    // (appended at the end — the field doesn't track cursor position) and
+    // fades a brief confirmation instead of keeping a removable attachment
+    // list, since the line is already part of the editable text at that
+    // point and can just be deleted like any other text.
+    private func insertAttachment(_ attachment: ComposerAttachment) {
+        attachmentError = nil
+        let separator = spec.isEmpty || spec.hasSuffix("\n") ? "" : "\n"
+        spec += separator + "[image: \(attachment.path)]\n"
+        insertedConfirmation = attachment.name
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if insertedConfirmation == attachment.name {
+                insertedConfirmation = nil
+            }
+        }
     }
 
     // Debounced path: cancels any pending/in-flight autosave and schedules a

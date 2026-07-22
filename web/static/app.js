@@ -271,6 +271,7 @@ function checkStaleModals() {
     const j = jobsBySlug[steerSlug];
     if (!j || j.state !== steerOpenState) {
       flushSteerDraft(); // text survives server-side even though the modal is closing itself
+      clearSteerChips();
       steerOverlay.hidden = true;
     }
   }
@@ -714,6 +715,7 @@ document.addEventListener("click", (ev) => {
     post("/api/done", { slug: steerDone.dataset.slug }).then((ok) => {
       if (ok) {
         postDraft.cancel(); // done also clears the draft server-side
+        clearSteerChips();
         steerOverlay.hidden = true;
       } else {
         steerDone.disabled = false;
@@ -751,6 +753,60 @@ document.addEventListener("click", (ev) => {
   }
 });
 
+// ---- attachments: paste/drop/pick images into a composer, upload each
+// immediately, and track it as a chip. Shared by the steer modal and job
+// editor — both keep their own chip array and just call these helpers.
+
+// a Files drop that lands outside a panel's own drop handler (backdrop,
+// board, anywhere else) would otherwise navigate the tab to the dropped
+// file — block that everywhere, once, at startup. No stopPropagation: the
+// panel/document drop handlers below still need to run.
+for (const t of ["dragover", "drop"]) {
+  window.addEventListener(t, (ev) => {
+    if (ev.dataTransfer && ev.dataTransfer.types && ev.dataTransfer.types.includes("Files")) ev.preventDefault();
+  });
+}
+
+const IMAGE_TYPE_RE = /^image\/(png|jpeg|gif|webp)$/;
+
+function attChipHTML(c) {
+  return `<div class="att-chip" data-path="${esc(c.path)}">
+    <img src="${esc(c.url)}" alt="">
+    <span class="att-name">${esc(c.name)}</span>
+    <button class="att-rm" type="button" title="remove">✕</button>
+  </div>`;
+}
+
+function renderAttChips(containerId, chips) {
+  const el = document.getElementById(containerId);
+  el.hidden = !chips.length;
+  el.innerHTML = chips.map(attChipHTML).join("");
+}
+
+async function uploadAttachment(slug, file) {
+  const fd = new FormData();
+  fd.append("slug", slug);
+  fd.append("file", file);
+  const r = await fetch("/api/upload", { method: "POST", body: fd });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || String(r.status));
+  return d; // { name, path, url }
+}
+
+function pickImageFiles(fileList) {
+  return [...fileList].filter((f) => IMAGE_TYPE_RE.test(f.type));
+}
+
+// pastedFiles pulls raw File objects out of a paste event's clipboard —
+// non-file items (plain text, html) are ignored so a normal text paste
+// still lands in the focused field untouched. Deliberately unfiltered by
+// type (unlike pickImageFiles) so callers can tell "nothing pasted" apart
+// from "files pasted, but none were images" and give feedback for the latter.
+function pastedFiles(ev) {
+  const items = [...(ev.clipboardData?.items || [])].filter((it) => it.kind === "file");
+  return items.map((it) => it.getAsFile()).filter(Boolean);
+}
+
 // ---- steer: mid-run instructions ----
 
 const steerOverlay = document.getElementById("steer-overlay");
@@ -758,6 +814,50 @@ let steerSlug = null;
 let steerMode = "steer"; // "steer" | "reactivate" | "unblock" — same modal, different endpoint
 // job.state captured at open time — see checkStaleModals below
 let steerOpenState = undefined;
+
+// attachments captured this composer session — dropped whenever the modal
+// closes (see clearSteerChips call sites below), never persisted server-side
+let steerChips = []; // { name, path, url }
+// bumped every time clearSteerChips runs (open or close) — lets an in-flight
+// upload tell "still my session" apart from "same slug, but reopened since"
+let steerGen = 0;
+// in-flight uploadAttachment() calls this session — gates send while > 0
+let steerPending = 0;
+
+function clearSteerChips() {
+  steerGen++;
+  steerChips = [];
+  renderAttChips("steer-chips-att", steerChips);
+}
+
+function addSteerFiles(files) {
+  const slug = steerSlug;
+  const gen = steerGen;
+  if (!slug) return;
+  const all = [...files];
+  const imgs = pickImageFiles(all);
+  if (all.length && !imgs.length) {
+    document.getElementById("steer-note").textContent = "images only (png/jpeg/gif/webp)";
+    return;
+  }
+  imgs.forEach(async (file) => {
+    steerPending++;
+    try {
+      const c = await uploadAttachment(slug, file);
+      // stale: composer moved on (closed, or reopened — same or different
+      // slug) while this upload was in flight
+      if (steerSlug !== slug || steerGen !== gen || steerOverlay.hidden) return;
+      steerChips.push(c);
+      renderAttChips("steer-chips-att", steerChips);
+      document.getElementById("steer-note").textContent = "";
+    } catch (e) {
+      if (steerSlug !== slug || steerGen !== gen || steerOverlay.hidden) return;
+      document.getElementById("steer-note").textContent = "upload failed: " + (e.message || e);
+    } finally {
+      steerPending--;
+    }
+  });
+}
 
 // server-synced draft for the composer textarea — one shared draft per job
 // regardless of mode, so steer/unblock/reactivate all read and write the
@@ -853,6 +953,8 @@ function specMetaHTML(d) {
 function openSteer(slug, mode = "steer") {
   steerSlug = slug;
   steerMode = mode;
+  clearSteerChips();
+  steerPending = 0;
   steerOpenState = jobsBySlug[slug] ? jobsBySlug[slug].state : undefined;
   document.getElementById("steer-title").textContent =
     mode === "reactivate" ? slug + " — reactivate (same zeus session)"
@@ -934,8 +1036,16 @@ function openSteer(slug, mode = "steer") {
 }
 
 document.getElementById("steer-send").addEventListener("click", async () => {
-  const text = document.getElementById("steer-text").value.trim();
-  // a reactivation message is optional; a steer without text is a mistake
+  if (steerPending > 0) {
+    document.getElementById("steer-note").textContent = "uploading image…";
+    return;
+  }
+  const rawText = document.getElementById("steer-text").value.trim();
+  // attachments compose as trailing "[image: <path>]" lines — an images-only
+  // steer (no typed text) is still a legitimate send
+  const imgLines = steerChips.map((c) => "[image: " + c.path + "]").join("\n");
+  const text = steerChips.length ? (rawText ? rawText + "\n\n" + imgLines : imgLines) : rawText;
+  // a reactivation message is optional; a steer without text or images is a mistake
   if (!text && steerMode !== "reactivate") {
     document.getElementById("steer-note").textContent = "message is empty";
     return;
@@ -952,11 +1062,12 @@ document.getElementById("steer-send").addEventListener("click", async () => {
     // cancel again — a keystroke during the in-flight send would have
     // scheduled a fresh sync that the pre-send cancel never saw
     postDraft.cancel();
+    clearSteerChips();
     steerOverlay.hidden = true;
   } else {
     document.getElementById("steer-note").textContent = "send failed — see status bar";
     // failed send — re-arm the draft sync with the composer's raw value
-    // (matching the input handler, which never trims)
+    // (matching the input handler, which never trims); chips + text stay put
     postDraft(slug, document.getElementById("steer-text").value);
   }
 });
@@ -964,7 +1075,30 @@ document.getElementById("steer-text").addEventListener("input", (ev) => {
   if (steerSlug) postDraft(steerSlug, ev.target.value);
 });
 steerOverlay.addEventListener("click", (ev) => {
-  if (ev.target === steerOverlay) { flushSteerDraft(); steerOverlay.hidden = true; }
+  if (ev.target === steerOverlay) { flushSteerDraft(); clearSteerChips(); steerOverlay.hidden = true; }
+});
+document.getElementById("steer-att-btn").addEventListener("click", () => {
+  document.getElementById("steer-att-input").click();
+});
+document.getElementById("steer-att-input").addEventListener("change", (ev) => {
+  addSteerFiles(ev.target.files);
+  ev.target.value = ""; // allow re-picking the same file
+});
+document.getElementById("steer-chips-att").addEventListener("click", (ev) => {
+  const rm = ev.target.closest(".att-rm");
+  if (!rm) return;
+  const path = rm.closest(".att-chip").dataset.path;
+  steerChips = steerChips.filter((c) => c.path !== path);
+  renderAttChips("steer-chips-att", steerChips);
+});
+const steerPanel = document.querySelector("#steer-overlay .panel");
+steerPanel.addEventListener("dragover", (ev) => {
+  if (ev.dataTransfer?.types?.includes("Files")) ev.preventDefault();
+});
+steerPanel.addEventListener("drop", (ev) => {
+  if (!ev.dataTransfer?.files?.length) return;
+  ev.preventDefault();
+  addSteerFiles(ev.dataTransfer.files);
 });
 document.getElementById("steer-text").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
@@ -981,6 +1115,7 @@ document.getElementById("steer-kill").addEventListener("click", async () => {
   btn.disabled = false;
   if (ok) {
     flushSteerDraft(); // kill doesn't clear the draft server-side — preserve it
+    clearSteerChips();
     steerOverlay.hidden = true;
   } else {
     document.getElementById("steer-note").textContent = "cancel failed — see status bar";
@@ -1011,6 +1146,70 @@ let editorStateCaptured = false;
 // true when the freshest save/load says the current spec won't run (loadForm's
 // d.err, or doEditorSave's d.warn) — one of updateEditorQueue's arming gates
 let editorSyncWarn = false;
+
+// attachments uploaded this composer session — visual confirmation only; the
+// [image: <path>] reference already landed in editorText's spec prose, and
+// stays there (user-editable text) even after the chip is ✕'d
+let editorChips = []; // { name, path, url }
+// bumped in openEditor — lets an in-flight upload tell "still my session"
+// apart from "same slug, but reopened since" (e.g. a double card-click)
+let editorGen = 0;
+// in-flight uploadAttachment() calls this session — gates queue while > 0
+let editorPending = 0;
+
+function renderEditorChips() {
+  renderAttChips("editor-chips-att", editorChips);
+}
+
+// insertAtCursor lands text at the caret when the textarea has focus, else
+// appends on its own line — covers the async-upload case where focus may
+// have moved on by the time the upload resolves. When the caret sits mid-line
+// (there's a preceding char and it isn't a newline), the insert is prefixed
+// with its own "\n" so the image reference doesn't get glued onto prose.
+function insertAtCursor(textarea, text) {
+  if (document.activeElement === textarea) {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const prevChar = start > 0 ? textarea.value[start - 1] : "";
+    const inserted = prevChar && prevChar !== "\n" ? "\n" + text : text;
+    textarea.value = textarea.value.slice(0, start) + inserted + textarea.value.slice(end);
+    textarea.selectionStart = textarea.selectionEnd = start + inserted.length;
+  } else {
+    textarea.value += (textarea.value && !textarea.value.endsWith("\n") ? "\n" : "") + text;
+  }
+}
+
+function addEditorFiles(files) {
+  const slug = editorSlug;
+  const gen = editorGen;
+  if (!slug || editorText.readOnly) return;
+  const all = [...files];
+  const imgs = pickImageFiles(all);
+  if (all.length && !imgs.length) {
+    editorNote.style.color = "";
+    editorNote.textContent = "images only (png/jpeg/gif/webp)";
+    return;
+  }
+  imgs.forEach(async (file) => {
+    editorPending++;
+    try {
+      const c = await uploadAttachment(slug, file);
+      // stale: editor moved on (closed, or reopened — same or different
+      // slug) while this upload was in flight
+      if (editorSlug !== slug || editorGen !== gen || editorOverlay.hidden) return;
+      editorChips.push(c);
+      renderEditorChips();
+      insertAtCursor(editorText, "[image: " + c.path + "]\n");
+      onEditorFormChange(); // land the inserted reference into the debounced autosave
+    } catch (e) {
+      if (editorSlug !== slug || editorGen !== gen || editorOverlay.hidden) return;
+      editorNote.style.color = "";
+      editorNote.textContent = "upload failed: " + (e.message || e);
+    } finally {
+      editorPending--;
+    }
+  });
+}
 
 function prereqRowHTML(p) {
   return `<div class="prereq-row">
@@ -1075,6 +1274,7 @@ function setFormReadOnly(readOnly) {
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));
   editorText.readOnly = readOnly;
+  document.getElementById("editor-att-btn").disabled = readOnly;
   // archive lives here, inside the opened job, on purpose: no card-level
   // shortcut — the server still refuses jobs with a cell in flight
   document.getElementById("editor-archive").hidden = readOnly;
@@ -1159,6 +1359,10 @@ function openEditor(slug) {
   editorReady = false;
   editorStateCaptured = false;
   editorSyncWarn = false;
+  editorChips = [];
+  editorGen++;
+  editorPending = 0;
+  renderEditorChips();
   editorNote.textContent = "";
   editorNote.style.color = "";
   const isNew = !slug;
@@ -1181,6 +1385,10 @@ function openEditor(slug) {
 
 document.getElementById("editor-queue").addEventListener("click", async () => {
   if (!editorSlug) return;
+  if (editorPending > 0) {
+    editorNote.textContent = "uploading image…";
+    return;
+  }
   const btn = document.getElementById("editor-queue");
   btn.disabled = true;
   await flushEditorAutosave(); // land any edit still sitting in the debounce window before queueing
@@ -1307,6 +1515,51 @@ async function doEditorSave() {
 document.getElementById("editor-form").addEventListener("input", onEditorFormChange);
 document.getElementById("editor-form").addEventListener("change", onEditorFormChange);
 
+document.getElementById("editor-att-btn").addEventListener("click", () => {
+  document.getElementById("editor-att-input").click();
+});
+document.getElementById("editor-att-input").addEventListener("change", (ev) => {
+  // stop it here — otherwise it bubbles into #editor-form's delegated
+  // change listener above and fires a spurious autosave before the upload
+  // (and its insertAtCursor) has actually landed anything new
+  ev.stopPropagation();
+  addEditorFiles(ev.target.files);
+  ev.target.value = ""; // allow re-picking the same file
+});
+document.getElementById("editor-chips-att").addEventListener("click", (ev) => {
+  const rm = ev.target.closest(".att-rm");
+  if (!rm) return;
+  const path = rm.closest(".att-chip").dataset.path;
+  editorChips = editorChips.filter((c) => c.path !== path);
+  renderEditorChips();
+});
+const editorPanel = document.querySelector("#editor-overlay .panel");
+editorPanel.addEventListener("dragover", (ev) => {
+  if (editorText.readOnly) return;
+  if (ev.dataTransfer?.types?.includes("Files")) ev.preventDefault();
+});
+editorPanel.addEventListener("drop", (ev) => {
+  if (editorText.readOnly || !ev.dataTransfer?.files?.length) return;
+  ev.preventDefault();
+  addEditorFiles(ev.dataTransfer.files);
+});
+
+// document-level (not overlay-level) so ⌘V/Ctrl-V works even when focus
+// sits on a non-input element inside the panel — mirrors the Escape
+// handler's layering: steer is checked (and wins) before editor, so if both
+// overlays somehow ended up open at once, a paste can't land in both.
+document.addEventListener("paste", (ev) => {
+  if (!steerOverlay.hidden) {
+    const files = pastedFiles(ev);
+    if (files.length) { ev.preventDefault(); addSteerFiles(files); }
+    return;
+  }
+  if (!editorOverlay.hidden && !editorText.readOnly) {
+    const files = pastedFiles(ev);
+    if (files.length) { ev.preventDefault(); addEditorFiles(files); }
+  }
+});
+
 document.getElementById("editor-archive").addEventListener("click", async () => {
   if (!editorSlug) return;
   const ok = await post("/api/archive", { slug: editorSlug });
@@ -1358,7 +1611,7 @@ overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.h
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if (!overlay.hidden) { overlay.hidden = true; return; }
-  if (!steerOverlay.hidden) { flushSteerDraft(); steerOverlay.hidden = true; return; }
+  if (!steerOverlay.hidden) { flushSteerDraft(); clearSteerChips(); steerOverlay.hidden = true; return; }
   if (!editorOverlay.hidden) { flushEditorAutosave(); editorOverlay.hidden = true; return; }
 });
 

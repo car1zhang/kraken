@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"kraken/core"
@@ -705,6 +706,130 @@ func TestDraftPostWireShape(t *testing.T) {
 var jobSaveFormConflictSpec = map[string]fieldSpec{
 	"error":    {kind: wireString, required: true},
 	"conflict": {kind: wireBool, required: true},
+}
+
+// --- uploads: POST /api/upload, resolved for reading via api.UploadPath
+// (upload.go); the GET route itself lives in web/serve.go, outside this
+// package — see UploadPath's own round-trip below for the read side. ---
+
+var uploadRespSpec = map[string]fieldSpec{
+	"name": {kind: wireString, required: true},
+	"path": {kind: wireString, required: true},
+	"url":  {kind: wireString, required: true},
+}
+
+func TestUploadRoundTrip(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	writeTestJob(t, "contract-upload", "")
+
+	png := smallPNG(t)
+	req := multipartUploadRequest(t, "contract-upload", "photo.png", png)
+	rec := httptest.NewRecorder()
+	uploadHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("uploadHandler: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/upload", rec.Body.Bytes(), uploadRespSpec)
+
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["name"] != "img-001.png" {
+		t.Errorf("name = %q, want img-001.png", resp["name"])
+	}
+	if _, err := os.Stat(resp["path"]); err != nil {
+		t.Errorf("uploaded file not on disk: %v", err)
+	}
+	if want := "/api/upload/contract-upload/img-001.png"; resp["url"] != want {
+		t.Errorf("url = %q, want %q", resp["url"], want)
+	}
+
+	// read side: web/serve.go's GET route resolves through this exact call
+	p, err := UploadPath("contract-upload", "img-001.png")
+	if err != nil {
+		t.Fatalf("UploadPath: %v", err)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, png) {
+		t.Errorf("round-tripped bytes mismatch")
+	}
+}
+
+func TestUploadUnknownSlug404(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	req := multipartUploadRequest(t, "no-such-job", "a.png", smallPNG(t))
+	rec := httptest.NewRecorder()
+	uploadHandler(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadOversize413(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	writeTestJob(t, "contract-upload-big", "")
+	big := bytes.Repeat([]byte{0}, 10<<20+1024) // just over the 10MB file cap, still under the 11MB body ceiling
+	req := multipartUploadRequest(t, "contract-upload-big", "big.png", big)
+	rec := httptest.NewRecorder()
+	uploadHandler(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadSniffOverridesFilename(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	writeTestJob(t, "contract-upload-sniff", "")
+	// a real PNG's bytes, dressed up with a lying .jpg filename
+	req := multipartUploadRequest(t, "contract-upload-sniff", "photo.jpg", smallPNG(t))
+	rec := httptest.NewRecorder()
+	uploadHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["name"] != "img-001.png" {
+		t.Errorf("name = %q, want img-001.png (sniff must win over the .jpg filename)", resp["name"])
+	}
+}
+
+func TestUploadUnsupportedType415(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	writeTestJob(t, "contract-upload-text", "")
+	req := multipartUploadRequest(t, "contract-upload-text", "notes.txt", []byte("just plain text, not an image"))
+	rec := httptest.NewRecorder()
+	uploadHandler(rec, req)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadPathTraversal404(t *testing.T) {
+	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	if _, err := UploadPath("contract-upload", "../../x"); err == nil {
+		t.Fatal("expected a traversal-shaped name to be rejected")
+	}
+}
+
+func TestUploadBadMethod405(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/upload", nil)
+	rec := httptest.NewRecorder()
+	uploadHandler(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
 }
 
 func TestJobSaveFormConflictWireShape(t *testing.T) {

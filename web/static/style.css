@@ -527,6 +527,28 @@ body {
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
 .answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
 
+/* attachment chips: paste/drop/pick images into the steer and editor
+   composers. Deliberately not .chip/.chips (that class opens an artifact
+   panel via the delegated document click handler) — these are pending
+   uploads, removable client-side, not artifacts. */
+.att-zone { display: flex; flex-direction: column; gap: 6px; }
+.att-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.att-chip {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--raised); border: 1px solid var(--hairline-2);
+  padding: 3px 6px 3px 3px;
+}
+.att-chip img { width: 22px; height: 22px; object-fit: cover; display: block; }
+.att-name { font: 10px var(--mono); color: var(--text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-rm {
+  background: none; border: none; cursor: pointer;
+  font: 10px var(--mono); color: var(--text-2); padding: 0 2px;
+}
+.att-rm:hover { color: var(--counter); }
+.att-bar { display: flex; align-items: center; gap: 8px; }
+.att-btn { font-size: 10px; letter-spacing: 0.5px; padding: 3px 9px; }
+.att-hint { font: 10px var(--mono); color: var(--text-2); opacity: 0.65; }
+
 /* ---- job editor: frontmatter as a form, spec as prose ---- */
 .editor-body { display: flex; flex-direction: column; gap: 12px; }
 .editor-newrow { display: flex; gap: 8px; }

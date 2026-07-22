@@ -63,6 +63,22 @@ func TestZeusBriefInfo(t *testing.T) {
 	}
 }
 
+// TestZeusBriefImageHandling asserts the [image: <path>] hardening line
+// rides in every brief variant — it's not gated by type or solo, since carl
+// can attach images to any job's spec or a steering message.
+func TestZeusBriefImageHandling(t *testing.T) {
+	for _, j := range []*Job{
+		{Slug: "img-build", Type: "build"},
+		{Slug: "img-info", Type: "info"},
+		{Slug: "img-solo", Type: "build", Solo: true},
+	} {
+		brief := zeusBrief(j)
+		if !strings.Contains(brief, "[image: <path>]") {
+			t.Errorf("%s brief missing the image-handling line", j.Slug)
+		}
+	}
+}
+
 func TestZeusBriefSolo(t *testing.T) {
 	for _, typ := range []string{"build", "info"} {
 		j := &Job{Slug: "z", Type: typ, Solo: true}

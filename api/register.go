@@ -33,4 +33,5 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/job/save", webJobSave)
 	mux.HandleFunc("/api/job/form", webJobForm)
 	mux.HandleFunc("/api/job/saveform", webJobSaveForm)
+	mux.HandleFunc("/api/upload", uploadHandler)
 }
