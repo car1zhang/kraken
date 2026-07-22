@@ -364,6 +364,9 @@ function updateAges() {
   document.querySelectorAll("[data-wakeup-fires]").forEach((el) => {
     el.textContent = `⏱ next check in ${wakeupLabel(+el.dataset.wakeupFires)}`;
   });
+  document.querySelectorAll("[data-resets]").forEach((el) => {
+    el.textContent = usageCountdown(+el.dataset.resets);
+  });
 }
 
 // ---- archived drawer (collapsible, lives under the DONE column) ----
@@ -715,6 +718,31 @@ document.addEventListener("click", (ev) => {
   const tmuxOpen = ev.target.closest(".open-tmux");
   if (tmuxOpen) {
     post("/api/peers/open", { slug: tmuxOpen.dataset.slug });
+    return;
+  }
+  const ccpBtn = ev.target.closest(".u-ccp");
+  if (ccpBtn) {
+    const text = `ccp ${ccpBtn.dataset.slug}`;
+    const prev = ccpBtn.textContent;
+    const done = () => {
+      ccpBtn.textContent = "copied";
+      setTimeout(() => { ccpBtn.textContent = prev; }, 1200);
+    };
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(done).catch(() => {});
+    } else {
+      // --tailnet serves plain http on a non-localhost origin, which is not
+      // a secure context: navigator.clipboard is undefined there. Fall back
+      // to the legacy textarea + execCommand path.
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        if (document.execCommand("copy")) done();
+      } catch {}
+      ta.remove();
+    }
     return;
   }
   if (ev.target.closest("#new-job")) {
@@ -1597,6 +1625,7 @@ document.addEventListener("keydown", (ev) => {
   if (!overlay.hidden) { overlay.hidden = true; return; }
   if (!steerOverlay.hidden) { flushSteerDraft(); clearSteerChips(); steerOverlay.hidden = true; return; }
   if (!editorOverlay.hidden) { flushEditorAutosave(); editorOverlay.hidden = true; return; }
+  if (!usageOverlay.hidden) { usageOverlay.hidden = true; return; }
 });
 
 // ---- dag view: jobs layered by dependency depth, edges = prereqs ----
@@ -1724,6 +1753,181 @@ document.getElementById("dag-nodes").addEventListener("click", (ev) => {
   if (liveCol === "working" || liveCol === "blocked") openSteer(slug, liveCol === "blocked" ? "unblock" : "steer");
   else openEditor(slug);
 });
+
+// ---- usage widget: header at-a-glance + drilldown modal over GET /api/usage
+// (core.AccountUsage — see api/usage.go). The "main" account is whichever
+// entry carries current:true (the server sorts it first); everything else is
+// pool. Absent on an older server (404) or offline (network error) — the
+// widget stays hidden rather than showing broken state, see fetchUsage.
+
+const usageStat = document.getElementById("usage-stat");
+const usageOverlay = document.getElementById("usage-overlay");
+let usageData = null; // last successful /api/usage payload
+
+// usageColorClass thresholds a percent into the same ok/warn/danger palette
+// used everywhere else in the board (solved/revealed/counter).
+function usageColorClass(percent) {
+  if (percent >= 80) return "u-danger";
+  if (percent >= 50) return "u-warn";
+  return "u-ok";
+}
+
+// usageCountdown formats a resets_at (unix millis) as a compact countdown —
+// "3h12m", "4d", "8m", "now" — mirroring wakeupLabel's countdown feel but at
+// day/hour/minute granularity instead of minutes/seconds.
+function usageCountdown(millis) {
+  const remainingS = Math.floor((millis - Date.now()) / 1000);
+  if (remainingS <= 0) return "now";
+  const d = Math.floor(remainingS / 86400);
+  if (d >= 1) return `${d}d`;
+  const h = Math.floor(remainingS / 3600);
+  const m = Math.floor((remainingS % 3600) / 60);
+  return h >= 1 ? `${h}h${m}m` : `${m}m`;
+}
+
+function usageMainAccount(data) {
+  const accounts = data.accounts || [];
+  return accounts.find((a) => a.current) || accounts[0];
+}
+
+function usageSegHTML(label, percent) {
+  return `<span class="u-seg ${usageColorClass(percent)}">${esc(label)} ${Math.round(percent)}%</span>`;
+}
+
+// usageStatHTML renders the header widget's inner content: the current
+// account's session/weekly/model segments, a pool summary, and a staleness
+// note. Never touches `hidden` — fetchUsage only reveals the widget after a
+// successful parse, so a transient error can't flash broken markup into view.
+function usageStatHTML(data) {
+  const accounts = data.accounts || [];
+  if (!data.available || !accounts.length) return `<span class="dim">usage —</span>`;
+  const main = usageMainAccount(data);
+  const segs = [];
+  if (main.session) segs.push(usageSegHTML("5h", main.session.percent));
+  if (main.weekly) segs.push(usageSegHTML("7d", main.weekly.percent));
+  for (const m of main.models || []) segs.push(usageSegHTML(m.name.toLowerCase(), m.percent));
+  const pool = accounts.filter((a) => a !== main);
+  let poolHTML = "";
+  if (pool.length) {
+    const weeklies = pool.map((a) => a.weekly?.percent).filter((p) => p !== undefined);
+    const worst = weeklies.length ? Math.max(...weeklies) : null;
+    poolHTML = `<span class="u-sep">·</span><span class="u-pool">pool ${pool.length}` +
+      (worst !== null ? ` · worst 7d <span class="${usageColorClass(worst)}">${Math.round(worst)}%</span>` : "") +
+      `</span>`;
+  }
+  const stale = !data.daemon_ok || data.age_seconds > 900
+    ? `<span class="u-stale">(stale ${Math.floor(data.age_seconds / 60)}m)</span>`
+    : "";
+  const out = segs.join("") + poolHTML + stale;
+  // an account with no windows at all (fresh install, reauth everywhere)
+  // must not leave a visible-but-blank widget
+  return out || `<span class="dim">usage —</span>`;
+}
+
+// usageBarHTML renders one labeled window row (session/weekly/a model) —
+// track+fill bar plus a right-aligned "P% · <reset-in>". Returns "" for an
+// absent window (e.g. reauth/no_creds accounts have none) so callers can just
+// filter(Boolean) the rows together.
+function usageBarHTML(label, w) {
+  if (!w) return "";
+  const pct = Math.max(0, Math.min(100, w.percent));
+  const cls = usageColorClass(w.percent);
+  const reset = w.resets_at ? ` · <span data-resets="${w.resets_at}">${usageCountdown(w.resets_at)}</span>` : "";
+  return `<div class="u-row">
+    <span class="u-row-label">${esc(label)}</span>
+    <span class="u-bar"><span class="u-bar-fill ${cls}" style="width:${pct}%"></span></span>
+    <span class="u-row-val">${Math.round(w.percent)}%${reset}</span>
+  </div>`;
+}
+
+// usageChipsHTML renders an account's status chips — cooldown/reauth/no_creds/
+// stale/error — any subset of which may apply at once.
+function usageChipsHTML(a) {
+  const chips = [];
+  if (a.cooldown_until && a.cooldown_until > Date.now()) {
+    chips.push(`<span class="u-chip u-chip-warn">cooling ${usageCountdown(a.cooldown_until)}</span>`);
+  }
+  if (a.reauth) chips.push(`<span class="u-chip u-chip-danger">reauth needed — ccp login</span>`);
+  if (a.no_creds) chips.push(`<span class="u-chip u-chip-danger">no creds</span>`);
+  if (a.stale) chips.push(`<span class="u-chip u-chip-dim">stale</span>`);
+  if (a.error) chips.push(`<span class="u-chip u-chip-danger" title="${esc(a.error)}">error</span>`);
+  return chips.join("");
+}
+
+// usageAccountHTML renders one account block: header line (slug, current
+// chip, email, tier, status chips, pool-only ccp button) plus a bar row per
+// window. Rows are empty (no session/weekly/models) for reauth/no_creds
+// accounts — the block then falls back to just the header.
+function usageAccountHTML(a) {
+  const tier = esc((a.tier || "").replace(/^default_claude_/, ""));
+  const rows = [usageBarHTML("session", a.session), usageBarHTML("weekly", a.weekly)]
+    .concat((a.models || []).map((m) => usageBarHTML(m.name.toLowerCase(), m)))
+    .filter(Boolean)
+    .join("");
+  const ccpBtn = a.current ? "" : `<button class="btn ghost mini u-ccp" data-slug="${esc(a.slug)}" title="copy ccp ${esc(a.slug)}">⧉ ccp</button>`;
+  return `<div class="u-account">
+    <div class="u-account-head">
+      <span class="u-slug">${esc(a.slug)}</span>
+      ${a.current ? `<span class="u-chip u-chip-current">current</span>` : ""}
+      ${a.email ? `<span class="dim">${esc(a.email)}</span>` : ""}
+      ${tier ? `<span class="u-chip">${tier}</span>` : ""}
+      ${usageChipsHTML(a)}
+      <span class="spacer"></span>
+      ${ccpBtn}
+    </div>
+    ${rows ? `<div class="u-rows">${rows}</div>` : ""}
+  </div>`;
+}
+
+// renderUsageModal fills the drilldown's head (fetched-ago / daemon-down
+// warning) and body (one block per account, server order = current-first).
+function renderUsageModal(data) {
+  const head = document.getElementById("usage-fetched");
+  if (!data.available) {
+    head.innerHTML = `<span class="dim">no data yet</span>`;
+  } else if (!data.daemon_ok) {
+    head.innerHTML = `<span class="u-chip u-chip-danger">daemon down — data frozen</span>`;
+  } else {
+    head.innerHTML = `<span class="dim">fetched ${age(Math.floor(data.fetched_at / 1000))} ago · daemon</span>`;
+  }
+  const body = document.getElementById("usage-body");
+  const accounts = data.accounts || [];
+  body.innerHTML = accounts.length
+    ? accounts.map(usageAccountHTML).join("")
+    : `<div class="empty">no usage data yet</div>`;
+}
+
+async function fetchUsage() {
+  try {
+    const r = await fetch("/api/usage");
+    if (!r.ok) return; // 404 on an older server — leave the widget hidden
+    usageData = await r.json();
+    usageStat.innerHTML = usageStatHTML(usageData);
+    usageStat.hidden = false;
+    if (!usageOverlay.hidden) renderUsageModal(usageData);
+  } catch {
+    // network error — leave the widget in whatever state it was already in
+  }
+}
+
+usageStat.addEventListener("click", () => {
+  usageOverlay.hidden = false;
+  if (usageData) renderUsageModal(usageData);
+  fetchUsage();
+});
+// role="button" promises keyboard operability — honor Enter/Space
+usageStat.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" || ev.key === " ") {
+    ev.preventDefault();
+    usageStat.click();
+  }
+});
+usageOverlay.addEventListener("click", (ev) => {
+  if (ev.target === usageOverlay) usageOverlay.hidden = true;
+});
+
+fetchUsage();
+setInterval(fetchUsage, 60000);
 
 // ---- poll (paused while dragging so the board doesn't rebuild mid-drag,
 // and while the tab is hidden — nothing is watching it either way) ----

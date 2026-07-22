@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -29,6 +30,10 @@ const (
 	// PR tracking is throttled to every reapEvery-th tick (~1 min): gh
 	// calls per open cell are the daemon's only rate-limited traffic.
 	reapEvery = 4
+	// usage polling is throttled to every usageEvery-th tick (~5 min): each
+	// account fetch is a real network call, and usage windows don't move
+	// fast enough to justify polling every 15s tick.
+	usageEvery = 20
 	// backoff between auto-retry pokes of the same stalled cell, and between
 	// re-notifications of the same standing health complaint.
 	repokeAfter = 10 * time.Minute
@@ -94,6 +99,10 @@ type daemonState struct {
 func newDaemon() *daemonState {
 	return &daemonState{Notified: map[string]int64{}, Poked: map[string]int64{}}
 }
+
+// usagePassRunning single-flights UsagePass across ticks: it does network I/O
+// up to ~10s and must never overlap itself or stretch the scheduler loop.
+var usagePassRunning atomic.Bool
 
 // RunDaemon runs the scheduler loop in the foreground: queue startable jobs,
 // derive live state, watch for unhealthy cells, track PRs, write a heartbeat.
@@ -320,6 +329,20 @@ func (d *daemonState) tick() (int, error) {
 				continue
 			}
 			d.trackPRs(j)
+		}
+	}
+
+	// usage poll (throttled, first-tick eager so UIs have data right after
+	// daemon start): single-flighted into its own goroutine since it's
+	// network I/O up to ~10s and must not stretch this loop.
+	if d.tickN == 1 || d.tickN%usageEvery == 0 {
+		if usagePassRunning.CompareAndSwap(false, true) {
+			go func() {
+				defer usagePassRunning.Store(false)
+				if err := UsagePass(); err != nil {
+					dlog("usage pass failed: %v", err)
+				}
+			}()
 		}
 	}
 

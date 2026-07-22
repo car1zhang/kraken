@@ -77,6 +77,9 @@ struct RootTabView: View {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
                 .tag(AppRouter.Tab.sessions)
+            UsageView()
+                .tabItem { Label("Usage", systemImage: "gauge.with.dots.needle.50percent") }
+                .tag(AppRouter.Tab.usage)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppRouter.Tab.settings)

@@ -116,6 +116,23 @@ body {
 }
 .theme-btn:hover { color: var(--text); }
 
+/* header at-a-glance usage widget: current account's session/weekly/model
+   segments + a pool summary, opening the drilldown modal on click (see
+   #usage-overlay below and the "usage widget" section in app.js) */
+.usage-stat {
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer; color: var(--text-2);
+  padding: 2px 5px; margin-left: 2px;
+}
+.usage-stat:hover { color: var(--text); }
+.u-seg { white-space: nowrap; }
+.u-ok { color: var(--solved); }
+.u-warn { color: var(--revealed); }
+.u-danger { color: var(--counter); }
+.u-sep { opacity: 0.4; }
+.u-pool { color: var(--text-2); }
+.u-stale { opacity: 0.55; }
+
 .stale-banner {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 16px;
@@ -547,6 +564,36 @@ body {
 .att-bar { display: flex; align-items: center; gap: 8px; }
 .att-btn { font-size: 10px; letter-spacing: 0.5px; padding: 3px 9px; }
 .att-hint { font: 10px var(--mono); color: var(--text-2); opacity: 0.65; }
+
+/* ---- usage drilldown: one block per account, bar rows per window ---- */
+.u-account { padding: 11px 0; border-bottom: 1px solid var(--hairline); }
+.u-account:first-child { padding-top: 0; }
+.u-account:last-child { border-bottom: none; padding-bottom: 0; }
+.u-account-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.u-slug { font: 700 12px var(--mono); color: var(--text); }
+.u-rows { margin-top: 9px; display: flex; flex-direction: column; gap: 7px; }
+.u-row { display: grid; grid-template-columns: minmax(56px, auto) 1fr 92px; align-items: center; gap: 9px; }
+.u-row-label { font: 10px var(--mono); color: var(--text-2); }
+.u-bar { height: 7px; background: var(--raised); border: 1px solid var(--hairline-2); border-radius: 4px; overflow: hidden; }
+.u-bar-fill { display: block; height: 100%; border-radius: 3px 0 0 3px; }
+.u-bar-fill.u-ok { background: var(--solved); }
+.u-bar-fill.u-warn { background: var(--revealed); }
+.u-bar-fill.u-danger { background: var(--counter); }
+.u-row-val { font: 10px var(--mono); color: var(--text-2); text-align: right; white-space: nowrap; }
+.u-row-val [data-resets] { color: var(--text-2); }
+.u-chip {
+  font: 9.5px var(--mono); letter-spacing: 0.3px;
+  padding: 2px 6px; border: 1px solid var(--hairline-2); color: var(--text-2);
+}
+.u-chip-current { color: var(--accent); border-color: var(--accent-soft); }
+.u-chip-warn { color: var(--revealed); border-color: var(--revealed-soft); }
+.u-chip-danger { color: var(--counter); border-color: var(--counter-soft); cursor: help; }
+.u-chip-dim { opacity: 0.6; }
+/* bare .dim spans inside the usage widget/modal (email, "usage —",
+   fetched-ago) — .stat.dim/.roster-row .dim don't reach them */
+.usage-stat .dim,
+#usage-overlay .dim { opacity: 0.55; }
+.btn.mini { font-size: 9.5px; letter-spacing: 0.3px; padding: 2px 7px; }
 
 /* ---- job editor: frontmatter as a form, spec as prose ---- */
 .editor-body { display: flex; flex-direction: column; gap: 12px; }

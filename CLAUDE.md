@@ -48,7 +48,8 @@ Every path in the binary derives from `os.UserHomeDir()` via `util.Home()` — n
 |---|---|---|
 | `~/Documents/pluto` (job files `*.job.md`, `archive/`) | user's pluto notes convention | `jobs/job.go` (`JobsDir`) |
 | `~/Developer` (git checkouts jobs may target) | user convention | `jobs/job.go` (`ResolveRepo`), `jobs/board.go` (`RepoCandidates`) |
-| `~/.kraken` (`cells/`, `daemon.json`) | kraken-owned | `jobs/cell.go`, `jobs/daemon.go` |
+| `~/.kraken` (`cells/`, `daemon.json`, `usage.json`) | kraken-owned | `jobs/cell.go`, `jobs/daemon.go`, `jobs/usage.go` |
+| `~/.claude-pool` (`<slug>/` account slots, `cooldowns.json`) | ccp-owned (claude code pool); kraken reads slot creds/identity and writes back rotated tokens after an OAuth refresh — its only write there | `core/usagepool.go` |
 | `~/.kraken/uploads` | kraken-owned (per-job image uploads) | `jobs/uploads.go` |
 | `~/.claude` (`sessions/`, `projects/`, `teams/`, `.usage-cache.json`) | Claude Code | `core/discover.go`, `core/peer.go`, `core/usage.go` |
 | `~/.claude/skills/doc/assets` (doc templates, `hermes-contract.md`, `lint_svg.py`) | user's doc skill; zeus briefs reference these by path | `jobs/crew.go` |

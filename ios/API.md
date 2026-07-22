@@ -327,6 +327,44 @@ Errors: 400 (both or neither of pane/slug set), 404 (no session in pane / no job
 
 ## Misc
 
+### `GET /api/usage` → `webUsage` (usage.go)
+
+The daemon's last usage-poller pass — one row per Claude account (main +
+every `~/.claude-pool` slot). Additive, no contract bump. Read-only (GET
+only, 405 otherwise). All `*_at` fields are unix millis. `accounts` is
+always `[]`, never `null`.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `available` | bool | always | snapshot file exists and parsed |
+| `fetched_at` | number | always | unix millis of the daemon's last completed pass; `0` when unavailable |
+| `age_seconds` | number | always | server-derived `max(0, (now - fetched_at) / 1000)`; `0` when unavailable |
+| `daemon_ok` | bool | always | the usage poller is the daemon: same liveness check as `/api/board`'s `daemon_ok` |
+| `accounts` | array (`AccountUsage`) | always (`[]` not `null`) | |
+
+`AccountUsage` (core/usagepool.go, marshaled as-is):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `slug` | string | always | `"main"` or the pool slot dir name |
+| `email` | string | omitempty | |
+| `display_name` | string | omitempty | |
+| `tier` | string | omitempty | raw `rate_limit_tier` |
+| `current` | bool | omitempty | |
+| `session` | object (`UsageWindow`) | omitempty | absent when the account hasn't been fetched yet (no creds / reauth needed / error with no prior data) |
+| `weekly` | object (`UsageWindow`) | omitempty | same absence rule as `session` |
+| `models` | array (`ModelWindow`) | omitempty | weekly_scoped per-model limits; absent whenever `session`/`weekly` are absent, but ALSO absent on a successful fetch when the account simply has no per-model limits |
+| `fetched_at` | number | omitempty | unix millis of last successful fetch for this account |
+| `stale` | bool | omitempty | `session`/`weekly`/`models` are a cached fallback (e.g. main-account keychain unreachable), not this pass's live fetch |
+| `error` | string | omitempty | last fetch error, if any |
+| `reauth` | bool | omitempty | token refresh failed — run `ccp login` for this account |
+| `no_creds` | bool | omitempty | no credentials found for this account (e.g. a disabled pool slot) |
+| `cooldown_until` | number | omitempty | unix millis, advisory — this account is in a cooldown window |
+
+`UsageWindow`: `percent` (number, always), `resets_at` (number, omitempty — unix millis, `0`/absent = unknown).
+
+`ModelWindow`: `name` (string, always — model display name, e.g. `"Fable"`), `percent` (number, always), `resets_at` (number, omitempty).
+
 ### `GET /api/health` → map literal (webpeers.go `healthHandler`)
 
 | key | type | optionality | notes |
