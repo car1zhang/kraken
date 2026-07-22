@@ -15,7 +15,13 @@ const COLUMNS = [
   { key: "done", title: "DONE", states: ["done"] },
 ];
 
-const MOVES = { draft: ["queued"], queued: ["draft"], blocked: ["done"] };
+const MOVES = {
+  draft: ["queued"],
+  queued: ["draft", "working"],
+  working: ["blocked"],
+  blocked: ["done", "working"],
+  done: ["blocked", "working", "archived"],
+};
 
 const STATE_COLOR = {
   working: "var(--solved)",
@@ -28,6 +34,17 @@ const STATE_COLOR = {
 
 let jobsBySlug = {};
 let dragging = null; // { slug, from }
+let draggedEl = null; // the dragged card's live DOM node
+let dragOriginParent = null; // its .col-cards parent at dragstart
+let dragOriginAnchor = null; // its nextElementSibling at dragstart — restore target on cancel
+let lastSlotAnchor; // throttling: the anchor node last acted on during same-column dragover
+let sameColumnDropHandled = false; // true once drop() takes over a same-column reorder's outcome
+
+// last fetched board.jobs, in server order — used to predict what the next
+// poll will look like after an optimistic same-column reorder (see
+// postReorder), so the boardSnapshot guard below doesn't false-positive a
+// rebuild the moment that poll lands.
+let lastBoardJobs = [];
 
 // serialized board.jobs of the last DOM rebuild — refresh() skips rebuilding
 // #board while it still matches, so any client-side state change that
@@ -203,7 +220,6 @@ function crewHTML(j) {
 
 function cardHTML(j, col) {
   const color = stateColor(j.state);
-  const movable = !!MOVES[col];
   const prs = (j.prs || []).map(prChipHTML).join("");
   const prereqs = (j.prereqs || [])
     .map((p) => {
@@ -218,7 +234,7 @@ function cardHTML(j, col) {
     .join("");
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
   return `<div class="card editable ${j.question || j.health ? "flagged" : ""}" style="--state:${color}"
-      draggable="${movable}" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
+      draggable="true" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
@@ -396,65 +412,239 @@ function archivedCardHTML(j) {
 
 // archiveDrawerHTML renders the drawer inside the DONE column's section —
 // re-created on every render, so its toggle is handled by the delegated
-// document click listener below, never a direct element listener.
+// document click listener below, never a direct element listener. Always
+// rendered (even with zero archived jobs) since it doubles as the drop
+// target for a done→archived drag; data-col="archived" mirrors the .col
+// sections' own data-col so the drag handlers can treat it uniformly.
 function archiveDrawerHTML(archived) {
-  if (!archived.length) return "";
-  return `<div class="archive-drawer">
-    <button class="archive-head" id="archive-toggle">
-      <span class="tri">${archiveOpen ? "▾" : "▸"}</span> ARCHIVED <span class="n">${archived.length}</span>
+  const hasArchived = archived.length > 0;
+  return `<div class="archive-drawer" data-col="archived">
+    <button class="archive-head" id="archive-toggle" ${hasArchived ? "" : "disabled"}>
+      <span class="tri">${hasArchived ? (archiveOpen ? "▾" : "▸") : "·"}</span> ARCHIVED <span class="n">${archived.length}</span>
     </button>
-    <div class="archive-cards" ${archiveOpen ? "" : "hidden"}>
+    ${hasArchived ? `<div class="archive-cards" ${archiveOpen ? "" : "hidden"}>
       ${archived.map(archivedCardHTML).join("")}
-    </div>
+    </div>` : ""}
   </div>`;
 }
 
-// ---- drag & drop (legal moves only) ----
+// ---- drag & drop: within-column reorder + cross-column lifecycle moves ----
+//
+// A drag target is either a COLUMNS section (.col, data-col=<state>) or the
+// archive drawer (.archive-drawer, data-col="archived") — dropZone() below
+// resolves whichever the pointer is actually over, letting the rest of the
+// handlers treat both uniformly via .dataset.col. Dragging over the SAME
+// column as the drag started in is a reorder — the card live-shifts into its
+// slot as the pointer moves (see flipMove) and /api/reorder saves the DOM
+// order on drop; dragging over a different legal column/drawer is a
+// lifecycle move (post or open the steer modal, per MOVES below).
+
+function dropZone(ev) {
+  return ev.target.closest(".archive-drawer, .col");
+}
+
+// insertionIndex finds where `y` (a pointer's clientY) falls among `cards`'
+// vertical midpoints — the slot a dropped card would land in.
+function insertionIndex(cards, y) {
+  for (let i = 0; i < cards.length; i++) {
+    const rect = cards[i].getBoundingClientRect();
+    if (y < rect.top + rect.height / 2) return i;
+  }
+  return cards.length;
+}
+
+// flipMove relocates cardEl to sit immediately before `anchor` within
+// cardsEl (null anchor = append at the end), animating every card that
+// visibly shifts as a result — FLIP: measure First, mutate to Last, Invert
+// with a transform, then transition (Play) back to identity. Used both for
+// live same-column reordering on dragover and to snap a card back to its
+// origin slot when a drag ends without a committed reorder. A no-op when
+// cardEl is already sitting in that slot.
+function flipMove(cardsEl, cardEl, anchor) {
+  if (cardEl.nextElementSibling === anchor) return;
+  const cards = [...cardsEl.querySelectorAll(".card")];
+  const first = new Map(cards.map((c) => [c, c.getBoundingClientRect()]));
+  cardsEl.insertBefore(cardEl, anchor);
+  for (const c of cards) {
+    const before = first.get(c);
+    const after = c.getBoundingClientRect();
+    const dy = before.top - after.top;
+    if (Math.abs(dy) < 0.5) continue;
+    c.style.transition = "none";
+    c.style.transform = `translateY(${dy}px)`;
+    c.offsetHeight; // force layout so the transform above paints before we animate away from it
+    c.style.transition = "transform 150ms var(--ease)";
+    c.style.transform = "";
+    c.addEventListener("transitionend", () => { c.style.transition = ""; }, { once: true });
+  }
+}
 
 document.addEventListener("dragstart", (ev) => {
   const card = ev.target.closest(".card[draggable='true']");
   if (!card) return;
   dragging = { slug: card.dataset.slug, from: card.dataset.col };
+  draggedEl = card;
+  dragOriginParent = card.parentElement;
+  dragOriginAnchor = card.nextElementSibling;
+  lastSlotAnchor = card.nextElementSibling;
+  sameColumnDropHandled = false;
   card.classList.add("dragging");
   ev.dataTransfer.effectAllowed = "move";
   ev.dataTransfer.setData("text/plain", dragging.slug);
   for (const to of MOVES[dragging.from] || []) {
-    document.querySelector(`.col[data-col="${to}"]`)?.classList.add("droptarget");
+    document.querySelector(`.col[data-col="${to}"], .archive-drawer[data-col="${to}"]`)?.classList.add("droptarget");
   }
 });
 
 document.addEventListener("dragend", () => {
+  // a same-column drop already left the DOM (and boardSnapshot) in its
+  // final state — success or reverted — so only an uncommitted drag (ESC,
+  // illegal drop, or a cross-column move that live-shifted the source
+  // column before crossing) needs snapping back to where it started
+  if (dragging && !sameColumnDropHandled && draggedEl && dragOriginParent) {
+    flipMove(dragOriginParent, draggedEl, dragOriginAnchor);
+  }
+  const handled = sameColumnDropHandled;
   dragging = null;
+  draggedEl = null;
+  dragOriginParent = null;
+  dragOriginAnchor = null;
+  lastSlotAnchor = undefined;
+  sameColumnDropHandled = false;
   document.querySelectorAll(".droptarget, .drophover").forEach((el) =>
     el.classList.remove("droptarget", "drophover"));
   document.querySelectorAll(".card.dragging").forEach((el) => el.classList.remove("dragging"));
+  // corrects any staleness accumulated while refresh() was suppressed for
+  // the drag (see the `if (dragging) return;` guard in refresh()) — cheap
+  // even when nothing changed, since refresh() no-ops on a matching
+  // snapshot. Skipped for a handled same-column drop: postReorder() already
+  // settled the DOM (quietly on success, force-rebuilt on failure).
+  if (!handled) refresh();
 });
 
 document.addEventListener("dragover", (ev) => {
-  const col = ev.target.closest(".col");
-  if (!col || !dragging) return;
-  if ((MOVES[dragging.from] || []).includes(col.dataset.col)) {
+  if (!dragging) return;
+  const zone = dropZone(ev);
+  if (!zone) return;
+  const to = zone.dataset.col;
+  if (to === dragging.from) {
+    const cardsEl = zone.querySelector(".col-cards");
+    if (!cardsEl || !draggedEl) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = "move";
-    col.classList.add("drophover");
+    // throttle: only touch the DOM when the pointer has actually crossed
+    // into a different slot, not on every mousemove-driven dragover tick
+    const others = [...cardsEl.querySelectorAll(".card")].filter((c) => c !== draggedEl);
+    const anchor = others[insertionIndex(others, ev.clientY)] || null;
+    if (anchor === lastSlotAnchor) return;
+    lastSlotAnchor = anchor;
+    flipMove(cardsEl, draggedEl, anchor);
+    return;
+  }
+  if ((MOVES[dragging.from] || []).includes(to)) {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    zone.classList.add("drophover");
   }
 });
 
 document.addEventListener("dragleave", (ev) => {
-  ev.target.closest(".col")?.classList.remove("drophover");
+  dropZone(ev)?.classList.remove("drophover");
 });
 
 document.addEventListener("drop", async (ev) => {
-  const col = ev.target.closest(".col");
-  if (!col || !dragging) return;
+  const zone = dropZone(ev);
+  if (!zone || !dragging) return;
   ev.preventDefault();
   const { slug, from } = dragging;
-  const to = col.dataset.col;
+  const to = zone.dataset.col;
+
+  if (to === from) {
+    // same-column reorder: the dragged card is already sitting in its final
+    // slot (dragover's live FLIP shifting put it there) — read the order
+    // straight off the DOM, no indicator/insertion math needed at drop time
+    sameColumnDropHandled = true;
+    const cardsEl = zone.querySelector(".col-cards");
+    if (!cardsEl) return;
+    const slugs = [...cardsEl.querySelectorAll(".card")].map((c) => c.dataset.slug);
+    await postReorder(to, slugs);
+    return;
+  }
+
   if (!(MOVES[from] || []).includes(to)) return;
   if (from === "draft" && to === "queued") await post("/api/queue", { slug });
   else if (from === "queued" && to === "draft") await post("/api/dequeue", { slug });
   else if (from === "blocked" && to === "done") await post("/api/done", { slug });
+  else if (from === "queued" && to === "working") await post("/api/start", { slug });
+  else if (from === "working" && to === "blocked") await post("/api/stop", { slug });
+  else if (from === "blocked" && to === "working") openSteer(slug, "unblock");
+  else if (from === "done" && to === "blocked") await post("/api/reactivate", { slug, text: "" });
+  else if (from === "done" && to === "working") openSteer(slug, "reactivate", { requireText: true });
+  else if (from === "done" && to === "archived") await post("/api/archive", { slug });
 });
+
+// postReorder persists a same-column drag reorder. Unlike post(), it does
+// NOT refresh on success: the DOM already shows the final order (dragover's
+// live FLIP shifting put it there), and boardSnapshot/lastBoardJobs are
+// updated to the predicted post-save shape so the next 3s poll — expected to
+// fetch that exact order back — reads as unchanged and skips the #board
+// rebuild that would otherwise flash the same content back in. On failure
+// the board is force-rebuilt from server truth and a toast explains why.
+async function postReorder(column, slugs) {
+  try {
+    const r = await fetch("/api/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ column, slugs }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.status);
+    const predicted = predictReorderedJobs(column, slugs);
+    if (predicted) {
+      lastBoardJobs = predicted;
+      boardSnapshot = JSON.stringify(predicted);
+    }
+    return true;
+  } catch (e) {
+    showToast(`reorder failed: ${e.message} — reverted`);
+    invalidateBoard();
+    await refresh();
+    return false;
+  }
+}
+
+// predictReorderedJobs mirrors the server's within-column reorder against
+// the last fetched board.jobs: same job objects in the same positions,
+// except column members now follow `slugs`' order (buildWebBoard groups
+// each display state contiguously and reorders only within it — see
+// jobs/order.go's ApplyColumnOrder). Returns null if slugs don't line up
+// with what the client already knows, so the caller falls back to the next
+// real poll instead of guessing.
+function predictReorderedJobs(column, slugs) {
+  const bySlug = Object.fromEntries(lastBoardJobs.map((j) => [j.slug, j]));
+  const reordered = slugs.map((s) => bySlug[s]).filter(Boolean);
+  if (reordered.length !== slugs.length) return null;
+  let i = 0;
+  return lastBoardJobs.map((j) => (j.state === column ? reordered[i++] : j));
+}
+
+// ---- toast: transient bottom-center notice for a reverted failed action ----
+
+let toastTimer = null;
+
+function showToast(message) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.className = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 4000);
+}
 
 async function post(url, body) {
   try {
@@ -598,6 +788,27 @@ let artifactURL = "";
 const isPage = (url) => /\.(html|svg|pdf)$/i.test(url);
 const isImage = (url) => /\.(png|jpe?g|gif|webp)$/i.test(url);
 
+// artifactParts recovers {slug, home, name} from an /api/artifact URL — the
+// same triple the overlay was opened with, needed to address a feedback post
+// at the exact artifact being viewed. Cell-home names may themselves contain
+// slashes (subpath artifacts), so only the first two segments are split off.
+function artifactParts(url) {
+  const m = url.match(/^\/api\/artifact\/([^/]+)\/([^/]+)\/(.+)$/);
+  return m ? { slug: m[1], home: m[2], name: m[3] } : null;
+}
+
+let feedbackSavedTimer = 0;
+
+function hideFeedbackForm() {
+  document.getElementById("feedback-form").hidden = true;
+  document.getElementById("feedback-text").value = "";
+  document.getElementById("feedback-note").textContent = "";
+  // a lingering "saved ✓" must never carry over to another artifact (or
+  // stack across rapid sends) — cancel the revert timer and reset now
+  clearTimeout(feedbackSavedTimer);
+  document.getElementById("panel-feedback").textContent = "feedback";
+}
+
 function openArtifact(url, name) {
   document.getElementById("panel-title").textContent = name;
   artifactURL = url;
@@ -605,6 +816,8 @@ function openArtifact(url, name) {
   showRaw = false;
   overlay.hidden = false;
   document.getElementById("panel-raw").hidden = isImage(url) || /\.pdf$/i.test(url);
+  document.getElementById("panel-feedback").hidden = false;
+  hideFeedbackForm();
   if (isImage(url)) {
     panelBody.className = "panel-body page";
     panelBody.innerHTML = `<img src="${esc(url)}" alt="artifact">`;
@@ -795,6 +1008,10 @@ let steerSlug = null;
 let steerMode = "steer"; // "steer" | "reactivate" | "unblock" — same modal, different endpoint
 // job.state captured at open time — see checkStaleModals below
 let steerOpenState = undefined;
+// true only when this "reactivate" open came from a done→working drag —
+// the ↺ card/editor button's optional-text behavior is unaffected (they
+// never pass opts.requireText)
+let steerRequireText = false;
 
 // attachments captured this composer session — dropped whenever the modal
 // closes (see clearSteerChips call sites below), never persisted server-side
@@ -943,11 +1160,12 @@ function specMetaHTML(d) {
     .join("")}</div>`;
 }
 
-function openSteer(slug, mode = "steer") {
+function openSteer(slug, mode = "steer", opts = {}) {
   steerSlug = slug;
   steerMode = mode;
   clearSteerChips();
   steerPending = 0;
+  steerRequireText = !!opts.requireText;
   steerOpenState = jobsBySlug[slug] ? jobsBySlug[slug].state : undefined;
   document.getElementById("steer-title").textContent =
     mode === "reactivate" ? slug + " — reactivate (same zeus session)"
@@ -1038,8 +1256,9 @@ document.getElementById("steer-send").addEventListener("click", async () => {
   // steer (no typed text) is still a legitimate send
   const imgLines = steerChips.map((c) => "[image: " + c.path + "]").join("\n");
   const text = steerChips.length ? (rawText ? rawText + "\n\n" + imgLines : imgLines) : rawText;
-  // a reactivation message is optional; a steer without text or images is a mistake
-  if (!text && steerMode !== "reactivate") {
+  // a reactivation message is optional (unless this open came from a
+  // done→working drag, which requires one); a steer without text or images is a mistake
+  if (!text && (steerMode !== "reactivate" || steerRequireText)) {
     document.getElementById("steer-note").textContent = "message is empty";
     return;
   }
@@ -1603,6 +1822,38 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
     panelBody.innerHTML = renderMD(rawText);
   }
 });
+document.getElementById("panel-feedback").addEventListener("click", () => {
+  const form = document.getElementById("feedback-form");
+  form.hidden = !form.hidden;
+  if (!form.hidden) document.getElementById("feedback-text").focus();
+});
+document.getElementById("feedback-cancel").addEventListener("click", () => hideFeedbackForm());
+document.getElementById("feedback-send").addEventListener("click", async () => {
+  const note = document.getElementById("feedback-note");
+  const parts = artifactParts(artifactURL);
+  const text = document.getElementById("feedback-text").value.trim();
+  if (!parts) { note.textContent = "can't identify this artifact"; return; }
+  if (!text) { note.textContent = "feedback is empty"; return; }
+  const sendBtn = document.getElementById("feedback-send");
+  sendBtn.disabled = true;
+  try {
+    const r = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug: parts.slug, home: parts.home, name: parts.name, feedback: text }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || String(r.status));
+    hideFeedbackForm();
+    const label = document.getElementById("panel-feedback");
+    label.textContent = "saved ✓";
+    feedbackSavedTimer = setTimeout(() => { label.textContent = "feedback"; }, 2000);
+  } catch (e) {
+    note.textContent = "failed: " + e.message;
+  } finally {
+    sendBtn.disabled = false;
+  }
+});
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });
 // one Escape closes one layer: the artifact viewer if it's on top (it can be
 // opened from inside the steer/unblock modal), else whichever of editor/steer
@@ -1841,6 +2092,7 @@ async function refresh() {
   try {
     const r = await fetch("/api/board");
     const board = await r.json();
+    lastBoardJobs = board.jobs || [];
     // always: cheap, correctness-critical bookkeeping regardless of whether
     // the jobs payload itself changed since the last rebuild
     const { byCol, archived } = render(board);

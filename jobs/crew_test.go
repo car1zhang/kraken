@@ -23,6 +23,11 @@ func TestZeusBriefBuild(t *testing.T) {
 		"never ends the job", "checkout -B " + CellBranch(j) + " origin/main",
 		// hermes briefs must carry the style contract verbatim and be lint-gated
 		"hermes-contract.md", "lint_svg.py", "--marker-id",
+		// three named single-dimension athena review variants, dispatched in
+		// parallel, with a targeted (not full) re-review on a blocking finding
+		"athena-logic", "athena-edge", "athena-style",
+		"dispatched in parallel", "one message, three Agent calls",
+		"re-review with only the flagging variant(s)",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("build brief missing %q", want)

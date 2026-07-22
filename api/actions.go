@@ -295,3 +295,101 @@ func webReactivate(req webReq) error {
 	clearDraft(j.Slug)
 	return nil
 }
+
+// webStart boots a queued job's cell immediately, mirroring CLI `k start`:
+// same validation (queued, prereqs met), same StartCell mechanics. Unlike
+// the daemon's own auto-start, this is carl acting by hand, so it doubles as
+// the manual release for a gated prereq (UnmetPrereqs only counts a
+// dependency as unmet while it isn't done — being gated doesn't block this
+// path, only the daemon's own startable() auto-start check) and bypasses the
+// daemon's CellCap entirely, same as `k start` always has.
+func webStart(req webReq) error {
+	j, bySlug, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	if state := jobs.DisplayState(j, bySlug); state != "queued" {
+		return fmt.Errorf("%s is %s — only queued jobs can be started", j.Slug, state)
+	}
+	if unmet := jobs.UnmetPrereqs(j, bySlug); len(unmet) > 0 {
+		var names []string
+		for _, p := range unmet {
+			names = append(names, p.Job)
+		}
+		return fmt.Errorf("%s has unmet prereqs: %s", j.Slug, strings.Join(names, ", "))
+	}
+	repo, err := jobs.ResolveRepo(j.Repo)
+	if err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	return jobs.StartCell(j, repo)
+}
+
+// webStop interrupts a working cell: one Escape to every in-flight agent
+// pane (jobs.InterruptCell), stopping short of a teardown — the daemon's own
+// roll-call reads the idled cell as blocked on its next tick, no job state
+// is written here.
+func webStop(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	if !j.Started() || j.State == "done" || !jobs.LiveSessions()[jobs.CellSession(j)] {
+		return fmt.Errorf("%s has no live cell to stop", j.Slug)
+	}
+	all, _ := core.OrderAll(core.DiscoverAll())
+	return jobs.InterruptCell(j, all)
+}
+
+// reorderReq is POST /api/reorder's request shape — distinct from webReq
+// since a manual board reorder posts a column + the full slug order within
+// it, not a single-job slug/text move.
+type reorderReq struct {
+	Column string   `json:"column"`
+	Slugs  []string `json:"slugs"`
+}
+
+var reorderColumns = map[string]bool{"draft": true, "queued": true, "working": true, "blocked": true, "done": true}
+
+// webReorderHandler persists a manual drag-reorder within one board column.
+// Posted slugs are filtered to those whose CURRENT DisplayState actually
+// matches the column before saving — a concurrent transition (a queued job
+// started mid-drag, say) just silently drops that slug from the stored
+// order rather than 409ing the whole reorder.
+func webReorderHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "POST only"})
+		return
+	}
+	var req reorderReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "bad json"})
+		return
+	}
+	if !reorderColumns[req.Column] {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("unknown column %q", req.Column)})
+		return
+	}
+	js := jobs.LoadJobs()
+	bySlug := map[string]*jobs.Job{}
+	for _, j := range js {
+		bySlug[j.Slug] = j
+	}
+	filtered := make([]string, 0, len(req.Slugs))
+	for _, s := range req.Slugs {
+		if j := bySlug[s]; j != nil && jobs.DisplayState(j, bySlug) == req.Column {
+			filtered = append(filtered, s)
+		}
+	}
+	if err := jobs.SaveColumnOrder(req.Column, filtered); err != nil {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	webBoardCache.invalidate()
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}

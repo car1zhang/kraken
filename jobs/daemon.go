@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -94,12 +95,33 @@ func dlogEvent(level, event, format string, a ...any) {
 func dlog(format string, a ...any)    { dlogEvent("info", "daemon", format, a...) }
 func dlogErr(format string, a ...any) { dlogEvent("error", "daemon-error", format, a...) }
 
+// probeOnline reports whether the Claude API endpoint is reachable — the
+// dependency that actually matters for a stalled cell. ~2s cap so a dead
+// network can't stall the tick. Note this is TCP reachability, not API
+// health: a 529-storm outage still probes "online" (the socket connects
+// fine), so those pokes ride the normal repokeAfter backoff instead of being
+// gated here — intended, since gating on 529s would need a real API call
+// every tick just to find out the endpoint is still overloaded.
+var probeOnline = func() bool {
+	conn, err := net.DialTimeout("tcp", "api.anthropic.com:443", 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 // daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
 // one; tick runs a single scheduler pass.
 type daemonState struct {
 	Notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
 	Poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
 	tickN    int
+	// offline: in-memory only, like the dedup maps above — losing it on
+	// restart just costs one duplicate "offline" notification. Set while
+	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
+	// by the same 529/network outage they're meant to survive.
+	offline bool
 }
 
 func newDaemon() *daemonState {
@@ -191,6 +213,29 @@ func (d *daemonState) tick() (int, error) {
 	times := liveSessionTimes()
 	now := time.Now()
 	cells := 0
+	// connectivity probe: at most one dial per tick, invoked lazily from
+	// inside gateRetry — only when a retryable poke is actually due or the
+	// daemon is already flagged offline. A tick with no stalled cells never
+	// touches the network.
+	var onlineProbed, online bool
+	checkOnline := func() bool {
+		if !onlineProbed {
+			online = probeOnline()
+			onlineProbed = true
+		}
+		return online
+	}
+	// stale-offline-flag guard: gateRetry only runs when a retryable health
+	// reason exists this tick, so a d.offline left true by a prior outage
+	// would otherwise linger forever once every stalled cell has recovered
+	// some other way (carl retried by hand, the turn just finished) — a much
+	// later, unrelated stall would then fire a spurious "back online"
+	// notification alongside its own. Checking here, unconditionally, at
+	// every tick's start clears it promptly instead.
+	if d.offline && checkOnline() {
+		title, msg := d.clearOffline()
+		notify(title, msg)
+	}
 	for _, j := range jobs {
 		if !j.Started() || j.State == "done" {
 			continue
@@ -243,16 +288,29 @@ func (d *daemonState) tick() (int, error) {
 			if reason := CellHealth(j, all); reason != "" {
 				key := "health:" + j.Slug + "|" + strings.SplitN(reason, " idle ", 2)[0]
 				if d.Notified[key] == 0 {
-					notify("kraken ⚠ "+j.Slug, reason+" — auto-retrying; also on the board")
+					suffix := " — on the board"
+					if RetryableHealth(reason) {
+						// accurate even while offline: it WILL auto-retry, once
+						// connectivity returns — gateRetry just gates the poke.
+						suffix = " — will auto-retry; also on the board"
+					}
+					notify("kraken ⚠ "+j.Slug, reason+suffix)
 					d.Notified[key] = now.Unix()
 					dlogEvent("error", "cell-unhealthy", "unhealthy %s: %s", j.Slug, reason)
 				}
 				// auto-retry retryable stalls with backoff: API overload comes
 				// in waves, and a manual retry during one just eats the next
-				// 529 — keep nudging every repokeAfter until a turn survives
-				if !strings.Contains(reason, "is gone") {
+				// 529 — keep nudging every repokeAfter until a turn survives.
+				// gateRetry additionally gates the poke behind connectivity —
+				// an offline machine gets one notification and zero poke spam
+				// instead of burning every backoff window on a dead network.
+				if RetryableHealth(reason) {
 					rkey := "retry:" + j.Slug
-					if now.Unix()-d.Poked[rkey] >= int64(repokeAfter/time.Second) {
+					poke, title, msg := d.gateRetry(now, rkey, checkOnline)
+					if title != "" {
+						notify(title, msg)
+					}
+					if poke {
 						if err := RetryCell(j); err != nil {
 							dlogErr("auto-retry %s failed: %v", j.Slug, err)
 						} else {
@@ -341,6 +399,7 @@ func (d *daemonState) tick() (int, error) {
 				continue
 			}
 			d.trackPRs(j)
+			d.scanTranscriptPRs(j, all)
 		}
 	}
 
@@ -391,6 +450,64 @@ func (d *daemonState) tick() (int, error) {
 		notify("kraken ▶ "+j.Slug, "cell started")
 	}
 	return cells, firstErr
+}
+
+// gateRetry decides whether a due auto-retry poke for rkey ("retry:"+slug)
+// is allowed to proceed, gating it behind reachability of the endpoint the
+// retry actually depends on: a stall caused by an outage can't be nudged
+// away, and hammering RetryCell every repokeAfter during one just burns
+// pokes for nothing. checkOnline is expected to memoize its dial for the
+// tick, so calling this for several stalled cells in one pass costs at most
+// one probe. Mutates d.offline/d.Notified/d.Poked; never touches tmux or
+// osascript itself — the caller fires the returned notification (title
+// non-empty) and, on poke==true, performs the actual RetryCell + Poked
+// stamp so gateRetry stays pure enough to unit test without a live cell.
+func (d *daemonState) gateRetry(now time.Time, rkey string, checkOnline func() bool) (poke bool, notifyTitle, notifyMsg string) {
+	pokeDue := now.Unix()-d.Poked[rkey] >= int64(repokeAfter/time.Second)
+	if !pokeDue && !d.offline {
+		return false, "", ""
+	}
+	if !checkOnline() {
+		d.offline = true
+		// only log the suppression when a poke was actually due — the
+		// not-due-but-offline path above still consults the probe (to notice
+		// a reconnect promptly), and logging that every tick would just be
+		// "still offline" noise with nothing suppressed.
+		if pokeDue {
+			dlog("suppressed retry poke (%s) — offline", rkey)
+		}
+		if d.Notified["offline"] == 0 {
+			d.Notified["offline"] = now.Unix()
+			return false, "kraken ⚠ offline", "offline — pausing auto-retries until connectivity returns"
+		}
+		return false, "", ""
+	}
+	if d.offline {
+		title, msg := d.clearOffline()
+		return pokeDue, title, msg
+	}
+	return pokeDue, "", ""
+}
+
+// clearOffline resets the offline dedup bookkeeping (the flag itself, the
+// "offline" Notified marker, and every backed-off "retry:" Poked key) and
+// returns the one back-online notification to fire. Shared by gateRetry's
+// reconnect path and tick's own tick-start check below — a stalled cell can
+// recover by some path OTHER than gateRetry (carl retries by hand, the turn
+// just finishes) while d.offline stays stuck true, and only checking at
+// tick-start (not only inside gateRetry, which only runs when a retryable
+// health reason exists this tick) catches that case before a much-later
+// stall would otherwise fire a spurious "back online" notification.
+func (d *daemonState) clearOffline() (title, msg string) {
+	d.offline = false
+	delete(d.Notified, "offline")
+	for k := range d.Poked {
+		if strings.HasPrefix(k, "retry:") {
+			delete(d.Poked, k)
+		}
+	}
+	dlog("connectivity restored — resuming auto-retries")
+	return "kraken ✓ online", "back online — resuming auto-retries"
 }
 
 // autoArchivePass sweeps jobs eligible under autoArchivable into the
@@ -456,6 +573,15 @@ func (d *daemonState) trackPRs(j *Job) {
 		return
 	}
 	delete(d.Notified, "ghfail:"+j.Slug)
+	// backstop: a recorded PR the branch-list query didn't return (recycled
+	// branch, hand-opened against a different head) gets asked about
+	// directly. A single-URL failure just skips that URL — it's not the
+	// "gh is down" signal listBranchPRs' ok=false already handled above.
+	for _, url := range needsPoll(j.PRs, fetched) {
+		if state, ok := viewPRState(dir, url); ok {
+			fetched = append(fetched, JobPR{URL: url, State: state})
+		}
+	}
 	updated, newlyMerged, changed := reconcilePRs(j.PRs, fetched)
 	if !changed {
 		return
@@ -474,6 +600,40 @@ func (d *daemonState) trackPRs(j *Job) {
 			msg = "PR merged — job already accepted; recorded"
 		}
 		notify("kraken ✓ "+j.Slug, msg)
+	}
+}
+
+// scanTranscriptPRs is the transcript-scanning backstop: it looks for GitHub
+// PR URLs zeus' own transcript mentions, in the job's own repo ONLY, and
+// attaches any not yet recorded. Unlike trackPRs (which asks gh, so an
+// unreachable API or bad repo just means "leave prs alone, retry next
+// pass"), and unlike pr-hook (which fails open with an empty prefix when the
+// origin can't be read, since the command it saw really did run in the
+// cell's worktree), this has no such anchor — a transcript can quote PR URLs
+// from anywhere — so an unresolved repo prefix means scan nothing (carl's Q7
+// call). Job-file writes only, same as trackPRs; every attach gets one dlog
+// line, and — matching trackPRs' repofail dedup — failures degrade silently.
+func (d *daemonState) scanTranscriptPRs(j *Job, all []*core.Peer) {
+	repo, err := ResolveRepo(j.Repo)
+	if err != nil {
+		return // trackPRs already surfaces a bad repo for this job this pass
+	}
+	prefix, ok := repoOriginPrefix(repo)
+	if !ok || prefix == "" {
+		return // no fail-open here: an unresolved prefix means scan nothing
+	}
+	transcript := zeusTranscriptPath(j, all)
+	if transcript == "" {
+		return // no live/stamped session — not an error, just nothing to scan
+	}
+	for _, url := range transcriptPRURLs(transcript, prefix) {
+		attached, err := appendJobPR(j, JobPR{URL: url, State: "open"})
+		switch {
+		case err != nil:
+			dlog("%s: transcript attach %s failed: %v", j.Slug, url, err)
+		case attached:
+			dlog("%s: attached from transcript %s", j.Slug, url)
+		}
 	}
 }
 

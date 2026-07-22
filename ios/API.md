@@ -50,7 +50,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `daemon_ok` | bool | always | |
 | `cell_cap` | number | always | |
 | `live_cells` | number | always | |
-| `jobs` | array (`webJob`) | always (`[]` not `null`) | |
+| `jobs` | array (`webJob`) | always (`[]` not `null`) | within a display state, jobs render in the manual reorder's order (see `POST /api/reorder` below) — no separate order field, the array position IS the display order |
 | `contract` | number | always | == `apiContract` |
 | `stale` | bool | always | this `k web` process' self-check |
 
@@ -153,6 +153,47 @@ session (e.g. `/send`) rather than being typed as plain conversation text.
 
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
+
+### `POST /api/start`
+
+Request: `webReq` — `slug` (string, required), `text` unused.
+Response: same as `/api/queue` etc above.
+
+Boots a queued job's cell immediately — the web/app equivalent of CLI `k
+start`: same validation (job must currently display as `queued`, every
+prereq's dependency done — gated or not), same `StartCell` mechanics. This is carl acting by
+hand, so — same as `k start` — it doubles as the manual release for a job
+parked behind a *gated* prereq (an already-done dependency flagged for human
+sign-off) and bypasses the daemon's `CellCap` entirely.
+
+### `POST /api/stop`
+
+Request: `webReq` — `slug` (string, required), `text` unused.
+Response: same as above.
+
+Interrupts a working cell: sends one Escape keystroke to every in-flight
+agent pane in the cell (zeus, any nested subagent sharing its pane, any live
+tmux-backed team member) — stops short of a teardown. No job state is
+written; the daemon's own roll-call reads the idled cell as `blocked` on its
+next tick, same as an agent that stalled on its own.
+
+### `POST /api/reorder`
+
+Persists a manual drag-reorder within one board column. Distinct request
+shape from `webReq` — this is a whole-column move, not a single-job action.
+
+Request (`reorderReq`):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `column` | string | always | one of `draft`\|`queued`\|`working`\|`blocked`\|`done` |
+| `slugs` | array of string | always (`[]` ok) | the column's full intended slug order |
+
+Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure
+(409 for an unrecognized `column`). Posted slugs whose current
+`DisplayState` no longer matches `column` — a concurrent transition
+mid-drag, e.g. a queued job that started — are silently dropped from the
+saved order rather than failing the whole request.
 
 ### `GET /api/draft?slug=` / `POST /api/draft` → `webDraft` (draft.go)
 
@@ -411,3 +452,19 @@ only (405 otherwise). `name` must exactly match the saved-name format
 name, unresolvable slug, or missing file — resolution goes through
 `api.UploadPath`, which does not require an active job (an upload outlives
 its job's own draft/queued/etc. state changes, same lifecycle as artifacts).
+
+### `POST /api/feedback` (web-UI-only; additive — contract stays unchanged)
+
+The artifact overlay's feedback button: freezes a snapshot of the artifact
+file plus a plaintext note under
+`~/Documents/pluto/doc-feedback/<YYYY-MM-DD>/<HHMMSS>-<slug>/` (`snapshot<ext>`
++ `feedback.txt`), for the user's `/dream` skill to fold into the doc-writing
+skills later. Resolution mirrors `GET /api/artifact/...`: `home` picks the
+active-vs-archived job namespace, then the same `ArtifactPath` guard resolves
+the file (path traversal, hidden segments, missing file all refused).
+
+Request: `{"slug": string, "home": "cell"|"pluto"|"archive", "name": string, "feedback": string}`.
+Response: `{"ok": true, "dir": string}` (the entry directory's absolute path) on success.
+Errors: 405 (non-POST), 400 (bad JSON, or feedback empty/whitespace-only),
+404 (unknown job, or `name` doesn't resolve to a real artifact file),
+500 (snapshot/note write failure).
