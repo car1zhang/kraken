@@ -2,6 +2,9 @@ package web
 
 import (
 	"net"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -52,6 +55,48 @@ func TestTailscaleIP(t *testing.T) {
 	}
 	if _, ok := tailscaleIP(nil); ok {
 		t.Errorf("empty addr list must miss")
+	}
+}
+
+func TestArtifactHandlerNoStore(t *testing.T) {
+	// Artifacts are rewritten in place by agents; every response — including
+	// 404s — must carry no-store so browsers never serve a stale copy.
+	dir := t.TempDir()
+	t.Setenv("KRAKEN_PLUTO_DIR", dir)
+	for _, path := range []string{
+		"/api/artifact/no-such-job-xyz/cell/report.html", // unresolvable slug
+		"/api/artifact/malformed",                        // too few parts
+	} {
+		rec := httptest.NewRecorder()
+		artifactHandler(rec, httptest.NewRequest("GET", path, nil))
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s: Cache-Control = %q, want %q", path, got, "no-store")
+		}
+		if rec.Code != 404 {
+			t.Errorf("%s: status = %d, want 404", path, rec.Code)
+		}
+	}
+
+	// 200 path — pins that http.ServeFile leaves the header intact on a
+	// successfully served artifact.
+	for name, content := range map[string]string{
+		"nscache.job.md":      "---\njob: nscache\nrepo: x\n---\n\n# Spec\n",
+		"nscache.report.html": "<p>hi</p>",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	artifactHandler(rec, httptest.NewRequest("GET", "/api/artifact/nscache/pluto/report.html", nil))
+	if rec.Code != 200 {
+		t.Fatalf("served artifact: status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("served artifact: Cache-Control = %q, want %q", got, "no-store")
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("served artifact: Content-Type = %q, want text/html", got)
 	}
 }
 
