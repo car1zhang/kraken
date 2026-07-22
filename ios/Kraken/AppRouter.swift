@@ -20,11 +20,12 @@ import Observation
 ///   kraken://session/<pane>        → Sessions tab, open that peer's detail
 ///                                     ("3" → pane "%3"; the % is implicit
 ///                                     so the scheme stays URL-safe)
+///   kraken://usage                 → Usage tab
 ///   kraken://settings              → Settings tab
 @Observable
 final class AppRouter {
     enum Tab: Hashable {
-        case board, sessions, log, settings
+        case board, sessions, usage, log, settings
     }
 
     var selectedTab: Tab = .board
@@ -83,6 +84,8 @@ final class AppRouter {
             if let pane = components.first, !pane.isEmpty {
                 pendingSessionPane = "%" + pane
             }
+        case "usage":
+            selectedTab = .usage
         case "settings":
             selectedTab = .settings
         default:

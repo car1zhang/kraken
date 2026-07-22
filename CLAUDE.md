@@ -49,7 +49,8 @@ Every path in the binary derives from `os.UserHomeDir()` via `util.Home()` — n
 | `~/Documents/pluto` (job files `*.job.md`, `archive/`) | user's pluto notes convention | `jobs/job.go` (`JobsDir`) |
 | `~/Documents/pluto/doc-feedback/` (day-grouped doc-feedback entries: artifact snapshot + feedback.txt) | written by the board's feedback button, read by the user's /dream skill | `jobs/feedback.go` |
 | `~/Developer` (git checkouts jobs may target) | user convention | `jobs/job.go` (`ResolveRepo`), `jobs/board.go` (`RepoCandidates`) |
-| `~/.kraken` (`cells/`, `daemon.json`, `order.json`) | kraken-owned | `jobs/cell.go`, `jobs/daemon.go`, `jobs/order.go` |
+| `~/.kraken` (`cells/`, `daemon.json`, `order.json`, `usage.json`) | kraken-owned | `jobs/cell.go`, `jobs/daemon.go`, `jobs/order.go`, `jobs/usage.go` |
+| `~/.claude-pool` (`<slug>/` account slots, `cooldowns.json`) | ccp-owned (claude code pool); kraken reads slot creds/identity and writes back rotated tokens after an OAuth refresh — its only write there | `core/usagepool.go` |
 | `~/.kraken/uploads` | kraken-owned (per-job image uploads) | `jobs/uploads.go` |
 | `~/.kraken/logs` (unified event log, size-rotated JSONL) | kraken-owned | `util/eventlog.go` |
 | `<cell worktree>/.claude/settings.json` | kraken-written per-cell hook config (PostToolUse → `kraken pr-hook`), merged not clobbered | `jobs/cell.go` |

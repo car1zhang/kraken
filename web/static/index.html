@@ -49,6 +49,7 @@
     <span class="stat" id="daemon-stat">connecting…</span>
     <span class="stat" id="cells-stat"></span>
     <span class="stat hot" id="flag-stat"></span>
+    <span class="usage-stat" id="usage-stat" hidden role="button" tabindex="0" title="usage — claude code pool"></span>
     <span class="viewtabs">
       <button class="viewtab active" data-view="board">BOARD</button>
       <button class="viewtab" data-view="dag">DAG</button>
@@ -141,6 +142,20 @@
         <button class="btn btn-big" id="steer-send">send ⌘⏎</button>
         <div class="answer-note" id="steer-note"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- usage drilldown: claude code pool usage, opened from the header widget.
+       Same overlay/panel structure as the artifact viewer, but static markup
+       (like steer/editor) since it's a fixed, non-job-scoped modal. -->
+  <div class="overlay" id="usage-overlay" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">usage — claude code pool</span>
+        <span class="stat dim" id="usage-fetched"></span>
+        <span class="spacer"></span>
+      </div>
+      <div class="panel-body" id="usage-body"></div>
     </div>
   </div>
 

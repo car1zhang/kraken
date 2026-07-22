@@ -494,6 +494,82 @@ struct HealthResponse: Decodable {
     let stale: Bool?
 }
 
+// MARK: - usage
+
+// UsageResponse mirrors usage.go's webUsage: the daemon's last usage-poller
+// pass, one row per Claude account (main + every ~/.claude-pool slot).
+// Additive endpoint, no contract bump.
+struct UsageResponse: Decodable {
+    let available: Bool
+    let fetchedAt: Int64
+    let ageSeconds: Int64
+    let daemonOK: Bool
+    let accounts: [UsageAccount]
+
+    enum CodingKeys: String, CodingKey {
+        case available
+        case fetchedAt = "fetched_at"
+        case ageSeconds = "age_seconds"
+        case daemonOK = "daemon_ok"
+        case accounts
+    }
+}
+
+// UsageAccount mirrors core/usagepool.go's AccountUsage. `session`/`weekly`/
+// `models` are absent together when the account hasn't been fetched yet (no
+// creds / reauth needed / error with no prior data).
+struct UsageAccount: Decodable, Identifiable {
+    let slug: String
+    let email: String?
+    let displayName: String?
+    let tier: String?
+    let current: Bool?
+    let session: UsageWindow?
+    let weekly: UsageWindow?
+    let models: [UsageModelWindow]?
+    let fetchedAt: Int64?
+    let stale: Bool?
+    let error: String?
+    let reauth: Bool?
+    let noCreds: Bool?
+    let cooldownUntil: Int64?
+
+    var id: String { slug }
+
+    enum CodingKeys: String, CodingKey {
+        case slug, email
+        case displayName = "display_name"
+        case tier, current, session, weekly, models
+        case fetchedAt = "fetched_at"
+        case stale, error, reauth
+        case noCreds = "no_creds"
+        case cooldownUntil = "cooldown_until"
+    }
+}
+
+struct UsageWindow: Decodable {
+    let percent: Double
+    let resetsAt: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case percent
+        case resetsAt = "resets_at"
+    }
+}
+
+// UsageModelWindow mirrors core/usagepool.go's ModelWindow — a weekly_scoped
+// per-model limit (e.g. "Fable").
+struct UsageModelWindow: Decodable {
+    let name: String
+    let percent: Double
+    let resetsAt: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case name, percent
+        case resetsAt = "resets_at"
+    }
+}
+
 // MARK: - unified event log
 
 // LogEntry mirrors util.LogEntry: one line of the unified event log

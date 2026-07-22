@@ -417,6 +417,14 @@ actor APIClient {
         }
     }
 
+    // MARK: - usage
+
+    /// The daemon's last usage-poller pass — one row per Claude account.
+    /// Additive endpoint, no contract bump.
+    func fetchUsage(baseURL: String) async throws -> UsageResponse {
+        try await get(baseURL: baseURL, path: "/api/usage")
+    }
+
     // MARK: - artifacts
 
     /// Fetches a non-html artifact's raw body as text (webArtifact.url is

@@ -579,6 +579,107 @@ func TestHealthWireShape(t *testing.T) {
 	}
 }
 
+// --- usage: GET /api/usage (usage.go) ---
+
+var webUsageSpec = map[string]fieldSpec{
+	"available":   {kind: wireBool, required: true},
+	"fetched_at":  {kind: wireNumber, required: true},
+	"age_seconds": {kind: wireNumber, required: true},
+	"daemon_ok":   {kind: wireBool, required: true},
+	"accounts":    {kind: wireArray, required: true},
+}
+
+// accountUsageSpec covers core.AccountUsage, the elements of webUsage's
+// "accounts" array — webUsage's own spec above only asserts it's an array.
+var accountUsageSpec = map[string]fieldSpec{
+	"slug":           {kind: wireString, required: true},
+	"email":          {kind: wireString, required: false},
+	"display_name":   {kind: wireString, required: false},
+	"tier":           {kind: wireString, required: false},
+	"current":        {kind: wireBool, required: false},
+	"session":        {kind: wireObject, required: false},
+	"weekly":         {kind: wireObject, required: false},
+	"models":         {kind: wireArray, required: false},
+	"fetched_at":     {kind: wireNumber, required: false},
+	"stale":          {kind: wireBool, required: false},
+	"error":          {kind: wireString, required: false},
+	"reauth":         {kind: wireBool, required: false},
+	"no_creds":       {kind: wireBool, required: false},
+	"cooldown_until": {kind: wireNumber, required: false},
+}
+
+var usageWindowSpec = map[string]fieldSpec{
+	"percent":   {kind: wireNumber, required: true},
+	"resets_at": {kind: wireNumber, required: false},
+}
+
+var modelWindowSpec = map[string]fieldSpec{
+	"name":      {kind: wireString, required: true},
+	"percent":   {kind: wireNumber, required: true},
+	"resets_at": {kind: wireNumber, required: false},
+}
+
+func TestWebUsageWireShapeEmpty(t *testing.T) {
+	data, err := json.Marshal(webUsage{Accounts: []core.AccountUsage{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webUsage (unavailable)", data, webUsageSpec)
+}
+
+func TestWebUsageWireShapePopulated(t *testing.T) {
+	wu := webUsage{
+		Available:  true,
+		FetchedAt:  1234567890,
+		AgeSeconds: 42,
+		DaemonOK:   true,
+		Accounts: []core.AccountUsage{{
+			Slug: "main", Email: "carl@example.com", DisplayName: "Carl",
+			Tier: "pro", Current: true,
+			Session: &core.UsageWindow{Percent: 12.5, ResetsAt: 1234567890},
+			Weekly:  &core.UsageWindow{Percent: 34.5, ResetsAt: 1234567890},
+			Models: []core.ModelWindow{
+				{Name: "Fable", Percent: 5.5, ResetsAt: 1234567890},
+			},
+			FetchedAt: 1234567890, Stale: true, Error: "e",
+			Reauth: true, NoCreds: true, CooldownUntil: 1234567890,
+		}},
+	}
+	data, err := json.Marshal(wu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webUsage (populated)", data, webUsageSpec)
+
+	var resp map[string]any
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	accounts, ok := resp["accounts"].([]any)
+	if !ok || len(accounts) != 1 {
+		t.Fatalf("accounts = %#v, want a 1-element array", resp["accounts"])
+	}
+	rowData, err := json.Marshal(wu.Accounts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "core.AccountUsage", rowData, accountUsageSpec)
+
+	windowData, err := json.Marshal(wu.Accounts[0].Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "core.UsageWindow", windowData, usageWindowSpec)
+
+	modelData, err := json.Marshal(wu.Accounts[0].Models[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "core.ModelWindow", modelData, modelWindowSpec)
+}
+
 // --- job editor: /api/job/raw, /api/job/form, /api/job/saveform ---
 //
 // writeTestJob and mustJSON are shared fixtures from web_test.go.
