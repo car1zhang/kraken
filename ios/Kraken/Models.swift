@@ -343,6 +343,18 @@ struct SaveResponse: Decodable {
     let warn: String
 }
 
+// MARK: - uploads
+
+// UploadResponse mirrors POST /api/upload's success body: the stored
+// filename, its absolute server-side path (the value embedded in outgoing
+// composer text as "[image: <path>]"), and a server-relative url for
+// fetching the image back (thumbnails).
+struct UploadResponse: Decodable {
+    let name: String
+    let path: String
+    let url: String
+}
+
 // MARK: - sessions (peers)
 
 // Peer mirrors peer.go's Peer struct. `messageable` has no `omitempty` tag

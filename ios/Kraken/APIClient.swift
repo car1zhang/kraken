@@ -30,6 +30,10 @@ actor APIClient {
     static let expectedContract = 3
 
     private let session: URLSession
+    // Multi-MB image uploads over cellular can easily take longer than the
+    // snappy 5s resource cap every other call uses — a dedicated session
+    // with a generous resource timeout, used only by uploadImage.
+    private let uploadSession: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -38,6 +42,10 @@ actor APIClient {
         config.timeoutIntervalForRequest = 5
         config.timeoutIntervalForResource = 5
         session = URLSession(configuration: config)
+
+        let uploadConfig = URLSessionConfiguration.ephemeral
+        uploadConfig.timeoutIntervalForResource = 60
+        uploadSession = URLSession(configuration: uploadConfig)
     }
 
     // MARK: - low-level plumbing
@@ -69,11 +77,11 @@ actor APIClient {
         return url
     }
 
-    private func perform(_ request: URLRequest) async throws -> Data {
+    private func perform(_ request: URLRequest, session: URLSession? = nil) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await (session ?? self.session).data(for: request)
         } catch {
             throw KrakenError.message(error.localizedDescription)
         }
@@ -324,6 +332,45 @@ actor APIClient {
     func capturePane(baseURL: String, pane: String) async throws -> String {
         let resp: CaptureResponse = try await get(baseURL: baseURL, path: "/api/peers/capture", query: [("pane", pane)])
         return resp.content
+    }
+
+    // MARK: - uploads
+
+    /// Uploads one composer image for `slug` — multipart/form-data with a
+    /// `slug` text field and a `file` field carrying the image bytes.
+    /// Foundation has no multipart encoder, so the body is hand-assembled;
+    /// everything else (URL building, non-2xx {"error":...} decoding into
+    /// KrakenError, decode-failure messaging) reuses the same plumbing as
+    /// every JSON call above.
+    func uploadImage(
+        baseURL: String, slug: String, data: Data, filename: String, mimeType: String
+    ) async throws -> UploadResponse {
+        let url = try buildURL(baseURL: baseURL, path: "/api/upload")
+        let boundary = "KrakenBoundary-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        func appendString(_ s: String) {
+            body.append(s.data(using: .utf8)!)
+        }
+        appendString("--\(boundary)\r\n")
+        appendString("Content-Disposition: form-data; name=\"slug\"\r\n\r\n")
+        appendString("\(slug)\r\n")
+        appendString("--\(boundary)\r\n")
+        appendString("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n")
+        appendString("Content-Type: \(mimeType)\r\n\r\n")
+        body.append(data)
+        appendString("\r\n--\(boundary)--\r\n")
+        request.httpBody = body
+
+        let respData = try await perform(request, session: uploadSession)
+        do {
+            return try decoder.decode(UploadResponse.self, from: respData)
+        } catch {
+            throw KrakenError.message(decodeErrorMessage(error, method: "POST", path: "/api/upload"))
+        }
     }
 
     // MARK: - artifacts
