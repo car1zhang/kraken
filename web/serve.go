@@ -50,43 +50,50 @@ func Serve(opts Options) error {
 		staticFiles.ServeHTTP(w, r)
 	}))
 	api.Register(mux)
-	// /api/artifact/<slug>/<cell|pluto>/<name>
-	mux.HandleFunc("/api/artifact/", func(w http.ResponseWriter, r *http.Request) {
-		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/artifact/"), "/", 3)
-		if len(parts) != 3 {
-			http.NotFound(w, r)
-			return
-		}
-		// the home decides the namespace the job resolves in: an archived
-		// "foo-2" and an active job slugged "foo-2" are different files
-		var j *jobs.Job
-		if parts[1] == "archive" {
-			j = jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), parts[0])
-		} else {
-			j = jobs.JobBySlug(jobs.LoadJobs(), parts[0])
-		}
-		if j == nil {
-			http.NotFound(w, r)
-			return
-		}
-		p, ok := api.ArtifactPath(j, parts[1], parts[2])
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		// html deliverables render as pages (local, agent-authored content —
-		// same trust as opening the file); binary formats viewers can render
-		// get their real type; everything else stays plain text for the
-		// in-board markdown viewer
-		w.Header().Set("Content-Type", artifactContentType(p))
-		http.ServeFile(w, r, p)
-	})
+	mux.HandleFunc("/api/artifact/", artifactHandler)
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil {
 		return fmt.Errorf("web server: %v", err)
 	}
 	return nil
+}
+
+// artifactHandler serves /api/artifact/<slug>/<cell|pluto|archive>/<name>.
+// Agents rewrite artifact files in place between views, so responses are
+// no-store: without it, ServeFile's Last-Modified triggers browser heuristic
+// caching (~10% of file age with no Cache-Control) and the board shows stale
+// artifacts long after the file changed on disk.
+func artifactHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/artifact/"), "/", 3)
+	if len(parts) != 3 {
+		http.NotFound(w, r)
+		return
+	}
+	// the home decides the namespace the job resolves in: an archived
+	// "foo-2" and an active job slugged "foo-2" are different files
+	var j *jobs.Job
+	if parts[1] == "archive" {
+		j = jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), parts[0])
+	} else {
+		j = jobs.JobBySlug(jobs.LoadJobs(), parts[0])
+	}
+	if j == nil {
+		http.NotFound(w, r)
+		return
+	}
+	p, ok := api.ArtifactPath(j, parts[1], parts[2])
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	// html deliverables render as pages (local, agent-authored content —
+	// same trust as opening the file); binary formats viewers can render
+	// get their real type; everything else stays plain text for the
+	// in-board markdown viewer
+	w.Header().Set("Content-Type", artifactContentType(p))
+	http.ServeFile(w, r, p)
 }
 
 // artifactContentType picks the served type by extension: renderable pages
