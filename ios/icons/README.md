@@ -7,5 +7,6 @@ without digging through git history. The active icon lives in
 
 - `zigzag-kraken.svg` — the faceted zigzag mark (shipped 2026-07-21,
   retired same day for the original circular silhouette in saturated purple).
-- `og4-kraken.svg` — the ACTIVE glyph (shipped 2026-07-21): OG circular dome
+- `og4-kraken.svg` — the ACTIVE glyph (shipped 2026-07-21, geometry refined
+  2026-07-22: outer teeth +6px out, inner pair +2px out): OG circular dome
   rebuilt as 5 primitives (1 ellipse + 4 tentacle petals), saturated purple.
