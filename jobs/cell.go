@@ -497,13 +497,19 @@ func stampSessionBeforeTeardown(j *Job) {
 }
 
 // CellHealth reports why a live cell looks unhealthy ("" = healthy).
-// Conditions, in order: zeus' process must exist; no API-error banner may be
-// the last thing in its transcript. Idleness comes from the PANE ("esc to
-// interrupt" absent), never from the session file — an API error that kills
-// a turn leaves the session status stuck on busy forever, and the error
-// banner itself scrolls out of view once subagent rosters grow, so neither
-// signal alone can be trusted. Every reason except "is gone" is retryable: a
-// poke resumes a claude sitting at its prompt.
+// Conditions, in order: zeus' process must exist; it must not be stuck on a
+// startup prompt; its transcript's final message entry must not classify as
+// a stall. That last check reads the TRANSCRIPT, not the pane: pane text is
+// agent-writable (a grep result or a quoted error string used to false-
+// positive the old ApiErrorRe scrape), and the "esc to interrupt" mid-turn
+// guard the scrape relied on no longer appears in Claude Code's UI as of
+// ≥2.1.217. core.LastStall's synthetic "api-error" entry, by contrast, is
+// only ever appended after Claude Code's own internal retries have already
+// given up — so classifying off it is inherently mid-turn-safe, with no
+// pane-scrape race to guard against. A guessed session id is refused before
+// any file read: resuming/reading a guessed id risks another claude's
+// transcript entirely. Use RetryableHealth to decide whether a reason here
+// is worth an automatic nudge.
 func CellHealth(j *Job, all []*core.Peer) string {
 	zeus := CellZeus(j, all)
 	if zeus == nil {
@@ -517,23 +523,40 @@ func CellHealth(j *Job, all []*core.Peer) string {
 		}
 		return ""
 	}
-	// an error banner only counts when it is the last CONTENT in the pane's
-	// transcript — an agent that recovered leaves newer output below its old
-	// banners, and a visible-but-superseded error must not flag forever.
-	// (The session file can't arbitrate: observed stuck on busy for 20h
-	// across both crashes and clean turns.)
-	erroredLast := func(p *core.Peer) bool {
-		full := core.PaneTail(p.Pane, 200)
-		if full == "" || strings.Contains(full, "esc to interrupt") {
-			return false // mid-turn = recovering, not stuck
+	if zeus.SessionID == "" || zeus.SessionIDGuessed {
+		return ""
+	}
+	path := core.TranscriptPathForSession(zeus.SessionID)
+	if path == "" {
+		return ""
+	}
+	return stallReason(core.LastStall(path))
+}
+
+// stallReason turns a transcript stall classification into the CellHealth
+// reason string ("" for none/interrupted — an interrupted turn, carl's
+// deliberate esc, isn't a stall to auto-retry). Pulled out of CellHealth as
+// its own pure function because RetryableHealth's prefix-matching against
+// these exact strings couples the two: pinning stallReason with its own
+// round-trip test (see cell_test.go) catches wording drift between them
+// before it silently breaks auto-retry classification.
+func stallReason(st core.Stall) string {
+	switch st.Kind {
+	case "api-error":
+		if st.Transient {
+			return "zeus hit an API error: " + st.Text
 		}
-		tail := strings.Join(core.TranscriptTail(p.Pane, 6), "\n")
-		return core.ApiErrorRe.MatchString(tail)
+		return "zeus needs attention: " + st.Text + " — fix and retry by hand"
+	default:
+		return ""
 	}
-	if erroredLast(zeus) {
-		return "zeus hit an API error"
-	}
-	return ""
+}
+
+// RetryableHealth reports whether a CellHealth reason is fixable by a
+// nudge: transient API errors are, dead processes and needs-attention
+// (credit/auth/prompt-length) stalls are not.
+func RetryableHealth(reason string) bool {
+	return strings.HasPrefix(reason, "zeus hit an API error")
 }
 
 // RetryCell pokes a stalled cell agent: a nudge message resumes a claude
@@ -546,7 +569,11 @@ func RetryCell(j *Job) error {
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	reason := CellHealth(j, all)
-	if strings.Contains(reason, "is gone") {
+	// match the literal CellHealth emits, not a loose "is gone" substring:
+	// stallReason's non-transient text can now embed arbitrary API-error
+	// copy, and "is gone" is common enough in free-form error text that a
+	// substring match risked refusing a retry that was actually poke-able.
+	if strings.HasPrefix(reason, "zeus process is gone") {
 		return fmt.Errorf("%s: %s", j.Slug, reason)
 	}
 	// a plain nudge resumes a claude sitting at its prompt after an errored
@@ -554,6 +581,9 @@ func RetryCell(j *Job) error {
 	zeus := CellZeus(j, all)
 	if zeus == nil {
 		return fmt.Errorf("%s: agent not found — rerun discovery", j.Slug)
+	}
+	if reason != "" {
+		return core.SendMessage(zeus, "you stalled ("+reason+") — pick up exactly where you left off and continue the job")
 	}
 	return core.SendMessage(zeus, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
 }

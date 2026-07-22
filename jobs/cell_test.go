@@ -3,6 +3,8 @@ package jobs
 import (
 	"strings"
 	"testing"
+
+	"kraken/core"
 )
 
 // cell_test.go — pure decision functions on the teardown/recovery paths:
@@ -92,6 +94,116 @@ func TestReactivateMode(t *testing.T) {
 			}
 			if mode != c.mode {
 				t.Errorf("reactivateMode(%q, %v) = %q, want %q", c.state, c.worktree, mode, c.mode)
+			}
+		})
+	}
+}
+
+// --- RetryableHealth ---
+
+func TestRetryableHealth(t *testing.T) {
+	cases := []struct {
+		reason string
+		want   bool
+	}{
+		{"zeus hit an API error: overloaded_error", true},
+		{"zeus needs attention: credit balance is too low — fix and retry by hand", false},
+		{"zeus process is gone — restart the cell (kill session + k start after cleanup)", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := RetryableHealth(c.reason); got != c.want {
+			t.Errorf("RetryableHealth(%q) = %v, want %v", c.reason, got, c.want)
+		}
+	}
+}
+
+// --- stallReason / RetryableHealth round trip ---
+//
+// stallReason (CellHealth's transcript-classification switch, pulled out
+// for testing) and RetryableHealth (a prefix match over stallReason's own
+// output) are coupled by exact wording — this pins that coupling so a
+// rewording of one without the other silently breaks auto-retry
+// classification instead of loudly failing a test.
+
+func TestStallReasonRetryableHealthRoundTrip(t *testing.T) {
+	cases := []struct {
+		name          string
+		st            core.Stall
+		wantRetryable bool
+		wantEmpty     bool
+	}{
+		{"transient api error is retryable", core.Stall{Kind: "api-error", Text: "overloaded_error", Transient: true}, true, false},
+		{"non-transient api error is not retryable", core.Stall{Kind: "api-error", Text: "credit balance is too low", Transient: false}, false, false},
+		{"interrupted turn yields no reason", core.Stall{Kind: "interrupted"}, false, true},
+		{"no stall yields no reason", core.Stall{Kind: ""}, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reason := stallReason(c.st)
+			if empty := reason == ""; empty != c.wantEmpty {
+				t.Fatalf("stallReason(%+v) = %q, want empty=%v", c.st, reason, c.wantEmpty)
+			}
+			if got := RetryableHealth(reason); got != c.wantRetryable {
+				t.Errorf("RetryableHealth(stallReason(%+v)) = %v, want %v", c.st, got, c.wantRetryable)
+			}
+		})
+	}
+}
+
+// --- CellHealth ---
+//
+// Only the branches reachable without touching disk or tmux are exercised
+// here: TranscriptPathForSession resolves paths under the real ~/.claude —
+// a hermetic test can't fake that without touching the home dir, so the
+// LastStall-driven classification (api-error transient/non-transient) isn't
+// covered by this table. The zeus==nil, startup-prompt, and guessed/empty
+// session id branches are all pure and covered below.
+
+func TestCellHealth(t *testing.T) {
+	j := &Job{Slug: "widget-fix"}
+	sess := CellSession(j)
+	zeusName := ZeusName(j)
+
+	cases := []struct {
+		name string
+		zeus *core.Peer // nil = no zeus in `all` at all
+		want string
+	}{
+		{
+			name: "zeus process gone",
+			zeus: nil,
+			want: "zeus process is gone — restart the cell (kill session + k start after cleanup)",
+		},
+		{
+			name: "startup prompt needs a human",
+			zeus: &core.Peer{Name: "claude", Depth: 0, TmuxSession: sess, Agent: "claude", Status: "question"},
+			want: "cell agent is stuck on a startup prompt — k o " + sess + " to answer it",
+		},
+		{
+			name: "still starting, no prompt — patience, not a flag",
+			zeus: &core.Peer{Name: "claude", Depth: 0, TmuxSession: sess, Agent: "claude", Status: "working"},
+			want: "",
+		},
+		{
+			name: "named zeus with a guessed session id — fail quiet, never read a guessed transcript",
+			zeus: &core.Peer{Name: zeusName, Depth: 0, TmuxSession: sess, SessionID: "abc123", SessionIDGuessed: true},
+			want: "",
+		},
+		{
+			name: "named zeus with no session id yet",
+			zeus: &core.Peer{Name: zeusName, Depth: 0, TmuxSession: sess, SessionID: ""},
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var all []*core.Peer
+			if c.zeus != nil {
+				all = append(all, c.zeus)
+			}
+			if got := CellHealth(j, all); got != c.want {
+				t.Errorf("CellHealth() = %q, want %q", got, c.want)
 			}
 		})
 	}

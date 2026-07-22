@@ -174,8 +174,10 @@ func refreshCmd() tea.Cmd {
 		js := jobs.LoadJobs()
 		live := jobs.LiveSessions()
 		st, ok := jobs.ReadDaemonStatus()
-		// cell health shells out to tmux per live cell — computed here, once
-		// per tick, never in the render path
+		// cell health reads each live cell's transcript file (no tmux) —
+		// computed here, once per tick, never in the render path; the
+		// ROLL-CALL of pane agents/team members below is what still shells
+		// out to tmux
 		health := map[string]string{}
 		crew := map[string]jobs.CrewSummary{}
 		for _, j := range js {

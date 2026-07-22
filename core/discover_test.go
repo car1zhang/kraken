@@ -399,6 +399,15 @@ func TestRefinedStatus(t *testing.T) {
 		{"unknown waiting", "unknown", "plain output\n", "waiting"},
 		{"running unchanged", "running", "plain output\n", "running"},
 		{"waiting becomes question", "waiting", "blah\n ❯ 1. Yes\n", "question"},
+		{"unknown spinner running (2.1.217)", "unknown", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\n", "running"},
+		{"shell spinner running (2.1.217)", "shell", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\n", "running"},
+		{"legacy esc-to-interrupt still running", "unknown", "some output\nesc to interrupt\n", "running"},
+		{"idle prompt no spinner waiting", "unknown", "some prior output\n❯ \n", "waiting"},
+		{"ellipsis-paren without glyph does not match", "unknown", "Loading… (see docs)\n", "waiting"},
+		{"glyph without ellipsis-paren does not match", "unknown", "✢ note\n", "waiting"},
+		{"question wins over spinner", "unknown", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\nDo you want to proceed?\n ❯ 1. Yes\n", "question"},
+		{"middle-dot glyph frame running", "unknown", "· Wibbling… (3s)\n", "running"},
+		{"short no-token spinner frame running", "unknown", "✳ Creating… (27s)\n", "running"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
