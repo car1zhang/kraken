@@ -50,7 +50,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `daemon_ok` | bool | always | |
 | `cell_cap` | number | always | |
 | `live_cells` | number | always | |
-| `jobs` | array (`webJob`) | always (`[]` not `null`) | |
+| `jobs` | array (`webJob`) | always (`[]` not `null`) | within a display state, jobs render in the manual reorder's order (see `POST /api/reorder` below) — no separate order field, the array position IS the display order |
 | `contract` | number | always | == `apiContract` |
 | `stale` | bool | always | this `k web` process' self-check |
 
@@ -153,6 +153,47 @@ session (e.g. `/send`) rather than being typed as plain conversation text.
 
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
+
+### `POST /api/start`
+
+Request: `webReq` — `slug` (string, required), `text` unused.
+Response: same as `/api/queue` etc above.
+
+Boots a queued job's cell immediately — the web/app equivalent of CLI `k
+start`: same validation (job must currently display as `queued`, every
+prereq's dependency done — gated or not), same `StartCell` mechanics. This is carl acting by
+hand, so — same as `k start` — it doubles as the manual release for a job
+parked behind a *gated* prereq (an already-done dependency flagged for human
+sign-off) and bypasses the daemon's `CellCap` entirely.
+
+### `POST /api/stop`
+
+Request: `webReq` — `slug` (string, required), `text` unused.
+Response: same as above.
+
+Interrupts a working cell: sends one Escape keystroke to every in-flight
+agent pane in the cell (zeus, any nested subagent sharing its pane, any live
+tmux-backed team member) — stops short of a teardown. No job state is
+written; the daemon's own roll-call reads the idled cell as `blocked` on its
+next tick, same as an agent that stalled on its own.
+
+### `POST /api/reorder`
+
+Persists a manual drag-reorder within one board column. Distinct request
+shape from `webReq` — this is a whole-column move, not a single-job action.
+
+Request (`reorderReq`):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `column` | string | always | one of `draft`\|`queued`\|`working`\|`blocked`\|`done` |
+| `slugs` | array of string | always (`[]` ok) | the column's full intended slug order |
+
+Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure
+(409 for an unrecognized `column`). Posted slugs whose current
+`DisplayState` no longer matches `column` — a concurrent transition
+mid-drag, e.g. a queued job that started — are silently dropped from the
+saved order rather than failing the whole request.
 
 ### `GET /api/draft?slug=` / `POST /api/draft` → `webDraft` (draft.go)
 

@@ -147,8 +147,22 @@ body {
   color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 2.5px;
 }
 .archive-head:hover { color: var(--text); }
+/* pointer-events none: disabled form controls swallow drag events in
+   Blink/WebKit, and with zero archived jobs the header IS the drawer's whole
+   done→archived drop area — pass hit-testing through to .archive-drawer.
+   Also neutralizes :hover/cursor, which a disabled header shouldn't have. */
+.archive-head:disabled { pointer-events: none; }
 .archive-head .tri { font-size: 9px; letter-spacing: 0; }
 .archive-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
+
+/* drop affordances for the archive drawer (done→archived drag) — mirrors
+   .col.droptarget/.drophover below */
+.archive-drawer.droptarget {
+  outline: 1px dashed var(--accent);
+  outline-offset: 4px;
+  background: var(--drop-tint);
+}
+.archive-drawer.drophover { background: var(--drop-tint-hover); }
 .archive-cards {
   display: flex; flex-direction: column; gap: 10px;
   padding-top: 10px;
@@ -203,7 +217,11 @@ body {
   transition: border-color 140ms var(--ease);
 }
 .card[draggable="true"] { cursor: grab; }
-.card.dragging { opacity: 0.4; }
+/* the in-column original while its card live-shifts around the pointer
+   (see flipMove in app.js) — reads as a lifted placeholder sitting in its
+   current slot; the native drag ghost carries the "real" card under the
+   cursor */
+.card.dragging { opacity: 0.35; cursor: grabbing; }
 .card:hover { border-color: var(--hairline-2); border-left-color: var(--state, var(--hairline-2)); }
 .card.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
 .card-top { display: flex; align-items: baseline; gap: 8px; }
@@ -352,6 +370,22 @@ body {
 /* the artifact viewer can be opened from inside the steer/unblock modal —
    it must always paint above any other overlay, regardless of DOM order */
 #overlay { z-index: 30; }
+
+/* transient bottom-center notice — currently just a reverted failed
+   drag-reorder, see showToast() in app.js. Above every overlay: it reports
+   on an action the user just took, which may have been inside one. */
+.toast {
+  position: fixed; left: 50%; bottom: 24px; z-index: 40;
+  transform: translate(-50%, 12px);
+  background: var(--counter-soft); color: var(--counter);
+  border: 1px solid var(--counter);
+  box-shadow: var(--glow-hot);
+  font: 11px var(--mono); letter-spacing: 0.3px;
+  padding: 8px 16px;
+  opacity: 0; pointer-events: none;
+  transition: opacity 160ms var(--ease), transform 160ms var(--ease);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* unblock/steer context: cell's last message, carl's last sent message, and
    artifact chips, shown above the composer so unblocking has the info needed */
