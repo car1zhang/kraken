@@ -175,6 +175,43 @@ function chipsHTML(artifacts, slug, label) {
   return chips + toggle;
 }
 
+// zeusPillHTML renders the zeus status pill for crewHTML — "running" reads
+// as actively working (green), "question" flags a pending AskUserQuestion
+// (amber), anything else (including "waiting") falls back to the muted
+// waiting label rather than echoing an arbitrary status string verbatim.
+function zeusPillHTML(status) {
+  if (status === "running") return `<span class="crew-pill run">zeus ●</span>`;
+  if (status === "polling") return `<span class="crew-pill polling">zeus ↻ polling</span>`;
+  if (status === "question") return `<span class="crew-pill question">zeus ⚑ question</span>`;
+  return `<span class="crew-pill">zeus ○ waiting</span>`;
+}
+
+const CREW_ROLES = ["hephaestus", "athena", "hermes", "other"];
+
+// crewHTML renders the crew line: a zeus status pill plus one working/total
+// chip per subagent role present in the roster. Renders nothing for an old
+// server payload (no zeus_status, no roster) so the card looks exactly as it
+// did before these fields existed.
+function crewHTML(j) {
+  const roster = j.roster || [];
+  if (!j.zeus_status && !roster.length) return "";
+  const zeusPill = j.zeus_status ? zeusPillHTML(j.zeus_status) : "";
+  const counts = {};
+  for (const r of roster) {
+    const role = CREW_ROLES.includes(r.role) ? r.role : "other";
+    (counts[role] ||= { working: 0, total: 0 }).total++;
+    if (r.working) counts[role].working++;
+  }
+  const chips = CREW_ROLES.filter((role) => counts[role])
+    .map((role) => {
+      const c = counts[role];
+      return `<span class="crew-chip${c.working > 0 ? " active" : ""}">${esc(role)} ${c.working}/${c.total}</span>`;
+    })
+    .join("");
+  if (!zeusPill && !chips) return "";
+  return `<div class="crew">${zeusPill}${chips}</div>`;
+}
+
 function cardHTML(j, col) {
   const color = stateColor(j.state);
   const movable = !!MOVES[col];
@@ -188,7 +225,7 @@ function cardHTML(j, col) {
     .join(" ");
   const chips = chipsHTML(j.artifacts, j.slug, j.slug);
   const roster = (j.roster || [])
-    .map((r) => `<div class="roster-row">${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
+    .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
   return `<div class="card editable ${j.question || j.health ? "flagged" : ""}" style="--state:${color}"
@@ -213,6 +250,7 @@ function cardHTML(j, col) {
     ${j.last_sent ? `<div class="last-sent">me→zeus: ${esc(j.last_sent)}</div>` : ""}
     ${j.detail ? `<div class="detail${detailClampable(j.detail) ? " clampable" : ""}${expandedDetails.has(j.slug) ? " expanded" : ""}">${esc(j.detail)}</div>` : ""}
     ${j.wakeup && j.wakeup.reason && j.state === "working" ? `<div class="wakeup-reason">↻ ${esc(j.wakeup.reason)}</div>` : ""}
+    ${crewHTML(j)}
     ${roster ? `<div class="roster">${roster}</div>` : ""}
     ${j.outcome && col === "done" ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
@@ -742,13 +780,18 @@ function flushSteerDraft() {
 // way); "reactivate" hides it outright since the cell is gone.
 function fillSteerContext(j, mode) {
   const container = document.getElementById("steer-context");
+  const crewEl = document.getElementById("steer-crew");
   const detailEl = document.getElementById("steer-detail");
   const lastSentEl = document.getElementById("steer-lastsent");
   const chipsEl = document.getElementById("steer-chips");
 
+  const crew = mode !== "reactivate" && j && crewHTML(j);
   const detail = mode !== "reactivate" && j && j.detail;
   const lastSent = mode !== "reactivate" && j && j.last_sent;
   const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
+
+  crewEl.hidden = !crew;
+  crewEl.innerHTML = crew || "";
 
   detailEl.hidden = !detail;
   // renderMD escapes before transforming, so agent-authored text is inert
@@ -760,7 +803,7 @@ function fillSteerContext(j, mode) {
   chipsEl.hidden = !artifacts;
   chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, j.slug, j.slug) : "";
 
-  container.hidden = !detail && !lastSent && !artifacts;
+  container.hidden = !crew && !detail && !lastSent && !artifacts;
 }
 
 // liveDisplayColumn mirrors render()'s column bucketing for a single job:

@@ -46,6 +46,65 @@ func daemonHeader(st jobs.DaemonStatus, ok bool) string {
 	return s
 }
 
+// crewRoleOrder lists the roles crewCell renders, in briefing order with
+// "other" last, alongside the single-letter abbreviation shown per role.
+var crewRoleOrder = []struct{ role, abbrev string }{
+	{"hephaestus", "h"},
+	{"athena", "a"},
+	{"hermes", "m"},
+	{"other", "o"},
+}
+
+// crewCell renders one job's live crew for the CREW column: a zeus marker
+// (z● running, z⚑ question, z○ anything else, omitted entirely when
+// ZeusStatus is "") followed by per-role working/total counts in
+// crewRoleOrder, e.g. "z● h1/2 a0/1". Pure and color-toggleable so it's
+// unit-testable without a viewerModel.
+func crewCell(sum jobs.CrewSummary, color bool) string {
+	var parts []string
+	switch sum.ZeusStatus {
+	case "running":
+		parts = append(parts, util.Paint(color, util.Green, "z●"))
+	case "polling":
+		// mid poll-loop (pending ScheduleWakeup): live work, not idleness
+		parts = append(parts, util.Paint(color, util.Cyan, "z↻"))
+	case "question":
+		parts = append(parts, util.Paint(color, util.Yellow, "z⚑"))
+	case "":
+		// no zeus yet — omit the marker entirely
+	default:
+		parts = append(parts, util.Paint(color, util.Dim, "z○"))
+	}
+
+	type counts struct{ working, total int }
+	byRole := map[string]counts{}
+	for _, a := range sum.Agents {
+		c := byRole[a.Role]
+		c.total++
+		if a.Working {
+			c.working++
+		}
+		byRole[a.Role] = c
+	}
+	for _, r := range crewRoleOrder {
+		c, ok := byRole[r.role]
+		if !ok {
+			continue
+		}
+		s := fmt.Sprintf("%s%d/%d", r.abbrev, c.working, c.total)
+		if c.working > 0 {
+			parts = append(parts, util.Paint(color, util.Green, s))
+		} else {
+			parts = append(parts, util.Paint(color, util.Dim, s))
+		}
+	}
+
+	if len(parts) == 0 {
+		return util.Paint(color, util.Dim, "-")
+	}
+	return strings.Join(parts, " ")
+}
+
 // buildJobLines renders the jobs view; viewLine.row indexes m.jrows.
 func (m *viewerModel) buildJobLines() []viewLine {
 	if !m.loaded {
@@ -63,7 +122,7 @@ func (m *viewerModel) buildJobLines() []viewLine {
 	bySlug := m.jobsBySlug()
 	now := time.Now()
 	lines = append(lines, viewLine{text: util.Paint(true, util.Cyan, "JOBS"), row: -1})
-	header := []string{"  #", "STATE", "JOB", "TYPE", "REPO", "PREREQS", "CELL", "ART", "AGE"}
+	header := []string{"  #", "STATE", "JOB", "TYPE", "REPO", "PREREQS", "CREW", "CELL", "ART", "AGE"}
 	for i, h := range header {
 		header[i] = util.Paint(true, util.Cyan, h)
 	}
@@ -96,8 +155,12 @@ func (m *viewerModel) buildJobLines() []viewLine {
 			}
 		}
 		cell := util.Paint(color, util.Dim, "-")
+		crew := util.Paint(color, util.Dim, "-")
 		if live[jobs.CellSession(j)] {
 			cell = jobs.CellSession(j)
+			if sum, ok := m.crewBySlug[j.Slug]; ok {
+				crew = crewCell(sum, color)
+			}
 		}
 		ageStr := ""
 		if !j.ModTime.IsZero() {
@@ -114,6 +177,7 @@ func (m *viewerModel) buildJobLines() []viewLine {
 			j.Type,
 			repo,
 			jobs.PrereqCell(j, bySlug, color),
+			crew,
 			cell,
 			art,
 			util.Paint(color, util.Dim, ageStr),

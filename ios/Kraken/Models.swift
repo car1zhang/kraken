@@ -70,6 +70,9 @@ struct WebJob: Decodable, Identifiable {
     // A pending interactive question (e.g. an AskUserQuestion tool call)
     // blocking the cell, if any.
     let question: WebQuestion?
+    // zeus' own refined status (running/polling/waiting/question), distinct
+    // from `state` — absent when zeus isn't resolvable yet.
+    let zeusStatus: String?
     // A pending ScheduleWakeup from zeus' transcript — the cell is on a poll
     // timer (mid /loop or /poll-pr-style tick) rather than genuinely idle.
     // Still counts as "working"; the UI renders a countdown chip from it.
@@ -106,7 +109,9 @@ struct WebJob: Decodable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, state, err, outcome, cell, live
-        case prereqs, detail, question, wakeup, roster, artifacts, health, mtime
+        case prereqs, detail, question, wakeup
+        case zeusStatus = "zeus_status"
+        case roster, artifacts, health, mtime
         case archived
         case displaySlug = "display_slug"
         case cellGone = "cell_gone"
@@ -186,9 +191,15 @@ struct WebWakeup: Decodable, Hashable {
 }
 
 // WebRosterAgent mirrors one live subagent entry in job.go's roster list.
+// role/status/working are Optionals per the omitempty-is-Optional rule even
+// though the server always sends them (no omitempty tag) — older servers
+// predate these keys entirely, so they're absent rather than empty.
 struct WebRosterAgent: Decodable {
     let name: String
     let model: String
+    let role: String?
+    let status: String?
+    let working: Bool?
 }
 
 struct WebArtifact: Decodable, Identifiable {

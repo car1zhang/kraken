@@ -102,6 +102,7 @@ type snapshotMsg struct {
 	jobs     []*jobs.Job
 	live     map[string]bool
 	health   map[string]string
+	crew     map[string]jobs.CrewSummary
 	daemonSt jobs.DaemonStatus
 	daemonOK bool
 }
@@ -138,6 +139,7 @@ type viewerModel struct {
 	rawJobs        []*jobs.Job
 	liveSessionSet map[string]bool
 	healthBySlug   map[string]string
+	crewBySlug     map[string]jobs.CrewSummary
 	daemonSt       jobs.DaemonStatus
 	daemonOK       bool
 	// inline answer input: non-nil while typing a steering message that gets
@@ -175,16 +177,23 @@ func refreshCmd() tea.Cmd {
 		// cell health shells out to tmux per live cell — computed here, once
 		// per tick, never in the render path
 		health := map[string]string{}
+		crew := map[string]jobs.CrewSummary{}
 		for _, j := range js {
 			if j.Started() && j.State != "done" && live[jobs.CellSession(j)] {
 				if reason := jobs.CellHealth(j, peers); reason != "" {
 					health[j.Slug] = reason
 				}
+				zeus := jobs.CellZeus(j, peers)
+				var members []core.TeamMember
+				if zeus != nil && !zeus.SessionIDGuessed {
+					members = core.TeamMembersForLead(zeus.SessionID)
+				}
+				crew[j.Slug] = jobs.CellCrew(jobs.CellSession(j), zeus, peers, members)
 			}
 		}
 		return snapshotMsg{
 			peers: peers, shells: shells, usage: core.UsageHeader(true),
-			jobs: js, live: live, health: health,
+			jobs: js, live: live, health: health, crew: crew,
 			daemonSt: st, daemonOK: ok,
 		}
 	}
@@ -210,6 +219,7 @@ func (m *viewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rawPeers, m.rawShells = msg.peers, msg.shells
 		m.rawJobs, m.liveSessionSet = msg.jobs, msg.live
 		m.healthBySlug = msg.health
+		m.crewBySlug = msg.crew
 		m.daemonSt, m.daemonOK = msg.daemonSt, msg.daemonOK
 		m.rebuild()
 	case actionMsg:
