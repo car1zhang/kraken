@@ -667,3 +667,25 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---- unified event log view ---- */
+
+.logview { height: calc(100vh - 64px); display: flex; padding: 12px 16px 16px; }
+.log-scroll {
+  flex: 1; overflow-y: auto; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px; line-height: 1.55; background: var(--surface);
+  border: 1px solid var(--line, var(--raised)); border-radius: 6px; padding: 8px 10px;
+}
+.log-more, .log-empty { color: var(--text-2); text-align: center; padding: 6px 0; font-size: 11px; }
+.log-row { display: flex; gap: 10px; align-items: baseline; white-space: pre-wrap; word-break: break-word; }
+.log-row + .log-row { margin-top: 1px; }
+.log-ts { color: var(--text-2); flex: none; }
+.log-src { color: var(--accent); flex: none; min-width: 52px; }
+.log-event { color: var(--text-2); flex: none; min-width: 92px; }
+.log-msg { color: var(--text); }
+.log-row.lvl-error .log-msg { color: var(--counter); }
+.log-row.lvl-error .log-event { color: var(--counter); }
+.log-file-divider {
+  color: var(--text-2); font-size: 10px; text-align: center; margin: 6px 0;
+  border-top: 1px dashed var(--raised); padding-top: 4px;
+}

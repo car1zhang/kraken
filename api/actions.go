@@ -9,6 +9,7 @@ import (
 
 	"kraken/core"
 	"kraken/jobs"
+	"kraken/util"
 )
 
 // --- board moves (the web UI's only writes; every one re-validates the
@@ -20,8 +21,9 @@ type webReq struct {
 }
 
 // webAction wraps a move handler with method/JSON plumbing and uniform
-// {ok}/{error} responses.
-func webAction(f func(webReq) error) http.HandlerFunc {
+// {ok}/{error} responses. name identifies the action in the unified event
+// log: every manual board move — success or refusal — leaves one entry.
+func webAction(name string, f func(webReq) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
@@ -36,10 +38,12 @@ func webAction(f func(webReq) error) http.HandlerFunc {
 			return
 		}
 		if err := f(req); err != nil {
+			util.LogEvent("web", "error", name, name+" "+req.Slug+": "+err.Error())
 			w.WriteHeader(http.StatusConflict)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		util.LogEvent("web", "info", name, name+" "+req.Slug)
 		webBoardCache.invalidate()
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}

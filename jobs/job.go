@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,9 +31,17 @@ type Job struct {
 	Repo string `json:"repo"`
 	// Base is the ref the cell's worktree branches from; empty means the
 	// default (origin/main, falling back to main).
-	Base    string   `json:"base,omitempty"`
-	Ready   bool     `json:"ready"`
-	Solo    bool     `json:"solo"`
+	Base  string `json:"base,omitempty"`
+	Ready bool   `json:"ready"`
+	Solo  bool   `json:"solo"`
+	// Model is the Claude model zeus runs on (`claude --model <value>`),
+	// hand-authored like solo. Consumed exactly once per cell start
+	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
+	// model can't change out from under it. Empty means claude's default.
+	Model string `json:"model,omitempty"`
+	// SkipDoc (build jobs only) skips the /doc → /send phase: zeus implements
+	// the spec directly, keeping the manual-test gate and PR pipeline.
+	SkipDoc bool     `json:"skip_doc,omitempty"`
 	Prereqs []Prereq `json:"prereqs,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
@@ -160,6 +169,11 @@ func (j *Job) boolField(key, val string) bool {
 	}
 }
 
+// modelTokenRe bounds what a model: value may look like — a plain CLI token.
+// It is a shape check, not an allowlist: claude's model list isn't kraken's
+// to own, and claude itself errors visibly in the pane on an unknown model.
+var modelTokenRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 // validStates: kraken itself writes working/blocked/done; draft and queued
 // are derived for display and never written to a job file, so hand-authoring
 // either is a dead end rather than a valid starting point. A hand-mangled
@@ -242,6 +256,14 @@ func ParseJob(name string, data []byte) *Job {
 			j.Ready = j.boolField(k, val)
 		case "solo":
 			j.Solo = j.boolField(k, val)
+		case "model":
+			if val != "" && !modelTokenRe.MatchString(val) {
+				j.addErr(fmt.Sprintf("bad model value %q", core.TruncateOneLine(val, 24)))
+			} else {
+				j.Model = val
+			}
+		case "skip-doc":
+			j.SkipDoc = j.boolField(k, val)
 		case "auto-approve":
 			// legacy field: removed from the schema, but existing pluto job
 			// files still carry auto-approve: keys (always a scalar). Keep
@@ -299,6 +321,11 @@ func ParseJob(name string, data []byte) *Job {
 	}
 	if j.Slug == "" {
 		j.Slug = strings.TrimSuffix(name, JobSuffix)
+	}
+	// cross-field check after the loop — key order in the file is free, so
+	// type may not be known yet when skip-doc parses
+	if j.SkipDoc && j.Type != "build" {
+		j.addErr("skip-doc only applies to build jobs")
 	}
 	return j
 }
@@ -452,6 +479,9 @@ func JobTemplate(slug string) string {
 		"                          #   gated: true   → when it completes, you review its outcome\n" +
 		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
+		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
+		"                          # applied once at cell start, default = claude's own default\n" +
+		"# skip-doc: true          # build only: skip the /doc → /send phase — zeus implements the spec directly\n" +
 		"---\n"
 }
 

@@ -203,9 +203,15 @@ func LiveSessions() map[string]bool {
 // cellClaudeArgs mirrors carl's `cc` alias (claude --dangerously-skip-permissions
 // --rc): cell agents work unattended in their own worktree, so they run with
 // bypass permissions from birth. tmux commands never see shell aliases, so the
-// flags are spelled out here.
-func cellClaudeArgs() []string {
-	return []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
+// flags are spelled out here. A non-empty model (the job's model: field) rides
+// along as --model — both spawn paths (StartCell, ReactivateJob) share this,
+// so a job's model choice survives reactivation.
+func cellClaudeArgs(model string) []string {
+	args := []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return args
 }
 
 // jobPrompt is the spec portion of the job body — everything up to the
@@ -255,7 +261,7 @@ func StartCell(j *Job, repo string) error {
 	}
 	// gate passed: from here on, failures must report the worktree so a
 	// half-built cell is cleanable by hand
-	argv := append(cellClaudeArgs(), "--name", ZeusName(j),
+	argv := append(cellClaudeArgs(j.Model), "--name", ZeusName(j),
 		"--append-system-prompt", zeusBrief(j))
 	if prompt := jobPrompt(j); prompt != "" {
 		argv = append(argv, "--", prompt)
@@ -852,7 +858,7 @@ func ReactivateJob(j *Job, session, message string) error {
 	if message != "" {
 		prompt += "\nsteering from carl: " + message
 	}
-	argv := append(cellClaudeArgs(), "--name", ZeusName(j), "-r", session, "--", prompt)
+	argv := append(cellClaudeArgs(j.Model), "--name", ZeusName(j), "-r", session, "--", prompt)
 	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
 		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)

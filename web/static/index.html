@@ -52,6 +52,7 @@
     <span class="viewtabs">
       <button class="viewtab active" data-view="board">BOARD</button>
       <button class="viewtab" data-view="dag">DAG</button>
+      <button class="viewtab" data-view="log">LOG</button>
     </span>
     <span class="spacer"></span>
     <button class="theme-btn" id="theme-toggle" title="theme: system → light → dark"></button>
@@ -64,6 +65,14 @@
     <div class="dag-canvas" id="dag-canvas">
       <svg id="dag-edges"></svg>
       <div id="dag-nodes"></div>
+    </div>
+  </main>
+  <!-- unified event log: newest at the bottom; scrolling to the top pulls
+       the previous (older) log file into view, one file per fetch -->
+  <main class="logview" id="log" hidden>
+    <div class="log-scroll" id="log-scroll">
+      <div class="log-more" id="log-more" hidden>· scroll up for older ·</div>
+      <div id="log-entries"><div class="log-empty">no log entries yet</div></div>
     </div>
   </main>
 
@@ -100,6 +109,7 @@
       <div class="panel-body answer-body">
         <div class="steer-context" id="steer-context" hidden>
           <div class="steer-crew" id="steer-crew" hidden></div>
+          <div class="prs" id="steer-prs" hidden></div>
           <div class="steer-detail" id="steer-detail" hidden></div>
           <div class="last-sent" id="steer-lastsent" hidden></div>
           <div class="chips" id="steer-chips" hidden></div>
@@ -156,8 +166,12 @@
             </label>
             <label>repo <select id="f-repo"></select></label>
             <label>base <input id="f-base" placeholder="origin/main" spellcheck="false"></label>
+            <label>model <input id="f-model" list="model-list" placeholder="default" spellcheck="false"
+              title="claude model for zeus (--model value) — applied once at cell start"></label>
             <span class="f-toggles">
               <label class="check"><input type="checkbox" id="f-solo"> solo</label>
+              <label class="check"><input type="checkbox" id="f-skipdoc"
+                title="build only: skip the /doc → /send phase — zeus implements the spec directly"> skip doc</label>
             </span>
           </div>
           <div class="f-block">
@@ -179,6 +193,9 @@
         <div class="answer-note" id="editor-note"></div>
       </div>
       <datalist id="job-list"></datalist>
+      <datalist id="model-list">
+        <option value="fable"><option value="opus"><option value="sonnet"><option value="haiku">
+      </datalist>
     </div>
   </div>
 

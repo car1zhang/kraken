@@ -24,7 +24,7 @@ import Observation
 @Observable
 final class AppRouter {
     enum Tab: Hashable {
-        case board, sessions, settings
+        case board, sessions, log, settings
     }
 
     var selectedTab: Tab = .board

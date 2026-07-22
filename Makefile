@@ -13,6 +13,7 @@ install: build install-completion install-daemon
 	cp kraken $(HOME)/.local/bin/kraken.tmp
 	mv -f $(HOME)/.local/bin/kraken.tmp $(HOME)/.local/bin/kraken
 	ln -sf $(HOME)/.local/bin/kraken $(HOME)/.local/bin/k
+	@$(HOME)/.local/bin/kraken logevent install install "make install ($$(git rev-parse --short HEAD 2>/dev/null || echo unknown))" || true
 	@echo "installed kraken + k symlink → ~/.local/bin"
 	# (re)start the daemon on the fresh binary; launchd restarts it at login
 	launchctl unload $(PLIST) 2>/dev/null || true

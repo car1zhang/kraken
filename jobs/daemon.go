@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -75,13 +76,23 @@ func ProcessAlive(pid int) bool {
 func notify(title, msg string) {
 	script := fmt.Sprintf("display notification %q with title %q", core.TruncateOneLine(msg, 120), title)
 	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-		dlog("osascript notify failed: %v", err)
+		dlogErr("osascript notify failed: %v", err)
 	}
 }
 
-func dlog(format string, a ...any) {
-	fmt.Printf("%s "+format+"\n", append([]any{time.Now().Format("15:04:05")}, a...)...)
+// dlogEvent prints one daemon log line (launchd captures stdout into
+// daemon.log as before) AND appends it to the unified event log — the
+// single source of truth the board's log viewer reads. level/event feed the
+// viewer's badges; the plain dlog/dlogErr wrappers cover the long tail of
+// call sites that don't need a dedicated event id.
+func dlogEvent(level, event, format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	fmt.Printf("%s %s\n", time.Now().Format("15:04:05"), msg)
+	util.LogEvent("daemon", level, event, msg)
 }
+
+func dlog(format string, a ...any)    { dlogEvent("info", "daemon", format, a...) }
+func dlogErr(format string, a ...any) { dlogEvent("error", "daemon-error", format, a...) }
 
 // daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
 // one; tick runs a single scheduler pass.
@@ -108,7 +119,17 @@ func RunDaemon() {
 	util.InitSelfCheck()
 	d := newDaemon()
 	st := DaemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
-	dlog("daemon up (pid %d, cap %d cells, tick %s)", st.PID, CellCap, DaemonInterval)
+	dlogEvent("info", "daemon-start", "daemon up (pid %d, cap %d cells, tick %s)", st.PID, CellCap, DaemonInterval)
+	// launchd stops the daemon with SIGTERM (make install's kickstart -k,
+	// logout, unload); log the shutdown so the event log shows every daemon
+	// lifecycle edge, not just the starts
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		s := <-sigc
+		dlogEvent("info", "daemon-stop", "daemon stopping (pid %d, %v)", os.Getpid(), s)
+		os.Exit(0)
+	}()
 	// TCC watchdog: reading ~/Documents from a launchd process blocks in
 	// open() until macOS consent is granted — and every reinstall changes the
 	// binary's code hash, revoking the previous grant. A silently-hung first
@@ -133,7 +154,7 @@ func RunDaemon() {
 		st.LastTick, st.Cells, st.LastError, st.Stale = time.Now().Unix(), cells, "", util.IsSelfStale()
 		if err != nil {
 			st.LastError = err.Error()
-			dlog("tick error: %v", err)
+			dlogEvent("error", "tick-error", "tick error: %v", err)
 		}
 		if data, err := json.Marshal(st); err == nil {
 			_ = util.AtomicWrite(daemonStatusPath(), string(data))
@@ -182,7 +203,7 @@ func (d *daemonState) tick() (int, error) {
 			// changes), so even a job whose cell later dies uncleanly stays
 			// reactivatable
 			if err := stampSession(j, all); err != nil {
-				dlog("session stamp %s failed: %v", j.Slug, err)
+				dlogErr("session stamp %s failed: %v", j.Slug, err)
 			}
 			delete(d.Notified, "gone:"+j.Slug)
 		} else {
@@ -193,7 +214,7 @@ func (d *daemonState) tick() (int, error) {
 			// finishing it — worktree discard included — is sanctioned.
 			if j.Teardown != "" {
 				if err := ResumeTeardown(j); err != nil {
-					dlog("%s: finish interrupted teardown failed: %v", j.Slug, err)
+					dlogErr("%s: finish interrupted teardown failed: %v", j.Slug, err)
 				} else {
 					dlog("%s: finished interrupted teardown (%s)", j.Slug, j.Teardown)
 				}
@@ -208,7 +229,7 @@ func (d *daemonState) tick() (int, error) {
 			key := "gone:" + j.Slug
 			if d.Notified[key] == 0 {
 				notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
-				dlog("%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
+				dlogEvent("error", "cell-gone", "%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
 				d.Notified[key] = now.Unix()
 			}
 		}
@@ -224,7 +245,7 @@ func (d *daemonState) tick() (int, error) {
 				if d.Notified[key] == 0 {
 					notify("kraken ⚠ "+j.Slug, reason+" — auto-retrying; also on the board")
 					d.Notified[key] = now.Unix()
-					dlog("unhealthy %s: %s", j.Slug, reason)
+					dlogEvent("error", "cell-unhealthy", "unhealthy %s: %s", j.Slug, reason)
 				}
 				// auto-retry retryable stalls with backoff: API overload comes
 				// in waves, and a manual retry during one just eats the next
@@ -233,7 +254,7 @@ func (d *daemonState) tick() (int, error) {
 					rkey := "retry:" + j.Slug
 					if now.Unix()-d.Poked[rkey] >= int64(repokeAfter/time.Second) {
 						if err := RetryCell(j); err != nil {
-							dlog("auto-retry %s failed: %v", j.Slug, err)
+							dlogErr("auto-retry %s failed: %v", j.Slug, err)
 						} else {
 							d.Poked[rkey] = now.Unix()
 							dlog("auto-retried %s (%s)", j.Slug, reason)
@@ -293,10 +314,10 @@ func (d *daemonState) tick() (int, error) {
 		if (st == "working" || st == "blocked") && st != j.State {
 			prev := j.State
 			if err := WriteJobState(j, st); err != nil {
-				dlog("write state %s for %s failed: %v", st, j.Slug, err)
+				dlogErr("write state %s for %s failed: %v", st, j.Slug, err)
 				continue
 			}
-			dlog("%s: %s → %s", j.Slug, prev, st)
+			dlogEvent("info", "state-change", "%s: %s → %s", j.Slug, prev, st)
 			if st == "blocked" {
 				key := "blocked:" + j.Slug
 				if d.Notified[key] == 0 {
@@ -359,14 +380,14 @@ func (d *daemonState) tick() (int, error) {
 			continue
 		}
 		if err := StartCell(j, repo); err != nil {
-			dlog("start %s failed: %v", j.Slug, err)
+			dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
 		cells++
-		dlog("started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
+		dlogEvent("info", "cell-start", "started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
 		notify("kraken ▶ "+j.Slug, "cell started")
 	}
 	return cells, firstErr
@@ -384,10 +405,10 @@ func autoArchivePass(jobs []*Job, live map[string]bool, now time.Time) []string 
 		}
 		name, err := ArchiveJob(j, live)
 		if err != nil {
-			dlog("auto-archive %s failed: %v", j.Slug, err)
+			dlogErr("auto-archive %s failed: %v", j.Slug, err)
 			continue
 		}
-		dlog("%s: auto-archived as %s (done > 24h)", j.Slug, name)
+		dlogEvent("info", "auto-archive", "%s: auto-archived as %s (done > 24h)", j.Slug, name)
 		archived = append(archived, j.Slug)
 	}
 	return archived
@@ -415,7 +436,7 @@ func (d *daemonState) trackPRs(j *Job) {
 		// the state-derivation pass only covers live jobs — for done or
 		// killed-back-to-draft jobs this is the sole surface for a bad repo
 		if key := "repofail:" + j.Slug; d.Notified[key] == 0 {
-			dlog("%s: resolve repo failed — leaving prs alone: %v", j.Slug, err)
+			dlogErr("%s: resolve repo failed — leaving prs alone: %v", j.Slug, err)
 			d.Notified[key] = time.Now().Unix()
 		}
 		return
@@ -429,7 +450,7 @@ func (d *daemonState) trackPRs(j *Job) {
 	if !ok {
 		// log the outage once per stretch, not every minute
 		if key := "ghfail:" + j.Slug; d.Notified[key] == 0 {
-			dlog("%s: gh pr list failed — leaving prs alone", j.Slug)
+			dlogErr("%s: gh pr list failed — leaving prs alone", j.Slug)
 			d.Notified[key] = time.Now().Unix()
 		}
 		return
@@ -440,14 +461,14 @@ func (d *daemonState) trackPRs(j *Job) {
 		return
 	}
 	if err := writeJobPRs(j, updated); err != nil {
-		dlog("%s: prs write failed: %v", j.Slug, err)
+		dlogErr("%s: prs write failed: %v", j.Slug, err)
 		return
 	}
 	for _, pr := range updated {
 		dlog("%s: pr %s %s", j.Slug, pr.State, pr.URL)
 	}
 	for _, url := range newlyMerged {
-		dlog("%s: merged %s — cell left alone", j.Slug, url)
+		dlogEvent("info", "pr-merged", "%s: merged %s — cell left alone", j.Slug, url)
 		msg := "PR merged — accept from the board when the job is finished"
 		if j.State == "done" {
 			msg = "PR merged — job already accepted; recorded"

@@ -77,6 +77,9 @@ struct RootTabView: View {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
                 .tag(AppRouter.Tab.sessions)
+            LogView()
+                .tabItem { Label("Log", systemImage: "list.bullet.rectangle") }
+                .tag(AppRouter.Tab.log)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppRouter.Tab.settings)

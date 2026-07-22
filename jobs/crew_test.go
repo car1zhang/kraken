@@ -102,6 +102,36 @@ func TestZeusBriefSolo(t *testing.T) {
 	}
 }
 
+func TestZeusBriefSkipDoc(t *testing.T) {
+	j := &Job{Slug: "sd", Type: "build", SkipDoc: true}
+	brief := zeusBrief(j)
+	// no doc pipeline, no phase gate — but the crew, the manual-test gate,
+	// and the PR pipeline all survive the branch
+	for _, want := range []string{
+		"skips the doc phase", "hephaestus", "athena", "manual test ready",
+		"open a PR with gh", "never ends the job", CellArtifacts(j),
+		// like the escalation disclaimer: /doc and /send may appear only to
+		// say they don't apply
+		"no /doc artifact", "no '/send' gate",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("skip-doc brief missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"Phase 1", "Phase 2", "hermes", "hermes-contract.md", "lint_svg.py", "doc ready for review",
+	} {
+		if strings.Contains(brief, unwanted) {
+			t.Errorf("skip-doc brief still mentions %q", unwanted)
+		}
+	}
+	// solo composes: skip-doc + solo has neither doc pipeline nor crew
+	solo := zeusBrief(&Job{Slug: "sd2", Type: "build", SkipDoc: true, Solo: true})
+	if !strings.Contains(solo, "no subagents at all") || strings.Contains(solo, "hermes") {
+		t.Error("skip-doc solo brief should keep the no-subagents delta and stay hermes-free")
+	}
+}
+
 func TestZeusBriefSubagentHygiene(t *testing.T) {
 	for _, typ := range []string{"build", "info"} {
 		brief := zeusBrief(&Job{Slug: "hygiene-" + typ, Type: typ})
