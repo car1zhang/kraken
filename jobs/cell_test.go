@@ -1,6 +1,8 @@
 package jobs
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,6 +65,113 @@ func TestTeardownFinalFields(t *testing.T) {
 		if strings.Join(got, "|") != strings.Join(c.want, "|") {
 			t.Errorf("teardownFinalFields(%q) = %v, want %v", c.marker, got, c.want)
 		}
+	}
+}
+
+// --- mergeHookSettings ---
+
+func TestMergeHookSettings(t *testing.T) {
+	entry := func(cmd string) map[string]any {
+		return map[string]any{
+			"matcher": "Bash",
+			"hooks": []any{
+				map[string]any{"type": "command", "command": cmd},
+			},
+		}
+	}
+	cases := []struct {
+		name     string
+		existing string
+		wantErr  bool
+		want     map[string]any
+	}{
+		{
+			name: "no existing file: fresh render",
+			want: map[string]any{
+				"hooks": map[string]any{
+					"PostToolUse": []any{entry("kraken pr-hook foo")},
+				},
+			},
+		},
+		{
+			name:     "existing file with unrelated keys: preserved",
+			existing: `{"env": {"FOO": "bar"}}`,
+			want: map[string]any{
+				"env": map[string]any{"FOO": "bar"},
+				"hooks": map[string]any{
+					"PostToolUse": []any{entry("kraken pr-hook foo")},
+				},
+			},
+		},
+		{
+			name:     "existing file with its own PostToolUse groups: kraken's appended, theirs intact",
+			existing: `{"hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "echo hi"}]}]}}`,
+			want: map[string]any{
+				"hooks": map[string]any{
+					"PostToolUse": []any{
+						map[string]any{
+							"matcher": "Write",
+							"hooks": []any{
+								map[string]any{"type": "command", "command": "echo hi"},
+							},
+						},
+						entry("kraken pr-hook foo"),
+					},
+				},
+			},
+		},
+		{
+			// unparseable JSON must not be overwritten — the caller's contract
+			// is to skip hook install with a warning, never clobber a repo's
+			// own config
+			name:     "unparseable existing: error, caller must skip",
+			existing: "{not json",
+			wantErr:  true,
+		},
+		{
+			// a second installation path (e.g. reactivation recreate) merging
+			// into settings that already carry kraken's exact command must be
+			// a no-op — no duplicate entry
+			name:     "existing entry with identical command: no-op, no duplicate",
+			existing: `{"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "kraken pr-hook foo"}]}]}}`,
+			want: map[string]any{
+				"hooks": map[string]any{
+					"PostToolUse": []any{entry("kraken pr-hook foo")},
+				},
+			},
+		},
+		{
+			// a differently-slugged or differently-pathed command must still
+			// be appended alongside — dedup matches on the full command string
+			name:     "existing entry with different command: still appended",
+			existing: `{"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "kraken pr-hook other-slug"}]}]}}`,
+			want: map[string]any{
+				"hooks": map[string]any{
+					"PostToolUse": []any{
+						entry("kraken pr-hook other-slug"),
+						entry("kraken pr-hook foo"),
+					},
+				},
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := mergeHookSettings([]byte(c.existing), "foo", "kraken")
+			if (err != nil) != c.wantErr {
+				t.Fatalf("mergeHookSettings(%q) err = %v, wantErr=%v", c.existing, err, c.wantErr)
+			}
+			if c.wantErr {
+				return
+			}
+			var gotParsed map[string]any
+			if err := json.Unmarshal(got, &gotParsed); err != nil {
+				t.Fatalf("mergeHookSettings(%q) produced invalid JSON: %v\n%s", c.existing, err, got)
+			}
+			if !reflect.DeepEqual(gotParsed, c.want) {
+				t.Errorf("mergeHookSettings(%q) = %s, want %v", c.existing, got, c.want)
+			}
+		})
 	}
 }
 

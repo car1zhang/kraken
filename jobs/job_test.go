@@ -1,6 +1,8 @@
 package jobs
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -688,5 +690,51 @@ func TestPatchPRsSkipsBlockScalarContent(t *testing.T) {
 	j := ParseJob("x.job.md", []byte(got))
 	if j.Err != "" || len(j.PRs) != 1 {
 		t.Fatalf("round-trip: err=%q prs=%+v", j.Err, j.PRs)
+	}
+}
+
+// writeJobPRs must never drop a URL already on disk: the daemon's reconciled
+// list is built from j.PRs loaded at the start of a tick, but appendJobPR
+// (the pr-hook verb's real-time path) may append a fresh record straight to
+// the FILE in between. File has A, X recorded; the caller passes an updated
+// A alone (as if X had never been loaded) — the write must still land with
+// both A(merged) and X(unchanged), X appended after the caller's slice.
+func TestWriteJobPRsUnionsFileOnlyRecords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.job.md")
+	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\nprs:\n" +
+		"  - url: https://x/pull/1\n    state: open\n" +
+		"  - url: https://x/pull/2\n    state: open\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := ParseJob("x.job.md", []byte(src))
+	j.File = path
+
+	// caller only knows about pull/1 (as if pull/2 was appended to the file
+	// by the hook after this tick's j.PRs snapshot was taken), and reports
+	// it merged
+	callerPRs := []JobPR{{URL: "https://x/pull/1", State: "merged"}}
+	if err := writeJobPRs(j, callerPRs); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsed := ParseJob("x.job.md", data)
+	if reparsed.Err != "" {
+		t.Fatalf("reparsed job errored: %s", reparsed.Err)
+	}
+	want := []JobPR{
+		{URL: "https://x/pull/1", State: "merged"},
+		{URL: "https://x/pull/2", State: "open"},
+	}
+	if len(reparsed.PRs) != 2 || reparsed.PRs[0] != want[0] || reparsed.PRs[1] != want[1] {
+		t.Fatalf("prs after write: %+v, want %+v", reparsed.PRs, want)
+	}
+	if len(j.PRs) != 2 || j.PRs[0] != want[0] || j.PRs[1] != want[1] {
+		t.Fatalf("j.PRs not updated to union: %+v", j.PRs)
 	}
 }

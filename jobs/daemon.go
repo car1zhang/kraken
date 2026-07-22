@@ -378,6 +378,7 @@ func (d *daemonState) tick() (int, error) {
 				continue
 			}
 			d.trackPRs(j)
+			d.scanTranscriptPRs(j, all)
 		}
 	}
 
@@ -551,6 +552,15 @@ func (d *daemonState) trackPRs(j *Job) {
 		return
 	}
 	delete(d.Notified, "ghfail:"+j.Slug)
+	// backstop: a recorded PR the branch-list query didn't return (recycled
+	// branch, hand-opened against a different head) gets asked about
+	// directly. A single-URL failure just skips that URL — it's not the
+	// "gh is down" signal listBranchPRs' ok=false already handled above.
+	for _, url := range needsPoll(j.PRs, fetched) {
+		if state, ok := viewPRState(dir, url); ok {
+			fetched = append(fetched, JobPR{URL: url, State: state})
+		}
+	}
 	updated, newlyMerged, changed := reconcilePRs(j.PRs, fetched)
 	if !changed {
 		return
@@ -569,6 +579,40 @@ func (d *daemonState) trackPRs(j *Job) {
 			msg = "PR merged — job already accepted; recorded"
 		}
 		notify("kraken ✓ "+j.Slug, msg)
+	}
+}
+
+// scanTranscriptPRs is the transcript-scanning backstop: it looks for GitHub
+// PR URLs zeus' own transcript mentions, in the job's own repo ONLY, and
+// attaches any not yet recorded. Unlike trackPRs (which asks gh, so an
+// unreachable API or bad repo just means "leave prs alone, retry next
+// pass"), and unlike pr-hook (which fails open with an empty prefix when the
+// origin can't be read, since the command it saw really did run in the
+// cell's worktree), this has no such anchor — a transcript can quote PR URLs
+// from anywhere — so an unresolved repo prefix means scan nothing (carl's Q7
+// call). Job-file writes only, same as trackPRs; every attach gets one dlog
+// line, and — matching trackPRs' repofail dedup — failures degrade silently.
+func (d *daemonState) scanTranscriptPRs(j *Job, all []*core.Peer) {
+	repo, err := ResolveRepo(j.Repo)
+	if err != nil {
+		return // trackPRs already surfaces a bad repo for this job this pass
+	}
+	prefix, ok := repoOriginPrefix(repo)
+	if !ok || prefix == "" {
+		return // no fail-open here: an unresolved prefix means scan nothing
+	}
+	transcript := zeusTranscriptPath(j, all)
+	if transcript == "" {
+		return // no live/stamped session — not an error, just nothing to scan
+	}
+	for _, url := range transcriptPRURLs(transcript, prefix) {
+		attached, err := appendJobPR(j, JobPR{URL: url, State: "open"})
+		switch {
+		case err != nil:
+			dlog("%s: transcript attach %s failed: %v", j.Slug, url, err)
+		case attached:
+			dlog("%s: attached from transcript %s", j.Slug, url)
+		}
 	}
 }
 
