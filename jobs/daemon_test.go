@@ -39,6 +39,65 @@ func TestAutoArchivePass(t *testing.T) {
 	}
 }
 
+func TestPRTrackable(t *testing.T) {
+	cases := []struct {
+		name string
+		job  *Job
+		want bool
+	}{
+		{
+			name: "working build job",
+			job:  &Job{Type: "build", State: "working"},
+			want: true,
+		},
+		{
+			name: "blocked build job",
+			job:  &Job{Type: "build", State: "blocked"},
+			want: true,
+		},
+		{
+			name: "done build job stays tracked",
+			job:  &Job{Type: "build", State: "done"},
+			want: true,
+		},
+		{
+			name: "never-started draft with no PR history",
+			job:  &Job{Type: "build", State: ""},
+			want: false,
+		},
+		{
+			name: "killed back to draft keeps its PR history tracked",
+			job:  &Job{Type: "build", State: "", PRs: []JobPR{{URL: "https://x/pull/1", State: "merged"}}},
+			want: true,
+		},
+		{
+			name: "info job never tracked",
+			job:  &Job{Type: "info", State: "working"},
+			want: false,
+		},
+		{
+			name: "done info job with PRs still gated by type",
+			job:  &Job{Type: "info", State: "done", PRs: []JobPR{{URL: "https://x/pull/9", State: "open"}}},
+			want: false,
+		},
+		{
+			name: "re-queued killed job keeps tracking",
+			job:  &Job{Type: "build", State: "queued", PRs: []JobPR{{URL: "https://x/pull/2", State: "open"}}},
+			want: true,
+		},
+		{
+			name: "unparseable job never tracked",
+			job:  &Job{Type: "build", State: "working", Err: "duplicate slug"},
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		if got := prTrackable(c.job); got != c.want {
+			t.Errorf("%s: prTrackable = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestReconcilePRs(t *testing.T) {
 	pr := func(n, state string) JobPR { return JobPR{URL: "https://x/pull/" + n, State: state} }
 	cases := []struct {
