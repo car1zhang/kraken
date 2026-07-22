@@ -113,6 +113,141 @@ func LastBlocks(path string, n int) ([]block, int, error) {
 	}
 }
 
+// Stall classifies how the last turn recorded in a transcript ended.
+// Kind "" = healthy/none, "api-error" = the turn died on an API failure
+// (Claude Code appends a synthetic assistant entry only after its own
+// retries give up), "interrupted" = carl pressed esc mid-turn.
+type Stall struct {
+	Kind      string
+	Text      string // display text for api-error entries ("API Error: …")
+	Transient bool   // api-error only: false for credit/auth/prompt-length failures
+}
+
+// nonTransientAPIErrors flags API-error text that nudging/retrying won't
+// fix — a fresh turn will hit the exact same wall.
+var nonTransientAPIErrors = []string{"credit balance", "prompt is too long", "invalid api key", "authentication", "billing"}
+
+// LastStall reads the final message entry of a transcript JSONL file and
+// classifies it. It reads only a fixed 256 KiB tail window (huge
+// transcripts stay cheap; a stall, if any, is always in the last entry),
+// scans backward past trailing bookkeeping records (summary, system,
+// progress, ...) for the last assistant/user entry carrying a message
+// object, and classifies that single entry. Any open/read error, or a
+// transcript with no such entry, returns a zero Stall — never an error.
+func LastStall(path string) Stall {
+	f, err := os.Open(path)
+	if err != nil {
+		return Stall{}
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return Stall{}
+	}
+	size := info.Size()
+	start := size - 256*1024
+	if start < 0 {
+		start = 0
+	}
+	if _, err := f.Seek(start, 0); err != nil {
+		return Stall{}
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return Stall{}
+	}
+	lines := strings.Split(string(data), "\n")
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:] // drop partial first line
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue // partial trailing line, or non-JSON bookkeeping
+		}
+		t, _ := rec["type"].(string)
+		if t != "assistant" && t != "user" {
+			continue
+		}
+		// Subagent traffic and harness-injected records ride in the same
+		// transcript file as zeus' own turns. A sidechain entry landing
+		// last must neither be misread as zeus's stall (false positive)
+		// nor mask a genuine synthetic api-error written just before it
+		// (false negative), so skip past both here exactly as parseBlocks
+		// does.
+		if side, _ := rec["isSidechain"].(bool); side {
+			continue
+		}
+		if meta, _ := rec["isMeta"].(bool); meta {
+			continue
+		}
+		msg, ok := rec["message"].(map[string]any)
+		if !ok {
+			continue
+		}
+		text := strings.TrimSpace(stallText(msg["content"]))
+		return classifyStall(t, msg, text)
+	}
+	return Stall{}
+}
+
+// stallText concatenates a message's text content — a plain string, or the
+// "text" blocks of a content-part array (tool_use/tool_result parts carry
+// no display text and are skipped).
+func stallText(content any) string {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []any:
+		var b strings.Builder
+		for _, part := range c {
+			pm, ok := part.(map[string]any)
+			if !ok || pm["type"] != "text" {
+				continue
+			}
+			if s, _ := pm["text"].(string); s != "" {
+				b.WriteString(s)
+			}
+		}
+		return b.String()
+	default:
+		return ""
+	}
+}
+
+// classifyStall applies the api-error/interrupted rules to a single
+// already-located assistant or user entry.
+func classifyStall(entryType string, msg map[string]any, text string) Stall {
+	switch entryType {
+	case "assistant":
+		model, _ := msg["model"].(string)
+		if model != "<synthetic>" {
+			return Stall{} // a real model merely mentioning "API Error" isn't a stall
+		}
+		lower := strings.ToLower(text)
+		if !strings.HasPrefix(lower, "api error") {
+			return Stall{}
+		}
+		transient := true
+		for _, s := range nonTransientAPIErrors {
+			if strings.Contains(lower, s) {
+				transient = false
+				break
+			}
+		}
+		return Stall{Kind: "api-error", Text: TruncateOneLine(text, 120), Transient: transient}
+	case "user":
+		if strings.HasPrefix(text, "[Request interrupted by user") {
+			return Stall{Kind: "interrupted"}
+		}
+	}
+	return Stall{}
+}
+
 // lastUserScanLimit bounds how far back LastUserText will grow its scan
 // window. Unlike LastBlocks/lastAssistantText, which are effectively
 // tail-bounded because assistant blocks are dense at the tail, a job that

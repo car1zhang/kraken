@@ -120,6 +120,22 @@ type TeamMember struct {
 // want ..." appearing in ordinary output.
 var questionOptionRe = regexp.MustCompile(`^\s*❯ \d+\. `)
 
+// spinnerLineRe matches the busy-indicator line the CLI paints for the whole
+// duration of a turn, as of CLI 2.1.217 (pinned from a real capture):
+//
+//	✢ Wibbling… (1m 7s · ↓ 2.1k tokens)
+//
+// The glyph cycles through a small set of star-like characters and the word
+// varies ("Thinking…", "Wibbling…", ...); the parenthetical always holds an
+// elapsed time and optionally token counts. Requiring glyph + word + "… ("
+// + digit, anchored at line start, keeps this from matching ordinary agent
+// output that merely contains an ellipsis or a parenthetical.
+//
+// The observed 2.1.217 cycle is exactly `· ✢ ✳ ✶ ✻ ✽`; `∗ ✦ ✧ ⚹` are
+// defensive extras beyond that observed set, included in case the cycle
+// grows in a later CLI build without another pane capture to confirm it.
+var spinnerLineRe = regexp.MustCompile(`(?m)^\s*[✢✳✶✻✽·∗✦✧⚹] \S.{0,58}… \(\d`)
+
 func refineStatus(p *Peer) {
 	if p.Pane == "" {
 		return
@@ -142,8 +158,16 @@ func refinedStatus(current, paneText string) string {
 	}
 	if current == "unknown" || current == "shell" {
 		// no session file (teammates), or a background shell muddying the
-		// reported status: the TUI shows "esc to interrupt" for the whole
-		// turn, so its absence means the claude is at its prompt
+		// reported status: the TUI paints a spinner status line for the
+		// whole turn (see spinnerLineRe), so its absence means the claude
+		// is at its prompt.
+		if spinnerLineRe.MatchString(paneText) {
+			return "running"
+		}
+		// legacy fallback: pre-2.1.217 CLIs painted "esc to interrupt" INSIDE
+		// the spinner parenthetical itself, not as a separate mode — both
+		// signals coexisted in the same line. spinnerLineRe won't match that
+		// older line shape, so this catches it as its own check.
 		if strings.Contains(paneText, "esc to interrupt") {
 			return "running"
 		}
