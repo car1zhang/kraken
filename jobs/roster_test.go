@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"strings"
 	"testing"
 
 	"kraken/core"
@@ -235,5 +236,45 @@ func TestCellCrewOrdering(t *testing.T) {
 		if got.Agents[i].Name != name {
 			t.Errorf("position %d: got %q, want %q (full order: %+v)", i, got.Agents[i].Name, name, got.Agents)
 		}
+	}
+}
+
+// TestCellCrewMultipleAthenaVariants locks in the same multi-instance role
+// bucketing TestCellCrewOrdering proves for hephaestus-1/hephaestus-2, but
+// for the three parallel single-dimension review variants zeus now spawns:
+// athena-logic/athena-edge/athena-style must all bucket into role "athena"
+// and render together, name-sorted, ahead of hermes and "other".
+func TestCellCrewMultipleAthenaVariants(t *testing.T) {
+	sess := "cell-x"
+	zeus := &core.Peer{TmuxSession: sess, Agent: "claude", Status: "running", Pane: "%1"}
+	peers := []*core.Peer{
+		zeus,
+		{TmuxSession: sess, Pane: "%2", Role: "teammate", AgentName: "athena-style", Status: "waiting"},
+		{TmuxSession: sess, Pane: "%3", Role: "teammate", AgentName: "athena-logic", Status: "running"},
+		{TmuxSession: sess, Pane: "%4", Role: "teammate", AgentName: "hephaestus-dedupe", Status: "waiting"},
+		{TmuxSession: sess, Pane: "%5", Role: "teammate", AgentName: "athena-edge", Status: "running"},
+	}
+
+	got := CellCrew(sess, zeus, peers, nil)
+	wantOrder := []string{"hephaestus-dedupe", "athena-edge", "athena-logic", "athena-style"}
+	if len(got.Agents) != len(wantOrder) {
+		t.Fatalf("want %d agents, got %d (%+v)", len(wantOrder), len(got.Agents), got.Agents)
+	}
+	for i, name := range wantOrder {
+		if got.Agents[i].Name != name {
+			t.Errorf("position %d: got %q, want %q (full order: %+v)", i, got.Agents[i].Name, name, got.Agents)
+		}
+		if role := got.Agents[i].Role; strings.HasPrefix(name, "athena") && role != "athena" {
+			t.Errorf("agent %q: Role = %q, want %q", name, role, "athena")
+		}
+	}
+	working := 0
+	for _, a := range got.Agents {
+		if crewRole(a.Name) == "athena" && a.Working {
+			working++
+		}
+	}
+	if working != 2 {
+		t.Errorf("want 2 of 3 athena variants working (a2/3), got %d", working)
 	}
 }
