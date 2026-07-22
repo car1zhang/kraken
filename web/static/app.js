@@ -598,6 +598,27 @@ let artifactURL = "";
 const isPage = (url) => /\.(html|svg|pdf)$/i.test(url);
 const isImage = (url) => /\.(png|jpe?g|gif|webp)$/i.test(url);
 
+// artifactParts recovers {slug, home, name} from an /api/artifact URL — the
+// same triple the overlay was opened with, needed to address a feedback post
+// at the exact artifact being viewed. Cell-home names may themselves contain
+// slashes (subpath artifacts), so only the first two segments are split off.
+function artifactParts(url) {
+  const m = url.match(/^\/api\/artifact\/([^/]+)\/([^/]+)\/(.+)$/);
+  return m ? { slug: m[1], home: m[2], name: m[3] } : null;
+}
+
+let feedbackSavedTimer = 0;
+
+function hideFeedbackForm() {
+  document.getElementById("feedback-form").hidden = true;
+  document.getElementById("feedback-text").value = "";
+  document.getElementById("feedback-note").textContent = "";
+  // a lingering "saved ✓" must never carry over to another artifact (or
+  // stack across rapid sends) — cancel the revert timer and reset now
+  clearTimeout(feedbackSavedTimer);
+  document.getElementById("panel-feedback").textContent = "feedback";
+}
+
 function openArtifact(url, name) {
   document.getElementById("panel-title").textContent = name;
   artifactURL = url;
@@ -605,6 +626,8 @@ function openArtifact(url, name) {
   showRaw = false;
   overlay.hidden = false;
   document.getElementById("panel-raw").hidden = isImage(url) || /\.pdf$/i.test(url);
+  document.getElementById("panel-feedback").hidden = false;
+  hideFeedbackForm();
   if (isImage(url)) {
     panelBody.className = "panel-body page";
     panelBody.innerHTML = `<img src="${esc(url)}" alt="artifact">`;
@@ -1586,6 +1609,38 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
   } else {
     panelBody.className = "panel-body md";
     panelBody.innerHTML = renderMD(rawText);
+  }
+});
+document.getElementById("panel-feedback").addEventListener("click", () => {
+  const form = document.getElementById("feedback-form");
+  form.hidden = !form.hidden;
+  if (!form.hidden) document.getElementById("feedback-text").focus();
+});
+document.getElementById("feedback-cancel").addEventListener("click", () => hideFeedbackForm());
+document.getElementById("feedback-send").addEventListener("click", async () => {
+  const note = document.getElementById("feedback-note");
+  const parts = artifactParts(artifactURL);
+  const text = document.getElementById("feedback-text").value.trim();
+  if (!parts) { note.textContent = "can't identify this artifact"; return; }
+  if (!text) { note.textContent = "feedback is empty"; return; }
+  const sendBtn = document.getElementById("feedback-send");
+  sendBtn.disabled = true;
+  try {
+    const r = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug: parts.slug, home: parts.home, name: parts.name, feedback: text }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || String(r.status));
+    hideFeedbackForm();
+    const label = document.getElementById("panel-feedback");
+    label.textContent = "saved ✓";
+    feedbackSavedTimer = setTimeout(() => { label.textContent = "feedback"; }, 2000);
+  } catch (e) {
+    note.textContent = "failed: " + e.message;
+  } finally {
+    sendBtn.disabled = false;
   }
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });

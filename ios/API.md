@@ -380,3 +380,19 @@ only (405 otherwise). `name` must exactly match the saved-name format
 name, unresolvable slug, or missing file — resolution goes through
 `api.UploadPath`, which does not require an active job (an upload outlives
 its job's own draft/queued/etc. state changes, same lifecycle as artifacts).
+
+### `POST /api/feedback` (web-UI-only; additive — contract stays unchanged)
+
+The artifact overlay's feedback button: freezes a snapshot of the artifact
+file plus a plaintext note under
+`~/Documents/pluto/doc-feedback/<YYYY-MM-DD>/<HHMMSS>-<slug>/` (`snapshot<ext>`
++ `feedback.txt`), for the user's `/dream` skill to fold into the doc-writing
+skills later. Resolution mirrors `GET /api/artifact/...`: `home` picks the
+active-vs-archived job namespace, then the same `ArtifactPath` guard resolves
+the file (path traversal, hidden segments, missing file all refused).
+
+Request: `{"slug": string, "home": "cell"|"pluto"|"archive", "name": string, "feedback": string}`.
+Response: `{"ok": true, "dir": string}` (the entry directory's absolute path) on success.
+Errors: 405 (non-POST), 400 (bad JSON, or feedback empty/whitespace-only),
+404 (unknown job, or `name` doesn't resolve to a real artifact file),
+500 (snapshot/note write failure).
