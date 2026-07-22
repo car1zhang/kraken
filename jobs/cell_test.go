@@ -317,3 +317,33 @@ func TestCellHealth(t *testing.T) {
 		})
 	}
 }
+
+// --- reactivatePrompt ---
+
+func TestReactivatePrompt(t *testing.T) {
+	const reorient = "re-orient text"
+	const rebase = "rebase instruction"
+	cases := []struct {
+		name       string
+		message    string
+		rebaseNote string
+		wantPrompt string
+		wantHas    bool
+	}{
+		{"blank message, no rebase", "", "", "", false},
+		{"blank message, rebase needed", "", rebase, rebase, true},
+		{"message, no rebase", "steer me", "", reorient + "\nsteering from carl: steer me", true},
+		{"message, rebase needed", "steer me", rebase, rebase + "\n" + reorient + "\nsteering from carl: steer me", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prompt, hasPrompt := reactivatePrompt(reorient, c.message, c.rebaseNote)
+			if hasPrompt != c.wantHas {
+				t.Fatalf("reactivatePrompt(%q, %q) hasPrompt = %v, want %v", c.message, c.rebaseNote, hasPrompt, c.wantHas)
+			}
+			if prompt != c.wantPrompt {
+				t.Errorf("reactivatePrompt(%q, %q) = %q, want %q", c.message, c.rebaseNote, prompt, c.wantPrompt)
+			}
+		})
+	}
+}

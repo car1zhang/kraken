@@ -1073,9 +1073,18 @@ private struct QuestionSummary: View {
 /// resume prompt of the done job's original zeus session. Mirrors
 /// SteerView's shape, but an empty message is fine — reactivating without
 /// steering just wakes the session with the standard fresh-branch brief.
-private struct ReactivateView: View {
+/// Not private: BoardView presents this directly for a done→working
+/// overview-strip drag, where `requireText` is set — that entry path has no
+/// separate confirmation step, so an empty-text resume would silently do
+/// nothing but reopen the same session.
+struct ReactivateView: View {
     let job: WebJob
     let baseURL: String
+    // When true (drag-to-working from the overview strip), the Reactivate
+    // button stays disabled until non-empty text is entered. JobDetailView's
+    // own entry (the action bar's Reactivate button) leaves this false —
+    // an empty-text reactivate there is a deliberate, low-stakes shortcut.
+    var requireText: Bool = false
     var onReactivated: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -1124,7 +1133,7 @@ private struct ReactivateView: View {
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Reactivate")
                 .buttonStyle(.borderedProminent)
-                .disabled(isBusy)
+                .disabled(isBusy || (requireText && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             }
         }
         .disabled(isBusy)
@@ -1160,8 +1169,10 @@ private struct ReactivateView: View {
 }
 
 /// Free-text steering for a live cell — routed like a terminal message.
-/// Reached from JobDetailView's action bar for any live job.
-private struct SteerView: View {
+/// Reached from JobDetailView's action bar for any live job, and directly
+/// from BoardView for a blocked→working overview-strip drag (unblockFraming
+/// true either way, since both entry points target a blocked cell).
+struct SteerView: View {
     let job: WebJob
     let baseURL: String
     // When true (the cell is blocked), the sheet frames itself as "unblock"

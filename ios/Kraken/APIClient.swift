@@ -18,6 +18,13 @@ private struct ErrorBody: Decodable {
     let error: String?
 }
 
+/// POST /api/reorder body — the full top-to-bottom slug order of one column.
+/// Defined here rather than in Models.swift since this is the only call site.
+private struct ReorderRequest: Encodable {
+    let column: String
+    let slugs: [String]
+}
+
 /// One networking client for the whole app: plain async/await URLSession,
 /// generic get/post plumbing, and a typed convenience method per endpoint.
 /// An actor so it's safe to share a single instance (and its URLSession)
@@ -246,6 +253,26 @@ actor APIClient {
             baseURL: baseURL, path: "/api/reactivate",
             body: SteerRequest(slug: slug, text: text)
         )
+    }
+
+    /// Persists a column's full top-to-bottom slug order after a board drag
+    /// reorder (see BoardView's within-column drag). `column` is a
+    /// BoardColumn rawValue ("draft", "queued", ...).
+    func reorderJob(baseURL: String, column: String, slugs: [String]) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/reorder",
+            body: ReorderRequest(column: column, slugs: slugs)
+        )
+    }
+
+    /// Boots a queued job's cell now, ahead of the daemon's own scheduling.
+    func startJob(baseURL: String, slug: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/start", body: SlugRequest(slug: slug))
+    }
+
+    /// Interrupts a working cell, moving the job to blocked.
+    func stopJob(baseURL: String, slug: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/stop", body: SlugRequest(slug: slug))
     }
 
     // MARK: - drafts

@@ -931,18 +931,68 @@ func reactivateMode(state string, worktreeExists bool) (string, error) {
 	return "", fmt.Errorf("job has never started — k start it instead")
 }
 
+// reactivatePrompt assembles the resumed claude's prompt from three pure
+// inputs: reorient (the mode-specific re-orientation text — resume vs
+// recreate, done vs not), message (carl's optional steering), and rebaseNote
+// (a rebase instruction, non-empty only in recreate mode when the remote
+// branch has drifted from base). A blank message with no rebase needed means
+// promptless resume (hasPrompt=false) — nothing is submitted, the session
+// just comes up idle. A rebase note with a blank message IS the entire
+// prompt, since it's the one thing that must happen before anything else;
+// otherwise it's prepended ahead of the re-orientation text.
+func reactivatePrompt(reorient, message, rebaseNote string) (prompt string, hasPrompt bool) {
+	if rebaseNote == "" && message == "" {
+		return "", false
+	}
+	if rebaseNote == "" {
+		return reorient + "\nsteering from carl: " + message, true
+	}
+	if message == "" {
+		return rebaseNote, true
+	}
+	return rebaseNote + "\n" + reorient + "\nsteering from carl: " + message, true
+}
+
+// recreateFromRemote checks whether the job's branch still lives on origin
+// (carl pushed it before the cell was lost) and, if so, whether it has
+// drifted behind base. ok=false means no usable remote ref was found — a
+// failed fetch (offline) or a branch that was never pushed — and the caller
+// falls back to ensureUsableBranch's local reset-or-rename logic unchanged.
+func recreateFromRemote(repo, branch, base string) (needsRebase bool, ok bool) {
+	if err := exec.Command("git", "-C", repo, "fetch", "origin").Run(); err != nil {
+		return false, false
+	}
+	remoteRef := "origin/" + branch
+	if !refExists(repo, remoteRef) {
+		return false, false
+	}
+	// A local branch with commits the remote lacks (pushed, then kept
+	// working, then the cell died) must not be force-reset to the remote
+	// tip — those commits would be reflog-only. Local ahead ⇒ fall back.
+	if refExists(repo, branch) &&
+		exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", branch, remoteRef).Run() != nil {
+		return false, false
+	}
+	needsRebase = exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", base, remoteRef).Run() != nil
+	return needsRebase, true
+}
+
 // ReactivateJob resurrects a job into its original zeus session. For a done
-// job: the worktree is recreated at the SAME path (the claude project dir —
-// and with it the transcript history — is keyed on that path), the branch
-// recycles per ensureUsableBranch (reset off the base when the old one is
-// fully merged, -rN only for unmerged leftovers), and claude is resumed with
-// -r <session> rather than started fresh. For a started job whose cell died
-// mid-run (hand-killed session, tmux restart, interrupted teardown): the
-// existing worktree — dirty files and all — is reused in place, so the one
-// recovery path that preserves WIP is also the one-command one. session
-// overrides the recorded id (hand-rescue for jobs done before kraken
-// stamped session ids); message rides along in the resume prompt as carl's
-// steering.
+// job (or a started job whose worktree was lost): the worktree is recreated
+// at the SAME path (the claude project dir — and with it the transcript
+// history — is keyed on that path). If carl pushed the branch before the
+// cell was lost, the worktree recreates off the REMOTE tip (origin/<branch>)
+// so pushed work is never silently dropped for a locally-reset one; only a
+// branch that never made it to origin falls back to ensureUsableBranch's
+// reset-or-rename. A remote branch that has drifted behind base earns a
+// rebase instruction in the resumed prompt. For a started job whose cell
+// died mid-run with its worktree intact: the existing worktree — dirty files
+// and all — is reused in place, so the one recovery path that preserves WIP
+// is also the one-command one. session overrides the recorded id
+// (hand-rescue for jobs done before kraken stamped session ids); message
+// rides along as carl's steering. A blank message (and no rebase needed)
+// resumes the session promptless — nothing is submitted, it just comes up
+// idle.
 func ReactivateJob(j *Job, session, message string) error {
 	if j.Err != "" {
 		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
@@ -974,38 +1024,61 @@ func ReactivateJob(j *Job, session, message string) error {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
-	var prompt string
+	var reorient, rebaseNote string
 	if mode == "resume" {
-		prompt = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."
+		reorient = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."
 	} else {
 		base, err := baseRef(j, repo)
 		if err != nil {
 			return fmt.Errorf("job %s: %v", j.Slug, err)
 		}
-		// recycle the branch when its PRs are all merged into the base; only
-		// unmerged leftovers force a fresh -rN name (persisted inside)
-		branchFlag, err := ensureUsableBranch(j, repo, base)
-		if err != nil {
-			return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
+		branch := CellBranch(j)
+		var branchFlag, startPoint string
+		fromRemote := false
+		if needsRebase, ok := recreateFromRemote(repo, branch, base); ok {
+			fromRemote = true
+			// carl pushed this branch before the cell was lost — recreate off
+			// the remote tip so that work is never silently dropped for a
+			// locally-reset branch
+			branchFlag, startPoint = "-B", "origin/"+branch
+			if needsRebase {
+				rebaseNote = "your branch " + branch + " is behind " + base + ". first run: git fetch origin && git rebase " + base + " — resolve any conflicts, verify the build still passes, and report the rebase result. then continue."
+			}
+		} else {
+			// never pushed (or origin unreachable): recycle the branch when
+			// its PRs are all merged into base; only unmerged leftovers force
+			// a fresh -rN name (persisted inside)
+			branchFlag, err = ensureUsableBranch(j, repo, base)
+			if err != nil {
+				return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
+			}
+			branch, startPoint = CellBranch(j), base
 		}
 		wt = CellWorktree(j, repo)
-		out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, CellBranch(j), base).CombinedOutput()
+		out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, branch, startPoint).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 		}
 		// fresh worktree, same as StartCell: no hook until installed, and a
 		// done→adjust reactivation is exactly when new PRs are about to ship
 		installHookSettings(wt, j)
+		// tell zeus where its branch actually points: the pushed remote tip
+		// when recreateFromRemote took over, the base otherwise
+		branchDesc := "freshly reset off " + base
+		if fromRemote {
+			branchDesc = "recreated from its pushed remote tip origin/" + branch
+		}
 		if j.State == "done" {
-			prompt = "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + CellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
+			reorient = "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + branch + " " + branchDesc + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
 		} else {
-			prompt = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + CellBranch(j) + " reset off " + base + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
+			reorient = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + branch + " " + branchDesc + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
 		}
 	}
-	if message != "" {
-		prompt += "\nsteering from carl: " + message
+	prompt, hasPrompt := reactivatePrompt(reorient, message, rebaseNote)
+	argv := append(cellClaudeArgs(), "--name", ZeusName(j), "-r", session)
+	if hasPrompt {
+		argv = append(argv, "--", prompt)
 	}
-	argv := append(cellClaudeArgs(), "--name", ZeusName(j), "-r", session, "--", prompt)
 	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
 		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)

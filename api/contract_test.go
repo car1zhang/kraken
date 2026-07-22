@@ -25,10 +25,13 @@ import (
 //     in tmux/process-table dependencies this file avoids).
 //   - webAction-wrapped endpoints (/api/queue, /api/dequeue, /api/done,
 //     /api/retry, /api/kill, /api/archive, /api/unarchive, /api/delete,
-//     /api/question, /api/steer, /api/reactivate): all share the trivial
-//     {"ok": true} success shape or {"error": string} failure shape, already
-//     covered by the generic error-response convention documented in
-//     ios/API.md.
+//     /api/question, /api/steer, /api/reactivate, /api/start, /api/stop):
+//     all share the trivial {"ok": true} success shape or {"error": string}
+//     failure shape, already covered by the generic error-response
+//     convention documented in ios/API.md.
+//   - /api/reorder's success/failure shapes are the same {"ok":true} /
+//     {"error": string} convention; only its distinct request shape
+//     (reorderReq) gets its own spec below.
 //   - /api/peers/* action endpoints (spawn, send, kill, open, capture): need
 //     real tmux panes/sessions to reach their success path.
 //   - /api/job/create and /api/job/save: exercised for behavior elsewhere
@@ -659,6 +662,26 @@ func TestJobSaveFormWireShape(t *testing.T) {
 	if _, ok := resp["mtime"].(json.Number); !ok {
 		t.Errorf("mtime = %#v, want json.Number", resp["mtime"])
 	}
+}
+
+// --- board reorder: POST /api/reorder (actions.go) — a custom request shape
+// unlike webReq, so it gets its own wire-shape spec. Success/failure
+// responses are the standard {"ok":true} / {"error":string} shapes already
+// covered by the webAction-wrapped-endpoint convention noted above; the
+// happy-path/unknown-column/departed-slug behavior is covered by
+// actions_test.go's TestWebReorder* handler tests.
+
+var reorderReqSpec = map[string]fieldSpec{
+	"column": {kind: wireString, required: true},
+	"slugs":  {kind: wireArray, required: true, nullable: true},
+}
+
+func TestReorderReqWireShape(t *testing.T) {
+	data, err := json.Marshal(reorderReq{Column: "queued", Slugs: []string{"a", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "reorderReq", data, reorderReqSpec)
 }
 
 // --- draft: /api/draft GET/POST (draft.go) ---
