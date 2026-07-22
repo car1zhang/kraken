@@ -24,7 +24,7 @@ import (
 // restart merely re-notifies once.
 
 const (
-	CellCap        = 10
+	CellCap        = 15
 	DaemonInterval = 15 * time.Second
 	// PR tracking is throttled to every reapEvery-th tick (~1 min): gh
 	// calls per open cell are the daemon's only rate-limited traffic.
