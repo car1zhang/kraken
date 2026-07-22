@@ -148,6 +148,8 @@ type jobFormFields struct {
 	Base    string        `json:"base"`
 	Ready   bool          `json:"ready"`
 	Solo    bool          `json:"solo"`
+	Model   string        `json:"model"`
+	SkipDoc bool          `json:"skip_doc"`
 	Prereqs []jobs.Prereq `json:"prereqs"`
 	Spec    string        `json:"spec"`
 	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
@@ -182,6 +184,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 	webJSON(w, http.StatusOK, map[string]any{
 		"slug": j.Slug, "type": j.Type, "repo": j.Repo, "base": j.Base,
 		"ready": j.Ready, "solo": j.Solo,
+		"model": j.Model, "skip_doc": j.SkipDoc,
 		"prereqs": prereqs,
 		"spec":    strings.TrimSpace(spec),
 		"mtime":   jobMTime(fi), "editable": editableJob(j),
@@ -215,6 +218,14 @@ func serializeJobFile(f jobFormFields, state, outcome, session string, run int, 
 		}
 	}
 	fmt.Fprintf(&b, "solo: %t\n", f.Solo)
+	// conditional like base: — absent parses as the default, so untouched
+	// jobs keep their files free of the new keys
+	if f.Model != "" {
+		fmt.Fprintf(&b, "model: %s\n", jobs.OneLine(f.Model))
+	}
+	if f.SkipDoc {
+		b.WriteString("skip-doc: true\n")
+	}
 	if state != "" {
 		fmt.Fprintf(&b, "state: %s\n", state)
 	}

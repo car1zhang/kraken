@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"kraken/core"
 	"kraken/jobs"
+	"kraken/util"
 )
 
 // Endpoints deliberately NOT shape-tested here, and why:
@@ -24,10 +26,13 @@ import (
 //     in tmux/process-table dependencies this file avoids).
 //   - webAction-wrapped endpoints (/api/queue, /api/dequeue, /api/done,
 //     /api/retry, /api/kill, /api/archive, /api/unarchive, /api/delete,
-//     /api/question, /api/steer, /api/reactivate): all share the trivial
-//     {"ok": true} success shape or {"error": string} failure shape, already
-//     covered by the generic error-response convention documented in
-//     ios/API.md.
+//     /api/question, /api/steer, /api/reactivate, /api/start, /api/stop):
+//     all share the trivial {"ok": true} success shape or {"error": string}
+//     failure shape, already covered by the generic error-response
+//     convention documented in ios/API.md.
+//   - /api/reorder's success/failure shapes are the same {"ok":true} /
+//     {"error": string} convention; only its distinct request shape
+//     (reorderReq) gets its own spec below.
 //   - /api/peers/* action endpoints (spawn, send, kill, open, capture): need
 //     real tmux panes/sessions to reach their success path.
 //   - /api/job/create and /api/job/save: exercised for behavior elsewhere
@@ -693,6 +698,8 @@ var jobFormSpec = map[string]fieldSpec{
 	"base":     {kind: wireString, required: true},
 	"ready":    {kind: wireBool, required: true},
 	"solo":     {kind: wireBool, required: true},
+	"model":    {kind: wireString, required: true},
+	"skip_doc": {kind: wireBool, required: true},
 	"prereqs":  {kind: wireArray, required: true},
 	"spec":     {kind: wireString, required: true},
 	"mtime":    {kind: wireNumber, required: true},
@@ -761,6 +768,26 @@ func TestJobSaveFormWireShape(t *testing.T) {
 	}
 }
 
+// --- board reorder: POST /api/reorder (actions.go) — a custom request shape
+// unlike webReq, so it gets its own wire-shape spec. Success/failure
+// responses are the standard {"ok":true} / {"error":string} shapes already
+// covered by the webAction-wrapped-endpoint convention noted above; the
+// happy-path/unknown-column/departed-slug behavior is covered by
+// actions_test.go's TestWebReorder* handler tests.
+
+var reorderReqSpec = map[string]fieldSpec{
+	"column": {kind: wireString, required: true},
+	"slugs":  {kind: wireArray, required: true, nullable: true},
+}
+
+func TestReorderReqWireShape(t *testing.T) {
+	data, err := json.Marshal(reorderReq{Column: "queued", Slugs: []string{"a", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "reorderReq", data, reorderReqSpec)
+}
+
 // --- draft: /api/draft GET/POST (draft.go) ---
 
 var webDraftSpec = map[string]fieldSpec{
@@ -798,6 +825,34 @@ func TestDraftPostWireShape(t *testing.T) {
 		t.Fatalf("draftHandler (POST): status %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/draft (POST)", rec.Body.Bytes(), draftPostOKSpec)
+}
+
+// --- feedback: /api/feedback POST (feedback.go) ---
+//
+// Only the 200 success shape is pinned here — 400/404/405 all return the
+// generic {"error": string} shape already covered by the convention note
+// atop this file (see the webAction-wrapped endpoints).
+
+var feedbackOKSpec = map[string]fieldSpec{
+	"ok":  {kind: wireBool, required: true},
+	"dir": {kind: wireString, required: true},
+}
+
+func TestFeedbackWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "contract-feedback", "")
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "contract-feedback.report.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := mustJSON(t, feedbackReq{Slug: "contract-feedback", Home: "pluto", Name: "report.html", Feedback: "note"})
+	req := httptest.NewRequest(http.MethodPost, "/api/feedback", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	feedbackHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("feedbackHandler: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/feedback", rec.Body.Bytes(), feedbackOKSpec)
 }
 
 // jobSaveFormConflictSpec is the 409 shape webJobSaveForm returns for a
@@ -950,4 +1005,76 @@ func TestJobSaveFormConflictWireShape(t *testing.T) {
 		t.Fatalf("webJobSaveForm: status %d, body %s, want 409", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/job/saveform (409 conflict)", rec.Body.Bytes(), jobSaveFormConflictSpec)
+}
+
+// --- unified event log: /api/logs/files, /api/logs ---
+
+var logFilesSpec = map[string]fieldSpec{
+	"files": {kind: wireArray, required: true},
+}
+
+var logReadSpec = map[string]fieldSpec{
+	"file":    {kind: wireString, required: true},
+	"prev":    {kind: wireString, required: true},
+	"entries": {kind: wireArray, required: true},
+}
+
+// logEntrySpec covers util.LogEntry, the elements of /api/logs "entries".
+var logEntrySpec = map[string]fieldSpec{
+	"ts":    {kind: wireNumber, required: true},
+	"src":   {kind: wireString, required: true},
+	"level": {kind: wireString, required: true},
+	"event": {kind: wireString, required: true},
+	"msg":   {kind: wireString, required: true},
+}
+
+// logFileInfoSpec covers util.LogFileInfo, the elements of /api/logs/files
+// "files".
+var logFileInfoSpec = map[string]fieldSpec{
+	"name":  {kind: wireString, required: true},
+	"size":  {kind: wireNumber, required: true},
+	"mtime": {kind: wireNumber, required: true},
+}
+
+func TestLogsWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_LOGS_DIR", t.TempDir())
+	util.LogEvent("web", "info", "queue", "queue contract-test")
+
+	rec := httptest.NewRecorder()
+	webLogFiles(rec, httptest.NewRequest(http.MethodGet, "/api/logs/files", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webLogFiles: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/logs/files", rec.Body.Bytes(), logFilesSpec)
+
+	files := util.ListLogFiles()
+	if len(files) != 1 {
+		t.Fatalf("want 1 log file, got %+v", files)
+	}
+	data, err := json.Marshal(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "util.LogFileInfo", data, logFileInfoSpec)
+
+	// no ?file= → newest file
+	rec = httptest.NewRecorder()
+	webLogRead(rec, httptest.NewRequest(http.MethodGet, "/api/logs", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webLogRead: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/logs", rec.Body.Bytes(), logReadSpec)
+
+	entry, err := json.Marshal(util.LogEntry{TS: 1, Src: "web", Level: "info", Event: "queue", Msg: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "util.LogEntry", entry, logEntrySpec)
+
+	// a name outside the listing must 404, never read a path
+	rec = httptest.NewRecorder()
+	webLogRead(rec, httptest.NewRequest(http.MethodGet, "/api/logs?file=../../etc/passwd", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("traversal name: status %d, want 404", rec.Code)
+	}
 }

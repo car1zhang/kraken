@@ -80,6 +80,9 @@ struct RootTabView: View {
             UsageView()
                 .tabItem { Label("Usage", systemImage: "gauge.with.dots.needle.50percent") }
                 .tag(AppRouter.Tab.usage)
+            LogView()
+                .tabItem { Label("Log", systemImage: "list.bullet.rectangle") }
+                .tag(AppRouter.Tab.log)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppRouter.Tab.settings)

@@ -50,7 +50,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `daemon_ok` | bool | always | |
 | `cell_cap` | number | always | |
 | `live_cells` | number | always | |
-| `jobs` | array (`webJob`) | always (`[]` not `null`) | |
+| `jobs` | array (`webJob`) | always (`[]` not `null`) | within a display state, jobs render in the manual reorder's order (see `POST /api/reorder` below) — no separate order field, the array position IS the display order |
 | `contract` | number | always | == `apiContract` |
 | `stale` | bool | always | this `k web` process' self-check |
 
@@ -154,6 +154,47 @@ session (e.g. `/send`) rather than being typed as plain conversation text.
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
 
+### `POST /api/start`
+
+Request: `webReq` — `slug` (string, required), `text` unused.
+Response: same as `/api/queue` etc above.
+
+Boots a queued job's cell immediately — the web/app equivalent of CLI `k
+start`: same validation (job must currently display as `queued`, every
+prereq's dependency done — gated or not), same `StartCell` mechanics. This is carl acting by
+hand, so — same as `k start` — it doubles as the manual release for a job
+parked behind a *gated* prereq (an already-done dependency flagged for human
+sign-off) and bypasses the daemon's `CellCap` entirely.
+
+### `POST /api/stop`
+
+Request: `webReq` — `slug` (string, required), `text` unused.
+Response: same as above.
+
+Interrupts a working cell: sends one Escape keystroke to every in-flight
+agent pane in the cell (zeus, any nested subagent sharing its pane, any live
+tmux-backed team member) — stops short of a teardown. No job state is
+written; the daemon's own roll-call reads the idled cell as `blocked` on its
+next tick, same as an agent that stalled on its own.
+
+### `POST /api/reorder`
+
+Persists a manual drag-reorder within one board column. Distinct request
+shape from `webReq` — this is a whole-column move, not a single-job action.
+
+Request (`reorderReq`):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `column` | string | always | one of `draft`\|`queued`\|`working`\|`blocked`\|`done` |
+| `slugs` | array of string | always (`[]` ok) | the column's full intended slug order |
+
+Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure
+(409 for an unrecognized `column`). Posted slugs whose current
+`DisplayState` no longer matches `column` — a concurrent transition
+mid-drag, e.g. a queued job that started — are silently dropped from the
+saved order rather than failing the whole request.
+
 ### `GET /api/draft?slug=` / `POST /api/draft` → `webDraft` (draft.go)
 
 Per-job prompt-composer draft text, kept in an in-memory store on the `k web`
@@ -220,6 +261,8 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
+| `model` | string | always | claude model for zeus (`--model` value), `""` = claude's default; applied once at cell start |
+| `skip_doc` | bool | always | build only: skip the /doc → /send phase, implement the spec directly |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -232,7 +275,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = default), `skip_doc` (bool, optional to send — build only), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
@@ -324,6 +367,35 @@ Response: `{"ok": true}`.
 Errors: 400 (both or neither of pane/slug set), 404 (no session in pane / no job / no live cell agent), 409 (open failure).
 
 ---
+
+## Unified event log
+
+The single source-of-truth record of everything kraken does (daemon
+lifecycle + tick events, web server lifecycle, board actions, CLI moves,
+installs, errors), stored as size-rotated JSONL files under `~/.kraken/logs`
+(util/eventlog.go). The file is the pagination unit: clients load the newest
+file, then walk backwards via `prev` as the user scrolls into history.
+
+### `GET /api/logs/files` → map literal (api/logs.go `webLogFiles`)
+
+`{"files": [logFileInfo]}` — always an array, `[]` when no logs exist.
+`logFileInfo`: `name` (string, e.g. `20260722-153000.jsonl`), `size`
+(number, bytes), `mtime` (number, unix millis).
+
+### `GET /api/logs[?file=]` → map literal (api/logs.go `webLogRead`)
+
+No `?file=` returns the newest file. `file` must be a name from the listing
+— anything else 404s.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `file` | string | always | the file served; `""` when no logs exist yet |
+| `prev` | string | always | next-older file name, `""` at the start of history — the scroll-back cursor |
+| `entries` | array (`logEntry`) | always (`[]` not `null`) | in append order (oldest first) |
+
+`logEntry`: `ts` (number, unix millis), `src` (string: `daemon`\|`web`\|`cli`\|`install`), `level` (string: `info`\|`error`), `event` (string, kebab id e.g. `cell-start`, `start-failed`, `queue`), `msg` (string).
+
+Errors: 404 (unknown file name), 500.
 
 ## Misc
 
@@ -418,3 +490,19 @@ only (405 otherwise). `name` must exactly match the saved-name format
 name, unresolvable slug, or missing file — resolution goes through
 `api.UploadPath`, which does not require an active job (an upload outlives
 its job's own draft/queued/etc. state changes, same lifecycle as artifacts).
+
+### `POST /api/feedback` (web-UI-only; additive — contract stays unchanged)
+
+The artifact overlay's feedback button: freezes a snapshot of the artifact
+file plus a plaintext note under
+`~/Documents/pluto/doc-feedback/<YYYY-MM-DD>/<HHMMSS>-<slug>/` (`snapshot<ext>`
++ `feedback.txt`), for the user's `/dream` skill to fold into the doc-writing
+skills later. Resolution mirrors `GET /api/artifact/...`: `home` picks the
+active-vs-archived job namespace, then the same `ArtifactPath` guard resolves
+the file (path traversal, hidden segments, missing file all refused).
+
+Request: `{"slug": string, "home": "cell"|"pluto"|"archive", "name": string, "feedback": string}`.
+Response: `{"ok": true, "dir": string}` (the entry directory's absolute path) on success.
+Errors: 405 (non-POST), 400 (bad JSON, or feedback empty/whitespace-only),
+404 (unknown job, or `name` doesn't resolve to a real artifact file),
+500 (snapshot/note write failure).

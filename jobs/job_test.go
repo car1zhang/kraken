@@ -1,6 +1,8 @@
 package jobs
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -105,6 +107,57 @@ func TestJobTemplateClean(t *testing.T) {
 	}
 	if got := jobPrompt(j); got != "" {
 		t.Fatalf("template prompt should be empty, got %q", got)
+	}
+}
+
+func TestParseJobModel(t *testing.T) {
+	// model: any plain CLI token (shape check, not an allowlist); empty or
+	// absent means claude's default
+	for _, val := range []string{"sonnet", "fable", "claude-opus-4-8", "us.anthropic.claude_v2"} {
+		src := "---\njob: x\nrepo: monolith\nmodel: " + val + "\n---\n"
+		j := ParseJob("x.job.md", []byte(src))
+		if j.Err != "" || j.Model != val {
+			t.Errorf("model %q: err=%q model=%q", val, j.Err, j.Model)
+		}
+	}
+	if j := ParseJob("x.job.md", []byte("---\njob: x\nmodel:\n---\n")); j.Err != "" || j.Model != "" {
+		t.Errorf("empty model: err=%q model=%q", j.Err, j.Model)
+	}
+	// comments strip like any scalar
+	j := ParseJob("x.job.md", []byte("---\njob: x\nmodel: haiku  # cheap\n---\n"))
+	if j.Err != "" || j.Model != "haiku" {
+		t.Errorf("commented model: err=%q model=%q", j.Err, j.Model)
+	}
+	// non-token values err loudly — the value lands on a claude argv
+	for _, val := range []string{"sonnet or opus", "a;b", "läuft"} {
+		src := "---\njob: x\nmodel: " + val + "\n---\n"
+		if j := ParseJob("x.job.md", []byte(src)); j.Err == "" {
+			t.Errorf("model %q: expected Err, got clean parse", val)
+		}
+	}
+}
+
+func TestParseJobSkipDoc(t *testing.T) {
+	j := ParseJob("x.job.md", []byte("---\njob: x\ntype: build\nrepo: monolith\nskip-doc: true\n---\n"))
+	if j.Err != "" || !j.SkipDoc {
+		t.Fatalf("skip-doc build: err=%q skipdoc=%v", j.Err, j.SkipDoc)
+	}
+	if j := ParseJob("x.job.md", []byte("---\njob: x\ntype: build\nskip-doc: sure\n---\n")); j.Err == "" {
+		t.Error("bad skip-doc bool: expected Err")
+	}
+	// info jobs have no doc→send split to skip: strict-loud, regardless of
+	// key order relative to type
+	for _, src := range []string{
+		"---\njob: x\ntype: info\nskip-doc: true\n---\n",
+		"---\njob: x\nskip-doc: true\ntype: info\n---\n",
+	} {
+		if j := ParseJob("x.job.md", []byte(src)); !strings.Contains(j.Err, "skip-doc") {
+			t.Errorf("skip-doc on info job: err=%q", j.Err)
+		}
+	}
+	// false on an info job is fine — the checkbox merely untoggled
+	if j := ParseJob("x.job.md", []byte("---\njob: x\ntype: info\nrepo: monolith\nskip-doc: false\n---\n")); j.Err != "" {
+		t.Errorf("skip-doc false on info job: err=%q", j.Err)
 	}
 }
 
@@ -537,10 +590,18 @@ func TestJobPrompt(t *testing.T) {
 }
 
 func TestCellClaudeArgs(t *testing.T) {
-	args := cellClaudeArgs()
+	args := cellClaudeArgs("")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--dangerously-skip-permissions") || !strings.Contains(joined, "--rc") {
 		t.Fatalf("cc-alias flags missing: %v", args)
+	}
+	if strings.Contains(joined, "--model") {
+		t.Fatalf("empty model must not add a --model flag: %v", args)
+	}
+	// a job's model: field rides along as --model <value>
+	withModel := strings.Join(cellClaudeArgs("sonnet"), " ")
+	if !strings.Contains(withModel, "--model sonnet") {
+		t.Fatalf("model flag missing: %q", withModel)
 	}
 }
 
@@ -688,5 +749,51 @@ func TestPatchPRsSkipsBlockScalarContent(t *testing.T) {
 	j := ParseJob("x.job.md", []byte(got))
 	if j.Err != "" || len(j.PRs) != 1 {
 		t.Fatalf("round-trip: err=%q prs=%+v", j.Err, j.PRs)
+	}
+}
+
+// writeJobPRs must never drop a URL already on disk: the daemon's reconciled
+// list is built from j.PRs loaded at the start of a tick, but appendJobPR
+// (the pr-hook verb's real-time path) may append a fresh record straight to
+// the FILE in between. File has A, X recorded; the caller passes an updated
+// A alone (as if X had never been loaded) — the write must still land with
+// both A(merged) and X(unchanged), X appended after the caller's slice.
+func TestWriteJobPRsUnionsFileOnlyRecords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.job.md")
+	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\nprs:\n" +
+		"  - url: https://x/pull/1\n    state: open\n" +
+		"  - url: https://x/pull/2\n    state: open\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := ParseJob("x.job.md", []byte(src))
+	j.File = path
+
+	// caller only knows about pull/1 (as if pull/2 was appended to the file
+	// by the hook after this tick's j.PRs snapshot was taken), and reports
+	// it merged
+	callerPRs := []JobPR{{URL: "https://x/pull/1", State: "merged"}}
+	if err := writeJobPRs(j, callerPRs); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsed := ParseJob("x.job.md", data)
+	if reparsed.Err != "" {
+		t.Fatalf("reparsed job errored: %s", reparsed.Err)
+	}
+	want := []JobPR{
+		{URL: "https://x/pull/1", State: "merged"},
+		{URL: "https://x/pull/2", State: "open"},
+	}
+	if len(reparsed.PRs) != 2 || reparsed.PRs[0] != want[0] || reparsed.PRs[1] != want[1] {
+		t.Fatalf("prs after write: %+v, want %+v", reparsed.PRs, want)
+	}
+	if len(j.PRs) != 2 || j.PRs[0] != want[0] || j.PRs[1] != want[1] {
+		t.Fatalf("j.PRs not updated to union: %+v", j.PRs)
 	}
 }

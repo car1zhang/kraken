@@ -374,6 +374,8 @@ func buildWebBoard() webBoard {
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
 	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale()}
+	order := jobs.LoadBoardOrder()
+	byState := map[string][]webJob{}
 	for _, j := range js {
 		var prereqs []webPrereq
 		for _, p := range j.Prereqs {
@@ -425,7 +427,28 @@ func buildWebBoard() webBoard {
 			}
 		}
 		wj.Reactivatable = (j.State == "done" || wj.CellGone) && j.Session != ""
-		board.Jobs = append(board.Jobs, wj)
+		byState[wj.State] = append(byState[wj.State], wj)
+	}
+	// emit each display-state group in lifecycle order, within-group order
+	// coming from the manual board reorder (jobs/order.go): members not yet
+	// in the stored order land on top (slug-sorted, since js already is),
+	// then stored members in their saved order — the flat array's
+	// within-state order IS the wire contract, no new key needed.
+	for _, state := range []string{"draft", "queued", "working", "blocked", "done"} {
+		group := byState[state]
+		// slug -> queue, not a single value: duplicate-slug job files (both
+		// erred into draft) must each keep their own card, so consume one
+		// entry per emitted slug — ApplyColumnOrder preserves multiplicity
+		wjBySlug := make(map[string][]webJob, len(group))
+		slugs := make([]string, len(group))
+		for i, wj := range group {
+			slugs[i] = wj.Slug
+			wjBySlug[wj.Slug] = append(wjBySlug[wj.Slug], wj)
+		}
+		for _, slug := range jobs.ApplyColumnOrder(slugs, order[state]) {
+			board.Jobs = append(board.Jobs, wjBySlug[slug][0])
+			wjBySlug[slug] = wjBySlug[slug][1:]
+		}
 	}
 	// archived jobs ride the same list under state "archived": no cell, no
 	// prereqs, no derivation — just the file, its artifacts, and the two

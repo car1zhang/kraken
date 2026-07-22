@@ -3,8 +3,10 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -80,12 +82,38 @@ func ProcessAlive(pid int) bool {
 func notify(title, msg string) {
 	script := fmt.Sprintf("display notification %q with title %q", core.TruncateOneLine(msg, 120), title)
 	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-		dlog("osascript notify failed: %v", err)
+		dlogErr("osascript notify failed: %v", err)
 	}
 }
 
-func dlog(format string, a ...any) {
-	fmt.Printf("%s "+format+"\n", append([]any{time.Now().Format("15:04:05")}, a...)...)
+// dlogEvent prints one daemon log line (launchd captures stdout into
+// daemon.log as before) AND appends it to the unified event log — the
+// single source of truth the board's log viewer reads. level/event feed the
+// viewer's badges; the plain dlog/dlogErr wrappers cover the long tail of
+// call sites that don't need a dedicated event id.
+func dlogEvent(level, event, format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	fmt.Printf("%s %s\n", time.Now().Format("15:04:05"), msg)
+	util.LogEvent("daemon", level, event, msg)
+}
+
+func dlog(format string, a ...any)    { dlogEvent("info", "daemon", format, a...) }
+func dlogErr(format string, a ...any) { dlogEvent("error", "daemon-error", format, a...) }
+
+// probeOnline reports whether the Claude API endpoint is reachable — the
+// dependency that actually matters for a stalled cell. ~2s cap so a dead
+// network can't stall the tick. Note this is TCP reachability, not API
+// health: a 529-storm outage still probes "online" (the socket connects
+// fine), so those pokes ride the normal repokeAfter backoff instead of being
+// gated here — intended, since gating on 529s would need a real API call
+// every tick just to find out the endpoint is still overloaded.
+var probeOnline = func() bool {
+	conn, err := net.DialTimeout("tcp", "api.anthropic.com:443", 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
@@ -94,6 +122,11 @@ type daemonState struct {
 	Notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
 	Poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
 	tickN    int
+	// offline: in-memory only, like the dedup maps above — losing it on
+	// restart just costs one duplicate "offline" notification. Set while
+	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
+	// by the same 529/network outage they're meant to survive.
+	offline bool
 }
 
 func newDaemon() *daemonState {
@@ -117,7 +150,17 @@ func RunDaemon() {
 	util.InitSelfCheck()
 	d := newDaemon()
 	st := DaemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
-	dlog("daemon up (pid %d, cap %d cells, tick %s)", st.PID, CellCap, DaemonInterval)
+	dlogEvent("info", "daemon-start", "daemon up (pid %d, cap %d cells, tick %s)", st.PID, CellCap, DaemonInterval)
+	// launchd stops the daemon with SIGTERM (make install's kickstart -k,
+	// logout, unload); log the shutdown so the event log shows every daemon
+	// lifecycle edge, not just the starts
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		s := <-sigc
+		dlogEvent("info", "daemon-stop", "daemon stopping (pid %d, %v)", os.Getpid(), s)
+		os.Exit(0)
+	}()
 	// TCC watchdog: reading ~/Documents from a launchd process blocks in
 	// open() until macOS consent is granted — and every reinstall changes the
 	// binary's code hash, revoking the previous grant. A silently-hung first
@@ -142,7 +185,7 @@ func RunDaemon() {
 		st.LastTick, st.Cells, st.LastError, st.Stale = time.Now().Unix(), cells, "", util.IsSelfStale()
 		if err != nil {
 			st.LastError = err.Error()
-			dlog("tick error: %v", err)
+			dlogEvent("error", "tick-error", "tick error: %v", err)
 		}
 		if data, err := json.Marshal(st); err == nil {
 			_ = util.AtomicWrite(daemonStatusPath(), string(data))
@@ -179,6 +222,29 @@ func (d *daemonState) tick() (int, error) {
 	times := liveSessionTimes()
 	now := time.Now()
 	cells := 0
+	// connectivity probe: at most one dial per tick, invoked lazily from
+	// inside gateRetry — only when a retryable poke is actually due or the
+	// daemon is already flagged offline. A tick with no stalled cells never
+	// touches the network.
+	var onlineProbed, online bool
+	checkOnline := func() bool {
+		if !onlineProbed {
+			online = probeOnline()
+			onlineProbed = true
+		}
+		return online
+	}
+	// stale-offline-flag guard: gateRetry only runs when a retryable health
+	// reason exists this tick, so a d.offline left true by a prior outage
+	// would otherwise linger forever once every stalled cell has recovered
+	// some other way (carl retried by hand, the turn just finished) — a much
+	// later, unrelated stall would then fire a spurious "back online"
+	// notification alongside its own. Checking here, unconditionally, at
+	// every tick's start clears it promptly instead.
+	if d.offline && checkOnline() {
+		title, msg := d.clearOffline()
+		notify(title, msg)
+	}
 	for _, j := range jobs {
 		if !j.Started() || j.State == "done" {
 			continue
@@ -191,7 +257,7 @@ func (d *daemonState) tick() (int, error) {
 			// changes), so even a job whose cell later dies uncleanly stays
 			// reactivatable
 			if err := stampSession(j, all); err != nil {
-				dlog("session stamp %s failed: %v", j.Slug, err)
+				dlogErr("session stamp %s failed: %v", j.Slug, err)
 			}
 			delete(d.Notified, "gone:"+j.Slug)
 		} else {
@@ -202,7 +268,7 @@ func (d *daemonState) tick() (int, error) {
 			// finishing it — worktree discard included — is sanctioned.
 			if j.Teardown != "" {
 				if err := ResumeTeardown(j); err != nil {
-					dlog("%s: finish interrupted teardown failed: %v", j.Slug, err)
+					dlogErr("%s: finish interrupted teardown failed: %v", j.Slug, err)
 				} else {
 					dlog("%s: finished interrupted teardown (%s)", j.Slug, j.Teardown)
 				}
@@ -217,7 +283,7 @@ func (d *daemonState) tick() (int, error) {
 			key := "gone:" + j.Slug
 			if d.Notified[key] == 0 {
 				notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
-				dlog("%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
+				dlogEvent("error", "cell-gone", "%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
 				d.Notified[key] = now.Unix()
 			}
 		}
@@ -231,18 +297,31 @@ func (d *daemonState) tick() (int, error) {
 			if reason := CellHealth(j, all); reason != "" {
 				key := "health:" + j.Slug + "|" + strings.SplitN(reason, " idle ", 2)[0]
 				if d.Notified[key] == 0 {
-					notify("kraken ⚠ "+j.Slug, reason+" — auto-retrying; also on the board")
+					suffix := " — on the board"
+					if RetryableHealth(reason) {
+						// accurate even while offline: it WILL auto-retry, once
+						// connectivity returns — gateRetry just gates the poke.
+						suffix = " — will auto-retry; also on the board"
+					}
+					notify("kraken ⚠ "+j.Slug, reason+suffix)
 					d.Notified[key] = now.Unix()
-					dlog("unhealthy %s: %s", j.Slug, reason)
+					dlogEvent("error", "cell-unhealthy", "unhealthy %s: %s", j.Slug, reason)
 				}
 				// auto-retry retryable stalls with backoff: API overload comes
 				// in waves, and a manual retry during one just eats the next
-				// 529 — keep nudging every repokeAfter until a turn survives
-				if !strings.Contains(reason, "is gone") {
+				// 529 — keep nudging every repokeAfter until a turn survives.
+				// gateRetry additionally gates the poke behind connectivity —
+				// an offline machine gets one notification and zero poke spam
+				// instead of burning every backoff window on a dead network.
+				if RetryableHealth(reason) {
 					rkey := "retry:" + j.Slug
-					if now.Unix()-d.Poked[rkey] >= int64(repokeAfter/time.Second) {
+					poke, title, msg := d.gateRetry(now, rkey, checkOnline)
+					if title != "" {
+						notify(title, msg)
+					}
+					if poke {
 						if err := RetryCell(j); err != nil {
-							dlog("auto-retry %s failed: %v", j.Slug, err)
+							dlogErr("auto-retry %s failed: %v", j.Slug, err)
 						} else {
 							d.Poked[rkey] = now.Unix()
 							dlog("auto-retried %s (%s)", j.Slug, reason)
@@ -302,10 +381,10 @@ func (d *daemonState) tick() (int, error) {
 		if (st == "working" || st == "blocked") && st != j.State {
 			prev := j.State
 			if err := WriteJobState(j, st); err != nil {
-				dlog("write state %s for %s failed: %v", st, j.Slug, err)
+				dlogErr("write state %s for %s failed: %v", st, j.Slug, err)
 				continue
 			}
-			dlog("%s: %s → %s", j.Slug, prev, st)
+			dlogEvent("info", "state-change", "%s: %s → %s", j.Slug, prev, st)
 			if st == "blocked" {
 				key := "blocked:" + j.Slug
 				if d.Notified[key] == 0 {
@@ -329,6 +408,7 @@ func (d *daemonState) tick() (int, error) {
 				continue
 			}
 			d.trackPRs(j)
+			d.scanTranscriptPRs(j, all)
 		}
 	}
 
@@ -382,17 +462,75 @@ func (d *daemonState) tick() (int, error) {
 			continue
 		}
 		if err := StartCell(j, repo); err != nil {
-			dlog("start %s failed: %v", j.Slug, err)
+			dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
 		cells++
-		dlog("started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
+		dlogEvent("info", "cell-start", "started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
 		notify("kraken ▶ "+j.Slug, "cell started")
 	}
 	return cells, firstErr
+}
+
+// gateRetry decides whether a due auto-retry poke for rkey ("retry:"+slug)
+// is allowed to proceed, gating it behind reachability of the endpoint the
+// retry actually depends on: a stall caused by an outage can't be nudged
+// away, and hammering RetryCell every repokeAfter during one just burns
+// pokes for nothing. checkOnline is expected to memoize its dial for the
+// tick, so calling this for several stalled cells in one pass costs at most
+// one probe. Mutates d.offline/d.Notified/d.Poked; never touches tmux or
+// osascript itself — the caller fires the returned notification (title
+// non-empty) and, on poke==true, performs the actual RetryCell + Poked
+// stamp so gateRetry stays pure enough to unit test without a live cell.
+func (d *daemonState) gateRetry(now time.Time, rkey string, checkOnline func() bool) (poke bool, notifyTitle, notifyMsg string) {
+	pokeDue := now.Unix()-d.Poked[rkey] >= int64(repokeAfter/time.Second)
+	if !pokeDue && !d.offline {
+		return false, "", ""
+	}
+	if !checkOnline() {
+		d.offline = true
+		// only log the suppression when a poke was actually due — the
+		// not-due-but-offline path above still consults the probe (to notice
+		// a reconnect promptly), and logging that every tick would just be
+		// "still offline" noise with nothing suppressed.
+		if pokeDue {
+			dlog("suppressed retry poke (%s) — offline", rkey)
+		}
+		if d.Notified["offline"] == 0 {
+			d.Notified["offline"] = now.Unix()
+			return false, "kraken ⚠ offline", "offline — pausing auto-retries until connectivity returns"
+		}
+		return false, "", ""
+	}
+	if d.offline {
+		title, msg := d.clearOffline()
+		return pokeDue, title, msg
+	}
+	return pokeDue, "", ""
+}
+
+// clearOffline resets the offline dedup bookkeeping (the flag itself, the
+// "offline" Notified marker, and every backed-off "retry:" Poked key) and
+// returns the one back-online notification to fire. Shared by gateRetry's
+// reconnect path and tick's own tick-start check below — a stalled cell can
+// recover by some path OTHER than gateRetry (carl retries by hand, the turn
+// just finishes) while d.offline stays stuck true, and only checking at
+// tick-start (not only inside gateRetry, which only runs when a retryable
+// health reason exists this tick) catches that case before a much-later
+// stall would otherwise fire a spurious "back online" notification.
+func (d *daemonState) clearOffline() (title, msg string) {
+	d.offline = false
+	delete(d.Notified, "offline")
+	for k := range d.Poked {
+		if strings.HasPrefix(k, "retry:") {
+			delete(d.Poked, k)
+		}
+	}
+	dlog("connectivity restored — resuming auto-retries")
+	return "kraken ✓ online", "back online — resuming auto-retries"
 }
 
 // autoArchivePass sweeps jobs eligible under autoArchivable into the
@@ -407,10 +545,10 @@ func autoArchivePass(jobs []*Job, live map[string]bool, now time.Time) []string 
 		}
 		name, err := ArchiveJob(j, live)
 		if err != nil {
-			dlog("auto-archive %s failed: %v", j.Slug, err)
+			dlogErr("auto-archive %s failed: %v", j.Slug, err)
 			continue
 		}
-		dlog("%s: auto-archived as %s (done > 24h)", j.Slug, name)
+		dlogEvent("info", "auto-archive", "%s: auto-archived as %s (done > 24h)", j.Slug, name)
 		archived = append(archived, j.Slug)
 	}
 	return archived
@@ -438,7 +576,7 @@ func (d *daemonState) trackPRs(j *Job) {
 		// the state-derivation pass only covers live jobs — for done or
 		// killed-back-to-draft jobs this is the sole surface for a bad repo
 		if key := "repofail:" + j.Slug; d.Notified[key] == 0 {
-			dlog("%s: resolve repo failed — leaving prs alone: %v", j.Slug, err)
+			dlogErr("%s: resolve repo failed — leaving prs alone: %v", j.Slug, err)
 			d.Notified[key] = time.Now().Unix()
 		}
 		return
@@ -452,30 +590,73 @@ func (d *daemonState) trackPRs(j *Job) {
 	if !ok {
 		// log the outage once per stretch, not every minute
 		if key := "ghfail:" + j.Slug; d.Notified[key] == 0 {
-			dlog("%s: gh pr list failed — leaving prs alone", j.Slug)
+			dlogErr("%s: gh pr list failed — leaving prs alone", j.Slug)
 			d.Notified[key] = time.Now().Unix()
 		}
 		return
 	}
 	delete(d.Notified, "ghfail:"+j.Slug)
+	// backstop: a recorded PR the branch-list query didn't return (recycled
+	// branch, hand-opened against a different head) gets asked about
+	// directly. A single-URL failure just skips that URL — it's not the
+	// "gh is down" signal listBranchPRs' ok=false already handled above.
+	for _, url := range needsPoll(j.PRs, fetched) {
+		if state, ok := viewPRState(dir, url); ok {
+			fetched = append(fetched, JobPR{URL: url, State: state})
+		}
+	}
 	updated, newlyMerged, changed := reconcilePRs(j.PRs, fetched)
 	if !changed {
 		return
 	}
 	if err := writeJobPRs(j, updated); err != nil {
-		dlog("%s: prs write failed: %v", j.Slug, err)
+		dlogErr("%s: prs write failed: %v", j.Slug, err)
 		return
 	}
 	for _, pr := range updated {
 		dlog("%s: pr %s %s", j.Slug, pr.State, pr.URL)
 	}
 	for _, url := range newlyMerged {
-		dlog("%s: merged %s — cell left alone", j.Slug, url)
+		dlogEvent("info", "pr-merged", "%s: merged %s — cell left alone", j.Slug, url)
 		msg := "PR merged — accept from the board when the job is finished"
 		if j.State == "done" {
 			msg = "PR merged — job already accepted; recorded"
 		}
 		notify("kraken ✓ "+j.Slug, msg)
+	}
+}
+
+// scanTranscriptPRs is the transcript-scanning backstop: it looks for GitHub
+// PR URLs zeus' own transcript mentions, in the job's own repo ONLY, and
+// attaches any not yet recorded. Unlike trackPRs (which asks gh, so an
+// unreachable API or bad repo just means "leave prs alone, retry next
+// pass"), and unlike pr-hook (which fails open with an empty prefix when the
+// origin can't be read, since the command it saw really did run in the
+// cell's worktree), this has no such anchor — a transcript can quote PR URLs
+// from anywhere — so an unresolved repo prefix means scan nothing (carl's Q7
+// call). Job-file writes only, same as trackPRs; every attach gets one dlog
+// line, and — matching trackPRs' repofail dedup — failures degrade silently.
+func (d *daemonState) scanTranscriptPRs(j *Job, all []*core.Peer) {
+	repo, err := ResolveRepo(j.Repo)
+	if err != nil {
+		return // trackPRs already surfaces a bad repo for this job this pass
+	}
+	prefix, ok := repoOriginPrefix(repo)
+	if !ok || prefix == "" {
+		return // no fail-open here: an unresolved prefix means scan nothing
+	}
+	transcript := zeusTranscriptPath(j, all)
+	if transcript == "" {
+		return // no live/stamped session — not an error, just nothing to scan
+	}
+	for _, url := range transcriptPRURLs(transcript, prefix) {
+		attached, err := appendJobPR(j, JobPR{URL: url, State: "open"})
+		switch {
+		case err != nil:
+			dlog("%s: transcript attach %s failed: %v", j.Slug, url, err)
+		case attached:
+			dlog("%s: attached from transcript %s", j.Slug, url)
+		}
 	}
 }
 

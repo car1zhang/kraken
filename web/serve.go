@@ -5,12 +5,16 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"kraken/api"
 	"kraken/jobs"
+	"kraken/util"
 )
 
 // Options are k web's already-parsed flags — cmd_web.go owns the flag
@@ -74,8 +78,19 @@ func Serve(opts Options) error {
 		http.ServeFile(w, r, p)
 	})
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)
+	util.LogEvent("web", "info", "web-start", "web server up on http://"+addr)
+	// ctrl-c / SIGTERM: log the shutdown edge before dying — the unified
+	// event log should show every server lifecycle boundary
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		s := <-sigc
+		util.LogEvent("web", "info", "web-stop", fmt.Sprintf("web server on %s stopping (%v)", addr, s))
+		os.Exit(0)
+	}()
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil {
+		util.LogEvent("web", "error", "web-error", "web server: "+err.Error())
 		return fmt.Errorf("web server: %v", err)
 	}
 	return nil

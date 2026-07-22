@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -203,9 +204,15 @@ func LiveSessions() map[string]bool {
 // cellClaudeArgs mirrors carl's `cc` alias (claude --dangerously-skip-permissions
 // --rc): cell agents work unattended in their own worktree, so they run with
 // bypass permissions from birth. tmux commands never see shell aliases, so the
-// flags are spelled out here.
-func cellClaudeArgs() []string {
-	return []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
+// flags are spelled out here. A non-empty model (the job's model: field) rides
+// along as --model — both spawn paths (StartCell, ReactivateJob) share this,
+// so a job's model choice survives reactivation.
+func cellClaudeArgs(model string) []string {
+	args := []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return args
 }
 
 // jobPrompt is the spec portion of the job body — everything up to the
@@ -255,7 +262,8 @@ func StartCell(j *Job, repo string) error {
 	}
 	// gate passed: from here on, failures must report the worktree so a
 	// half-built cell is cleanable by hand
-	argv := append(cellClaudeArgs(), "--name", ZeusName(j),
+	installHookSettings(wt, j)
+	argv := append(cellClaudeArgs(j.Model), "--name", ZeusName(j),
 		"--append-system-prompt", zeusBrief(j))
 	if prompt := jobPrompt(j); prompt != "" {
 		argv = append(argv, "--", prompt)
@@ -277,6 +285,124 @@ func StartCell(j *Job, repo string) error {
 		fmt.Fprintf(os.Stderr, "kraken: cell is up but state write failed: %v\n", err)
 	}
 	return nil
+}
+
+// krakenHookEntry is the PostToolUse matcher group kraken installs into a
+// cell's worktree: a Bash hook that reports every `gh pr create` zeus runs
+// straight to `kraken pr-hook <slug>`, so a PR attaches to the board the
+// instant it's opened instead of waiting for the next scan/poll. krakenBin
+// is the resolved kraken binary — hooks run in a non-interactive shell where
+// ~/.local/bin may not be on PATH, so a bare "kraken" only works as a
+// fallback.
+func krakenHookEntry(slug, krakenBin string) map[string]any {
+	return map[string]any{
+		"matcher": "Bash",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": krakenBin + " pr-hook " + slug,
+			},
+		},
+	}
+}
+
+// mergeHookSettings renders a cell's .claude/settings.json: kraken's
+// PostToolUse hook entry (krakenHookEntry) appended into whatever's already
+// there. existing empty/nil renders a fresh file. Non-empty existing bytes
+// are merged non-destructively — unrelated top-level keys and any PostToolUse
+// groups the repo's own checked-in settings.json already declares survive
+// alongside kraken's, never clobbered. An error return means existing wasn't
+// valid JSON; the caller must leave the file alone rather than overwrite a
+// repo's own config. Idempotent: if an existing PostToolUse group already
+// carries the exact command kraken would install (matched by command string,
+// since that's what encodes slug + binary path), nothing is appended — a
+// second installation path (e.g. reactivation recreate alongside a preserved
+// StartCell install) can't duplicate the entry.
+func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) {
+	parsed := map[string]any{}
+	if len(bytes.TrimSpace(existing)) > 0 {
+		if err := json.Unmarshal(existing, &parsed); err != nil {
+			return nil, err
+		}
+	}
+	hooks, ok := parsed["hooks"].(map[string]any)
+	if !ok {
+		hooks = map[string]any{}
+	}
+	postToolUse, ok := hooks["PostToolUse"].([]any)
+	if !ok {
+		postToolUse = nil
+	}
+	command := krakenBin + " pr-hook " + slug
+	if !hasHookCommand(postToolUse, command) {
+		hooks["PostToolUse"] = append(postToolUse, krakenHookEntry(slug, krakenBin))
+		parsed["hooks"] = hooks
+	}
+	out, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+// hasHookCommand reports whether any PostToolUse group in groups already
+// contains a hook whose command exactly matches command.
+func hasHookCommand(groups []any, command string) bool {
+	for _, g := range groups {
+		group, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		hookList, ok := group["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, h := range hookList {
+			hook, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cmd, ok := hook["command"].(string); ok && cmd == command {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// installHookSettings writes (or merges kraken's entry into) the cell's
+// project-scoped Claude Code hook config, <wt>/.claude/settings.json, so
+// zeus' `gh pr create` calls self-report to kraken pr-hook. Called from
+// StartCell after the worktree is up and before claude launches in it. Never
+// fails the cell: attachment still works via the daemon's scan/poll paths, so
+// any failure here is a stderr warning, not an error return.
+func installHookSettings(wt string, j *Job) {
+	slug := util.Slugify(j.Slug)
+	dir := filepath.Join(wt, ".claude")
+	path := filepath.Join(dir, "settings.json")
+	var existing []byte
+	if data, err := os.ReadFile(path); err == nil {
+		existing = data
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: read %s: %v\n", j.Slug, path, err)
+		return
+	}
+	krakenBin, err := os.Executable()
+	if err != nil {
+		krakenBin = "kraken"
+	}
+	merged, err := mergeHookSettings(existing, slug, krakenBin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: %s is not valid JSON — leaving it alone: %v\n", j.Slug, path, err)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: mkdir %s: %v\n", j.Slug, dir, err)
+		return
+	}
+	if err := os.WriteFile(path, merged, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: write %s: %v\n", j.Slug, path, err)
+	}
 }
 
 // --- PR listing ---
@@ -497,13 +623,19 @@ func stampSessionBeforeTeardown(j *Job) {
 }
 
 // CellHealth reports why a live cell looks unhealthy ("" = healthy).
-// Conditions, in order: zeus' process must exist; no API-error banner may be
-// the last thing in its transcript. Idleness comes from the PANE ("esc to
-// interrupt" absent), never from the session file — an API error that kills
-// a turn leaves the session status stuck on busy forever, and the error
-// banner itself scrolls out of view once subagent rosters grow, so neither
-// signal alone can be trusted. Every reason except "is gone" is retryable: a
-// poke resumes a claude sitting at its prompt.
+// Conditions, in order: zeus' process must exist; it must not be stuck on a
+// startup prompt; its transcript's final message entry must not classify as
+// a stall. That last check reads the TRANSCRIPT, not the pane: pane text is
+// agent-writable (a grep result or a quoted error string used to false-
+// positive the old ApiErrorRe scrape), and the "esc to interrupt" mid-turn
+// guard the scrape relied on no longer appears in Claude Code's UI as of
+// ≥2.1.217. core.LastStall's synthetic "api-error" entry, by contrast, is
+// only ever appended after Claude Code's own internal retries have already
+// given up — so classifying off it is inherently mid-turn-safe, with no
+// pane-scrape race to guard against. A guessed session id is refused before
+// any file read: resuming/reading a guessed id risks another claude's
+// transcript entirely. Use RetryableHealth to decide whether a reason here
+// is worth an automatic nudge.
 func CellHealth(j *Job, all []*core.Peer) string {
 	zeus := CellZeus(j, all)
 	if zeus == nil {
@@ -517,23 +649,40 @@ func CellHealth(j *Job, all []*core.Peer) string {
 		}
 		return ""
 	}
-	// an error banner only counts when it is the last CONTENT in the pane's
-	// transcript — an agent that recovered leaves newer output below its old
-	// banners, and a visible-but-superseded error must not flag forever.
-	// (The session file can't arbitrate: observed stuck on busy for 20h
-	// across both crashes and clean turns.)
-	erroredLast := func(p *core.Peer) bool {
-		full := core.PaneTail(p.Pane, 200)
-		if full == "" || strings.Contains(full, "esc to interrupt") {
-			return false // mid-turn = recovering, not stuck
+	if zeus.SessionID == "" || zeus.SessionIDGuessed {
+		return ""
+	}
+	path := core.TranscriptPathForSession(zeus.SessionID)
+	if path == "" {
+		return ""
+	}
+	return stallReason(core.LastStall(path))
+}
+
+// stallReason turns a transcript stall classification into the CellHealth
+// reason string ("" for none/interrupted — an interrupted turn, carl's
+// deliberate esc, isn't a stall to auto-retry). Pulled out of CellHealth as
+// its own pure function because RetryableHealth's prefix-matching against
+// these exact strings couples the two: pinning stallReason with its own
+// round-trip test (see cell_test.go) catches wording drift between them
+// before it silently breaks auto-retry classification.
+func stallReason(st core.Stall) string {
+	switch st.Kind {
+	case "api-error":
+		if st.Transient {
+			return "zeus hit an API error: " + st.Text
 		}
-		tail := strings.Join(core.TranscriptTail(p.Pane, 6), "\n")
-		return core.ApiErrorRe.MatchString(tail)
+		return "zeus needs attention: " + st.Text + " — fix and retry by hand"
+	default:
+		return ""
 	}
-	if erroredLast(zeus) {
-		return "zeus hit an API error"
-	}
-	return ""
+}
+
+// RetryableHealth reports whether a CellHealth reason is fixable by a
+// nudge: transient API errors are, dead processes and needs-attention
+// (credit/auth/prompt-length) stalls are not.
+func RetryableHealth(reason string) bool {
+	return strings.HasPrefix(reason, "zeus hit an API error")
 }
 
 // RetryCell pokes a stalled cell agent: a nudge message resumes a claude
@@ -546,7 +695,11 @@ func RetryCell(j *Job) error {
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	reason := CellHealth(j, all)
-	if strings.Contains(reason, "is gone") {
+	// match the literal CellHealth emits, not a loose "is gone" substring:
+	// stallReason's non-transient text can now embed arbitrary API-error
+	// copy, and "is gone" is common enough in free-form error text that a
+	// substring match risked refusing a retry that was actually poke-able.
+	if strings.HasPrefix(reason, "zeus process is gone") {
 		return fmt.Errorf("%s: %s", j.Slug, reason)
 	}
 	// a plain nudge resumes a claude sitting at its prompt after an errored
@@ -554,6 +707,9 @@ func RetryCell(j *Job) error {
 	zeus := CellZeus(j, all)
 	if zeus == nil {
 		return fmt.Errorf("%s: agent not found — rerun discovery", j.Slug)
+	}
+	if reason != "" {
+		return core.SendMessage(zeus, "you stalled ("+reason+") — pick up exactly where you left off and continue the job")
 	}
 	return core.SendMessage(zeus, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
 }
@@ -781,18 +937,68 @@ func reactivateMode(state string, worktreeExists bool) (string, error) {
 	return "", fmt.Errorf("job has never started — k start it instead")
 }
 
+// reactivatePrompt assembles the resumed claude's prompt from three pure
+// inputs: reorient (the mode-specific re-orientation text — resume vs
+// recreate, done vs not), message (carl's optional steering), and rebaseNote
+// (a rebase instruction, non-empty only in recreate mode when the remote
+// branch has drifted from base). A blank message with no rebase needed means
+// promptless resume (hasPrompt=false) — nothing is submitted, the session
+// just comes up idle. A rebase note with a blank message IS the entire
+// prompt, since it's the one thing that must happen before anything else;
+// otherwise it's prepended ahead of the re-orientation text.
+func reactivatePrompt(reorient, message, rebaseNote string) (prompt string, hasPrompt bool) {
+	if rebaseNote == "" && message == "" {
+		return "", false
+	}
+	if rebaseNote == "" {
+		return reorient + "\nsteering from carl: " + message, true
+	}
+	if message == "" {
+		return rebaseNote, true
+	}
+	return rebaseNote + "\n" + reorient + "\nsteering from carl: " + message, true
+}
+
+// recreateFromRemote checks whether the job's branch still lives on origin
+// (carl pushed it before the cell was lost) and, if so, whether it has
+// drifted behind base. ok=false means no usable remote ref was found — a
+// failed fetch (offline) or a branch that was never pushed — and the caller
+// falls back to ensureUsableBranch's local reset-or-rename logic unchanged.
+func recreateFromRemote(repo, branch, base string) (needsRebase bool, ok bool) {
+	if err := exec.Command("git", "-C", repo, "fetch", "origin").Run(); err != nil {
+		return false, false
+	}
+	remoteRef := "origin/" + branch
+	if !refExists(repo, remoteRef) {
+		return false, false
+	}
+	// A local branch with commits the remote lacks (pushed, then kept
+	// working, then the cell died) must not be force-reset to the remote
+	// tip — those commits would be reflog-only. Local ahead ⇒ fall back.
+	if refExists(repo, branch) &&
+		exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", branch, remoteRef).Run() != nil {
+		return false, false
+	}
+	needsRebase = exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", base, remoteRef).Run() != nil
+	return needsRebase, true
+}
+
 // ReactivateJob resurrects a job into its original zeus session. For a done
-// job: the worktree is recreated at the SAME path (the claude project dir —
-// and with it the transcript history — is keyed on that path), the branch
-// recycles per ensureUsableBranch (reset off the base when the old one is
-// fully merged, -rN only for unmerged leftovers), and claude is resumed with
-// -r <session> rather than started fresh. For a started job whose cell died
-// mid-run (hand-killed session, tmux restart, interrupted teardown): the
-// existing worktree — dirty files and all — is reused in place, so the one
-// recovery path that preserves WIP is also the one-command one. session
-// overrides the recorded id (hand-rescue for jobs done before kraken
-// stamped session ids); message rides along in the resume prompt as carl's
-// steering.
+// job (or a started job whose worktree was lost): the worktree is recreated
+// at the SAME path (the claude project dir — and with it the transcript
+// history — is keyed on that path). If carl pushed the branch before the
+// cell was lost, the worktree recreates off the REMOTE tip (origin/<branch>)
+// so pushed work is never silently dropped for a locally-reset one; only a
+// branch that never made it to origin falls back to ensureUsableBranch's
+// reset-or-rename. A remote branch that has drifted behind base earns a
+// rebase instruction in the resumed prompt. For a started job whose cell
+// died mid-run with its worktree intact: the existing worktree — dirty files
+// and all — is reused in place, so the one recovery path that preserves WIP
+// is also the one-command one. session overrides the recorded id
+// (hand-rescue for jobs done before kraken stamped session ids); message
+// rides along as carl's steering. A blank message (and no rebase needed)
+// resumes the session promptless — nothing is submitted, it just comes up
+// idle.
 func ReactivateJob(j *Job, session, message string) error {
 	if j.Err != "" {
 		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
@@ -824,35 +1030,63 @@ func ReactivateJob(j *Job, session, message string) error {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
-	var prompt string
+	var reorient, rebaseNote string
 	if mode == "resume" {
-		prompt = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."
+		reorient = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."
 	} else {
 		base, err := baseRef(j, repo)
 		if err != nil {
 			return fmt.Errorf("job %s: %v", j.Slug, err)
 		}
-		// recycle the branch when its PRs are all merged into the base; only
-		// unmerged leftovers force a fresh -rN name (persisted inside)
-		branchFlag, err := ensureUsableBranch(j, repo, base)
-		if err != nil {
-			return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
+		branch := CellBranch(j)
+		var branchFlag, startPoint string
+		fromRemote := false
+		if needsRebase, ok := recreateFromRemote(repo, branch, base); ok {
+			fromRemote = true
+			// carl pushed this branch before the cell was lost — recreate off
+			// the remote tip so that work is never silently dropped for a
+			// locally-reset branch
+			branchFlag, startPoint = "-B", "origin/"+branch
+			if needsRebase {
+				rebaseNote = "your branch " + branch + " is behind " + base + ". first run: git fetch origin && git rebase " + base + " — resolve any conflicts, verify the build still passes, and report the rebase result. then continue."
+			}
+		} else {
+			// never pushed (or origin unreachable): recycle the branch when
+			// its PRs are all merged into base; only unmerged leftovers force
+			// a fresh -rN name (persisted inside)
+			branchFlag, err = ensureUsableBranch(j, repo, base)
+			if err != nil {
+				return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
+			}
+			branch, startPoint = CellBranch(j), base
 		}
 		wt = CellWorktree(j, repo)
-		out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, CellBranch(j), base).CombinedOutput()
+		out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, branch, startPoint).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 		}
+		// fresh worktree, same as StartCell: no hook until installed, and a
+		// done→adjust reactivation is exactly when new PRs are about to ship
+		installHookSettings(wt, j)
+		// tell zeus where its branch actually points: the pushed remote tip
+		// when recreateFromRemote took over, the base otherwise
+		branchDesc := "freshly reset off " + base
+		if fromRemote {
+			branchDesc = "recreated from its pushed remote tip origin/" + branch
+		}
 		if j.State == "done" {
-			prompt = "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + CellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
+			reorient = "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + branch + " " + branchDesc + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
 		} else {
-			prompt = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + CellBranch(j) + " reset off " + base + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
+			reorient = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + branch + " " + branchDesc + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
 		}
 	}
-	if message != "" {
-		prompt += "\nsteering from carl: " + message
+	prompt, hasPrompt := reactivatePrompt(reorient, message, rebaseNote)
+	// the job's model rides along on reactivation too (Q2): a resumed zeus
+	// keeps the model its job file specifies at reactivate time
+	argv := append(cellClaudeArgs(j.Model), "--name", ZeusName(j), "-r", session)
+	if hasPrompt {
+		argv = append(argv, "--", prompt)
 	}
-	argv := append(cellClaudeArgs(), "--name", ZeusName(j), "-r", session, "--", prompt)
 	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
 		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)

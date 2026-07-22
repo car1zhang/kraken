@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,9 +31,17 @@ type Job struct {
 	Repo string `json:"repo"`
 	// Base is the ref the cell's worktree branches from; empty means the
 	// default (origin/main, falling back to main).
-	Base    string   `json:"base,omitempty"`
-	Ready   bool     `json:"ready"`
-	Solo    bool     `json:"solo"`
+	Base  string `json:"base,omitempty"`
+	Ready bool   `json:"ready"`
+	Solo  bool   `json:"solo"`
+	// Model is the Claude model zeus runs on (`claude --model <value>`),
+	// hand-authored like solo. Consumed exactly once per cell start
+	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
+	// model can't change out from under it. Empty means claude's default.
+	Model string `json:"model,omitempty"`
+	// SkipDoc (build jobs only) skips the /doc → /send phase: zeus implements
+	// the spec directly, keeping the manual-test gate and PR pipeline.
+	SkipDoc bool     `json:"skip_doc,omitempty"`
 	Prereqs []Prereq `json:"prereqs,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
@@ -160,6 +169,11 @@ func (j *Job) boolField(key, val string) bool {
 	}
 }
 
+// modelTokenRe bounds what a model: value may look like — a plain CLI token.
+// It is a shape check, not an allowlist: claude's model list isn't kraken's
+// to own, and claude itself errors visibly in the pane on an unknown model.
+var modelTokenRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 // validStates: kraken itself writes working/blocked/done; draft and queued
 // are derived for display and never written to a job file, so hand-authoring
 // either is a dead end rather than a valid starting point. A hand-mangled
@@ -242,6 +256,14 @@ func ParseJob(name string, data []byte) *Job {
 			j.Ready = j.boolField(k, val)
 		case "solo":
 			j.Solo = j.boolField(k, val)
+		case "model":
+			if val != "" && !modelTokenRe.MatchString(val) {
+				j.addErr(fmt.Sprintf("bad model value %q", core.TruncateOneLine(val, 24)))
+			} else {
+				j.Model = val
+			}
+		case "skip-doc":
+			j.SkipDoc = j.boolField(k, val)
 		case "auto-approve":
 			// legacy field: removed from the schema, but existing pluto job
 			// files still carry auto-approve: keys (always a scalar). Keep
@@ -299,6 +321,11 @@ func ParseJob(name string, data []byte) *Job {
 	}
 	if j.Slug == "" {
 		j.Slug = strings.TrimSuffix(name, JobSuffix)
+	}
+	// cross-field check after the loop — key order in the file is free, so
+	// type may not be known yet when skip-doc parses
+	if j.SkipDoc && j.Type != "build" {
+		j.addErr("skip-doc only applies to build jobs")
 	}
 	return j
 }
@@ -452,6 +479,9 @@ func JobTemplate(slug string) string {
 		"                          #   gated: true   → when it completes, you review its outcome\n" +
 		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
+		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
+		"                          # applied once at cell start, default = claude's own default\n" +
+		"# skip-doc: true          # build only: skip the /doc → /send phase — zeus implements the spec directly\n" +
 		"---\n"
 }
 
@@ -534,6 +564,29 @@ func JobBySlug(jobs []*Job, slug string) *Job {
 		}
 	}
 	return nil
+}
+
+// LoadJobBySlug parses exactly one job file, for a caller (the pr-hook verb)
+// that only knows its own slug and runs once per zeus tool call — the full
+// LoadJobs() sweep (every file in the dir, plus slug-collision and
+// prereq-cycle bookkeeping across the whole board) is wasted work at that
+// call rate. Fast path reads "<slug>.job.md" directly; a mismatch (the
+// file's own `job:` frontmatter overrides the filename) falls back to a full
+// LoadJobs()+JobBySlug scan.
+func LoadJobBySlug(slug string) *Job {
+	slug = strings.TrimSuffix(slug, JobSuffix)
+	path := filepath.Join(PlutoDir(), slug+JobSuffix)
+	if data, err := os.ReadFile(path); err == nil {
+		j := ParseJob(slug+JobSuffix, data)
+		j.File = path
+		if info, err := os.Stat(path); err == nil {
+			j.ModTime = info.ModTime()
+		}
+		if j.Slug == slug {
+			return j
+		}
+	}
+	return JobBySlug(LoadJobs(), slug)
 }
 
 // --- DAG ---
@@ -733,21 +786,70 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 
 // writeJobPRs persists the tracker's PR record atomically, mirroring
 // WriteJobFields' re-read-then-patch pattern so a concurrent editor save
-// isn't clobbered with stale bytes.
+// isn't clobbered with stale bytes. Invariant: this write may add or update
+// records, but must never DROP a URL already present in the file. The
+// caller's `prs` is built from j.PRs loaded at the start of a daemon tick;
+// the pr-hook verb's real-time appendJobPR path may have appended a fresh
+// record straight to the file in the meantime. Re-parsing the freshly-read
+// bytes and unioning in any file-only URL (state as last recorded there)
+// before patching closes that race — without it, a PR attached mid-tick
+// would be silently overwritten out of existence by the tracker's own write.
 func writeJobPRs(j *Job, prs []JobPR) error {
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return err
 	}
-	content, err := patchPRs(string(data), prs)
+	fresh := ParseJob(filepath.Base(j.File), data)
+	have := make(map[string]bool, len(prs))
+	for _, p := range prs {
+		have[p.URL] = true
+	}
+	merged := prs
+	for _, p := range fresh.PRs {
+		if !have[p.URL] {
+			merged = append(merged, p)
+		}
+	}
+	content, err := patchPRs(string(data), merged)
 	if err != nil {
 		return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
 	}
 	if err := util.AtomicWrite(j.File, content); err != nil {
 		return err
 	}
-	j.PRs = prs
+	j.PRs = merged
 	return nil
+}
+
+// appendJobPR is the shared attach path for recording one shipped PR against
+// a job: the pr-hook verb's real-time path and (later) a transcript-scanning
+// backstop both fold through here. Re-reads the file fresh and parses its
+// current prs — not j.PRs, which may be stale — so a concurrent daemon tick
+// or nvim save between load and write can't be clobbered, mirroring
+// writeJobPRs' re-read-then-patch semantics. No-ops (attached=false) if the
+// URL is already recorded; a hook re-run on the same gh pr create output
+// must never duplicate an entry.
+func appendJobPR(j *Job, pr JobPR) (attached bool, err error) {
+	data, err := os.ReadFile(j.File)
+	if err != nil {
+		return false, err
+	}
+	fresh := ParseJob(filepath.Base(j.File), data)
+	for _, existing := range fresh.PRs {
+		if existing.URL == pr.URL {
+			return false, nil
+		}
+	}
+	prs := append(fresh.PRs, pr)
+	content, err := patchPRs(string(data), prs)
+	if err != nil {
+		return false, fmt.Errorf("%s: %v", filepath.Base(j.File), err)
+	}
+	if err := util.AtomicWrite(j.File, content); err != nil {
+		return false, err
+	}
+	j.PRs = prs
+	return true, nil
 }
 
 // WriteJobFields patches kraken-owned fields atomically (temp file + rename

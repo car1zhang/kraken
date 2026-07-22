@@ -1,5 +1,7 @@
 import SwiftUI
 import Observation
+import Foundation
+import UniformTypeIdentifiers
 
 @Observable
 final class BoardViewModel {
@@ -71,6 +73,39 @@ struct BoardView: View {
     @State private var showingOverview = false
     @State private var selectedColumn: BoardColumn = .draft
 
+    // MARK: - drag reorder / cross-column drag state
+    //
+    // A single drag session (started by JobCardView.onDrag in one column's
+    // list) can be dropped either back into that same list — a within-column
+    // reorder — or onto the always-visible overview strip above the pager —
+    // a cross-column lifecycle action. Both paths read/write this shared
+    // state; see columnView, overviewCell, ReorderDropDelegate,
+    // OverviewDropDelegate below.
+
+    // Optimistic local top-to-bottom slug order per column, applied over the
+    // server's own order while a drag is in flight or just after it commits.
+    // Cleared once the next board poll lands (see clearSettledReorders) so
+    // the server's own order takes back over without a visible flicker.
+    @State private var localOrder: [BoardColumn: [String]] = [:]
+    // Columns whose localOrder overlay should be dropped as soon as the next
+    // poll's board data arrives (the commit succeeded — the server now
+    // agrees, so the overlay has served its purpose).
+    @State private var pendingReorderColumns: Set<BoardColumn> = []
+    // Columns whose reorder POST is still in flight — their overlay is
+    // neither settled nor abandoned, so clearSettledReorders leaves it be.
+    @State private var inFlightReorderColumns: Set<BoardColumn> = []
+    // The slug/column of the card currently mid-drag, shared across both the
+    // in-column and overview-strip drop targets.
+    @State private var draggingSlug: String?
+    @State private var draggingSourceColumn: BoardColumn?
+    // Which overview-strip cell is currently hovered by a legal drop, for
+    // highlighting.
+    @State private var hoveredDropColumn: BoardColumn?
+    // Sheets presented for cross-column drops that need user input rather
+    // than a bare API call (blocked→working, done→working).
+    @State private var dragSteerJob: WebJob?
+    @State private var dragReactivateJob: WebJob?
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -101,10 +136,12 @@ struct BoardView: View {
             .task(id: scenePhase) {
                 guard scenePhase == .active else { return }
                 await vm.refresh(baseURL: serverURL)
+                clearSettledReorders()
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(4))
                     if Task.isCancelled { break }
                     await vm.refresh(baseURL: serverURL)
+                    clearSettledReorders()
                 }
             }
             .sheet(item: $selectedJob) { job in
@@ -138,6 +175,28 @@ struct BoardView: View {
             .sheet(isPresented: $showingOverview) {
                 NavigationStack {
                     BoardOverviewSheet(vm: vm, baseURL: serverURL) {
+                        Task { await vm.refresh(baseURL: serverURL) }
+                    }
+                }
+            }
+            // blocked→working overview-strip drag: reuses JobDetailView's
+            // SteerView with unblockFraming — same delivery as the in-detail
+            // Unblock button, just reached from the strip instead.
+            .sheet(item: $dragSteerJob) { job in
+                NavigationStack {
+                    SteerView(job: job, baseURL: serverURL, unblockFraming: true) {
+                        dragSteerJob = nil
+                        Task { await vm.refresh(baseURL: serverURL) }
+                    }
+                }
+            }
+            // done→working overview-strip drag: reuses ReactivateView with
+            // requireText, since this entry path has no separate
+            // confirmation step to catch an accidental empty resume.
+            .sheet(item: $dragReactivateJob) { job in
+                NavigationStack {
+                    ReactivateView(job: job, baseURL: serverURL, requireText: true) {
+                        dragReactivateJob = nil
                         Task { await vm.refresh(baseURL: serverURL) }
                     }
                 }
@@ -273,6 +332,8 @@ struct BoardView: View {
         let count = vm.jobs(in: column).count
         let flagged = vm.hasFlag(in: column)
         let isCurrent = selectedColumn == column
+        let isLegalTarget = draggingSourceColumn.map { isLegalCrossColumnDrop(from: $0, to: column) } ?? false
+        let isHovered = hoveredDropColumn == column
         return Button {
             selectedColumn = column
         } label: {
@@ -294,17 +355,31 @@ struct BoardView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
+            .background(isHovered ? KTheme.accent.opacity(0.18) : Color.clear)
             .overlay(alignment: .bottom) {
                 if isCurrent {
                     Rectangle().fill(KTheme.accent).frame(height: 2)
                 }
             }
+            .overlay {
+                if isLegalTarget {
+                    Rectangle().stroke(KTheme.accent, lineWidth: isHovered ? 2 : 1)
+                }
+            }
         }
         .buttonStyle(.plain)
+        .onDrop(of: [.text], delegate: OverviewDropDelegate(
+            target: column,
+            draggingSlug: $draggingSlug,
+            draggingSourceColumn: $draggingSourceColumn,
+            hoveredColumn: $hoveredDropColumn,
+            isLegal: isLegalCrossColumnDrop,
+            onDrop: performCrossColumnDrop
+        ))
     }
 
     private func columnView(_ column: BoardColumn) -> some View {
-        let jobs = vm.jobs(in: column)
+        let jobs = orderedJobs(column)
         return ScrollView {
             VStack(spacing: 0) {
                 HStack(alignment: .lastTextBaseline) {
@@ -331,8 +406,32 @@ struct BoardView: View {
                 } else {
                     LazyVStack(spacing: 10) {
                         ForEach(jobs) { job in
-                            JobCardView(job: job)
-                                .onTapGesture { presentJob(job) }
+                            // Archived cards aren't draggable: the server
+                            // rejects a reorder of the "archived" column,
+                            // and no cross-column drop has an archived
+                            // source (mirrors the web board, where archived
+                            // cards render without draggable at all).
+                            if column == .archived {
+                                JobCardView(job: job)
+                                    .onTapGesture { presentJob(job) }
+                            } else {
+                                JobCardView(job: job)
+                                    .opacity(draggingSlug == job.slug ? 0.4 : 1.0)
+                                    .onTapGesture { presentJob(job) }
+                                    .onDrag {
+                                        draggingSlug = job.slug
+                                        draggingSourceColumn = column
+                                        return NSItemProvider(object: job.slug as NSString)
+                                    }
+                                    .onDrop(of: [.text], delegate: ReorderDropDelegate(
+                                        item: job.slug,
+                                        column: column,
+                                        slugs: slugsBinding(for: column),
+                                        draggingSlug: $draggingSlug,
+                                        draggingSourceColumn: $draggingSourceColumn,
+                                        onCommit: commitReorder
+                                    ))
+                            }
                         }
                     }
                     .padding()
@@ -340,7 +439,215 @@ struct BoardView: View {
             }
         }
         .background(KTheme.ground)
-        .refreshable { await vm.refresh(baseURL: serverURL) }
+        .refreshable {
+            await vm.refresh(baseURL: serverURL)
+            clearSettledReorders()
+        }
+    }
+
+    // MARK: - drag reorder / cross-column drag helpers
+
+    /// `vm.jobs(in:)` server order, overridden by `localOrder`'s optimistic
+    /// slug order where one is set (mid-drag or just after a commit — see
+    /// localOrder's doc comment). Jobs absent from the overlay (arrived from
+    /// the server after the drag started) go on top, in server order —
+    /// matching the server's own unlisted-first rule (jobs/order.go
+    /// ApplyColumnOrder), so nothing jumps when the overlay hands off.
+    private func orderedJobs(_ column: BoardColumn) -> [WebJob] {
+        let serverJobs = vm.jobs(in: column)
+        guard let overlay = localOrder[column] else { return serverJobs }
+        var bySlug = Dictionary(uniqueKeysWithValues: serverJobs.map { ($0.slug, $0) })
+        var listed: [WebJob] = []
+        for slug in overlay {
+            if let job = bySlug.removeValue(forKey: slug) { listed.append(job) }
+        }
+        let unlisted = serverJobs.filter { bySlug[$0.slug] != nil }
+        return unlisted + listed
+    }
+
+    /// A live-editable binding over one column's slug order, seeded from the
+    /// current displayed order (overlay if present, else server order) on
+    /// first read. ReorderDropDelegate mutates this directly as a drag
+    /// crosses other cards.
+    private func slugsBinding(for column: BoardColumn) -> Binding<[String]> {
+        Binding(
+            get: { localOrder[column] ?? orderedJobs(column).map(\.slug) },
+            set: { localOrder[column] = $0 }
+        )
+    }
+
+    /// Called right after each board refresh: drops the optimistic overlay
+    /// for any column whose reorder commit is settled (the poll now reflects
+    /// it), and for any column whose overlay was orphaned by a drag that
+    /// never dropped (cancelled/loose-ended drags get no callback, so their
+    /// live-swapped order would otherwise shadow the server's forever). A
+    /// column mid-drag right now — `draggingSourceColumn` — is left alone.
+    private func clearSettledReorders() {
+        guard !localOrder.isEmpty else { return }
+        for column in localOrder.keys {
+            if pendingReorderColumns.contains(column) {
+                localOrder[column] = nil
+                pendingReorderColumns.remove(column)
+            } else if !inFlightReorderColumns.contains(column) && column != draggingSourceColumn {
+                localOrder[column] = nil
+            }
+        }
+    }
+
+    /// Persists a within-column reorder. A no-op drop (order unchanged)
+    /// skips the round-trip and just drops any overlay the drag's
+    /// live-swaps left behind. The column is marked in-flight before the
+    /// POST launches so a poll landing mid-flight can't mistake the
+    /// overlay for an abandoned drag's; on success it graduates to
+    /// pending-settle (cleared on the next poll), on error everything
+    /// reverts to the server's order immediately.
+    private func commitReorder(column: BoardColumn, slugs: [String]) {
+        guard slugs != vm.jobs(in: column).map(\.slug) else {
+            localOrder[column] = nil
+            return
+        }
+        localOrder[column] = slugs
+        inFlightReorderColumns.insert(column)
+        Task {
+            do {
+                try await APIClient.shared.reorderJob(baseURL: serverURL, column: column.rawValue, slugs: slugs)
+                inFlightReorderColumns.remove(column)
+                pendingReorderColumns.insert(column)
+            } catch {
+                inFlightReorderColumns.remove(column)
+                localOrder[column] = nil
+                vm.errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// The legal overview-strip lifecycle drops, keyed by (source, target)
+    /// column — see the slice brief for the exact action each pair maps to.
+    private func isLegalCrossColumnDrop(from: BoardColumn, to: BoardColumn) -> Bool {
+        switch (from, to) {
+        case (.draft, .queued), (.queued, .draft), (.blocked, .done),
+             (.queued, .working), (.working, .blocked), (.blocked, .working),
+             (.done, .blocked), (.done, .working), (.done, .archived):
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Executes (or, for the two cases needing user input, presents a sheet
+    /// for) the lifecycle action for a legal overview-strip drop. `slug`'s
+    /// WebJob is looked up fresh from the board rather than threaded through
+    /// the drag, since drag state only ever carried the slug.
+    private func performCrossColumnDrop(from: BoardColumn, to: BoardColumn, slug: String) {
+        let job = vm.board?.jobs.first { $0.slug == slug }
+        switch (from, to) {
+        case (.draft, .queued):
+            runBoardAction { try await APIClient.shared.queueJob(baseURL: serverURL, slug: slug) }
+        case (.queued, .draft):
+            runBoardAction { try await APIClient.shared.dequeueJob(baseURL: serverURL, slug: slug) }
+        case (.blocked, .done):
+            runBoardAction { try await APIClient.shared.markDone(baseURL: serverURL, slug: slug) }
+        case (.queued, .working):
+            runBoardAction { try await APIClient.shared.startJob(baseURL: serverURL, slug: slug) }
+        case (.working, .blocked):
+            runBoardAction { try await APIClient.shared.stopJob(baseURL: serverURL, slug: slug) }
+        case (.blocked, .working):
+            if let job { dragSteerJob = job }
+        case (.done, .blocked):
+            runBoardAction { try await APIClient.shared.reactivateJob(baseURL: serverURL, slug: slug, text: "") }
+        case (.done, .working):
+            if let job { dragReactivateJob = job }
+        case (.done, .archived):
+            runBoardAction { try await APIClient.shared.archiveJob(baseURL: serverURL, slug: slug) }
+        default:
+            break
+        }
+    }
+
+    private func runBoardAction(_ action: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await action()
+                await vm.refresh(baseURL: serverURL)
+            } catch {
+                vm.errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+}
+
+/// Drives a within-column drag reorder: as the dragged card hovers over
+/// another card in the same LazyVStack, live-swaps their positions in
+/// `slugs` so the list visually reorders during the drag itself; the final
+/// `slugs` value at drop time is what gets committed to the server.
+private struct ReorderDropDelegate: DropDelegate {
+    let item: String
+    let column: BoardColumn
+    let slugs: Binding<[String]>
+    let draggingSlug: Binding<String?>
+    let draggingSourceColumn: Binding<BoardColumn?>
+    let onCommit: (BoardColumn, [String]) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = draggingSlug.wrappedValue, dragging != item,
+              let from = slugs.wrappedValue.firstIndex(of: dragging),
+              let to = slugs.wrappedValue.firstIndex(of: item) else { return }
+        if slugs.wrappedValue[to] != dragging {
+            slugs.wrappedValue.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let finalOrder = slugs.wrappedValue
+        draggingSlug.wrappedValue = nil
+        draggingSourceColumn.wrappedValue = nil
+        onCommit(column, finalOrder)
+        return true
+    }
+}
+
+/// Drives an overview-strip lifecycle drop: highlights the cell while a
+/// legal drag hovers it, and fires the mapped action on drop. Illegal
+/// targets never highlight and their drop is a no-op (returns false so the
+/// card visually snaps back).
+private struct OverviewDropDelegate: DropDelegate {
+    let target: BoardColumn
+    let draggingSlug: Binding<String?>
+    let draggingSourceColumn: Binding<BoardColumn?>
+    let hoveredColumn: Binding<BoardColumn?>
+    let isLegal: (BoardColumn, BoardColumn) -> Bool
+    let onDrop: (BoardColumn, BoardColumn, String) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let source = draggingSourceColumn.wrappedValue, isLegal(source, target) else { return }
+        hoveredColumn.wrappedValue = target
+    }
+
+    func dropExited(info: DropInfo) {
+        if hoveredColumn.wrappedValue == target { hoveredColumn.wrappedValue = nil }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard let source = draggingSourceColumn.wrappedValue, isLegal(source, target) else {
+            return DropProposal(operation: .forbidden)
+        }
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer { hoveredColumn.wrappedValue = nil }
+        guard let source = draggingSourceColumn.wrappedValue, let slug = draggingSlug.wrappedValue,
+              isLegal(source, target) else {
+            return false
+        }
+        draggingSlug.wrappedValue = nil
+        draggingSourceColumn.wrappedValue = nil
+        onDrop(source, target, slug)
+        return true
     }
 }
 

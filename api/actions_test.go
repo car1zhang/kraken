@@ -1,6 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,5 +194,97 @@ func TestWebQueueDequeueRoundTrip(t *testing.T) {
 	}
 	if j := jobs.JobBySlug(jobs.LoadJobs(), "roundtrip"); j == nil || !j.Ready {
 		t.Fatalf("expected ready true after re-queue, got %+v", j)
+	}
+}
+
+// --- POST /api/reorder ---
+
+func postReorder(t *testing.T, column string, slugs []string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := mustJSON(t, reorderReq{Column: column, Slugs: slugs})
+	req := httptest.NewRequest(http.MethodPost, "/api/reorder", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	webReorderHandler(rec, req)
+	return rec
+}
+
+func TestWebReorderHappyPath(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	writeTestJob(t, "reorder-a", "")
+	writeTestJob(t, "reorder-b", "")
+
+	rec := postReorder(t, "queued", []string{"reorder-b", "reorder-a"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp["ok"] {
+		t.Fatalf("expected ok: true, got %v", resp)
+	}
+	got := jobs.LoadBoardOrder()["queued"]
+	want := []string{"reorder-b", "reorder-a"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("stored order = %v, want %v", got, want)
+	}
+}
+
+func TestWebReorderUnknownColumn(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	rec := postReorder(t, "bogus", []string{"x"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp["error"], "unknown column") {
+		t.Fatalf("error = %q, want mention of unknown column", resp["error"])
+	}
+}
+
+// TestWebReorderDropsDepartedSlug: a slug posted for a column it doesn't
+// actually occupy (a concurrent transition, or a stale board) is silently
+// dropped from the saved order rather than rejecting the whole reorder.
+func TestWebReorderDropsDepartedSlug(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	writeTestJobBody(t, "reorder-queued", "", "spec\n") // ready: false in writeTestJobBody -> draft
+	writeTestJob(t, "reorder-actually-queued", "")      // ready: true -> queued
+
+	rec := postReorder(t, "queued", []string{"reorder-actually-queued", "reorder-queued"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	got := jobs.LoadBoardOrder()["queued"]
+	if len(got) != 1 || got[0] != "reorder-actually-queued" {
+		t.Fatalf("stored order = %v, want only the actually-queued slug", got)
+	}
+}
+
+// --- POST /api/start ---
+
+func TestWebStartRejectsNonQueued(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJobBody(t, "start-draft", "", "spec\n")
+	err := webStart(webReq{Slug: "start-draft"})
+	if err == nil || !strings.Contains(err.Error(), "only queued jobs can be started") {
+		t.Fatalf("expected 'only queued jobs' error, got %v", err)
+	}
+}
+
+// --- POST /api/stop ---
+
+func TestWebStopRejectsDeadCell(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "stop-not-live", "state: working\n")
+	err := webStop(webReq{Slug: "stop-not-live"})
+	if err == nil || !strings.Contains(err.Error(), "no live cell") {
+		t.Fatalf("expected 'no live cell' error, got %v", err)
 	}
 }

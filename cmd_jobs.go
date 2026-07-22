@@ -11,6 +11,20 @@ import (
 	"kraken/util"
 )
 
+// --- pr-hook ---
+
+// cmdPrHook is the thin dispatch wrapper for `kraken pr-hook <slug>` — a
+// Claude Code PostToolUse hook (jobs.PrHook does the work), not a
+// user-facing verb, so it's kept out of usage() like _complete. A malformed
+// invocation (no slug) is silently ignored rather than util.Die'd: this
+// runs as a hook, and must never fail zeus' tool call.
+func cmdPrHook(args []string) {
+	if len(args) != 1 {
+		return
+	}
+	jobs.PrHook(args[0])
+}
+
 // --- k start ---
 
 func cmdStart(args []string) {
@@ -60,6 +74,7 @@ func cmdStart(args []string) {
 	if err := jobs.StartCell(j, repo); err != nil {
 		util.Die("%v", err)
 	}
+	util.LogEvent("cli", "info", "start", "k start "+j.Slug+" — cell "+jobs.CellSession(j))
 	fmt.Printf("started %s: worktree %s (branch %s), zeus in tmux session %s, state: working\n",
 		j.Slug, jobs.CellWorktree(j, repo), jobs.CellBranch(j), jobs.CellSession(j))
 	fmt.Printf("attach: tmux attach -t %s  (or k o %s)\n", jobs.CellSession(j), jobs.CellSession(j))
@@ -95,6 +110,7 @@ func cmdDone(args []string) {
 	if err != nil {
 		util.Die("%v", err)
 	}
+	util.LogEvent("cli", "info", "done", "k done "+j.Slug)
 }
 
 // --- k reactivate ---
@@ -123,6 +139,7 @@ func cmdReactivate(args []string) {
 	if err := jobs.ReactivateJob(j, session, jobs.OneLine(strings.Join(rest[1:], " "))); err != nil {
 		util.Die("%v", err)
 	}
+	util.LogEvent("cli", "info", "reactivate", "k reactivate "+j.Slug)
 	fmt.Printf("reactivated %s: zeus session resumed in tmux session %s (branch %s), state: working\n",
 		j.Slug, jobs.CellSession(j), jobs.CellBranch(j))
 	fmt.Printf("attach: tmux attach -t %s  (or k o %s)\n", jobs.CellSession(j), jobs.CellSession(j))
@@ -213,6 +230,7 @@ func cmdArchive(args []string) {
 	if err != nil {
 		util.Die("%v", err)
 	}
+	util.LogEvent("cli", "info", "archive", "k archive "+j.Slug+" → "+name)
 	fmt.Printf("archived %s → %s (k unarchive %s restores it)\n", j.Slug, filepath.Join(jobs.ArchiveDir(), name+jobs.JobSuffix), name)
 }
 
@@ -227,7 +245,20 @@ func cmdUnarchive(args []string) {
 	if err := jobs.UnarchiveJob(a); err != nil {
 		util.Die("%v", err)
 	}
+	util.LogEvent("cli", "info", "unarchive", "k unarchive "+a.ArchivedName)
 	fmt.Printf("unarchived %s → %s (state %q preserved)\n", a.ArchivedName, filepath.Join(jobs.PlutoDir(), util.Slugify(a.Slug)+jobs.JobSuffix), a.State)
+}
+
+// --- k logevent ---
+
+// cmdLogEvent appends one entry to the unified event log — plumbing for
+// non-Go writers (the Makefile's install target logs through this), not a
+// user-facing command, so it stays out of k help.
+func cmdLogEvent(args []string) {
+	if len(args) < 3 {
+		util.Die("usage: k logevent <src> <event> <msg...>")
+	}
+	util.LogEvent(args[0], "info", args[1], strings.Join(args[2:], " "))
 }
 
 // --- k j ---

@@ -56,8 +56,12 @@ func main() {
 		cmdDaemon(rest)
 	case "migrate":
 		cmdMigrate(rest)
+	case "logevent":
+		cmdLogEvent(rest)
 	case "web":
 		cmdWeb(rest)
+	case "pr-hook":
+		cmdPrHook(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":
