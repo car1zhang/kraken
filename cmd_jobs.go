@@ -11,6 +11,20 @@ import (
 	"kraken/util"
 )
 
+// --- pr-hook ---
+
+// cmdPrHook is the thin dispatch wrapper for `kraken pr-hook <slug>` — a
+// Claude Code PostToolUse hook (jobs.PrHook does the work), not a
+// user-facing verb, so it's kept out of usage() like _complete. A malformed
+// invocation (no slug) is silently ignored rather than util.Die'd: this
+// runs as a hook, and must never fail zeus' tool call.
+func cmdPrHook(args []string) {
+	if len(args) != 1 {
+		return
+	}
+	jobs.PrHook(args[0])
+}
+
 // --- k start ---
 
 func cmdStart(args []string) {

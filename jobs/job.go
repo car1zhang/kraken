@@ -536,6 +536,29 @@ func JobBySlug(jobs []*Job, slug string) *Job {
 	return nil
 }
 
+// LoadJobBySlug parses exactly one job file, for a caller (the pr-hook verb)
+// that only knows its own slug and runs once per zeus tool call — the full
+// LoadJobs() sweep (every file in the dir, plus slug-collision and
+// prereq-cycle bookkeeping across the whole board) is wasted work at that
+// call rate. Fast path reads "<slug>.job.md" directly; a mismatch (the
+// file's own `job:` frontmatter overrides the filename) falls back to a full
+// LoadJobs()+JobBySlug scan.
+func LoadJobBySlug(slug string) *Job {
+	slug = strings.TrimSuffix(slug, JobSuffix)
+	path := filepath.Join(PlutoDir(), slug+JobSuffix)
+	if data, err := os.ReadFile(path); err == nil {
+		j := ParseJob(slug+JobSuffix, data)
+		j.File = path
+		if info, err := os.Stat(path); err == nil {
+			j.ModTime = info.ModTime()
+		}
+		if j.Slug == slug {
+			return j
+		}
+	}
+	return JobBySlug(LoadJobs(), slug)
+}
+
 // --- DAG ---
 
 // markPrereqCycles flags every job on a prereq cycle: a cycle can never
@@ -733,21 +756,70 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 
 // writeJobPRs persists the tracker's PR record atomically, mirroring
 // WriteJobFields' re-read-then-patch pattern so a concurrent editor save
-// isn't clobbered with stale bytes.
+// isn't clobbered with stale bytes. Invariant: this write may add or update
+// records, but must never DROP a URL already present in the file. The
+// caller's `prs` is built from j.PRs loaded at the start of a daemon tick;
+// the pr-hook verb's real-time appendJobPR path may have appended a fresh
+// record straight to the file in the meantime. Re-parsing the freshly-read
+// bytes and unioning in any file-only URL (state as last recorded there)
+// before patching closes that race — without it, a PR attached mid-tick
+// would be silently overwritten out of existence by the tracker's own write.
 func writeJobPRs(j *Job, prs []JobPR) error {
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return err
 	}
-	content, err := patchPRs(string(data), prs)
+	fresh := ParseJob(filepath.Base(j.File), data)
+	have := make(map[string]bool, len(prs))
+	for _, p := range prs {
+		have[p.URL] = true
+	}
+	merged := prs
+	for _, p := range fresh.PRs {
+		if !have[p.URL] {
+			merged = append(merged, p)
+		}
+	}
+	content, err := patchPRs(string(data), merged)
 	if err != nil {
 		return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
 	}
 	if err := util.AtomicWrite(j.File, content); err != nil {
 		return err
 	}
-	j.PRs = prs
+	j.PRs = merged
 	return nil
+}
+
+// appendJobPR is the shared attach path for recording one shipped PR against
+// a job: the pr-hook verb's real-time path and (later) a transcript-scanning
+// backstop both fold through here. Re-reads the file fresh and parses its
+// current prs — not j.PRs, which may be stale — so a concurrent daemon tick
+// or nvim save between load and write can't be clobbered, mirroring
+// writeJobPRs' re-read-then-patch semantics. No-ops (attached=false) if the
+// URL is already recorded; a hook re-run on the same gh pr create output
+// must never duplicate an entry.
+func appendJobPR(j *Job, pr JobPR) (attached bool, err error) {
+	data, err := os.ReadFile(j.File)
+	if err != nil {
+		return false, err
+	}
+	fresh := ParseJob(filepath.Base(j.File), data)
+	for _, existing := range fresh.PRs {
+		if existing.URL == pr.URL {
+			return false, nil
+		}
+	}
+	prs := append(fresh.PRs, pr)
+	content, err := patchPRs(string(data), prs)
+	if err != nil {
+		return false, fmt.Errorf("%s: %v", filepath.Base(j.File), err)
+	}
+	if err := util.AtomicWrite(j.File, content); err != nil {
+		return false, err
+	}
+	j.PRs = prs
+	return true, nil
 }
 
 // WriteJobFields patches kraken-owned fields atomically (temp file + rename

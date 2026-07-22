@@ -1,0 +1,182 @@
+package jobs
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+// prhook_test.go — the pr-hook verb's pure pieces: payload parsing/URL
+// extraction (extractPRURLs never touches gh, stdin, or a job file) and the
+// shared attach path (appendJobPR) against a real file on disk.
+
+func TestExtractPRURLs(t *testing.T) {
+	const prefix = "github.com/carl/kraken"
+	cases := []struct {
+		name    string
+		payload string
+		prefix  string
+		want    []string
+	}{
+		{
+			name:    "gh pr create URL on stdout",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create --title x"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/42\n","stderr":""}}`,
+			prefix:  prefix,
+			want:    []string{"https://github.com/carl/kraken/pull/42"},
+		},
+		{
+			name:    "tool_response string variant",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_response":"Creating PR...\nhttps://github.com/carl/kraken/pull/7\n"}`,
+			prefix:  prefix,
+			want:    []string{"https://github.com/carl/kraken/pull/7"},
+		},
+		{
+			name:    "non-Bash tool is ignored",
+			payload: `{"tool_name":"Read","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/1"}}`,
+			prefix:  prefix,
+			want:    nil,
+		},
+		{
+			name:    "gh pr view must not match",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr view 42"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/42"}}`,
+			prefix:  prefix,
+			want:    nil,
+		},
+		{
+			name:    "different repo filtered out",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/other/repo/pull/9"}}`,
+			prefix:  prefix,
+			want:    nil,
+		},
+		{
+			name:    "empty prefix matches any repo",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/other/repo/pull/9"}}`,
+			prefix:  "",
+			want:    []string{"https://github.com/other/repo/pull/9"},
+		},
+		{
+			name:    "multiple URLs",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/1\nhttps://github.com/carl/kraken/pull/2\n"}}`,
+			prefix:  prefix,
+			want:    []string{"https://github.com/carl/kraken/pull/1", "https://github.com/carl/kraken/pull/2"},
+		},
+		{
+			name:    "malformed JSON does not panic",
+			payload: `{not valid json`,
+			prefix:  prefix,
+			want:    nil,
+		},
+		{
+			name:    "empty payload does not panic",
+			payload: ``,
+			prefix:  prefix,
+			want:    nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := extractPRURLs([]byte(c.payload), c.prefix)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestOriginToPrefix(t *testing.T) {
+	cases := []struct{ origin, want string }{
+		{"https://github.com/carl/kraken.git", "github.com/carl/kraken"},
+		{"https://github.com/carl/kraken", "github.com/carl/kraken"},
+		{"git@github.com:carl/kraken.git", "github.com/carl/kraken"},
+		{"git@github.com:carl/kraken", "github.com/carl/kraken"},
+	}
+	for _, c := range cases {
+		if got := originToPrefix(c.origin); got != c.want {
+			t.Errorf("originToPrefix(%q) = %q, want %q", c.origin, got, c.want)
+		}
+	}
+}
+
+func TestAppendJobPR(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yelp-dedupe.job.md")
+	if err := os.WriteFile(path, []byte(sampleJob), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
+	j.File = path
+
+	attached, err := appendJobPR(j, JobPR{URL: "https://github.com/carl/kraken/pull/1", State: "open"})
+	if err != nil || !attached {
+		t.Fatalf("first append: attached=%v err=%v, want true, nil", attached, err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsed := ParseJob("yelp-dedupe.job.md", data)
+	if reparsed.Err != "" {
+		t.Fatalf("reparsed job errored: %s", reparsed.Err)
+	}
+	if len(reparsed.PRs) != 1 || reparsed.PRs[0].URL != "https://github.com/carl/kraken/pull/1" || reparsed.PRs[0].State != "open" {
+		t.Fatalf("prs after append: %+v", reparsed.PRs)
+	}
+	orig := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
+	if reparsed.Body != orig.Body {
+		t.Fatal("appendJobPR mutated the body")
+	}
+	if reparsed.Repo != "monolith" || !reparsed.Ready {
+		t.Fatal("appendJobPR clobbered other frontmatter")
+	}
+
+	// dedup: re-attaching the same URL is a no-op
+	attached2, err2 := appendJobPR(j, JobPR{URL: "https://github.com/carl/kraken/pull/1", State: "open"})
+	if err2 != nil || attached2 {
+		t.Fatalf("dedup append: attached=%v err=%v, want false, nil", attached2, err2)
+	}
+
+	// a distinct URL still appends alongside the first
+	attached3, err3 := appendJobPR(j, JobPR{URL: "https://github.com/carl/kraken/pull/2", State: "open"})
+	if err3 != nil || !attached3 {
+		t.Fatalf("second append: attached=%v err=%v, want true, nil", attached3, err3)
+	}
+	data2, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reparsed2 := ParseJob("yelp-dedupe.job.md", data2); len(reparsed2.PRs) != 2 {
+		t.Fatalf("prs after second append: %+v", reparsed2.PRs)
+	}
+}
+
+func TestLoadJobBySlug(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	if err := os.WriteFile(filepath.Join(PlutoDir(), "yelp-dedupe.job.md"), []byte(sampleJob), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// fast path: filename matches slug
+	j := LoadJobBySlug("yelp-dedupe")
+	if j == nil || j.Slug != "yelp-dedupe" || j.Repo != "monolith" {
+		t.Fatalf("LoadJobBySlug fast path: %+v", j)
+	}
+	// suffix tolerated
+	if j := LoadJobBySlug("yelp-dedupe.job.md"); j == nil || j.Slug != "yelp-dedupe" {
+		t.Fatalf("LoadJobBySlug with suffix: %+v", j)
+	}
+	// fallback: frontmatter job: override with a mismatched filename — the
+	// direct "<slug>.job.md" path doesn't exist, so this only resolves via
+	// the full LoadJobs()+JobBySlug scan
+	override := "---\njob: overridden\nrepo: monolith\nready: true\n---\n\nbody\n"
+	if err := os.WriteFile(filepath.Join(PlutoDir(), "filename-mismatch.job.md"), []byte(override), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if j := LoadJobBySlug("overridden"); j == nil || j.Repo != "monolith" {
+		t.Fatalf("LoadJobBySlug fallback: %+v", j)
+	}
+	// missing slug
+	if j := LoadJobBySlug("no-such-job"); j != nil {
+		t.Fatalf("LoadJobBySlug(missing) = %+v, want nil", j)
+	}
+}

@@ -58,6 +58,8 @@ func main() {
 		cmdMigrate(rest)
 	case "web":
 		cmdWeb(rest)
+	case "pr-hook":
+		cmdPrHook(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":

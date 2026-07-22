@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -255,6 +256,7 @@ func StartCell(j *Job, repo string) error {
 	}
 	// gate passed: from here on, failures must report the worktree so a
 	// half-built cell is cleanable by hand
+	installHookSettings(wt, j)
 	argv := append(cellClaudeArgs(), "--name", ZeusName(j),
 		"--append-system-prompt", zeusBrief(j))
 	if prompt := jobPrompt(j); prompt != "" {
@@ -277,6 +279,124 @@ func StartCell(j *Job, repo string) error {
 		fmt.Fprintf(os.Stderr, "kraken: cell is up but state write failed: %v\n", err)
 	}
 	return nil
+}
+
+// krakenHookEntry is the PostToolUse matcher group kraken installs into a
+// cell's worktree: a Bash hook that reports every `gh pr create` zeus runs
+// straight to `kraken pr-hook <slug>`, so a PR attaches to the board the
+// instant it's opened instead of waiting for the next scan/poll. krakenBin
+// is the resolved kraken binary — hooks run in a non-interactive shell where
+// ~/.local/bin may not be on PATH, so a bare "kraken" only works as a
+// fallback.
+func krakenHookEntry(slug, krakenBin string) map[string]any {
+	return map[string]any{
+		"matcher": "Bash",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": krakenBin + " pr-hook " + slug,
+			},
+		},
+	}
+}
+
+// mergeHookSettings renders a cell's .claude/settings.json: kraken's
+// PostToolUse hook entry (krakenHookEntry) appended into whatever's already
+// there. existing empty/nil renders a fresh file. Non-empty existing bytes
+// are merged non-destructively — unrelated top-level keys and any PostToolUse
+// groups the repo's own checked-in settings.json already declares survive
+// alongside kraken's, never clobbered. An error return means existing wasn't
+// valid JSON; the caller must leave the file alone rather than overwrite a
+// repo's own config. Idempotent: if an existing PostToolUse group already
+// carries the exact command kraken would install (matched by command string,
+// since that's what encodes slug + binary path), nothing is appended — a
+// second installation path (e.g. reactivation recreate alongside a preserved
+// StartCell install) can't duplicate the entry.
+func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) {
+	parsed := map[string]any{}
+	if len(bytes.TrimSpace(existing)) > 0 {
+		if err := json.Unmarshal(existing, &parsed); err != nil {
+			return nil, err
+		}
+	}
+	hooks, ok := parsed["hooks"].(map[string]any)
+	if !ok {
+		hooks = map[string]any{}
+	}
+	postToolUse, ok := hooks["PostToolUse"].([]any)
+	if !ok {
+		postToolUse = nil
+	}
+	command := krakenBin + " pr-hook " + slug
+	if !hasHookCommand(postToolUse, command) {
+		hooks["PostToolUse"] = append(postToolUse, krakenHookEntry(slug, krakenBin))
+		parsed["hooks"] = hooks
+	}
+	out, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+// hasHookCommand reports whether any PostToolUse group in groups already
+// contains a hook whose command exactly matches command.
+func hasHookCommand(groups []any, command string) bool {
+	for _, g := range groups {
+		group, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		hookList, ok := group["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, h := range hookList {
+			hook, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cmd, ok := hook["command"].(string); ok && cmd == command {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// installHookSettings writes (or merges kraken's entry into) the cell's
+// project-scoped Claude Code hook config, <wt>/.claude/settings.json, so
+// zeus' `gh pr create` calls self-report to kraken pr-hook. Called from
+// StartCell after the worktree is up and before claude launches in it. Never
+// fails the cell: attachment still works via the daemon's scan/poll paths, so
+// any failure here is a stderr warning, not an error return.
+func installHookSettings(wt string, j *Job) {
+	slug := util.Slugify(j.Slug)
+	dir := filepath.Join(wt, ".claude")
+	path := filepath.Join(dir, "settings.json")
+	var existing []byte
+	if data, err := os.ReadFile(path); err == nil {
+		existing = data
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: read %s: %v\n", j.Slug, path, err)
+		return
+	}
+	krakenBin, err := os.Executable()
+	if err != nil {
+		krakenBin = "kraken"
+	}
+	merged, err := mergeHookSettings(existing, slug, krakenBin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: %s is not valid JSON — leaving it alone: %v\n", j.Slug, path, err)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: mkdir %s: %v\n", j.Slug, dir, err)
+		return
+	}
+	if err := os.WriteFile(path, merged, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: hook install for %s: write %s: %v\n", j.Slug, path, err)
+	}
 }
 
 // --- PR listing ---
@@ -843,6 +963,9 @@ func ReactivateJob(j *Job, session, message string) error {
 		if err != nil {
 			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 		}
+		// fresh worktree, same as StartCell: no hook until installed, and a
+		// done→adjust reactivation is exactly when new PRs are about to ship
+		installHookSettings(wt, j)
 		if j.State == "done" {
 			prompt = "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + CellBranch(j) + " freshly reset off " + base + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
 		} else {

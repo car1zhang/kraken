@@ -50,6 +50,7 @@ Every path in the binary derives from `os.UserHomeDir()` via `util.Home()` — n
 | `~/Developer` (git checkouts jobs may target) | user convention | `jobs/job.go` (`ResolveRepo`), `jobs/board.go` (`RepoCandidates`) |
 | `~/.kraken` (`cells/`, `daemon.json`) | kraken-owned | `jobs/cell.go`, `jobs/daemon.go` |
 | `~/.kraken/uploads` | kraken-owned (per-job image uploads) | `jobs/uploads.go` |
+| `<cell worktree>/.claude/settings.json` | kraken-written per-cell hook config (PostToolUse → `kraken pr-hook`), merged not clobbered | `jobs/cell.go` |
 | `~/.claude` (`sessions/`, `projects/`, `teams/`, `.usage-cache.json`) | Claude Code | `core/discover.go`, `core/peer.go`, `core/usage.go` |
 | `~/.claude/skills/doc/assets` (doc templates, `hermes-contract.md`, `lint_svg.py`) | user's doc skill; zeus briefs reference these by path | `jobs/crew.go` |
 | `~/.codex/session_index.jsonl` | Codex | `core/discover.go` |
