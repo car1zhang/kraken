@@ -1082,17 +1082,24 @@ function flushSteerDraft() {
 function fillSteerContext(j, mode) {
   const container = document.getElementById("steer-context");
   const crewEl = document.getElementById("steer-crew");
+  const prsEl = document.getElementById("steer-prs");
   const detailEl = document.getElementById("steer-detail");
   const lastSentEl = document.getElementById("steer-lastsent");
   const chipsEl = document.getElementById("steer-chips");
 
   const crew = mode !== "reactivate" && j && crewHTML(j);
+  // PRs are job history, not cell state — shown in every mode, including
+  // reactivate ("what already shipped" is exactly the reactivation context)
+  const prs = j && j.prs && j.prs.length ? j.prs : null;
   const detail = j && j.detail;
   const lastSent = j && j.last_sent;
   const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
 
   crewEl.hidden = !crew;
   crewEl.innerHTML = crew || "";
+
+  prsEl.hidden = !prs;
+  prsEl.innerHTML = prs ? prs.map(prChipHTML).join("") : "";
 
   detailEl.hidden = !detail;
   // renderMD escapes before transforming, so agent-authored text is inert
@@ -1104,7 +1111,7 @@ function fillSteerContext(j, mode) {
   chipsEl.hidden = !artifacts;
   chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, j.slug, j.slug) : "";
 
-  container.hidden = !crew && !detail && !lastSent && !artifacts;
+  container.hidden = !crew && !prs && !detail && !lastSent && !artifacts;
 }
 
 // liveDisplayColumn mirrors render()'s column bucketing for a single job:
@@ -1139,7 +1146,9 @@ function specMetaHTML(d) {
     ["type", esc(d.type || "—")],
     ["repo", esc(d.repo || "—")],
     ["base", esc(d.base || "origin/main")],
+    ["model", esc(d.model || "default")],
     ["solo", d.solo ? "✓" : "✗"],
+    ["skip doc", d.skip_doc ? "✓" : "✗"],
   ];
   const prereqs = d.prereqs || [];
   if (prereqs.length) {
@@ -1437,8 +1446,10 @@ function fillForm(d) {
     (d.repo && !repos.includes(d.repo) ? `<option value="${esc(d.repo)}">${esc(d.repo)}</option>` : "");
   repoSel.value = d.repo || "";
   document.getElementById("f-base").value = d.base || "";
+  document.getElementById("f-model").value = d.model || "";
   editorReady = !!d.ready;
   document.getElementById("f-solo").checked = !!d.solo;
+  document.getElementById("f-skipdoc").checked = !!d.skip_doc;
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
   document.getElementById("job-list").innerHTML = (d.slugs || []).map((x) => `<option value="${esc(x)}">`).join("");
@@ -1456,8 +1467,10 @@ function readForm() {
     type: document.getElementById("f-type").value,
     repo: document.getElementById("f-repo").value.trim(),
     base: document.getElementById("f-base").value.trim(),
+    model: document.getElementById("f-model").value.trim(),
     ready: editorReady,
     solo: document.getElementById("f-solo").checked,
+    skip_doc: document.getElementById("f-skipdoc").checked,
     prereqs,
     spec: editorText.value,
     mtime: editorMTime,
@@ -1472,7 +1485,9 @@ function setFormReadOnly(readOnly) {
   document.getElementById("f-type").disabled = readOnly;
   document.getElementById("f-repo").disabled = readOnly;
   document.getElementById("f-base").disabled = readOnly;
+  document.getElementById("f-model").disabled = readOnly;
   document.getElementById("f-solo").disabled = readOnly;
+  document.getElementById("f-skipdoc").disabled = readOnly;
   document.getElementById("f-add-prereq").disabled = readOnly;
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));
@@ -1858,10 +1873,7 @@ document.querySelectorAll(".viewtab").forEach((tab) =>
   tab.addEventListener("click", () => {
     view = tab.dataset.view;
     localStorage.setItem("kraken-view", view);
-    document.querySelectorAll(".viewtab").forEach((t) =>
-      t.classList.toggle("active", t.dataset.view === view));
-    document.getElementById("board").hidden = view !== "board";
-    document.getElementById("dag").hidden = view !== "dag";
+    applyView();
     invalidateBoard(); // switching to dag must render it even though jobs are unchanged
     refresh();
   }));
@@ -1871,6 +1883,8 @@ function applyView() {
     t.classList.toggle("active", t.dataset.view === view));
   document.getElementById("board").hidden = view !== "board";
   document.getElementById("dag").hidden = view !== "dag";
+  document.getElementById("log").hidden = view !== "log";
+  if (view === "log") refreshLog();
 }
 
 const NODE_W = 190;
@@ -1976,12 +1990,105 @@ document.getElementById("dag-nodes").addEventListener("click", (ev) => {
   else openEditor(slug);
 });
 
+// ---- unified event log view ----
+//
+// Pagination is file-granular (the server rotates by size): the view loads
+// the newest log file, and scrolling to the top pulls the previous file into
+// the DOM, one fetch per file, using the `prev` name each response carries.
+// State is a chain of loaded files oldest→newest; the newest entry of the
+// chain is re-fetched on every poll so live events stream in.
+
+let logChain = []; // file names, oldest→newest; last is the live "latest"
+let logData = {}; // name → { entries, prev }
+let logLoading = false;
+
+const logTime = (ts) => {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
+function logRowHTML(e) {
+  return `<div class="log-row lvl-${esc(e.level)}">
+    <span class="log-ts">${logTime(e.ts)}</span>
+    <span class="log-src">${esc(e.src)}</span>
+    <span class="log-event">${esc(e.event)}</span>
+    <span class="log-msg">${esc(e.msg)}</span>
+  </div>`;
+}
+
+// renderLog rebuilds the entry list. keepBottom pins the view to the newest
+// entry (initial load / already-at-bottom tail-follow); otherwise the scroll
+// offset is preserved relative to the content that was already there, so
+// prepending an older file doesn't yank the view.
+function renderLog(keepBottom) {
+  const scroll = document.getElementById("log-scroll");
+  const entriesEl = document.getElementById("log-entries");
+  const prevHeight = scroll.scrollHeight;
+  const prevTop = scroll.scrollTop;
+  const parts = [];
+  for (const name of logChain) {
+    parts.push(`<div class="log-file-divider">${esc(name)}</div>`);
+    parts.push(...(logData[name]?.entries || []).map(logRowHTML));
+  }
+  entriesEl.innerHTML = parts.join("") || '<div class="log-empty">no log entries yet</div>';
+  // the head of the chain still having a prev means more history exists
+  const first = logChain[0];
+  document.getElementById("log-more").hidden = !(first && logData[first]?.prev);
+  if (keepBottom) {
+    scroll.scrollTop = scroll.scrollHeight;
+  } else {
+    scroll.scrollTop = prevTop + (scroll.scrollHeight - prevHeight);
+  }
+}
+
+// refreshLog re-fetches the newest file (and adopts a rotation: a new latest
+// name appends to the chain, the old latest keeps its cached entries).
+async function refreshLog() {
+  try {
+    const r = await fetch("/api/logs");
+    const d = await r.json();
+    if (!r.ok || !d.file) return;
+    const scroll = document.getElementById("log-scroll");
+    const firstLoad = logChain.length === 0;
+    // tail-follow only when the user is already looking at the newest lines
+    const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40;
+    const changed = !logData[d.file] || logData[d.file].entries.length !== d.entries.length;
+    logData[d.file] = { entries: d.entries, prev: d.prev };
+    if (!logChain.includes(d.file)) logChain.push(d.file);
+    if (changed || firstLoad) renderLog(firstLoad || atBottom);
+  } catch {} // the status bar already reports an unreachable server
+}
+
+// loadOlderLog prepends the file before the current head of the chain.
+async function loadOlderLog() {
+  const first = logChain[0];
+  const prev = first && logData[first]?.prev;
+  if (!prev || logLoading || logData[prev]) return;
+  logLoading = true;
+  try {
+    const r = await fetch("/api/logs?file=" + encodeURIComponent(prev));
+    const d = await r.json();
+    if (r.ok && d.file) {
+      logData[d.file] = { entries: d.entries, prev: d.prev };
+      logChain.unshift(d.file);
+      renderLog(false);
+    }
+  } catch {}
+  logLoading = false;
+}
+
+document.getElementById("log-scroll").addEventListener("scroll", (ev) => {
+  if (ev.target.scrollTop < 40) loadOlderLog();
+});
+
 // ---- poll (paused while dragging so the board doesn't rebuild mid-drag,
 // and while the tab is hidden — nothing is watching it either way) ----
 
 async function refresh() {
   if (dragging) return;
   if (document.hidden) return;
+  if (view === "log") refreshLog(); // stream new entries while the log is up
   try {
     const r = await fetch("/api/board");
     const board = await r.json();

@@ -228,6 +228,10 @@ struct JobForm: Decodable {
     let base: String
     let ready: Bool
     let solo: Bool
+    // model/skipDoc are Optional for wire tolerance: an older server's
+    // payload simply lacks the keys, which must decode as the defaults.
+    let model: String?
+    let skipDoc: Bool?
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -238,6 +242,7 @@ struct JobForm: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
+        case model, skipDoc = "skip_doc"
         case prereqs, spec, mtime, editable, err, slugs, repos
     }
 }
@@ -272,12 +277,15 @@ struct JobFormSaveRequest: Encodable {
     let base: String
     let ready: Bool
     let solo: Bool
+    let model: String
+    let skipDoc: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
         case slug, type, repo, base, ready, solo
+        case model, skipDoc = "skip_doc"
         case prereqs, spec, mtime
     }
 }
@@ -484,4 +492,37 @@ struct HealthResponse: Decodable {
     // servers.
     let contract: Int?
     let stale: Bool?
+}
+
+// MARK: - unified event log
+
+// LogEntry mirrors util.LogEntry: one line of the unified event log
+// (~/.kraken/logs). ts is unix millis.
+struct LogEntry: Decodable {
+    let ts: Int64
+    let src: String
+    let level: String
+    let event: String
+    let msg: String
+}
+
+// LogFileInfo mirrors util.LogFileInfo — one rotated log file, the viewer's
+// pagination unit.
+struct LogFileInfo: Decodable {
+    let name: String
+    let size: Int64
+    let mtime: Int64
+}
+
+// GET /api/logs/files
+struct LogFilesResponse: Decodable {
+    let files: [LogFileInfo]
+}
+
+// GET /api/logs[?file=] — one file's parsed entries; prev names the
+// next-older file ("" at the start of history), the scroll-back cursor.
+struct LogReadResponse: Decodable {
+    let file: String
+    let prev: String
+    let entries: [LogEntry]
 }

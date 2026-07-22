@@ -308,6 +308,23 @@ actor APIClient {
 
     // MARK: - sessions
 
+    // MARK: - unified event log
+
+    func fetchLogFiles(baseURL: String) async throws -> LogFilesResponse {
+        try await get(baseURL: baseURL, path: "/api/logs/files")
+    }
+
+    /// file == nil fetches the newest log file; a name (from a previous
+    /// response's `prev`) fetches that older file for scroll-back.
+    func fetchLog(baseURL: String, file: String? = nil) async throws -> LogReadResponse {
+        var path = "/api/logs"
+        if let file, !file.isEmpty {
+            let escaped = file.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? file
+            path += "?file=" + escaped
+        }
+        return try await get(baseURL: baseURL, path: path)
+    }
+
     func fetchHealth(baseURL: String) async throws -> HealthResponse {
         try await get(baseURL: baseURL, path: "/api/health")
     }

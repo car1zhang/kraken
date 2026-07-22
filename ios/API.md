@@ -261,6 +261,8 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
+| `model` | string | always | claude model for zeus (`--model` value), `""` = claude's default; applied once at cell start |
+| `skip_doc` | bool | always | build only: skip the /doc → /send phase, implement the spec directly |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -273,7 +275,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = default), `skip_doc` (bool, optional to send — build only), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
@@ -365,6 +367,35 @@ Response: `{"ok": true}`.
 Errors: 400 (both or neither of pane/slug set), 404 (no session in pane / no job / no live cell agent), 409 (open failure).
 
 ---
+
+## Unified event log
+
+The single source-of-truth record of everything kraken does (daemon
+lifecycle + tick events, web server lifecycle, board actions, CLI moves,
+installs, errors), stored as size-rotated JSONL files under `~/.kraken/logs`
+(util/eventlog.go). The file is the pagination unit: clients load the newest
+file, then walk backwards via `prev` as the user scrolls into history.
+
+### `GET /api/logs/files` → map literal (api/logs.go `webLogFiles`)
+
+`{"files": [logFileInfo]}` — always an array, `[]` when no logs exist.
+`logFileInfo`: `name` (string, e.g. `20260722-153000.jsonl`), `size`
+(number, bytes), `mtime` (number, unix millis).
+
+### `GET /api/logs[?file=]` → map literal (api/logs.go `webLogRead`)
+
+No `?file=` returns the newest file. `file` must be a name from the listing
+— anything else 404s.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `file` | string | always | the file served; `""` when no logs exist yet |
+| `prev` | string | always | next-older file name, `""` at the start of history — the scroll-back cursor |
+| `entries` | array (`logEntry`) | always (`[]` not `null`) | in append order (oldest first) |
+
+`logEntry`: `ts` (number, unix millis), `src` (string: `daemon`\|`web`\|`cli`\|`install`), `level` (string: `info`\|`error`), `event` (string, kebab id e.g. `cell-start`, `start-failed`, `queue`), `msg` (string).
+
+Errors: 404 (unknown file name), 500.
 
 ## Misc
 

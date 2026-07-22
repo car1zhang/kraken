@@ -248,6 +248,24 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 	}
 }
 
+func TestSerializeJobFileModelAndSkipDoc(t *testing.T) {
+	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Model: "sonnet", SkipDoc: true}
+	content := serializeJobFile(f, "", "", "", 0, nil, "")
+	j := jobs.ParseJob("x.job.md", []byte(content))
+	if j.Err != "" {
+		t.Fatalf("round-trip err: %s\n%s", j.Err, content)
+	}
+	if j.Model != "sonnet" || !j.SkipDoc {
+		t.Fatalf("model/skip-doc lost in round-trip: model=%q skipdoc=%v", j.Model, j.SkipDoc)
+	}
+	// conditional emission: defaults leave the file free of the new keys, so
+	// untouched jobs stay readable by older binaries
+	content = serializeJobFile(jobFormFields{Slug: "x", Type: "build", Repo: "kraken"}, "", "", "", 0, nil, "")
+	if strings.Contains(content, "model:") || strings.Contains(content, "skip-doc:") {
+		t.Fatalf("default model/skip-doc serialized anyway:\n%s", content)
+	}
+}
+
 func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
 	f := jobFormFields{Slug: "x", Type: "build", Repo: "r"}
 	content := serializeJobFile(f, "done", "shipped", "abc-123", 2, nil, "")

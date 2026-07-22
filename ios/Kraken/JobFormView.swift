@@ -35,6 +35,8 @@ struct JobFormView: View {
     @State private var base = ""
     @State private var ready = false
     @State private var solo = false
+    @State private var model = ""
+    @State private var skipDoc = false
     @State private var prereqRows: [PrereqRow] = []
     @State private var spec = ""
     @State private var mtime: Int64 = 0
@@ -175,11 +177,37 @@ struct JobFormView: View {
                     .kField()
                     .listRowBackground(Color.clear)
             }
+            kSection("Model") {
+                TextField("model for zeus (optional, default = claude's default)", text: $model)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .font(.data(13))
+                    .kField()
+                    .listRowBackground(Color.clear)
+                // suggestion chips, same pattern as the repo suggestions above
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(["fable", "opus", "sonnet", "haiku"], id: \.self) { m in
+                            Button(m) { model = m }
+                                .buttonStyle(.plain)
+                                .font(.data(11))
+                                .foregroundStyle(KTheme.accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .overlay(Rectangle().stroke(KTheme.accentSoft, lineWidth: 1))
+                        }
+                    }
+                }
+                .listRowBackground(Color.clear)
+            }
             kSection("Flags") {
                 Toggle("Ready (queue on save)", isOn: $ready)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
                 Toggle("Solo (no subagent crew)", isOn: $solo)
+                    .font(.voice(13))
+                    .foregroundStyle(KTheme.text)
+                Toggle("Skip doc (build only: implement directly)", isOn: $skipDoc)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
             }
@@ -347,7 +375,7 @@ struct JobFormView: View {
     // once, the same idiom SpecSection uses for its `.task(id:)` key.
     private var autosaveSnapshotKey: String {
         let prereqsPart = prereqRows.map { "\($0.job)=\($0.gated)" }.joined(separator: ",")
-        return "\(type)|\(repo)|\(base)|\(solo)|\(prereqsPart)|\(spec)"
+        return "\(type)|\(repo)|\(base)|\(model)|\(solo)|\(skipDoc)|\(prereqsPart)|\(spec)"
     }
 
     private func load() async {
@@ -360,6 +388,8 @@ struct JobFormView: View {
             base = f.base
             ready = f.ready
             solo = f.solo
+            model = f.model ?? ""
+            skipDoc = f.skipDoc ?? false
             prereqRows = f.prereqs.map { PrereqRow(job: $0.job, gated: $0.gated) }
             spec = f.spec
             mtime = f.mtime
@@ -440,6 +470,7 @@ struct JobFormView: View {
         let req = JobFormSaveRequest(
             slug: slug, type: type, repo: repo, base: base,
             ready: ready, solo: solo,
+            model: model.trimmingCharacters(in: .whitespaces), skipDoc: skipDoc,
             prereqs: prereqRows.map { Prereq(job: $0.job, gated: $0.gated) },
             spec: spec, mtime: 0
         )

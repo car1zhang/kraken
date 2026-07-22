@@ -110,6 +110,57 @@ func TestJobTemplateClean(t *testing.T) {
 	}
 }
 
+func TestParseJobModel(t *testing.T) {
+	// model: any plain CLI token (shape check, not an allowlist); empty or
+	// absent means claude's default
+	for _, val := range []string{"sonnet", "fable", "claude-opus-4-8", "us.anthropic.claude_v2"} {
+		src := "---\njob: x\nrepo: monolith\nmodel: " + val + "\n---\n"
+		j := ParseJob("x.job.md", []byte(src))
+		if j.Err != "" || j.Model != val {
+			t.Errorf("model %q: err=%q model=%q", val, j.Err, j.Model)
+		}
+	}
+	if j := ParseJob("x.job.md", []byte("---\njob: x\nmodel:\n---\n")); j.Err != "" || j.Model != "" {
+		t.Errorf("empty model: err=%q model=%q", j.Err, j.Model)
+	}
+	// comments strip like any scalar
+	j := ParseJob("x.job.md", []byte("---\njob: x\nmodel: haiku  # cheap\n---\n"))
+	if j.Err != "" || j.Model != "haiku" {
+		t.Errorf("commented model: err=%q model=%q", j.Err, j.Model)
+	}
+	// non-token values err loudly — the value lands on a claude argv
+	for _, val := range []string{"sonnet or opus", "a;b", "läuft"} {
+		src := "---\njob: x\nmodel: " + val + "\n---\n"
+		if j := ParseJob("x.job.md", []byte(src)); j.Err == "" {
+			t.Errorf("model %q: expected Err, got clean parse", val)
+		}
+	}
+}
+
+func TestParseJobSkipDoc(t *testing.T) {
+	j := ParseJob("x.job.md", []byte("---\njob: x\ntype: build\nrepo: monolith\nskip-doc: true\n---\n"))
+	if j.Err != "" || !j.SkipDoc {
+		t.Fatalf("skip-doc build: err=%q skipdoc=%v", j.Err, j.SkipDoc)
+	}
+	if j := ParseJob("x.job.md", []byte("---\njob: x\ntype: build\nskip-doc: sure\n---\n")); j.Err == "" {
+		t.Error("bad skip-doc bool: expected Err")
+	}
+	// info jobs have no doc→send split to skip: strict-loud, regardless of
+	// key order relative to type
+	for _, src := range []string{
+		"---\njob: x\ntype: info\nskip-doc: true\n---\n",
+		"---\njob: x\nskip-doc: true\ntype: info\n---\n",
+	} {
+		if j := ParseJob("x.job.md", []byte(src)); !strings.Contains(j.Err, "skip-doc") {
+			t.Errorf("skip-doc on info job: err=%q", j.Err)
+		}
+	}
+	// false on an info job is fine — the checkbox merely untoggled
+	if j := ParseJob("x.job.md", []byte("---\njob: x\ntype: info\nrepo: monolith\nskip-doc: false\n---\n")); j.Err != "" {
+		t.Errorf("skip-doc false on info job: err=%q", j.Err)
+	}
+}
+
 func TestParseJobStrict(t *testing.T) {
 	// every construct the parser can't fully understand must set Err — an
 	// erred job never runs, and the error is surfaced on the board
@@ -539,10 +590,18 @@ func TestJobPrompt(t *testing.T) {
 }
 
 func TestCellClaudeArgs(t *testing.T) {
-	args := cellClaudeArgs()
+	args := cellClaudeArgs("")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--dangerously-skip-permissions") || !strings.Contains(joined, "--rc") {
 		t.Fatalf("cc-alias flags missing: %v", args)
+	}
+	if strings.Contains(joined, "--model") {
+		t.Fatalf("empty model must not add a --model flag: %v", args)
+	}
+	// a job's model: field rides along as --model <value>
+	withModel := strings.Join(cellClaudeArgs("sonnet"), " ")
+	if !strings.Contains(withModel, "--model sonnet") {
+		t.Fatalf("model flag missing: %q", withModel)
 	}
 }
 
