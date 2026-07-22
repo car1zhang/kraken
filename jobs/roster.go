@@ -33,7 +33,10 @@ type CrewSummary struct {
 // role, disambiguated by whatever suffix fits the slice — "hephaestus-12",
 // "hephaestus-surface" — so the role must LEAD the name: exactly the role, or
 // the role followed by "-". A name that merely contains a role word elsewhere
-// ("probe-hermes") reads as "other" rather than guessing.
+// ("probe-hermes") reads as "other" rather than guessing. This isn't just
+// hypothetical: zeus' three parallel review variants — "athena-logic",
+// "athena-edge", "athena-style" — are a real case of the same pattern, and
+// all three bucket into the "athena" role for free.
 func crewRole(name string) string {
 	for _, role := range []string{"hephaestus", "athena", "hermes"} {
 		if name == role || strings.HasPrefix(name, role+"-") {
