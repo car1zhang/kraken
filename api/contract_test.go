@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"kraken/core"
@@ -697,6 +698,34 @@ func TestDraftPostWireShape(t *testing.T) {
 		t.Fatalf("draftHandler (POST): status %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/draft (POST)", rec.Body.Bytes(), draftPostOKSpec)
+}
+
+// --- feedback: /api/feedback POST (feedback.go) ---
+//
+// Only the 200 success shape is pinned here — 400/404/405 all return the
+// generic {"error": string} shape already covered by the convention note
+// atop this file (see the webAction-wrapped endpoints).
+
+var feedbackOKSpec = map[string]fieldSpec{
+	"ok":  {kind: wireBool, required: true},
+	"dir": {kind: wireString, required: true},
+}
+
+func TestFeedbackWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "contract-feedback", "")
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "contract-feedback.report.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	body := mustJSON(t, feedbackReq{Slug: "contract-feedback", Home: "pluto", Name: "report.html", Feedback: "note"})
+	req := httptest.NewRequest(http.MethodPost, "/api/feedback", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	feedbackHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("feedbackHandler: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/feedback", rec.Body.Bytes(), feedbackOKSpec)
 }
 
 // jobSaveFormConflictSpec is the 409 shape webJobSaveForm returns for a

@@ -47,6 +47,7 @@ Every path in the binary derives from `os.UserHomeDir()` via `util.Home()` — n
 | Path | Owner | Code |
 |---|---|---|
 | `~/Documents/pluto` (job files `*.job.md`, `archive/`) | user's pluto notes convention | `jobs/job.go` (`JobsDir`) |
+| `~/Documents/pluto/doc-feedback/` (day-grouped doc-feedback entries: artifact snapshot + feedback.txt) | written by the board's feedback button, read by the user's /dream skill | `jobs/feedback.go` |
 | `~/Developer` (git checkouts jobs may target) | user convention | `jobs/job.go` (`ResolveRepo`), `jobs/board.go` (`RepoCandidates`) |
 | `~/.kraken` (`cells/`, `daemon.json`) | kraken-owned | `jobs/cell.go`, `jobs/daemon.go` |
 | `~/.kraken/uploads` | kraken-owned (per-job image uploads) | `jobs/uploads.go` |
