@@ -194,49 +194,73 @@ func TestWebWakeupFromMirrorsFields(t *testing.T) {
 	}
 }
 
-// --- lastSentMessage: the most recent me→zeus mid-run log entry ---
+// --- lastUserSent: last real user message from a zeus transcript ---
 
-func TestLastSentMessageEmptyBody(t *testing.T) {
-	if got := lastSentMessage(""); got != "" {
+// writeBoardTestTranscript joins lines into a fresh temp jsonl file and
+// returns its path — mirrors core's writeTranscript helper since board.go's
+// tests need the same transcript-line fixtures.
+func writeBoardTestTranscript(t *testing.T, lines ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	content := strings.Join(lines, "\n")
+	if len(lines) > 0 {
+		content += "\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLastUserSentEmptyPath(t *testing.T) {
+	if got := lastUserSent(""); got != "" {
 		t.Errorf("got %q, want empty", got)
 	}
 }
 
-func TestLastSentMessageNoLogSection(t *testing.T) {
-	body := "# Spec\ndo the thing\n"
-	if got := lastSentMessage(body); got != "" {
+func TestLastUserSentNoUserTurn(t *testing.T) {
+	path := writeBoardTestTranscript(t, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`)
+	if got := lastUserSent(path); got != "" {
 		t.Errorf("got %q, want empty", got)
 	}
 }
 
-func TestLastSentMessageOneEntry(t *testing.T) {
-	body := "# Spec\ndo the thing\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n" +
-		"- [2026-07-01 10:00 me→zeus] pivot to plan B\n"
-	if got := lastSentMessage(body); got != "pivot to plan B" {
+func TestLastUserSentRealMessage(t *testing.T) {
+	path := writeBoardTestTranscript(t, `{"type":"user","message":{"content":"pivot to plan B"}}`)
+	if got := lastUserSent(path); got != "pivot to plan B" {
 		t.Errorf("got %q, want %q", got, "pivot to plan B")
 	}
 }
 
-func TestLastSentMessageMultipleEntriesInterleaved(t *testing.T) {
-	body := "# Spec\ndo the thing\n\n## Mid-run log\n" +
-		"<!-- appended by kraken; do not hand-edit -->\n" +
-		"- [2026-07-01 10:00 me→zeus] first message\n" +
-		"- [2026-07-01 10:05 zeus→me] status update, not mine\n" +
-		"- [2026-07-01 10:10 me→zeus] second message\n" +
-		"- [2026-07-01 10:15 zeus→me] another status update\n"
-	if got := lastSentMessage(body); got != "second message" {
-		t.Errorf("got %q, want %q", got, "second message")
+func TestLastUserSentOneLines(t *testing.T) {
+	rec := map[string]any{"type": "user", "message": map[string]any{"content": "line one\nline two"}}
+	line, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeBoardTestTranscript(t, string(line))
+	if got := lastUserSent(path); got != "line one line two" {
+		t.Errorf("got %q, want one-lined text", got)
 	}
 }
 
-func TestLastSentMessageSkipsAnsweredQuestionEntries(t *testing.T) {
-	body := "# Spec\ndo the thing\n\n## Mid-run log\n" +
-		"<!-- appended by kraken; do not hand-edit -->\n" +
-		"- [2026-07-01 10:00 me→zeus] real message\n" +
-		"- [2026-07-01 10:05 zeus→me] status update\n" +
-		"- [2026-07-01 10:10 me→zeus] answered question: option 2\n"
-	if got := lastSentMessage(body); got != "real message" {
-		t.Errorf("got %q, want %q", got, "real message")
+func TestLastUserSentCapsAt4000(t *testing.T) {
+	rec := map[string]any{"type": "user", "message": map[string]any{"content": strings.Repeat("a", 5000)}}
+	line, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeBoardTestTranscript(t, string(line))
+	got := lastUserSent(path)
+	if r := []rune(got); len(r) != 4000 {
+		t.Errorf("got length %d, want capped at 4000", len(r))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("got %q, want truncated result to end with ellipsis", got)
+	}
+	if want := strings.Repeat("a", 3999); !strings.HasPrefix(got, want) {
+		t.Errorf("got prefix %q, want 3999 leading a's before the ellipsis", got[:20])
 	}
 }
 

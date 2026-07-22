@@ -384,9 +384,6 @@ func (m *viewerModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := core.SendMessage(zeus, text); err != nil {
 				return "", err
 			}
-			if err := jobs.AppendMidRunLog(j, "me→zeus", jobs.OneLine(text)); err != nil {
-				return "", err
-			}
 			if err := jobs.WriteJobState(j, "working"); err != nil {
 				return "", err
 			}

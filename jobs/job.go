@@ -452,7 +452,7 @@ func JobTemplate(slug string) string {
 		"                          #   gated: true   → when it completes, you review its outcome\n" +
 		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
-		"---\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n"
+		"---\n"
 }
 
 // LoadJobs reads every *.job.md in the pluto dir, sorted by slug. Missing dir

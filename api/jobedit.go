@@ -234,13 +234,16 @@ func serializeJobFile(f jobFormFields, state, outcome, session string, run int, 
 		}
 	}
 	b.WriteString("---\n\n")
-	if spec := strings.TrimSpace(f.Spec); spec != "" {
-		b.WriteString(spec + "\n\n")
+	spec := strings.TrimSpace(f.Spec)
+	switch {
+	case logSection != "":
+		if spec != "" {
+			b.WriteString(spec + "\n\n")
+		}
+		b.WriteString(strings.TrimRight(logSection, "\n") + "\n")
+	case spec != "":
+		b.WriteString(spec + "\n")
 	}
-	if logSection == "" {
-		logSection = "## Mid-run log\n<!-- appended by kraken; do not hand-edit -->"
-	}
-	b.WriteString(logSection + "\n")
 	return b.String()
 }
 

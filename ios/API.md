@@ -90,7 +90,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `display_slug` | string | omitempty | original slug, archived jobs only |
 | `cell_gone` | bool | omitempty | started + non-done + tmux session vanished; worktree (incl. uncommitted WIP) still on disk — reactivate preserves it, done/kill discard it |
 | `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
-| `last_sent` | string | omitempty | carl's last free-text message; question-answer entries excluded, started + non-done jobs only |
+| `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 chars. Question-answer digit keypresses never appear (they're tool_results, not user text); started + non-done jobs (live or cell_gone) only |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
