@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -260,5 +262,94 @@ func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
 	content = serializeJobFile(f, "", "", "", 0, nil, "")
 	if strings.Contains(content, "session:") || strings.Contains(content, "run:") {
 		t.Fatalf("empty session/run serialized anyway:\n%s", content)
+	}
+}
+
+// TestWebJobSaveFormPreservesLegacyLogSection covers a job file left over
+// from before the mid-run log was retired: saving through the form must
+// still round-trip that section byte-preserved, since splitBodyLog() is the
+// legacy-tolerant reader and nothing should ever drop existing content. A
+// second save (with the fresh mtime the first save returned, mirroring the
+// editor's real load-save-save flow) must produce byte-identical output —
+// pinning the whole save path as idempotent, not just the log substring.
+func TestWebJobSaveFormPreservesLegacyLogSection(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJobBody(t, "legacy-log", "ready: true\n",
+		"# Spec\ndo the thing\n\n## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n- [2026-07-01 10:00 me→zeus] earlier note\n")
+	path := filepath.Join(jobs.PlutoDir(), "legacy-log"+jobs.JobSuffix)
+
+	formReq := httptest.NewRequest(http.MethodGet, "/api/job/form?slug=legacy-log", nil)
+	formRec := httptest.NewRecorder()
+	webJobForm(formRec, formReq)
+	var form map[string]any
+	if err := json.Unmarshal(formRec.Body.Bytes(), &form); err != nil {
+		t.Fatalf("bad form response: %v", err)
+	}
+	mtime, ok := form["mtime"].(float64)
+	if !ok {
+		t.Fatalf("form mtime = %#v (%T), want float64", form["mtime"], form["mtime"])
+	}
+
+	save := func(mtime float64) ([]byte, float64) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{
+			"slug": "legacy-log", "type": "build", "repo": "monolith", "spec": "do the thing", "mtime": mtime,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		webJobSaveForm(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("save: got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("bad save response: %v", err)
+		}
+		newMTime, ok := resp["mtime"].(float64)
+		if !ok {
+			t.Fatalf("save mtime = %#v (%T), want float64", resp["mtime"], resp["mtime"])
+		}
+		saved, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saved, newMTime
+	}
+
+	save1, mtimeAfterSave1 := save(mtime)
+	if !strings.Contains(string(save1), "## Mid-run log\n<!-- appended by kraken; do not hand-edit -->\n- [2026-07-01 10:00 me→zeus] earlier note") {
+		t.Fatalf("legacy log section did not survive the save byte-preserved:\n%s", save1)
+	}
+	save2, _ := save(mtimeAfterSave1)
+	if !bytes.Equal(save1, save2) {
+		t.Fatalf("second save is not byte-identical to the first (save is not idempotent):\nsave1:\n%s\nsave2:\n%s", save1, save2)
+	}
+}
+
+// TestWebJobSaveFormNoLegacyLogSectionGainsNone covers the common case now:
+// a job file with no legacy log section must not have one manufactured on
+// save — the mid-run log is retired, so nothing should write it back in.
+func TestWebJobSaveFormNoLegacyLogSectionGainsNone(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "no-log", "")
+
+	body, _ := json.Marshal(map[string]any{
+		"slug": "no-log", "type": "build", "repo": "monolith", "spec": "do the thing", "force": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	webJobSaveForm(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save: got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	saved, err := os.ReadFile(filepath.Join(jobs.PlutoDir(), "no-log"+jobs.JobSuffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "Mid-run log") {
+		t.Fatalf("log-less file gained a mid-run log section on save:\n%s", saved)
+	}
+	if !bytes.HasSuffix(saved, []byte("\n")) || bytes.HasSuffix(saved, []byte("\n\n")) {
+		t.Fatalf("log-less save should end with exactly one trailing newline, got:\n%q", saved)
 	}
 }

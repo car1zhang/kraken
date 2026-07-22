@@ -268,15 +268,14 @@ body {
 .outcome { color: var(--solved); font-size: 11px; margin-top: 5px; }
 
 /* the cell's last words: a live zeus' most recent assistant text block —
-   clamped to ~6 lines, click to expand/collapse the full text */
+   clamped to 2 lines; click opens the steer modal, which renders the full
+   text (see #steer-detail) */
 .detail {
   color: var(--text-2); font-size: 11px; line-height: 1.4; margin-top: 6px;
   white-space: pre-wrap;
-  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.detail.clampable { cursor: pointer; }
-.detail.expanded { -webkit-line-clamp: unset; overflow: visible; }
 
 /* carl's own last message to the cell, above .detail */
 .last-sent {

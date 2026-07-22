@@ -93,8 +93,8 @@ success: |
 
 func TestJobTemplateClean(t *testing.T) {
 	// JobTemplate is the actual skeleton `k n`/nvim expand: it must parse
-	// clean and its body must be blank above the mid-run log — no leftover
-	// "# Spec" heading and no prompt text to send zeus on an unedited job.
+	// clean and its body must be blank — no leftover "# Spec" heading and
+	// no prompt text to send zeus on an unedited job.
 	src := JobTemplate("x")
 	if strings.Contains(src, "# Spec") {
 		t.Fatalf("template body should have no # Spec heading:\n%s", src)

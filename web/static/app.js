@@ -39,13 +39,9 @@ function invalidateBoard() {
   boardSnapshot = "";
 }
 
-// per-slug detail-expanded state, persisted the same way archiveOpen is
-// (see archiveOpen below) so it survives the 3s poll re-render, which
+// per-slug artifact-chips-expanded state, persisted the same way archiveOpen
+// is (see archiveOpen below) so it survives the 3s poll re-render, which
 // rebuilds #board innerHTML and would otherwise wipe any .expanded class
-let expandedDetails = new Set(JSON.parse(localStorage.getItem("kraken-expanded-details") || "[]"));
-
-// per-slug artifact-chips-expanded state, same persistence pattern as
-// expandedDetails above
 let expandedArtifacts = new Set(JSON.parse(localStorage.getItem("kraken-expanded-artifacts") || "[]"));
 
 function columnFor(state) {
@@ -129,13 +125,6 @@ function wakeupLabel(firesAt) {
 function wakeupChipHTML(j) {
   if (!j.wakeup || j.state !== "working") return "";
   return `<div class="wakeup-row"><span class="chip-wakeup" data-wakeup-fires="${+j.wakeup.fires_at}">⏱ next check in ${esc(wakeupLabel(j.wakeup.fires_at))}</span></div>`;
-}
-
-// detailClampable heuristically decides whether a detail block is long
-// enough to plausibly get clamped by the CSS line-clamp — only then does it
-// make sense to show a pointer cursor / accept clicks to expand it.
-function detailClampable(text) {
-  return text.length > 240 || (text.match(/\n/g) || []).length >= 6;
 }
 
 // prChipHTML renders one linked chip for a job's PR: "#<N> <state>" parsed
@@ -248,7 +237,7 @@ function cardHTML(j, col) {
     ${j.err ? `<div class="err">✕ ${esc(j.err)}</div>` : ""}
     ${j.health ? `<div class="err">⚠ ${esc(j.health)}</div>` : ""}
     ${j.last_sent ? `<div class="last-sent">me→zeus: ${esc(j.last_sent)}</div>` : ""}
-    ${j.detail ? `<div class="detail${detailClampable(j.detail) ? " clampable" : ""}${expandedDetails.has(j.slug) ? " expanded" : ""}">${esc(j.detail)}</div>` : ""}
+    ${j.detail ? `<div class="detail">${esc(j.detail)}</div>` : ""}
     ${j.wakeup && j.wakeup.reason && j.state === "working" ? `<div class="wakeup-reason">↻ ${esc(j.wakeup.reason)}</div>` : ""}
     ${crewHTML(j)}
     ${roster ? `<div class="roster">${roster}</div>` : ""}
@@ -723,14 +712,6 @@ document.addEventListener("click", (ev) => {
     });
     return;
   }
-  const detail = ev.target.closest(".detail.clampable");
-  if (detail && !window.getSelection().toString()) {
-    const slug = detail.closest(".card")?.dataset.slug;
-    if (detail.classList.toggle("expanded")) expandedDetails.add(slug);
-    else expandedDetails.delete(slug);
-    localStorage.setItem("kraken-expanded-details", JSON.stringify([...expandedDetails]));
-    return;
-  }
   const tmuxOpen = ev.target.closest(".open-tmux");
   if (tmuxOpen) {
     post("/api/peers/open", { slug: tmuxOpen.dataset.slug });
@@ -877,7 +858,10 @@ function flushSteerDraft() {
 
 // steer context: the cell's last message, carl's last sent message, and its
 // artifact chips — populated for "steer"/"unblock" (the data is there either
-// way); "reactivate" hides it outright since the cell is gone.
+// way). "reactivate" hides the crew and chips (the cell is gone) but keeps
+// the messages: a gone cell's last words are the one context that matters
+// when deciding to reactivate, and the 2-line card clamp has no other path
+// to the full text.
 function fillSteerContext(j, mode) {
   const container = document.getElementById("steer-context");
   const crewEl = document.getElementById("steer-crew");
@@ -886,8 +870,8 @@ function fillSteerContext(j, mode) {
   const chipsEl = document.getElementById("steer-chips");
 
   const crew = mode !== "reactivate" && j && crewHTML(j);
-  const detail = mode !== "reactivate" && j && j.detail;
-  const lastSent = mode !== "reactivate" && j && j.last_sent;
+  const detail = j && j.detail;
+  const lastSent = j && j.last_sent;
   const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
 
   crewEl.hidden = !crew;

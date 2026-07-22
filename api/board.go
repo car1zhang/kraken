@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -119,9 +118,11 @@ type webJob struct {
 	// text of the last assistant text block of zeus' transcript, capped at
 	// 4000 chars.
 	Detail string `json:"detail,omitempty"`
-	// LastSent is the text of the most recent me→zeus mid-run log entry —
-	// carl's own last message to the cell, independent of whether it's
-	// currently live.
+	// LastSent is the last real user message from zeus' own transcript,
+	// regardless of send channel (board steer, k s, direct tmux typing),
+	// one-lined and capped at 4000 chars. Omitted when no transcript is
+	// resolvable or it has no user turn yet; question-answer digit
+	// keypresses never appear here since they're tool_results, not user text.
 	LastSent string `json:"last_sent,omitempty"`
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
@@ -314,28 +315,15 @@ func truncateText(s string, limit int) string {
 	return string(r[:limit]) + "…"
 }
 
-// lastSentMessage returns the text of the most recent me→zeus entry in a
-// job body's "## Mid-run log" section (see jobs.AppendMidRunLog for the entry
-// format: "- [2006-01-02 15:04 actor] text"), timestamp and actor stripped.
-// "" when the body has no log section or no me→zeus entry in it. Entries
-// kraken generated itself from a question-answer click ("answered question:
-// option N") are skipped — they're not something carl typed, so scanning
-// continues to the last entry that actually is.
-func lastSentMessage(body string) string {
-	_, log := splitBodyLog(body)
-	var last string
-	for _, line := range strings.Split(log, "\n") {
-		m := midRunLogEntryRe.FindStringSubmatch(line)
-		if m != nil && m[1] == "me→zeus" && !strings.HasPrefix(m[2], "answered question: option ") {
-			last = m[2]
-		}
+// lastUserSent resolves a transcript path to the board's last_sent field:
+// the last real user message, one-lined and capped at 4000 chars. ""
+// when the path is unresolved or the transcript has no user turn yet.
+func lastUserSent(transcript string) string {
+	if transcript == "" {
+		return ""
 	}
-	return last
+	return core.TruncateOneLine(core.LastUserText(transcript), 4000)
 }
-
-// midRunLogEntryRe matches one mid-run log line, capturing the actor and
-// the text that follows it.
-var midRunLogEntryRe = regexp.MustCompile(`^- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([^\]]+)\] (.*)$`)
 
 // boardCache memoizes buildWebBoard for a short TTL so a burst of board
 // polls (several web tabs + the iOS app) costs one discovery, not N. The
@@ -399,9 +387,6 @@ func buildWebBoard() webBoard {
 			ModTime: j.ModTime.Unix(),
 			PRs:     j.PRs,
 		}
-		if j.Started() && j.State != "done" {
-			wj.LastSent = lastSentMessage(j.Body)
-		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
 			if j.Started() && j.State != "done" {
@@ -410,6 +395,7 @@ func buildWebBoard() webBoard {
 				zeus, transcript := cellZeusTranscript(j, all)
 				if transcript != "" {
 					wj.Detail = lastAssistantText(transcript)
+					wj.LastSent = lastUserSent(transcript)
 					wj.Question = webQuestionFrom(jobs.FindPendingQuestion(transcript))
 					if zeus != nil && zeus.Status == "polling" && zeus.Wakeup != nil {
 						wj.Wakeup = webWakeupFrom(zeus.Wakeup)
@@ -435,6 +421,7 @@ func buildWebBoard() webBoard {
 			wj.Health = "cell session is gone — reactivate to resume; done/kill discard the worktree"
 			if transcript := core.TranscriptPathForSession(j.Session); transcript != "" {
 				wj.Detail = lastAssistantText(transcript)
+				wj.LastSent = lastUserSent(transcript)
 			}
 		}
 		wj.Reactivatable = (j.State == "done" || wj.CellGone) && j.Session != ""
