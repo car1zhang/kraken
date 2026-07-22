@@ -152,6 +152,9 @@ func ArchiveJob(j *Job, live map[string]bool) (string, error) {
 	for _, s := range skipped {
 		fmt.Fprintf(os.Stderr, "kraken: artifact not moved (target exists or move failed): %s\n", s)
 	}
+	// uploaded images are already consumed into zeus' transcript by now —
+	// best-effort like the cell dir removal in cell.go, nothing left to keep
+	os.RemoveAll(UploadsDir(j.Slug))
 	return name, nil
 }
 
@@ -188,6 +191,9 @@ func DeleteArchivedJob(a *Job) error {
 	if err := os.Remove(a.File); err != nil {
 		return fmt.Errorf("delete %s: %v", a.ArchivedName, err)
 	}
+	// no uploads cleanup here: ArchiveJob already removed them at archive
+	// time, and the freed slug may since belong to a NEW active job whose
+	// uploads this would silently destroy
 	entries, err := os.ReadDir(ArchiveDir())
 	if err != nil {
 		return nil

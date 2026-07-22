@@ -156,9 +156,6 @@ func webAnswerQuestion(req webReq) error {
 	if err := sendDigit(zeus, digit); err != nil {
 		return fmt.Errorf("send digit: %v", err)
 	}
-	if err := jobs.AppendMidRunLog(j, "me→zeus", "answered question: option "+digit); err != nil {
-		return fmt.Errorf("delivered, but mid-run log append failed: %v", err)
-	}
 	return jobs.WriteJobState(j, "working")
 }
 
@@ -196,10 +193,9 @@ func webRetry(req webReq) error {
 // intermediary anymore, so the message goes straight into its pane exactly
 // as typed, with no "from carl:" prefix. That means text starting with "/"
 // invokes a real slash command in zeus' Claude session (e.g. /send) — that's
-// intentional, not a leak. Also appended to the job's mid-run log (the
-// durable trail) and, on successful delivery, marks the job working (a steer
-// is carl acting, which un-stalls a blocked cell same as an answered
-// question would).
+// intentional, not a leak. The transcript is the record now; on successful
+// delivery the job is marked working (a steer is carl acting, which
+// un-stalls a blocked cell same as an answered question would).
 func webSteer(req webReq) error {
 	j, _, err := webJobFor(req.Slug)
 	if err != nil {
@@ -217,11 +213,8 @@ func webSteer(req webReq) error {
 	if zeus == nil {
 		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, jobs.CellSession(j))
 	}
-	if err := jobs.AppendMidRunLog(j, "me→zeus", jobs.OneLine(text)); err != nil {
-		return fmt.Errorf("mid-run log append failed: %v", err)
-	}
 	if err := core.SendMessage(zeus, text); err != nil {
-		return fmt.Errorf("logged, but delivery failed: %v", err)
+		return fmt.Errorf("delivery failed: %v", err)
 	}
 	if err := jobs.WriteJobState(j, "working"); err != nil {
 		return err

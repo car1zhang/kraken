@@ -24,6 +24,20 @@ type block struct {
 // match, so callers fall back to treating the text as a plain user block.
 var teammateMsgRe = regexp.MustCompile(`(?s)<teammate-message[^>]*\bteammate_id="([^"]+)"[^>]*>\s*(.*?)\s*</teammate-message>`)
 
+// commandRe matches the harness-synthesized record for a typed slash
+// command: the raw keystrokes are replaced with a wrapper of
+// <command-name>, <command-message>, and (if the user typed args)
+// <command-args> tags. Two orders are observed in the wild: modern
+// transcripts put <command-message> first (…</command-message><command-name>/foo</command-name>
+// [<command-args>bar</command-args>]), older ones put <command-name> first
+// with <command-message> trailing. <command-args> is entirely absent when
+// the command was typed with no arguments — it is not merely empty.
+//
+// The match is anchored to the start of the (trimmed) text: a genuine user
+// message that merely quotes one of these tags mid-sentence has real prose
+// before it and so must NOT collapse to "/foo".
+var commandRe = regexp.MustCompile(`^\s*(?:<command-message>[^<]*</command-message>\s*)?<command-name>([^<]*)</command-name>\s*(?:<command-message>[^<]*</command-message>\s*)?(?:<command-args>([^<]*)</command-args>)?`)
+
 // ReadTranscriptPath applies k r's pre-flight refusals — shared by cmdRead
 // and the HTTP read endpoint so both give byte-identical error text — and
 // resolves the peer's transcript path.
@@ -232,6 +246,77 @@ func classifyStall(entryType string, msg map[string]any, text string) Stall {
 		}
 	}
 	return Stall{}
+}
+
+// lastUserScanLimit bounds how far back LastUserText will grow its scan
+// window. Unlike LastBlocks/lastAssistantText, which are effectively
+// tail-bounded because assistant blocks are dense at the tail, a job that
+// was never steered has its only real user text — the spawn prompt — sitting
+// at the file HEAD, so an unbounded backward scan would read and JSON-parse
+// the entire transcript (tens of MB for long runs) on every board cache
+// miss, which happens per live job every 2s. A user message buried deeper
+// than this is stale enough that omitting last_sent is preferable to paying
+// for a full-file scan on every poll. A var, not a const, so tests can
+// shrink it.
+var lastUserScanLimit int64 = 8 << 20
+
+// LastUserText returns the text of the last real user message in a
+// transcript — backs the board's last_sent field. Reads the file tail
+// backward in growing windows like LastBlocks, walking the parsed blocks
+// backward for the first "user" one that isn't a harness interruption
+// artifact ("[Request interrupted..."), then normalizes a slash-command
+// wrapper down to "/foo bar baz". Returns "" when the file is unreadable,
+// empty, contains no acceptable user block, or the scan exceeds
+// lastUserScanLimit without finding one.
+func LastUserText(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	size := info.Size()
+	for window := int64(256 * 1024); ; window *= 2 {
+		start := size - window
+		if start < 0 {
+			start = 0
+		}
+		if _, err := f.Seek(start, 0); err != nil {
+			return ""
+		}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return ""
+		}
+		lines := strings.Split(string(data), "\n")
+		if start > 0 && len(lines) > 0 {
+			lines = lines[1:] // drop partial first line
+		}
+		blocks := parseBlocks(lines)
+		for i := len(blocks) - 1; i >= 0; i-- {
+			if blocks[i].Kind != "user" {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(blocks[i].Text), "[Request interrupted") {
+				continue
+			}
+			if m := commandRe.FindStringSubmatch(strings.TrimSpace(blocks[i].Text)); m != nil {
+				if name := strings.TrimSpace(m[1]); name != "" {
+					if cmdArgs := strings.TrimSpace(m[2]); cmdArgs != "" {
+						return name + " " + cmdArgs
+					}
+					return name
+				}
+			}
+			return blocks[i].Text
+		}
+		if start == 0 || window >= lastUserScanLimit {
+			return ""
+		}
+	}
 }
 
 func parseBlocks(lines []string) []block {

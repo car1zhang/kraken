@@ -268,15 +268,14 @@ body {
 .outcome { color: var(--solved); font-size: 11px; margin-top: 5px; }
 
 /* the cell's last words: a live zeus' most recent assistant text block —
-   clamped to ~6 lines, click to expand/collapse the full text */
+   clamped to 2 lines; click opens the steer modal, which renders the full
+   text (see #steer-detail) */
 .detail {
   color: var(--text-2); font-size: 11px; line-height: 1.4; margin-top: 6px;
   white-space: pre-wrap;
-  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.detail.clampable { cursor: pointer; }
-.detail.expanded { -webkit-line-clamp: unset; overflow: visible; }
 
 /* carl's own last message to the cell, above .detail */
 .last-sent {
@@ -526,6 +525,28 @@ body {
    overlays ---- */
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
 .answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
+
+/* attachment chips: paste/drop/pick images into the steer and editor
+   composers. Deliberately not .chip/.chips (that class opens an artifact
+   panel via the delegated document click handler) — these are pending
+   uploads, removable client-side, not artifacts. */
+.att-zone { display: flex; flex-direction: column; gap: 6px; }
+.att-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.att-chip {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--raised); border: 1px solid var(--hairline-2);
+  padding: 3px 6px 3px 3px;
+}
+.att-chip img { width: 22px; height: 22px; object-fit: cover; display: block; }
+.att-name { font: 10px var(--mono); color: var(--text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-rm {
+  background: none; border: none; cursor: pointer;
+  font: 10px var(--mono); color: var(--text-2); padding: 0 2px;
+}
+.att-rm:hover { color: var(--counter); }
+.att-bar { display: flex; align-items: center; gap: 8px; }
+.att-btn { font-size: 10px; letter-spacing: 0.5px; padding: 3px 9px; }
+.att-hint { font: 10px var(--mono); color: var(--text-2); opacity: 0.65; }
 
 /* ---- job editor: frontmatter as a form, spec as prose ---- */
 .editor-body { display: flex; flex-direction: column; gap: 12px; }

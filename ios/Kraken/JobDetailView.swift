@@ -1,4 +1,169 @@
 import SwiftUI
+import PhotosUI
+
+// MARK: - image attachments
+//
+// One acquired-and-uploaded image on a composer (steer/unblock, and the
+// spec editor in JobFormView.swift — ReactivateView deliberately has no
+// attachment bar). `path` is the absolute
+// server-side path embedded in outgoing text as "[image: <path>]"; `url` is
+// the server-relative thumbnail fetch used only when no local `thumbnail`
+// is available. Not private — JobFormView.swift shares this model and the
+// picker bar below rather than duplicating the upload plumbing.
+struct ComposerAttachment: Identifiable {
+    let id = UUID()
+    let name: String
+    let path: String
+    let url: String
+    let thumbnail: UIImage?
+}
+
+/// PhotosPicker + paste-image affordance + upload progress, shared by
+/// SteerView's composer and JobFormView's spec editor. Owns no attachment
+/// list itself — each acquired image uploads immediately and is handed to
+/// the caller via `onUploaded`, so SteerView can collect them into a chips
+/// row while JobFormView instead inserts straight into the spec text.
+struct ImageAttachmentBar: View {
+    let baseURL: String
+    let slug: String
+    @Binding var isUploading: Bool
+    var onUploaded: (ComposerAttachment) -> Void
+    var onError: (String) -> Void
+
+    @State private var pickerItems: [PhotosPickerItem] = []
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PhotosPicker(selection: $pickerItems, matching: .images) {
+                Label("Add Image", systemImage: "photo.badge.plus")
+            }
+            .font(.voice(12))
+            .foregroundStyle(KTheme.accent)
+            .onChange(of: pickerItems) { _, items in
+                guard !items.isEmpty else { return }
+                let toLoad = items
+                pickerItems = []
+                Task { await loadAndUpload(toLoad) }
+            }
+
+            if UIPasteboard.general.hasImages {
+                Button {
+                    pasteImage()
+                } label: {
+                    Label("Paste", systemImage: "doc.on.clipboard")
+                }
+                .buttonStyle(.plain)
+                .font(.voice(12))
+                .foregroundStyle(KTheme.accent)
+            }
+
+            if isUploading {
+                ProgressView().controlSize(.small)
+            }
+        }
+    }
+
+    private func pasteImage() {
+        guard let image = UIPasteboard.general.image else { return }
+        Task { await upload(image: image, suggestedName: "pasted-\(Int(Date().timeIntervalSince1970))") }
+    }
+
+    private func loadAndUpload(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data) else {
+                onError("couldn't load image")
+                continue
+            }
+            await upload(image: image, suggestedName: item.itemIdentifier ?? "image")
+        }
+    }
+
+    // The picker's native format is often HEIC, which the server rejects —
+    // every acquired image is re-encoded to JPEG before upload regardless of
+    // its original source format, sidestepping the HEIC/PNG/etc. question
+    // entirely rather than sniffing and branching per format.
+    private func upload(image: UIImage, suggestedName: String) async {
+        guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
+            onError("couldn't encode image")
+            return
+        }
+        isUploading = true
+        defer { isUploading = false }
+        do {
+            let resp = try await APIClient.shared.uploadImage(
+                baseURL: baseURL, slug: slug, data: jpegData,
+                filename: "\(suggestedName).jpg", mimeType: "image/jpeg"
+            )
+            onUploaded(ComposerAttachment(name: resp.name, path: resp.path, url: resp.url, thumbnail: image))
+        } catch {
+            onError((error as? KrakenError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+}
+
+/// One horizontal-scrolling row of attachment thumbnails with a ✕ to remove
+/// each client-side. Not private — reused verbatim if JobFormView ever wants
+/// a chips row too, though it currently opts for direct text insertion.
+struct AttachmentChipsRow: View {
+    let baseURL: String
+    let attachments: [ComposerAttachment]
+    var onRemove: (ComposerAttachment) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { att in
+                    AttachmentChip(attachment: att, baseURL: baseURL) { onRemove(att) }
+                }
+            }
+        }
+    }
+}
+
+private struct AttachmentChip: View {
+    let attachment: ComposerAttachment
+    let baseURL: String
+    var onRemove: () -> Void
+
+    private var thumbnailURL: URL? {
+        let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
+        return URL(string: trimmed + attachment.url)
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ZStack(alignment: .topTrailing) {
+                Group {
+                    if let thumbnail = attachment.thumbnail {
+                        Image(uiImage: thumbnail).resizable().scaledToFill()
+                    } else {
+                        AsyncImage(url: thumbnailURL) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            KTheme.raised
+                        }
+                    }
+                }
+                .frame(width: 56, height: 56)
+                .clipped()
+                .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
+
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.white, KTheme.counter)
+                }
+                .accessibilityLabel("Remove \(attachment.name)")
+                .offset(x: 6, y: -6)
+            }
+            Text(attachment.name)
+                .font(.data(8))
+                .foregroundStyle(KTheme.text2)
+                .lineLimit(1)
+                .frame(width: 56)
+        }
+    }
+}
 
 // MARK: - artifact folder tree
 //
@@ -1012,6 +1177,11 @@ private struct SteerView: View {
     @State private var isBusy = false
     @State private var errorMessage: String?
     @State private var showingArtifact: WebArtifact?
+    // Session-local only — deliberately NOT persisted to DraftStore (see
+    // that file's header comment), so attachments don't survive a killed app
+    // the way typed text does.
+    @State private var attachments: [ComposerAttachment] = []
+    @State private var isUploading = false
 
     private var draftKey: String { "steer:\(job.slug)" }
 
@@ -1053,6 +1223,17 @@ private struct SteerView: View {
                     .scrollContentBackground(.hidden)
                     .kField(focused: textFocused, minHeight: 120)
                     .listRowBackground(Color.clear)
+                ImageAttachmentBar(
+                    baseURL: baseURL, slug: job.slug,
+                    isUploading: $isUploading,
+                    onUploaded: { attachments.append($0) },
+                    onError: { errorMessage = $0 }
+                )
+                if !attachments.isEmpty {
+                    AttachmentChipsRow(baseURL: baseURL, attachments: attachments) { att in
+                        attachments.removeAll { $0.id == att.id }
+                    }
+                }
             }
             if let errorMessage {
                 kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
@@ -1074,7 +1255,7 @@ private struct SteerView: View {
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Send")
                 .buttonStyle(.borderedProminent)
-                .disabled(isBusy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isBusy || isUploading || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
             }
         }
         .disabled(isBusy)
@@ -1101,13 +1282,24 @@ private struct SteerView: View {
         }
     }
 
+    // One "[image: <path>]" line per attachment, appended after the typed
+    // text — an images-only send (empty text, one or more attachments) is
+    // valid, since the disabled-state check above allows it.
+    private var outgoingText: String {
+        guard !attachments.isEmpty else { return text }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imageLines = attachments.map { "[image: \($0.path)]" }.joined(separator: "\n")
+        return trimmed.isEmpty ? imageLines : trimmed + "\n\n" + imageLines
+    }
+
     private func send() {
         isBusy = true
         errorMessage = nil
         Task {
             do {
-                try await APIClient.shared.steer(baseURL: baseURL, slug: job.slug, text: text)
+                try await APIClient.shared.steer(baseURL: baseURL, slug: job.slug, text: outgoingText)
                 isBusy = false
+                attachments = []
                 // The server clears the job's draft itself on a successful
                 // steer — clear() drops the local copy and cancels any pending
                 // sync, and that's the last word: deliberately NOT resetting
@@ -1118,7 +1310,7 @@ private struct SteerView: View {
                 onSteered()
             } catch {
                 isBusy = false
-                // A failed send (409, etc.) keeps the draft.
+                // A failed send (409, etc.) keeps the draft and attachments.
                 errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
         }

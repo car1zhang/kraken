@@ -111,6 +111,14 @@
         </div>
         <textarea id="steer-text" rows="4"
           placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
+        <div class="att-zone" id="steer-att-zone">
+          <div class="att-chips" id="steer-chips-att" hidden></div>
+          <div class="att-bar">
+            <button class="btn ghost att-btn" id="steer-att-btn" type="button" title="attach images">📎 attach</button>
+            <span class="att-hint">paste (⌘V) or drop images</span>
+            <input type="file" id="steer-att-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+          </div>
+        </div>
         <button class="btn btn-big" id="steer-send">send ⌘⏎</button>
         <div class="answer-note" id="steer-note"></div>
       </div>
@@ -159,6 +167,14 @@
           <label class="f-block grow">spec — zeus' initial prompt, as fleshed out as possible
             <textarea id="editor-text" spellcheck="false"></textarea>
           </label>
+          <div class="att-zone" id="editor-att-zone">
+            <div class="att-chips" id="editor-chips-att" hidden></div>
+            <div class="att-bar">
+              <button class="btn ghost att-btn" id="editor-att-btn" type="button" title="attach images">📎 attach</button>
+              <span class="att-hint">paste (⌘V) or drop images</span>
+              <input type="file" id="editor-att-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+            </div>
+          </div>
         </div>
         <div class="answer-note" id="editor-note"></div>
       </div>

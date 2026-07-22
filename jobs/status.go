@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"kraken/core"
-	"kraken/util"
 )
 
 // status.go — cell status, derived by kraken rather than declared by any
@@ -308,50 +307,6 @@ func deriveState(j *Job, live bool, active bool) string {
 }
 
 // --- job file writes ---
-
-// AppendMidRunLog appends one line to a job file's "## Mid-run log" section
-// (adding the heading if the file doesn't have one yet), touching nothing
-// above it — the frontmatter and human-authored spec body are never rewritten
-// by this path. Atomic temp+rename, same as WriteJobFields. Used for logging
-// carl's direct messages/steering to zeus.
-func AppendMidRunLog(j *Job, actor, text string) error {
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		return err
-	}
-	content := string(data)
-	entry := "- [" + time.Now().Format("2006-01-02 15:04") + " " + actor + "] " + text
-	// look for the heading in the body only: frontmatter text (e.g. a
-	// success block scalar that mentions the heading) must not count, or the
-	// real heading never gets written and log lines glue onto the spec
-	lines := strings.Split(content, "\n")
-	fencesToSkip := 0
-	if len(lines) > 0 && isFence(lines[0]) {
-		fencesToSkip = 2 // frontmatter present: body starts after its fences
-	}
-	hasHeading := false
-	fences := 0
-	for _, line := range lines {
-		if fences < fencesToSkip {
-			if isFence(line) {
-				fences++
-			}
-			continue
-		}
-		if strings.HasPrefix(strings.TrimSpace(line), "## Mid-run log") {
-			hasHeading = true
-			break
-		}
-	}
-	trimmed := strings.TrimRight(content, "\n")
-	var newContent string
-	if hasHeading {
-		newContent = trimmed + "\n" + entry + "\n"
-	} else {
-		newContent = trimmed + "\n\n## Mid-run log\n" + entry + "\n"
-	}
-	return util.AtomicWrite(j.File, newContent)
-}
 
 // ListArtifacts lists a cell's artifact files, sorted by name. Missing dir
 // (no cell, or nothing produced yet) reads as no artifacts, not an error.

@@ -51,6 +51,28 @@ func Serve(opts Options) error {
 	}))
 	api.Register(mux)
 	mux.HandleFunc("/api/artifact/", artifactHandler)
+	// GET /api/upload/<slug>/<name> — the POST side lives at the exact path
+	// "/api/upload" (api.Register); a ServeMux exact pattern and a subtree
+	// pattern ("/api/upload/", trailing slash) never shadow each other, so
+	// the two coexist without conflict.
+	mux.HandleFunc("/api/upload/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/upload/"), "/", 2)
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		p, err := api.UploadPath(parts[0], parts[1])
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", artifactContentType(p))
+		http.ServeFile(w, r, p)
+	})
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil {

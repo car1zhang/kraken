@@ -67,6 +67,7 @@ func zeusBrief(j *Job) string {
 	fmt.Fprintf(&b, "You run in an isolated cell: a git worktree on branch %s (your cwd). Never touch the repo's primary checkout; all work happens in this worktree.\n", CellBranch(j))
 	b.WriteString("carl's messages arrive directly in your pane. There is no intermediary and no escalation file: whatever you write as your FINAL message before going idle is what carl sees on the job board as this cell's status detail — so end every working session by stating plainly what is ready, what you need, or what you decided. Kraken derives working/blocked from your activity automatically; never write status anywhere.\n")
 	b.WriteString("For a decision that genuinely blocks you and cannot be defaulted, you may use AskUserQuestion — kraken surfaces the options to carl's board as buttons. Otherwise prefer baking open questions into the doc artifact and continuing with the recommended default.\n")
+	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path yourself if it somehow wasn't ingested).\n")
 	if !j.Solo {
 		fmt.Fprintf(&b, "Doc pipeline: your doc source is %s, written with permanent `<!-- DIAGRAM: <id> -->` placeholder comments. Each diagram is designed AND rendered by a subagent you name hermes, run on the OPUS model, one per diagram, writing one complete <svg> fragment to %s/<id>.svg, then it terminates — you never read or write SVG bodies yourself.\n",
 			docSourcePath(j), docFragmentsDir(j))
