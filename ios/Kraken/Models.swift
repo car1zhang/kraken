@@ -505,6 +505,11 @@ struct UsageResponse: Decodable {
     let ageSeconds: Int64
     let daemonOK: Bool
     let accounts: [UsageAccount]
+    // Rotation mode fields (Slice C), added additively — Optional so an
+    // older server (missing these keys entirely) still decodes fine.
+    let rotationMode: String?
+    let rotationSetBy: String?
+    let rotationSetAt: Int64?
 
     enum CodingKeys: String, CodingKey {
         case available
@@ -512,6 +517,9 @@ struct UsageResponse: Decodable {
         case ageSeconds = "age_seconds"
         case daemonOK = "daemon_ok"
         case accounts
+        case rotationMode = "rotation_mode"
+        case rotationSetBy = "rotation_set_by"
+        case rotationSetAt = "rotation_set_at"
     }
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"kraken/internal/core"
+	"kraken/internal/jobs"
 )
 
 func TestUsageHandlerAvailable(t *testing.T) {
@@ -93,6 +94,45 @@ func TestUsageHandlerUnavailable(t *testing.T) {
 	// daemon_ok reads real daemon state — just assert it's present and boolean
 	if _, ok := resp["daemon_ok"].(bool); !ok {
 		t.Errorf("daemon_ok = %#v, want a bool", resp["daemon_ok"])
+	}
+}
+
+// TestUsageHandlerRotationStateReachesWire covers K6: readRotationState is a
+// swappable seam (mirroring readUsageSnapshot/usageNow above) specifically
+// so this handler's rotation_mode/rotation_set_by/rotation_set_at fields are
+// testable without a real ~/.kraken/rotation.json — but nothing previously
+// exercised it. Swap it and assert every rotation field on the response
+// actually comes from readRotationState's return value, not just a
+// zero-value default.
+func TestUsageHandlerRotationStateReachesWire(t *testing.T) {
+	oldRotation := readRotationState
+	readRotationState = func() jobs.RotationState {
+		return jobs.RotationState{Mode: "manual", SetBy: "cli", SetAt: 1_700_000_000_000}
+	}
+	t.Cleanup(func() { readRotationState = oldRotation })
+
+	oldRead := readUsageSnapshot
+	readUsageSnapshot = func() (core.UsageSnapshot, bool) { return core.UsageSnapshot{}, false }
+	t.Cleanup(func() { readUsageSnapshot = oldRead })
+
+	w := httptest.NewRecorder()
+	usageHandler(w, httptest.NewRequest(http.MethodGet, "/api/usage", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var got webUsage
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RotationMode != "manual" {
+		t.Errorf("rotation_mode = %q, want manual", got.RotationMode)
+	}
+	if got.RotationSetBy != "cli" {
+		t.Errorf("rotation_set_by = %q, want cli", got.RotationSetBy)
+	}
+	if got.RotationSetAt != 1_700_000_000_000 {
+		t.Errorf("rotation_set_at = %d, want 1700000000000", got.RotationSetAt)
 	}
 }
 

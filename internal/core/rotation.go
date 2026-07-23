@@ -266,10 +266,17 @@ func sameSlotDir(a, b string) bool {
 // be refused before it's ever joined.
 func validateSlug(slug string) error {
 	if slug == "" || slug != filepath.Base(slug) || strings.HasPrefix(slug, ".") {
-		return fmt.Errorf("invalid slot slug %q", slug)
+		return fmt.Errorf("invalid slot slug %q: %w", slug, ErrInvalidSlug)
 	}
 	return nil
 }
+
+// ErrInvalidSlug sentinels a validateSlug rejection — bad, path-unsafe, or
+// empty user/API-facing input, as opposed to a slug that's well-formed but
+// doesn't resolve to a real slot. Callers classify on this via errors.Is
+// (see api/account.go's 400 mapping) rather than matching the human-facing
+// message.
+var ErrInvalidSlug = errors.New("invalid slot slug")
 
 // ErrRotationInFlight sentinels a refusal caused by an unresolved rotation
 // journal (see journalRefusalError below) — a previous rotation that crashed
@@ -550,6 +557,15 @@ func SwapMainTo(slug string) (from, to string, err error) {
 // is the slot being rotated INTO — the save-back slot must never resolve to
 // it, since that would clobber the very creds the rotation is trying to
 // install with the outgoing main creds.
+// ErrSaveBackIsTarget sentinels the refusal ensureSaveBackSlot raises when
+// the pool slot that would receive the outgoing main account's creds turns
+// out to be the very slot the rotation is trying to install — installing
+// there would clobber the incoming target creds with the outgoing ones.
+// Callers classify on this via errors.Is (see api/account.go's 409 mapping)
+// rather than matching the human-facing message, which is free to reword
+// without silently breaking that classification elsewhere.
+var ErrSaveBackIsTarget = errors.New("save-back slot would be the rotation target")
+
 func ensureSaveBackSlot(mainMeta accountMeta, targetSlotDir string) (string, error) {
 	if mainMeta.Email == "" {
 		// Pre-install: aborting here is always safe. Proceeding would slugify
@@ -566,7 +582,7 @@ func ensureSaveBackSlot(mainMeta accountMeta, targetSlotDir string) (string, err
 			continue
 		}
 		if sameSlotDir(dir, targetSlotDir) {
-			return "", fmt.Errorf("save-back slot would be the rotation target")
+			return "", fmt.Errorf("slot %q: %w", s, ErrSaveBackIsTarget)
 		}
 		// The outgoing main creds are about to land here — if this slot is
 		// disabled, they'd land somewhere the pool never surfaces (NoCreds
@@ -595,7 +611,7 @@ func ensureSaveBackSlot(mainMeta accountMeta, targetSlotDir string) (string, err
 	}
 	dir := filepath.Join(PoolDir(), dirName)
 	if sameSlotDir(dir, targetSlotDir) {
-		return "", fmt.Errorf("save-back slot would be the rotation target")
+		return "", fmt.Errorf("slot %q: %w", dirName, ErrSaveBackIsTarget)
 	}
 
 	if err := os.MkdirAll(PoolDir(), 0o755); err != nil {

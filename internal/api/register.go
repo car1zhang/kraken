@@ -17,6 +17,8 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/peers/open", peersOpenHandler(defaultPeerSource))
 	mux.HandleFunc("/api/board", boardHandler)
 	mux.HandleFunc("/api/usage", usageHandler)
+	mux.HandleFunc("/api/account/switch", accountSwitchHandler)
+	mux.HandleFunc("/api/account/mode", accountModeHandler)
 	mux.HandleFunc("/api/draft", draftHandler)
 	mux.HandleFunc("/api/queue", webAction("queue", webQueue))
 	mux.HandleFunc("/api/dequeue", webAction("dequeue", webDequeue))

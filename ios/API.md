@@ -117,7 +117,6 @@ rides on the wire), `options` (array of `webQuestionOption`, always).
 
 `webWakeup`: `reason` (string, always), `fires_at` (number, always — unix millis). Distinct from `Wakeup` on the peer wire shape only in that it drops `delay_seconds` — the client only needs `fires_at` for its countdown.
 
-### `POST /api/queue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 ### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
 Request: `webReq` — `slug` (string, required), `text` (string, omitempty, unused by these).
@@ -413,6 +412,9 @@ always `[]`, never `null`.
 | `age_seconds` | number | always | server-derived `max(0, (now - fetched_at) / 1000)`; `0` when unavailable |
 | `daemon_ok` | bool | always | the usage poller is the daemon: same liveness check as `/api/board`'s `daemon_ok` |
 | `accounts` | array (`AccountUsage`) | always (`[]` not `null`) | |
+| `rotation_mode` | string | always | `"auto"` or `"manual"` — see `jobs.RotationState`. Added additively (Slice C); absent on an older server, which older clients read the same as `undefined`/missing |
+| `rotation_set_by` | string | omitempty | `"cli"`, `"web"`, or absent when the mode has never been explicitly set (auto-default) |
+| `rotation_set_at` | number | omitempty | unix millis of the last explicit mode change; `0`/absent when auto-default |
 
 `AccountUsage` (core/usagepool.go, marshaled as-is):
 
@@ -436,6 +438,60 @@ always `[]`, never `null`.
 `UsageWindow`: `percent` (number, always), `resets_at` (number, omitempty — unix millis, `0`/absent = unknown).
 
 `ModelWindow`: `name` (string, always — model display name, e.g. `"Fable"`), `percent` (number, always), `resets_at` (number, omitempty).
+
+### `POST /api/account/switch` → `accountSwitchResp` (account.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+
+Manually switch the main Claude login to a `~/.claude-pool` slot — always
+executes regardless of usage thresholds (unlike the auto rotation gate), and
+pins rotation to `"manual"` on success (see `jobs.RotationState` / `k
+account`). Additive, no contract bump.
+
+Request:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `slug` | string | required | the pool slot dir name to switch main to |
+
+Response (200):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `from` | string | always | outgoing main account's email |
+| `to` | string | always | incoming (now main) account's email |
+| `mode` | string | always | the read-back mode after the swap — normally `"manual"`, but can be `"auto"` on the rare case where the swap committed and the manual pin write itself failed to persist |
+
+Errors: 405 (non-POST), 400 (missing `slug` / bad json / invalid slug —
+`core.ErrInvalidSlug`), 409 (a previous rotation didn't complete —
+`core.ErrRotationInFlight` — or the save-back slot would be the rotation
+target — `core.ErrSaveBackIsTarget`), 500 (any other swap failure, e.g.
+target slot needs `ccp login`). All error bodies are the generic
+`{"error": string}` shape. A failed swap never changes the rotation mode.
+
+### `POST /api/account/mode` → `accountModeResp` (account.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+
+Sets rotation mode without swapping main — `"manual"` pins (parity with the
+CLI's `k account auto`/manual-switch semantics and the web UI's banner
+toggle), `"auto"` re-enables the rotation gate. Additive, no contract bump.
+
+Request:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `mode` | string | required | `"auto"` or `"manual"` — any other value is a 400 |
+
+Response (200):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `mode` | string | always | echoes the mode now in effect |
+
+Errors: 405 (non-POST), 400 (missing/invalid `mode` / bad json), 500 (state
+write failure).
+
+`/api/account/switch` and `/api/account/mode` both persist to the same
+`rotation.json` independently of one another — there's no merge, so
+concurrent calls to either endpoint (or the CLI's `k account` commands) are
+last-writer-wins on the mode field.
 
 ### `GET /api/health` → map literal (webpeers.go `healthHandler`)
 

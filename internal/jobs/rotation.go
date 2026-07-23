@@ -213,6 +213,17 @@ var (
 // exits or is killed — accepted, since RotationGate never blocks or fails
 // the spawn it guards; a blocked gate only means that spawn's rotation
 // check is skipped, not that the spawn itself fails.
+// AcquireRotationLock exports acquireRotationLock for manual rotation call
+// sites outside this package — `k account <slug>`'s CLI switch
+// (cmd_account.go) and the web API's POST /api/account/switch handler — that
+// must take the same cross-process guard RotationGate itself takes before
+// swapping main, so a manual switch can never race the daemon's own gate (or
+// each other) mid-swap. See acquireRotationLock's doc comment for the flock
+// semantics and the three possible outcomes.
+func AcquireRotationLock() (release func(), ok bool, err error) {
+	return acquireRotationLock()
+}
+
 func acquireRotationLock() (release func(), ok bool, err error) {
 	path := rotationLockPath()
 	if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
@@ -290,10 +301,12 @@ func notifyDeduped(key, title, msg string) {
 	notifyFn(title, msg)
 	// Re-read AFTER the (slow, osascript-shelling) notify call rather than
 	// reusing the pre-notify `st` above: osascript can block long enough for
-	// a concurrent SetRotationMode (from `k account` or the web UI, neither
-	// of which takes rotation.lock) to land in the gap, and writing back the
-	// stale pre-notify struct would silently clobber that mode flip. Only
-	// LastNotice is mutated onto the freshly re-read state.
+	// a concurrent SetRotationMode call from a mode-only path (`k account
+	// auto`, POST /api/account/mode — neither takes rotation.lock, unlike the
+	// manual-switch paths, which have taken it since K2) to land in the gap,
+	// and writing back the stale pre-notify struct would silently clobber
+	// that mode flip. Only LastNotice is mutated onto the freshly re-read
+	// state.
 	st = ReadRotationState()
 	st.LastNotice = NoticeState{Key: key, At: now}
 	if err := WriteRotationState(st); err != nil {
@@ -304,9 +317,12 @@ func notifyDeduped(key, title, msg string) {
 // recordGateRun stamps nowMillis as RotationGate's last real (auto-mode,
 // non-cooldown-skipped) run — see rotationGateCooldown. Re-reads state
 // immediately before writing and mutates only LastGateAt, for the same
-// reason notifyDeduped does: a concurrent SetRotationMode call isn't
-// guarded by rotation.lock, so the read RotationGate already did to decide
-// to proceed can be stale by the time this write actually happens.
+// reason notifyDeduped does: a concurrent SetRotationMode call from a
+// mode-only path (`k account auto`, POST /api/account/mode) isn't guarded by
+// rotation.lock — unlike the manual-switch paths (`k account <slug>`, POST
+// /api/account/switch), which have taken it since K2 — so the read
+// RotationGate already did to decide to proceed can be stale by the time
+// this write actually happens.
 func recordGateRun(nowMillis int64) {
 	st := ReadRotationState()
 	st.LastGateAt = nowMillis

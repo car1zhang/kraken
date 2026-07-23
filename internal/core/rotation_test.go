@@ -658,6 +658,11 @@ func TestSwapMainToAbortSaveBackIsTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("SwapMainTo: want error when save-back slot would be the rotation target")
 	}
+	// Callers (api/account.go's 409 mapping) classify this refusal via
+	// errors.Is against the sentinel, not a message match — pin that down.
+	if !errors.Is(err, ErrSaveBackIsTarget) {
+		t.Errorf("SwapMainTo error %q does not wrap ErrSaveBackIsTarget", err.Error())
+	}
 	env.assertMainStateUnchanged(t, before)
 }
 
@@ -680,6 +685,11 @@ func TestSwapMainToAbortInvalidSlug(t *testing.T) {
 			// go green with validateSlug deleted entirely.
 			if !strings.Contains(err.Error(), "invalid slot slug") {
 				t.Errorf("SwapMainTo(%q) error = %q, want it to mention %q", slug, err.Error(), "invalid slot slug")
+			}
+			// Callers (api/account.go's 400 mapping) classify via errors.Is
+			// against the sentinel, not the message.
+			if !errors.Is(err, ErrInvalidSlug) {
+				t.Errorf("SwapMainTo(%q) error %q does not wrap ErrInvalidSlug", slug, err.Error())
 			}
 			env.assertMainStateUnchanged(t, before)
 		})

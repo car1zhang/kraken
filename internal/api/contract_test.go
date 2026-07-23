@@ -581,11 +581,14 @@ func TestHealthWireShape(t *testing.T) {
 // --- usage: GET /api/usage (usage.go) ---
 
 var webUsageSpec = map[string]fieldSpec{
-	"available":   {kind: wireBool, required: true},
-	"fetched_at":  {kind: wireNumber, required: true},
-	"age_seconds": {kind: wireNumber, required: true},
-	"daemon_ok":   {kind: wireBool, required: true},
-	"accounts":    {kind: wireArray, required: true},
+	"available":       {kind: wireBool, required: true},
+	"fetched_at":      {kind: wireNumber, required: true},
+	"age_seconds":     {kind: wireNumber, required: true},
+	"daemon_ok":       {kind: wireBool, required: true},
+	"accounts":        {kind: wireArray, required: true},
+	"rotation_mode":   {kind: wireString, required: true},
+	"rotation_set_by": {kind: wireString, required: false},
+	"rotation_set_at": {kind: wireNumber, required: false},
 }
 
 // accountUsageSpec covers core.AccountUsage, the elements of webUsage's
@@ -619,7 +622,7 @@ var modelWindowSpec = map[string]fieldSpec{
 }
 
 func TestWebUsageWireShapeEmpty(t *testing.T) {
-	data, err := json.Marshal(webUsage{Accounts: []core.AccountUsage{}})
+	data, err := json.Marshal(webUsage{Accounts: []core.AccountUsage{}, RotationMode: "auto"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,10 +631,13 @@ func TestWebUsageWireShapeEmpty(t *testing.T) {
 
 func TestWebUsageWireShapePopulated(t *testing.T) {
 	wu := webUsage{
-		Available:  true,
-		FetchedAt:  1234567890,
-		AgeSeconds: 42,
-		DaemonOK:   true,
+		Available:     true,
+		FetchedAt:     1234567890,
+		AgeSeconds:    42,
+		DaemonOK:      true,
+		RotationMode:  "manual",
+		RotationSetBy: "cli",
+		RotationSetAt: 1234567890,
 		Accounts: []core.AccountUsage{{
 			Slug: "main", Email: "carl@example.com", DisplayName: "Carl",
 			Tier: "pro", Current: true,
@@ -677,6 +683,57 @@ func TestWebUsageWireShapePopulated(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "core.ModelWindow", modelData, modelWindowSpec)
+}
+
+// --- account rotation: POST /api/account/switch, POST /api/account/mode
+// (account.go) — custom request/response shapes, so each gets its own spec.
+// Handler behavior (method guards, validation, 409/500 branches) is covered
+// by account_test.go; this only pins the wire shapes. ---
+
+var accountSwitchReqSpec = map[string]fieldSpec{
+	"slug": {kind: wireString, required: true},
+}
+
+var accountSwitchRespSpec = map[string]fieldSpec{
+	"from": {kind: wireString, required: true},
+	"to":   {kind: wireString, required: true},
+	"mode": {kind: wireString, required: true},
+}
+
+func TestAccountSwitchWireShape(t *testing.T) {
+	reqData, err := json.Marshal(accountSwitchReq{Slug: "carl-work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountSwitchReq", reqData, accountSwitchReqSpec)
+
+	respData, err := json.Marshal(accountSwitchResp{From: "old@example.com", To: "new@example.com", Mode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountSwitchResp", respData, accountSwitchRespSpec)
+}
+
+var accountModeReqSpec = map[string]fieldSpec{
+	"mode": {kind: wireString, required: true},
+}
+
+var accountModeRespSpec = map[string]fieldSpec{
+	"mode": {kind: wireString, required: true},
+}
+
+func TestAccountModeWireShape(t *testing.T) {
+	reqData, err := json.Marshal(accountModeReq{Mode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountModeReq", reqData, accountModeReqSpec)
+
+	respData, err := json.Marshal(accountModeResp{Mode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountModeResp", respData, accountModeRespSpec)
 }
 
 // --- job editor: /api/job/raw, /api/job/form, /api/job/saveform ---

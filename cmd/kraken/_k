@@ -13,6 +13,7 @@ _k() {
         'n:new shell window, optionally running a command'
         'c:new named claude window with a prompt'
         'j:job board (every *.job.md in pluto)'
+        'account:rotation status, or switch/pin the main Claude login (auto|<slug>)'
         'start:start a job manually (worktree + cell + zeus)'
         'done:manually complete a started job'
         'daemon:run the scheduler loop in the foreground'
@@ -41,6 +42,19 @@ _k() {
                 local -a jobs
                 jobs=(${(f)"$(command ls ~/Documents/pluto 2>/dev/null | command sed -n 's/\.job\.md$//p')"})
                 _describe -t jobs 'job' jobs
+            fi
+            ;;
+        account)
+            if (( CURRENT == 3 )); then
+                local -a targets
+                targets=(auto)
+                # glob-qualified: (N) nullglob (no error on zero matches),
+                # (/) directories only — cooldowns.json and the
+                # .rotation-inflight journal file live alongside the slot
+                # dirs in the same pool dir and must not show up as targets
+                # — (:t) takes just the basename of each match.
+                targets+=(${CLAUDE_POOL_DIR:-$HOME/.claude-pool}/*(N/:t))
+                _describe -t targets 'target' targets
             fi
             ;;
     esac

@@ -47,6 +47,8 @@ func main() {
 		cmdNewClaude(rest)
 	case "j":
 		cmdJobs(rest)
+	case "account":
+		cmdAccount(rest)
 	case "start":
 		cmdStart(rest)
 	case "done":
@@ -99,6 +101,15 @@ Commands:
                       new named claude in a new window of the current session
   k j [--json]        job board: every *.job.md in ~/Documents/pluto with
                       state, repo, prereqs, live cell
+  k account           show rotation mode (auto/manual) + a table of every
+                      Claude account (main + ~/.claude-pool slots): usage,
+                      identity, flags
+  k account auto      re-enable auto-rotation (no swap)
+  k account <slug>    manually switch the main login to pool slot <slug>,
+                      always — regardless of thresholds — and pin rotation to
+                      manual (k account auto to release it). note: a pool
+                      slot literally named "auto" can never be targeted this
+                      way — the auto keyword always wins
   k start <slug>      start a job manually: git worktree on carl/<slug> +
                       tmux session cell-<slug> + zeus (requires ready: true
                       and prereqs done)

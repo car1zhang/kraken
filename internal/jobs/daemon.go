@@ -446,17 +446,12 @@ func (d *daemonState) tick() (int, error) {
 	}
 
 	// usage poll (throttled, first-tick eager so UIs have data right after
-	// daemon start): single-flighted into its own goroutine since it's
-	// network I/O up to ~10s and must not stretch this loop.
+	// daemon start): KickUsagePass's own usagePassRunning atomic
+	// single-flights this into its own goroutine (network I/O up to ~10s,
+	// must not stretch this loop) against RotationGate's post-swap kick
+	// running in this same process.
 	if d.tickN == 1 || d.tickN%usageEvery == 0 {
-		if usagePassRunning.CompareAndSwap(false, true) {
-			go func() {
-				defer usagePassRunning.Store(false)
-				if err := UsagePass(); err != nil {
-					dlog("usage pass failed: %v", err)
-				}
-			}()
-		}
+		KickUsagePass()
 	}
 
 	// auto-archive: done jobs left untouched for a day sweep themselves into

@@ -108,3 +108,38 @@ func UsagePass() error {
 	dlog("usage pass: %d accounts, %d errors, %s", len(snap.Accounts), errCount, time.Since(start).Round(time.Millisecond))
 	return nil
 }
+
+// KickUsagePass best-effort triggers a usage pass outside the daemon's own
+// poll cadence, single-flighted via the usagePassRunning atomic against a
+// concurrent pass already running IN THIS PROCESS — daemon.go's own periodic
+// tick() call routes through this function. RotationGate's post-swap kick
+// (rotation.go) does NOT call KickUsagePass — it has its own inline copy of
+// the same CompareAndSwap-then-goroutine dance, deliberately sharing this
+// same usagePassRunning atomic so the two still single-flight against each
+// other within one process rather than racing two passes at once.
+// usagePassRunning is plain in-memory process state, not a file lock: a pass
+// already in flight in the `k web` process, say, offers no guarantee
+// whatsoever about the separate `k daemon` process, which has its own copy
+// of this atomic — this only ever collapses same-process races, not
+// cross-process ones. Routes through the runUsagePass seam so tests that
+// stub it out get a no-network guarantee here too. Caller: the web API's
+// POST /api/account/switch, which wants the board to reflect a manual
+// rotation promptly rather than waiting for the next poll tick. (`k account
+// <slug>`'s CLI switch does NOT use this — it runs UsagePass() synchronously
+// instead, since the CLI process exits right after printing its result and a
+// fire-and-forget goroutine here would be killed before it ever wrote the
+// snapshot.)
+func KickUsagePass() {
+	// pass is captured into a local before the goroutine starts (rather than
+	// read from inside it) so a test that swaps runUsagePass back right
+	// after this call returns can never race this read — same pattern as
+	// RotationGate's own inline kick (rotation.go).
+	if pass := runUsagePass; usagePassRunning.CompareAndSwap(false, true) {
+		go func() {
+			defer usagePassRunning.Store(false)
+			if err := pass(); err != nil {
+				dlog("usage pass failed: %v", err)
+			}
+		}()
+	}
+}
