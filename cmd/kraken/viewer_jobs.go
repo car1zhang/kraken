@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kraken/core"
-	"kraken/jobs"
-	"kraken/util"
+	"kraken/internal/core"
+	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 // viewer_jobs.go — the J-toggled job board inside k v: every job with state,

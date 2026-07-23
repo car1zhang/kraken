@@ -9,7 +9,7 @@ import (
 	"embed"
 	"io/fs"
 
-	"kraken/jobs"
+	"kraken/internal/jobs"
 )
 
 // skillsFS embeds kraken's kraken-owned skill bundle (info, aim, do, pr) so

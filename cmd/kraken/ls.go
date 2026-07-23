@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"kraken/core"
-	"kraken/util"
+	"kraken/internal/core"
+	"kraken/internal/util"
 )
 
 // --- k ls ---

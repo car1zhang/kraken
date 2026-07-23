@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"kraken/jobs"
-	"kraken/util"
+	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 // --- pr-hook ---

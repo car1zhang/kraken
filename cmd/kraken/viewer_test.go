@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kraken/core"
-	"kraken/jobs"
-	"kraken/util"
+	"kraken/internal/core"
+	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 func TestPinBlocked(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	// package to repo root, where .claude/ lives).
 	_ "kraken"
 
-	"kraken/core"
-	"kraken/util"
+	"kraken/internal/core"
+	"kraken/internal/util"
 )
 
 func main() {

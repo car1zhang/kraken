@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"kraken/core"
+	"kraken/internal/core"
 )
 
 func TestPeerCellsOrphanTeammate(t *testing.T) {

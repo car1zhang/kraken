@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"kraken/core"
-	"kraken/util"
+	"kraken/internal/core"
+	"kraken/internal/util"
 )
 
 // --- k r ---

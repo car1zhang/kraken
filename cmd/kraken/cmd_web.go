@@ -1,7 +1,7 @@
 package main
 
 import (
-	"kraken/util"
+	"kraken/internal/util"
 	"kraken/web"
 )
 

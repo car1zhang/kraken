@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kraken/core"
-	"kraken/jobs"
-	"kraken/util"
+	"kraken/internal/core"
+	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 // k v — persistent live viewer over the same discovery the one-shot commands
