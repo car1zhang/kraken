@@ -437,3 +437,123 @@ func TestReconcilePRs(t *testing.T) {
 		}
 	}
 }
+
+// repairFilter's whole safety story: a record is dropped only when NEITHER
+// create-vouched NOR a family head backs it — everything else (vouched,
+// family, or simply unknown) survives, and unknown additionally reports the
+// pass incomplete so the caller retries instead of hardening a guess.
+func TestRepairFilter(t *testing.T) {
+	pr := func(n string) JobPR { return JobPR{URL: "https://x/pull/" + n, State: "open"} }
+	inFamily := func(b string) bool { return b == "carl/slug" }
+
+	t.Run("drops only both-negative records", func(t *testing.T) {
+		headOf := func(url string) (string, bool) { return "carl/other-job", true }
+		kept, dropped, complete := repairFilter([]JobPR{pr("1")}, map[string]bool{}, true, headOf, inFamily)
+		if len(kept) != 0 || !reflect.DeepEqual(dropped, []string{"https://x/pull/1"}) || !complete {
+			t.Fatalf("kept=%+v dropped=%v complete=%v", kept, dropped, complete)
+		}
+	})
+
+	t.Run("create-vouched keeps even with a foreign head", func(t *testing.T) {
+		vouched := map[string]bool{"https://x/pull/1": true}
+		// headOf would say "drop" if consulted — vouched must short-circuit it.
+		headOf := func(url string) (string, bool) { return "carl/other-job", true }
+		kept, dropped, complete := repairFilter([]JobPR{pr("1")}, vouched, true, headOf, inFamily)
+		if len(dropped) != 0 || !reflect.DeepEqual(kept, []JobPR{pr("1")}) || !complete {
+			t.Fatalf("kept=%+v dropped=%v complete=%v", kept, dropped, complete)
+		}
+	})
+
+	t.Run("family head keeps", func(t *testing.T) {
+		headOf := func(url string) (string, bool) { return "carl/slug", true }
+		kept, dropped, complete := repairFilter([]JobPR{pr("1")}, map[string]bool{}, true, headOf, inFamily)
+		if len(dropped) != 0 || !reflect.DeepEqual(kept, []JobPR{pr("1")}) || !complete {
+			t.Fatalf("kept=%+v dropped=%v complete=%v", kept, dropped, complete)
+		}
+	})
+
+	t.Run("unknown head keeps and reports incomplete", func(t *testing.T) {
+		headOf := func(url string) (string, bool) { return "", false }
+		kept, dropped, complete := repairFilter([]JobPR{pr("1")}, map[string]bool{}, true, headOf, inFamily)
+		if len(dropped) != 0 || !reflect.DeepEqual(kept, []JobPR{pr("1")}) || complete {
+			t.Fatalf("kept=%+v dropped=%v complete=%v, want complete=false", kept, dropped, complete)
+		}
+	})
+
+	t.Run("empty recorded is trivially complete with no drops", func(t *testing.T) {
+		headOf := func(url string) (string, bool) { t.Fatal("headOf must not be called"); return "", false }
+		kept, dropped, complete := repairFilter(nil, map[string]bool{}, true, headOf, inFamily)
+		if kept != nil || dropped != nil || !complete {
+			t.Fatalf("kept=%+v dropped=%v complete=%v", kept, dropped, complete)
+		}
+	})
+
+	// vouchedOK=false is the tri-state fix: an unreadable transcript must
+	// never be treated as "vouches for nothing". Every record survives
+	// untouched, complete is false so the caller retries, and headOf is
+	// never invoked — asserted with a counting closure — since nothing
+	// could safely be dropped this pass anyway, so spending a gh call on
+	// the head check would be pure waste.
+	t.Run("vouchedOK=false keeps everything and never calls headOf", func(t *testing.T) {
+		calls := 0
+		headOf := func(url string) (string, bool) {
+			calls++
+			return "carl/other-job", true // would say "drop" if ever consulted
+		}
+		recorded := []JobPR{pr("1"), pr("2")}
+		kept, dropped, complete := repairFilter(recorded, map[string]bool{}, false, headOf, inFamily)
+		if !reflect.DeepEqual(kept, recorded) || dropped != nil || complete {
+			t.Fatalf("kept=%+v dropped=%v complete=%v, want kept=%+v dropped=nil complete=false", kept, dropped, complete, recorded)
+		}
+		if calls != 0 {
+			t.Fatalf("headOf called %d times, want 0", calls)
+		}
+	})
+}
+
+// branchFamily must match exactly the branches a job could actually have
+// shipped from — every run through the job's current Run, nothing that
+// merely shares the slug as a prefix.
+func TestBranchFamily(t *testing.T) {
+	fam1 := branchFamily(&Job{Slug: "slug", Run: 1})
+	if len(fam1) != 1 || !fam1["carl/slug"] {
+		t.Fatalf("run 1: got %v, want just carl/slug", fam1)
+	}
+
+	fam3 := branchFamily(&Job{Slug: "slug", Run: 3})
+	want := []string{"carl/slug", "carl/slug-r2", "carl/slug-r3"}
+	if len(fam3) != len(want) {
+		t.Fatalf("run 3: got %v, want exactly %v", fam3, want)
+	}
+	for _, b := range want {
+		if !fam3[b] {
+			t.Errorf("run 3: missing %s in %v", b, fam3)
+		}
+	}
+
+	reject := []string{
+		"carl/slugx",        // no separator — not a run suffix
+		"carl/slug-r",       // dangling -r, no digit
+		"carl/slug-extra",   // unrelated suffix, not -rN
+		"carl/slug2-r2",     // prefix-similar OTHER slug
+		"carl/slug-r2extra", // -r2 prefix but not an exact match
+	}
+	for _, b := range reject {
+		if fam3[b] {
+			t.Errorf("run 3: unexpectedly matched %s", b)
+		}
+	}
+
+	// a hand-typo'd run (e.g. `run: 2000000000`) must not make branchFamily
+	// allocate/iterate billions of entries — the cap holds maxRun at 64,
+	// giving exactly base (r=1) + r2..r64 = 64 entries, and the whole call
+	// must return quickly.
+	start := time.Now()
+	famHuge := branchFamily(&Job{Slug: "slug", Run: 2000000000})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("run 2000000000: took %v, want fast (cap should bound the loop)", elapsed)
+	}
+	if len(famHuge) != 64 {
+		t.Fatalf("run 2000000000: got %d entries, want exactly 64 (cap applied)", len(famHuge))
+	}
+}

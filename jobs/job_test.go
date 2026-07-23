@@ -3,6 +3,7 @@ package jobs
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -795,5 +796,72 @@ func TestWriteJobPRsUnionsFileOnlyRecords(t *testing.T) {
 	}
 	if len(j.PRs) != 2 || j.PRs[0] != want[0] || j.PRs[1] != want[1] {
 		t.Fatalf("j.PRs not updated to union: %+v", j.PRs)
+	}
+}
+
+// removeJobPRs is the repair pass's write path: unlike writeJobPRs (which
+// unions in any file-only URL, protecting a concurrent attach but wrongly
+// resurrecting exactly what a repair means to delete), it re-reads the file
+// fresh and filters ITS current list by URL — so a PR the drop set never
+// named survives untouched. This test only exercises that drop-set
+// filtering semantics (a URL outside drop passes through unchanged); it
+// doesn't simulate a true concurrent appendJobPR race across processes.
+func TestRemoveJobPRs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.job.md")
+	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\nprs:\n" +
+		"  - url: https://x/pull/1\n    state: open\n" +
+		"  - url: https://x/pull/2\n    state: open\n" +
+		"  - url: https://x/pull/3\n    state: open\n" +
+		"  - url: https://x/pull/4\n    state: open\n" +
+		"  - url: https://x/pull/5\n    state: open\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := ParseJob("x.job.md", []byte(src))
+	j.File = path
+
+	drop := map[string]bool{
+		"https://x/pull/1": true,
+		"https://x/pull/2": true,
+		"https://x/pull/3": true,
+		"https://x/pull/4": true,
+	}
+	removed, err := removeJobPRs(j, drop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRemoved := []string{"https://x/pull/1", "https://x/pull/2", "https://x/pull/3", "https://x/pull/4"}
+	if !reflect.DeepEqual(removed, wantRemoved) {
+		t.Fatalf("removed: got %v, want %v", removed, wantRemoved)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsed := ParseJob("x.job.md", data)
+	if reparsed.Err != "" {
+		t.Fatalf("reparsed job errored: %s", reparsed.Err)
+	}
+	// pull/5 was never in the drop set — it survives untouched, which is
+	// the filtering behavior that also protects a PR attached concurrently
+	// between this call's read and write (not exercised here directly).
+	want := []JobPR{{URL: "https://x/pull/5", State: "open"}}
+	if !reflect.DeepEqual(reparsed.PRs, want) {
+		t.Fatalf("prs after remove: got %+v, want %+v", reparsed.PRs, want)
+	}
+	if !reflect.DeepEqual(j.PRs, want) {
+		t.Fatalf("j.PRs not updated: got %+v, want %+v", j.PRs, want)
+	}
+
+	// no-op: nothing in drop matches what's now on disk, so nothing is
+	// removed and the file is left untouched.
+	removed2, err := removeJobPRs(j, map[string]bool{"https://x/pull/999": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed2 != nil {
+		t.Fatalf("no-op drop: got removed %v, want nil", removed2)
 	}
 }

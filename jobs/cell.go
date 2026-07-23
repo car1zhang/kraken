@@ -125,6 +125,31 @@ func CellBranch(j *Job) string {
 	return branchForRun(j.Slug, j.Run)
 }
 
+// branchFamily enumerates a job's legitimate head branches: carl/<slug>
+// through every run the job has actually advanced through (branchForRun for
+// r = 1..max(j.Run,1)), covering a recycled-then-advanced branch history —
+// not just the current CellBranch. Used by the PR-repair pass (daemon.go) to
+// tell a job's own PRs apart from another job's foreign ones attached by the
+// historical raw-text scan; exact matches only; pure, so it's table-testable
+// without gh.
+func branchFamily(j *Job) map[string]bool {
+	maxRun := j.Run
+	if maxRun < 1 {
+		maxRun = 1
+	}
+	// job files are hand-editable; a run beyond 64 is certainly a typo (e.g.
+	// `run: 2000000000`), and capping only shrinks the family — it never
+	// drops a real branch, since runs never get anywhere near this bound.
+	if maxRun > 64 {
+		maxRun = 64
+	}
+	fam := make(map[string]bool, maxRun)
+	for r := 1; r <= maxRun; r++ {
+		fam[branchForRun(j.Slug, r)] = true
+	}
+	return fam
+}
+
 // ensureUsableBranch makes CellBranch(j) safe to (re)create the worktree on
 // and returns the git worktree-add branch flag to use: "-b" when the branch
 // doesn't exist, "-B" (reset) when it exists but is fully merged into base —

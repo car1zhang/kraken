@@ -73,6 +73,41 @@ func TestExtractPRURLs(t *testing.T) {
 			prefix:  prefix,
 			want:    nil,
 		},
+		{
+			name:    "already-exists URL on stderr still attaches",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create --title x"},"tool_output":{"stdout":"","stderr":"a pull request for branch \"carl/yelp-dedupe\" into branch \"main\" already exists: https://github.com/carl/kraken/pull/55\n"}}`,
+			prefix:  prefix,
+			want:    []string{"https://github.com/carl/kraken/pull/55"},
+		},
+		{
+			name:    "URL quoted in command body must not attach",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create --title x --body \"relates to https://github.com/carl/kraken/pull/36\""},"tool_output":{"stdout":"","stderr":""}}`,
+			prefix:  prefix,
+			want:    nil,
+		},
+		{
+			name:    "stdout non-empty but URL-free falls back to stderr",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"Creating pull request for carl/x into main\n","stderr":"https://github.com/carl/kraken/pull/8\n"}}`,
+			prefix:  prefix,
+			want:    []string{"https://github.com/carl/kraken/pull/8"},
+		},
+		{
+			name:    "tool_response object variant",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_response":{"stdout":"https://github.com/carl/kraken/pull/5\n","stderr":""}}`,
+			prefix:  prefix,
+			want:    []string{"https://github.com/carl/kraken/pull/5"},
+		},
+		{
+			// PostToolUse fires on every Bash call, including ones that only
+			// mention the phrase; a grep's own stdout can carry another job's
+			// PR URL verbatim (the same mention-class false attach the
+			// transcript scanner closed via ghPrCreatePattern) and must not
+			// attach here either.
+			name:    "grep mentioning the literal is not an invocation",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"grep -rn \"gh pr create\" ~/Documents/pluto"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/30\n","stderr":""}}`,
+			prefix:  prefix,
+			want:    nil,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
