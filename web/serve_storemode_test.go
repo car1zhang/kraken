@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kraken/jobs"
-	"kraken/store"
+	"kraken/internal/jobs"
+	"kraken/internal/store"
 )
 
 // useTestStore opens a temp-file store and wires the jobs package onto it
