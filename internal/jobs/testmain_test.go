@@ -14,6 +14,12 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("KRAKEN_LOGS_DIR", dir)
+	// Real RotationGate shells out to the keychain/network — no-op it for
+	// the whole package's test binary so any test that calls StartCell or
+	// ReactivateJob (now or in the future) never touches either. A test
+	// that specifically wants to assert on gate invocation re-swaps this
+	// locally.
+	rotationGate = func(string) {}
 	code := m.Run()
 	os.RemoveAll(dir) // deferred cleanup never runs past os.Exit
 	os.Exit(code)

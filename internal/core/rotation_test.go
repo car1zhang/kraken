@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -415,6 +416,41 @@ func TestSwapMainToHappyPath(t *testing.T) {
 	}
 	if json.Unmarshal(doc["oauthAccount"], &oauthAccount) != nil || oauthAccount.EmailAddress != "target@example.com" {
 		t.Errorf("~/.claude.json oauthAccount = %s, want target email", doc["oauthAccount"])
+	}
+}
+
+// TestSwapMainToUsesFresherTargetCredsAtInstall covers H7: a concurrent
+// UsagePass refresh of the SAME target slot landing between SwapMainTo's
+// step-1 creds load and its pre-install re-read must not get clobbered by
+// the now-superseded step-1 token — installing a token whose paired refresh
+// token has already been rotated out from under it would brick main into
+// reauth on the very next refresh. The 2nd securityFind call against the
+// target slot's own keychain service simulates that concurrent refresh
+// landing in the keychain right before the pre-install re-read (call #1 is
+// step 1's own load, which actually misses the keychain here and falls back
+// to the .credentials.json file written by writeSlot).
+func TestSwapMainToUsesFresherTargetCredsAtInstall(t *testing.T) {
+	env := newSwapTestEnv(t)
+	env.writeMainClaudeJSON(t, map[string]any{"oauthAccount": map[string]any{"emailAddress": "main@example.com"}})
+	env.setMainKeychainCreds(t, "main-access", "main-refresh", farFutureMillis())
+	targetDir := env.writeSlot(t, "target-slot", "target@example.com", "Target", "pro",
+		"target-access", "target-refresh", farFutureMillis())
+
+	replaceNthSecurityFindForService(t, env.keychain, slotKeychainService(targetDir), 2,
+		credsFixtureJSON("fresher-access", "fresher-refresh", farFutureMillis()))
+
+	_, to, err := SwapMainTo("target-slot")
+	if err != nil {
+		t.Fatalf("SwapMainTo: %v", err)
+	}
+	if to == "" {
+		t.Fatal("SwapMainTo: to must never be empty on a successful swap")
+	}
+
+	mainRaw := env.keychain[mainKeychainService]
+	mainCreds, ok := decodeOauthCreds([]byte(mainRaw))
+	if !ok || mainCreds.ClaudeAiOauth.AccessToken != "fresher-access" {
+		t.Errorf("main keychain creds = %+v, ok=%v, want the fresher (concurrently-refreshed) access token installed instead of the stale step-1 one", mainCreds.ClaudeAiOauth, ok)
 	}
 }
 
@@ -882,6 +918,44 @@ func TestSelectRotationTargetBoundaryJustUnderCandidateThresholds(t *testing.T) 
 	}
 }
 
+// --- SelectRotationTarget: weekly-exhausted candidate exclusion (G1) ---
+//
+// Without this exclusion, main can rotate onto a slot that is ITSELF
+// weekly-exhausted: NeedsRotation trips again on the very next spawn and
+// selects a new target, which can land back on the ORIGINAL (still
+// weekly-exhausted) main account — a ping-pong that repeats for days
+// instead of ever landing somewhere with real headroom.
+
+func TestSelectRotationTargetExcludesWeeklyExhaustedSlot(t *testing.T) {
+	rows := []AccountUsage{
+		{Slug: "weekly-hot", Email: "weekly-hot@example.com", Session: &UsageWindow{Percent: 10}, Weekly: &UsageWindow{Percent: 90}},
+	}
+	slug, reason := SelectRotationTarget(rows, "main@example.com", 0)
+	if slug != "" || reason != "weekly-hot: weekly 90% ≥ 90%" {
+		t.Fatalf("slug=%q reason=%q, want weekly-hot excluded at weekly 90%% (boundary — ≥, not >)", slug, reason)
+	}
+}
+
+func TestSelectRotationTargetWeeklyJustUnderThresholdEligible(t *testing.T) {
+	rows := []AccountUsage{
+		{Slug: "weekly-ok", Email: "weekly-ok@example.com", Session: &UsageWindow{Percent: 10}, Weekly: &UsageWindow{Percent: 89.9}},
+	}
+	slug, reason := SelectRotationTarget(rows, "main@example.com", 0)
+	if slug != "weekly-ok" || reason != "" {
+		t.Fatalf("slug=%q reason=%q, want weekly-ok eligible at weekly 89.9%%", slug, reason)
+	}
+}
+
+func TestSelectRotationTargetNilWeeklyStaysEligible(t *testing.T) {
+	rows := []AccountUsage{
+		{Slug: "no-weekly-data", Email: "no-weekly-data@example.com", Session: &UsageWindow{Percent: 10}}, // Weekly == nil
+	}
+	slug, reason := SelectRotationTarget(rows, "main@example.com", 0)
+	if slug != "no-weekly-data" || reason != "" {
+		t.Fatalf("slug=%q reason=%q, want no-weekly-data eligible — a nil Weekly window must not disqualify", slug, reason)
+	}
+}
+
 // --- Fable matching: case-insensitivity + duplicate-window max (F7) ---
 
 func TestNeedsRotationFableCaseInsensitive(t *testing.T) {
@@ -1050,6 +1124,12 @@ func TestSwapMainToRefusesWhenJournalPresent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "did not complete") {
 		t.Errorf("SwapMainTo error = %q, want it to mention the incomplete rotation", err.Error())
+	}
+	// H6: callers outside this package (jobs/rotation.go) classify this
+	// refusal via errors.Is against the sentinel, not by matching the
+	// message's wording.
+	if !errors.Is(err, ErrRotationInFlight) {
+		t.Errorf("SwapMainTo error %q does not wrap ErrRotationInFlight", err.Error())
 	}
 	env.assertMainStateUnchanged(t, before)
 	if _, statErr := os.Stat(journal); statErr != nil {

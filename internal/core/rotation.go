@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,13 @@ const (
 	rotateFablePct      = 90
 	candidateSessionPct = 80
 	candidateFablePct   = 80
+	// candidateWeeklyPct excludes a pool slot whose OWN weekly window is
+	// already at (or past) the rotation trigger. Without this, main can
+	// rotate onto a slot that is itself weekly-exhausted — which trips
+	// NeedsRotation again on the very next spawn and swaps back, ping-
+	// ponging between two exhausted accounts for days instead of landing
+	// somewhere with real headroom.
+	candidateWeeklyPct = 90
 )
 
 // claudeJSONDisplayName is the literal string used in user-facing error
@@ -157,6 +165,13 @@ func SelectRotationTarget(accounts []AccountUsage, mainEmail string, now int64) 
 			excluded = append(excluded, fmt.Sprintf("%s: session %g%% ≥ %d%%", a.Slug, a.Session.Percent, candidateSessionPct))
 			continue
 		}
+		// A nil Weekly window (couldn't be fetched) stays eligible, same
+		// convention as a missing Fable window above — rotating on missing
+		// data would be a false exclusion, not a safe default.
+		if a.Weekly != nil && a.Weekly.Percent >= candidateWeeklyPct {
+			excluded = append(excluded, fmt.Sprintf("%s: weekly %g%% ≥ %d%%", a.Slug, a.Weekly.Percent, candidateWeeklyPct))
+			continue
+		}
 
 		eligible = append(eligible, candidate{acct: a, fablePct: fablePct})
 	}
@@ -256,16 +271,26 @@ func validateSlug(slug string) error {
 	return nil
 }
 
+// ErrRotationInFlight sentinels a refusal caused by an unresolved rotation
+// journal (see journalRefusalError below) — a previous rotation that crashed
+// or otherwise never reached its commit point. Callers classify on this via
+// errors.Is rather than matching substrings against the human-facing
+// message, which is free to reword without silently breaking that
+// classification elsewhere (see jobs/rotation.go's swap-failure dedup key).
+var ErrRotationInFlight = errors.New("rotation in flight")
+
 // journalRefusalError formats the "previous rotation did not complete"
 // refusal shared by the top-of-function warm read and the os.O_EXCL race at
 // the commit point below. data is the journal's content — empty if it
 // couldn't be read (e.g. we lost the O_EXCL race against a write that's
 // still in flight). The journal can also be an orphan left behind by a
 // rotation that failed before ever reaching the commit point, so the
-// wording doesn't assert main IS diverged, only that it might be.
+// wording doesn't assert main IS diverged, only that it might be. Wraps
+// ErrRotationInFlight so callers outside this package can classify the
+// refusal with errors.Is instead of parsing the message.
 func journalRefusalError(inflight, data string) error {
-	return fmt.Errorf("previous rotation (%s) did not complete; main login MAY be diverged (or the rotation failed before committing) — verify with ccp status; if main looks right, rm %s, else run ccp login first",
-		strings.TrimSpace(data), inflight)
+	return fmt.Errorf("previous rotation (%s) did not complete; main login MAY be diverged (or the rotation failed before committing) — verify with ccp status; if main looks right, rm %s, else run ccp login first: %w",
+		strings.TrimSpace(data), inflight, ErrRotationInFlight)
 }
 
 // SwapMainTo installs the given pool slot's credentials as the main Claude
@@ -404,6 +429,24 @@ func SwapMainTo(slug string) (from, to string, err error) {
 		return "", "", err
 	}
 
+	// 6.5. Re-check the target slot's own creds right before the commit
+	// point. Everything above (including the refresh in step 2) can take
+	// long enough — keychain prompts, disk I/O, a slow refresh HTTP round
+	// trip — for a concurrent UsagePass refresh of this SAME slot to land in
+	// between step 1's read and here, rotating its refresh token out from
+	// under us. Installing step 1's now-superseded access token would still
+	// look fine today, but its paired refresh token is already invalidated
+	// on the provider side by the concurrent refresh — the NEXT refresh
+	// attempt against it would be rejected outright, bricking main into
+	// reauth. Prefer whatever's freshest on disk now; a failed re-read
+	// (transient, keychain locked) degrades to the step-1 creds rather than
+	// aborting the swap over a read hiccup this late.
+	if fresher, ok := loadSlotCreds(slotDir); ok &&
+		fresher.ClaudeAiOauth.AccessToken != targetCreds.ClaudeAiOauth.AccessToken &&
+		!fresher.expired(now) {
+		targetCreds = fresher
+	}
+
 	// 7. INSTALL. Everything above is reversible / hasn't touched the main
 	// login — from here on we're committed: exactly two writes, both
 	// pre-computed, neither of which can fail on a read.
@@ -431,9 +474,17 @@ func SwapMainTo(slug string) (from, to string, err error) {
 	}
 	if _, werr := jf.Write([]byte(mainMeta.Email + " -> " + targetMeta.Email)); werr != nil {
 		jf.Close()
+		// Pre-commit abort: nothing has been written to the keychain or
+		// ~/.claude.json yet, so an orphaned journal here would wedge every
+		// future rotation behind a "previous rotation did not complete"
+		// refusal for no reason.
+		_ = os.Remove(inflight)
 		return "", "", fmt.Errorf("write rotation journal: %w", werr)
 	}
 	if cerr := jf.Close(); cerr != nil {
+		// Same pre-commit abort as above — the write succeeded but Close
+		// (flush) didn't, still before either real write.
+		_ = os.Remove(inflight)
 		return "", "", fmt.Errorf("write rotation journal: %w", cerr)
 	}
 
@@ -466,6 +517,16 @@ func SwapMainTo(slug string) (from, to string, err error) {
 		// anyway rather than leaving the journal for a human over a plain
 		// read hiccup.
 		cur, curOK := loadMainCreds()
+		// A concurrent actor (another rotation's own rollback, a fresh `ccp
+		// login`) may have already put the ORIGINAL outgoing creds back in
+		// place while we were between the keychain write and this check —
+		// in that case main is already correct and our own rollback would be
+		// a redundant (harmless but noisy) re-write; just clear the journal
+		// and surface the original error.
+		if curOK && cur.ClaudeAiOauth.AccessToken == mainCreds.ClaudeAiOauth.AccessToken {
+			_ = os.Remove(inflight)
+			return "", "", fmt.Errorf("update %s: %w (main creds already back in place)", claudeJSONDisplayName, err)
+		}
 		foreignWrite := curOK && cur.ClaudeAiOauth.AccessToken != targetCreds.ClaudeAiOauth.AccessToken
 		if foreignWrite {
 			return "", "", fmt.Errorf("update %s: %w (rollback skipped (main rewritten concurrently): main may hold neither %s's nor %s's creds while %s still names %s; run ccp login)",
