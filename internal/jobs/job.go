@@ -121,6 +121,15 @@ func PlutoDir() string {
 	return filepath.Join(util.Home(), "Documents", "pluto")
 }
 
+// PlutoSandboxed reports whether PlutoDir resolves away from the real
+// ~/Documents/pluto — i.e. KRAKEN_PLUTO_DIR points at a sandbox copy. The
+// mirror-mode API gate uses this to decide whether archive/unarchive/delete
+// (which move preserved-artifact files under PlutoDir even in store mode)
+// are safe to allow.
+func PlutoSandboxed() bool {
+	return PlutoDir() != filepath.Join(util.Home(), "Documents", "pluto")
+}
+
 // started reports whether the job has ever entered a cell: "" means never
 // started; "working", "blocked", and "done" all count as started.
 func (j *Job) Started() bool {

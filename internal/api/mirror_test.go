@@ -18,11 +18,15 @@ import (
 var mirrorGatedRoutes = []string{
 	"/api/start", "/api/kill", "/api/stop", "/api/steer",
 	"/api/question", "/api/retry", "/api/done", "/api/reactivate",
-	"/api/archive", "/api/unarchive", "/api/delete",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",
 }
+
+// mirrorPlutoRoutes mirror mirrorPlutoActions: gated under mirror mode only
+// while PlutoDir is NOT sandboxed (their sole real-world side effect is
+// preserved-artifact file moves under PlutoDir).
+var mirrorPlutoRoutes = []string{"/api/archive", "/api/unarchive", "/api/delete"}
 
 // mirrorUngatedRoutes are webAction-wrapped routes that must stay fully live
 // under mirror mode — DB-local moves that never reach a real tmux pane or a
@@ -59,6 +63,34 @@ func TestMirrorModeGatesTmuxDrivingRoutes(t *testing.T) {
 				t.Fatalf("%s: body = %q, want %q", path, got, "disabled in mirror mode")
 			}
 		})
+	}
+}
+
+// TestMirrorModePlutoRoutesConditional covers the archive/unarchive/delete
+// gate's two halves: 403 while PlutoDir resolves to the real default, live
+// (past the gate, into the handler's own validation) once KRAKEN_PLUTO_DIR
+// points at a sandbox.
+func TestMirrorModePlutoRoutesConditional(t *testing.T) {
+	SetMirrorMode(true)
+	t.Cleanup(func() { SetMirrorMode(false) })
+	mux := http.NewServeMux()
+	Register(mux)
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KRAKEN_PLUTO_DIR", "")
+	for _, path := range mirrorPlutoRoutes {
+		rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("unsandboxed %s: status = %d, want 403", path, rec.Code)
+		}
+	}
+
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	for _, path := range mirrorPlutoRoutes {
+		rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
+		if rec.Code == http.StatusForbidden {
+			t.Fatalf("sandboxed %s: still 403 — gate should open with KRAKEN_PLUTO_DIR set", path)
+		}
 	}
 }
 

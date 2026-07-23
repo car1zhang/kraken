@@ -35,14 +35,12 @@ type webReq struct {
 //     list of gated actions, but DoneJob's own force=true teardownCell call
 //     makes it just as real a mutation as kill.
 //   - archive (webArchive → ArchiveJob), unarchive (webUnarchive →
-//     UnarchiveJob), and delete (webDelete → DeleteArchivedJob) are gated
-//     too even though they're DB-local in store mode: all three call
-//     movePrefixed/removeArchivedArtifactFiles against the REAL
-//     ~/Documents/pluto (and its archive/ subdir) — preserved artifact
-//     flat-copies live as plain files on disk regardless of storage mode
-//     (see jobs/archive.go), so a mirror board's archive/unarchive/delete
-//     buttons would rename or unlink real pluto files even though the job
-//     row itself only ever touches the sandbox DB.
+//     UnarchiveJob), and delete (webDelete → DeleteArchivedJob) are
+//     conditionally gated (mirrorPlutoActions below): all three call
+//     movePrefixed/removeArchivedArtifactFiles against PlutoDir (and its
+//     archive/ subdir) — preserved artifact flat-copies live as plain
+//     files on disk regardless of storage mode (see jobs/archive.go) — so
+//     they run in mirror mode only when PlutoDir is a sandbox copy.
 //
 // webQueue and webDequeue stay UNGATED: each only flips the ready DB field
 // and never touches any file outside the sandbox DB. Under mirror the tick
@@ -58,21 +56,34 @@ var mirrorGatedActions = map[string]bool{
 	"retry":      true,
 	"done":       true,
 	"reactivate": true,
-	"archive":    true,
-	"unarchive":  true,
-	"delete":     true,
+}
+
+// mirrorPlutoActions are DB-local moves whose only real-world side effect
+// is preserved-artifact file moves under PlutoDir (see the archive bullet
+// above). They're allowed in mirror mode when — and only when — PlutoDir is
+// sandboxed (KRAKEN_PLUTO_DIR set away from the real ~/Documents/pluto,
+// mandatory in the mirror runbook): the file moves then land in the sandbox
+// copy, which is exactly the parity behavior worth testing.
+var mirrorPlutoActions = map[string]bool{
+	"archive":   true,
+	"unarchive": true,
+	"delete":    true,
 }
 
 // webAction wraps a move handler with method/JSON plumbing and uniform
 // {ok}/{error} responses. name identifies the action in the unified event
 // log: every manual board move — success or refusal — leaves one entry.
-// mirrorGatedActions[name] short-circuits before any of that — including
-// before the request body is even decoded — so a mirror-mode board can
-// never reach f at all for those actions.
+// The mirror gates short-circuit before any of that — including before the
+// request body is even decoded — so a mirror-mode board can never reach f
+// at all for those actions.
 func webAction(name string, f func(webReq) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if mirrorGatedActions[name] && mirrorModeOn() {
 			http.Error(w, "disabled in mirror mode", http.StatusForbidden)
+			return
+		}
+		if mirrorPlutoActions[name] && mirrorModeOn() && !jobs.PlutoSandboxed() {
+			http.Error(w, "disabled in mirror mode (KRAKEN_PLUTO_DIR not sandboxed)", http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
