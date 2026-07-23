@@ -594,6 +594,27 @@ func TestSendToPeerGuards(t *testing.T) {
 	}
 }
 
+func TestGuardBareSlashCommand(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{"bare command gets a trailing space", "/do", "/do "},
+		{"bare command with different name", "/doc", "/doc "},
+		{"command with arguments is untouched", "/do implement the thing", "/do implement the thing"},
+		{"command with only trailing space is untouched", "/do ", "/do "},
+		{"plain text is untouched", "hello zeus", "hello zeus"},
+		{"empty message is untouched", "", ""},
+		{"multi-line message is untouched", "/do\nmore", "/do\nmore"},
+	}
+	for _, c := range cases {
+		if got := guardBareSlashCommand(c.msg); got != c.want {
+			t.Errorf("%s: guardBareSlashCommand(%q) = %q, want %q", c.name, c.msg, got, c.want)
+		}
+	}
+}
+
 func TestTmuxKeyName(t *testing.T) {
 	cases := []struct {
 		name string

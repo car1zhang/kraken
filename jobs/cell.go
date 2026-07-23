@@ -288,6 +288,7 @@ func StartCell(j *Job, repo string) error {
 	// gate passed: from here on, failures must report the worktree so a
 	// half-built cell is cleanable by hand
 	installHookSettings(wt, j)
+	installSkills(wt, j)
 	argv := append(cellClaudeArgs(j.Model), "--name", ZeusName(j),
 		"--append-system-prompt", zeusBrief(j))
 	if prompt := jobPrompt(j); prompt != "" {
@@ -305,7 +306,7 @@ func StartCell(j *Job, repo string) error {
 	// startup until answered
 	acceptTrustPrompts(sess)
 	// always "working": there is no plan gate to sit in — every build job
-	// waits on /send before phase 2, but that's zeus' own brief, not a state
+	// waits on /do before phase 2, but that's zeus' own brief, not a state
 	if err := WriteJobState(j, "working"); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: cell is up but state write failed: %v\n", err)
 	}
@@ -1093,6 +1094,7 @@ func ReactivateJob(j *Job, session, message string) error {
 		// fresh worktree, same as StartCell: no hook until installed, and a
 		// done→adjust reactivation is exactly when new PRs are about to ship
 		installHookSettings(wt, j)
+		installSkills(wt, j)
 		// tell zeus where its branch actually points: the pushed remote tip
 		// when recreateFromRemote took over, the base otherwise
 		branchDesc := "freshly reset off " + base

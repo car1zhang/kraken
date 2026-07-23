@@ -435,6 +435,14 @@ func (d *daemonState) tick() (int, error) {
 			d.scanTranscriptPRs(j, all)
 			d.repairPRs(j, all)
 		}
+		// PR watcher (same throttled cadence, its own pass after the tracker
+		// above so every job's j.PRs is fully reconciled — state transitions,
+		// transcript attaches, repair drops — before watchPRs reads it): bump
+		// zeus' pane when an open PR of an active job gets a new comment/
+		// review or a newly-failing CI check.
+		for _, j := range jobs {
+			d.watchPRs(j, all, live)
+		}
 	}
 
 	// usage poll (throttled, first-tick eager so UIs have data right after
@@ -648,6 +656,158 @@ func (d *daemonState) trackPRs(j *Job) {
 			msg = "PR merged — job already accepted; recorded"
 		}
 		notify("kraken ✓ "+j.Slug, msg)
+	}
+}
+
+// watchDecision is watchPRs' pure core: given one open PR's freshly fetched
+// state and its currently recorded watermarks, decides whether to bump zeus'
+// pane and what the new watermarks should be.
+//
+// A PR whose fetched state isn't (still) open never bumps and its watermarks
+// pass through unchanged — trackPRs' own pass reconciles the recorded state;
+// this just declines to act on stale-open data.
+//
+// First sight (both watermarks still empty) seeds LastCommentAt to the
+// newest existing comment/review timestamp WITHOUT bumping — a PR's whole
+// prior comment history must not flood zeus on the tick kraken starts
+// watching it. A currently-failing check DOES bump even on first sight,
+// since it's actionable right now regardless of history; BumpedSHA is seeded
+// silently (no bump) on first sight only when checks are currently green.
+//
+// After first sight, a newer comment/review timestamp bumps, and a head SHA
+// that differs from BumpedSHA while checks are failing bumps (once per SHA —
+// an unchanged SHA never re-bumps for the same standing failure). Both kinds
+// of news in the same pass fold into one message. bump is false, and both
+// watermarks pass through unchanged, when there is nothing new to report.
+func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA string) (bump bool, message string, newLastCommentAt, newBumpedSHA string) {
+	newLastCommentAt, newBumpedSHA = lastCommentAt, bumpedSHA
+	if f.State != "open" {
+		return false, "", newLastCommentAt, newBumpedSHA
+	}
+	firstSight := lastCommentAt == "" && bumpedSHA == ""
+
+	var parts []string
+	if f.LastCommentAt != "" {
+		switch {
+		case firstSight:
+			newLastCommentAt = f.LastCommentAt // seed silently — no history flood
+		case f.LastCommentAt > lastCommentAt:
+			parts = append(parts, fmt.Sprintf(
+				"%s got a new comment or review — read it with `gh pr view %s --comments`, address it (reply or fix), and continue",
+				url, url))
+			newLastCommentAt = f.LastCommentAt
+		}
+	}
+
+	switch {
+	// f.HeadSHA != "" guards both branches: an empty headRefOid (a gh
+	// response gh itself didn't fully populate) must never bump with a
+	// blank SHA in the message, and must never seed/advance BumpedSHA to ""
+	// — doing so would make the NEXT pass's fetch look like first sight
+	// again (bumpedSHA=="" is part of firstSight's definition).
+	case len(f.FailingChecks) > 0 && f.HeadSHA != "" && f.HeadSHA != bumpedSHA:
+		parts = append(parts, fmt.Sprintf(
+			"%s has failing CI on %s (at least %s) — run `gh pr checks %s` to see the full current rollup and fix it",
+			url, f.HeadSHA, strings.Join(f.FailingChecks, ", "), url))
+		newBumpedSHA = f.HeadSHA
+	case firstSight && f.HeadSHA != "":
+		newBumpedSHA = f.HeadSHA // seed silently — checks are green right now
+	}
+
+	return len(parts) > 0, strings.Join(parts, "; "), newLastCommentAt, newBumpedSHA
+}
+
+// watchPRs polls each open, recorded PR of an active (working/blocked) job
+// for new comments/reviews and failing CI, bumping zeus' pane once per new
+// comment-or-review timestamp and once per newly-failing head SHA (combined
+// into a single message when both land in the same pass). Job-file
+// watermark writes only happen after a successful SendToPeer — a failed send
+// leaves the watermark untouched so the next pass retries the same bump,
+// matching trackPRs' "state on disk only advances on a confirmed write"
+// discipline. Skipped entirely (no gh calls) for jobs that aren't
+// prTrackable (same Err/Type eligibility as the tracker's own gate): an
+// unparseable job must never have its prs: block rewritten, since
+// updatePRWatermark's patchPRs pass rewrites the WHOLE block from a fresh
+// re-parse and would silently and permanently drop any record a hand-edit
+// typo currently makes unparseable, clearing the error in the process), jobs
+// with no live cell, no working/blocked state, or no recorded open PR — the
+// throttled reapEvery cadence already bounds gh traffic; this bounds it
+// further to jobs that could plausibly need a bump right now.
+func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
+	if !prTrackable(j) {
+		return
+	}
+	if j.State != "working" && j.State != "blocked" {
+		return
+	}
+	if !live[CellSession(j)] {
+		return
+	}
+	var open []JobPR
+	for _, pr := range j.PRs {
+		if pr.State == "open" {
+			open = append(open, pr)
+		}
+	}
+	if len(open) == 0 {
+		return
+	}
+	repo, err := ResolveRepo(j.Repo)
+	if err != nil {
+		return // trackPRs already surfaces a bad repo for this job this pass
+	}
+	dir := ExistingWorktree(j, repo)
+	if dir == "" {
+		dir = repo // worktree gone: still ask in the repo, same fallback as trackPRs
+	}
+	var zeus *core.Peer
+	zeusLookedUp := false
+	for _, pr := range open {
+		fetched, ok := viewPRActivity(dir, pr.URL)
+		if !ok {
+			// log the outage once per stretch, not every minute — same
+			// dedup shape as trackPRs' ghfail key
+			if key := "prwatchfail:" + j.Slug; d.Notified[key] == 0 {
+				dlogErr("%s: pr-watch fetch failed for %s — leaving watermarks alone", j.Slug, pr.URL)
+				d.Notified[key] = time.Now().Unix()
+			}
+			continue // gh failure: leave this PR's watermarks alone, retry next pass
+		}
+		delete(d.Notified, "prwatchfail:"+j.Slug)
+		bump, msg, newLastCommentAt, newBumpedSHA := watchDecision(pr.URL, fetched, pr.LastCommentAt, pr.BumpedSHA)
+		if newLastCommentAt == pr.LastCommentAt && newBumpedSHA == pr.BumpedSHA {
+			continue // nothing changed, not even a first-sight seed
+		}
+		if !bump {
+			// seed-only: persist immediately, no cell message involved
+			if err := updatePRWatermark(j, pr.URL, newLastCommentAt, newBumpedSHA); err != nil {
+				dlogErr("%s: pr-watch seed write failed: %v", j.Slug, err)
+			}
+			continue
+		}
+		if !zeusLookedUp {
+			zeus = CellZeus(j, all)
+			zeusLookedUp = true
+		}
+		if zeus == nil {
+			continue // no live zeus peer to bump — retry next pass
+		}
+		if _, err := core.SendToPeer(zeus, msg); err != nil {
+			// dedup like the gh-fetch failure above: a question-blocked cell
+			// would otherwise write ~1 identical error line per minute
+			// overnight while carl is asleep
+			if key := "bumpfail:" + j.Slug; d.Notified[key] == 0 {
+				dlogErr("%s: pr-bump send failed: %v", j.Slug, err)
+				d.Notified[key] = time.Now().Unix()
+			}
+			continue // watermark stays put on disk — retried next pass
+		}
+		delete(d.Notified, "bumpfail:"+j.Slug)
+		if err := updatePRWatermark(j, pr.URL, newLastCommentAt, newBumpedSHA); err != nil {
+			dlogErr("%s: pr-watch watermark write failed: %v", j.Slug, err)
+			continue
+		}
+		dlogEvent("info", "pr-bump", "%s: bumped zeus for %s: %s", j.Slug, pr.URL, msg)
 	}
 }
 

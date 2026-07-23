@@ -1,0 +1,64 @@
+<svg viewBox="0 0 860 350" role="img" aria-label="Current doc-diagram render pipeline and the three defect classes reaching the board unchecked">
+  <text class="title" x="16" y="26">today: reads are inline; the built cache has no callers</text>
+  <defs>
+    <marker id="arrow-current-state" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <!-- Top flow: zeus -> hermes brief -> fragment -> flatten -> board artifact -->
+  <g class="node">
+    <rect x="30" y="44" width="150" height="52" rx="8"/>
+    <text x="105" y="70">zeus (doc agent)</text>
+  </g>
+
+  <g class="node warn">
+    <rect x="204" y="38" width="162" height="64" rx="8"/>
+    <text x="285" y="54"><tspan x="285" dy="0">hermes brief</tspan><tspan x="285" dy="1.2em">layout rules only —</tspan><tspan x="285" dy="1.2em">no style contract</tspan></text>
+  </g>
+
+  <g class="node">
+    <rect x="390" y="44" width="152" height="52" rx="8"/>
+    <text x="466" y="70">fragment &lt;id&gt;.svg</text>
+  </g>
+
+  <g class="node">
+    <rect x="566" y="44" width="90" height="52" rx="8"/>
+    <text x="611" y="70">flatten</text>
+  </g>
+
+  <g class="node">
+    <rect x="680" y="44" width="140" height="52" rx="8"/>
+    <text x="750" y="70">board artifact</text>
+  </g>
+
+  <path class="edge" d="M180,70 L204,70" marker-end="url(#arrow-current-state)"/>
+  <path class="edge" d="M366,70 L390,70" marker-end="url(#arrow-current-state)"/>
+  <path class="edge" d="M542,70 L566,70" marker-end="url(#arrow-current-state)"/>
+  <path class="edge" d="M656,70 L680,70" marker-end="url(#arrow-current-state)"/>
+
+  <!-- Defect classes group -->
+  <g class="group">
+    <rect x="30" y="180" width="800" height="150" rx="8"/>
+    <text x="44" y="202">defect classes reaching the board unchecked (audit: 7 of 18 diagrams)</text>
+  </g>
+
+  <g class="node danger">
+    <rect x="64" y="228" width="236" height="78" rx="8"/>
+    <text x="182" y="251"><tspan x="182" dy="0">bare-shape classes</tspan><tspan x="182" dy="1.2em">&lt;rect class='node'&gt; misses</tspan><tspan x="182" dy="1.2em">'svg .node rect' → black fill</tspan></text>
+  </g>
+
+  <g class="node danger">
+    <rect x="334" y="228" width="210" height="78" rx="8"/>
+    <text x="439" y="251"><tspan x="439" dy="0">embedded &lt;style&gt; blocks</tspan><tspan x="439" dy="1.2em">rules leak document-wide,</tspan><tspan x="439" dy="1.2em">break dark mode</tspan></text>
+  </g>
+
+  <g class="node danger">
+    <rect x="578" y="228" width="200" height="78" rx="8"/>
+    <text x="678" y="259"><tspan x="678" dy="0">coords outside viewBox</tspan><tspan x="678" dy="1.2em">labels clipped at edges</tspan></text>
+  </g>
+
+  <path class="edge danger" d="M466,96 L182,228" marker-end="url(#arrow-current-state)"/>
+  <path class="edge danger" d="M466,96 L439,228" marker-end="url(#arrow-current-state)"/>
+  <path class="edge danger" d="M466,96 L678,228" marker-end="url(#arrow-current-state)"/>
+</svg>

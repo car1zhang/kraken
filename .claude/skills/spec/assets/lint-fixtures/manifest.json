@@ -1,0 +1,39 @@
+[
+  {
+    "file": "fail-tiling-defeat.svg",
+    "expect": "fail",
+    "note": "bare-shape classes (rect class=group/store/node, not <g>-wrapped) -> CLASS_PLACEMENT"
+  },
+  {
+    "file": "fail-markdown-pipeline.svg",
+    "expect": "fail",
+    "note": "bare-shape classes (rect/text class=node/group/store, not <g>-wrapped) -> CLASS_PLACEMENT; also fill=\"none\" attrs -> PAINT_ATTR"
+  },
+  {
+    "file": "fail-target-surfaces.svg",
+    "expect": "fail",
+    "note": "embedded <style> block + hex color literals -> STYLE_BLOCK + COLOR_LITERAL"
+  },
+  {
+    "file": "fail-component-map.svg",
+    "expect": "fail",
+    "note": "embedded <style> block with CSS custom properties -> STYLE_BLOCK"
+  },
+  {
+    "file": "fail-banned-element.svg",
+    "expect": "fail",
+    "note": "<script>/<foreignObject>/<image> present -> BANNED_ELEMENT (ban-list line 155)"
+  },
+  {
+    "file": "pass-current-state.svg",
+    "expect": "pass",
+    "marker_id": "arrow-current-state",
+    "note": "clean contract-conforming fragment from this spec's own doc"
+  },
+  {
+    "file": "pass-code-map.svg",
+    "expect": "pass",
+    "marker_id": "arrow-code-map",
+    "note": "clean contract-conforming fragment from this spec's own doc"
+  }
+]

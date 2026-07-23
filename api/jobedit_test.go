@@ -231,12 +231,21 @@ func TestWebJobSaveMTimeLock(t *testing.T) {
 
 // serializeJobFile must carry the kraken-owned prs: record through a web
 // edit — dropping it would lose shipping history and make the tracker
-// re-notify on its next tick.
+// re-notify on its next tick. This also covers watchPRs' watermark fields
+// (LastCommentAt/BumpedSHA): the doc comment on serializeJobFile claims prs
+// is a "preserved kraken-owned tail … the form can't touch them by
+// construction" — a form save that silently wiped the watermarks would make
+// that false: comments arriving in the gap would never get bumped, and a
+// standing CI failure would re-bump on the very next pass since BumpedSHA
+// reset to "" reads as first-sight-not-yet-seeded again.
 func TestSerializeJobFilePreservesPRs(t *testing.T) {
 	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Ready: true}
 	prs := []jobs.JobPR{
 		{URL: "https://github.com/example/repo/pull/1", State: "merged"},
-		{URL: "https://github.com/example/repo/pull/2", State: "open"},
+		{
+			URL: "https://github.com/example/repo/pull/2", State: "open",
+			LastCommentAt: "2024-01-02T00:00:00Z", BumpedSHA: "sha1",
+		},
 	}
 	content := serializeJobFile(f, "working", "", "", 0, prs, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
@@ -244,7 +253,7 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 		t.Fatalf("serialized file does not round-trip: %s\n%s", j.Err, content)
 	}
 	if len(j.PRs) != 2 || j.PRs[0] != prs[0] || j.PRs[1] != prs[1] {
-		t.Fatalf("prs lost in round-trip: %+v", j.PRs)
+		t.Fatalf("prs (including watermarks) lost in round-trip: %+v", j.PRs)
 	}
 }
 

@@ -39,7 +39,7 @@ type Job struct {
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
 	// model can't change out from under it. Empty means claude's default.
 	Model string `json:"model,omitempty"`
-	// SkipDoc (build jobs only) skips the /doc → /send phase: zeus implements
+	// SkipDoc (build jobs only) skips the /spec → /do phase: zeus implements
 	// the spec directly, keeping the manual-test gate and PR pipeline.
 	SkipDoc bool     `json:"skip_doc,omitempty"`
 	Prereqs []Prereq `json:"prereqs,omitempty"`
@@ -89,10 +89,19 @@ type Prereq struct {
 
 // JobPR is one PR shipped from a job's cell branch: url + state
 // (open|merged|closed), kraken-owned like state/session/run. The PR number
-// clients display is derived from the URL, so nothing else is stored.
+// clients display is derived from the URL, so nothing else is sent to clients.
+//
+// LastCommentAt and BumpedSHA are the daemon's watchPRs watermarks (RFC3339
+// newest-comment-or-review timestamp already bumped for, and the head OID
+// whose failing checks were already bumped for) — frontmatter-only, kraken-
+// owned exactly like url/state, but deliberately `json:"-"`: they must never
+// reach the API wire (see api/contract_test.go's TestJobPRWireShape, which
+// pins jobs.JobPR's exact JSON shape to url+state).
 type JobPR struct {
-	URL   string `json:"url"`
-	State string `json:"state"`
+	URL           string `json:"url"`
+	State         string `json:"state"`
+	LastCommentAt string `json:"-"`
+	BumpedSHA     string `json:"-"`
 }
 
 const JobSuffix = ".job.md"
@@ -381,6 +390,10 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 				}
 			case "state":
 				p.State = stripComment(v)
+			case "last-comment-at":
+				p.LastCommentAt = stripComment(v)
+			case "bumped-sha":
+				p.BumpedSHA = stripComment(v)
 			default:
 				j.addErr("unknown prs key " + strings.TrimSpace(k))
 			}
@@ -481,7 +494,7 @@ func JobTemplate(slug string) string {
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
 		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
 		"                          # applied once at cell start, default = claude's own default\n" +
-		"# skip-doc: true          # build only: skip the /doc → /send phase — zeus implements the spec directly\n" +
+		"# skip-doc: true          # build only: skip the /spec → /do phase — zeus implements the spec directly\n" +
 		"---\n"
 }
 
@@ -750,6 +763,16 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 		block = append(block, "prs:")
 		for _, p := range prs {
 			block = append(block, "  - url: "+OneLine(p.URL), "    state: "+OneLine(p.State))
+			// watermarks are omitted (not even blank) when unset — old records
+			// and freshly-fetched ones that watchPRs hasn't touched yet stay
+			// byte-identical to the pre-watermark format, so this round-trips
+			// through the strict parser whether or not it wrote them.
+			if p.LastCommentAt != "" {
+				block = append(block, "    last-comment-at: "+OneLine(p.LastCommentAt))
+			}
+			if p.BumpedSHA != "" {
+				block = append(block, "    bumped-sha: "+OneLine(p.BumpedSHA))
+			}
 		}
 	}
 	lines := strings.Split(content, "\n")
@@ -887,6 +910,43 @@ func removeJobPRs(j *Job, drop map[string]bool) (removed []string, err error) {
 	}
 	j.PRs = kept
 	return removed, nil
+}
+
+// updatePRWatermark persists watchPRs' per-URL comment/CI watermarks for one
+// recorded PR, re-reading the file fresh first (mirroring writeJobPRs/
+// appendJobPR/removeJobPRs' read-fresh-then-patch pattern) so a concurrent
+// tracker write or hand edit isn't clobbered with stale bytes. A no-op if the
+// URL isn't present on the freshly-read file — it must have been dropped
+// (repair pass, hand edit) between load and write, and there is nothing left
+// to stamp a watermark onto; the caller's own copy of j.PRs is left alone in
+// that case too, since there is nothing new to reflect.
+func updatePRWatermark(j *Job, url, lastCommentAt, bumpedSHA string) error {
+	data, err := os.ReadFile(j.File)
+	if err != nil {
+		return err
+	}
+	fresh := ParseJob(filepath.Base(j.File), data)
+	found := false
+	for i := range fresh.PRs {
+		if fresh.PRs[i].URL == url {
+			fresh.PRs[i].LastCommentAt = lastCommentAt
+			fresh.PRs[i].BumpedSHA = bumpedSHA
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+	content, err := patchPRs(string(data), fresh.PRs)
+	if err != nil {
+		return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
+	}
+	if err := util.AtomicWrite(j.File, content); err != nil {
+		return err
+	}
+	j.PRs = fresh.PRs
+	return nil
 }
 
 // WriteJobFields patches kraken-owned fields atomically (temp file + rename

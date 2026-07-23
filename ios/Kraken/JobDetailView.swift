@@ -1,6 +1,73 @@
 import SwiftUI
 import PhotosUI
 
+// MARK: - command chips
+
+/// Row of four tappable command chips — /info /spec /do /pr — for one-tap
+/// insertion into a composer's bound text, mirroring the web SPA's command
+/// chips (app.js's attachCmdChips). SwiftUI's TextEditor exposes no cursor
+/// position without a UIKit bridge, so this appends rather than inserting at
+/// the caret: a leading space is added only when the text is non-empty and
+/// doesn't already end in whitespace, then the command plus a trailing
+/// space. Shared by SteerView/ReactivateView here and JobFormView's spec
+/// editor.
+///
+/// Each chip also lights up (purple fill + soft glow, mirroring app.js's
+/// mirrored-backdrop highlight for the same four commands) when its command
+/// already appears in `text` — pure render-state off the existing binding,
+/// no new state. TextEditor has no attributed-text support, so unlike the
+/// web composers this doesn't attempt an inline in-text highlight; the chip
+/// itself is the highlight surface.
+struct CmdChipsRow: View {
+    @Binding var text: String
+
+    private static let commands = ["/info", "/spec", "/do", "/pr"]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.commands, id: \.self) { cmd in
+                let active = Self.isPresent(cmd, in: text)
+                Button {
+                    append(cmd)
+                } label: {
+                    Text(cmd)
+                        .font(.data(11, weight: .semibold))
+                        .foregroundStyle(KTheme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(active ? KTheme.accentSoft : .clear)
+                        .overlay(Rectangle().stroke(active ? KTheme.accent : KTheme.accentSoft, lineWidth: 1))
+                        .shadow(color: active ? KTheme.accent.opacity(0.5) : .clear, radius: 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func append(_ cmd: String) {
+        if text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") {
+            text += cmd + " "
+        } else {
+            text += " " + cmd + " "
+        }
+    }
+
+    // isPresent reports whether `cmd` (e.g. "/info") appears in `text` as a
+    // whole command token. Mirrors app.js's CMD_HL_RE, which is anchored on
+    // both ends: a trailing \b — so e.g. "/do" doesn't light up on a
+    // hypothetical "/doc" sharing its prefix, since \b between the shared
+    // "o" and "c" isn't a boundary (both are word characters) — and a
+    // leading (^|\s) group, so a path fragment like "web/static/do" doesn't
+    // light up either (nothing there is whitespace-preceded).
+    private static func isPresent(_ cmd: String, in text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let name = cmd.dropFirst() // strip leading "/"
+        let pattern = "(^|\\s)/\(name)\\b"
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+}
+
 // MARK: - image attachments
 //
 // One acquired-and-uploaded image on a composer (steer/unblock, and the
@@ -1107,6 +1174,7 @@ struct ReactivateView: View {
                     .foregroundStyle(KTheme.text2)
             }
             kSection("What to adjust (optional)") {
+                CmdChipsRow(text: $text)
                 TextEditor(text: $text)
                     .focused($textFocused)
                     .scrollContentBackground(.hidden)
@@ -1139,7 +1207,10 @@ struct ReactivateView: View {
         .disabled(isBusy)
         .task {
             await draftStore.hydrate(slug: job.slug)
-            text = draftStore.get(draftKey)
+            // Guard against clobbering a command chip tapped in the window
+            // between this view appearing and hydration finishing — only
+            // land the stored draft if nothing's been typed yet.
+            if text.isEmpty { text = draftStore.get(draftKey) }
         }
         .onChange(of: text) {
             draftStore.set(draftKey, text)
@@ -1229,6 +1300,7 @@ struct SteerView: View {
                 }
             }
             kSection("Message") {
+                CmdChipsRow(text: $text)
                 TextEditor(text: $text)
                     .focused($textFocused)
                     .scrollContentBackground(.hidden)
@@ -1272,7 +1344,10 @@ struct SteerView: View {
         .disabled(isBusy)
         .task {
             await draftStore.hydrate(slug: job.slug)
-            text = draftStore.get(draftKey)
+            // Guard against clobbering a command chip tapped in the window
+            // between this view appearing and hydration finishing — only
+            // land the stored draft if nothing's been typed yet.
+            if text.isEmpty { text = draftStore.get(draftKey) }
         }
         .onChange(of: text) {
             draftStore.set(draftKey, text)

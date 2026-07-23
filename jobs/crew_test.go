@@ -1,10 +1,9 @@
 package jobs
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
-
-	"kraken/util"
 )
 
 // crew_test.go — zeus' brief content matrix. There is no hermes pane agent
@@ -17,28 +16,40 @@ func TestZeusBriefBuild(t *testing.T) {
 	j := &Job{Slug: "x", Type: "build"}
 	brief := zeusBrief(j)
 	for _, want := range []string{
-		"zeus", "hephaestus", "athena", "/send", "PR", "manual test ready",
+		"zeus", "hephaestus", "athena", "/spec", "'/do' message arrives", "/pr", "PR", "manual test ready",
 		"AskUserQuestion", CellArtifacts(j), "TaskStop",
 		// a merged PR is never job completion; follow-ups recycle the branch
 		"never ends the job", "checkout -B " + CellBranch(j) + " origin/main",
 		// hermes briefs must carry the style contract verbatim and be lint-gated
 		"hermes-contract.md", "lint_svg.py", "--marker-id",
+		// the lint command must be anchored to the worktree root, since the
+		// fragment path is absolute but the lint script path is worktree-relative
+		"from the worktree root",
 		// three named single-dimension athena review variants, dispatched in
 		// parallel, with a targeted (not full) re-review on a blocking finding
 		"athena-logic", "athena-edge", "athena-style",
 		"dispatched in parallel", "one message, three Agent calls",
 		"re-review with only the flagging variant(s)",
+		// /pr is a same-named-shadow risk (like /info), so zeus must read the
+		// worktree copy by path rather than invoking it by name
+		"do NOT invoke /pr by name",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("build brief missing %q", want)
 		}
 	}
-	// the contract path must be built home-relative via util.Home(), never a
-	// bare ~ or a literal /Users/<name>
-	if contract := hermesContractPath(); !strings.HasPrefix(contract, util.Home()) || !strings.Contains(brief, contract) {
-		t.Errorf("build brief does not reference a home-relative contract path (got %q)", contract)
+	// the contract/lint paths must be worktree-RELATIVE (zeus' cwd is the
+	// worktree) — never home-relative, never a bare ~-prefixed path (which
+	// filepath.IsAbs alone would miss), and always rooted at .claude/skills/
+	for _, path := range []string{HermesContractPath(), LintSvgPath()} {
+		if filepath.IsAbs(path) || strings.HasPrefix(path, "~") || !strings.HasPrefix(path, ".claude/skills/") || !strings.Contains(brief, path) {
+			t.Errorf("build brief does not reference a worktree-relative .claude/skills/ path (got %q)", path)
+		}
 	}
-	for _, unwanted := range []string{"plan.md", "done.md", "hermes pane", "relay", "Success criteria"} {
+	for _, unwanted := range []string{
+		"plan.md", "done.md", "hermes pane", "relay", "Success criteria",
+		"/send", "/doc skill", "you inherit carl's user skills",
+	} {
 		if strings.Contains(brief, unwanted) {
 			t.Errorf("build brief still mentions %q", unwanted)
 		}
@@ -53,12 +64,20 @@ func TestZeusBriefBuild(t *testing.T) {
 func TestZeusBriefInfo(t *testing.T) {
 	j := &Job{Slug: "y", Type: "info"}
 	brief := zeusBrief(j)
-	for _, want := range []string{"zeus", "/info", "No PR", "AskUserQuestion", CellArtifacts(j), "TaskStop"} {
+	for _, want := range []string{
+		"zeus", "/info", "No PR", "AskUserQuestion", CellArtifacts(j), "TaskStop",
+		// /info is a same-named-shadow risk (a personal /info skill), so zeus
+		// must read the worktree copy by path rather than invoke it by name
+		"do NOT invoke /info",
+	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("info brief missing %q", want)
 		}
 	}
-	for _, unwanted := range []string{"plan.md", "done.md", "open a PR with gh", "hermes pane", "relay", "Success criteria"} {
+	for _, unwanted := range []string{
+		"plan.md", "done.md", "open a PR with gh", "hermes pane", "relay", "Success criteria",
+		"/send", "/doc skill", "you inherit carl's user skills",
+	} {
 		if strings.Contains(brief, unwanted) {
 			t.Errorf("info brief still mentions %q", unwanted)
 		}
@@ -114,10 +133,10 @@ func TestZeusBriefSkipDoc(t *testing.T) {
 	// and the PR pipeline all survive the branch
 	for _, want := range []string{
 		"skips the doc phase", "hephaestus", "athena", "manual test ready",
-		"open a PR with gh", "never ends the job", CellArtifacts(j),
-		// like the escalation disclaimer: /doc and /send may appear only to
+		"open a PR with gh", "do NOT invoke /pr by name", "never ends the job", CellArtifacts(j),
+		// like the escalation disclaimer: /spec and /do may appear only to
 		// say they don't apply
-		"no /doc artifact", "no '/send' gate",
+		"no spec doc", "no '/do' gate",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("skip-doc brief missing %q", want)
@@ -125,6 +144,7 @@ func TestZeusBriefSkipDoc(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"Phase 1", "Phase 2", "hermes", "hermes-contract.md", "lint_svg.py", "doc ready for review",
+		"/send", "you inherit carl's user skills",
 	} {
 		if strings.Contains(brief, unwanted) {
 			t.Errorf("skip-doc brief still mentions %q", unwanted)
@@ -164,6 +184,29 @@ func TestZeusBriefSelfDestructiveGuard(t *testing.T) {
 		for _, want := range []string{"OWN job's slug", "scratch job fixture", "decapitates"} {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s (solo=%v) brief missing %q", j.Type, j.Solo, want)
+			}
+		}
+	}
+}
+
+// TestZeusBriefSkillsPrecedence asserts the worktree .claude/skills/
+// precedence sentence rides in every brief variant — it's not gated by type,
+// solo, or skip-doc, since kraken materializes its own skills into every
+// cell worktree regardless of workflow.
+func TestZeusBriefSkillsPrecedence(t *testing.T) {
+	for _, j := range []*Job{
+		{Slug: "prec-build", Type: "build"},
+		{Slug: "prec-info", Type: "info"},
+		{Slug: "prec-solo", Type: "build", Solo: true},
+		{Slug: "prec-skipdoc", Type: "build", SkipDoc: true},
+	} {
+		brief := zeusBrief(j)
+		for _, want := range []string{
+			".claude/skills/", "kraken-owned and canonical",
+			"shadows one of them", "never commit `.claude/` changes",
+		} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s (solo=%v skipdoc=%v) brief missing skills-precedence text %q", j.Type, j.Solo, j.SkipDoc, want)
 			}
 		}
 	}
