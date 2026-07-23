@@ -3,7 +3,7 @@
 PLIST := $(HOME)/Library/LaunchAgents/dev.carl.kraken.plist
 
 build:
-	go build -o kraken .
+	go build -o kraken ./cmd/kraken
 
 install: build install-completion install-daemon
 	mkdir -p $(HOME)/.local/bin

@@ -5,6 +5,11 @@ import (
 	"os"
 	"strconv"
 
+	// Blank import of the module-root package: its init() injects the
+	// embedded .claude/skills bundle into jobs.SkillsFS (go:embed pins that
+	// package to repo root, where .claude/ lives).
+	_ "kraken"
+
 	"kraken/core"
 	"kraken/util"
 )
