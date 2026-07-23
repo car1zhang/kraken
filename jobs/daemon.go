@@ -8,12 +8,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"kraken/core"
+	"kraken/store"
 	"kraken/util"
 )
 
@@ -64,7 +67,40 @@ func daemonStatusPath() string {
 	return filepath.Join(util.Home(), ".kraken", "daemon.json")
 }
 
+// inProcessDaemonStatus holds kraken serve's own heartbeat when a store is
+// wired: RunServeTicks stamps it every tick instead of writing
+// daemon.json, since serve's tick loop and the process reading
+// ReadDaemonStatus (its own web API) are the same process — no file
+// round-trip needed, and no daemon.json to leave stale for `k daemon` to
+// trip on. UseStore clears it (see store.go) so a not-yet-ticked serve
+// process reads as "no status" rather than a leftover value.
+var inProcessDaemonStatus atomic.Pointer[DaemonStatus]
+
+// ReadDaemonStatus returns the daemon's last-known heartbeat: the
+// in-process value (set by RunServeTicks) when a store is wired, else
+// ~/.kraken/daemon.json — the `k daemon` / `k web` two-process contract.
 func ReadDaemonStatus() (DaemonStatus, bool) {
+	if ActiveStore() != nil {
+		st := inProcessDaemonStatus.Load()
+		if st == nil {
+			return DaemonStatus{}, false
+		}
+		return *st, true
+	}
+	return readDaemonStatusFile()
+}
+
+// readDaemonStatusFile reads ~/.kraken/daemon.json directly, ignoring
+// whether a store is wired in THIS process. ReadDaemonStatus must keep
+// branching on ActiveStore for its normal callers (the web API, the
+// viewer), which want serve's own in-process status once wired — but the
+// single-instance startup guards (daemonGuardErr, used by both RunDaemon
+// and kraken serve's GuardServeStart) need the file unconditionally: by the
+// time kraken serve's guard runs, jobs.UseStore has already wired
+// ActiveStore in this process, so ReadDaemonStatus would otherwise report
+// this process' own (still-nil, not-yet-ticked) in-process status instead
+// of a DIFFERENT already-running daemon/serve process' file heartbeat.
+func readDaemonStatusFile() (DaemonStatus, bool) {
 	var st DaemonStatus
 	data, err := os.ReadFile(daemonStatusPath())
 	if err != nil || json.Unmarshal(data, &st) != nil {
@@ -75,6 +111,142 @@ func ReadDaemonStatus() (DaemonStatus, bool) {
 
 func ProcessAlive(pid int) bool {
 	return pid > 0 && syscall.Kill(pid, 0) == nil
+}
+
+// ProcessIsKraken cross-checks (E14) that pid — already confirmed alive by
+// ProcessAlive — is actually a kraken process, via one `ps` exec (same
+// shell-out style core/discover.go already uses for its own process
+// enumeration). PIDs recycle: a daemon.json left behind by a process that
+// died can, after enough time and enough other processes starting/exiting,
+// end up naming a pid the OS has since handed to something completely
+// unrelated — without this check, daemonGuardErr would read that unrelated
+// process as "the daemon is alive" and refuse to start forever, with no
+// remedy short of a human noticing and deleting the file by hand. Fails
+// open (true) on any ps error: the guard's whole purpose is refusing to
+// double-run a real daemon, and a ps hiccup must never manufacture a FALSE
+// refusal by assuming the pid ISN'T kraken.
+//
+// Exported as a package-level var (not a plain func), same stubbing
+// pattern this file already uses for probeOnline: it's exported (capital
+// P) specifically so tests in OTHER packages (cmd_import_test.go, package
+// main) that need to simulate "a live, genuinely-kraken conflicting
+// process" — which they can't do for real without spawning an actual
+// kraken binary just to get ps to report the right comm — can swap it too.
+var ProcessIsKraken = func(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return true
+	}
+	return strings.Contains(strings.ToLower(string(out)), "kraken")
+}
+
+// daemonGuardErr is the single-instance startup guard shared by RunDaemon
+// and kraken serve (GuardServeStart): refuses when daemon.json names a
+// DIFFERENT, still-alive, ACTUALLY-kraken pid (processIsKraken, E14 —
+// closes the pid-recycling false-positive above). Always reads the file
+// directly (readDaemonStatusFile), not ReadDaemonStatus, so it works the
+// same whether or not this process has wired a store yet. The error names
+// the stale-state remedy (rm ~/.kraken/daemon.json) so a genuinely stuck
+// guard — the recycled-pid case processIsKraken doesn't catch because the
+// unrelated process' name happens to also contain "kraken", or any other
+// edge this heuristic misses — always has an obvious way out without
+// reading source.
+func daemonGuardErr() error {
+	st, ok := readDaemonStatusFile()
+	if !ok || st.PID == os.Getpid() || !ProcessAlive(st.PID) || !ProcessIsKraken(st.PID) {
+		return nil
+	}
+	return daemonConflictErr(st.PID)
+}
+
+// daemonConflictErr formats daemonGuardErr's refusal — pulled out as its
+// own pure function (E14) so the error text's stale-state remedy (rm
+// ~/.kraken/daemon.json) is testable without needing a second live,
+// actually-named-kraken pid to trigger the real refusal branch.
+func daemonConflictErr(pid int) error {
+	return fmt.Errorf("daemon already running (pid %d) — if this is stale (daemon.json outlived the process, or its pid was recycled), remove ~/.kraken/daemon.json and retry", pid)
+}
+
+// GuardFileModeStart is E2's startup guard for the two legacy file-mode
+// entry points, `kraken daemon` (RunDaemon) and `k web` (cmd_web.go):
+// refuses to start file-mode against a machine that has already migrated
+// onto the sqlite store. ActiveStore() != nil means this very process
+// wired one itself (never true for these two commands, which never call
+// UseStore) — the real signal is store.DBPath() existing on disk at all,
+// which only happens once `kraken import` has run. Starting the file-mode
+// daemon/web server on top of that would silently read/write the stale
+// job-file copies while `kraken serve` (if also running) owns the
+// authoritative DB, or — worse — race it if serve isn't running yet.
+// force is the explicit override for genuine emergencies (serve is broken
+// and file-mode is needed as a stopgap); the error names `kraken serve` so
+// the normal remedy is obvious without reading source.
+func GuardFileModeStart(force bool) error {
+	if force {
+		return nil
+	}
+	if ActiveStore() != nil {
+		return nil
+	}
+	if _, err := os.Stat(store.DBPath()); err == nil {
+		return fmt.Errorf("kraken.db exists at %s but this process isn't using it — this deployment has migrated to `kraken serve`; run that instead (pass --force-file-mode to start this file-mode command anyway)", store.DBPath())
+	}
+	return nil
+}
+
+// GuardServeStart is kraken serve's own startup guard (mirrors RunDaemon's
+// check): called synchronously by cmd_serve BEFORE starting the tick loop
+// or binding the web server, so a standalone `kraken daemon` (or a second
+// `kraken serve`) already running makes serve refuse cleanly and exit
+// non-zero instead of silently double-running the scheduler underneath a
+// web server that came up anyway.
+//
+// L7 (reverse direction of runImport's own GuardServeStart check): also
+// refuses while a `kraken import` is mid-sweep, signaled by the
+// import_in_progress kv marker ImportAll sets for the duration of every
+// non-dry-run. Only checkable when a store is already wired (ActiveStore()
+// != nil) — true for cmd_serve's call site (serveSetup wires the store
+// before this guard runs) and harmlessly a no-op for runImport's own call
+// site (which calls this BEFORE opening any store, by design: an import
+// checking itself would be meaningless).
+func GuardServeStart() error {
+	if err := daemonGuardErr(); err != nil {
+		return err
+	}
+	if st := ActiveStore(); st != nil {
+		if v, err := st.GetKV(importInProgressKVKey); err == nil && v != "" {
+			return fmt.Errorf("kraken import is in progress (started at unix-millis %s) — wait for it to finish before starting serve", v)
+		}
+	}
+	return nil
+}
+
+// writeDaemonStatusFile persists st to ~/.kraken/daemon.json, creating the
+// parent dir if needed. Historically RunDaemon-only; RunServeTicks now
+// writes it too (so `kraken daemon`'s own startup guard trips while `kraken
+// serve` is running the scheduler) in addition to the in-process status it
+// already keeps. Best-effort: a failed write is silently skipped, matching
+// every other heartbeat/status write in this package.
+func writeDaemonStatusFile(st DaemonStatus) {
+	if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
+		return
+	}
+	if data, err := json.Marshal(st); err == nil {
+		_ = util.AtomicWrite(daemonStatusPath(), string(data))
+	}
+}
+
+// serveStop, closed by StopServeTicks, tells RunServeTicks' between-tick
+// sleep to return immediately instead of riding out the rest of the current
+// DaemonInterval — used by kraken serve's shutdown handler so a SIGTERM
+// doesn't have to wait up to DaemonInterval before the process can exit.
+var serveStop = make(chan struct{})
+var serveStopOnce sync.Once
+
+// StopServeTicks signals RunServeTicks to return after its current tick
+// instead of sleeping again. Idempotent — safe to call more than once (a
+// repeated signal, a test) without panicking on a double close.
+func StopServeTicks() {
+	serveStopOnce.Do(func() { close(serveStop) })
 }
 
 // notify fires a macOS notification; failures are logged, never fatal — the
@@ -139,7 +311,14 @@ type daemonState struct {
 	// WITHOUT dropping anything, so giving up is always safe — it just stops
 	// spending gh calls on a job whose evidence never resolves.
 	RepairTries map[string]int
-	tickN       int
+	// ArtifactSyncState tracks each started job's own last-derived board
+	// state (slug → "working"/"blocked"/...), independent of the job's own
+	// State field, purely to detect the working→blocked edge that triggers
+	// syncArtifactsNow. In-process only, like the dedup maps above: losing
+	// it on restart just means the next real transition (not a spurious one
+	// — there's no false trigger from a blank map) does the mirror instead.
+	ArtifactSyncState map[string]string
+	tickN             int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
 	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
@@ -149,11 +328,34 @@ type daemonState struct {
 
 func newDaemon() *daemonState {
 	return &daemonState{
-		Notified:    map[string]int64{},
-		Poked:       map[string]int64{},
-		Repaired:    map[string]bool{},
-		PRHeads:     map[string]string{},
-		RepairTries: map[string]int{},
+		Notified:          map[string]int64{},
+		Poked:             map[string]int64{},
+		Repaired:          map[string]bool{},
+		PRHeads:           map[string]string{},
+		RepairTries:       map[string]int{},
+		ArtifactSyncState: map[string]string{},
+	}
+}
+
+// pruneArtifactSyncState drops ArtifactSyncState entries for slugs that left
+// the "started and not done" live set — finished (done), archived, or
+// vanished from the board entirely. A stale "working" entry would otherwise
+// survive keyed on a slug that later gets reused by an unrelated new job
+// (archiving frees the slug — see archive.go), spuriously firing that new
+// job's first working→blocked transition as if it were a continuation of
+// the old job's. Pure over (d, jobs), so it's unit-testable without a live
+// cell, tmux, or a real repo to resolve.
+func (d *daemonState) pruneArtifactSyncState(jobs []*Job) {
+	stillTracked := map[string]bool{}
+	for _, j := range jobs {
+		if j.Started() && j.State != "done" {
+			stillTracked[j.Slug] = true
+		}
+	}
+	for slug := range d.ArtifactSyncState {
+		if !stillTracked[slug] {
+			delete(d.ArtifactSyncState, slug)
+		}
 	}
 }
 
@@ -163,10 +365,14 @@ var usagePassRunning atomic.Bool
 
 // RunDaemon runs the scheduler loop in the foreground: queue startable jobs,
 // derive live state, watch for unhealthy cells, track PRs, write a heartbeat.
-// Never returns.
-func RunDaemon() {
-	if st, ok := ReadDaemonStatus(); ok && st.PID != os.Getpid() && ProcessAlive(st.PID) {
-		util.Die("daemon already running (pid %d)", st.PID)
+// Never returns. forceFileMode is `k daemon`'s --force-file-mode override of
+// GuardFileModeStart's migrated-deployment refusal (E2).
+func RunDaemon(forceFileMode bool) {
+	if err := daemonGuardErr(); err != nil {
+		util.Die("%v", err)
+	}
+	if err := GuardFileModeStart(forceFileMode); err != nil {
+		util.Die("%v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
 		util.Die("mkdir %s: %v", filepath.Dir(daemonStatusPath()), err)
@@ -201,7 +407,7 @@ func RunDaemon() {
 	}()
 	first := true
 	for {
-		cells, err := d.tick()
+		cells, err := d.tick(false)
 		if first {
 			close(firstTick)
 			first = false
@@ -211,16 +417,119 @@ func RunDaemon() {
 			st.LastError = err.Error()
 			dlogEvent("error", "tick-error", "tick error: %v", err)
 		}
-		if data, err := json.Marshal(st); err == nil {
-			_ = util.AtomicWrite(daemonStatusPath(), string(data))
-		}
+		writeDaemonStatusFile(st)
 		time.Sleep(DaemonInterval)
+	}
+}
+
+// ServeOpts configures RunServeTicks' per-tick behavior. The zero value is
+// the normal kraken serve scheduler; Mirror selects the local
+// mirror-testing mode (`kraken serve --mirror`, cmd_serve.go): a read-only
+// scheduler variant for testing feature parity against real data without
+// ever touching real tmux/git/gh, popping a real OS notification, or
+// conflicting with the live daemon.json heartbeat a genuine `kraken daemon`
+// or `kraken serve` process depends on.
+type ServeOpts struct {
+	Mirror bool
+}
+
+// RunServeTicks runs the scheduler tick loop for kraken serve: the same
+// per-tick scheduling as RunDaemon, minus the concerns that only make sense
+// for the standalone `k daemon` process — no TCC-watchdog goroutine (serve
+// isn't launchd-managed the same way) and no SIGTERM/SIGINT handling here
+// (cmd_serve registers its own, since web.Serve's own signal handling
+// already covers HTTP shutdown and this goroutine additionally needs
+// StopServeTicks/the store closed in the right order). It DOES perform the
+// same startup guard as RunDaemon (daemonGuardErr — dies loudly, matching
+// RunDaemon's util.Die, as a backstop in case it's ever reached without
+// cmd_serve's own GuardServeStart pre-check having already refused) and the
+// same daemon.json heartbeat write RunDaemon does, on top of (not instead
+// of) the in-process status inProcessDaemonStatus/ReadDaemonStatus serves —
+// resurrecting the heartbeat file is deliberate: it's what lets a
+// standalone `kraken daemon` refuse to start while serve is running.
+// Callers run this as a goroutine alongside web.Serve; it returns only once
+// StopServeTicks is called (serve's shutdown path). UseStore must already
+// have been called — every accessor tick() touches (LoadJobs,
+// WriteJobFields, ...) is only store-backed once wired.
+//
+// opts.Mirror skips both of those: no daemonGuardErr check (mirror is
+// designed to run ALONGSIDE a live daemon/serve process against a separate
+// sandbox DB and port, never to contend with it for the single-instance
+// slot) and no daemon.json write, ever — a mirror process must never be
+// mistaken for the real daemon/serve by another process' own guard check.
+// The in-process heartbeat (inProcessDaemonStatus/ReadDaemonStatus) still
+// updates normally, so the mirror process' own board header shows a live
+// status.
+func RunServeTicks(opts ServeOpts) {
+	if !opts.Mirror {
+		if err := daemonGuardErr(); err != nil {
+			util.Die("%v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
+			util.Die("mkdir %s: %v", filepath.Dir(daemonStatusPath()), err)
+		}
+	}
+	d := newDaemon()
+	st := DaemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
+	cur := st
+	inProcessDaemonStatus.Store(&cur)
+	if !opts.Mirror {
+		// L7: daemon.json is written BEFORE the first tick runs, not only
+		// afterward — d.tick() is not guaranteed fast (live-cell roll call,
+		// throttled PR/usage polling, ...), and a concurrent `kraken import`
+		// starting in that window would read no daemon.json yet and (wrongly)
+		// conclude no daemon/serve is running, racing this process to write the
+		// same kraken.db. Publishing the heartbeat file first closes that
+		// window; ImportAll's own import_in_progress kv marker (checked by
+		// GuardServeStart, see below) closes the reverse direction — a
+		// `kraken serve` starting while an import is already mid-sweep.
+		writeDaemonStatusFile(st)
+	}
+	dlogEvent("info", "daemon-start", "serve ticks up (pid %d, cap %d cells, tick %s, mirror %v)", st.PID, CellCap, DaemonInterval, opts.Mirror)
+	for {
+		cells, err := d.tick(opts.Mirror)
+		next := st
+		next.LastTick, next.Cells, next.LastError, next.Stale = time.Now().Unix(), cells, "", util.IsSelfStale()
+		if err != nil {
+			next.LastError = err.Error()
+			dlogEvent("error", "tick-error", "tick error: %v", err)
+		}
+		st = next
+		// L5: store a FRESH copy each tick, not &st — st is one variable
+		// reused across every loop iteration, so a reader that Loads the
+		// pointer once and holds onto it (ReadDaemonStatus's caller) was
+		// racing this goroutine's next st = next assignment, which
+		// mutates the exact struct the reader's pointer already points
+		// at. A distinct local per iteration means each Store publishes an
+		// immutable snapshot that's never written to again.
+		cur := next
+		inProcessDaemonStatus.Store(&cur)
+		if !opts.Mirror {
+			writeDaemonStatusFile(st)
+		}
+		select {
+		case <-serveStop:
+			return
+		case <-time.After(DaemonInterval):
+		}
 	}
 }
 
 // Tick is one scheduler pass. Each concern is independent: an error in one
 // (reported via return for the status file) never blocks the others.
-func (d *daemonState) tick() (int, error) {
+//
+// mirror (spec: kraken serve --mirror, RunServeTicks' ServeOpts.Mirror) is
+// the local mirror-testing mode's read-only-scheduler contract: state
+// derivation (the ROLL-CALL, deriveState, WriteJobState) and the
+// working→blocked artifact sync keep running — the whole point is testing
+// those against real data — but every real-world side effect this pass can
+// otherwise trigger is skipped: no StartCell/queueing, no teardown
+// (ResumeTeardown), no PR tracking/polling/scanning/repair, no usage
+// polling, no auto-archive, and no macOS notify() popups or auto-retry
+// pokes (RetryCell). dlog/dlogEvent keep firing either way — they're
+// process-local logging (stdout + the unified event log, itself mirrored
+// into the sandbox DB when one is wired), not a real-world side effect.
+func (d *daemonState) tick(mirror bool) (int, error) {
 	d.tickN++
 	jobs := LoadJobs()
 	live := LiveSessions()
@@ -229,15 +538,20 @@ func (d *daemonState) tick() (int, error) {
 		bySlug[j.Slug] = j
 	}
 
-	// unparseable jobs: one notification per file+mtime, the board carries
-	// the detail
+	// unparseable jobs: one notification per job+mtime, the board carries
+	// the detail. Keyed on j.Slug, not j.File: a store-backed job's File is
+	// always empty (jobFromStoreRow leaves it zero), which would collide
+	// every unparseable store job onto the same dedup key — j.Slug is the
+	// one identity both file- and store-backed jobs actually have.
 	for _, j := range jobs {
 		if j.Err == "" {
 			continue
 		}
-		key := "err:" + j.File
+		key := "err:" + j.Slug
 		if mt := j.ModTime.Unix(); d.Notified[key] != mt {
-			notify("kraken: job error", j.Slug+": "+j.Err)
+			if !mirror {
+				notify("kraken: job error", j.Slug+": "+j.Err)
+			}
 			d.Notified[key] = mt
 		}
 	}
@@ -267,7 +581,9 @@ func (d *daemonState) tick() (int, error) {
 	// every tick's start clears it promptly instead.
 	if d.offline && checkOnline() {
 		title, msg := d.clearOffline()
-		notify(title, msg)
+		if !mirror {
+			notify(title, msg)
+		}
 	}
 	for _, j := range jobs {
 		if !j.Started() || j.State == "done" {
@@ -291,6 +607,12 @@ func (d *daemonState) tick() (int, error) {
 			// killed). The marker's provenance is carl's explicit action, so
 			// finishing it — worktree discard included — is sanctioned.
 			if j.Teardown != "" {
+				// mirror never finishes a real teardown (worktree removal,
+				// tmux kill-session) — a surviving teardown: marker is left
+				// exactly as found, for the real daemon/serve to resume.
+				if mirror {
+					continue
+				}
 				if err := ResumeTeardown(j); err != nil {
 					dlogErr("%s: finish interrupted teardown failed: %v", j.Slug, err)
 				} else {
@@ -306,7 +628,9 @@ func (d *daemonState) tick() (int, error) {
 			// is the one that preserves the worktree's uncommitted work.
 			key := "gone:" + j.Slug
 			if d.Notified[key] == 0 {
-				notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
+				if !mirror {
+					notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
+				}
 				dlogEvent("error", "cell-gone", "%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
 				d.Notified[key] = now.Unix()
 			}
@@ -317,7 +641,10 @@ func (d *daemonState) tick() (int, error) {
 		// reads as. Idle-stall dedup: the reason embeds the rounded idle
 		// duration, so key on the prefix or every tick re-notifies with a
 		// fresh number.
-		if isLive {
+		// mirror: the whole health/auto-retry pass is skipped — RetryCell is a
+		// real poke into a live tmux pane, and the notify() calls here are
+		// exactly the "no notifications/pokes" mirror is meant never to fire.
+		if isLive && !mirror {
 			if reason := CellHealth(j, all); reason != "" {
 				key := "health:" + j.Slug + "|" + strings.SplitN(reason, " idle ", 2)[0]
 				if d.Notified[key] == 0 {
@@ -360,10 +687,13 @@ func (d *daemonState) tick() (int, error) {
 		// only for its error-notification side effect — state derivation
 		// itself no longer needs the worktree).
 		if _, err := ResolveRepo(j.Repo); err != nil {
-			// surfaces on the board as repo?; notify once per file version
-			key := "repo:" + j.File
+			// surfaces on the board as repo?; notify once per job version.
+			// Keyed on j.Slug, not j.File — see the "err:" dedup above.
+			key := "repo:" + j.Slug
 			if mt := j.ModTime.Unix(); d.Notified[key] != mt {
-				notify("kraken: job error", j.Slug+": "+err.Error())
+				if !mirror {
+					notify("kraken: job error", j.Slug+": "+err.Error())
+				}
 				d.Notified[key] = mt
 			}
 			continue
@@ -393,6 +723,37 @@ func (d *daemonState) tick() (int, error) {
 			}
 		}
 		st := deriveState(j, isLive, active)
+		// E11: on the very first tick after this process starts (fresh
+		// daemonState, so ArtifactSyncState is blank), seed the map from
+		// THIS tick's own derived state AND run one unconditional sync for
+		// every started, not-done job — regardless of whether st is
+		// "working" or "blocked". Without this, a job that was ALREADY
+		// blocked before a `kraken serve` restart (its working→blocked
+		// EDGE happened under a PREVIOUS process, or never happened at all
+		// if it's been sitting blocked since before the daemon first ever
+		// ran) would never get its artifacts captured: the transition
+		// check right below only fires on an OBSERVED "working"→"blocked"
+		// edge, and a blank ArtifactSyncState reads as "" != "working", so
+		// it silently misses (not spuriously fires — just misses) exactly
+		// the case a restart-while-blocked leaves behind. This one-shot
+		// startup sync is unconditional on live/blocked/working precisely
+		// because it isn't trying to detect a transition; it's a "capture
+		// whatever this process finds on boot" pass, same idea as
+		// teardownCell's own "last chance" sync but at startup instead of
+		// teardown.
+		if d.tickN == 1 && j.Started() && j.State != "done" {
+			syncArtifactsNow(j, "serve-startup")
+		}
+		// block-event artifact sync (spec Q11): a working→blocked transition
+		// in the ROLL-CALL's own derived state — tracked independently of
+		// j.State's file/store write below, which may already agree with st
+		// (a web/TUI action can write "working" directly between ticks) —
+		// gets one store mirror of the cell's artifacts dir. No-op when no
+		// store is wired.
+		if d.ArtifactSyncState[j.Slug] == "working" && st == "blocked" {
+			syncArtifactsNow(j, "working→blocked")
+		}
+		d.ArtifactSyncState[j.Slug] = st
 		// the dedup key must clear whenever the DERIVED state reads as
 		// working, not only when the daemon itself performs the write below:
 		// web/TUI actions (answering a question, steering, /send) write
@@ -412,21 +773,28 @@ func (d *daemonState) tick() (int, error) {
 			if st == "blocked" {
 				key := "blocked:" + j.Slug
 				if d.Notified[key] == 0 {
-					notify("kraken ⏸ "+j.Slug, "blocked — see the board")
+					if !mirror {
+						notify("kraken ⏸ "+j.Slug, "blocked — see the board")
+					}
 					d.Notified[key] = now.Unix()
 				}
 			}
 		}
 	}
 
+	d.pruneArtifactSyncState(jobs)
+
 	// PR tracker (throttled): record every PR shipped from a cell branch
 	// into the job's prs: list. A merge is a signal — one notification and
 	// a board chip — NEVER a teardown trigger; teardown lives only behind
-	// carl's explicit accept (k done / board Done). Tracking continues
+	// carl's explicit accept via board Done. Tracking continues
 	// through done — a merge after carl accepts still deserves recording —
 	// and stops only when the job is archived (autoArchivePass below drops
 	// it from LoadJobs' namespace entirely).
-	if d.tickN%reapEvery == 0 {
+	// mirror: no PR tracking/polling/scanning/repair — every one of these
+	// shells out to gh and/or writes prs: history that only matters for a
+	// real cell's lifecycle.
+	if !mirror && d.tickN%reapEvery == 0 {
 		for _, j := range jobs {
 			if !prTrackable(j) {
 				continue
@@ -439,8 +807,10 @@ func (d *daemonState) tick() (int, error) {
 
 	// usage poll (throttled, first-tick eager so UIs have data right after
 	// daemon start): single-flighted into its own goroutine since it's
-	// network I/O up to ~10s and must not stretch this loop.
-	if d.tickN == 1 || d.tickN%usageEvery == 0 {
+	// network I/O up to ~10s and must not stretch this loop. Skipped under
+	// mirror — tick() there runs ONLY state derivation + block-event
+	// artifact sync, nothing else.
+	if !mirror && (d.tickN == 1 || d.tickN%usageEvery == 0) {
 		if usagePassRunning.CompareAndSwap(false, true) {
 			go func() {
 				defer usagePassRunning.Store(false)
@@ -455,47 +825,56 @@ func (d *daemonState) tick() (int, error) {
 	// the archive, so the board doesn't accumulate accepted work forever.
 	// !live is the same safety net ArchiveJob itself re-checks — a job
 	// stamped done but whose cell somehow lingers is left alone here.
-	archivedSlugs := autoArchivePass(jobs, live, now)
-	switch n := len(archivedSlugs); {
-	case n == 0:
-	case n <= 3:
-		for _, slug := range archivedSlugs {
-			notify("kraken 📦 "+slug, "auto-archived (done > 24h)")
+	// Skipped entirely under mirror: ArchiveJob moves real pluto/archive
+	// files, which mirror must never touch on its own initiative.
+	if !mirror {
+		archivedSlugs := autoArchivePass(jobs, live, now)
+		switch n := len(archivedSlugs); {
+		case n == 0:
+		case n <= 3:
+			for _, slug := range archivedSlugs {
+				notify("kraken 📦 "+slug, "auto-archived (done > 24h)")
+			}
+		default:
+			notify("kraken 📦", fmt.Sprintf("auto-archived %d done jobs (> 24h)", n))
 		}
-	default:
-		notify("kraken 📦", fmt.Sprintf("auto-archived %d done jobs (> 24h)", n))
 	}
 
 	// queue: start startable jobs under the cap. StartCell writes "working"
-	// itself once the cell is up.
+	// itself once the cell is up. Skipped entirely under mirror — mirror is
+	// a read-only scheduler variant, never a second real scheduler racing
+	// the live daemon/serve to start the same job's cell.
 	var firstErr error
-	for _, j := range jobs {
-		if cells >= CellCap {
-			break
-		}
-		if !startable(j, bySlug) {
-			continue
-		}
-		repo, err := ResolveRepo(j.Repo)
-		if err != nil {
-			// surfaces on the board as repo?; notify once per file version
-			key := "repo:" + j.File
-			if mt := j.ModTime.Unix(); d.Notified[key] != mt {
-				notify("kraken: job error", j.Slug+": "+err.Error())
-				d.Notified[key] = mt
+	if !mirror {
+		for _, j := range jobs {
+			if cells >= CellCap {
+				break
 			}
-			continue
-		}
-		if err := StartCell(j, repo); err != nil {
-			dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
-			if firstErr == nil {
-				firstErr = err
+			if !startable(j, bySlug) {
+				continue
 			}
-			continue
+			repo, err := ResolveRepo(j.Repo)
+			if err != nil {
+				// surfaces on the board as repo?; notify once per job version.
+				// Keyed on j.Slug, not j.File — see the "err:" dedup above.
+				key := "repo:" + j.Slug
+				if mt := j.ModTime.Unix(); d.Notified[key] != mt {
+					notify("kraken: job error", j.Slug+": "+err.Error())
+					d.Notified[key] = mt
+				}
+				continue
+			}
+			if err := StartCell(j, repo); err != nil {
+				dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			cells++
+			dlogEvent("info", "cell-start", "started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
+			notify("kraken ▶ "+j.Slug, "cell started")
 		}
-		cells++
-		dlogEvent("info", "cell-start", "started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
-		notify("kraken ▶ "+j.Slug, "cell started")
 	}
 	return cells, firstErr
 }

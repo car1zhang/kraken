@@ -536,3 +536,25 @@ func TestArchivedArtifactServing(t *testing.T) {
 		t.Fatal("active job resolved in archive home")
 	}
 }
+
+// TestJobArtifactsFileModeLiveStillListsPlutoCopies covers the
+// Q12 "a live cell always serves straight from the cell dir, skip the DB"
+// short-circuit is a store-mode-only rule. Pre-migration, file mode always
+// appended the pluto flat-copy listing regardless of liveness, and that must
+// stay exactly as it was — no store wired here, so live=true must not
+// suppress the pluto listing the way it now does in store mode.
+func TestJobArtifactsFileModeLiveStillListsPlutoCopies(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "art-file-live", "")
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "art-file-live.report.html"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := jobs.JobBySlug(jobs.LoadJobs(), "art-file-live")
+	if j == nil {
+		t.Fatal("job not found")
+	}
+	arts := jobArtifacts(j, true)
+	if len(arts) != 1 || arts[0].Name != "report.html" {
+		t.Fatalf("want the pluto copy listed even though live=true (file mode), got %+v", arts)
+	}
+}

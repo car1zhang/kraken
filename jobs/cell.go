@@ -20,8 +20,9 @@ import (
 // --- cells ---
 
 // A cell is a job's runtime: a dedicated git worktree plus a dedicated tmux
-// session holding the job's agents. Phase 2 cells are manual (k start / k
-// reap); the daemon takes over creation and teardown in phase 3.
+// session holding the job's agents. Cells are created via the board's start
+// action or the daemon (StartCell), and torn down via the board's Done/Kill
+// actions or the daemon's dead-cell watch (teardownCell).
 
 func cellsRoot() string {
 	return filepath.Join(util.Home(), ".kraken", "cells")
@@ -256,7 +257,7 @@ func jobPrompt(j *Job) string {
 // StartCell creates a job's cell: worktree off the base ref, tmux session,
 // zeus pane, identity marker, state write. Callers have validated the job
 // (parseable, ready, unstarted, prereqs met) — this owns mechanics only, and
-// is shared by k start and the daemon.
+// is shared by the board's start action (webStart) and the daemon.
 func StartCell(j *Job, repo string) error {
 	sess := CellSession(j)
 	if LiveSessions()[sess] {
@@ -312,6 +313,33 @@ func StartCell(j *Job, repo string) error {
 	return nil
 }
 
+// prHookCommand builds the exact `kraken pr-hook` command string a cell's
+// PostToolUse hook runs — shared by krakenHookEntry (the entry structure
+// below) and mergeHookSettings' hasHookCommand idempotency check, so the
+// two can never drift out of sync (a mismatch there would re-append a
+// "new" hook entry on every single hook install/reactivation, even when
+// nothing about it actually changed).
+//
+// E7: carries --serve-addr when kraken serve (SetHookServeAddr,
+// prhook.go) recorded a bind address different from the hook's own
+// fallback default (defaultServeAddr) — a pr-hook invocation is a brand
+// new OS process spawned by this command, inheriting none of serve's
+// flags/env, so anything serve resolved that isn't the default has to be
+// baked into the command string itself. Likewise --db-path when
+// KRAKEN_DB_PATH is set in this (kraken serve's own) process environment.
+// File-mode `k daemon`/`k web` cells never call SetHookServeAddr, so their
+// hook commands are byte-identical to before E7.
+func prHookCommand(slug, krakenBin string) string {
+	cmd := krakenBin + " pr-hook"
+	if addr := currentHookServeAddr(); addr != "" && addr != defaultServeAddr {
+		cmd += " --serve-addr " + addr
+	}
+	if dbPath := os.Getenv("KRAKEN_DB_PATH"); dbPath != "" {
+		cmd += " --db-path " + dbPath
+	}
+	return cmd + " " + slug
+}
+
 // krakenHookEntry is the PostToolUse matcher group kraken installs into a
 // cell's worktree: a Bash hook that reports every `gh pr create` zeus runs
 // straight to `kraken pr-hook <slug>`, so a PR attaches to the board the
@@ -325,7 +353,7 @@ func krakenHookEntry(slug, krakenBin string) map[string]any {
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": krakenBin + " pr-hook " + slug,
+				"command": prHookCommand(slug, krakenBin),
 			},
 		},
 	}
@@ -358,7 +386,7 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	if !ok {
 		postToolUse = nil
 	}
-	command := krakenBin + " pr-hook " + slug
+	command := prHookCommand(slug, krakenBin)
 	if !hasHookCommand(postToolUse, command) {
 		hooks["PostToolUse"] = append(postToolUse, krakenHookEntry(slug, krakenBin))
 		parsed["hooks"] = hooks
@@ -501,7 +529,7 @@ func ownTmuxSession() string {
 // before the worktree removal and state write could run).
 func guardSelfTeardown(target, own string) error {
 	if own != "" && own == target {
-		return fmt.Errorf("refusing to tear down %s from inside it — run k done/k k from outside the cell (or use the board)", target)
+		return fmt.Errorf("refusing to tear down %s from inside it — use the board's Done action, or k k, from outside the cell", target)
 	}
 	return nil
 }
@@ -513,7 +541,7 @@ func guardSelfTeardown(target, own string) error {
 // All-or-nothing: when not forcing, worktree dirt is checked BEFORE the
 // session kill and refuses the whole teardown up front — killing first and
 // failing on the dirty worktree left a dead cell stuck in "working" (the
-// demo-job incident). force is the explicit human sign-off (k done, kill),
+// demo-job incident). force is the explicit human sign-off (board Done, kill),
 // where dirt is listed and discarded instead.
 func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
@@ -522,7 +550,7 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if !force {
 		if wt := ExistingWorktree(j, repo); wt != "" {
 			if dirt, err := exec.Command("git", "-C", wt, "status", "--porcelain").Output(); err == nil && len(strings.TrimSpace(string(dirt))) > 0 {
-				return fmt.Errorf("worktree %s has uncommitted changes — not touching the cell (k done force-discards them)", wt)
+				return fmt.Errorf("worktree %s has uncommitted changes — not touching the cell (the board's Done action force-discards them)", wt)
 			}
 		}
 	}
@@ -551,6 +579,10 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 			return fmt.Errorf("git worktree remove: %s", strings.TrimSpace(string(out)))
 		}
 	}
+	// mandatory final pass (spec Q11): whatever's in the artifacts dir right
+	// now is the last chance to mirror it into the store before it's gone —
+	// no-op when no store is wired.
+	syncArtifactsNow(j, "teardown")
 	// the cell dir (doc source, artifacts) goes too: artifacts were
 	// preserved into pluto before teardown, and the mid-run log in the job
 	// file is the durable trail
@@ -664,7 +696,7 @@ func stampSessionBeforeTeardown(j *Job) {
 func CellHealth(j *Job, all []*core.Peer) string {
 	zeus := CellZeus(j, all)
 	if zeus == nil {
-		return "zeus process is gone — restart the cell (kill session + k start after cleanup)"
+		return "zeus process is gone — restart the cell (kill the session, then start it again from the board after cleanup)"
 	}
 	// found positionally but not yet named: claude is still starting — a
 	// lingering startup prompt needs a human, plain slowness needs patience
@@ -775,7 +807,7 @@ func KillJob(j *Job) ([]string, error) {
 	return append(msgs, "killed "+j.Slug+" — back to draft"), nil
 }
 
-// --- k done ---
+// --- accept/done ---
 
 // preserveArtifacts copies a finishing cell's deliverables into the pluto dir
 // as <slug>.<name> (never overwriting): everything in the cell's artifacts/
@@ -881,8 +913,8 @@ func ResumeTeardown(j *Job) error {
 }
 
 // DoneJob completes a started job: preserve artifacts, force-teardown the
-// cell, stamp state done + outcome. Shared by k done and the web UI's
-// review→done move. The caller has validated the job is started and not done.
+// cell, stamp state done + outcome. Called from the board's Done action
+// (webDone). The caller has validated the job is started and not done.
 // The teardown intent lands in the job file before the first destructive step
 // so an interrupted run is resumable (ResumeTeardown) instead of stranding
 // the job between states.
@@ -935,7 +967,7 @@ func OneLine(s string) string {
 	}, s))
 }
 
-// --- k reactivate ---
+// --- reactivate ---
 
 // reactivateMode decides which reactivation applies — pure, so the
 // state × worktree matrix is testable without git or tmux:
@@ -959,7 +991,7 @@ func reactivateMode(state string, worktreeExists bool) (string, error) {
 		}
 		return "recreate", nil
 	}
-	return "", fmt.Errorf("job has never started — k start it instead")
+	return "", fmt.Errorf("job has never started — start it from the board instead")
 }
 
 // reactivatePrompt assembles the resumed claude's prompt from three pure
@@ -1032,7 +1064,7 @@ func ReactivateJob(j *Job, session, message string) error {
 		session = j.Session
 	}
 	if session == "" {
-		return fmt.Errorf("%s has no recorded zeus session (done before kraken stamped session ids) — pass one explicitly: k reactivate %s --session <uuid>", j.Slug, j.Slug)
+		return fmt.Errorf("%s has no recorded zeus session (done before kraken stamped session ids) — the board's reactivate action can't resume it without one", j.Slug)
 	}
 	sess := CellSession(j)
 	if LiveSessions()[sess] {
@@ -1131,103 +1163,8 @@ func ReactivateJob(j *Job, session, message string) error {
 	return nil
 }
 
-// --- k migrate ---
-
-// OldJobState re-reads a job file's raw frontmatter `state:` value directly,
-// bypassing the strict parser that already rejected it into j.Err. This is
-// more robust than trying to regexp the old value back out of the error
-// string: cmdMigrate needs the ACTUAL old value to branch correctly (a
-// terminal "merged"/"abandoned"/"failed" must never be re-run; only the
-// in-flight old states should requeue), and the file is the one place that
-// value still lives. "" (not found) reads as not-found, never an error.
-func OldJobState(j *Job) (string, bool) {
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		return "", false
-	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	if len(lines) == 0 || !isFence(lines[0]) {
-		return "", false
-	}
-	for i := 1; i < len(lines); i++ {
-		if isFence(lines[i]) {
-			break
-		}
-		line := lines[i]
-		if line == "" || line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		key, rest, ok := strings.Cut(line, ":")
-		if ok && strings.TrimSpace(key) == "state" {
-			return stripComment(rest), true
-		}
-	}
-	return "", false
-}
-
-// MigrateTerminal handles an old state that already meant the job was done
-// (merged/abandoned/failed): any leftover cell is torn down (verified,
-// forced) and the job is stamped state: done. ready is never touched — these
-// jobs are finished, not requeued.
-func MigrateTerminal(j *Job, live map[string]bool, defaultOutcome string) error {
-	repo, err := ResolveRepo(j.Repo)
-	if err != nil {
-		return err
-	}
-	if err := teardownCell(j, repo, live, true); err != nil {
-		return fmt.Errorf("teardown failed: %v", err)
-	}
-	fields := []string{"state", "done"}
-	if j.Outcome == "" {
-		fields = append(fields, "outcome", defaultOutcome)
-	}
-	if err := WriteJobFields(j, fields...); err != nil {
-		return fmt.Errorf("teardown ok, but state write failed: %v", err)
-	}
-	return nil
-}
-
-// MigrateInFlight handles an old state that meant the job's cell was still
-// mid-run (planning/plan-review/executing/testing/pr-open) under the
-// pre-five-state model: preserve whatever the old cell produced, force-tear
-// it down, and clear state back to "" — NOT touching ready, since a file
-// already ready: true requeues naturally under the daemon and a hand-set
-// ready: false correctly stays parked in draft.
-func MigrateInFlight(j *Job, live map[string]bool) error {
-	repo, err := ResolveRepo(j.Repo)
-	if err != nil {
-		return err
-	}
-	copied, perr := preserveArtifacts(j, repo)
-	for _, c := range copied {
-		fmt.Printf("%-24s preserved artifact %s\n", j.Slug, c)
-	}
-	if perr != nil {
-		return fmt.Errorf("artifact preservation failed: %v", perr)
-	}
-	if err := teardownCell(j, repo, live, true); err != nil {
-		return fmt.Errorf("teardown failed: %v", err)
-	}
-	if err := WriteJobFields(j, "state", ""); err != nil {
-		return fmt.Errorf("teardown ok, but state write failed: %v", err)
-	}
-	return nil
-}
-
-// MigrateQueued handles an old "queued" state: just clear state back to "" (no
-// ready write — a queued job was already ready: true by definition under the
-// old model). No teardown is expected — a queued job never had a cell — but
-// one runs defensively anyway in case reality drifted from the file.
-func MigrateQueued(j *Job, live map[string]bool) error {
-	repo, err := ResolveRepo(j.Repo)
-	if err != nil {
-		return err
-	}
-	if err := teardownCell(j, repo, live, true); err != nil {
-		return fmt.Errorf("defensive teardown failed: %v", err)
-	}
-	if err := WriteJobFields(j, "state", ""); err != nil {
-		return fmt.Errorf("state write failed: %v", err)
-	}
-	return nil
-}
+// S2: the k-migrate section (OldJobState, MigrateTerminal, MigrateInFlight,
+// MigrateQueued — the pre-five-state model's one-time state-migration
+// helpers) lived here and is gone: dead code, no callers anywhere in the
+// tree since `k migrate` itself was retired. See jobs/store.go's own
+// comment for the matching note on its former mention.

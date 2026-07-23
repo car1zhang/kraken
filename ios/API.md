@@ -97,7 +97,8 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 
 `jobPR`: `url` (string, always), `state` (string, always: `open` \| `merged` \| `closed`). The PR number for display derives from the url's trailing `/pull/<n>`.
 
-`webArtifact`: `name` (string, always), `url` (string, always).
+`webArtifact`: `name` (string, always — in store mode this may contain `/`
+for a nested path, e.g. `icon-variations/v2.png`), `url` (string, always).
 
 `webAgent` (roster entry): `name` (string, always), `model` (string, always),
 `role` (string, always — `hephaestus`/`athena`/`hermes`/`other`), `status`
@@ -159,12 +160,12 @@ Response: same as above.
 Request: `webReq` — `slug` (string, required), `text` unused.
 Response: same as `/api/queue` etc above.
 
-Boots a queued job's cell immediately — the web/app equivalent of CLI `k
-start`: same validation (job must currently display as `queued`, every
-prereq's dependency done — gated or not), same `StartCell` mechanics. This is carl acting by
-hand, so — same as `k start` — it doubles as the manual release for a job
-parked behind a *gated* prereq (an already-done dependency flagged for human
-sign-off) and bypasses the daemon's `CellCap` entirely.
+Boots a queued job's cell immediately, by hand — same validation (job must
+currently display as `queued`, every prereq's dependency done — gated or
+not), same `StartCell` mechanics the daemon's own auto-start uses. Since
+this is carl acting by hand, it doubles as the manual release for a job
+parked behind a *gated* prereq (an already-done dependency flagged for
+human sign-off) and bypasses the daemon's `CellCap` entirely.
 
 ### `POST /api/stop`
 
@@ -382,10 +383,20 @@ file, then walk backwards via `prev` as the user scrolls into history.
 `logFileInfo`: `name` (string, e.g. `20260722-153000.jsonl`), `size`
 (number, bytes), `mtime` (number, unix millis).
 
+In store mode (kraken serve, DB-backed) there are no JSONL files at all: the
+listing is always exactly one virtual file named `"events"`, whose `size` is
+the newest event's id (not a byte count) and whose `mtime` is the newest
+event's ts — both move as events accrue rather than staying pinned at a
+constant, so size/mtime-based change detection still has something to key
+off. The wire shape itself is unchanged either way.
+
 ### `GET /api/logs[?file=]` → map literal (api/logs.go `webLogRead`)
 
 No `?file=` returns the newest file. `file` must be a name from the listing
-— anything else 404s.
+— anything else 404s. In store mode, `file` also accepts the opaque
+scroll-back cursor form `events:<id>` (e.g. `events:1042`, as returned in a
+previous response's `prev`) in addition to the bare `"events"` name; both
+resolve, anything else 404s the same as an unrecognized file-mode name.
 
 | key | type | optionality | notes |
 |---|---|---|---|
@@ -396,6 +407,37 @@ No `?file=` returns the newest file. `file` must be a name from the listing
 `logEntry`: `ts` (number, unix millis), `src` (string: `daemon`\|`web`\|`cli`\|`install`), `level` (string: `info`\|`error`), `event` (string, kebab id e.g. `cell-start`, `start-failed`, `queue`), `msg` (string).
 
 Errors: 404 (unknown file name), 500.
+
+### `POST /api/pr-attach` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+The endpoint jobs/prhook.go's in-cell pr-hook POSTs to instead of writing a
+job's PR list directly, now that `kraken serve` is the sole DB writer. Also
+reachable in principle from the daemon's own transcript-scanning/branch-list
+backstops, though today those still call `jobs.AttachJobPR` in-process (same
+package, no HTTP hop needed).
+
+Request (`prAttachReq`): `slug` (string, required), `url` (string, required
+— must exactly match a GitHub PR URL: `https://github.com/<owner>/<repo>/pull/<n>`).
+Response: `{"ok": true, "attached": bool}` — `attached` is `false` when the
+PR was already recorded (idempotent re-attach).
+Errors: 400 (bad JSON, missing slug, or `url` doesn't match the GitHub PR
+URL shape), 404 (no such job), 500 (write failure).
+
+### `POST /api/logevent` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+The endpoint `k logevent` (cmd_jobs.go — the Makefile's install target, and
+any other non-Go writer) POSTs to instead of appending the unified event log
+JSONL file directly. The append still goes through `util.LogEvent`, whose
+event sink (wired by `jobs.UseStore`) is what lands it in the events table
+when `kraken serve` is running — additive to the JSONL file write, as
+always.
+
+Request (`logEventReq`): `src` (string, required), `level` (string,
+omitempty — `info` or `error`, defaults to `info`), `event` (string,
+required), `msg` (string, omitempty).
+Response: `{"ok": true}` on success.
+Errors: 400 (bad JSON; missing `src`/`event`; `level` not `info`/`error`),
+405 (non-POST).
 
 ## Misc
 

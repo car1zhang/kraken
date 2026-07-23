@@ -9,7 +9,7 @@ import (
 	"kraken/util"
 )
 
-// --- k j ---
+// --- board data ---
 
 // JobStateColor maps the five-state job board model to the shared palette.
 func JobStateColor(state string) string {

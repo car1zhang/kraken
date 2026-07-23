@@ -23,10 +23,23 @@ type boardOrder struct {
 	Columns map[string][]string `json:"columns"`
 }
 
-// LoadBoardOrder reads ~/.kraken/order.json. Missing, unreadable, or corrupt
-// state — like every other foreign/own state file this repo reads — degrades
-// to an empty map rather than an error.
+// LoadBoardOrder returns every column's stored order: store-backed
+// (store.GetBoardOrder) when a store is wired, else ~/.kraken/order.json.
+// Missing, unreadable, or corrupt state — like every other foreign/own
+// state file this repo reads — degrades to an empty map rather than an
+// error.
 func LoadBoardOrder() map[string][]string {
+	if st := ActiveStore(); st != nil {
+		columns, err := st.GetBoardOrder()
+		if err != nil {
+			// Log before degrading to empty — see jobs/job.go's
+			// LoadJobs for the same rationale (a DB fault must not silently
+			// read as "board order was never set").
+			dlogErr("load board order from store failed: %v", err)
+			return map[string][]string{}
+		}
+		return columns
+	}
 	data, err := os.ReadFile(orderPath())
 	if err != nil {
 		return map[string][]string{}
@@ -38,9 +51,20 @@ func LoadBoardOrder() map[string][]string {
 	return o.Columns
 }
 
-// SaveColumnOrder replaces one column's stored order, leaving every other
-// column untouched, and writes the file back atomically.
+// SaveColumnOrder replaces one column's stored order: store-backed
+// (store.SetBoardColumn, which already dedupes, skips empty slugs, and
+// enforces one-column-per-slug) when a store is wired, else the file
+// written back atomically. L9: the file path mirrors that SAME
+// one-column-per-slug invariant — every surviving slug is removed from
+// every OTHER column, not just assigned into this one — so a slug can
+// never end up duplicated across two columns in order.json the way it
+// already can't in the store (a drag-and-drop firing twice, or two tabs
+// racing a reorder of different columns, must not leave a slug rendered
+// twice on the board).
 func SaveColumnOrder(column string, slugs []string) error {
+	if st := ActiveStore(); st != nil {
+		return st.SetBoardColumn(column, slugs)
+	}
 	columns := LoadBoardOrder()
 
 	seen := make(map[string]bool, len(slugs))
@@ -51,6 +75,18 @@ func SaveColumnOrder(column string, slugs []string) error {
 		}
 		seen[s] = true
 		deduped = append(deduped, s)
+	}
+	for other, members := range columns {
+		if other == column {
+			continue
+		}
+		kept := members[:0:0]
+		for _, m := range members {
+			if !seen[m] {
+				kept = append(kept, m)
+			}
+		}
+		columns[other] = kept
 	}
 	columns[column] = deduped
 

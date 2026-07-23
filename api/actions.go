@@ -20,11 +20,65 @@ type webReq struct {
 	Text string `json:"text,omitempty"`
 }
 
+// mirrorGatedActions names every webAction whose handler reaches into a
+// REAL tmux pane, worktree, or agent process — found by reading every
+// handler below for tmux/StartCell/teardownCell/core.SendMessage call
+// sites, not just the tmux-driving actions a mirror-mode board button most
+// obviously suggests:
+//   - kill (webKill → KillJob → teardownCell), stop (webStop → InterruptCell),
+//     steer (webSteer → core.SendMessage), question (webAnswerQuestion →
+//     sendDigit), retry (webRetry → RetryCell → core.SendMessage), start
+//     (webStart → StartCell) and reactivate (webReactivate → ReactivateJob)
+//     all shell out to a live tmux session or spawn/tear one down.
+//   - done (webDone → DoneJob) force-tears-down the cell's tmux session and
+//     worktree exactly like kill does — it is NOT in the brief's example
+//     list of gated actions, but DoneJob's own force=true teardownCell call
+//     makes it just as real a mutation as kill.
+//   - queue (webQueue) only flips a DB field (ready: true) and never
+//     touches tmux itself, but under mirror there is no scheduler that will
+//     ever act on it (jobs.ServeOpts.Mirror skips StartCell/queueing
+//     entirely) — queueing a job in mirror mode would silently do nothing,
+//     so it's gated for user-facing consistency rather than safety.
+//   - archive (webArchive → ArchiveJob), unarchive (webUnarchive →
+//     UnarchiveJob), and delete (webDelete → DeleteArchivedJob) are gated
+//     too even though they're DB-local in store mode: all three call
+//     movePrefixed/removeArchivedArtifactFiles against the REAL
+//     ~/Documents/pluto (and its archive/ subdir) — preserved artifact
+//     flat-copies live as plain files on disk regardless of storage mode
+//     (see jobs/archive.go), so a mirror board's archive/unarchive/delete
+//     buttons would rename or unlink real pluto files even though the job
+//     row itself only ever touches the sandbox DB.
+//
+// webDequeue stays UNGATED: it only flips a DB field back (ready: false) and
+// never touches any file outside the sandbox DB — the one genuinely
+// DB-local mutation left in this group.
+var mirrorGatedActions = map[string]bool{
+	"queue":      true,
+	"start":      true,
+	"kill":       true,
+	"stop":       true,
+	"steer":      true,
+	"question":   true,
+	"retry":      true,
+	"done":       true,
+	"reactivate": true,
+	"archive":    true,
+	"unarchive":  true,
+	"delete":     true,
+}
+
 // webAction wraps a move handler with method/JSON plumbing and uniform
 // {ok}/{error} responses. name identifies the action in the unified event
 // log: every manual board move — success or refusal — leaves one entry.
+// mirrorGatedActions[name] short-circuits before any of that — including
+// before the request body is even decoded — so a mirror-mode board can
+// never reach f at all for those actions.
 func webAction(name string, f func(webReq) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if mirrorGatedActions[name] && mirrorModeOn() {
+			http.Error(w, "disabled in mirror mode", http.StatusForbidden)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -102,8 +156,8 @@ func webDequeue(req webReq) error {
 // webDone is the blocked→done drag: complete the job with the fixed
 // outcome "accepted" — there's no crew-authored done marker and no
 // success criterion anymore, accepting IS the exit criterion. Validation
-// mirrors cmdDone (started, not already done) rather than the board's
-// currently-displayed column: the board can be a tick fresher than the job
+// mirrors the pre-Q14 CLI's `k done` validation (started, not already done)
+// rather than the board's currently-displayed column: the board can be a tick fresher than the job
 // file (see buildWebBoard's derive-ahead), so gating on a stale "blocked"
 // read would 409 a legal drag. The board's column gating (drag only fires
 // from BLOCKED) is the UX guard; this is just the server-side floor.
@@ -296,13 +350,13 @@ func webReactivate(req webReq) error {
 	return nil
 }
 
-// webStart boots a queued job's cell immediately, mirroring CLI `k start`:
-// same validation (queued, prereqs met), same StartCell mechanics. Unlike
-// the daemon's own auto-start, this is carl acting by hand, so it doubles as
-// the manual release for a gated prereq (UnmetPrereqs only counts a
-// dependency as unmet while it isn't done — being gated doesn't block this
-// path, only the daemon's own startable() auto-start check) and bypasses the
-// daemon's CellCap entirely, same as `k start` always has.
+// webStart boots a queued job's cell immediately by hand — the board's
+// manual start action: same validation (queued, prereqs met), same
+// StartCell mechanics the daemon's own auto-start uses. Since this is carl
+// acting by hand, it doubles as the manual release for a gated prereq
+// (UnmetPrereqs only counts a dependency as unmet while it isn't done —
+// being gated doesn't block this path, only the daemon's own startable()
+// auto-start check) and bypasses the daemon's CellCap entirely.
 func webStart(req webReq) error {
 	j, bySlug, err := webJobFor(req.Slug)
 	if err != nil {

@@ -238,7 +238,7 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 		{URL: "https://github.com/example/repo/pull/1", State: "merged"},
 		{URL: "https://github.com/example/repo/pull/2", State: "open"},
 	}
-	content := serializeJobFile(f, "working", "", "", 0, prs, "")
+	content := serializeJobFile(f, "working", "", "", "", 0, prs, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
 		t.Fatalf("serialized file does not round-trip: %s\n%s", j.Err, content)
@@ -250,7 +250,7 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 
 func TestSerializeJobFileModelAndSkipDoc(t *testing.T) {
 	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Model: "sonnet", SkipDoc: true}
-	content := serializeJobFile(f, "", "", "", 0, nil, "")
+	content := serializeJobFile(f, "", "", "", "", 0, nil, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
 		t.Fatalf("round-trip err: %s\n%s", j.Err, content)
@@ -260,7 +260,7 @@ func TestSerializeJobFileModelAndSkipDoc(t *testing.T) {
 	}
 	// conditional emission: defaults leave the file free of the new keys, so
 	// untouched jobs stay readable by older binaries
-	content = serializeJobFile(jobFormFields{Slug: "x", Type: "build", Repo: "kraken"}, "", "", "", 0, nil, "")
+	content = serializeJobFile(jobFormFields{Slug: "x", Type: "build", Repo: "kraken"}, "", "", "", "", 0, nil, "")
 	if strings.Contains(content, "model:") || strings.Contains(content, "skip-doc:") {
 		t.Fatalf("default model/skip-doc serialized anyway:\n%s", content)
 	}
@@ -268,7 +268,7 @@ func TestSerializeJobFileModelAndSkipDoc(t *testing.T) {
 
 func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
 	f := jobFormFields{Slug: "x", Type: "build", Repo: "r"}
-	content := serializeJobFile(f, "done", "shipped", "abc-123", 2, nil, "")
+	content := serializeJobFile(f, "done", "shipped", "abc-123", "", 2, nil, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
 		t.Fatalf("round-trip err: %s", j.Err)
@@ -277,9 +277,31 @@ func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
 		t.Fatalf("kraken-owned fields lost: %+v", j)
 	}
 	// and absent fields stay absent
-	content = serializeJobFile(f, "", "", "", 0, nil, "")
+	content = serializeJobFile(f, "", "", "", "", 0, nil, "")
 	if strings.Contains(content, "session:") || strings.Contains(content, "run:") {
 		t.Fatalf("empty session/run serialized anyway:\n%s", content)
+	}
+}
+
+// TestSerializeJobFilePreservesTeardown covers: the teardown-
+// intent marker (jobs.Job.Teardown) must round-trip through a raw
+// composeRawJobContent/webJobSave cycle in store mode exactly like state/
+// outcome/session/run already do — serializeJobFile is what both the file
+// and store raw-save paths use to render it back out.
+func TestSerializeJobFilePreservesTeardown(t *testing.T) {
+	f := jobFormFields{Slug: "x", Type: "build", Repo: "r"}
+	content := serializeJobFile(f, "working", "", "", "kill", 0, nil, "")
+	j := jobs.ParseJob("x.job.md", []byte(content))
+	if j.Err != "" {
+		t.Fatalf("round-trip err: %s\n%s", j.Err, content)
+	}
+	if j.Teardown != "kill" {
+		t.Fatalf("teardown lost in round-trip: %+v", j)
+	}
+	// and an absent teardown stays absent
+	content = serializeJobFile(f, "", "", "", "", 0, nil, "")
+	if strings.Contains(content, "teardown:") {
+		t.Fatalf("empty teardown serialized anyway:\n%s", content)
 	}
 }
 

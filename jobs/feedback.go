@@ -26,6 +26,13 @@ func SaveArtifactFeedback(slug, home, name, artifactPath, feedback string) (stri
 		return "", fmt.Errorf("feedback is empty")
 	}
 	now := time.Now()
+	if st := ActiveStore(); st != nil {
+		snapshot, err := os.ReadFile(artifactPath)
+		if err != nil {
+			return "", err
+		}
+		return saveArtifactFeedbackToStore(st, slug, home, name, snapshot, filepath.Ext(artifactPath), feedback, now)
+	}
 
 	dayDir := filepath.Join(PlutoDir(), "doc-feedback", now.Format("2006-01-02"))
 	if err := os.MkdirAll(dayDir, 0o755); err != nil {
@@ -42,6 +49,26 @@ func SaveArtifactFeedback(slug, home, name, artifactPath, feedback string) (stri
 		return "", err
 	}
 	return entryDir, nil
+}
+
+// SaveArtifactFeedbackBytes is SaveArtifactFeedback's store-only twin for
+// nested artifacts that never had a resolvable filesystem path in the first
+// place: Q12's pluto/archive homes are flat-file only (ArtifactPath refuses
+// any name containing "/"), but the artifacts table itself preserves nested
+// paths (the block-event sync mirrors the cell's whole artifacts tree, not
+// just its top level) — api/feedback.go's handler falls back to this when
+// ArtifactPath can't resolve a name but api.ArtifactBytes can. Requires a
+// store to be wired; callers that might run file-mode should prefer
+// SaveArtifactFeedback whenever a real path is available.
+func SaveArtifactFeedbackBytes(slug, home, name string, data []byte, feedback string) (string, error) {
+	if strings.TrimSpace(feedback) == "" {
+		return "", fmt.Errorf("feedback is empty")
+	}
+	st := ActiveStore()
+	if st == nil {
+		return "", fmt.Errorf("no store wired")
+	}
+	return saveArtifactFeedbackToStore(st, slug, home, name, data, filepath.Ext(name), feedback, time.Now())
 }
 
 // claimFeedbackDir claims an unused <dayDir>/<base>[-N] entry directory.

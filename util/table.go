@@ -34,12 +34,6 @@ func FormatTableLines(rows [][]string) []string {
 	return lines
 }
 
-func PrintTable(rows [][]string) {
-	for _, line := range FormatTableLines(rows) {
-		fmt.Println(line)
-	}
-}
-
 func Age(d time.Duration) string {
 	switch {
 	case d < time.Minute:

@@ -143,3 +143,31 @@ func UploadPath(slug, name string) (string, error) {
 	}
 	return p, nil
 }
+
+// UploadBytes is UploadPath's store-backed read-side twin: resolves
+// slug+name straight from the uploads table instead of a file on disk.
+// jobs.SaveUpload always writes both a DB row and a materialized file (its
+// path-returning contract, kept even store-backed — see jobs/store.go's
+// saveUploadToStore), so ok=false here — no store wired, or a lookup miss —
+// is always safe for the caller to treat as "fall through to UploadPath".
+func UploadBytes(slug, name string) (data []byte, mimeType string, ok bool) {
+	st := jobs.ActiveStore()
+	if st == nil {
+		return nil, "", false
+	}
+	if slug == "" || strings.Contains(slug, "/") || util.Slugify(slug) == "" {
+		return nil, "", false
+	}
+	if !uploadNamePattern.MatchString(name) {
+		return nil, "", false
+	}
+	sr, err := st.GetJobBySlug(slug)
+	if err != nil {
+		return nil, "", false
+	}
+	u, err := st.GetUpload(sr.ID, name)
+	if err != nil {
+		return nil, "", false
+	}
+	return u.Bytes, u.Mime, true
+}

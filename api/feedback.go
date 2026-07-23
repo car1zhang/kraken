@@ -49,14 +49,21 @@ func feedbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ArtifactPath itself os.Stats the resolved path and refuses a missing
-	// file or a directory, so ok==true already means the file exists.
-	p, ok := ArtifactPath(j, req.Home, req.Name)
-	if !ok {
+	// file or a directory, so ok==true already means the file exists. It also
+	// refuses any "pluto"/"archive" name containing "/" (those homes are
+	// flat-file only) even when a store-backed artifact exists at that
+	// nested path — ArtifactBytes below is the fallback for exactly that
+	// case.
+	var dir string
+	var err error
+	if p, ok := ArtifactPath(j, req.Home, req.Name); ok {
+		dir, err = jobs.SaveArtifactFeedback(req.Slug, req.Home, req.Name, p, req.Feedback)
+	} else if data, _, ok := ArtifactBytes(j, req.Home, req.Name); ok {
+		dir, err = jobs.SaveArtifactFeedbackBytes(req.Slug, req.Home, req.Name, data, req.Feedback)
+	} else {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown artifact"})
 		return
 	}
-
-	dir, err := jobs.SaveArtifactFeedback(req.Slug, req.Home, req.Name, p, req.Feedback)
 	if err != nil {
 		// empty feedback was rejected above, so what's left is server-side
 		// I/O — 500, without leaking filesystem paths to the client

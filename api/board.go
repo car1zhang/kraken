@@ -176,11 +176,38 @@ type webBoard struct {
 	Stale bool `json:"stale"`
 }
 
-// jobArtifacts collects a job's viewable artifacts from both homes: the live
-// cell's artifacts dir and the preserved <slug>.<name> copies in pluto.
-func jobArtifacts(j *jobs.Job) []webArtifact {
+// jobArtifacts collects a job's viewable artifacts. A live cell always
+// serves straight from the cell dir (Q12), unchanged regardless of storage
+// mode. Once the cell is gone: file mode keeps its original pluto-copy
+// listing; store mode (L4+E6) UNIONS three sources — the (normally empty,
+// post-teardown) cell-dir walk, the artifacts table (the block-event
+// sync's mirror, which — unlike the pluto flat-copy preservation — keeps
+// nested subdirs), and the pluto flat <slug>.<name> copies — deduped by
+// name with precedence cell > store > pluto. The pluto source can't be
+// dropped in store mode: an info job's root-level *.md docs are preserved
+// straight from the worktree root by cell.go's preserveArtifacts, never
+// through CellArtifacts()/artifacts/, so jobs/sync.go's syncCellArtifacts
+// (which only ever mirrors the artifacts/ subdir) never captures them into
+// the store's artifacts table at all — the pluto flat copy is the SOLE
+// record of that deliverable, store mode or not. Dropping it (the
+// pre-L4/E6 behavior: store mode returned cell ∪ store only) made an info
+// job's doc vanish from the board entirely the moment its cell was torn
+// down.
+func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
+	seen := map[string]bool{}
 	var out []webArtifact
+	add := func(entries []webArtifact) {
+		for _, e := range entries {
+			if seen[e.Name] {
+				continue // lower-precedence source already lost this name
+			}
+			seen[e.Name] = true
+			out = append(out, e)
+		}
+	}
+
 	root := jobs.CellArtifacts(j)
+	var cellEntries []webArtifact
 	for _, p := range jobs.ListArtifacts(j) {
 		// name is the path relative to the artifacts dir, so nested files
 		// read as "icon-variations/icon-v1.png" and clients can group by dir
@@ -188,19 +215,68 @@ func jobArtifacts(j *jobs.Job) []webArtifact {
 		if rel, err := filepath.Rel(root, p); err == nil {
 			name = rel
 		}
-		out = append(out, webArtifact{Name: name, URL: "/api/artifact/" + j.Slug + "/cell/" + name})
+		cellEntries = append(cellEntries, webArtifact{Name: name, URL: "/api/artifact/" + j.Slug + "/cell/" + name})
 	}
+	add(cellEntries)
+
+	if st := jobs.ActiveStore(); st != nil {
+		// Q12's "a live cell always serves straight from the cell dir"
+		// short-circuit is a store-mode-only rule: file mode's pre-migration
+		// behavior always appended the pluto flat-copy listing regardless of
+		// liveness, and that must stay exactly as it was — only
+		// gate on live when a store is actually wired.
+		if live {
+			return out
+		}
+		add(storeArtifactList(j.Slug, j.ID, "pluto"))
+		add(plutoFlatArtifacts(j))
+		return out
+	}
+	add(plutoFlatArtifacts(j))
+	return out
+}
+
+// plutoFlatArtifacts scans PlutoDir for j's <slug>.<name> flat copies —
+// preserveArtifacts' legacy preservation format (cell.go). Pulled out of
+// jobArtifacts so both the file-mode branch and the store-mode union
+// (L4+E6) share one implementation.
+func plutoFlatArtifacts(j *jobs.Job) []webArtifact {
 	prefix := util.Slugify(j.Slug) + "."
 	entries, err := os.ReadDir(jobs.PlutoDir())
 	if err != nil {
-		return out
+		return nil
 	}
+	var out []webArtifact
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasPrefix(name, prefix) || strings.HasSuffix(name, jobs.JobSuffix) {
 			continue
 		}
 		out = append(out, webArtifact{Name: strings.TrimPrefix(name, prefix), URL: "/api/artifact/" + j.Slug + "/pluto/" + strings.TrimPrefix(name, prefix)})
+	}
+	return out
+}
+
+// storeArtifactList lists jobID's DB-mirrored artifacts (store/artifacts.go,
+// populated by the block-event sync — jobs/sync.go) as webArtifacts under
+// the given URL "home" segment. The URL scheme is unchanged from file mode
+// on purpose (Q12 only moves where the BYTES are served from, not the wire
+// shape): ArtifactBytes/artifactHandler resolve any non-"cell" home through
+// the store first whenever one is wired, falling back to ArtifactPath's
+// filesystem lookup otherwise. home is "pluto" for an active (done) job's
+// artifacts, "archive" for an archived job's.
+func storeArtifactList(slug string, jobID int64, home string) []webArtifact {
+	st := jobs.ActiveStore()
+	if st == nil || jobID == 0 {
+		return nil
+	}
+	rows, err := st.ListArtifacts(jobID)
+	if err != nil {
+		return nil
+	}
+	out := make([]webArtifact, 0, len(rows))
+	for _, a := range rows {
+		out = append(out, webArtifact{Name: a.Path, URL: "/api/artifact/" + slug + "/" + home + "/" + a.Path})
 	}
 	return out
 }
@@ -255,6 +331,79 @@ func ArtifactPath(j *jobs.Job, home, name string) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+// ArtifactBytes is ArtifactPath's store-backed twin (Q12): resolves
+// job+name straight from the artifacts table instead of a filesystem home,
+// for any non-"cell" home once a store is wired — a done/archived job's
+// "pluto"/"archive" homes no longer need a file on disk to serve from. ok
+// is false whenever no store is wired, j has no store row, or the path
+// isn't found in the table — callers fall back to ArtifactPath, which is
+// always safe (preserveArtifacts/movePrefixed still write the file copies
+// too, per jobs/cell.go and jobs/archive.go's own store-mode branches).
+//
+// L11: home is now a required parameter, refused outright when "cell" —
+// Q12's rule is that a live cell's artifacts are NEVER DB-backed, only
+// ever served straight off disk. Without this, a caller that fell back to
+// ArtifactBytes after an ArtifactPath("cell", ...) miss (feedback.go does
+// exactly this: ArtifactPath first, ArtifactBytes as the fallback) could
+// have the DB serve bytes for a same-named artifact that actually lives
+// under a DIFFERENT home (e.g. a "pluto" flat copy sharing a filename with
+// a would-be cell file) — silently mislabeling which home the returned
+// bytes actually came from. Also refuses any name ending in jobs.JobSuffix
+// — mirroring ArtifactPath's own "job files are never artifacts" refusal,
+// which ArtifactBytes never had (a name reconstructing to a job file's own
+// suffix must never be servable as an artifact, DB-backed or not).
+func ArtifactBytes(j *jobs.Job, home, name string) (data []byte, mimeType string, ok bool) {
+	if home == "cell" {
+		return nil, "", false
+	}
+	st := jobs.ActiveStore()
+	if st == nil || j.ID == 0 {
+		return nil, "", false
+	}
+	name = strings.TrimPrefix(name, "/")
+	if name == "" {
+		return nil, "", false
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
+			return nil, "", false // no traversal, no empty/hidden segments — mirrors ArtifactPath
+		}
+	}
+	if strings.HasSuffix(name, jobs.JobSuffix) {
+		return nil, "", false
+	}
+	a, err := st.GetArtifact(j.ID, name)
+	if err != nil {
+		return nil, "", false
+	}
+	return a.Bytes, artifactMimeType(name), true
+}
+
+// artifactMimeType mirrors web/serve.go's artifactContentType (same
+// extension → type mapping), duplicated here since api sits below web in
+// the dependency chain and DB-served bytes never pass through
+// http.ServeFile's own path-based content-type sniffing.
+func artifactMimeType(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "text/plain; charset=utf-8"
+	}
 }
 
 // cellZeusTranscript resolves a live job's zeus peer and (best-effort) its
@@ -385,7 +534,7 @@ func buildWebBoard() webBoard {
 		wj := webJob{
 			Slug: j.Slug, Type: j.Type, Repo: j.Repo,
 			State: jobs.DisplayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
-			Prereqs: prereqs, Artifacts: jobArtifacts(j),
+			Prereqs: prereqs, Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
 			ModTime: j.ModTime.Unix(),
 			PRs:     j.PRs,
 		}
@@ -465,8 +614,12 @@ func buildWebBoard() webBoard {
 }
 
 // archivedWebArtifacts lists an archived job's artifact copies for the
-// wire, served from the archive home.
+// wire: store mode lists from the DB (storeArtifactList), file mode from
+// the archive home on disk — same split as jobArtifacts' non-live branch.
 func archivedWebArtifacts(a *jobs.Job) []webArtifact {
+	if jobs.ActiveStore() != nil {
+		return storeArtifactList(a.ArchivedName, a.ID, "archive")
+	}
 	var out []webArtifact
 	for _, p := range jobs.ArchivedArtifactPaths(a) {
 		name := strings.TrimPrefix(filepath.Base(p), a.ArchivedName+".")

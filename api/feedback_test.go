@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"kraken/jobs"
+	"kraken/store"
 )
 
 // writeFeedbackFixture writes a minimal job file plus a pluto artifact for
@@ -114,6 +116,94 @@ func TestFeedbackHandlerEmptyFeedback(t *testing.T) {
 	}))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestFeedbackHandlerStoreMode confirms deliverable 7: feedback POST
+// already flows to the store via jobs.SaveArtifactFeedback (jobs/feedback.go,
+// out of this slice's ownership but verified here end-to-end through the
+// handler this slice does own). Artifact resolution stays file-based either
+// way (feedbackHandler calls api.ArtifactPath, unchanged) — preserveArtifacts
+// still writes real pluto flat copies store-backed (jobs/cell.go), mimicked
+// here directly since this test doesn't run a real cell.
+func TestFeedbackHandlerStoreMode(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	mustCreateStoreJob(t, st, store.Job{Slug: "fb-store", Type: "build", Repo: "monolith"})
+
+	if err := os.MkdirAll(jobs.PlutoDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "fb-store.report.html"), []byte("<html>x</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	feedbackHandler(rec, feedbackPostReq(t, feedbackReq{
+		Slug: "fb-store", Home: "pluto", Name: "report.html", Feedback: "great work",
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := resp["dir"].(string)
+	if !strings.HasPrefix(dir, "db:") {
+		t.Fatalf("dir = %q, want a db: locator in store mode", dir)
+	}
+
+	entries, err := st.ListFeedback("fb-store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Note != "great work" || string(entries[0].Snapshot) != "<html>x</html>" {
+		t.Fatalf("store feedback rows: %+v", entries)
+	}
+}
+
+// TestFeedbackHandlerStoreModeNestedArtifact covers a nested
+// store-only artifact (e.g. synced from a cell's artifacts/icon-variations/
+// subdir, per storeArtifactList's nested-path support) has no flat pluto
+// copy on disk and ArtifactPath refuses any "/" in a pluto-home name, so
+// feedbackHandler must fall back to ArtifactBytes + SaveArtifactFeedbackBytes
+// rather than 404ing.
+func TestFeedbackHandlerStoreModeNestedArtifact(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "fb-nested", Type: "build", Repo: "monolith"})
+	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{
+		{Path: "nested/diagram.svg", Bytes: []byte("<svg>nested</svg>"), Mtime: 1},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	feedbackHandler(rec, feedbackPostReq(t, feedbackReq{
+		Slug: "fb-nested", Home: "pluto", Name: "nested/diagram.svg", Feedback: "arrows overlap",
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := resp["dir"].(string)
+	if !strings.HasPrefix(dir, "db:") {
+		t.Fatalf("dir = %q, want a db: locator", dir)
+	}
+
+	entries, err := st.ListFeedback("fb-nested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Note != "arrows overlap" || string(entries[0].Snapshot) != "<svg>nested</svg>" {
+		t.Fatalf("store feedback rows: %+v", entries)
+	}
+	if entries[0].Artifact != "pluto/nested/diagram.svg" {
+		t.Fatalf("artifact locator: %q", entries[0].Artifact)
 	}
 }
 

@@ -2257,7 +2257,20 @@ async function refreshLog() {
     const firstLoad = logChain.length === 0;
     // tail-follow only when the user is already looking at the newest lines
     const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40;
-    const changed = !logData[d.file] || logData[d.file].entries.length !== d.entries.length;
+    // store mode's virtual "events" file name never rotates (unlike a
+    // file-mode log file, which gets a fresh name — and therefore an
+    // immediate !logData[d.file] hit — on every rotation): once the store
+    // has accrued more than one page's worth of events, entries.length pins
+    // at the page size forever even as the window keeps sliding (oldest
+    // entries drop off the top, newest ones enter the tail), so a
+    // length-only comparison reads as "unchanged" and the view freezes.
+    // Comparing the newest entry too catches that slide.
+    const prevEntries = logData[d.file]?.entries;
+    const changed =
+      !prevEntries ||
+      prevEntries.length !== d.entries.length ||
+      (d.entries.length > 0 &&
+        JSON.stringify(prevEntries[prevEntries.length - 1]) !== JSON.stringify(d.entries[d.entries.length - 1]));
     logData[d.file] = { entries: d.entries, prev: d.prev };
     if (!logChain.includes(d.file)) logChain.push(d.file);
     if (changed || firstLoad) renderLog(firstLoad || atBottom);

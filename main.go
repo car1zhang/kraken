@@ -40,26 +40,16 @@ func main() {
 		cmdNewShell(rest)
 	case "c":
 		cmdNewClaude(rest)
-	case "j":
-		cmdJobs(rest)
-	case "start":
-		cmdStart(rest)
-	case "done":
-		cmdDone(rest)
-	case "archive":
-		cmdArchive(rest)
-	case "unarchive":
-		cmdUnarchive(rest)
-	case "reactivate":
-		cmdReactivate(rest)
 	case "daemon":
 		cmdDaemon(rest)
-	case "migrate":
-		cmdMigrate(rest)
 	case "logevent":
 		cmdLogEvent(rest)
 	case "web":
 		cmdWeb(rest)
+	case "serve":
+		cmdServe(rest)
+	case "import":
+		cmdImport(rest)
 	case "pr-hook":
 		cmdPrHook(rest)
 	case "_complete":
@@ -92,36 +82,12 @@ Commands:
                       running cmd (drops back to the shell when cmd exits)
   k c [-c dir] <name> [prompt...]
                       new named claude in a new window of the current session
-  k j [--json]        job board: every *.job.md in ~/Documents/pluto with
-                      state, repo, prereqs, live cell
-  k start <slug>      start a job manually: git worktree on carl/<slug> +
-                      tmux session cell-<slug> + zeus (requires ready: true
-                      and prereqs done)
-  k done <slug> [outcome...]
-                      manually complete a started job (the acceptance path for
-                      info jobs): preserves artifacts into pluto,
-                      tears the cell down, records the outcome
-  k archive <slug>    move a job (file + preserved artifacts) into
-                      ~/Documents/pluto/archive, freeing its slug; archive
-                      name conflicts get numbered (foo-2, foo-3, ...). Only
-                      jobs with no cell in flight — kill a live job first
-                      (kill returns it to draft)
-  k unarchive <archived-name>
-                      restore an archived job (k j lists archived last) under
-                      its original slug, state preserved; refused while the
-                      slug is taken by an active job
-  k reactivate <slug> [--session <uuid>] [message...]
-                      resume a done job's original zeus session for
-                      adjustments: same worktree path, branch recycled off
-                      the base (fresh -rN only if unmerged commits remain),
-                      state back to working
   k daemon            run the scheduler loop in the foreground (launchd runs
                       this at login via make install): queues ready jobs
                       (≤5 cells), derives working/blocked from cell activity,
                       tracks each job's PRs (merge = notification + board
                       chip, never teardown), notifies on blocked cells,
                       writes ~/.kraken/daemon.json
-  k migrate           kill + requeue cells started under the old crew format
   k web [-p port] [--tailnet] [-addr host:port]
                       web UI + sessions API (default 127.0.0.1:7777): jobs as
                       a kanban board, artifacts rendered in the browser,
@@ -130,6 +96,20 @@ Commands:
                       live sessions. --tailnet binds the Mac's tailscale IP
                       (100.64.0.0/10) instead of localhost; -addr sets an
                       explicit bind and overrides both -p and --tailnet
+  k serve [-p port] [--tailnet] [-addr host:port]
+                      merged process (sqlite migration): opens ~/.kraken/kraken.db,
+                      runs the scheduler tick loop + nightly backup rotation as
+                      background goroutines, and serves k web's same UI/API in
+                      the foreground, all store-backed. Replaces k daemon + k web
+                      for real deployment; same flags as k web
+  k import [--dry-run] [--force] [--reimport]
+                      one-shot sqlite-migration cutover: sweeps every file
+                      store (job files, board order, uploads, artifacts,
+                      event logs, doc feedback) into ~/.kraken/kraken.db.
+                      Refuses while a daemon/serve is running, or against an
+                      already-populated/already-imported database without
+                      --force/--reimport; --dry-run reports counts without
+                      writing anything. Human-run once per machine at cutover.
 
 <sel>: index from 'k ls', '.' for the current pane, an exact pane id (%3), or
 substring match on name/project/agent/tmux-session; also a session-uuid

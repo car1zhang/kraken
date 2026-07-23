@@ -175,6 +175,100 @@ func TestMergeHookSettings(t *testing.T) {
 	}
 }
 
+// --- prHookCommand / E7 hook addr propagation ---
+
+// TestPrHookCommandDefaultsMatchPreE7Shape confirms that with neither
+// SetHookServeAddr nor KRAKEN_DB_PATH set (file-mode `k daemon`/`k web`,
+// or a `kraken serve` process that never called SetHookServeAddr), the
+// hook command is byte-identical to before E7 — no flags at all.
+func TestPrHookCommandDefaultsMatchPreE7Shape(t *testing.T) {
+	SetHookServeAddr("")
+	t.Cleanup(func() { SetHookServeAddr("") })
+	t.Setenv("KRAKEN_DB_PATH", "")
+
+	if got, want := prHookCommand("foo", "kraken"), "kraken pr-hook foo"; got != want {
+		t.Fatalf("prHookCommand = %q, want %q", got, want)
+	}
+}
+
+// TestPrHookCommandCarriesNonDefaultServeAddr covers E7: a serve addr that
+// differs from defaultServeAddr must be baked into the hook command as
+// --serve-addr, since a pr-hook invocation is a fresh OS process that
+// inherits none of kraken serve's own flags.
+func TestPrHookCommandCarriesNonDefaultServeAddr(t *testing.T) {
+	SetHookServeAddr("127.0.0.1:9999")
+	t.Cleanup(func() { SetHookServeAddr("") })
+	t.Setenv("KRAKEN_DB_PATH", "")
+
+	got := prHookCommand("foo", "kraken")
+	want := "kraken pr-hook --serve-addr 127.0.0.1:9999 foo"
+	if got != want {
+		t.Fatalf("prHookCommand = %q, want %q", got, want)
+	}
+}
+
+// TestPrHookCommandOmitsDefaultServeAddr: an addr equal to defaultServeAddr
+// must NOT be spelled out — matches the pre-E7 command shape exactly when
+// serve happens to be bound at its own default.
+func TestPrHookCommandOmitsDefaultServeAddr(t *testing.T) {
+	SetHookServeAddr(defaultServeAddr)
+	t.Cleanup(func() { SetHookServeAddr("") })
+	t.Setenv("KRAKEN_DB_PATH", "")
+
+	if got, want := prHookCommand("foo", "kraken"), "kraken pr-hook foo"; got != want {
+		t.Fatalf("prHookCommand = %q, want %q", got, want)
+	}
+}
+
+// TestPrHookCommandCarriesDBPathOverride covers E7's second propagated
+// value: KRAKEN_DB_PATH set in kraken serve's own process environment
+// (a non-default DB location) must ride along too.
+func TestPrHookCommandCarriesDBPathOverride(t *testing.T) {
+	SetHookServeAddr("")
+	t.Cleanup(func() { SetHookServeAddr("") })
+	t.Setenv("KRAKEN_DB_PATH", "/custom/kraken.db")
+
+	got := prHookCommand("foo", "kraken")
+	want := "kraken pr-hook --db-path /custom/kraken.db foo"
+	if got != want {
+		t.Fatalf("prHookCommand = %q, want %q", got, want)
+	}
+}
+
+// TestMergeHookSettingsIdempotentWithNonDefaultAddr covers the actual bug
+// E7 had to guard against: prHookCommand is shared by krakenHookEntry AND
+// mergeHookSettings' hasHookCommand dedup check specifically so a
+// non-default addr/db-path never causes the two to disagree and
+// re-append a "new" hook entry on every single reinstall.
+func TestMergeHookSettingsIdempotentWithNonDefaultAddr(t *testing.T) {
+	SetHookServeAddr("127.0.0.1:9999")
+	t.Cleanup(func() { SetHookServeAddr("") })
+	t.Setenv("KRAKEN_DB_PATH", "/custom/kraken.db")
+
+	first, err := mergeHookSettings(nil, "foo", "kraken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := mergeHookSettings(first, "foo", "kraken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstParsed, secondParsed map[string]any
+	if err := json.Unmarshal(first, &firstParsed); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(second, &secondParsed); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(firstParsed, secondParsed) {
+		t.Fatalf("second merge duplicated the entry: first=%s second=%s", first, second)
+	}
+	groups := secondParsed["hooks"].(map[string]any)["PostToolUse"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("want exactly 1 PostToolUse group after re-merge, got %d: %v", len(groups), groups)
+	}
+}
+
 // --- reactivateMode ---
 
 func TestReactivateMode(t *testing.T) {
@@ -217,7 +311,7 @@ func TestRetryableHealth(t *testing.T) {
 	}{
 		{"zeus hit an API error: overloaded_error", true},
 		{"zeus needs attention: credit balance is too low — fix and retry by hand", false},
-		{"zeus process is gone — restart the cell (kill session + k start after cleanup)", false},
+		{"zeus process is gone — restart the cell (kill the session, then start it again from the board after cleanup)", false},
 		{"", false},
 	}
 	for _, c := range cases {
@@ -282,7 +376,7 @@ func TestCellHealth(t *testing.T) {
 		{
 			name: "zeus process gone",
 			zeus: nil,
-			want: "zeus process is gone — restart the cell (kill session + k start after cleanup)",
+			want: "zeus process is gone — restart the cell (kill the session, then start it again from the board after cleanup)",
 		},
 		{
 			name: "startup prompt needs a human",

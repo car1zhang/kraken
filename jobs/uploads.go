@@ -65,15 +65,20 @@ func nextUploadName(dir, ext string) (string, error) {
 	return fmt.Sprintf("img-%03d.%s", max+1, ext), nil
 }
 
-// SaveUpload writes data as the next sequential image in slug's uploads
-// dir, atomically (temp file + rename, via util.AtomicWrite — a []byte
-// round-trips through string exactly, so no encoding hazard for binary
-// image data) so a reader never observes a partial write. Returns the
-// assigned file name and its absolute path.
+// SaveUpload writes data as the next sequential image for slug, returning
+// the assigned name and its absolute path — store-backed (bytes in the
+// uploads table, keyed by the job's store id) when a store is wired, else
+// atomically to slug's uploads dir. The path-returning contract is kept
+// even store-backed: a materialized copy is written alongside the DB row,
+// since callers (the "[image: <path>]" line Claude Code auto-ingests, per
+// crew.go) need a real file to hand the agent, not a blob.
 func SaveUpload(slug, ext string, data []byte) (name, path string, err error) {
 	ext = strings.TrimPrefix(ext, ".")
 	if ext == "" || strings.ContainsAny(ext, "/\\.") {
 		return "", "", fmt.Errorf("bad upload extension %q", ext)
+	}
+	if st := ActiveStore(); st != nil {
+		return saveUploadToStore(st, slug, ext, data)
 	}
 	dir := UploadsDir(slug)
 	if dir == "" {
@@ -98,7 +103,17 @@ func SaveUpload(slug, ext string, data []byte) (name, path string, err error) {
 // RemoveUploads deletes a job's entire uploads dir; a missing dir is not an
 // error — a job that never received an upload has nothing to clean up. An
 // empty-slugifying slug is a no-op rather than a RemoveAll on the root.
+// Store-backed, this also deletes the DB rows first: SaveUpload
+// writes both a blob row AND a materialized file, so cleanup must remove
+// both — the row-only delete left the on-disk copies behind forever.
 func RemoveUploads(slug string) error {
+	if st := ActiveStore(); st != nil {
+		if sr, err := st.GetJobBySlug(slug); err == nil {
+			if err := st.DeleteUploadsForJob(sr.ID); err != nil {
+				return err
+			}
+		} // no active job under that slug: nothing in the DB to remove, but the materialized dir below may still exist
+	}
 	dir := UploadsDir(slug)
 	if dir == "" {
 		return nil

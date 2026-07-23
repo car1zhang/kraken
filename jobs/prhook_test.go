@@ -1,9 +1,15 @@
 package jobs
 
 import (
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +189,255 @@ func TestAppendJobPR(t *testing.T) {
 	}
 	if reparsed2 := ParseJob("yelp-dedupe.job.md", data2); len(reparsed2.PRs) != 2 {
 		t.Fatalf("prs after second append: %+v", reparsed2.PRs)
+	}
+}
+
+// withStdin redirects os.Stdin to a pipe carrying data for the duration of
+// fn — PrHook reads its payload from stdin, same as a real Claude Code
+// PostToolUse hook invocation.
+func withStdin(t *testing.T, data string, fn func()) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(data); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	old := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = old }()
+	fn()
+}
+
+func TestPostPRAttachSuccessAndFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", strings.TrimPrefix(srv.URL, "http://"))
+	if !postPRAttach("x", "https://github.com/carl/kraken/pull/1") {
+		t.Fatal("want true against a reachable, 200-returning server")
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing listens here anymore: connections refuse immediately
+	t.Setenv("KRAKEN_SERVE_ADDR", addr)
+	if postPRAttach("x", "https://github.com/carl/kraken/pull/1") {
+		t.Fatal("want false against an unreachable address")
+	}
+}
+
+func TestAttachJobPRWrapper(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "yelp-dedupe.job.md")
+	if err := os.WriteFile(path, []byte(sampleJob), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
+	j.File = path
+
+	attached, err := AttachJobPR(j, "https://github.com/carl/kraken/pull/3")
+	if err != nil || !attached {
+		t.Fatalf("AttachJobPR: attached=%v err=%v, want true, nil", attached, err)
+	}
+	attached2, err2 := AttachJobPR(j, "https://github.com/carl/kraken/pull/3")
+	if err2 != nil || attached2 {
+		t.Fatalf("AttachJobPR dedup: attached=%v err=%v, want false, nil", attached2, err2)
+	}
+}
+
+// TestPrHookAttachesViaServerWhenAvailable covers the new POST-first path:
+// a reachable /api/pr-attach must be used instead of writing the job file
+// directly.
+func TestPrHookAttachesViaServerWhenAvailable(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	path := filepath.Join(PlutoDir(), "yelp-dedupe.job.md")
+	if err := os.WriteFile(path, []byte("---\njob: yelp-dedupe\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\nready: true\nprereqs: []\nsolo: false\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotBody []byte
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if r.URL.Path != "/api/pr-attach" || r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", strings.TrimPrefix(srv.URL, "http://"))
+
+	payload := `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/9\n"}}`
+	withStdin(t, payload, func() { PrHook("yelp-dedupe") })
+
+	if hits != 1 {
+		t.Fatalf("want exactly 1 POST to /api/pr-attach, got %d", hits)
+	}
+	var req map[string]string
+	if err := json.Unmarshal(gotBody, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req["slug"] != "yelp-dedupe" || req["url"] != "https://github.com/carl/kraken/pull/9" {
+		t.Fatalf("posted body = %+v", req)
+	}
+
+	// the server "attached" it, not this process directly — the job file on
+	// disk must be untouched.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reparsed := ParseJob("yelp-dedupe.job.md", data); len(reparsed.PRs) != 0 {
+		t.Fatalf("PrHook wrote the file directly despite a reachable server: %+v", reparsed.PRs)
+	}
+}
+
+// TestPrHookFailsOpenWhenServerUnreachable covers the fail-open contract:
+// PrHook must return normally (never os.Exit(1)) and fall back to the
+// direct file write when kraken serve can't be reached, in a file-mode
+// deployment. KRAKEN_DB_PATH is pointed at a path that doesn't exist so
+// storeModeDeployment() reliably reads false regardless of what's sitting in
+// the real developer machine's ~/.kraken/kraken.db.
+func TestPrHookFailsOpenWhenServerUnreachable(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	t.Setenv("KRAKEN_DB_PATH", filepath.Join(t.TempDir(), "kraken.db"))
+	path := filepath.Join(PlutoDir(), "yelp-dedupe.job.md")
+	if err := os.WriteFile(path, []byte("---\njob: yelp-dedupe\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\nready: true\nprereqs: []\nsolo: false\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", addr)
+
+	payload := `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/9\n"}}`
+	withStdin(t, payload, func() { PrHook("yelp-dedupe") })
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsed := ParseJob("yelp-dedupe.job.md", data)
+	if len(reparsed.PRs) != 1 || reparsed.PRs[0].URL != "https://github.com/carl/kraken/pull/9" {
+		t.Fatalf("want the direct-fallback write to have attached the PR, got %+v", reparsed.PRs)
+	}
+}
+
+// withStderrCapture redirects os.Stderr to a pipe for the duration of fn and
+// returns everything written to it — PrHook reports every outcome via a
+// single stderr line, so tests can assert on it directly.
+func withStderrCapture(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = old
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// TestPrHookStoreModeSkipsDirectWriteWhenServerUnreachable covers:
+// a store-mode deployment (kraken.db exists on disk) whose serve process is
+// unreachable must NOT fall back to writing the job file directly — that
+// file isn't authoritative once serve owns the DB — and must report the loss
+// loudly instead of silently claiming success.
+func TestPrHookStoreModeSkipsDirectWriteWhenServerUnreachable(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	path := filepath.Join(PlutoDir(), "yelp-dedupe.job.md")
+	if err := os.WriteFile(path, []byte("---\njob: yelp-dedupe\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\nready: true\nprereqs: []\nsolo: false\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "kraken.db")
+	if err := os.WriteFile(dbPath, []byte("not a real db, existence is all that matters here"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KRAKEN_DB_PATH", dbPath)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", addr)
+
+	payload := `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/9\n"}}`
+	var stderr string
+	withStdin(t, payload, func() {
+		stderr = withStderrCapture(t, func() { PrHook("yelp-dedupe") })
+	})
+
+	if !strings.Contains(stderr, "PR NOT RECORDED") {
+		t.Fatalf("stderr = %q, want a PR NOT RECORDED line", stderr)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reparsed := ParseJob("yelp-dedupe.job.md", data); len(reparsed.PRs) != 0 {
+		t.Fatalf("job file was written despite a store-mode deployment: %+v", reparsed.PRs)
+	}
+}
+
+// TestPrHookAttachesForStoreOnlyJob covers L1: a board-created job that
+// exists only as a store row (no <slug>.job.md on disk at all) must still
+// have its PR POSTed to a reachable kraken serve — LoadJobBySlug returning
+// nil here must not block the attach attempt, since the POST only needs
+// slug+url and the server does its own job lookup.
+func TestPrHookAttachesForStoreOnlyJob(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir()) // empty: no job file for this slug anywhere
+
+	var gotBody []byte
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if r.URL.Path != "/api/pr-attach" || r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", strings.TrimPrefix(srv.URL, "http://"))
+
+	payload := `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/11\n"}}`
+	stderr := withStderrCapture(t, func() {
+		withStdin(t, payload, func() { PrHook("store-only-job") })
+	})
+
+	if hits != 1 {
+		t.Fatalf("want exactly 1 POST to /api/pr-attach despite no local job file, got %d", hits)
+	}
+	var req map[string]string
+	if err := json.Unmarshal(gotBody, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req["slug"] != "store-only-job" || req["url"] != "https://github.com/carl/kraken/pull/11" {
+		t.Fatalf("posted body = %+v", req)
+	}
+	if !strings.Contains(stderr, "attached") {
+		t.Fatalf("stderr = %q, want an attached line", stderr)
 	}
 }
 
