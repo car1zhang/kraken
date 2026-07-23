@@ -34,11 +34,6 @@ type webReq struct {
 //     worktree exactly like kill does — it is NOT in the brief's example
 //     list of gated actions, but DoneJob's own force=true teardownCell call
 //     makes it just as real a mutation as kill.
-//   - queue (webQueue) only flips a DB field (ready: true) and never
-//     touches tmux itself, but under mirror there is no scheduler that will
-//     ever act on it (jobs.ServeOpts.Mirror skips StartCell/queueing
-//     entirely) — queueing a job in mirror mode would silently do nothing,
-//     so it's gated for user-facing consistency rather than safety.
 //   - archive (webArchive → ArchiveJob), unarchive (webUnarchive →
 //     UnarchiveJob), and delete (webDelete → DeleteArchivedJob) are gated
 //     too even though they're DB-local in store mode: all three call
@@ -49,11 +44,12 @@ type webReq struct {
 //     buttons would rename or unlink real pluto files even though the job
 //     row itself only ever touches the sandbox DB.
 //
-// webDequeue stays UNGATED: it only flips a DB field back (ready: false) and
-// never touches any file outside the sandbox DB — the one genuinely
-// DB-local mutation left in this group.
+// webQueue and webDequeue stay UNGATED: each only flips the ready DB field
+// and never touches any file outside the sandbox DB. Under mirror the tick
+// never starts a queued job (jobs.ServeOpts.Mirror skips StartCell), so a
+// mirror-queued job simply sits in the queued column — which is exactly
+// what draft→queued parity testing needs to show.
 var mirrorGatedActions = map[string]bool{
-	"queue":      true,
 	"start":      true,
 	"kill":       true,
 	"stop":       true,

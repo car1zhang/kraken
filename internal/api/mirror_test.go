@@ -16,7 +16,7 @@ import (
 // mirrorGatedRoutes mirrors mirrorGatedActions' action-name → route mapping
 // (register.go), for a single table-driven sweep.
 var mirrorGatedRoutes = []string{
-	"/api/queue", "/api/start", "/api/kill", "/api/stop", "/api/steer",
+	"/api/start", "/api/kill", "/api/stop", "/api/steer",
 	"/api/question", "/api/retry", "/api/done", "/api/reactivate",
 	"/api/archive", "/api/unarchive", "/api/delete",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
@@ -27,7 +27,7 @@ var mirrorGatedRoutes = []string{
 // mirrorUngatedRoutes are webAction-wrapped routes that must stay fully live
 // under mirror mode — DB-local moves that never reach a real tmux pane or a
 // real pluto file.
-var mirrorUngatedRoutes = []string{"/api/dequeue"}
+var mirrorUngatedRoutes = []string{"/api/queue", "/api/dequeue"}
 
 func postJSON(t *testing.T, mux http.Handler, path string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
