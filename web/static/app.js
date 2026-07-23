@@ -181,23 +181,35 @@ function chipsHTML(artifacts, slug, label) {
   return chips + toggle;
 }
 
-// zeusPillHTML renders the zeus status pill for crewHTML — "running" reads
-// as actively working (green), "question" flags a pending AskUserQuestion
-// (amber), anything else (including "waiting") falls back to the muted
-// waiting label rather than echoing an arbitrary status string verbatim.
+// zeusPillHTML renders the zeus status pill for crewHTML: one god icon
+// (cloud) whose color is the sole status indicator — "running" green,
+// "polling" cyan, "question" flags a pending AskUserQuestion (amber),
+// anything else (including "waiting") falls back to the muted default
+// rather than echoing an arbitrary status string verbatim. The name
+// survives only in the title attribute, for hover/assistive tech.
+const ZEUS_STATUS = {
+  running: { cls: "run", title: "zeus — running" },
+  polling: { cls: "polling", title: "zeus — polling" },
+  question: { cls: "question", title: "zeus — question" },
+};
 function zeusPillHTML(status) {
-  if (status === "running") return `<span class="crew-pill run">zeus ●</span>`;
-  if (status === "polling") return `<span class="crew-pill polling">zeus ↻ polling</span>`;
-  if (status === "question") return `<span class="crew-pill question">zeus ⚑ question</span>`;
-  return `<span class="crew-pill">zeus ○ waiting</span>`;
+  const s = ZEUS_STATUS[status] || { cls: "", title: "zeus — waiting" };
+  return `<span class="crew-pill${s.cls ? " " + s.cls : ""}" title="${esc(s.title)}">↯</span>`;
 }
 
 const CREW_ROLES = ["hephaestus", "athena", "hermes", "other"];
 
+// CREW_ICONS maps a crew role to its god's text-presentation glyph (VS15
+// forces monochrome rendering, matching the rest of the UI's icon glyphs —
+// ● ⚑ ↻ ⧉ ↺; zeus' ↯ has no emoji variant, so no VS15 needed there).
+// "other" has no god and keeps its plain text label.
+const CREW_ICONS = { hephaestus: "⚒︎", athena: "⚖︎", hermes: "✉︎" };
+
 // crewHTML renders the crew line: a zeus status pill plus one working/total
-// chip per subagent role present in the roster. Renders nothing for an old
-// server payload (no zeus_status, no roster) so the card looks exactly as it
-// did before these fields existed.
+// chip per subagent role present in the roster, each chip led by its god's
+// icon in place of the role name (icon replaces the name; the name moves to
+// title). Renders nothing for an old server payload (no zeus_status, no
+// roster) so the card looks exactly as it did before these fields existed.
 function crewHTML(j) {
   const roster = j.roster || [];
   if (!j.zeus_status && !roster.length) return "";
@@ -211,7 +223,12 @@ function crewHTML(j) {
   const chips = CREW_ROLES.filter((role) => counts[role])
     .map((role) => {
       const c = counts[role];
-      return `<span class="crew-chip${c.working > 0 ? " active" : ""}">${esc(role)} ${c.working}/${c.total}</span>`;
+      const icon = CREW_ICONS[role];
+      const label = icon
+        ? `<span class="crew-ico">${icon}</span> ${c.working}/${c.total}`
+        : `${esc(role)} ${c.working}/${c.total}`;
+      const title = `${role} — ${c.working} of ${c.total} working`;
+      return `<span class="crew-chip${c.working > 0 ? " active" : ""}" title="${esc(title)}">${label}</span>`;
     })
     .join("");
   if (!zeusPill && !chips) return "";
@@ -1015,8 +1032,9 @@ function pastedFiles(ev) {
 // textarea (draft sync, autosave) see the change like any other keystroke.
 const CMD_CHIPS = ["/info", "/aim", "/do", "/pr"];
 
-// ---- command highlight: mirrored backdrop rendering /info /aim /do /pr in
-// purple-with-glow behind the (now text-transparent) composer textareas — a
+// ---- command highlight: mirrored backdrop rendering /info /aim /do /pr,
+// each in its own skill color with glow (info blue, aim red, do yellow, pr
+// green), behind the (now text-transparent) composer textareas — a
 // <textarea> can't style substrings of its own value, so the real glyphs
 // live in a sibling div instead (style.css's .cmd-hl-wrap/.cmd-hl-backdrop,
 // unioned with #steer-text/#editor-text's own rule for font/padding/
@@ -1027,13 +1045,22 @@ const CMD_CHIPS = ["/info", "/aim", "/do", "/pr"];
 // on a leading (^|\s) group in addition to the trailing \b: without it a
 // mid-word slash-run like "[image: /Users/x/pr-notes.png]" or a path such
 // as "web/static/do" lights up too, since \b alone only guards the *end* of
-// the match.
+// the match. Accepted gap: the (^|\s) anchor guards the *start* of a run of
+// non-whitespace, not "is actually a command" — a bracketed path whose
+// first segment happens to be a command still lights up (e.g.
+// "[image: /do/x.png]", since "/do" sits right after a space and "/"
+// satisfies \b same as a space would). Harmless in practice: kraken's own
+// upload paths are ~/.kraken/uploads/..., never /info, /aim, /do, or /pr.
 const CMD_HL_RE = new RegExp("(^|\\s)(/(?:" + CMD_CHIPS.map((c) => c.slice(1)).join("|") + "))\\b", "g");
 
 function cmdHighlightHTML(text) {
   // group 1 (the leading boundary char, or "" at start-of-text) is passed
-  // through untouched; only group 2 (the command itself) gets wrapped.
-  const highlighted = esc(text).replace(CMD_HL_RE, (_m, lead, cmd) => `${lead}<span class="cmd-hl">${cmd}</span>`);
+  // through untouched; only group 2 (the command itself) gets wrapped. The
+  // span always carries the generic .cmd-hl class (style.css's fallback
+  // color/glow) plus a per-command .cmd-hl-<name> class carrying the actual
+  // skill color — derived from cmd itself, not a hand-duplicated list, so it
+  // can only ever name one of CMD_CHIPS.
+  const highlighted = esc(text).replace(CMD_HL_RE, (_m, lead, cmd) => `${lead}<span class="cmd-hl cmd-hl-${cmd.slice(1)}">${cmd}</span>`);
   // a <textarea> reserves a trailing blank row that a pre-wrap div won't
   // unless told to — an unconditional sentinel newline reproduces it so
   // scrollTop syncing never runs the mirror out of vertical room before the
@@ -1111,15 +1138,48 @@ function attachCmdHighlight(textareaId) {
   });
 }
 
+// CMD_ACTIVE_RE: one boundary-anchored regex per command, same (^|\s)…\b
+// semantics as CMD_HL_RE above but scoped to a single command — lets a chip
+// ask "is my command present in the textarea" without matching a different
+// command's substring or a mid-word/path occurrence (mirrors iOS'
+// CmdChipsRow.isPresent). Built from CMD_CHIPS, not hand-duplicated.
+const CMD_ACTIVE_RE = Object.fromEntries(
+  CMD_CHIPS.map((cmd) => [cmd, new RegExp("(^|\\s)" + cmd + "\\b")]),
+);
+
+// cmdChipsContainers: textareaId -> chips containerId, registered by
+// attachCmdChips — lets refreshCmdChips (called from the same programmatic
+// ".value =" call sites as refreshCmdHighlight) find the right chip row
+// without every caller having to know both ids.
+const cmdChipsContainers = {};
+
+// refreshCmdChips re-evaluates one composer's chip row against its
+// textarea's *current* value, toggling "active" per chip. Call beside
+// refreshCmdHighlight everywhere a textarea's value changes without a real
+// keystroke (draft restore, form load, inserted text) — the live "input"
+// listener wired below covers real typing and chip-click insertion.
+function refreshCmdChips(textareaId) {
+  const containerId = cmdChipsContainers[textareaId];
+  const containerEl = containerId && document.getElementById(containerId);
+  const textarea = document.getElementById(textareaId);
+  if (!containerEl || !textarea) return;
+  const value = textarea.value;
+  for (const cmd of CMD_CHIPS) {
+    const btn = containerEl.querySelector(`.cmd-chip-${cmd.slice(1)}`);
+    if (btn) btn.classList.toggle("active", CMD_ACTIVE_RE[cmd].test(value));
+  }
+}
+
 function attachCmdChips(containerId, textareaId) {
   const containerEl = document.getElementById(containerId);
   const textarea = document.getElementById(textareaId);
   if (!textarea || !containerEl) return;
+  cmdChipsContainers[textareaId] = containerId;
   containerEl.innerHTML = "";
   for (const cmd of CMD_CHIPS) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "cmd-chip";
+    btn.className = `cmd-chip cmd-chip-${cmd.slice(1)}`;
     btn.textContent = cmd;
     // never let the button itself take focus — on mobile that dismisses and
     // then reopens the keyboard as focus bounces button -> textarea; the
@@ -1133,6 +1193,8 @@ function attachCmdChips(containerId, textareaId) {
     });
     containerEl.appendChild(btn);
   }
+  textarea.addEventListener("input", () => refreshCmdChips(textareaId));
+  refreshCmdChips(textareaId); // first paint
 }
 
 // ---- steer: mid-run instructions ----
@@ -1314,6 +1376,7 @@ function openSteer(slug, mode = "steer", opts = {}) {
       : "message zeus directly — steering / pivot instruction, delivered straight to its pane";
   text.value = "";
   refreshCmdHighlight("steer-text");
+  refreshCmdChips("steer-text");
   // fetch the shared draft after the composer is already showing empty —
   // only land it if the modal is still open for this slug and the user
   // hasn't started typing in the meantime
@@ -1324,6 +1387,7 @@ function openSteer(slug, mode = "steer", opts = {}) {
       if (text.value === "") {
         text.value = d.text || "";
         refreshCmdHighlight("steer-text");
+        refreshCmdChips("steer-text");
       }
     })
     .catch(() => {});
@@ -1548,8 +1612,12 @@ function insertAtCursor(textarea, text, opts) {
   textarea.selectionStart = textarea.selectionEnd = pos;
   // programmatic write — no native "input" event, so the command-highlight
   // backdrop (if this textarea has one) needs an explicit nudge; harmless
-  // no-op for textareas without a "-backdrop" sibling
-  if (textarea.id) refreshCmdHighlight(textarea.id);
+  // no-op for textareas without a "-backdrop" sibling. Same reasoning for
+  // the chip row's active state.
+  if (textarea.id) {
+    refreshCmdHighlight(textarea.id);
+    refreshCmdChips(textarea.id);
+  }
   return pos;
 }
 
@@ -1615,6 +1683,7 @@ function fillForm(d) {
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
   refreshCmdHighlight("editor-text");
+  refreshCmdChips("editor-text");
   document.getElementById("job-list").innerHTML = (d.slugs || []).map((x) => `<option value="${esc(x)}">`).join("");
 }
 
