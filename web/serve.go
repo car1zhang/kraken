@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"net"
@@ -23,21 +24,57 @@ type Options struct {
 	Port         string
 	Tailnet      bool
 	ExplicitAddr string
+	// DisableSignalHandler skips Serve's own SIGTERM/SIGINT goroutine below.
+	// kraken serve (cmd_serve.go) registers its own shutdown handler — stop
+	// ticks, close the store, exit exactly once — and sets this so the two
+	// handlers don't race each other for which os.Exit(0) call wins; k web
+	// (cmd_web.go) leaves it false and keeps Serve's simple log-and-exit
+	// behavior unchanged.
+	DisableSignalHandler bool
+	// Listener, when set, is used instead of Serve binding its own (E5): a
+	// caller that needs to know binding succeeded BEFORE starting other
+	// side effects (kraken serve — cmd_serve.go net.Listens first, then
+	// only starts the scheduler tick goroutine and writes daemon.json once
+	// that succeeds) calls net.Listen itself via the exact same address
+	// ResolveAddr computes, and hands the listener in here. Nil (the k web
+	// default) preserves the old ListenAndServe-does-everything behavior.
+	Listener net.Listener
 }
 
-// Serve builds the mux (embedded static assets + the api package's routes +
-// artifact serving) and blocks on ListenAndServe.
-func Serve(opts Options) error {
+// ResolveAddr computes the host:port Serve would bind for opts, applying
+// the same Tailnet/ExplicitAddr precedence (ExplicitAddr wins over
+// Tailnet/Port) Serve uses internally. Exported so a caller that wants to
+// net.Listen itself before Serve runs (kraken serve, via Options.Listener
+// above) binds the exact same address Serve would have.
+func ResolveAddr(opts Options) (string, error) {
 	addr := "127.0.0.1:" + opts.Port
 	if opts.Tailnet {
 		ip, err := detectTailscaleIP()
 		if err != nil {
-			return err
+			return "", err
 		}
 		addr = ip + ":" + opts.Port
 	}
 	if opts.ExplicitAddr != "" {
 		addr = opts.ExplicitAddr // overrides --tailnet/-p, per usage
+	}
+	return addr, nil
+}
+
+// Serve builds the mux (embedded static assets + the api package's routes +
+// artifact serving) and blocks serving it. Binds its own listener at
+// ResolveAddr(opts) unless opts.Listener is already set.
+func Serve(opts Options) error {
+	addr, err := ResolveAddr(opts)
+	if err != nil {
+		return err
+	}
+	ln := opts.Listener
+	if ln == nil {
+		ln, err = net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen %s: %v", addr, err)
+		}
 	}
 	static, err := fs.Sub(webAssets, "static")
 	if err != nil {
@@ -59,41 +96,60 @@ func Serve(opts Options) error {
 	// "/api/upload" (api.Register); a ServeMux exact pattern and a subtree
 	// pattern ("/api/upload/", trailing slash) never shadow each other, so
 	// the two coexist without conflict.
-	mux.HandleFunc("/api/upload/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", http.StatusMethodNotAllowed)
-			return
-		}
-		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/upload/"), "/", 2)
-		if len(parts) != 2 {
-			http.NotFound(w, r)
-			return
-		}
-		p, err := api.UploadPath(parts[0], parts[1])
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", artifactContentType(p))
-		http.ServeFile(w, r, p)
-	})
+	mux.HandleFunc("/api/upload/", uploadGetHandler)
 	fmt.Printf("kraken web ui → http://%s (ctrl-c to stop)\n", addr)
 	util.LogEvent("web", "info", "web-start", "web server up on http://"+addr)
-	// ctrl-c / SIGTERM: log the shutdown edge before dying — the unified
-	// event log should show every server lifecycle boundary
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		s := <-sigc
-		util.LogEvent("web", "info", "web-stop", fmt.Sprintf("web server on %s stopping (%v)", addr, s))
-		os.Exit(0)
-	}()
+	if !opts.DisableSignalHandler {
+		// ctrl-c / SIGTERM: log the shutdown edge before dying — the unified
+		// event log should show every server lifecycle boundary. Skipped
+		// when a caller (kraken serve) owns its own shutdown sequence — see
+		// Options.DisableSignalHandler.
+		sigc := make(chan os.Signal, 1)
+		signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+		go func() {
+			s := <-sigc
+			util.LogEvent("web", "info", "web-stop", fmt.Sprintf("web server on %s stopping (%v)", addr, s))
+			os.Exit(0)
+		}()
+	}
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		util.LogEvent("web", "error", "web-error", "web server: "+err.Error())
 		return fmt.Errorf("web server: %v", err)
 	}
 	return nil
+}
+
+// uploadGetHandler serves GET /api/upload/<slug>/<name>: store mode reads
+// straight from the uploads table (api.UploadBytes), falling back to
+// the materialized file (api.UploadPath) — always safe, since
+// jobs.SaveUpload writes both regardless of storage mode. A named function
+// (not an inline closure in Serve) so it's directly unit-testable.
+func uploadGetHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/upload/"), "/", 2)
+	if len(parts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+	if data, mimeType, ok := api.UploadBytes(parts[0], parts[1]); ok {
+		if mimeType == "" {
+			mimeType = artifactContentType(parts[1])
+		}
+		w.Header().Set("Content-Type", mimeType)
+		http.ServeContent(w, r, parts[1], time.Time{}, bytes.NewReader(data))
+		return
+	}
+	p, err := api.UploadPath(parts[0], parts[1])
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", artifactContentType(p))
+	http.ServeFile(w, r, p)
 }
 
 // artifactHandler serves /api/artifact/<slug>/<cell|pluto|archive>/<name>.
@@ -119,6 +175,19 @@ func artifactHandler(w http.ResponseWriter, r *http.Request) {
 	if j == nil {
 		http.NotFound(w, r)
 		return
+	}
+	// Q12: a live cell always serves straight from the cell dir ("cell"
+	// home skips this branch entirely); a store-backed done/archived job's
+	// "pluto"/"archive" homes serve from the DB instead of a preserved file
+	// copy. ArtifactBytes returns ok=false whenever no store is wired or the
+	// path isn't in the table, so this always falls through to the
+	// filesystem lookup below when appropriate.
+	if parts[1] != "cell" {
+		if data, mimeType, ok := api.ArtifactBytes(j, parts[1], parts[2]); ok {
+			w.Header().Set("Content-Type", mimeType)
+			http.ServeContent(w, r, parts[2], time.Time{}, bytes.NewReader(data))
+			return
+		}
 	}
 	p, ok := api.ArtifactPath(j, parts[1], parts[2])
 	if !ok {

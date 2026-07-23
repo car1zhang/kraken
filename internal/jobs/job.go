@@ -80,6 +80,14 @@ type Job struct {
 	Body         string    `json:"-"`
 	Err          string    `json:"err,omitempty"`
 	ModTime      time.Time `json:"-"`
+	// ID and Rev are storage-internal, populated only when this Job was
+	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
+	// store row id, Rev the optimistic-concurrency counter WriteJobFields/
+	// WriteJobState pass to store.UpdateJobFields. Both are zero for a
+	// file-backed Job (LoadJobsFromFiles etc.) — never wire fields, never
+	// meaningful to a client.
+	ID  int64 `json:"-"`
+	Rev int64 `json:"-"`
 }
 
 type Prereq struct {
@@ -111,6 +119,15 @@ func PlutoDir() string {
 		return d // tests point at a temp dir; daily use never sets this
 	}
 	return filepath.Join(util.Home(), "Documents", "pluto")
+}
+
+// PlutoSandboxed reports whether PlutoDir resolves away from the real
+// ~/Documents/pluto — i.e. KRAKEN_PLUTO_DIR points at a sandbox copy. The
+// mirror-mode API gate uses this to decide whether archive/unarchive/delete
+// (which move preserved-artifact files under PlutoDir even in store mode)
+// are safe to allow.
+func PlutoSandboxed() bool {
+	return PlutoDir() != filepath.Join(util.Home(), "Documents", "pluto")
 }
 
 // started reports whether the job has ever entered a cell: "" means never
@@ -498,9 +515,30 @@ func JobTemplate(slug string) string {
 		"---\n"
 }
 
-// LoadJobs reads every *.job.md in the pluto dir, sorted by slug. Missing dir
-// or unreadable files degrade to an empty/partial list, never an error.
+// LoadJobs returns every active job, sorted by slug: store-backed when a
+// store is wired (UseStore, from kraken serve), else the original
+// file-based LoadJobsFromFiles. The legacy importer keeps reading files
+// directly via LoadJobsFromFiles regardless of UseStore.
 func LoadJobs() []*Job {
+	if st := ActiveStore(); st != nil {
+		jobs, err := loadJobsFromStore(st)
+		if err != nil {
+			// A DB error must not render as a silently-empty
+			// board — file-mode's equivalent ("no pluto dir yet") is a
+			// legitimately empty state, but a store query failure is a real
+			// fault that deserves a loud event, not just a quiet board wipe.
+			dlogErr("load jobs from store failed: %v", err)
+			return nil // still degrade to empty, same contract as a missing pluto dir
+		}
+		return jobs
+	}
+	return LoadJobsFromFiles()
+}
+
+// LoadJobsFromFiles reads every *.job.md in the pluto dir, sorted by slug.
+// Missing dir or unreadable files degrade to an empty/partial list, never
+// an error.
+func LoadJobsFromFiles() []*Job {
 	entries, err := os.ReadDir(PlutoDir())
 	if err != nil {
 		return nil
@@ -588,6 +626,17 @@ func JobBySlug(jobs []*Job, slug string) *Job {
 // LoadJobs()+JobBySlug scan.
 func LoadJobBySlug(slug string) *Job {
 	slug = strings.TrimSuffix(slug, JobSuffix)
+	if st := ActiveStore(); st != nil {
+		sr, err := st.GetJobBySlug(slug)
+		if err != nil {
+			return nil
+		}
+		j, err := loadJobFull(st, sr)
+		if err != nil {
+			return nil
+		}
+		return j
+	}
 	path := filepath.Join(PlutoDir(), slug+JobSuffix)
 	if data, err := os.ReadFile(path); err == nil {
 		j := ParseJob(slug+JobSuffix, data)
@@ -695,9 +744,9 @@ func DisplayState(j *Job, bySlug map[string]*Job) string {
 // startable reports whether j is ready for kraken to auto-start into a cell
 // right now: no error, ready, never started, every prereq met, and no prereq
 // is gated. A gated prereq — even one whose dep is done — parks the job for a
-// human to release by hand (k start / the board); startable() must return
-// false there so the daemon never auto-starts a gated job, matching the
-// pre-five-state gate-review-never-auto-starts rule.
+// human to release by hand (the board's manual start action); startable()
+// must return false there so the daemon never auto-starts a gated job,
+// matching the pre-five-state gate-review-never-auto-starts rule.
 func startable(j *Job, bySlug map[string]*Job) bool {
 	if j.Err != "" || !j.Ready || j.State != "" {
 		return false
@@ -818,6 +867,9 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 // before patching closes that race — without it, a PR attached mid-tick
 // would be silently overwritten out of existence by the tracker's own write.
 func writeJobPRs(j *Job, prs []JobPR) error {
+	if st := ActiveStore(); st != nil {
+		return writeJobPRsToStore(st, j, prs)
+	}
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return err
@@ -853,6 +905,9 @@ func writeJobPRs(j *Job, prs []JobPR) error {
 // URL is already recorded; a hook re-run on the same gh pr create output
 // must never duplicate an entry.
 func appendJobPR(j *Job, pr JobPR) (attached bool, err error) {
+	if st := ActiveStore(); st != nil {
+		return appendJobPRToStore(st, j, pr)
+	}
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return false, err
@@ -885,6 +940,9 @@ func appendJobPR(j *Job, pr JobPR) (attached bool, err error) {
 // read-fresh-then-patch shape), so a PR attached concurrently between load
 // and write still survives — it's simply absent from drop and passes through.
 func removeJobPRs(j *Job, drop map[string]bool) (removed []string, err error) {
+	if st := ActiveStore(); st != nil {
+		return removeJobPRsFromStore(st, j, drop)
+	}
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return nil, err
@@ -913,14 +971,17 @@ func removeJobPRs(j *Job, drop map[string]bool) (removed []string, err error) {
 }
 
 // updatePRWatermark persists watchPRs' per-URL comment/CI watermarks for one
-// recorded PR, re-reading the file fresh first (mirroring writeJobPRs/
+// recorded PR. Store-backed via store.SetPRWatermark when a store is wired;
+// else the file path re-reads fresh first (mirroring writeJobPRs/
 // appendJobPR/removeJobPRs' read-fresh-then-patch pattern) so a concurrent
 // tracker write or hand edit isn't clobbered with stale bytes. A no-op if the
-// URL isn't present on the freshly-read file — it must have been dropped
-// (repair pass, hand edit) between load and write, and there is nothing left
-// to stamp a watermark onto; the caller's own copy of j.PRs is left alone in
-// that case too, since there is nothing new to reflect.
+// URL isn't present — it must have been dropped (repair pass, hand edit)
+// between load and write, and there is nothing left to stamp a watermark
+// onto; the caller's own copy of j.PRs is left alone in that case too.
 func updatePRWatermark(j *Job, url, lastCommentAt, bumpedSHA string) error {
+	if st := ActiveStore(); st != nil {
+		return updatePRWatermarkToStore(st, j, url, lastCommentAt, bumpedSHA)
+	}
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return err
@@ -949,10 +1010,15 @@ func updatePRWatermark(j *Job, url, lastCommentAt, bumpedSHA string) error {
 	return nil
 }
 
-// WriteJobFields patches kraken-owned fields atomically (temp file + rename
-// in the same dir), re-reading the file first so a concurrent nvim save isn't
-// clobbered with stale bytes. keyvals alternates key, value.
+// WriteJobFields patches kraken-owned fields atomically: store-backed via
+// store.UpdateJobFields (gated on j.ID/j.Rev, refreshing j.Rev on success)
+// when a store is wired, else the original file patch (temp file + rename
+// in the same dir, re-reading the file first so a concurrent nvim save
+// isn't clobbered with stale bytes). keyvals alternates key, value.
 func WriteJobFields(j *Job, keyvals ...string) error {
+	if st := ActiveStore(); st != nil {
+		return writeJobFieldsToStore(st, j, keyvals...)
+	}
 	data, err := os.ReadFile(j.File)
 	if err != nil {
 		return err

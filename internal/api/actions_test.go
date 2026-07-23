@@ -73,7 +73,7 @@ func TestAnswerableSingleDigit(t *testing.T) {
 }
 
 // TestWebDoneValidation covers webDone's server-side floor: started and not
-// done, matching cmdDone rather than the board's (possibly stale) displayed
+// done, matching the pre-Q14 CLI's `k done` rather than the board's (possibly stale) displayed
 // column — a never-started job and an already-done one are both refused; a
 // merely-working (not yet blocked) job is NOT refused here, since the
 // board's column gating is what restricts the drag to BLOCKED, not this

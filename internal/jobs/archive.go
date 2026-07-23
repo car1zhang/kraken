@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -31,11 +33,26 @@ func ArchiveDir() string {
 	return filepath.Join(PlutoDir(), "archive")
 }
 
-// LoadArchivedJobs reads every *.job.md in the archive dir, sorted by file
-// name, stamping each job's ArchivedName. Missing dir or unreadable files
-// degrade to an empty/partial list, never an error — same contract as
-// LoadJobs.
+// LoadArchivedJobs returns every archived job, store-backed when a store is
+// wired, else the original file-based LoadArchivedJobsFromFiles.
 func LoadArchivedJobs() []*Job {
+	if st := ActiveStore(); st != nil {
+		jobs, err := loadArchivedJobsFromStore(st)
+		if err != nil {
+			// Log before degrading to empty — see LoadJobs.
+			dlogErr("load archived jobs from store failed: %v", err)
+			return nil
+		}
+		return jobs
+	}
+	return LoadArchivedJobsFromFiles()
+}
+
+// LoadArchivedJobsFromFiles reads every *.job.md in the archive dir, sorted
+// by file name, stamping each job's ArchivedName. Missing dir or unreadable
+// files degrade to an empty/partial list, never an error — same contract as
+// LoadJobsFromFiles.
+func LoadArchivedJobsFromFiles() []*Job {
 	entries, err := os.ReadDir(ArchiveDir())
 	if err != nil {
 		return nil
@@ -139,6 +156,40 @@ func ArchiveJob(j *Job, live map[string]bool) (string, error) {
 	if live[CellSession(j)] {
 		return "", fmt.Errorf("%s still has a live cell session %s — kill it first", j.Slug, CellSession(j))
 	}
+	if st := ActiveStore(); st != nil {
+		// E13: store.ArchiveJob now numbers off util.Slugify(slug) itself,
+		// same source freeArchiveName(util.Slugify(j.Slug)) below uses for
+		// the file path — unified: the raw-slug and slugified forms only
+		// ever differ for characters slugify strips/normalizes, which job
+		// slugs in practice never have, but there's no reason to leave the
+		// two paths disagreeing.
+		name, err := st.ArchiveJob(j.ID)
+		if err != nil {
+			return "", fmt.Errorf("archive %s: %w", j.Slug, err)
+		}
+		// uploaded images are already consumed into zeus' transcript by now —
+		// same best-effort cleanup as the file path's os.RemoveAll(UploadsDir)
+		if err := st.DeleteUploadsForJob(j.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "kraken: uploads not deleted for %s: %v\n", j.Slug, err)
+		}
+		// The materialized upload files too, not just the DB rows.
+		os.RemoveAll(UploadsDir(j.Slug))
+		// Preserved pluto artifacts are still real files even
+		// store-backed (Q12 — live cells serve straight off disk, and
+		// api/board.go lists preserved copies from the pluto/archive dirs
+		// regardless of storage mode), so the store path must move them
+		// exactly like the file path does below.
+		if err := os.MkdirAll(ArchiveDir(), 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "kraken: mkdir %s: %v\n", ArchiveDir(), err)
+		} else {
+			_, skipped := movePrefixed(PlutoDir(), util.Slugify(j.Slug), ArchiveDir(), name)
+			for _, s := range skipped {
+				fmt.Fprintf(os.Stderr, "kraken: artifact not moved (target exists or move failed): %s\n", s)
+			}
+		}
+		j.ArchivedName = name
+		return name, nil
+	}
 	if err := os.MkdirAll(ArchiveDir(), 0o755); err != nil {
 		return "", fmt.Errorf("mkdir %s: %v", ArchiveDir(), err)
 	}
@@ -166,6 +217,21 @@ func UnarchiveJob(a *Job) error {
 	if slug == "" {
 		return fmt.Errorf("%s has an unusable slug — fix the job: line in %s first", a.ArchivedName, a.File)
 	}
+	if st := ActiveStore(); st != nil {
+		if err := st.UnarchiveJob(a.ID); err != nil {
+			if errors.Is(err, store.ErrSlugTaken) {
+				return fmt.Errorf("slug %s is taken by an active job — archive or rename that one first", slug)
+			}
+			return fmt.Errorf("unarchive %s: %w", a.ArchivedName, err)
+		}
+		// Move the preserved artifact file copies back, same as
+		// the file path below — they never lived in the DB to begin with.
+		_, skipped := movePrefixed(ArchiveDir(), a.ArchivedName, PlutoDir(), slug)
+		for _, s := range skipped {
+			fmt.Fprintf(os.Stderr, "kraken: artifact not moved (target exists or move failed): %s\n", s)
+		}
+		return nil
+	}
 	target := filepath.Join(PlutoDir(), slug+JobSuffix)
 	if _, err := os.Stat(target); err == nil {
 		return fmt.Errorf("slug %s is taken by an active job — archive or rename that one first", slug)
@@ -188,26 +254,46 @@ func UnarchiveJob(a *Job) error {
 // anything active goes through archive first, so deletion is always the
 // reversible-then-irreversible two-step.
 func DeleteArchivedJob(a *Job) error {
+	if st := ActiveStore(); st != nil {
+		if err := st.DeleteJob(a.ID); err != nil {
+			return fmt.Errorf("delete %s: %w", a.ArchivedName, err)
+		}
+		// The archived artifact FILE copies too — api/board.go
+		// lists them straight from ArchiveDir() regardless of storage mode,
+		// so a store-only delete would leave orphaned files behind forever.
+		removeArchivedArtifactFiles(a.ArchivedName)
+		return nil
+	}
 	if err := os.Remove(a.File); err != nil {
 		return fmt.Errorf("delete %s: %v", a.ArchivedName, err)
 	}
 	// no uploads cleanup here: ArchiveJob already removed them at archive
 	// time, and the freed slug may since belong to a NEW active job whose
 	// uploads this would silently destroy
+	removeArchivedArtifactFiles(a.ArchivedName)
+	return nil
+}
+
+// removeArchivedArtifactFiles deletes every preserved artifact copy under
+// ArchiveDir() prefixed archivedName+"." (the job file itself excluded —
+// callers remove/rename that separately). Shared by both DeleteArchivedJob
+// branches since preserved artifacts are plain files in both storage modes.
+// Missing dir or an individual removal failure is logged, not fatal — same
+// best-effort contract as movePrefixed's skipped list.
+func removeArchivedArtifactFiles(archivedName string) {
 	entries, err := os.ReadDir(ArchiveDir())
 	if err != nil {
-		return nil
+		return
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, a.ArchivedName+".") || strings.HasSuffix(name, JobSuffix) {
+		if e.IsDir() || !strings.HasPrefix(name, archivedName+".") || strings.HasSuffix(name, JobSuffix) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(ArchiveDir(), name)); err != nil {
 			fmt.Fprintf(os.Stderr, "kraken: artifact not deleted: %v\n", err)
 		}
 	}
-	return nil
 }
 
 // ArchivedArtifactPaths lists an archived job's artifact copies (absolute
