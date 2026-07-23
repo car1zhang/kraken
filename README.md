@@ -25,7 +25,7 @@ $ k
 | `k n [-c dir] [cmd…]` | new shell window in the current session, optionally running a command |
 | `k c [-c dir] <name> [prompt…]` | new named claude in a new window of the current session |
 | `k web` | file-mode-only web UI over `~/Documents/pluto` job files: kanban board, inline question answers, artifacts in the browser; refuses to start once this machine has migrated onto sqlite — run `k serve` there instead |
-| `k serve [-p port] [--tailnet] [-addr host:port] [--mirror]` | the sqlite-backed merged process: opens `~/.kraken/kraken.db`, runs the scheduler tick loop and nightly backups in the background, and serves the same web UI in the foreground — the long-lived process real deployments run post-migration (launchd runs it at login via `make install`). `--mirror` is a local-testing-only variant against a sandbox DB — see [Local mirror testing](#local-mirror-testing) |
+| `k serve [-p port] [--tailnet] [-addr host:port] [--mirror]` | the sqlite-backed merged process: opens `~/.kraken/kraken.db`, runs the scheduler tick loop and nightly backups in the background, and serves the same web UI on localhost + the tailnet (dual-bind, automatic once tailscale is up) — the long-lived process real deployments run post-migration (launchd runs it at login via `make install`). `--mirror` is a local-testing-only variant against a sandbox DB — see [Local mirror testing](#local-mirror-testing) |
 | `k daemon` | the pre-migration scheduler loop, file-mode only (launchd runs it at login via `make install`, until this machine has run `kraken import`) |
 | `kraken import [--dry-run] [--force] [--reimport] [--live-sources]` | **cutover-only**: one-shot sweep of every file-mode job, artifact, upload, and log into `kraken.db`; a temporary migration verb, not a day-to-day one. `--live-sources` is a local-testing-only escape hatch — see [Local mirror testing](#local-mirror-testing) |
 
@@ -61,7 +61,7 @@ Requires macOS, tmux, and Go ≥ 1.24 to build:
 make install
 ```
 
-This builds the binary, installs it to `~/.local/bin` as `kraken` with a `k` symlink, and drops zsh completion into your completions dir. On a migrated machine (kraken.db present) the launchd job runs `kraken serve`, localhost-only by default — `make install SERVE_FLAGS=--tailnet` makes it bind the tailscale IP instead so the iOS app can reach the board. `k o` focuses [ghostty](https://ghostty.org) windows via AppleScript, which needs Accessibility permission the first time.
+This builds the binary, installs it to `~/.local/bin` as `kraken` with a `k` symlink, and drops zsh completion into your completions dir. On a migrated machine (kraken.db present) the launchd job runs `kraken serve`, which binds localhost and — automatically, whenever tailscale is up — the tailnet IP in the same process, so the iOS app reaches the board with no extra flags. `k o` focuses [ghostty](https://ghostty.org) windows via AppleScript, which needs Accessibility permission the first time.
 
 ## How it works
 

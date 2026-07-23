@@ -71,7 +71,12 @@ func cmdServe(args []string) {
 	// always resets it rather than inheriting a previous test's leftover.
 	api.SetMirrorMode(mirror)
 
-	opts := web.Options{Port: port, Tailnet: tailnet, ExplicitAddr: explicitAddr, DisableSignalHandler: true}
+	// AlsoTailnet: a real serve binds localhost AND (whenever tailscale is
+	// or comes up) the tailnet IP in one process — `make install` needs no
+	// flags for the iOS app to reach the board. Mirror stays strictly
+	// localhost: a parity sandbox has no business being tailnet-visible.
+	opts := web.Options{Port: port, Tailnet: tailnet, ExplicitAddr: explicitAddr,
+		DisableSignalHandler: true, AlsoTailnet: !mirror}
 	ln, st, addr, err := serveSetup(opts, mirror)
 	if err != nil {
 		util.Die("%v", err)

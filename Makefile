@@ -70,12 +70,6 @@ install-daemon:
 # serve` (the sqlite-backed replacement for daemon + web) and the log file
 # name so the two deployments' logs never intermix if a machine switches
 # between them across imports.
-# SERVE_FLAGS adds one optional flag to the serve plist's argv — the one
-# real use is `make install SERVE_FLAGS=--tailnet` so launchd's serve binds
-# the tailscale IP (iOS app reachability). Single flag only: plist argv
-# entries are one <string> each and this substitution emits exactly one.
-SERVE_FLAGS ?=
-
 install-serve:
 	mkdir -p $(HOME)/Library/LaunchAgents $(HOME)/.kraken
 	printf '%s\n' \
@@ -86,7 +80,6 @@ install-serve:
 	  '  <key>ProgramArguments</key><array>' \
 	  '    <string>$(HOME)/.local/bin/kraken</string>' \
 	  '    <string>serve</string>' \
-	  $(if $(SERVE_FLAGS),'    <string>$(SERVE_FLAGS)</string>') \
 	  '  </array>' \
 	  '  <key>RunAtLoad</key><true/>' \
 	  '  <key>KeepAlive</key><true/>' \
