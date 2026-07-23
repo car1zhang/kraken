@@ -39,6 +39,15 @@ type Options struct {
 	// ResolveAddr computes, and hands the listener in here. Nil (the k web
 	// default) preserves the old ListenAndServe-does-everything behavior.
 	Listener net.Listener
+	// AlsoTailnet adds a second listener on the tailscale IP (same port,
+	// same mux) alongside the primary bind — one process serving both
+	// localhost and the tailnet. Tailscale coming up AFTER this process
+	// (launchd starts serve at login, often before the tailscale daemon
+	// has an interface) is handled by retrying detection in the
+	// background until it succeeds; detection failure never affects the
+	// primary listener. No-op when the primary bind already is the
+	// tailnet address (--tailnet / -addr naming it).
+	AlsoTailnet bool
 }
 
 // ResolveAddr computes the host:port Serve would bind for opts, applying
@@ -113,11 +122,59 @@ func Serve(opts Options) error {
 		}()
 	}
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if opts.AlsoTailnet {
+		go serveTailnetWhenUp(addr, opts.Port, mux)
+	}
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		util.LogEvent("web", "error", "web-error", "web server: "+err.Error())
 		return fmt.Errorf("web server: %v", err)
 	}
 	return nil
+}
+
+// tailnetRetryInterval paces serveTailnetWhenUp's detection loop. A var so
+// tests can shrink it.
+var tailnetRetryInterval = 30 * time.Second
+
+// serveTailnetWhenUp binds port on the tailscale IP and serves mux there,
+// retrying detection until tailscale has an interface — launchd starts
+// kraken serve at login, frequently before tailscaled brings the tailnet
+// up, and a one-shot check would leave the board unreachable from iOS
+// until the next restart. Failures here never touch the primary listener:
+// worst case the process simply stays localhost-only, logging once per
+// state change rather than once per retry.
+func serveTailnetWhenUp(primaryAddr, port string, mux http.Handler) {
+	loggedWaiting := false
+	for {
+		ip, err := detectTailscaleIP()
+		if err != nil {
+			if !loggedWaiting {
+				util.LogEvent("web", "info", "web-tailnet-wait", "tailnet listener waiting: "+err.Error())
+				loggedWaiting = true
+			}
+			time.Sleep(tailnetRetryInterval)
+			continue
+		}
+		addr := ip + ":" + port
+		if addr == primaryAddr {
+			return // primary bind already covers the tailnet
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			util.LogEvent("web", "error", "web-error", "tailnet listen "+addr+": "+err.Error())
+			time.Sleep(tailnetRetryInterval)
+			continue
+		}
+		util.LogEvent("web", "info", "web-start", "web server also on http://"+addr)
+		srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			// the tailnet interface can vanish (tailscale down/up); go back
+			// to waiting for it rather than giving up for the process' life.
+			util.LogEvent("web", "error", "web-error", "tailnet server: "+err.Error())
+			loggedWaiting = false
+			time.Sleep(tailnetRetryInterval)
+		}
+	}
 }
 
 // uploadGetHandler serves GET /api/upload/<slug>/<name>: store mode reads
@@ -253,8 +310,10 @@ func tailscaleIP(addrs []net.Addr) (string, bool) {
 }
 
 // detectTailscaleIP gathers every local interface address and picks the
-// tailnet one — the thin, non-testable caller around tailscaleIP.
-func detectTailscaleIP() (string, error) {
+// tailnet one — the thin caller around tailscaleIP. A var so
+// serveTailnetWhenUp's tests can stub tailscale coming up without a real
+// tailnet interface on the test machine.
+var detectTailscaleIP = func() (string, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return "", fmt.Errorf("enumerate network interfaces: %v", err)
