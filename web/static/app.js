@@ -791,27 +791,6 @@ let artifactURL = "";
 const isPage = (url) => /\.(html|svg|pdf)$/i.test(url);
 const isImage = (url) => /\.(png|jpe?g|gif|webp)$/i.test(url);
 
-// artifactParts recovers {slug, home, name} from an /api/artifact URL — the
-// same triple the overlay was opened with, needed to address a feedback post
-// at the exact artifact being viewed. Cell-home names may themselves contain
-// slashes (subpath artifacts), so only the first two segments are split off.
-function artifactParts(url) {
-  const m = url.match(/^\/api\/artifact\/([^/]+)\/([^/]+)\/(.+)$/);
-  return m ? { slug: m[1], home: m[2], name: m[3] } : null;
-}
-
-let feedbackSavedTimer = 0;
-
-function hideFeedbackForm() {
-  document.getElementById("feedback-form").hidden = true;
-  document.getElementById("feedback-text").value = "";
-  document.getElementById("feedback-note").textContent = "";
-  // a lingering "saved ✓" must never carry over to another artifact (or
-  // stack across rapid sends) — cancel the revert timer and reset now
-  clearTimeout(feedbackSavedTimer);
-  document.getElementById("panel-feedback").textContent = "feedback";
-}
-
 function openArtifact(url, name) {
   document.getElementById("panel-title").textContent = name;
   artifactURL = url;
@@ -819,8 +798,6 @@ function openArtifact(url, name) {
   showRaw = false;
   overlay.hidden = false;
   document.getElementById("panel-raw").hidden = isImage(url) || /\.pdf$/i.test(url);
-  document.getElementById("panel-feedback").hidden = false;
-  hideFeedbackForm();
   if (isImage(url)) {
     panelBody.className = "panel-body page";
     panelBody.innerHTML = `<img src="${esc(url)}" alt="artifact">`;
@@ -1027,6 +1004,39 @@ function pickImageFiles(fileList) {
 function pastedFiles(ev) {
   const items = [...(ev.clipboardData?.items || [])].filter((it) => it.kind === "file");
   return items.map((it) => it.getAsFile()).filter(Boolean);
+}
+
+// ---- command chips: /info /spec /do /pr insertion into composer textareas ----
+// one-tap insertion of the kraken build-pipeline commands (info -> spec -> do
+// -> pr) into whichever prompt composer they're wired to. Always lands at the
+// cursor position (replacing any selection) with a trailing space, then
+// returns focus to the textarea so typing continues right after the command.
+// Fires a bubbling "input" event afterward so listeners already wired to the
+// textarea (draft sync, autosave) see the change like any other keystroke.
+const CMD_CHIPS = ["/info", "/spec", "/do", "/pr"];
+
+function attachCmdChips(containerId, textareaId) {
+  const containerEl = document.getElementById(containerId);
+  const textarea = document.getElementById(textareaId);
+  if (!textarea || !containerEl) return;
+  containerEl.innerHTML = "";
+  for (const cmd of CMD_CHIPS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cmd-chip";
+    btn.textContent = cmd;
+    // never let the button itself take focus — on mobile that dismisses and
+    // then reopens the keyboard as focus bounces button -> textarea; the
+    // textarea keeps its cursor/selection the whole time regardless
+    btn.addEventListener("mousedown", (ev) => ev.preventDefault());
+    btn.addEventListener("click", () => {
+      if (textarea.disabled || textarea.readOnly) return;
+      insertAtCursor(textarea, cmd + " ", { inlineGap: true });
+      textarea.focus();
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    containerEl.appendChild(btn);
+  }
 }
 
 // ---- steer: mid-run instructions ----
@@ -1314,6 +1324,7 @@ document.getElementById("steer-send").addEventListener("click", async () => {
 document.getElementById("steer-text").addEventListener("input", (ev) => {
   if (steerSlug) postDraft(steerSlug, ev.target.value);
 });
+attachCmdChips("steer-cmd-chips", "steer-text");
 steerOverlay.addEventListener("click", (ev) => {
   if (ev.target === steerOverlay) { flushSteerDraft(); clearSteerChips(); steerOverlay.hidden = true; }
 });
@@ -1373,6 +1384,7 @@ document.getElementById("steer-spec-toggle").addEventListener("click", () => {
 const editorOverlay = document.getElementById("editor-overlay");
 const editorText = document.getElementById("editor-text");
 const editorNote = document.getElementById("editor-note");
+attachCmdChips("editor-cmd-chips", "editor-text");
 let editorSlug = null;
 let editorMTime = 0;
 let editorReady = false; // captured from the last loaded form; the ready row is gone, sent as-is by the ready button
@@ -1401,22 +1413,38 @@ function renderEditorChips() {
   renderAttChips("editor-chips-att", editorChips);
 }
 
-// insertAtCursor lands text at the caret when the textarea has focus, else
-// appends on its own line — covers the async-upload case where focus may
-// have moved on by the time the upload resolves. When the caret sits mid-line
-// (there's a preceding char and it isn't a newline), the insert is prefixed
-// with its own "\n" so the image reference doesn't get glued onto prose.
-function insertAtCursor(textarea, text) {
-  if (document.activeElement === textarea) {
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const prevChar = start > 0 ? textarea.value[start - 1] : "";
-    const inserted = prevChar && prevChar !== "\n" ? "\n" + text : text;
-    textarea.value = textarea.value.slice(0, start) + inserted + textarea.value.slice(end);
-    textarea.selectionStart = textarea.selectionEnd = start + inserted.length;
-  } else {
-    textarea.value += (textarea.value && !textarea.value.endsWith("\n") ? "\n" : "") + text;
+// insertAtCursor splices text into a textarea at its current cursor position
+// (replacing any active selection) and leaves the cursor sitting right after
+// it — callers that want focus to follow (e.g. attachCmdChips) call .focus()
+// themselves. A textarea's selectionStart/End are never null (0 if it's
+// never been focused), so no fallback is needed there. Two opt-in behaviors,
+// off by default:
+//   - ownLineWhenUnfocused: true (the image-attachment call site) treats a
+//     textarea that's lost focus — e.g. an async upload resolving after the
+//     user moved on — as stale cursor state and appends at the end instead
+//     of trusting a selection the user isn't looking at anymore.
+//   - inlineGap: true (the command-chip call site below) closes a gap against
+//     the preceding non-whitespace character with a single space instead of
+//     a newline — chips land inline with a trailing space, not on their own
+//     line.
+// Without inlineGap, mid-line text gets its own leading "\n" so it doesn't
+// glue onto existing prose (the image-reference case).
+function insertAtCursor(textarea, text, opts) {
+  const { ownLineWhenUnfocused = false, inlineGap = false } = opts || {};
+  const useEnd = ownLineWhenUnfocused && document.activeElement !== textarea;
+  const start = useEnd ? textarea.value.length : textarea.selectionStart;
+  const end = useEnd ? textarea.value.length : textarea.selectionEnd;
+  const prevChar = start > 0 ? textarea.value[start - 1] : "";
+  let gap = "";
+  if (prevChar) {
+    if (inlineGap) { if (!/\s/.test(prevChar)) gap = " "; }
+    else if (prevChar !== "\n") gap = "\n";
   }
+  const inserted = gap + text;
+  textarea.value = textarea.value.slice(0, start) + inserted + textarea.value.slice(end);
+  const pos = start + inserted.length;
+  textarea.selectionStart = textarea.selectionEnd = pos;
+  return pos;
 }
 
 function addEditorFiles(files) {
@@ -1439,7 +1467,7 @@ function addEditorFiles(files) {
       if (editorSlug !== slug || editorGen !== gen || editorOverlay.hidden) return;
       editorChips.push(c);
       renderEditorChips();
-      insertAtCursor(editorText, "[image: " + c.path + "]\n");
+      insertAtCursor(editorText, "[image: " + c.path + "]\n", { ownLineWhenUnfocused: true });
       onEditorFormChange(); // land the inserted reference into the debounced autosave
     } catch (e) {
       if (editorSlug !== slug || editorGen !== gen || editorOverlay.hidden) return;
@@ -1520,6 +1548,7 @@ function setFormReadOnly(readOnly) {
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));
   editorText.readOnly = readOnly;
+  document.getElementById("editor-cmd-chips").hidden = readOnly;
   document.getElementById("editor-att-btn").disabled = readOnly;
   // archive lives here, inside the opened job, on purpose: no card-level
   // shortcut — the server still refuses jobs with a cell in flight
@@ -1848,38 +1877,6 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
   } else {
     panelBody.className = "panel-body md";
     panelBody.innerHTML = renderMD(rawText);
-  }
-});
-document.getElementById("panel-feedback").addEventListener("click", () => {
-  const form = document.getElementById("feedback-form");
-  form.hidden = !form.hidden;
-  if (!form.hidden) document.getElementById("feedback-text").focus();
-});
-document.getElementById("feedback-cancel").addEventListener("click", () => hideFeedbackForm());
-document.getElementById("feedback-send").addEventListener("click", async () => {
-  const note = document.getElementById("feedback-note");
-  const parts = artifactParts(artifactURL);
-  const text = document.getElementById("feedback-text").value.trim();
-  if (!parts) { note.textContent = "can't identify this artifact"; return; }
-  if (!text) { note.textContent = "feedback is empty"; return; }
-  const sendBtn = document.getElementById("feedback-send");
-  sendBtn.disabled = true;
-  try {
-    const r = await fetch("/api/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug: parts.slug, home: parts.home, name: parts.name, feedback: text }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || String(r.status));
-    hideFeedbackForm();
-    const label = document.getElementById("panel-feedback");
-    label.textContent = "saved ✓";
-    feedbackSavedTimer = setTimeout(() => { label.textContent = "feedback"; }, 2000);
-  } catch (e) {
-    note.textContent = "failed: " + e.message;
-  } finally {
-    sendBtn.disabled = false;
   }
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });

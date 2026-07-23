@@ -1,0 +1,445 @@
+<meta charset="utf-8">
+<title>{{SYSTEM_NAME}} Explanation</title>
+<!--
+  FILL-IN-THE-BLANKS TEMPLATE (explain mode)
+  - This file is deliberately a BODY FRAGMENT — no <!DOCTYPE>, <html>, <head>, or <body> tags.
+    Browsers render it fine when opened locally, and it keeps the file simple. Never add wrapper
+    tags. Docs are purely local HTML — there is no cloud/Artifact publishing step.
+  - Replace every {{PLACEHOLDER}}. Delete sections that truly do not apply.
+  - Keep Section 1 (High-Level Overview) VERY concise: 1-3 sentences per subsection. Diagrams carry the detail.
+  - Diagrams are inline SVG. Spam them: every section that can be drawn should have one.
+
+  SVG CONVENTIONS (all diagrams in this doc)
+  - Delegated: each diagram is designed AND rendered by a Sonnet subagent into a fragment file under
+    ~/designs/.fragments/<doc-slug>/. This source file keeps a permanent "DIAGRAM: <id>" placeholder
+    comment per slot — SVG is never spliced into the source. A mechanical flatten step substitutes
+    the fragments into the derived build file under ~/designs/.build/ after each edit round (see
+    SKILL.md). The main agent does not hand-author or read SVG bodies.
+  - viewBox="0 0 860 H" (pick H per diagram), no width/height attributes — CSS scales it.
+  - Shared classes styled by this doc's CSS:
+      .node  — <g class="node"><rect .../><text .../></g>  box with centered label
+      .accent — add to a .node group to highlight the parts the doc is really about
+      .ok / .warn / .danger — status variants, on a .node <g> (box) or a .edge <path> (edge)
+      .group — dashed container rect for ownership/service boundaries
+      .store — data stores (use rect with larger rx or cylinder-ish shape)
+      .lane  — swimlane header rects in sequence/swimlane diagrams
+      .edge  — <path class="edge" ... marker-end="url(#arrow-<id>)"/>
+      .edgeLabel — small muted text on edges
+      .flow-dot — animated SMIL dot riding an edge path (see ANIMATION CONVENTIONS)
+      .cell  — <g class="cell"><rect/><text/></g> compact cell for example data rendered in its
+               natural shape (matrix/2D-array grids, schedules, payload field stacks); variants
+               compose (cell store = header, cell accent = touched by the example)
+      .step  — <g class="step"><circle/><text/></g> numbered badge marking walkthrough order
+      .pill / .decision / .actor / .badge / .bar / .axis / .region — terminals & tags, branch
+               gates, human actors, count bubbles, magnitude bars, timeline axes, tinted zones
+      .title — REQUIRED on every diagram: top-left takeaway heading (lint fails without it)
+      .note  — free-floating annotation text (start-anchored)
+      .dim   — extra class on any element to fade untaken/background context to ~45%
+    The full parts-kit contract (exact markup per asset, ban list, geometry/animation rules) lives
+    at assets/hermes-contract.md (relative to this skill's own base directory) — diagram subagent briefs paste it verbatim.
+  - Every SVG defines its own arrow marker with a DOC-UNIQUE id, e.g. id="arrow-architecture",
+    id="arrow-runtime-flow" (inline SVGs share one HTML id namespace — collisions break arrows).
+  - Wrap long labels with <tspan x="..." dy="1.2em"> lines; keep ≥12px padding inside boxes.
+
+  ANIMATION CONVENTIONS (flow diagrams)
+  - Diagrams that depict movement (sequence/swimlane flows, request lifecycles, data movement,
+    pipelines, state transitions, rollout timelines) are ANIMATED by default; purely structural
+    diagrams (data model, code map, component boundaries) stay static.
+  - Techniques: SMIL <animateMotion> dots traveling along edge paths (reuse the edge's <path> via
+    <mpath href="#...">, path ids doc-unique like marker ids); stroke-dashoffset "marching ants"
+    on active edges; staged opacity/pulse on the currently-active node. Subtle + looping; no JS.
+  - Respect reduced motion: pause everything under @media (prefers-reduced-motion: reduce)
+    (e.g. .diagram :is(animate, animateMotion) via CSS `animation: none` for CSS anims, and give
+    SMIL a paused fallback by also gating a .flow-dot { display:none } rule).
+
+  WORKED EXAMPLES (exemplary diagrams)
+  - Beyond structure, every doc shows at least one WORKED EXAMPLE: one concrete named instance
+    (a real user flow, a sample record/request with actual field values) traced through the
+    system stage by stage — .step badges in time order, the instance's data as .cell chips whose
+    values visibly change between stages, the taken path highlighted while alternatives stay plain.
+  - Whenever the doc deals in structured data (API responses, matrices, 2D arrays, schedules,
+    grids), also render what an EXAMPLE of that data means in its natural shape — a 2D array as an
+    actual .cell grid with headers, a slot schedule as a day/time strip, a region as a drawn
+    region — never as raw JSON prose.
+  - Keep ONE consistent example (same user/org/record values) across all exemplary diagrams in
+    the doc so the reader follows a single story; briefs spell out the exact values to draw.
+
+  UI MOCKUPS (when the doc touches UI)
+  - Mock up every affected screen/component state: inline HTML/CSS blocks styled to resemble the
+    real UI (preferred), annotated screenshots, or a picture — SVG only when it genuinely fits.
+  - Before/after pairs for modified screens. Self-contained (inline CSS, no external assets).
+  - Built by the main agent directly — never delegated to the design subagents.
+-->
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
+    --surface: #f6f8fa; --accent: #0969da;
+    --ok: #1a7f37; --warn: #9a6700; --danger: #d1242f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+      --surface: #161b22; --accent: #4493f8;
+      --ok: #3fb950; --warn: #d29922; --danger: #f85149;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 940px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem;
+  }
+  h1 { font-size: 1.9rem; border-bottom: 1px solid var(--line); padding-bottom: .4rem; }
+  h2 { font-size: 1.45rem; margin-top: 2.5rem; border-bottom: 1px solid var(--line); padding-bottom: .3rem; }
+  h3 { font-size: 1.15rem; margin-top: 1.8rem; }
+  h4 { font-size: 1rem; margin-top: 1.4rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .875em;
+    background: var(--surface); border-radius: 5px; }
+  code { padding: .15em .35em; }
+  pre { padding: 12px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: .75rem 0 1.25rem; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left;
+    vertical-align: top; font-size: 14px; }
+  th { background: var(--surface); }
+  blockquote.meta { margin: .75rem 0 1.5rem; padding: .5rem 1rem; border-left: 4px solid var(--line);
+    color: var(--muted); font-size: .9rem; }
+  blockquote.meta p { margin: .2rem 0; }
+  /* Diagram slots */
+  figure.diagram { margin: 1.25rem 0; border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; background: var(--surface); overflow-x: auto; }
+  figure.diagram figcaption { margin-top: .6rem; font-size: .85rem; color: var(--muted); }
+  /* ===== Shared SVG styling — HARDENED (this block is deliverable D1) ===== */
+  svg { display: block; width: 100%; height: auto; font-family: inherit; }
+  /* Baseline safety net: zero-specificity defaults so NO shape can ever render as SVG's
+     default solid black. Class rules below always win; explicit fill/stroke attrs are respected. */
+  svg :where(rect, circle, ellipse, polygon):not([fill]) { fill: var(--surface); }
+  svg :where(rect, circle, ellipse, polygon):not([stroke]) { stroke: var(--line); }
+  svg :where(path):not([fill]) { fill: none; }
+  svg :where(path):not([stroke]):not([class]) { stroke: var(--muted); }
+  svg text { fill: var(--fg); font-size: 13px; }
+  /* Dual selectors: match both <g class="node"><rect/></g> AND bare <rect class="node"/> */
+  svg .node rect, svg rect.node { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .node text, svg .store text, svg .lane text { text-anchor: middle; dominant-baseline: middle; }
+  svg .accent rect, svg rect.accent { stroke: var(--accent); stroke-width: 1.8; }
+  svg .accent text, svg text.accent { fill: var(--accent); font-weight: 600; }
+  svg .group > rect, svg rect.group { fill: none; stroke: var(--line); stroke-dasharray: 5 4; }
+  svg .group > text, svg text.group { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .store rect, svg rect.store, svg .store ellipse, svg ellipse.store, svg .store path
+    { fill: var(--surface); stroke: var(--fg); stroke-width: 1.2; }
+  svg .lane rect, svg rect.lane { fill: var(--surface); stroke: var(--line); }
+  svg .edge { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  svg .edge.dashed { stroke-dasharray: 5 4; }
+  svg .edgeLabel { fill: var(--muted); font-size: 12px; text-anchor: middle; }
+  svg .arrowhead { fill: var(--muted); stroke: none; }
+  svg .flow-dot { fill: var(--accent); stroke: none; }
+  svg .cell rect, svg rect.cell { fill: var(--bg); stroke: var(--line); }
+  svg .cell text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
+  svg .step circle { fill: var(--accent); stroke: none; }
+  svg .step text { fill: var(--bg); font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
+  /* Semantic status classes — the sanctioned replacement for ad-hoc hex colors */
+  svg .ok rect, svg rect.ok { stroke: var(--ok); }
+  svg .ok text, svg text.ok { fill: var(--ok); }
+  svg .warn rect, svg rect.warn { stroke: var(--warn); }
+  svg .warn text, svg text.warn { fill: var(--warn); }
+  svg .danger rect, svg rect.danger { stroke: var(--danger); }
+  svg .danger text, svg text.danger { fill: var(--danger); }
+  svg .edge.ok { stroke: var(--ok); } svg .edge.warn { stroke: var(--warn); } svg .edge.danger { stroke: var(--danger); }
+  svg .edge.ok + marker path, svg .edge.warn + marker path { } /* markers inherit .arrowhead */
+  svg .pill rect { fill: var(--surface); stroke: var(--muted); }
+  svg .pill text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .decision path { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .decision text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .actor circle { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor path { fill: none; stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor text { fill: var(--fg); font-size: 12px; text-anchor: middle; }
+  svg .badge circle { fill: var(--surface); stroke: var(--line); }
+  svg .badge text { fill: var(--fg); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
+  svg .bar rect { fill: var(--accent); stroke: none; }
+  svg .bar.ok rect { fill: var(--ok); } svg .bar.warn rect { fill: var(--warn); } svg .bar.danger rect { fill: var(--danger); }
+  svg .axis { stroke: var(--muted); stroke-width: 1; fill: none; }
+  svg .region rect, svg .region ellipse, svg .region path { fill: var(--accent); opacity: .12; stroke: none; }
+  svg .region.ok rect { fill: var(--ok); } svg .region.warn rect { fill: var(--warn); } svg .region.danger rect { fill: var(--danger); }
+  svg .region text { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .title { fill: var(--fg); font-size: 14px; font-weight: 600; text-anchor: start; }
+  svg .note { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .dim { opacity: .45; }
+  @media (prefers-reduced-motion: reduce) {
+    svg .flow-dot { display: none; }
+    figure.diagram * { animation: none !important; }
+  }
+</style>
+
+<h1>{{SYSTEM_NAME}} Explanation</h1>
+
+<blockquote class="meta">
+  <p><strong>Mode:</strong> Explain</p>
+  <p><strong>Status:</strong> Draft</p>
+  <p><strong>Owner:</strong> {{OWNER_OR_TEAM}}</p>
+  <p><strong>Last Updated:</strong> {{DATE}}</p>
+  <p><strong>Related Context:</strong> {{LINKS_OR_TICKETS}}</p>
+</blockquote>
+
+<h2>1. High-Level Overview</h2>
+<!-- Keep this whole section very concise. 1-3 sentences per subsection; diagrams do the talking. -->
+
+<h3>What This System Is</h3>
+<p>{{The system in 1-2 plain-language sentences, for a smart reader who has not read the code.}}</p>
+
+<h3>Why It Exists</h3>
+<p>{{The product/business/engineering problem it solves — 1-2 sentences.}}</p>
+
+<h3>High-Level Architecture</h3>
+<p>{{The system at the highest useful level in 1-2 sentences. The diagram is the real content.}}</p>
+
+<figure class="diagram">
+  <!-- SVG: architecture diagram — REQUIRED. Actors, services, stores, and the main flows between them.
+       Example skeleton (replace entirely; keep marker id doc-unique): -->
+  <svg viewBox="0 0 860 200" role="img" aria-label="High-level architecture">
+    <defs>
+      <marker id="arrow-architecture" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+      </marker>
+    </defs>
+    <g class="node"><rect x="20" y="70" width="170" height="60" rx="8"/><text x="105" y="100">{{User / Trigger}}</text></g>
+    <path class="edge" d="M190,100 H280" marker-end="url(#arrow-architecture)"/>
+    <g class="node accent"><rect x="280" y="70" width="180" height="60" rx="8"/><text x="370" y="100">{{Core System}}</text></g>
+    <path class="edge" d="M460,100 H560" marker-end="url(#arrow-architecture)"/>
+    <g class="store"><rect x="560" y="70" width="150" height="60" rx="18"/><text x="635" y="100">{{Data Store}}</text></g>
+    <path class="edge dashed" d="M370,130 V170 H560" marker-end="url(#arrow-architecture)"/>
+    <text class="edgeLabel" x="465" y="162">{{observability / debug surface}}</text>
+  </svg>
+  <figcaption>{{One line: the shape of the system at a glance.}}</figcaption>
+</figure>
+
+<h3>Core Concepts / Data Model</h3>
+<p>{{The key entities, events, records, and terms in 1-2 sentences.}}</p>
+
+<figure class="diagram">
+  <!-- SVG: entity/relationship diagram — REQUIRED when relationships are non-trivial.
+       Boxes per entity with key fields as tspan lines; labeled edges for relationships/lifecycle.
+       When an entity is a grid/matrix/2D-array/schedule, ALSO show an example instance rendered in
+       its natural shape (.cell grid with real values) — here or as a second figure. -->
+  {{DATA_MODEL_SVG}}
+  <figcaption>{{One line: the core entities and how they relate.}}</figcaption>
+</figure>
+
+<h3>Mental Model</h3>
+<table>
+  <tr><th>#</th><th>Key Idea</th></tr>
+  <tr><td>1</td><td>{{Key idea that makes the system easier to understand}}</td></tr>
+  <tr><td>2</td><td>{{Key idea that makes the system easier to understand}}</td></tr>
+  <tr><td>3</td><td>{{Key idea that makes the system easier to understand}}</td></tr>
+</table>
+
+<h2>2. Mid-Level System Walkthrough</h2>
+
+<h3>Components</h3>
+
+<figure class="diagram">
+  <!-- SVG: component/boundary map — all components below, grouped by ownership boundary
+       (class="group" containers), with the main data-flow edges between them. -->
+  {{COMPONENT_MAP_SVG}}
+  <figcaption>{{One line: component boundaries and who talks to whom.}}</figcaption>
+</figure>
+
+<h4>Component: {{Component Name}}</h4>
+<table>
+  <tr><th>Field</th><th>Details</th></tr>
+  <tr><td>Responsibility</td><td>{{What this component owns}}</td></tr>
+  <tr><td>Inputs</td><td>{{Data/events/requests it receives}}</td></tr>
+  <tr><td>Outputs</td><td>{{Data/events/results it produces}}</td></tr>
+  <tr><td>Side Effects</td><td>{{External writes, network calls, notifications, jobs, mutations}}</td></tr>
+  <tr><td>Dependencies</td><td>{{Important upstream/downstream systems}}</td></tr>
+  <tr><td>Boundary</td><td>{{What this component should not know or own}}</td></tr>
+  <tr><td>Unit Test Plan</td><td>{{Unit tests or pure behavior checks that prove this component}}</td></tr>
+  <tr><td>Integration Test Plan</td><td>{{Cross-component, DB/API/job, logs, or traces that prove this component}}</td></tr>
+  <tr><td>E2E Test Plan</td><td>{{End-to-end workflow, replay, browser/API flow, or N/A with reason}}</td></tr>
+  <tr><td>Manual / Debug Verification</td><td>{{Dashboards, logs, screenshots, DB rows, or manual checks}}</td></tr>
+</table>
+
+<h4>Component: {{Component Name}}</h4>
+<table>
+  <tr><th>Field</th><th>Details</th></tr>
+  <tr><td>Responsibility</td><td>{{What this component owns}}</td></tr>
+  <tr><td>Inputs</td><td>{{Data/events/requests it receives}}</td></tr>
+  <tr><td>Outputs</td><td>{{Data/events/results it produces}}</td></tr>
+  <tr><td>Side Effects</td><td>{{External writes, network calls, notifications, jobs, mutations}}</td></tr>
+  <tr><td>Dependencies</td><td>{{Important upstream/downstream systems}}</td></tr>
+  <tr><td>Boundary</td><td>{{What this component should not know or own}}</td></tr>
+  <tr><td>Unit Test Plan</td><td>{{Unit tests or pure behavior checks that prove this component}}</td></tr>
+  <tr><td>Integration Test Plan</td><td>{{Cross-component, DB/API/job, logs, or traces that prove this component}}</td></tr>
+  <tr><td>E2E Test Plan</td><td>{{End-to-end workflow, replay, browser/API flow, or N/A with reason}}</td></tr>
+  <tr><td>Manual / Debug Verification</td><td>{{Dashboards, logs, screenshots, DB rows, or manual checks}}</td></tr>
+</table>
+
+<h3>Runtime Flow</h3>
+<p>{{How the system runs from trigger to output — 1-2 sentences, then the diagram, then prose only for edge cases.}}</p>
+
+<figure class="diagram">
+  <!-- SVG: sequence/swimlane diagram — REQUIRED, ANIMATED (dots along the arrows in time order; see header conventions). Vertical lifelines per participant
+       (class="lane" headers, dashed .edge lifelines), horizontal labeled arrows in time order. -->
+  {{RUNTIME_FLOW_SVG}}
+  <figcaption>{{One line: the end-to-end runtime flow.}}</figcaption>
+</figure>
+
+<h3>Worked Example</h3>
+<p>{{One concrete instance in 1-2 sentences — name the actual user action / request / record and its real field values. The diagram tells the story.}}</p>
+
+<figure class="diagram">
+  <!-- SVG: worked example — REQUIRED, ANIMATED. Different from the runtime flow above: that shows
+       the lanes, this shows ONE real instance moving through them. Trace one named example (a real
+       user action, a sample record/request with actual field values) stage by stage: .step badges in
+       time order, the instance's data as .cell chips/grids whose values visibly change between
+       stages, the taken path highlighted (.accent boxes, .ok edges) while alternatives stay plain.
+       If the doc deals in structured data (API response, matrix, 2D array, schedule), render the
+       example data in its natural shape (.cell grid with headers, day/time strip), not raw JSON.
+       Delete only if the doc truly has no runtime flow at all. -->
+  {{WORKED_EXAMPLE_SVG}}
+  <figcaption>{{One line: what this example instance is and what happens to it end to end.}}</figcaption>
+</figure>
+
+<h3>Important Behaviors</h3>
+
+<h4>Happy Path</h4>
+<p>{{The common path end to end.}}</p>
+
+<h4>Edge Cases / Failure Modes</h4>
+<p>{{The confusing or high-risk paths, what fails open/closed, and what retries or recovery mechanisms exist.}}</p>
+
+<figure class="diagram">
+  <!-- SVG: state/failure diagram — ANIMATED (pulse active state / dots on transitions). States as nodes, transitions as labeled edges,
+       retry loops and terminal states explicit. Delete only if there is genuinely no state. -->
+  {{STATE_DIAGRAM_SVG}}
+  <figcaption>{{One line: the states and the failure/retry transitions.}}</figcaption>
+</figure>
+
+<h4>Observability / Debugging</h4>
+<p>{{Logs, metrics, traces, dashboards, debug panels, database rows, and where to look during an incident.}}</p>
+
+<h2>3. Low-Level Code Map</h2>
+
+<h3>Where Things Live</h3>
+<table>
+  <tr><th>Area</th><th>Location</th></tr>
+  <tr><td>Entrypoints</td><td>{{files/functions/routes/jobs}}</td></tr>
+  <tr><td>Core implementation</td><td>{{files/modules}}</td></tr>
+  <tr><td>Source-of-truth types</td><td>{{files/models}}</td></tr>
+  <tr><td>Persistence / external systems</td><td>{{tables/queues/apis}}</td></tr>
+  <tr><td>Existing tests/fixtures</td><td>{{files}}</td></tr>
+  <tr><td>Related docs</td><td>{{AGENTS.md/designs/runbooks}}</td></tr>
+</table>
+
+<figure class="diagram">
+  <!-- SVG: module/file dependency sketch — key files as nodes, import/call edges.
+       Delete if the code map is trivially small. -->
+  {{CODE_MAP_SVG}}
+  <figcaption>{{One line: how the key files depend on each other.}}</figcaption>
+</figure>
+
+<h3>Reading Guide</h3>
+<p>Start here:</p>
+<table>
+  <tr><th>Order</th><th>Area</th><th>Why</th></tr>
+  <tr><td>1</td><td>{{Best first file or doc}}</td><td>{{Why it gives the fastest orientation}}</td></tr>
+  <tr><td>2</td><td>{{Main orchestrator or entrypoint}}</td><td>{{What flow it shows}}</td></tr>
+  <tr><td>3</td><td>{{Core type/model file}}</td><td>{{What concepts it defines}}</td></tr>
+  <tr><td>4</td><td>{{Important test or fixture}}</td><td>{{What behavior it proves}}</td></tr>
+</table>
+
+<p>Then inspect:</p>
+<table>
+  <tr><th>Area</th><th>What To Look For</th></tr>
+  <tr><td>{{Component or file cluster}}</td><td>{{What this explains}}</td></tr>
+  <tr><td>{{Component or file cluster}}</td><td>{{What this explains}}</td></tr>
+</table>
+
+<h3>Review / Investigation Checklist</h3>
+<table>
+  <tr><th>Check</th><th>How To Verify</th></tr>
+  <tr><td>{{Question to ask when reviewing/debugging}}</td><td>{{Where/how to answer it}}</td></tr>
+  <tr><td>{{Invariant to verify}}</td><td>{{Expected signal}}</td></tr>
+  <tr><td>{{Metric/log/table to inspect}}</td><td>{{Expected signal}}</td></tr>
+  <tr><td>{{Test or replay to run}}</td><td>{{Expected result}}</td></tr>
+</table>
+
+<h2>Scope Of This Explanation</h2>
+
+<h3>Covered</h3>
+<table>
+  <tr><th>#</th><th>Topic</th></tr>
+  <tr><td>1</td><td>{{What this doc explains}}</td></tr>
+  <tr><td>2</td><td>{{What this doc explains}}</td></tr>
+</table>
+
+<h3>Not Covered</h3>
+<table>
+  <tr><th>#</th><th>Topic</th></tr>
+  <tr><td>1</td><td>{{What this doc intentionally leaves out}}</td></tr>
+  <tr><td>2</td><td>{{Adjacent system or deeper topic}}</td></tr>
+</table>
+
+<h2>Assumptions</h2>
+<table>
+  <tr><th>#</th><th>Assumption</th><th>Why Reasonable</th><th>If Wrong</th></tr>
+  <tr><td>1</td><td>{{Assumption}}</td><td>{{Reason}}</td><td>{{What changes in this explanation}}</td></tr>
+  <tr><td>2</td><td>{{Assumption}}</td><td>{{Reason}}</td><td>{{What changes in this explanation}}</td></tr>
+</table>
+
+<h2>Open Questions</h2>
+<!-- Only genuine user decisions or facts the codebase cannot answer. Number questions Q1, Q2, ... globally across all groups (do not restart per group); keep numbers stable across iterations. -->
+
+<h3>Product / Behavior</h3>
+<table>
+  <tr><th>#</th><th>Question</th><th>Implication</th><th>Importance</th></tr>
+  <tr><td>{{Q#}}</td><td>{{Question}}</td><td>{{What changes depending on the answer}}</td><td>{{P0/P1/P2}}</td></tr>
+</table>
+
+<h3>Architecture / Boundaries</h3>
+<table>
+  <tr><th>#</th><th>Question</th><th>Implication</th><th>Importance</th></tr>
+  <tr><td>{{Q#}}</td><td>{{Question}}</td><td>{{What changes depending on the answer}}</td><td>{{P0/P1/P2}}</td></tr>
+</table>
+
+<h3>Data / Contracts</h3>
+<table>
+  <tr><th>#</th><th>Question</th><th>Implication</th><th>Importance</th></tr>
+  <tr><td>{{Q#}}</td><td>{{Question}}</td><td>{{What changes depending on the answer}}</td><td>{{P0/P1/P2}}</td></tr>
+</table>
+
+<h3>Operations / Debugging</h3>
+<table>
+  <tr><th>#</th><th>Question</th><th>Implication</th><th>Importance</th></tr>
+  <tr><td>{{Q#}}</td><td>{{Question}}</td><td>{{What changes depending on the answer}}</td><td>{{P0/P1/P2}}</td></tr>
+</table>
+
+<h3>Testing / Verification</h3>
+<table>
+  <tr><th>#</th><th>Question</th><th>Implication</th><th>Importance</th></tr>
+  <tr><td>{{Q#}}</td><td>{{Question}}</td><td>{{What changes depending on the answer}}</td><td>{{P0/P1/P2}}</td></tr>
+</table>
+
+<h2>Verification Plan</h2>
+<table>
+  <tr><th>Level</th><th>What To Validate</th><th>Notes</th></tr>
+  <tr><td>Unit-Level</td><td>{{Tests or pure functions that validate component behavior}}</td><td>{{Expected signal}}</td></tr>
+  <tr><td>Integration</td><td>{{Tests, scripts, logs, or traces that validate component interaction}}</td><td>{{Expected signal}}</td></tr>
+  <tr><td>E2E / Replay</td><td>{{End-to-end flow, replay, browser/API flow, or N/A with reason}}</td><td>{{Expected signal}}</td></tr>
+  <tr><td>Manual Review</td><td>{{Screenshots, dashboards, database rows, config pages, or manual checks}}</td><td>{{Who/where/how}}</td></tr>
+</table>
+
+<h2>Iteration Notes</h2>
+
+<h3>Review First</h3>
+<table>
+  <tr><th>#</th><th>Item</th><th>Why It Matters</th></tr>
+  <tr><td>1</td><td>{{Most uncertain explanation or assumption}}</td><td>{{Reason}}</td></tr>
+  <tr><td>2</td><td>{{Question that should be resolved next}}</td><td>{{Reason}}</td></tr>
+</table>
+
+<h3>Follow-Up Docs</h3>
+<table>
+  <tr><th>#</th><th>Doc</th></tr>
+  <tr><td>1</td><td>{{Deeper subsystem or adjacent workflow worth explaining separately}}</td></tr>
+  <tr><td>2</td><td>{{Design/spec that should be written if changes are proposed}}</td></tr>
+</table>

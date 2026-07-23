@@ -1,0 +1,107 @@
+<svg viewBox="0 0 860 490" role="img" aria-label="Component map of touched files" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .cm-root {
+      --cm-card: #f3f0fb;
+      --cm-card-stroke: #c9bde8;
+      --cm-accent: #ece2ff;
+      --cm-accent-stroke: #8a6ff0;
+      --cm-text: #2a2440;
+      --cm-group-stroke: #b8a9dd;
+      --cm-group-label: #6b5da0;
+      --cm-edge: #7a6fa0;
+      --cm-edge-label: #574d74;
+      --cm-arrow: #7a6fa0;
+    }
+    @media (prefers-color-scheme: dark) {
+      .cm-root {
+        --cm-card: #2a2640;
+        --cm-card-stroke: #4a4468;
+        --cm-accent: #3a2f66;
+        --cm-accent-stroke: #b9a6ff;
+        --cm-text: #eae6ff;
+        --cm-group-stroke: #5a5080;
+        --cm-group-label: #b3a4e0;
+        --cm-edge: #9a8fd0;
+        --cm-edge-label: #b9b0d8;
+        --cm-arrow: #9a8fd0;
+      }
+    }
+    .cm-root .node { fill: var(--cm-card); stroke: var(--cm-card-stroke); stroke-width: 1.5; rx: 8; }
+    .cm-root .accent { fill: var(--cm-accent); stroke: var(--cm-accent-stroke); stroke-width: 1.75; }
+    .cm-root .group { fill: none; stroke: var(--cm-group-stroke); stroke-width: 1.5; stroke-dasharray: 6 5; rx: 12; }
+    .cm-root .groupLabel { fill: var(--cm-group-label); font: 700 13px system-ui, sans-serif; text-anchor: start; }
+    .cm-root .nodeText { fill: var(--cm-text); font: 13px system-ui, sans-serif; text-anchor: middle; }
+    .cm-root .edge { fill: none; stroke: var(--cm-edge); stroke-width: 1.6; }
+    .cm-root .edge.dashed { stroke-dasharray: 5 4; }
+    .cm-root .edgeLabel { fill: var(--cm-edge-label); font: 12px system-ui, sans-serif; }
+    .cm-root .arrowhead { fill: var(--cm-arrow); }
+  </style>
+
+  <defs>
+    <marker id="arrow-cm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <g class="cm-root">
+
+    <!-- ================= GROUP 1: web assets (left) ================= -->
+    <rect class="group" x="30" y="56" width="400" height="306"/>
+    <text class="groupLabel" x="42" y="50">web assets — most change</text>
+
+    <!-- Node A: app.js (accent) -->
+    <rect class="node accent" x="50" y="84" width="360" height="70" rx="8"/>
+    <text class="nodeText" x="230" y="107">web/app.js —<tspan x="230" dy="1.2em">cardHTML, archivedCardHTML,</tspan><tspan x="230" dy="1.2em">editor overlay, handlers</tspan></text>
+
+    <!-- Node B: index.html (accent) -->
+    <rect class="node accent" x="50" y="186" width="360" height="60" rx="8"/>
+    <text class="nodeText" x="230" y="211">web/index.html —<tspan x="230" dy="1.2em">#editor-overlay markup</tspan></text>
+
+    <!-- Node C: style.css (accent) -->
+    <rect class="node accent" x="50" y="278" width="360" height="60" rx="8"/>
+    <text class="nodeText" x="230" y="303">web/style.css — .kill deleted,<tspan x="230" dy="1.2em">composer styles</tspan></text>
+
+    <!-- ================= GROUP 2: Go server (top right) ================= -->
+    <rect class="group" x="470" y="56" width="360" height="200"/>
+    <text class="groupLabel" x="482" y="50">Go server — deletion only</text>
+
+    <!-- Node E: tests -->
+    <rect class="node" x="488" y="84" width="324" height="56" rx="8"/>
+    <text class="nodeText" x="650" y="106">web_test.go / contract_test.go —<tspan x="650" dy="1.2em">stay green (no wire change)</tspan></text>
+
+    <!-- Node D: web.go -->
+    <rect class="node" x="488" y="170" width="324" height="72" rx="8"/>
+    <text class="nodeText" x="650" y="193">web.go —<tspan x="650" dy="1.2em">webReview + /api/review</tspan><tspan x="650" dy="1.2em">route deleted</tspan></text>
+
+    <!-- ================= GROUP 3: iOS app (bottom right) ================= -->
+    <rect class="group" x="470" y="296" width="360" height="180"/>
+    <text class="groupLabel" x="482" y="290">iOS app — one shared pattern</text>
+
+    <!-- Node F: JobDetailView (accent) -->
+    <rect class="node accent" x="488" y="324" width="324" height="58" rx="8"/>
+    <text class="nodeText" x="650" y="347">JobDetailView.swift —<tspan x="650" dy="1.2em">artifact collapse in Detail + Steer</tspan></text>
+
+    <!-- Node G: API.md (accent) -->
+    <rect class="node accent" x="488" y="406" width="324" height="56" rx="8"/>
+    <text class="nodeText" x="650" y="428">ios/API.md —<tspan x="650" dy="1.2em">/api/review section deleted</tspan></text>
+
+    <!-- ================= EDGES ================= -->
+
+    <!-- app.js -> web.go (solid). Label sits in clear top band. -->
+    <line class="edge" x1="410" y1="119" x2="486" y2="200" marker-end="url(#arrow-cm)"/>
+    <text class="edgeLabel" x="430" y="34" text-anchor="middle">fetch /api/board · /api/steer · /api/kill · /api/job/form</text>
+
+    <!-- JobDetailView.swift -> web.go (solid, unchanged API) -->
+    <line class="edge" x1="650" y1="324" x2="650" y2="244" marker-end="url(#arrow-cm)"/>
+    <text class="edgeLabel" x="662" y="288" text-anchor="start">same JSON API (unchanged)</text>
+
+    <!-- index.html -> app.js (dashed, DOM ids) -->
+    <line class="edge dashed" x1="230" y1="186" x2="230" y2="156" marker-end="url(#arrow-cm)"/>
+    <text class="edgeLabel" x="242" y="174" text-anchor="start">DOM ids</text>
+
+    <!-- style.css -> index.html (dashed, classes) -->
+    <line class="edge dashed" x1="230" y1="278" x2="230" y2="248" marker-end="url(#arrow-cm)"/>
+    <text class="edgeLabel" x="242" y="266" text-anchor="start">classes</text>
+
+  </g>
+</svg>

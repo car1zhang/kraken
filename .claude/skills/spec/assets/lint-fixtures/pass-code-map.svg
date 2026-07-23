@@ -1,0 +1,77 @@
+<svg viewBox="0 0 860 485" role="img" aria-label="File-level dependency map of the doc and diagram deliverables">
+  <text class="title" x="16" y="26">where the key files live and who imports whom</text>
+  <defs>
+    <marker id="arrow-code-map" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <!-- edges: contract flow -->
+  <path class="edge" d="M185,66 C250,66 262,150 320,150" marker-end="url(#arrow-code-map)"/>
+  <text class="edgeLabel" x="252" y="104">references path</text>
+
+  <path class="edge dashed" d="M185,176 C245,172 268,166 320,164" marker-end="url(#arrow-code-map)"/>
+  <text class="edgeLabel" x="252" y="160">paste into briefs</text>
+
+  <path class="edge dashed" d="M185,271 C248,250 270,196 320,180" marker-end="url(#arrow-code-map)"/>
+  <text class="edgeLabel" x="252" y="230">paste into briefs</text>
+
+  <!-- edges: render flow -->
+  <path class="edge" d="M715,92 L715,175" marker-end="url(#arrow-code-map)"/>
+  <text class="edgeLabel" x="768" y="135">reads + verdicts</text>
+
+  <path class="edge" d="M715,217 L715,320" marker-end="url(#arrow-code-map)"/>
+  <text class="edgeLabel" x="785" y="270">flatten substitutes</text>
+
+  <path class="edge dashed" d="M485,331 L620,341" marker-end="url(#arrow-code-map)"/>
+  <text class="edgeLabel" x="552" y="326">CSS ships inside doc</text>
+
+  <path class="edge dashed" d="M392,352 L392,410"/>
+  <text class="edgeLabel" x="480" y="384">byte-identical CSS block</text>
+
+  <!-- nodes -->
+  <g class="node">
+    <rect x="30" y="40" width="155" height="52" rx="8"/>
+    <text x="108" y="60"><tspan x="108">jobs/crew.go</tspan><tspan x="108" dy="1.2em">(zeusBrief)</tspan></text>
+  </g>
+
+  <g class="node">
+    <rect x="30" y="155" width="155" height="42" rx="8"/>
+    <text x="107" y="180">doc/SKILL.md</text>
+  </g>
+
+  <g class="node">
+    <rect x="30" y="250" width="155" height="42" rx="8"/>
+    <text x="107" y="275">info/SKILL.md</text>
+  </g>
+
+  <g class="node accent">
+    <rect x="320" y="140" width="180" height="52" rx="8"/>
+    <text x="410" y="160"><tspan x="410">hermes-contract.md</tspan><tspan x="410" dy="1.2em">(new asset)</tspan></text>
+  </g>
+
+  <g class="node accent">
+    <rect x="620" y="40" width="190" height="52" rx="8"/>
+    <text x="715" y="60"><tspan x="715">lint_svg.py</tspan><tspan x="715" dy="1.2em">(new asset)</tspan></text>
+  </g>
+
+  <g class="node store">
+    <rect x="620" y="175" width="190" height="42" rx="8"/>
+    <text x="715" y="200">fragments/&lt;id&gt;.svg</text>
+  </g>
+
+  <g class="node store">
+    <rect x="620" y="320" width="190" height="42" rx="8"/>
+    <text x="715" y="345">artifacts/&lt;slug&gt;.html</text>
+  </g>
+
+  <g class="node">
+    <rect x="300" y="310" width="185" height="42" rx="8"/>
+    <text x="392" y="335">spec-template.html</text>
+  </g>
+
+  <g class="node">
+    <rect x="300" y="410" width="195" height="42" rx="8"/>
+    <text x="397" y="435">explain-template.html</text>
+  </g>
+</svg>

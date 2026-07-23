@@ -546,21 +546,6 @@ body {
 }
 #steer-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
 .btn:disabled { opacity: 0.4; cursor: default; }
-.feedback-form {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 9px 14px;
-  border-bottom: 1px solid var(--hairline);
-  background: var(--raised);
-}
-#feedback-text {
-  font: 12px/1.5 var(--sans);
-  background: var(--surface); color: var(--text);
-  border: 1px solid var(--hairline-2);
-  padding: 8px 10px; resize: vertical; min-height: 54px;
-}
-#feedback-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
-.feedback-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
-.feedback-note { font: 11px var(--mono); color: var(--text-2); margin-right: auto; }
 .panel-body { overflow-y: auto; padding: 16px 20px; font-size: 12.5px; line-height: 1.6; }
 .panel-body.raw { white-space: pre-wrap; font: 11px/1.6 var(--mono); color: var(--text-2); }
 .panel-body.page { padding: 0; overflow: hidden; }
@@ -591,6 +576,19 @@ body {
    overlays ---- */
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
 .answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
+
+/* command chips: one-tap /info /spec /do /pr insertion above a composer
+   textarea. Deliberately not .chip/.chips — that class is claimed by the
+   delegated document click handler that opens an artifact panel. */
+.cmd-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.cmd-chip {
+  font: 10px var(--mono);
+  background: transparent; color: var(--accent);
+  border: 1px solid var(--accent-soft);
+  padding: 2px 7px; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.cmd-chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
 
 /* attachment chips: paste/drop/pick images into the steer and editor
    composers. Deliberately not .chip/.chips (that class opens an artifact

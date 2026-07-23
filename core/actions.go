@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -359,6 +360,24 @@ func CapturePane(pane string) (string, error) {
 	return string(out), nil
 }
 
+// bareSlashCommandRe matches a message that's nothing but a single slash
+// command with no arguments (e.g. "/do"), as opposed to "/do implement the
+// thing" or plain conversational text.
+var bareSlashCommandRe = regexp.MustCompile(`^/\S+$`)
+
+// guardBareSlashCommand appends a trailing space to a bare slash command
+// before it's typed into a pane. Claude Code's slash palette autocompletes a
+// bare command by longest-prefix match, so an unqualified "/do" can silently
+// complete to an unrelated personal command like "/doc" — the space defeats
+// that prefix match. Anything else (has arguments, has no leading slash, or
+// spans multiple lines) passes through unchanged.
+func guardBareSlashCommand(msg string) string {
+	if bareSlashCommandRe.MatchString(msg) {
+		return msg + " "
+	}
+	return msg
+}
+
 // SendMessage runs the send-time safety checks and types msg into p's prompt,
 // submitting it with Enter. Shared by k s, the bus, and the daemon — every
 // path that talks to an agent goes through the same guards.
@@ -371,6 +390,7 @@ func SendMessage(p *Peer, msg string) error {
 	if p.Status == "question" || PaneShowsQuestion(p.Pane) {
 		return fmt.Errorf("%s has a question/permission prompt open — sending would answer it; resolve it first", DisplayName(p))
 	}
+	msg = guardBareSlashCommand(msg)
 	if strings.Contains(msg, "\n") {
 		load := exec.Command("tmux", "load-buffer", "-b", "kraken", "-")
 		load.Stdin = strings.NewReader(msg)

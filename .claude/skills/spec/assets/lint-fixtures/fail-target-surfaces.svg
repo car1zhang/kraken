@@ -1,0 +1,106 @@
+<svg viewBox="0 0 860 480" role="img" aria-label="Target UI surfaces (revised)" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="arrow-ts" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+  <style>
+    .node rect { fill:#f5f6f8; stroke:#b8bec8; stroke-width:1; rx:6; ry:6; }
+    .node text { fill:#1f2430; font-size:13px; text-anchor:middle; dominant-baseline:middle; }
+    .node.accent rect { fill:#fff4e0; stroke:#e0a020; stroke-width:1.6; }
+    .node.accent text { fill:#7a4d05; }
+    .group { fill:none; stroke:#9aa2b1; stroke-width:1.2; stroke-dasharray:6 4; rx:10; ry:10; }
+    .glabel { fill:#6b7280; font-size:12px; font-weight:600; }
+    .store rect { fill:#eef2ff; stroke:#7c86a0; stroke-width:1.2; rx:8; ry:8; }
+    .store text { fill:#33405c; font-size:12px; text-anchor:middle; }
+    .store .del { fill:#c0392b; font-weight:600; }
+    .edge { fill:none; stroke:#6b7280; stroke-width:1.6; }
+    .edge.dashed { stroke-dasharray:5 4; stroke:#8a93a3; }
+    .edgeLabel { fill:#6b7280; font-size:11px; text-anchor:middle; }
+    .arrowhead { fill:#6b7280; }
+    .muted { fill:#9aa2b1; font-size:11px; font-style:italic; }
+  </style>
+
+  <!-- ===== LEFT: Board card group ===== -->
+  <rect class="group" x="25" y="44" width="300" height="278"/>
+  <text class="glabel" x="37" y="63">Board card (calm, read-mostly)</text>
+
+  <g class="node accent">
+    <rect x="37" y="78" width="276" height="32"/>
+    <text x="175" y="94">slug · ● state (no ✕)</text>
+  </g>
+  <g class="node">
+    <rect x="37" y="128" width="276" height="32"/>
+    <text x="175" y="144">meta · detail</text>
+  </g>
+  <g class="node accent">
+    <rect x="37" y="178" width="276" height="32"/>
+    <text x="175" y="194">chips: first 3 + [+N more] toggle</text>
+  </g>
+  <g class="node">
+    <rect x="37" y="228" width="276" height="32"/>
+    <text x="175" y="244">⚡ unblock / ➤ message zeus (kept)</text>
+  </g>
+  <text class="muted" x="37" y="300">removed: ✕ kill, ⌨ nvim/code</text>
+
+  <!-- ===== MIDDLE/RIGHT: Steer/unblock modal group ===== -->
+  <rect class="group" x="518" y="44" width="320" height="256"/>
+  <text class="glabel" x="530" y="62">Steer/unblock modal</text>
+  <text class="glabel" x="530" y="78">THE opened job (live working/blocked)</text>
+
+  <g class="node accent">
+    <rect x="533" y="92" width="290" height="32"/>
+    <text x="678" y="108">panel head: ✕ cancel job (confirm)</text>
+  </g>
+  <g class="node">
+    <rect x="533" y="138" width="290" height="32"/>
+    <text x="678" y="154">context: detail · last sent · chips</text>
+  </g>
+  <g class="node accent">
+    <rect x="533" y="184" width="290" height="48"/>
+    <text x="678" y="200">
+      <tspan x="678" dy="0">▸ spec — ❄ frozen ·</tspan>
+      <tspan x="678" dy="1.25em">display only (collapsible)</tspan>
+    </text>
+  </g>
+  <g class="node">
+    <rect x="533" y="246" width="290" height="32"/>
+    <text x="678" y="262">composer textarea + send</text>
+  </g>
+
+  <!-- ===== BOTTOM-LEFT: Editor overlay group ===== -->
+  <rect class="group" x="25" y="362" width="300" height="98"/>
+  <text class="glabel" x="37" y="383">Editor overlay —</text>
+  <text class="glabel" x="37" y="399">editable jobs only (draft/queued/done)</text>
+  <g class="node">
+    <rect x="37" y="414" width="276" height="32"/>
+    <text x="175" y="430">form + save (unchanged)</text>
+  </g>
+
+  <!-- ===== EDGE 1: card group -> modal group ===== -->
+  <line class="edge" x1="325" y1="110" x2="516" y2="110" marker-end="url(#arrow-ts)"/>
+  <text class="edgeLabel" x="421" y="92">click card</text>
+  <text class="edgeLabel" x="421" y="104">(live working/blocked)</text>
+
+  <!-- ===== EDGE 3: card ⚡ node -> modal group (same modal) ===== -->
+  <line class="edge" x1="313" y1="244" x2="516" y2="258" marker-end="url(#arrow-ts)"/>
+  <text class="edgeLabel" x="414" y="241">same modal</text>
+
+  <!-- ===== EDGE 2: card group -> editor overlay ===== -->
+  <line class="edge" x1="120" y1="322" x2="120" y2="360" marker-end="url(#arrow-ts)"/>
+  <text class="edgeLabel" x="200" y="345">click card (editable)</text>
+
+  <!-- ===== dashed edges: modal group -> server store ===== -->
+  <line class="edge dashed" x1="560" y1="302" x2="560" y2="388" marker-end="url(#arrow-ts)"/>
+  <line class="edge dashed" x1="620" y1="302" x2="620" y2="388" marker-end="url(#arrow-ts)"/>
+  <text class="edgeLabel" x="745" y="328">POST /api/kill ·</text>
+  <text class="edgeLabel" x="745" y="344">POST /api/steer ·</text>
+  <text class="edgeLabel" x="745" y="360">GET form (spec)</text>
+
+  <!-- ===== BOTTOM-RIGHT: server store box ===== -->
+  <g class="store">
+    <rect x="430" y="390" width="408" height="64"/>
+    <text x="634" y="416">server: /api/kill · /api/steer · /api/job/form</text>
+    <text class="del" x="634" y="438">/api/review DELETED</text>
+  </g>
+</svg>

@@ -85,15 +85,6 @@
         <span class="spacer"></span>
         <button class="btn ghost" id="panel-open">↗ tab</button>
         <button class="btn ghost" id="panel-raw">raw</button>
-        <button class="btn ghost" id="panel-feedback" hidden>feedback</button>
-      </div>
-      <div class="feedback-form" id="feedback-form" hidden>
-        <textarea id="feedback-text" placeholder="what's wrong with this doc/diagram?" rows="3"></textarea>
-        <div class="feedback-actions">
-          <span class="feedback-note" id="feedback-note"></span>
-          <button class="btn ghost" id="feedback-cancel">cancel</button>
-          <button class="btn" id="feedback-send">send</button>
-        </div>
       </div>
       <div class="panel-body" id="panel-body"></div>
     </div>
@@ -129,6 +120,7 @@
           <button class="steer-spec-head" id="steer-spec-toggle"><span class="tri">▸</span> spec</button>
           <div class="steer-spec-body" id="steer-spec-body" hidden></div>
         </div>
+        <div class="cmd-chips" id="steer-cmd-chips"></div>
         <textarea id="steer-text" rows="4"
           placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
         <div class="att-zone" id="steer-att-zone">
@@ -195,14 +187,15 @@
             <span class="f-toggles">
               <label class="check"><input type="checkbox" id="f-solo"> solo</label>
               <label class="check"><input type="checkbox" id="f-skipdoc"
-                title="build only: skip the /doc → /send phase — zeus implements the spec directly"> skip doc</label>
+                title="build only: skip the /spec → /do phase — zeus implements the spec directly"> skip doc</label>
             </span>
           </div>
           <div class="f-block">
             <span class="f-label">prereqs <button class="mini-add" id="f-add-prereq">+ add</button></span>
             <div id="f-prereqs"></div>
           </div>
-          <label class="f-block grow">spec — zeus' initial prompt, as fleshed out as possible
+          <div class="cmd-chips" id="editor-cmd-chips"></div>
+          <label class="f-block grow" for="editor-text">spec — zeus' initial prompt, as fleshed out as possible
             <textarea id="editor-text" spellcheck="false"></textarea>
           </label>
           <div class="att-zone" id="editor-att-zone">

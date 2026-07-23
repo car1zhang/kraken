@@ -696,6 +696,46 @@ func TestParseJobPRsStrict(t *testing.T) {
 	}
 }
 
+// TestParseJobPRsWatermarks covers the watchPRs watermark fields riding
+// alongside url/state in a hand-written or daemon-written prs: block, and
+// confirms a legacy entry with neither key still parses clean with both
+// watermarks left at their empty default — the backward-compat guarantee: a
+// file written by an old binary (or a human, or the form editor, which never
+// emits these keys) must keep parsing exactly as before.
+func TestParseJobPRsWatermarks(t *testing.T) {
+	src := `---
+job: x
+type: build
+repo: kraken
+ready: true
+state: working
+prs:
+  - url: https://github.com/car1zhang/kraken/pull/7
+    state: open
+    last-comment-at: 2024-01-02T03:04:05Z
+    bumped-sha: abc123
+  - url: https://github.com/car1zhang/kraken/pull/9
+    state: open
+---
+body`
+	j := ParseJob("x.job.md", []byte(src))
+	if j.Err != "" {
+		t.Fatalf("unexpected err: %s", j.Err)
+	}
+	if len(j.PRs) != 2 {
+		t.Fatalf("prs: %+v", j.PRs)
+	}
+	want0 := JobPR{URL: "https://github.com/car1zhang/kraken/pull/7", State: "open",
+		LastCommentAt: "2024-01-02T03:04:05Z", BumpedSHA: "abc123"}
+	if j.PRs[0] != want0 {
+		t.Fatalf("watermarked entry: got %+v, want %+v", j.PRs[0], want0)
+	}
+	want1 := JobPR{URL: "https://github.com/car1zhang/kraken/pull/9", State: "open"}
+	if j.PRs[1] != want1 {
+		t.Fatalf("legacy entry (no watermark keys): got %+v, want %+v", j.PRs[1], want1)
+	}
+}
+
 func TestPatchPRs(t *testing.T) {
 	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\n---\nbody\n"
 	prs := []JobPR{{URL: "https://x/pull/1", State: "open"}}
@@ -731,6 +771,34 @@ func TestPatchPRs(t *testing.T) {
 	// no frontmatter refuses
 	if _, err := patchPRs("no fences here", prs); err == nil {
 		t.Error("expected error on missing frontmatter")
+	}
+}
+
+// TestPatchPRsWatermarkRoundTrip covers watchPRs' two extra frontmatter
+// fields through patchPRs: a watermarked entry emits last-comment-at/
+// bumped-sha lines and round-trips through the strict parser, while an
+// entry with no watermarks set (the pre-watchPRs shape) writes byte-
+// identical to before — no blank watermark lines — so files nothing has
+// ever watched stay untouched by this feature.
+func TestPatchPRsWatermarkRoundTrip(t *testing.T) {
+	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\n---\nbody\n"
+	prs := []JobPR{
+		{URL: "https://x/pull/1", State: "open", LastCommentAt: "2024-01-02T03:04:05Z", BumpedSHA: "abc123"},
+		{URL: "https://x/pull/2", State: "open"}, // no watermarks yet
+	}
+	got, err := patchPRs(src, prs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "  - url: https://x/pull/1\n    state: open\n    last-comment-at: 2024-01-02T03:04:05Z\n    bumped-sha: abc123\n") {
+		t.Fatalf("watermark lines missing: %q", got)
+	}
+	if !strings.Contains(got, "  - url: https://x/pull/2\n    state: open\n---") {
+		t.Fatalf("unwatermarked entry grew blank watermark lines: %q", got)
+	}
+	j := ParseJob("x.job.md", []byte(got))
+	if j.Err != "" || len(j.PRs) != 2 || j.PRs[0] != prs[0] || j.PRs[1] != prs[1] {
+		t.Fatalf("round-trip: err=%q prs=%+v\n%s", j.Err, j.PRs, got)
 	}
 }
 
@@ -863,5 +931,56 @@ func TestRemoveJobPRs(t *testing.T) {
 	}
 	if removed2 != nil {
 		t.Fatalf("no-op drop: got removed %v, want nil", removed2)
+	}
+}
+
+// updatePRWatermark is watchPRs' write path: it must land the new watermark
+// on the right URL, leave every other recorded field (including a sibling
+// PR's own watermark) untouched, and no-op cleanly when the URL is no longer
+// on disk (dropped by a concurrent repair pass or hand edit between load and
+// write) rather than resurrecting it.
+func TestUpdatePRWatermark(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.job.md")
+	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\nprs:\n" +
+		"  - url: https://x/pull/1\n    state: open\n" +
+		"  - url: https://x/pull/2\n    state: open\n    last-comment-at: 2024-01-01T00:00:00Z\n    bumped-sha: sha0\n---\nbody\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j := ParseJob("x.job.md", []byte(src))
+	j.File = path
+
+	if err := updatePRWatermark(j, "https://x/pull/1", "2024-02-01T00:00:00Z", "sha1"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reparsed := ParseJob("x.job.md", data)
+	if reparsed.Err != "" {
+		t.Fatalf("reparsed job errored: %s", reparsed.Err)
+	}
+	want := []JobPR{
+		{URL: "https://x/pull/1", State: "open", LastCommentAt: "2024-02-01T00:00:00Z", BumpedSHA: "sha1"},
+		{URL: "https://x/pull/2", State: "open", LastCommentAt: "2024-01-01T00:00:00Z", BumpedSHA: "sha0"},
+	}
+	if len(reparsed.PRs) != 2 || reparsed.PRs[0] != want[0] || reparsed.PRs[1] != want[1] {
+		t.Fatalf("prs after watermark update: got %+v, want %+v", reparsed.PRs, want)
+	}
+	if len(j.PRs) != 2 || j.PRs[0] != want[0] || j.PRs[1] != want[1] {
+		t.Fatalf("j.PRs not updated: got %+v, want %+v", j.PRs, want)
+	}
+
+	// URL no longer on disk (simulating a concurrent drop): no-op, no error,
+	// and the file is left byte-for-byte as read.
+	before, _ := os.ReadFile(path)
+	if err := updatePRWatermark(j, "https://x/pull/999", "2024-03-01T00:00:00Z", "sha2"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatalf("unknown-URL update touched the file:\nbefore: %s\nafter:  %s", before, after)
 	}
 }

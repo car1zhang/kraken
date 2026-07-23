@@ -1,6 +1,49 @@
 import SwiftUI
 import PhotosUI
 
+// MARK: - command chips
+
+/// Row of four tappable command chips — /info /spec /do /pr — for one-tap
+/// insertion into a composer's bound text, mirroring the web SPA's command
+/// chips (app.js's attachCmdChips). SwiftUI's TextEditor exposes no cursor
+/// position without a UIKit bridge, so this appends rather than inserting at
+/// the caret: a leading space is added only when the text is non-empty and
+/// doesn't already end in whitespace, then the command plus a trailing
+/// space. Shared by SteerView/ReactivateView here and JobFormView's spec
+/// editor.
+struct CmdChipsRow: View {
+    @Binding var text: String
+
+    private static let commands = ["/info", "/spec", "/do", "/pr"]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.commands, id: \.self) { cmd in
+                Button {
+                    append(cmd)
+                } label: {
+                    Text(cmd)
+                        .font(.data(11, weight: .semibold))
+                        .foregroundStyle(KTheme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .overlay(Rectangle().stroke(KTheme.accentSoft, lineWidth: 1))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func append(_ cmd: String) {
+        if text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") {
+            text += cmd + " "
+        } else {
+            text += " " + cmd + " "
+        }
+    }
+}
+
 // MARK: - image attachments
 //
 // One acquired-and-uploaded image on a composer (steer/unblock, and the
@@ -1107,6 +1150,7 @@ struct ReactivateView: View {
                     .foregroundStyle(KTheme.text2)
             }
             kSection("What to adjust (optional)") {
+                CmdChipsRow(text: $text)
                 TextEditor(text: $text)
                     .focused($textFocused)
                     .scrollContentBackground(.hidden)
@@ -1139,7 +1183,10 @@ struct ReactivateView: View {
         .disabled(isBusy)
         .task {
             await draftStore.hydrate(slug: job.slug)
-            text = draftStore.get(draftKey)
+            // Guard against clobbering a command chip tapped in the window
+            // between this view appearing and hydration finishing — only
+            // land the stored draft if nothing's been typed yet.
+            if text.isEmpty { text = draftStore.get(draftKey) }
         }
         .onChange(of: text) {
             draftStore.set(draftKey, text)
@@ -1229,6 +1276,7 @@ struct SteerView: View {
                 }
             }
             kSection("Message") {
+                CmdChipsRow(text: $text)
                 TextEditor(text: $text)
                     .focused($textFocused)
                     .scrollContentBackground(.hidden)
@@ -1272,7 +1320,10 @@ struct SteerView: View {
         .disabled(isBusy)
         .task {
             await draftStore.hydrate(slug: job.slug)
-            text = draftStore.get(draftKey)
+            // Guard against clobbering a command chip tapped in the window
+            // between this view appearing and hydration finishing — only
+            // land the stored draft if nothing's been typed yet.
+            if text.isEmpty { text = draftStore.get(draftKey) }
         }
         .onChange(of: text) {
             draftStore.set(draftKey, text)
