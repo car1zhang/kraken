@@ -85,6 +85,31 @@ enum KTheme {
     static let pollingSoftUI = dyn(light: 0xD9F2F7, dark: 0x0E2E33)
     static let pollingSoft = Color(uiColor: pollingSoftUI)
 
+    // Per-skill colors: /info /aim /do /pr each get their own hue so a spec
+    // full of pipeline commands reads as a colored pipeline, both in the
+    // iOS composer inline highlight (HighlightingTextEditor) and in
+    // CmdChipsRow. aim-red is a true red, kept distinct from the pink
+    // `counter` above; do-yellow is yellower than the amber `revealed` above
+    // so "do" doesn't read as "question pending"; pr-green mirrors `solved`
+    // via its own token so the two can diverge later; info-blue is a new
+    // hue (the palette otherwise has no true blue — `polling` is cyan).
+    static let skillInfoUI = dyn(light: 0x1A6FD4, dark: 0x5EA8FF)
+    static let skillInfo = Color(uiColor: skillInfoUI)
+    static let skillInfoSoftUI = dyn(light: 0xDCEAFB, dark: 0x102A45)
+    static let skillInfoSoft = Color(uiColor: skillInfoSoftUI)
+    static let skillAimUI = dyn(light: 0xC42B2B, dark: 0xFF6B6B)
+    static let skillAim = Color(uiColor: skillAimUI)
+    static let skillAimSoftUI = dyn(light: 0xFBE0E0, dark: 0x3A1414)
+    static let skillAimSoft = Color(uiColor: skillAimSoftUI)
+    static let skillDoUI = dyn(light: 0x8A7206, dark: 0xF5D34D)
+    static let skillDo = Color(uiColor: skillDoUI)
+    static let skillDoSoftUI = dyn(light: 0xF7F0D4, dark: 0x332B0E)
+    static let skillDoSoft = Color(uiColor: skillDoSoftUI)
+    static let skillPrUI = dyn(light: 0x178A44, dark: 0x4ADE80)
+    static let skillPr = Color(uiColor: skillPrUI)
+    static let skillPrSoftUI = dyn(light: 0xDCF3E4, dark: 0x0F2E1D)
+    static let skillPrSoft = Color(uiColor: skillPrSoftUI)
+
     // --- global chrome (nav bar / tab bar / page dots) ---
     // Configured once via UIKit appearance proxies rather than threading
     // .toolbarBackground through every NavigationStack (there are many —
@@ -145,7 +170,11 @@ extension Font {
     // it for free instead of hand-editing dozens of literals. +1.5pt below
     // 13pt, +2pt at/above — chosen so it reproduces the sizes called out
     // during review exactly (10→11.5, 11→12.5, 13→15) while still bumping
-    // everything else in between consistently.
+    // everything else in between consistently. fileprivate: nothing outside
+    // this file needs the raw arithmetic — UIFont.voice below (UIKit's twin
+    // of Font.voice, for HighlightingTextEditor's UITextView) lives in this
+    // same file and reuses this exact function rather than a duplicated
+    // literal that could drift from this rule.
     fileprivate static func bumped(_ size: CGFloat) -> CGFloat {
         size < 13 ? size + 1.5 : size + 2
     }
@@ -160,6 +189,17 @@ extension Font {
     /// transcript text blocks.
     static func voice(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: bumped(size), weight: weight, design: .default)
+    }
+}
+
+extension UIFont {
+    /// UIKit twin of Font.voice, for UIKit-hosted text (HighlightingTextEditor's
+    /// UITextView) that can't consume a SwiftUI Font. Calls Font.bumped
+    /// directly — fileprivate only blocks access outside this file, and this
+    /// extension lives in the same file — so the two can never drift apart
+    /// on sizing.
+    static func voice(_ size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
+        .systemFont(ofSize: Font.bumped(size), weight: weight)
     }
 }
 

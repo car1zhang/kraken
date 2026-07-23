@@ -5,44 +5,66 @@ import PhotosUI
 
 /// Row of four tappable command chips — /info /aim /do /pr — for one-tap
 /// insertion into a composer's bound text, mirroring the web SPA's command
-/// chips (app.js's attachCmdChips). SwiftUI's TextEditor exposes no cursor
-/// position without a UIKit bridge, so this appends rather than inserting at
-/// the caret: a leading space is added only when the text is non-empty and
-/// doesn't already end in whitespace, then the command plus a trailing
-/// space. Shared by SteerView/ReactivateView here and JobFormView's spec
-/// editor.
+/// chips (app.js's attachCmdChips). This still appends rather than inserting
+/// at the caret even though HighlightingTextEditor is UIKit-backed (and so
+/// does expose a cursor position) — caret-aware insertion is an explicit
+/// non-goal for this pass. A leading space is added only when the text is
+/// non-empty and doesn't already end in whitespace, then the command plus a
+/// trailing space. Shared by SteerView/ReactivateView here and JobFormView's
+/// spec editor.
 ///
-/// Each chip also lights up (purple fill + soft glow, mirroring app.js's
-/// mirrored-backdrop highlight for the same four commands) when its command
-/// already appears in `text` — pure render-state off the existing binding,
-/// no new state. TextEditor has no attributed-text support, so unlike the
-/// web composers this doesn't attempt an inline in-text highlight; the chip
-/// itself is the highlight surface.
+/// Each chip is colored by its skill (text = skill color, inactive border =
+/// skill soft, active = skill-soft fill + skill border + glow) and lights up
+/// when its command already appears in `text` — pure render-state off the
+/// existing binding, no new state. `commands` is also the single source
+/// HighlightingTextEditor's token finder reuses, so the two never drift
+/// apart on which commands are recognized.
 struct CmdChipsRow: View {
     @Binding var text: String
 
-    private static let commands = ["/info", "/aim", "/do", "/pr"]
+    static let commands = ["/info", "/aim", "/do", "/pr"]
 
     var body: some View {
         HStack(spacing: 6) {
             ForEach(Self.commands, id: \.self) { cmd in
                 let active = Self.isPresent(cmd, in: text)
+                let style = Self.style(for: cmd)
                 Button {
                     append(cmd)
                 } label: {
                     Text(cmd)
                         .font(.data(11, weight: .semibold))
-                        .foregroundStyle(KTheme.accent)
+                        .foregroundStyle(style.color)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(active ? KTheme.accentSoft : .clear)
-                        .overlay(Rectangle().stroke(active ? KTheme.accent : KTheme.accentSoft, lineWidth: 1))
-                        .shadow(color: active ? KTheme.accent.opacity(0.5) : .clear, radius: 4)
+                        .background(active ? style.soft : .clear)
+                        .overlay(Rectangle().stroke(active ? style.color : style.soft, lineWidth: 1))
+                        .shadow(color: active ? style.color.opacity(0.5) : .clear, radius: 4)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    // command → (UIColor, UIColor soft) — the ONE switch statement both this
+    // chip row and HighlightingTextEditor.color(forCommand:) draw from,
+    // following the KTheme xxxUI/Color(uiColor:) convention: UIColor is
+    // canonical here, with the SwiftUI Color below derived from it for chip
+    // rendering. Not private — HighlightingTextEditor.swift calls this too.
+    static func styleUI(for cmd: String) -> (color: UIColor, soft: UIColor)? {
+        switch cmd {
+        case "/info": return (KTheme.skillInfoUI, KTheme.skillInfoSoftUI)
+        case "/aim": return (KTheme.skillAimUI, KTheme.skillAimSoftUI)
+        case "/do": return (KTheme.skillDoUI, KTheme.skillDoSoftUI)
+        case "/pr": return (KTheme.skillPrUI, KTheme.skillPrSoftUI)
+        default: return nil
+        }
+    }
+
+    private static func style(for cmd: String) -> (color: Color, soft: Color) {
+        guard let ui = styleUI(for: cmd) else { return (KTheme.accent, KTheme.accentSoft) }
+        return (Color(uiColor: ui.color), Color(uiColor: ui.soft))
     }
 
     private func append(_ cmd: String) {
@@ -54,17 +76,15 @@ struct CmdChipsRow: View {
     }
 
     // isPresent reports whether `cmd` (e.g. "/info") appears in `text` as a
-    // whole command token. Mirrors app.js's CMD_HL_RE, which is anchored on
-    // both ends: a trailing \b — so e.g. "/do" doesn't light up on a
-    // hypothetical "/doc" sharing its prefix, since \b between the shared
-    // "o" and "c" isn't a boundary (both are word characters) — and a
-    // leading (^|\s) group, so a path fragment like "web/static/do" doesn't
-    // light up either (nothing there is whitespace-preceded).
+    // whole command token. Delegates to HighlightingTextEditor's shared
+    // regex (commandTokenRanges) rather than hand-building a second pattern,
+    // so the anchoring rules — a trailing \b (so "/do" doesn't light up on
+    // "/doc") and a leading (^|\s) boundary (so "web/static/do" doesn't
+    // light up either) — can never drift between the chip row and the
+    // inline highlighter.
     private static func isPresent(_ cmd: String, in text: String) -> Bool {
         guard !text.isEmpty else { return false }
-        let name = cmd.dropFirst() // strip leading "/"
-        let pattern = "(^|\\s)/\(name)\\b"
-        return text.range(of: pattern, options: .regularExpression) != nil
+        return HighlightingTextEditor.commandTokenRanges(in: text).contains { $0.command == cmd }
     }
 }
 
@@ -423,14 +443,19 @@ struct PRChip: View {
     }
 }
 
-/// Zeus + crew status chips: a "zeus ●/⚑/○" pill first (only when the server
-/// sent a zeus status), then one chip per crew role present on the roster —
-/// fixed order hephaestus, athena, hermes, other — each reading "<role>
-/// <working>/<total>". Not private: both BoardView's JobCardView and
-/// JobDetailView render the same row, mirroring PRChip's sharing pattern
-/// above. Renders EmptyView when there's nothing to show, so a job with no
-/// zeus status and no roster (including servers that predate these wire
-/// fields entirely) falls back to exactly today's UI.
+/// Zeus + crew status chips: a zeus pill first (only when the server sent a
+/// zeus status) showing just its cloud icon, colored by status — the icon
+/// replaces both the "zeus" name and the old ●/↻/⚑/○ status glyph, since
+/// color alone now carries the state (the name survives for hover/VoiceOver
+/// via accessibilityLabel); then one chip per crew role present on the
+/// roster — fixed order hephaestus, athena, hermes, other — each showing its
+/// god icon plus "<working>/<total>" (icon color: green if any member is
+/// working, muted otherwise). The "other" bucket has no god icon and keeps
+/// its plain "other <working>/<total>" text label. Not private: both
+/// BoardView's JobCardView and JobDetailView render the same row, mirroring
+/// PRChip's sharing pattern above. Renders EmptyView when there's nothing to
+/// show, so a job with no zeus status and no roster (including servers that
+/// predate these wire fields entirely) falls back to exactly today's UI.
 struct CrewChipsView: View {
     let zeusStatus: String?
     let roster: [WebRosterAgent]
@@ -438,13 +463,23 @@ struct CrewChipsView: View {
     private static let knownRoles = ["hephaestus", "athena", "hermes"]
     private static let chipOrder = knownRoles + ["other"]
 
-    private var zeusChip: (label: String, color: Color)? {
+    // God → SF Symbol, carl's picks: zeus=lightning bolt, hephaestus=
+    // hammer (forge), athena=judge (courthouse), hermes=message (messenger).
+    private static let roleIcons: [String: String] = [
+        "hephaestus": "hammer.fill",
+        "athena": "building.columns.fill",
+        "hermes": "envelope.fill",
+    ]
+
+    // Just the color — the a11y label is built straight from zeusStatus at
+    // the call site instead of this helper echoing it back out.
+    private var zeusColor: Color? {
         guard let zeusStatus, !zeusStatus.isEmpty else { return nil }
         switch zeusStatus {
-        case "running": return ("zeus ●", KTheme.solved)
-        case "polling": return ("zeus ↻", KTheme.polling)
-        case "question": return ("zeus ⚑", KTheme.revealed)
-        default: return ("zeus ○", KTheme.text2)
+        case "running": return KTheme.solved
+        case "polling": return KTheme.polling
+        case "question": return KTheme.revealed
+        default: return KTheme.text2
         }
     }
 
@@ -467,28 +502,53 @@ struct CrewChipsView: View {
     }
 
     var body: some View {
-        let zeus = zeusChip
+        let zeus = zeusColor
         let chips = roleChips
         if zeus != nil || !chips.isEmpty {
             HStack(spacing: 6) {
-                if let zeus {
-                    chipLabel(zeus.label, color: zeus.color)
+                if let zeus, let zeusStatus {
+                    chipLabel(icon: "bolt.fill", color: zeus)
+                        .accessibilityLabel("zeus — \(zeusStatus)")
                 }
                 ForEach(chips, id: \.role) { chip in
-                    chipLabel("\(chip.role) \(chip.working)/\(chip.total)",
-                              color: chip.working > 0 ? KTheme.solved : KTheme.text2)
+                    let color: Color = chip.working > 0 ? KTheme.solved : KTheme.text2
+                    if let icon = Self.roleIcons[chip.role] {
+                        chipLabel(icon: icon, text: "\(chip.working)/\(chip.total)", color: color)
+                            .accessibilityLabel("\(chip.role) — \(chip.working) of \(chip.total) working")
+                    } else {
+                        chipLabel(text: "\(chip.role) \(chip.working)/\(chip.total)", color: color)
+                            .accessibilityLabel("\(chip.role) — \(chip.working) of \(chip.total) working")
+                    }
                 }
             }
         }
     }
 
-    private func chipLabel(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.data(9, weight: .semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .overlay(Rectangle().stroke(color, lineWidth: 1))
+    // `icon` is an optional leading SF Symbol (nil for the iconless "other"
+    // bucket); `text` is optional too so the zeus chip can be icon-only.
+    // .accessibilityElement(children: .ignore) collapses the HStack into a
+    // single a11y element: a bare HStack isn't an a11y element on its own,
+    // so without this VoiceOver either skips it entirely or reads its
+    // children individually — either way the .accessibilityLabel a call
+    // site applies afterward would be discarded or misattributed.
+    private func chipLabel(icon: String? = nil, text: String? = nil, color: Color) -> some View {
+        HStack(spacing: 3) {
+            if let icon {
+                // The god icon reads a step larger than the counts beside
+                // it (mirrors the web's .crew-pill/.crew-ico size bump).
+                Image(systemName: icon)
+                    .font(.data(11, weight: .semibold))
+            }
+            if let text {
+                Text(text)
+            }
+        }
+        .font(.data(9, weight: .semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .overlay(Rectangle().stroke(color, lineWidth: 1))
+        .accessibilityElement(children: .ignore)
     }
 }
 
@@ -1156,7 +1216,10 @@ struct ReactivateView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(DraftStore.self) private var draftStore
-    @FocusState private var textFocused: Bool
+    // Not @FocusState: SwiftUI's .focused($state) never fires on a
+    // UIViewRepresentable, so HighlightingTextEditor bridges focus itself
+    // via its own isFocused binding instead (see that type's doc comment).
+    @State private var textFocused = false
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -1175,9 +1238,7 @@ struct ReactivateView: View {
             }
             kSection("What to adjust (optional)") {
                 CmdChipsRow(text: $text)
-                TextEditor(text: $text)
-                    .focused($textFocused)
-                    .scrollContentBackground(.hidden)
+                HighlightingTextEditor(text: $text, isFocused: $textFocused)
                     .kField(focused: textFocused, minHeight: 120)
                     .listRowBackground(Color.clear)
             }
@@ -1254,7 +1315,10 @@ struct SteerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(DraftStore.self) private var draftStore
-    @FocusState private var textFocused: Bool
+    // Not @FocusState: SwiftUI's .focused($state) never fires on a
+    // UIViewRepresentable, so HighlightingTextEditor bridges focus itself
+    // via its own isFocused binding instead (see that type's doc comment).
+    @State private var textFocused = false
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -1301,9 +1365,7 @@ struct SteerView: View {
             }
             kSection("Message") {
                 CmdChipsRow(text: $text)
-                TextEditor(text: $text)
-                    .focused($textFocused)
-                    .scrollContentBackground(.hidden)
+                HighlightingTextEditor(text: $text, isFocused: $textFocused)
                     .kField(focused: textFocused, minHeight: 120)
                     .listRowBackground(Color.clear)
                 ImageAttachmentBar(
