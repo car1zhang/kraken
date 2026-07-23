@@ -262,7 +262,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `ready` | bool | always | |
 | `solo` | bool | always | |
 | `model` | string | always | claude model for zeus (`--model` value), `""` = claude's default; applied once at cell start |
-| `skip_doc` | bool | always | build only: skip the /spec → /do phase, implement the spec directly |
+| `skip_doc` | bool | always | build only: skip the /aim → /do phase, implement the spec directly |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |

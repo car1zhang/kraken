@@ -539,7 +539,7 @@ body {
 }
 .btn.steer-done:hover { background: var(--solved-soft); border-color: var(--solved); box-shadow: var(--glow-ok); }
 /* ---- command highlight: mirrored backdrop behind the steer/editor
-   textareas, so /info /spec /do /pr read highlighted (purple + glow)
+   textareas, so /info /aim /do /pr read highlighted (purple + glow)
    inline — a <textarea> can't style substrings of its own value. The
    wrapper is position:relative and otherwise unstyled; the textarea stays
    normal-flow (so it alone drives the wrapper's height — dragging its
@@ -627,7 +627,7 @@ body {
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
 .answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
 
-/* command chips: one-tap /info /spec /do /pr insertion above a composer
+/* command chips: one-tap /info /aim /do /pr insertion above a composer
    textarea. Deliberately not .chip/.chips — that class is claimed by the
    delegated document click handler that opens an artifact panel. */
 .cmd-chips { display: flex; flex-wrap: wrap; gap: 5px; }

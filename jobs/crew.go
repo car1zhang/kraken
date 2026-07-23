@@ -50,14 +50,14 @@ func docArtifactPath(j *Job) string {
 // cell worktree by installSkills before zeus launches. Worktree-relative
 // because zeus' cwd IS the worktree.
 func HermesContractPath() string {
-	return filepath.Join(".claude", "skills", "spec", "assets", "hermes-contract.md")
+	return filepath.Join(".claude", "skills", "aim", "assets", "hermes-contract.md")
 }
 
 // LintSvgPath is the stdlib-python fragment linter zeus runs against every
 // hermes-rendered fragment before it may be flattened into the artifact.
 // Same worktree-relative sourcing as HermesContractPath — see its comment.
 func LintSvgPath() string {
-	return filepath.Join(".claude", "skills", "spec", "assets", "lint_svg.py")
+	return filepath.Join(".claude", "skills", "aim", "assets", "lint_svg.py")
 }
 
 // zeusBrief builds zeus' system prompt: sole agent for the job, direct human
@@ -67,7 +67,7 @@ func zeusBrief(j *Job) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are zeus, the sole agent for kraken job %q (type: %s).\n", j.Slug, j.Type)
 	fmt.Fprintf(&b, "You run in an isolated cell: a git worktree on branch %s (your cwd). Never touch the repo's primary checkout; all work happens in this worktree.\n", CellBranch(j))
-	b.WriteString("Your worktree's `.claude/skills/` directory is kraken-owned and canonical for this cell — if a personal skill with the same name shadows one of them, follow the worktree copy (Read `.claude/skills/<name>/SKILL.md` directly); never commit `.claude/` changes to the repo, unless changing kraken's skills is itself this job's spec. Ignore any personal `doc` or `send` skills that might try to auto-trigger — this pipeline is `/spec` then a `/do` gate, nothing else.\n")
+	b.WriteString("Your worktree's `.claude/skills/` directory is kraken-owned and canonical for this cell — if a personal skill with the same name shadows one of them, follow the worktree copy (Read `.claude/skills/<name>/SKILL.md` directly); never commit `.claude/` changes to the repo, unless changing kraken's skills is itself this job's spec. Ignore any personal `doc` or `send` skills that might try to auto-trigger — this pipeline is `/aim` then a `/do` gate, nothing else.\n")
 	b.WriteString("carl's messages arrive directly in your pane. There is no intermediary and no escalation file: whatever you write as your FINAL message before going idle is what carl sees on the job board as this cell's status detail — so end every working session by stating plainly what is ready, what you need, or what you decided. Kraken derives working/blocked from your activity automatically; never write status anywhere.\n")
 	b.WriteString("For a decision that genuinely blocks you and cannot be defaulted, you may use AskUserQuestion — kraken surfaces the options to carl's board as buttons. Otherwise prefer baking open questions into the doc artifact and continuing with the recommended default.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path yourself if it somehow wasn't ingested).\n")
@@ -94,7 +94,7 @@ func zeusBrief(j *Job) string {
 			// the contract. The manual-test gate and PR pipeline stay.
 			b.WriteString("This job skips the doc phase: there is no spec doc and no '/do' gate — the job spec above is the contract; implement exactly what it says, starting immediately. Delegate slices to subagents named hephaestus (sonnet model), each with a focused unique brief (exact scope + file targets); review each slice with three subagents named athena-logic, athena-edge, and athena-style (all opus model, dispatched in parallel), each with its own single-dimension reviewer brief covering correctness/bugs/scalability, edge cases, and style/CLAUDE.md-compliance respectively. Run the repo's tests and linters. Then say 'manual test ready: <urls + what to try>' and STOP; when carl's reply passes the gate, shut test services down, follow `.claude/skills/pr/SKILL.md` in your worktree (do NOT invoke /pr by name) for branch and PR conventions: push the branch, open a PR with gh, poll checks green (fixing failures), then report the PR URL plus a one-line outcome and STOP.\n")
 		} else {
-			b.WriteString("Phase 1: research the repo, then produce a SPEC-MODE doc artifact per the /spec skill (the kraken-level skills live in .claude/skills/ in your worktree) with the cell deltas above. Bake ALL open questions into the doc's tables with recommended defaults — never block waiting on answers. When the artifact is flattened into artifacts/, say 'doc ready for review: <artifact path>' plus the open P0s in one line, and STOP.\n")
+			b.WriteString("Phase 1: research the repo, then produce a SPEC-MODE doc artifact per the /aim skill (the kraken-level skills live in .claude/skills/ in your worktree) with the cell deltas above. Bake ALL open questions into the doc's tables with recommended defaults — never block waiting on answers. When the artifact is flattened into artifacts/, say 'doc ready for review: <artifact path>' plus the open P0s in one line, and STOP.\n")
 			fmt.Fprintf(&b, "Phase 2 (begins when a '/do' message arrives in your pane): implement exactly what the doc specifies. Delegate slices to subagents named hephaestus (sonnet model), each with a focused unique brief (exact scope + file targets); review each slice with three subagents named athena-logic, athena-edge, and athena-style (all opus model, dispatched in parallel), each with its own single-dimension reviewer brief covering correctness/bugs/scalability, edge cases, and style/CLAUDE.md-compliance respectively. Run the repo's tests and linters. Then say 'manual test ready: <urls + what to try>' and STOP; when carl's reply passes the gate, shut test services down, follow `.claude/skills/pr/SKILL.md` in your worktree (do NOT invoke /pr by name) for branch and PR conventions: push the branch, open a PR with gh, poll checks green (fixing failures), then report the PR URL plus a one-line outcome and STOP.\n")
 		}
 		fmt.Fprintf(&b, "PRs are per-slice, not per-job: kraken records every PR you open from %s on the job's board, and a PR merging never ends the job. A hook attaches each PR to the board the instant `gh pr create` returns, so you never need to report the URL yourself. If a PR of yours merges and more work arrives, recycle your branch before starting it — git fetch origin && git checkout -B %s origin/main — then ship the follow-up as a new PR.\n", CellBranch(j), CellBranch(j))

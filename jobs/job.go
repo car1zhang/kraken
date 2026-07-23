@@ -39,7 +39,7 @@ type Job struct {
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
 	// model can't change out from under it. Empty means claude's default.
 	Model string `json:"model,omitempty"`
-	// SkipDoc (build jobs only) skips the /spec → /do phase: zeus implements
+	// SkipDoc (build jobs only) skips the /aim → /do phase: zeus implements
 	// the spec directly, keeping the manual-test gate and PR pipeline.
 	SkipDoc bool     `json:"skip_doc,omitempty"`
 	Prereqs []Prereq `json:"prereqs,omitempty"`
@@ -494,7 +494,7 @@ func JobTemplate(slug string) string {
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
 		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
 		"                          # applied once at cell start, default = claude's own default\n" +
-		"# skip-doc: true          # build only: skip the /spec → /do phase — zeus implements the spec directly\n" +
+		"# skip-doc: true          # build only: skip the /aim → /do phase — zeus implements the spec directly\n" +
 		"---\n"
 }
 

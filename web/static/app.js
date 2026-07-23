@@ -1006,16 +1006,16 @@ function pastedFiles(ev) {
   return items.map((it) => it.getAsFile()).filter(Boolean);
 }
 
-// ---- command chips: /info /spec /do /pr insertion into composer textareas ----
-// one-tap insertion of the kraken build-pipeline commands (info -> spec -> do
+// ---- command chips: /info /aim /do /pr insertion into composer textareas ----
+// one-tap insertion of the kraken build-pipeline commands (info -> aim -> do
 // -> pr) into whichever prompt composer they're wired to. Always lands at the
 // cursor position (replacing any selection) with a trailing space, then
 // returns focus to the textarea so typing continues right after the command.
 // Fires a bubbling "input" event afterward so listeners already wired to the
 // textarea (draft sync, autosave) see the change like any other keystroke.
-const CMD_CHIPS = ["/info", "/spec", "/do", "/pr"];
+const CMD_CHIPS = ["/info", "/aim", "/do", "/pr"];
 
-// ---- command highlight: mirrored backdrop rendering /info /spec /do /pr in
+// ---- command highlight: mirrored backdrop rendering /info /aim /do /pr in
 // purple-with-glow behind the (now text-transparent) composer textareas — a
 // <textarea> can't style substrings of its own value, so the real glyphs
 // live in a sibling div instead (style.css's .cmd-hl-wrap/.cmd-hl-backdrop,

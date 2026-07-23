@@ -17,12 +17,12 @@ import (
 
 func testSkillsFS() fstest.MapFS {
 	return fstest.MapFS{
-		"info/SKILL.md":                   {Data: []byte("---\nname: info\n---\ninfo body")},
-		"spec/SKILL.md":                   {Data: []byte("---\nname: spec\n---\nspec body")},
-		"spec/assets/spec.html":           {Data: []byte("<html>spec template</html>")},
-		"spec/assets/lint-fixtures/x.svg": {Data: []byte("<svg>fixture</svg>")},
-		"do/SKILL.md":                     {Data: []byte("---\nname: do\n---\ndo body")},
-		"pr/SKILL.md":                     {Data: []byte("---\nname: pr\n---\npr body")},
+		"info/SKILL.md":                  {Data: []byte("---\nname: info\n---\ninfo body")},
+		"aim/SKILL.md":                   {Data: []byte("---\nname: aim\n---\naim body")},
+		"aim/assets/aim.html":            {Data: []byte("<html>aim template</html>")},
+		"aim/assets/lint-fixtures/x.svg": {Data: []byte("<svg>fixture</svg>")},
+		"do/SKILL.md":                    {Data: []byte("---\nname: do\n---\ndo body")},
+		"pr/SKILL.md":                    {Data: []byte("---\nname: pr\n---\npr body")},
 	}
 }
 
@@ -74,11 +74,11 @@ func TestInstallSkillsMaterializesFullTree(t *testing.T) {
 	installSkills(wt, j)
 
 	for path, want := range map[string]string{
-		"info/SKILL.md":         "info body",
-		"spec/SKILL.md":         "spec body",
-		"spec/assets/spec.html": "spec template",
-		"do/SKILL.md":           "do body",
-		"pr/SKILL.md":           "pr body",
+		"info/SKILL.md":       "info body",
+		"aim/SKILL.md":        "aim body",
+		"aim/assets/aim.html": "aim template",
+		"do/SKILL.md":         "do body",
+		"pr/SKILL.md":         "pr body",
 	} {
 		full := filepath.Join(wt, ".claude", "skills", path)
 		got := skillsReadFile(t, full)
@@ -97,15 +97,15 @@ func TestInstallSkillsIdempotent(t *testing.T) {
 	j := &Job{Slug: "demo-job"}
 
 	installSkills(wt, j)
-	first := skillsReadFile(t, filepath.Join(wt, ".claude", "skills", "spec", "SKILL.md"))
+	first := skillsReadFile(t, filepath.Join(wt, ".claude", "skills", "aim", "SKILL.md"))
 	installSkills(wt, j)
-	second := skillsReadFile(t, filepath.Join(wt, ".claude", "skills", "spec", "SKILL.md"))
+	second := skillsReadFile(t, filepath.Join(wt, ".claude", "skills", "aim", "SKILL.md"))
 
 	if first != second {
-		t.Errorf("re-running installSkills changed spec/SKILL.md: %q vs %q", first, second)
+		t.Errorf("re-running installSkills changed aim/SKILL.md: %q vs %q", first, second)
 	}
 	// still exactly one copy of the asset file, not duplicated/nested
-	full := filepath.Join(wt, ".claude", "skills", "spec", "assets", "spec.html")
+	full := filepath.Join(wt, ".claude", "skills", "aim", "assets", "aim.html")
 	if _, err := os.Stat(full); err != nil {
 		t.Errorf("expected %s to exist after second install: %v", full, err)
 	}
@@ -146,9 +146,9 @@ func TestInstallSkillsReplacesStaleContents(t *testing.T) {
 
 	// simulate a previous install that had an extra/renamed file no longer
 	// present in the current embedded bundle
-	staleDir := filepath.Join(wt, ".claude", "skills", "spec")
+	staleDir := filepath.Join(wt, ".claude", "skills", "aim")
 	if err := os.MkdirAll(staleDir, 0o755); err != nil {
-		t.Fatalf("mkdir stale spec dir: %v", err)
+		t.Fatalf("mkdir stale aim dir: %v", err)
 	}
 	staleFile := filepath.Join(staleDir, "stale-leftover.md")
 	if err := os.WriteFile(staleFile, []byte("leftover from an old skill version"), 0o644); err != nil {
@@ -161,7 +161,7 @@ func TestInstallSkillsReplacesStaleContents(t *testing.T) {
 		t.Errorf("expected stale file %s to be gone after install, stat err = %v", staleFile, err)
 	}
 	// and the current bundle's file is present
-	full := filepath.Join(wt, ".claude", "skills", "spec", "SKILL.md")
+	full := filepath.Join(wt, ".claude", "skills", "aim", "SKILL.md")
 	if _, err := os.Stat(full); err != nil {
 		t.Errorf("expected %s to exist after install: %v", full, err)
 	}
@@ -198,7 +198,7 @@ func TestInstallSkillsSkipsNonDirRootEntry(t *testing.T) {
 		t.Errorf("expected root-level non-dir entry README.md not to be materialized as a skill, stat err = %v", err)
 	}
 	// the real skills still installed fine alongside the stray file
-	full := filepath.Join(wt, ".claude", "skills", "spec", "SKILL.md")
+	full := filepath.Join(wt, ".claude", "skills", "aim", "SKILL.md")
 	if _, err := os.Stat(full); err != nil {
 		t.Errorf("expected %s to exist despite stray root entry: %v", full, err)
 	}
@@ -236,27 +236,27 @@ func TestInstallSkillsSkipsTrackedSkillDir(t *testing.T) {
 	wt := t.TempDir()
 	j := &Job{Slug: "demo-job"}
 
-	// simulate the target repo's own checkout having spec/ tracked in git
+	// simulate the target repo's own checkout having aim/ tracked in git
 	// (a kraken-targeted cell working on kraken's own repo, where the
-	// checked-out branch's spec/SKILL.md is fresher truth than this
+	// checked-out branch's aim/SKILL.md is fresher truth than this
 	// possibly-lagging binary's embed) — everything else stays untracked.
-	withTrackedStub(t, func(_, name string) bool { return name == "spec" })
+	withTrackedStub(t, func(_, name string) bool { return name == "aim" })
 
-	// pre-seed spec/ with content standing in for the branch's own committed
+	// pre-seed aim/ with content standing in for the branch's own committed
 	// version, so we can assert installSkills left it alone
-	specDir := filepath.Join(wt, ".claude", "skills", "spec")
-	if err := os.MkdirAll(specDir, 0o755); err != nil {
-		t.Fatalf("mkdir spec dir: %v", err)
+	aimDir := filepath.Join(wt, ".claude", "skills", "aim")
+	if err := os.MkdirAll(aimDir, 0o755); err != nil {
+		t.Fatalf("mkdir aim dir: %v", err)
 	}
-	trackedFile := filepath.Join(specDir, "SKILL.md")
-	if err := os.WriteFile(trackedFile, []byte("branch-committed spec content"), 0o644); err != nil {
-		t.Fatalf("write tracked spec file: %v", err)
+	trackedFile := filepath.Join(aimDir, "SKILL.md")
+	if err := os.WriteFile(trackedFile, []byte("branch-committed aim content"), 0o644); err != nil {
+		t.Fatalf("write tracked aim file: %v", err)
 	}
 
 	installSkills(wt, j)
 
-	if got := skillsReadFile(t, trackedFile); got != "branch-committed spec content" {
-		t.Errorf("tracked spec/SKILL.md was overwritten: got %q", got)
+	if got := skillsReadFile(t, trackedFile); got != "branch-committed aim content" {
+		t.Errorf("tracked aim/SKILL.md was overwritten: got %q", got)
 	}
 	// untracked skills still install normally
 	full := filepath.Join(wt, ".claude", "skills", "do", "SKILL.md")

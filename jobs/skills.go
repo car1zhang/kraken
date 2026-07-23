@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-// SkillsFS holds kraken's kraken-owned skill bundle (info, spec, do, pr),
+// SkillsFS holds kraken's kraken-owned skill bundle (info, aim, do, pr),
 // embedded into the binary at build time. Root's skills_embed.go assigns
 // this during init(), sub-FS'd to the .claude/skills root so each top-level
 // entry here is one skill's own directory. Left nil when the jobs package is

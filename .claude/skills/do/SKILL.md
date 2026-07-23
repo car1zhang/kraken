@@ -1,25 +1,25 @@
 ---
 name: do
-description: "Implement the system described by a /spec spec or explain artifact produced earlier in this conversation. Resolves any P0 open questions with the user first, then writes the code. Use when the user asks for /do, \"send it\", \"ship the doc\", \"implement the spec\", \"build what we specced\", or similar phrasing after a /spec artifact has been created."
+description: "Implement the system described by an /aim spec or explain artifact produced earlier in this conversation. Resolves any P0 open questions with the user first, then writes the code. Use when the user asks for /do, \"send it\", \"ship the doc\", \"implement the spec\", \"build what we specced\", or similar phrasing after an /aim artifact has been created."
 ---
 
 # Do — Implement A Spec Artifact
 
-Take a spec/explain artifact produced by [[spec]] earlier in this conversation and implement it. The doc is the source of truth for scope, components, constraints, and testing. Before writing code, resolve any `P0` items from the doc's Open Questions table with the user.
+Take a spec/explain artifact produced by [[aim]] earlier in this conversation and implement it. The doc is the source of truth for scope, components, constraints, and testing. Before writing code, resolve any `P0` items from the doc's Open Questions table with the user.
 
 ## Preconditions
 
-- A `/spec` artifact must exist for this conversation. It is usually an HTML file under `~/designs/<slug>.spec.html` or `~/designs/<slug>.explain.html` created by the [[spec]] skill (older artifacts may be `.spec.md` / `.explain.md`).
+- An `/aim` artifact must exist for this conversation. It is usually an HTML file under `~/designs/<slug>.spec.html` or `~/designs/<slug>.explain.html` created by the [[aim]] skill (older artifacts may be `.spec.md` / `.explain.md`).
 - If no such artifact exists in this conversation:
   - Do **not** start implementing.
-  - Tell the user: "No /spec artifact found in this conversation — run /spec first, then /do."
+  - Tell the user: "No /aim artifact found in this conversation — run /aim first, then /do."
   - Stop. Do not infer a spec from prior chat messages alone; the doc file is the contract.
 
 ## Workflow
 
 ### 1. Locate The Doc
 
-- Identify the most recent `/spec` artifact path mentioned in this conversation.
+- Identify the most recent `/aim` artifact path mentioned in this conversation.
 - Read it in full. The doc is the source of truth — do not rely on chat memory of what it said.
 - If the user passes an explicit path as an argument, use that instead.
 
@@ -75,6 +75,6 @@ Once verification passes and the report is written, tear down everything spawned
 
 ## Boundaries
 
-- /do is for implementing an existing doc, not for re-spec'ing. If the user wants scope changes mid-implementation, update the doc first (or hand back to [[spec]]) before continuing to code.
+- /do is for implementing an existing doc, not for re-spec'ing. If the user wants scope changes mid-implementation, update the doc first (or hand back to [[aim]]) before continuing to code.
 - /do does not create branches, commits, or PRs unless the user asks. Follow repo git conventions (or a personal `git` skill, if one exists in this session) for branches and commits, and use [[pr]] for PRs.
 - If the doc is in explain mode (describes an existing system), /do should generally do nothing — explain docs document current state, not future work. Confirm with the user before treating an explain doc as an implementation target.
