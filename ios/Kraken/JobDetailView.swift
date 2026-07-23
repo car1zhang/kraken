@@ -3,7 +3,7 @@ import PhotosUI
 
 // MARK: - command chips
 
-/// Row of four tappable command chips — /info /spec /do /pr — for one-tap
+/// Row of four tappable command chips — /info /aim /do /pr — for one-tap
 /// insertion into a composer's bound text, mirroring the web SPA's command
 /// chips (app.js's attachCmdChips). SwiftUI's TextEditor exposes no cursor
 /// position without a UIKit bridge, so this appends rather than inserting at
@@ -21,7 +21,7 @@ import PhotosUI
 struct CmdChipsRow: View {
     @Binding var text: String
 
-    private static let commands = ["/info", "/spec", "/do", "/pr"]
+    private static let commands = ["/info", "/aim", "/do", "/pr"]
 
     var body: some View {
         HStack(spacing: 6) {

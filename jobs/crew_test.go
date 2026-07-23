@@ -16,7 +16,7 @@ func TestZeusBriefBuild(t *testing.T) {
 	j := &Job{Slug: "x", Type: "build"}
 	brief := zeusBrief(j)
 	for _, want := range []string{
-		"zeus", "hephaestus", "athena", "/spec", "'/do' message arrives", "/pr", "PR", "manual test ready",
+		"zeus", "hephaestus", "athena", "/aim", "'/do' message arrives", "/pr", "PR", "manual test ready",
 		"AskUserQuestion", CellArtifacts(j), "TaskStop",
 		// a merged PR is never job completion; follow-ups recycle the branch
 		"never ends the job", "checkout -B " + CellBranch(j) + " origin/main",
@@ -134,7 +134,7 @@ func TestZeusBriefSkipDoc(t *testing.T) {
 	for _, want := range []string{
 		"skips the doc phase", "hephaestus", "athena", "manual test ready",
 		"open a PR with gh", "do NOT invoke /pr by name", "never ends the job", CellArtifacts(j),
-		// like the escalation disclaimer: /spec and /do may appear only to
+		// like the escalation disclaimer: /aim and /do may appear only to
 		// say they don't apply
 		"no spec doc", "no '/do' gate",
 	} {

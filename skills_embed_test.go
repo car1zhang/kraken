@@ -16,7 +16,7 @@ import (
 func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 	want := map[string]string{
 		"info": "info",
-		"spec": "spec",
+		"aim":  "aim",
 		"do":   "do",
 		"pr":   "pr",
 	}
@@ -69,7 +69,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "spec", "do", "pr"} {
+	for _, want := range []string{"info", "aim", "do", "pr"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}
