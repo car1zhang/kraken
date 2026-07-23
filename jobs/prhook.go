@@ -39,7 +39,10 @@ type hookPayload struct {
 
 // hookOutput pulls the stdout/stderr pair out of a tool_output (or
 // tool_response) field that may be either {"stdout":...,"stderr":...} or a
-// plain string — schema drift must not crash the hook.
+// plain string — schema drift must not crash the hook. prscan.go also calls
+// this to read a transcript line's top-level toolUseResult field: same dual
+// shape, just observed from the transcript instead of the hook's stdin — a
+// coupling worth knowing from both ends if this shape ever changes.
 func hookOutput(raw json.RawMessage) (stdout, stderr string) {
 	if len(raw) == 0 {
 		return "", ""
@@ -60,25 +63,38 @@ func hookOutput(raw json.RawMessage) (stdout, stderr string) {
 
 // extractPRURLs finds GitHub PR URLs created by this hook call: raw is one
 // PostToolUse payload, prefix (e.g. "github.com/carl/kraken") restricts hits
-// to that owner/repo when non-empty. Only a Bash "gh pr create" call is
-// considered; searches stdout first, falling back to stderr and then the
-// whole raw payload only when the prior source yields nothing — gh pr
-// create prints the URL on stdout, but a captured-stderr-only variant or an
-// unrecognized output shape shouldn't lose a PR that really got created.
+// to that owner/repo when non-empty. Only a Bash call that INVOKES
+// `gh pr create` is considered — gated by ghPrCreatePattern (declared in
+// prscan.go and shared by both callers: this hook and the transcript
+// scanner) rather than a plain substring check, since PostToolUse fires on
+// every Bash call including ones that merely mention the phrase, e.g.
+// `grep -rn "gh pr create" jobs/prpoll.go`; that grep's own stdout can carry
+// another job's PR URL verbatim, which a substring check would misattach.
+// Once gated, searches stdout first, falling back to stderr when stdout
+// yields nothing — gh pr create prints the URL on stdout, but a re-create
+// against a branch that already has an open PR prints "already exists:
+// <URL>" on stderr instead. It deliberately does NOT fall back to the whole
+// raw payload: raw includes the command text itself, so a foreign PR URL
+// quoted in e.g. `gh pr create --body "…see …/pull/36…"` must never
+// false-positively attach. A PR this misses because neither stream carried
+// the URL is still caught within about a minute by the create-call
+// transcript scanner and the branch-list poll (trackPRs in daemon.go), so
+// staying strict here costs nothing but latency.
+//
 // Pure and side-effect-free so it's table-testable independent of gh/stdin.
 func extractPRURLs(raw []byte, prefix string) []string {
 	var p hookPayload
 	if json.Unmarshal(raw, &p) != nil {
 		return nil
 	}
-	if p.ToolName != "Bash" || !strings.Contains(p.ToolInput.Command, "gh pr create") {
+	if p.ToolName != "Bash" || !ghPrCreatePattern.MatchString(p.ToolInput.Command) {
 		return nil
 	}
 	stdout, stderr := hookOutput(p.ToolOutput)
 	if stdout == "" && stderr == "" {
 		stdout, stderr = hookOutput(p.ToolResponse)
 	}
-	for _, src := range []string{stdout, stderr, string(raw)} {
+	for _, src := range []string{stdout, stderr} {
 		if urls := matchPRURLs(src, prefix); len(urls) > 0 {
 			return urls
 		}

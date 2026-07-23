@@ -822,7 +822,7 @@ func writeJobPRs(j *Job, prs []JobPR) error {
 }
 
 // appendJobPR is the shared attach path for recording one shipped PR against
-// a job: the pr-hook verb's real-time path and (later) a transcript-scanning
+// a job: the pr-hook verb's real-time path and the transcript-scanning
 // backstop both fold through here. Re-reads the file fresh and parses its
 // current prs — not j.PRs, which may be stale — so a concurrent daemon tick
 // or nvim save between load and write can't be clobbered, mirroring
@@ -850,6 +850,43 @@ func appendJobPR(j *Job, pr JobPR) (attached bool, err error) {
 	}
 	j.PRs = prs
 	return true, nil
+}
+
+// removeJobPRs drops recorded PRs by URL — the repair pass's write path.
+// Deliberately NOT writeJobPRs: that helper re-reads the file and unions in
+// any file-only URL missing from the caller's list, which exists so a
+// concurrent appendJobPR attach survives a tracker write built from a stale
+// j.PRs snapshot — but that same union would silently resurrect exactly the
+// records this call means to delete. Instead this re-reads the file fresh
+// and filters ITS current list by the drop set (mirroring appendJobPR's
+// read-fresh-then-patch shape), so a PR attached concurrently between load
+// and write still survives — it's simply absent from drop and passes through.
+func removeJobPRs(j *Job, drop map[string]bool) (removed []string, err error) {
+	data, err := os.ReadFile(j.File)
+	if err != nil {
+		return nil, err
+	}
+	fresh := ParseJob(filepath.Base(j.File), data)
+	var kept []JobPR
+	for _, p := range fresh.PRs {
+		if drop[p.URL] {
+			removed = append(removed, p.URL)
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	content, err := patchPRs(string(data), kept)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v", filepath.Base(j.File), err)
+	}
+	if err := util.AtomicWrite(j.File, content); err != nil {
+		return nil, err
+	}
+	j.PRs = kept
+	return removed, nil
 }
 
 // WriteJobFields patches kraken-owned fields atomically (temp file + rename

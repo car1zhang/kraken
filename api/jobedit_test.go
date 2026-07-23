@@ -235,8 +235,8 @@ func TestWebJobSaveMTimeLock(t *testing.T) {
 func TestSerializeJobFilePreservesPRs(t *testing.T) {
 	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Ready: true}
 	prs := []jobs.JobPR{
-		{URL: "https://github.com/car1zhang/kraken/pull/7", State: "merged"},
-		{URL: "https://github.com/car1zhang/kraken/pull/9", State: "open"},
+		{URL: "https://github.com/example/repo/pull/1", State: "merged"},
+		{URL: "https://github.com/example/repo/pull/2", State: "open"},
 	}
 	content := serializeJobFile(f, "working", "", "", 0, prs, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))

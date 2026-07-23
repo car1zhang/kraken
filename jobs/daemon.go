@@ -116,7 +116,25 @@ var probeOnline = func() bool {
 type daemonState struct {
 	Notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
 	Poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
-	tickN    int
+	// Repaired marks a job's PR-repair pass as fully done for this process
+	// (slug → done) — see repairPRs. In-memory only, like Notified/Poked
+	// above, but re-running the pass across a daemon restart is safe BY
+	// DESIGN: the repair criterion never drops a create-vouched or
+	// family-branch record, so repeating it finds nothing new to drop.
+	Repaired map[string]bool
+	// PRHeads memoizes viewPRHead's successful URL → headRefName lookups.
+	// Heads are immutable once a PR exists, so this is a positive cache with
+	// no invalidation, consulted before every gh pr view call and shared
+	// across jobs and passes — without it, a permanently-unresolvable URL
+	// (e.g. its repo got deleted) costs one gh subprocess per record per PR
+	// pass forever, and a URL recorded against two jobs is billed twice.
+	PRHeads map[string]string
+	// RepairTries counts consecutive incomplete repair passes per slug (slug
+	// → count). After 3, repairPRs gives up: it sets Repaired[slug]=true
+	// WITHOUT dropping anything, so giving up is always safe — it just stops
+	// spending gh calls on a job whose evidence never resolves.
+	RepairTries map[string]int
+	tickN       int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
 	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
@@ -125,7 +143,13 @@ type daemonState struct {
 }
 
 func newDaemon() *daemonState {
-	return &daemonState{Notified: map[string]int64{}, Poked: map[string]int64{}}
+	return &daemonState{
+		Notified:    map[string]int64{},
+		Poked:       map[string]int64{},
+		Repaired:    map[string]bool{},
+		PRHeads:     map[string]string{},
+		RepairTries: map[string]int{},
+	}
 }
 
 // RunDaemon runs the scheduler loop in the foreground: queue startable jobs,
@@ -400,6 +424,7 @@ func (d *daemonState) tick() (int, error) {
 			}
 			d.trackPRs(j)
 			d.scanTranscriptPRs(j, all)
+			d.repairPRs(j, all)
 		}
 	}
 
@@ -635,6 +660,191 @@ func (d *daemonState) scanTranscriptPRs(j *Job, all []*core.Peer) {
 			dlog("%s: attached from transcript %s", j.Slug, url)
 		}
 	}
+}
+
+// repairPRs is a cleanup of PR records the historical raw-text transcript
+// scan mis-attached to the wrong job: it used to scan zeus' whole transcript
+// for anything that looked like a PR URL under the repo, so a PR another job
+// (or a human) opened against an unrelated branch could land in this job's
+// prs: list. That scan is now gone in favor of gh-pr-create-tool-call
+// attachment only, but the pollution it already wrote survives on disk until
+// this pass removes it.
+//
+// Criterion: a recorded PR is dropped only when it is BOTH not create-vouched
+// (the transcript's own gh-pr-create evidence, via transcriptPRURLs — now
+// tool-call-only) AND its head branch is confirmed to be outside the job's
+// own branchFamily. The vouch side is TRI-STATE, not "empty means no
+// creates": an empty createVouched set is trustworthy evidence of "zero
+// creates" ONLY when the transcript was actually read. If the repo can't be
+// resolved, the origin prefix can't be resolved, there's no transcript path,
+// or the transcript file fails to stat, that's an absent vouch, not a
+// negative one — the pass keeps every record for this job untouched, marks
+// itself incomplete, and skips every gh call (nothing could be safely
+// dropped anyway). Concretely: job 2nd-kraken-status-investigation's
+// pull/27 is a genuine zeus create from a non-family branch, vouched for
+// only by its transcript — if that transcript ever went missing, treating
+// the resulting empty set as "no creates" would silently delete a
+// legitimate record with no recovery path.
+//
+// Residual risk: the vouch reads exactly one transcript — the live zeus
+// peer's, or else the job's stamped session — so a legitimate non-family
+// create from an EARLIER session of a reactivated/re-stamped cell would be
+// unvouched by that read and, being non-family, dropped anyway. Accepted:
+// verified absent from current data.
+//
+// Repeating the whole pass after a daemon restart can only ever find nothing
+// left to drop, never re-drop a legitimate record — create-vouched and
+// family-branch records are never candidates, and now, with the tri-state
+// vouch rule, missing evidence never drops anything either. d.Repaired only
+// exists to skip redundant gh calls within one process's lifetime; d.offline
+// and RepairTries additionally bound how much gh traffic an unresolvable job
+// can cost.
+func (d *daemonState) repairPRs(j *Job, all []*core.Peer) {
+	if d.Repaired[j.Slug] {
+		return
+	}
+	if d.offline {
+		return // outage amplification guard: gh calls would just fail/hang during an outage
+	}
+	if len(j.PRs) == 0 {
+		d.Repaired[j.Slug] = true
+		return
+	}
+
+	repo, resolveErr := ResolveRepo(j.Repo)
+	var dir string
+	if resolveErr == nil {
+		dir = ExistingWorktree(j, repo)
+		if dir == "" {
+			dir = repo // worktree gone: still ask in the repo, same fallback as trackPRs
+		}
+	}
+
+	// create-vouched set: tri-state (see doc comment above). vouchedOK is
+	// true only once the transcript was actually stat'able — repo resolves,
+	// origin prefix resolves, a transcript path exists, and the file itself
+	// is readable. Anything short of that leaves createVouched meaningless,
+	// so it must not be treated as "vouches for nothing".
+	createVouched := map[string]bool{}
+	vouchedOK := false
+	if resolveErr == nil {
+		if prefix, ok := repoOriginPrefix(repo); ok && prefix != "" {
+			if transcript := zeusTranscriptPath(j, all); transcript != "" {
+				if _, statErr := os.Stat(transcript); statErr == nil {
+					vouchedOK = true
+					for _, url := range transcriptPRURLs(transcript, prefix) {
+						createVouched[url] = true
+					}
+				}
+			}
+		}
+	}
+	if !vouchedOK {
+		d.repairGiveUpOrRetry(j, false)
+		return
+	}
+
+	// d.PRHeads memoizes headOf's successful lookups across jobs and passes
+	// — see the PRHeads field doc. The drop log line below reads straight
+	// from it instead of a second gh call.
+	headOf := func(url string) (string, bool) {
+		if dir == "" {
+			return "", false
+		}
+		if head, ok := d.PRHeads[url]; ok {
+			return head, true
+		}
+		head, ok := viewPRHead(dir, url)
+		if ok {
+			d.PRHeads[url] = head
+		}
+		return head, ok
+	}
+
+	family := branchFamily(j)
+	inFamily := func(branch string) bool { return family[branch] }
+	_, dropped, complete := repairFilter(j.PRs, createVouched, vouchedOK, headOf, inFamily)
+	if len(dropped) == 0 {
+		d.repairGiveUpOrRetry(j, complete)
+		return
+	}
+
+	dropSet := make(map[string]bool, len(dropped))
+	for _, url := range dropped {
+		dropSet[url] = true
+	}
+	removed, err := removeJobPRs(j, dropSet)
+	if err != nil {
+		if key := "repairfail:" + j.Slug; d.Notified[key] == 0 {
+			dlogErr("%s: pr-repair write failed: %v", j.Slug, err)
+			d.Notified[key] = time.Now().Unix()
+		}
+		return // leave d.Repaired unset — retry the write next PR pass
+	}
+	delete(d.Notified, "repairfail:"+j.Slug)
+	if len(removed) > 0 {
+		for _, url := range removed {
+			dlog("%s: repair dropped %s (head %s)", j.Slug, url, d.PRHeads[url])
+		}
+		dlogEvent("info", "pr-repair", "%s: repair dropped %d foreign PR record(s)", j.Slug, len(removed))
+	}
+	d.repairGiveUpOrRetry(j, complete)
+}
+
+// repairGiveUpOrRetry records the outcome of one repair pass for j: complete
+// marks the job fully repaired (no further gh calls, ever, for this
+// process). Otherwise it counts the incomplete attempt and, once RepairTries
+// hits the cap, gives up anyway WITHOUT dropping anything — a job whose
+// evidence never resolves (permanently unreachable repo, permanently gone
+// transcript) would otherwise cost one gh round-trip attempt every PR-
+// tracker tick forever. Giving up is always safe because it never drops a
+// record; it only stops spending gh calls on one that can't be verified.
+func (d *daemonState) repairGiveUpOrRetry(j *Job, complete bool) {
+	if complete {
+		d.Repaired[j.Slug] = true
+		delete(d.RepairTries, j.Slug)
+		return
+	}
+	d.RepairTries[j.Slug]++
+	if d.RepairTries[j.Slug] >= 3 {
+		d.Repaired[j.Slug] = true
+		dlogEvent("info", "pr-repair", "%s: giving up after 3 tries — records kept", j.Slug)
+	}
+}
+
+// repairFilter is repairPRs' pure decision: which recorded PRs survive.
+// vouchedOK gates the whole thing — when false, the transcript-based
+// evidence is meaningless (couldn't be read), so EVERY record is kept
+// untouched, headOf is never called, and complete is unconditionally false
+// so the caller retries. When vouchedOK is true, a record is dropped only
+// when BOTH createVouched doesn't cover it AND headOf resolves to a branch
+// outside family — an unknown headOf (ok=false) always keeps the record and
+// flips complete to false, so the caller knows to retry rather than treat
+// this job as fully repaired. Table-tested without gh via fake headOf/family
+// closures.
+func repairFilter(recorded []JobPR, createVouched map[string]bool, vouchedOK bool, headOf func(url string) (string, bool), family func(branch string) bool) (kept []JobPR, dropped []string, complete bool) {
+	if !vouchedOK {
+		return recorded, nil, false
+	}
+	complete = true
+	for _, r := range recorded {
+		if createVouched[r.URL] {
+			kept = append(kept, r)
+			continue
+		}
+		head, ok := headOf(r.URL)
+		if !ok {
+			kept = append(kept, r)
+			complete = false
+			continue
+		}
+		if family(head) {
+			kept = append(kept, r)
+			continue
+		}
+		dropped = append(dropped, r.URL)
+	}
+	return kept, dropped, complete
 }
 
 // reconcilePRs merges freshly fetched PR states into the recorded list.
