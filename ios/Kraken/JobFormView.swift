@@ -256,6 +256,9 @@ struct JobFormView: View {
                 }
             }
             kSection("Spec") {
+                if editable {
+                    CmdChipsRow(text: $spec)
+                }
                 TextEditor(text: $spec)
                     .scrollContentBackground(.hidden)
                     .kField(minHeight: 160)

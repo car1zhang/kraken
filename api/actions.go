@@ -250,7 +250,7 @@ func webRetry(req webReq) error {
 // webSteer delivers a mid-run instruction directly to zeus — there's no
 // intermediary anymore, so the message goes straight into its pane exactly
 // as typed, with no "from carl:" prefix. That means text starting with "/"
-// invokes a real slash command in zeus' Claude session (e.g. /send) — that's
+// invokes a real slash command in zeus' Claude session (e.g. /do) — that's
 // intentional, not a leak. The transcript is the record now; on successful
 // delivery the job is marked working (a steer is carl acting, which
 // un-stalls a blocked cell same as an answered question would).

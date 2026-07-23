@@ -336,6 +336,94 @@ func TestPRTrackable(t *testing.T) {
 	}
 }
 
+// TestWatchPRsSkipsUnparseableJob is the eligibility-gate regression for
+// watchPRs (reviewer finding: watchPRs must not run for a job that failed to
+// parse cleanly). Without the gate, updatePRWatermark's patchPRs pass
+// re-reads the file, reparses it — and because the parser is strict, a
+// hand-edit typo in one prs: entry (e.g. "state: opne") both marks the whole
+// job Err AND silently drops that entry from the in-memory list — then
+// rewrites the WHOLE prs: block from that reduced list. The typo'd entry
+// would vanish from disk forever, and the very same rewrite clears the
+// job's Err on the next parse (the offending line is gone, so nothing is
+// left to error on). The gate (reusing prTrackable, exactly like the
+// tracker itself) must make watchPRs return before it ever touches gh or
+// the file. Proven for real: a fake `gh` on PATH and a real (if empty) git
+// checkout so ResolveRepo succeeds — if the gate didn't fire, this test
+// would observe both the gh call and the file rewrite.
+func TestWatchPRsSkipsUnparseableJob(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KRAKEN_PLUTO_DIR", filepath.Join(home, "pluto"))
+	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// a real (if empty) git checkout so ResolveRepo can resolve "testrepo" —
+	// this must succeed, so a failure to reach gh proves the ELIGIBILITY
+	// GATE fired, not merely that the repo couldn't be found
+	repoDir := filepath.Join(home, "Developer", "testrepo")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// fake gh on PATH: if watchPRs ever invokes it, that alone proves the
+	// gate is missing (and would go on to corrupt the fixture the same way
+	// the real bug does)
+	fakeBin := t.TempDir()
+	ghCalled := filepath.Join(fakeBin, "gh-was-called")
+	script := "#!/bin/sh\ntouch " + ghCalled + "\n" +
+		`echo '{"state":"open","headRefOid":"sha1","comments":[{"createdAt":"2024-01-01T00:00:00Z"}],"reviews":[],"statusCheckRollup":[]}'` + "\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// the exact scenario from the finding: a hand-edit typo ("state: opne")
+	// in one prs: entry marks the whole job Err — and, being strict, the
+	// parser already drops that entry from j.PRs in memory, though its raw
+	// text still sits untouched on disk unless a write happens.
+	content := "---\n" +
+		"job: typojob\n" +
+		"type: build\n" +
+		"repo: testrepo\n" +
+		"ready: false\n" +
+		"state: working\n" +
+		"prs:\n" +
+		"  - url: https://github.com/x/x/pull/1\n" +
+		"    state: open\n" +
+		"  - url: https://github.com/x/x/pull/2\n" +
+		"    state: opne\n" + // typo — marks the whole job Err, drops this entry from j.PRs
+		"---\n\n# Spec\n"
+	path := filepath.Join(PlutoDir(), "typojob.job.md")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	j := ParseJob("typojob.job.md", []byte(content))
+	j.File = path
+	if j.Err == "" {
+		t.Fatal("fixture setup: expected the typo'd prs entry to mark the job Err")
+	}
+	if len(j.PRs) != 1 || j.PRs[0].URL != "https://github.com/x/x/pull/1" {
+		t.Fatalf("fixture setup: expected only pull/1 to survive strict parsing, got %+v", j.PRs)
+	}
+
+	d := newDaemon()
+	live := map[string]bool{CellSession(j): true}
+	d.watchPRs(j, nil, live)
+
+	if _, err := os.Stat(ghCalled); err == nil {
+		t.Fatal("watchPRs called gh for an unparseable (Err != \"\") job — the eligibility gate did not fire")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != content {
+		t.Fatalf("unparseable job's file was rewritten (watermark write not gated):\nbefore: %s\nafter:  %s", content, string(after))
+	}
+}
+
 // fakeProbe counts invocations and returns whatever seq says (defaulting to
 // the last value once seq runs out), so a test can script a probe sequence
 // (offline, offline, online, ...) and still assert how many dials happened.
@@ -858,5 +946,267 @@ func TestTickMirrorSkipsAutoArchive(t *testing.T) {
 	}
 	if len(archived) != 0 {
 		t.Fatalf("want zero archived jobs after a mirror tick, got %d", len(archived))
+	}
+}
+
+// watchDecision's whole safety story: a bump only fires on genuine news (a
+// newer comment/review timestamp, or a failing check on a SHA not already
+// bumped), first sight never floods zeus with a PR's prior comment history,
+// a currently-failing check bumps even on first sight since it's actionable
+// regardless of history, and a PR that isn't (still) open never bumps.
+func TestWatchDecision(t *testing.T) {
+	cases := []struct {
+		name                             string
+		fetch                            prWatchFetch
+		lastCommentAt, bumpedSHA         string
+		wantBump                         bool
+		wantMessageContains              []string
+		wantLastCommentAt, wantBumpedSHA string
+	}{
+		{
+			name:              "no change is a no-op",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "sha1", LastCommentAt: "2024-01-01T00:00:00Z"},
+			lastCommentAt:     "2024-01-01T00:00:00Z",
+			bumpedSHA:         "sha1",
+			wantBump:          false,
+			wantLastCommentAt: "2024-01-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+		},
+		{
+			name:                "new comment after the watermark bumps",
+			fetch:               prWatchFetch{State: "open", HeadSHA: "sha1", LastCommentAt: "2024-01-02T00:00:00Z"},
+			lastCommentAt:       "2024-01-01T00:00:00Z",
+			bumpedSHA:           "sha1",
+			wantBump:            true,
+			wantMessageContains: []string{"new comment or review", "--comments"},
+			wantLastCommentAt:   "2024-01-02T00:00:00Z",
+			wantBumpedSHA:       "sha1",
+		},
+		{
+			name:              "failing CI on the already-bumped SHA never re-bumps",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "sha1", FailingChecks: []string{"ci/build"}},
+			lastCommentAt:     "2024-01-01T00:00:00Z",
+			bumpedSHA:         "sha1",
+			wantBump:          false,
+			wantLastCommentAt: "2024-01-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+		},
+		{
+			// empty-SHA guard: gh occasionally returns a headRefOid gh
+			// itself didn't fully populate. Must never bump with a blank
+			// SHA in the message, and must never advance BumpedSHA to "" —
+			// doing so would make the NEXT pass look like first sight again.
+			name:              "failing CI with an empty head SHA never bumps or seeds",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "", FailingChecks: []string{"ci/build"}},
+			lastCommentAt:     "2024-01-01T00:00:00Z",
+			bumpedSHA:         "sha1",
+			wantBump:          false,
+			wantLastCommentAt: "2024-01-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+		},
+		{
+			// load-bearing: a PR seeded quiet on green CI (bumpedSHA set,
+			// lastCommentAt never seeded because there was no comment
+			// history yet) must still bump on carl's first review days
+			// later — firstSight is false here (bumpedSHA != ""), so this is
+			// NOT the first-sight seed path; it was correct only by
+			// accident before this test existed.
+			name:                "quiet PR seeded on green CI still bumps on a later first comment",
+			fetch:               prWatchFetch{State: "open", HeadSHA: "sha1", LastCommentAt: "2024-02-01T00:00:00Z"},
+			lastCommentAt:       "",
+			bumpedSHA:           "sha1",
+			wantBump:            true,
+			wantMessageContains: []string{"new comment or review"},
+			wantLastCommentAt:   "2024-02-01T00:00:00Z",
+			wantBumpedSHA:       "sha1",
+		},
+		{
+			name:                "failing CI on a new SHA bumps",
+			fetch:               prWatchFetch{State: "open", HeadSHA: "sha2", FailingChecks: []string{"ci/build"}},
+			lastCommentAt:       "2024-01-01T00:00:00Z",
+			bumpedSHA:           "sha1",
+			wantBump:            true,
+			wantMessageContains: []string{"failing CI", "sha2", "ci/build"},
+			wantLastCommentAt:   "2024-01-01T00:00:00Z",
+			wantBumpedSHA:       "sha2",
+		},
+		{
+			name: "first sight seeds the comment watermark silently but still bumps a currently-failing check",
+			fetch: prWatchFetch{
+				State: "open", HeadSHA: "sha1",
+				LastCommentAt: "2023-06-01T00:00:00Z", // pre-existing history — must not itself bump
+				FailingChecks: []string{"ci/build"},
+			},
+			lastCommentAt:       "",
+			bumpedSHA:           "",
+			wantBump:            true,
+			wantMessageContains: []string{"failing CI"},
+			wantLastCommentAt:   "2023-06-01T00:00:00Z", // seeded, not reported
+			wantBumpedSHA:       "sha1",
+		},
+		{
+			name:              "first sight with checks currently green seeds both watermarks without bumping",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "sha1", LastCommentAt: "2023-06-01T00:00:00Z"},
+			lastCommentAt:     "",
+			bumpedSHA:         "",
+			wantBump:          false,
+			wantLastCommentAt: "2023-06-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+		},
+		{
+			name: "a new comment and a newly-failing SHA in the same pass combine into one message",
+			fetch: prWatchFetch{
+				State: "open", HeadSHA: "sha2",
+				LastCommentAt: "2024-01-02T00:00:00Z",
+				FailingChecks: []string{"ci/build", "ci/lint"},
+			},
+			lastCommentAt:       "2024-01-01T00:00:00Z",
+			bumpedSHA:           "sha1",
+			wantBump:            true,
+			wantMessageContains: []string{"new comment or review", "failing CI", "ci/build, ci/lint"},
+			wantLastCommentAt:   "2024-01-02T00:00:00Z",
+			wantBumpedSHA:       "sha2",
+		},
+		{
+			name: "closed since last recorded as open never bumps, watermarks untouched",
+			fetch: prWatchFetch{
+				State: "closed", HeadSHA: "sha2",
+				LastCommentAt: "2024-01-02T00:00:00Z",
+				FailingChecks: []string{"ci/build"},
+			},
+			lastCommentAt:     "2024-01-01T00:00:00Z",
+			bumpedSHA:         "sha1",
+			wantBump:          false,
+			wantLastCommentAt: "2024-01-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+		},
+		{
+			name: "merged since last recorded as open never bumps, watermarks untouched",
+			fetch: prWatchFetch{
+				State: "merged", HeadSHA: "sha2",
+				LastCommentAt: "2024-01-02T00:00:00Z",
+			},
+			lastCommentAt:     "",
+			bumpedSHA:         "",
+			wantBump:          false,
+			wantLastCommentAt: "",
+			wantBumpedSHA:     "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bump, msg, newLastCommentAt, newBumpedSHA := watchDecision("https://x/pull/1", c.fetch, c.lastCommentAt, c.bumpedSHA)
+			if bump != c.wantBump {
+				t.Errorf("bump = %v, want %v (msg %q)", bump, c.wantBump, msg)
+			}
+			if newLastCommentAt != c.wantLastCommentAt {
+				t.Errorf("newLastCommentAt = %q, want %q", newLastCommentAt, c.wantLastCommentAt)
+			}
+			if newBumpedSHA != c.wantBumpedSHA {
+				t.Errorf("newBumpedSHA = %q, want %q", newBumpedSHA, c.wantBumpedSHA)
+			}
+			for _, want := range c.wantMessageContains {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message %q missing %q", msg, want)
+				}
+			}
+			if !c.wantBump && msg != "" {
+				t.Errorf("no-bump case produced a non-empty message %q", msg)
+			}
+		})
+	}
+}
+
+// TestLatestActivityAt covers the self-bump-loop fix: zeus' own `gh pr
+// comment` replies (ViewerDidAuthor) must never advance LastCommentAt, or
+// the daemon would re-bump zeus every pass on its own reply forever
+// ("address it" → reply → bump → ...). Reviews are filtered by the PR's
+// author instead: GitHub allows COMMENT-type reviews on your own PR (inline
+// thread replies land as exactly that), so zeus-as-PR-author must not
+// advance the watermark either — while an empty author fails open so an
+// unknown login can never silently swallow carl's review.
+func TestLatestActivityAt(t *testing.T) {
+	review := func(at, login string) prActivityReview {
+		r := prActivityReview{SubmittedAt: at}
+		r.Author.Login = login
+		return r
+	}
+	cases := []struct {
+		name     string
+		comments []prActivityComment
+		reviews  []prActivityReview
+		prAuthor string
+		want     string
+	}{
+		{
+			name: "viewer-authored comment is excluded from the newest timestamp",
+			comments: []prActivityComment{
+				{CreatedAt: "2024-01-01T00:00:00Z", ViewerDidAuthor: false},
+				{CreatedAt: "2024-01-05T00:00:00Z", ViewerDidAuthor: true}, // zeus' own reply — newest by time, must not win
+			},
+			want: "2024-01-01T00:00:00Z",
+		},
+		{
+			name: "all comments viewer-authored falls back to reviews",
+			comments: []prActivityComment{
+				{CreatedAt: "2024-01-05T00:00:00Z", ViewerDidAuthor: true},
+			},
+			reviews: []prActivityReview{review("2024-01-02T00:00:00Z", "car1zhang")},
+			want:    "2024-01-02T00:00:00Z",
+		},
+		{
+			name: "non-viewer comment newer than any review wins",
+			comments: []prActivityComment{
+				{CreatedAt: "2024-01-09T00:00:00Z", ViewerDidAuthor: false},
+			},
+			reviews: []prActivityReview{review("2024-01-02T00:00:00Z", "car1zhang")},
+			want:    "2024-01-09T00:00:00Z",
+		},
+		{
+			name: "PR-author-authored review is excluded (zeus' inline reply)",
+			reviews: []prActivityReview{
+				review("2024-01-02T00:00:00Z", "car1zhang"),
+				review("2024-01-06T00:00:00Z", "carl-probook"), // zeus' thread reply — newest, must not win
+			},
+			prAuthor: "carl-probook",
+			want:     "2024-01-02T00:00:00Z",
+		},
+		{
+			name:     "empty PR author fails open — review still counts",
+			reviews:  []prActivityReview{review("2024-01-03T00:00:00Z", "carl-probook")},
+			prAuthor: "",
+			want:     "2024-01-03T00:00:00Z",
+		},
+		{
+			name: "no comments or reviews yields empty",
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := latestActivityAt(c.comments, c.reviews, c.prAuthor); got != c.want {
+				t.Errorf("latestActivityAt = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestFailingConclusions pins which CheckConclusionState values count as an
+// actionable CI failure (see the var's doc comment in prpoll.go): FAILURE,
+// TIMED_OUT, STARTUP_FAILURE, ACTION_REQUIRED are failing; CANCELLED,
+// NEUTRAL, SKIPPED are explicitly not — a check that was cancelled or
+// skipped isn't "broken", and bumping zeus for one would just be noise.
+func TestFailingConclusions(t *testing.T) {
+	failing := []string{"FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+	for _, c := range failing {
+		if !failingConclusions[c] {
+			t.Errorf("%s: want counted as failing, got not counted", c)
+		}
+	}
+	notFailing := []string{"CANCELLED", "NEUTRAL", "SKIPPED", "SUCCESS", ""}
+	for _, c := range notFailing {
+		if failingConclusions[c] {
+			t.Errorf("%s: want NOT counted as failing, got counted", c)
+		}
 	}
 }

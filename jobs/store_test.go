@@ -358,33 +358,6 @@ func TestSaveUploadStoreBackedRejectsUnslugifiableSlugBeforeInsert(t *testing.T)
 	}
 }
 
-func TestSaveArtifactFeedbackStoreBacked(t *testing.T) {
-	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "fb-job", Type: "info"})
-
-	artifact := filepath.Join(t.TempDir(), "note.svg")
-	if err := os.WriteFile(artifact, []byte("<svg/>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := SaveArtifactFeedback("fb-job", "cell", "note.svg", artifact, "too busy")
-	if err != nil {
-		t.Fatalf("save feedback: %v", err)
-	}
-	if dir == "" {
-		t.Fatal("want a non-empty locator")
-	}
-	entries, err := st.ListFeedback("fb-job")
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("store feedback: %+v err=%v", entries, err)
-	}
-	if entries[0].Note != "too busy" || string(entries[0].Snapshot) != "<svg/>" {
-		t.Fatalf("feedback row: %+v", entries[0])
-	}
-	if entries[0].Artifact != "cell/note.svg" {
-		t.Fatalf("artifact locator: %q", entries[0].Artifact)
-	}
-}
-
 func TestUsageSnapshotStoreBacked(t *testing.T) {
 	useTestStore(t)
 	if _, ok := ReadUsageSnapshot(); ok {

@@ -73,6 +73,11 @@ CREATE TABLE prs (
 	job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
 	url    TEXT NOT NULL,
 	state  TEXT NOT NULL CHECK(state IN ('open','merged','closed')),
+	-- watchPRs watermarks (jobs/daemon.go): RFC3339 newest-seen comment
+	-- time and the last CI SHA already bumped for. Bookkeeping, not a job
+	-- mutation — SetPRWatermark deliberately does not bump jobs.rev.
+	last_comment_at TEXT NOT NULL DEFAULT '',
+	bumped_sha      TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (job_id, url)
 );
 

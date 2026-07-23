@@ -459,6 +459,15 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 		b.WriteString("prs:\n")
 		for _, p := range prs {
 			fmt.Fprintf(&b, "  - url: %s\n    state: %s\n", jobs.OneLine(p.URL), jobs.OneLine(p.State))
+			// watermarks are omitted (not even blank) when unset — same
+			// conditional shape as jobs.patchPRs, so a form save round-trips
+			// a record watchPRs hasn't touched yet byte-for-byte compatibly
+			if p.LastCommentAt != "" {
+				fmt.Fprintf(&b, "    last-comment-at: %s\n", jobs.OneLine(p.LastCommentAt))
+			}
+			if p.BumpedSHA != "" {
+				fmt.Fprintf(&b, "    bumped-sha: %s\n", jobs.OneLine(p.BumpedSHA))
+			}
 		}
 	}
 	b.WriteString("---\n\n")

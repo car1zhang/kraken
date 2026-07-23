@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -110,7 +109,8 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 		j.Prereqs = append(j.Prereqs, Prereq{Job: p.Slug, Gated: p.Gated})
 	}
 	for _, p := range prs {
-		j.PRs = append(j.PRs, JobPR{URL: p.URL, State: p.State})
+		j.PRs = append(j.PRs, JobPR{URL: p.URL, State: p.State,
+			LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA})
 	}
 	return j
 }
@@ -244,7 +244,8 @@ func writeJobPRsToStore(st *store.Store, j *Job, prs []JobPR) error {
 	merged := append([]JobPR{}, prs...)
 	for _, p := range existing {
 		if !have[p.URL] {
-			merged = append(merged, JobPR{URL: p.URL, State: p.State})
+			merged = append(merged, JobPR{URL: p.URL, State: p.State,
+				LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA})
 		}
 	}
 	for _, p := range merged {
@@ -276,6 +277,24 @@ func appendJobPRToStore(st *store.Store, j *Job, pr JobPR) (attached bool, err e
 	return true, nil
 }
 
+// updatePRWatermarkToStore is updatePRWatermark's store-backed path:
+// store.SetPRWatermark is itself a no-op for an unrecorded URL, mirroring
+// the file path's dropped-between-load-and-write tolerance. The in-memory
+// copy updates only when the URL is still present.
+func updatePRWatermarkToStore(st *store.Store, j *Job, url, lastCommentAt, bumpedSHA string) error {
+	if err := st.SetPRWatermark(j.ID, url, lastCommentAt, bumpedSHA); err != nil {
+		return fmt.Errorf("pr watermark for %s: %w", j.Slug, err)
+	}
+	for i := range j.PRs {
+		if j.PRs[i].URL == url {
+			j.PRs[i].LastCommentAt = lastCommentAt
+			j.PRs[i].BumpedSHA = bumpedSHA
+			break
+		}
+	}
+	return nil
+}
+
 // removeJobPRsFromStore is removeJobPRs' store-backed path: re-reads the
 // current DB set (mirroring the file path's read-fresh-then-filter shape,
 // so a concurrently attached PR absent from drop survives untouched) and
@@ -294,7 +313,8 @@ func removeJobPRsFromStore(st *store.Store, j *Job, drop map[string]bool) (remov
 			removed = append(removed, p.URL)
 			continue
 		}
-		kept = append(kept, JobPR{URL: p.URL, State: p.State})
+		kept = append(kept, JobPR{URL: p.URL, State: p.State,
+			LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA})
 	}
 	if len(removed) == 0 {
 		return nil, nil
@@ -340,31 +360,6 @@ func saveUploadToStore(st *store.Store, slug, ext string, data []byte) (name, pa
 		return "", "", err
 	}
 	return u.Name, path, nil
-}
-
-// saveArtifactFeedbackToStore is SaveArtifactFeedback's (and
-// SaveArtifactFeedbackBytes') shared store-backed core: freezes the given
-// snapshot bytes into one feedback row via store.AddFeedback. home
-// (cell|pluto|archive, the artifact's namespace, per feedbackReq in
-// api/feedback.go — nothing to do with $HOME) has no dedicated column in
-// the store schema, so it's folded together with name into Artifact as
-// "home/name" to keep both losslessly attached to the entry. ext is the
-// artifact's extension (with leading dot), stored as SnapshotExt. Returns a
-// synthetic "db:<id>" locator in place of the file path's entry directory —
-// /dream and the board only ever display this string, never parse it.
-func saveArtifactFeedbackToStore(st *store.Store, slug, home, name string, snapshot []byte, ext, feedback string, now time.Time) (string, error) {
-	id, err := st.AddFeedback(store.Feedback{
-		JobSlug:     slug,
-		Artifact:    home + "/" + name,
-		Snapshot:    snapshot,
-		SnapshotExt: strings.ToLower(ext),
-		Note:        feedback,
-		TS:          now.UnixMilli(),
-	})
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("db:%d", id), nil
 }
 
 // jobFieldValue converts one of WriteJobFields' variadic string keyvals

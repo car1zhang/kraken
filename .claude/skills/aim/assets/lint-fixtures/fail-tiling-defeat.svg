@@ -1,0 +1,60 @@
+<svg viewBox="0 0 860 486" role="img" aria-label="Why full-height web views blow up memory">
+  <defs>
+    <marker id="arrow-tiling-defeat" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <!-- ===================== LEFT PANEL ===================== -->
+  <rect class="group" x="20" y="16" width="390" height="380" rx="8"/>
+  <text x="34" y="38" font-size="14">Normal: viewport-sized<tspan x="34" dy="1.2em">web view (ArtifactView)</tspan></text>
+
+  <!-- document -->
+  <text x="60" y="76" font-size="12">document (10,000 pt)</text>
+  <rect class="group" x="60" y="84" width="120" height="236" rx="3"/>
+
+  <!-- resident tiles above the viewport -->
+  <rect class="store" x="66" y="94" width="108" height="30" rx="2"/>
+  <rect class="store" x="66" y="130" width="108" height="30" rx="2"/>
+  <!-- viewport band -->
+  <rect class="node accent" x="66" y="167" width="108" height="70" rx="2"/>
+  <text x="120" y="206" font-size="12" text-anchor="middle">viewport</text>
+  <!-- resident tiles below the viewport -->
+  <rect class="store" x="66" y="246" width="108" height="30" rx="2"/>
+  <rect class="store" x="66" y="284" width="108" height="30" rx="2"/>
+
+  <!-- tiles label + pointer -->
+  <text x="192" y="198" font-size="12">rasterized tiles<tspan x="192" dy="1.2em">&#8776; viewport only</tspan></text>
+  <path class="edge" id="td-vp" d="M194,205 L182,205" marker-end="url(#arrow-tiling-defeat)"/>
+
+  <!-- summary -->
+  <text x="34" y="350" font-size="13">memory &#8776; screen-sized, constant</text>
+
+  <!-- ===================== RIGHT PANEL ===================== -->
+  <rect class="group" x="450" y="16" width="390" height="380" rx="8"/>
+  <text x="464" y="38" font-size="14">Kraken inline blocks: web view<tspan x="464" dy="1.2em">inflated to content height</tspan></text>
+
+  <!-- document, fully rasterized -->
+  <text x="500" y="76" font-size="12">document (10,000 pt)</text>
+  <rect class="group" x="500" y="84" width="120" height="236" rx="3"/>
+  <rect class="store" x="506" y="90" width="108" height="27" rx="2"/>
+  <rect class="store" x="506" y="122" width="108" height="27" rx="2"/>
+  <rect class="store" x="506" y="154" width="108" height="27" rx="2"/>
+  <rect class="store" x="506" y="186" width="108" height="27" rx="2"/>
+  <rect class="store" x="506" y="218" width="108" height="27" rx="2"/>
+  <rect class="store" x="506" y="250" width="108" height="27" rx="2"/>
+  <rect class="store" x="506" y="282" width="108" height="27" rx="2"/>
+
+  <!-- bounds label + pointer -->
+  <text x="636" y="198" font-size="12">view bounds = content<tspan x="636" dy="1.2em">&#8658; every tile resident</tspan></text>
+  <path class="edge" id="td-bounds" d="M634,205 L622,205" marker-end="url(#arrow-tiling-defeat)"/>
+
+  <!-- math -->
+  <text x="464" y="346" font-size="13">1170 px wide &#215; 3&#215; scale &#215; 4 B/px<tspan x="464" dy="1.35em">&#8776; 14 MB per 1,000 pt of content</tspan><tspan x="464" dy="1.35em">20 blocks + spec card &#8658; hundreds of MB</tspan></text>
+
+  <!-- ===================== JETSAM ===================== -->
+  <path class="edge" id="td-jetsam" d="M760,396 L760,424" marker-end="url(#arrow-tiling-defeat)"/>
+  <text class="edgeLabel" x="684" y="414" text-anchor="end" font-size="12">footprint crosses limit</text>
+  <rect class="store" x="690" y="426" width="140" height="42" rx="4"/>
+  <text x="760" y="452" font-size="13" text-anchor="middle">jetsam kill</text>
+</svg>

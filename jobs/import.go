@@ -481,6 +481,11 @@ func syncJobChildren(st *store.Store, id int64, j *Job) error {
 		if err := st.UpsertPR(id, p.URL, p.State); err != nil {
 			return err
 		}
+		if p.LastCommentAt != "" || p.BumpedSHA != "" {
+			if err := st.SetPRWatermark(id, p.URL, p.LastCommentAt, p.BumpedSHA); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

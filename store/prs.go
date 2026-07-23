@@ -7,8 +7,27 @@ import (
 
 // PR is one PR shipped from a job's cell branch — mirrors jobs.JobPR.
 type PR struct {
-	URL   string
-	State string
+	URL           string
+	State         string
+	LastCommentAt string
+	BumpedSHA     string
+}
+
+// SetPRWatermark stamps watchPRs' per-URL comment/CI watermarks. A no-op
+// when the URL isn't recorded for jobID (it was dropped between the
+// caller's load and this write — nothing left to stamp). Does NOT bump
+// jobs.rev: watermarks are daemon bookkeeping invisible to the editor, and
+// bumping would 409 an open editor for a change it cannot see. UpsertPR
+// never touches these columns, so a state refresh preserves watermarks.
+func (s *Store) SetPRWatermark(jobID int64, url, lastCommentAt, bumpedSHA string) error {
+	_, err := s.db.Exec(
+		`UPDATE prs SET last_comment_at = ?, bumped_sha = ? WHERE job_id = ? AND url = ?`,
+		lastCommentAt, bumpedSHA, jobID, url,
+	)
+	if err != nil {
+		return fmt.Errorf("set pr watermark %s for job %d: %w", url, jobID, err)
+	}
+	return nil
 }
 
 // UpsertPR records url against job_id if it isn't already there (INSERT OR
@@ -98,7 +117,8 @@ func (s *Store) ListPRs(jobID int64) ([]PR, error) {
 // the save's own remove-anything-not-named pass.
 func listPRsTx(x execer, jobID int64) ([]PR, error) {
 	rows, err := x.Query(
-		`SELECT url, state FROM prs WHERE job_id = ? ORDER BY rowid`,
+		`SELECT url, state, COALESCE(last_comment_at, ''), COALESCE(bumped_sha, '')
+		 FROM prs WHERE job_id = ? ORDER BY rowid`,
 		jobID,
 	)
 	if err != nil {
@@ -108,7 +128,7 @@ func listPRsTx(x execer, jobID int64) ([]PR, error) {
 	var out []PR
 	for rows.Next() {
 		var p PR
-		if err := rows.Scan(&p.URL, &p.State); err != nil {
+		if err := rows.Scan(&p.URL, &p.State, &p.LastCommentAt, &p.BumpedSHA); err != nil {
 			return nil, fmt.Errorf("list prs for job %d: %w", jobID, err)
 		}
 		out = append(out, p)
