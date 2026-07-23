@@ -3,7 +3,7 @@
 PLIST := $(HOME)/Library/LaunchAgents/dev.carl.kraken.plist
 
 build:
-	go build -o kraken .
+	go build -o kraken ./cmd/kraken
 
 install: build install-completion install-daemon
 	mkdir -p $(HOME)/.local/bin
@@ -53,7 +53,7 @@ install-completion:
 		if [ -d "$$d" ] || mkdir -p "$$d" 2>/dev/null; then dest="$$d"; break; fi; \
 	done; \
 	if [ -z "$$dest" ]; then echo "no writable completion dir"; exit 1; fi; \
-	cp _k "$$dest/_k"; \
+	cp cmd/kraken/_k "$$dest/_k"; \
 	echo "installed zsh completion → $$dest/_k"; \
 	echo "reload with: rm -f ~/.zcompdump* && exec zsh"
 

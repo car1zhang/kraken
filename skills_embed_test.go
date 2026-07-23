@@ -1,11 +1,11 @@
-package main
+package kraken
 
 import (
 	"io/fs"
 	"strings"
 	"testing"
 
-	"kraken/jobs"
+	"kraken/internal/jobs"
 )
 
 // skills_embed_test.go verifies the go:embed directive actually captured

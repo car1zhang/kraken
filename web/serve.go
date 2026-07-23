@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"kraken/api"
-	"kraken/jobs"
-	"kraken/util"
+	"kraken/internal/api"
+	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 // Options are k web's already-parsed flags — cmd_web.go owns the flag
