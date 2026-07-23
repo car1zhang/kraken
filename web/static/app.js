@@ -1015,6 +1015,102 @@ function pastedFiles(ev) {
 // textarea (draft sync, autosave) see the change like any other keystroke.
 const CMD_CHIPS = ["/info", "/spec", "/do", "/pr"];
 
+// ---- command highlight: mirrored backdrop rendering /info /spec /do /pr in
+// purple-with-glow behind the (now text-transparent) composer textareas — a
+// <textarea> can't style substrings of its own value, so the real glyphs
+// live in a sibling div instead (style.css's .cmd-hl-wrap/.cmd-hl-backdrop,
+// unioned with #steer-text/#editor-text's own rule for font/padding/
+// border-width so the two surfaces can't drift apart). Escaping runs first,
+// then the boundary match — none of the four commands' characters are
+// HTML-special, so matching against already-escaped text is safe. Derived
+// from CMD_CHIPS (single source) rather than hand-duplicated, and anchored
+// on a leading (^|\s) group in addition to the trailing \b: without it a
+// mid-word slash-run like "[image: /Users/x/pr-notes.png]" or a path such
+// as "web/static/do" lights up too, since \b alone only guards the *end* of
+// the match.
+const CMD_HL_RE = new RegExp("(^|\\s)(/(?:" + CMD_CHIPS.map((c) => c.slice(1)).join("|") + "))\\b", "g");
+
+function cmdHighlightHTML(text) {
+  // group 1 (the leading boundary char, or "" at start-of-text) is passed
+  // through untouched; only group 2 (the command itself) gets wrapped.
+  const highlighted = esc(text).replace(CMD_HL_RE, (_m, lead, cmd) => `${lead}<span class="cmd-hl">${cmd}</span>`);
+  // a <textarea> reserves a trailing blank row that a pre-wrap div won't
+  // unless told to — an unconditional sentinel newline reproduces it so
+  // scrollTop syncing never runs the mirror out of vertical room before the
+  // real textarea does
+  return highlighted + "\n";
+}
+
+// syncCmdHighlightGutter keeps the backdrop's right inset matched to
+// whatever width the textarea's scrollbar is actually eating. With classic
+// (space-taking) scrollbars, `overflow:hidden` on the backdrop reserves no
+// gutter, so the textarea's content box — and therefore its line-wrap
+// point — ends up ~11-15px narrower than the backdrop's once content
+// overflows; without this the two surfaces wrap differently and whole lines
+// "ghost" out of alignment. The -2 accounts for the two 1px borders shared
+// by the unioned metric rule in style.css.
+function syncCmdHighlightGutter(textarea, backdrop) {
+  backdrop.style.right = (textarea.offsetWidth - textarea.clientWidth - 2) + "px";
+}
+
+// cmdHighlightPending coalesces refreshCmdHighlight calls to one render per
+// animation frame per textarea id — the escape+regex+innerHTML-parse pass
+// is O(n) in the composer's text length, and re-running it on every single
+// keystroke of a multi-KB spec is wasted work once keystrokes arrive faster
+// than paint.
+const cmdHighlightPending = new Set();
+
+// renderCmdHighlight does the actual synchronous work: re-renders one
+// composer's backdrop from its textarea's *current* value. Called directly
+// for the first paint (attachCmdHighlight) and via the refreshCmdHighlight
+// rAF wrapper everywhere else.
+function renderCmdHighlight(textareaId) {
+  const textarea = document.getElementById(textareaId);
+  const backdrop = document.getElementById(textareaId + "-backdrop");
+  if (!textarea || !backdrop) return;
+  backdrop.innerHTML = cmdHighlightHTML(textarea.value);
+  syncCmdHighlightGutter(textarea, backdrop);
+  backdrop.scrollTop = textarea.scrollTop;
+}
+
+// refreshCmdHighlight schedules a re-render of one composer's backdrop from
+// its textarea's *current* value, coalesced to the next animation frame.
+// Call after every programmatic ".value =" write (draft restore, form load,
+// inserted text) in addition to the live "input" listener attachCmdHighlight
+// wires below — anything that skips a real keystroke skips the browser's own
+// "input" event too, and the backdrop would otherwise show stale text.
+function refreshCmdHighlight(textareaId) {
+  if (cmdHighlightPending.has(textareaId)) return;
+  cmdHighlightPending.add(textareaId);
+  requestAnimationFrame(() => {
+    cmdHighlightPending.delete(textareaId);
+    renderCmdHighlight(textareaId);
+  });
+}
+
+function attachCmdHighlight(textareaId) {
+  const textarea = document.getElementById(textareaId);
+  const backdrop = document.getElementById(textareaId + "-backdrop");
+  const wrap = document.getElementById(textareaId + "-wrap");
+  if (!textarea || !backdrop) return;
+  // Gates the textareas' color:transparent/caret-color rules (style.css) on
+  // JS having actually run — without this class, an exception earlier in
+  // this script would leave the mirror never rendered while the textarea's
+  // own text stays invisible, i.e. a silently unreadable composer.
+  if (wrap) wrap.classList.add("cmd-hl-on");
+  renderCmdHighlight(textareaId); // first paint: skip the rAF hop
+  textarea.addEventListener("input", () => refreshCmdHighlight(textareaId));
+  // Scroll sync stays synchronous (not coalesced through refreshCmdHighlight)
+  // — a drag-resize can change the textarea/backdrop width split without
+  // firing an "input" event, so the gutter needs recomputing here too, and
+  // coalescing scroll itself would visibly lag the mirror behind a fast
+  // scroll-wheel fling.
+  textarea.addEventListener("scroll", () => {
+    backdrop.scrollTop = textarea.scrollTop;
+    syncCmdHighlightGutter(textarea, backdrop);
+  });
+}
+
 function attachCmdChips(containerId, textareaId) {
   const containerEl = document.getElementById(containerId);
   const textarea = document.getElementById(textareaId);
@@ -1217,6 +1313,7 @@ function openSteer(slug, mode = "steer", opts = {}) {
       ? "tell the crew how to proceed — routed straight to the cell"
       : "message zeus directly — steering / pivot instruction, delivered straight to its pane";
   text.value = "";
+  refreshCmdHighlight("steer-text");
   // fetch the shared draft after the composer is already showing empty —
   // only land it if the modal is still open for this slug and the user
   // hasn't started typing in the meantime
@@ -1224,7 +1321,10 @@ function openSteer(slug, mode = "steer", opts = {}) {
     .then((r) => r.json())
     .then((d) => {
       if (steerOverlay.hidden || steerSlug !== slug) return;
-      if (text.value === "") text.value = d.text || "";
+      if (text.value === "") {
+        text.value = d.text || "";
+        refreshCmdHighlight("steer-text");
+      }
     })
     .catch(() => {});
   document.getElementById("steer-note").textContent = "";
@@ -1325,6 +1425,7 @@ document.getElementById("steer-text").addEventListener("input", (ev) => {
   if (steerSlug) postDraft(steerSlug, ev.target.value);
 });
 attachCmdChips("steer-cmd-chips", "steer-text");
+attachCmdHighlight("steer-text");
 steerOverlay.addEventListener("click", (ev) => {
   if (ev.target === steerOverlay) { flushSteerDraft(); clearSteerChips(); steerOverlay.hidden = true; }
 });
@@ -1385,6 +1486,7 @@ const editorOverlay = document.getElementById("editor-overlay");
 const editorText = document.getElementById("editor-text");
 const editorNote = document.getElementById("editor-note");
 attachCmdChips("editor-cmd-chips", "editor-text");
+attachCmdHighlight("editor-text");
 let editorSlug = null;
 let editorMTime = 0;
 let editorReady = false; // captured from the last loaded form; the ready row is gone, sent as-is by the ready button
@@ -1444,6 +1546,10 @@ function insertAtCursor(textarea, text, opts) {
   textarea.value = textarea.value.slice(0, start) + inserted + textarea.value.slice(end);
   const pos = start + inserted.length;
   textarea.selectionStart = textarea.selectionEnd = pos;
+  // programmatic write — no native "input" event, so the command-highlight
+  // backdrop (if this textarea has one) needs an explicit nudge; harmless
+  // no-op for textareas without a "-backdrop" sibling
+  if (textarea.id) refreshCmdHighlight(textarea.id);
   return pos;
 }
 
@@ -1508,6 +1614,7 @@ function fillForm(d) {
   document.getElementById("f-skipdoc").checked = !!d.skip_doc;
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
+  refreshCmdHighlight("editor-text");
   document.getElementById("job-list").innerHTML = (d.slugs || []).map((x) => `<option value="${esc(x)}">`).join("");
 }
 

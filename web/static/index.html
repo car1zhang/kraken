@@ -121,8 +121,11 @@
           <div class="steer-spec-body" id="steer-spec-body" hidden></div>
         </div>
         <div class="cmd-chips" id="steer-cmd-chips"></div>
-        <textarea id="steer-text" rows="4"
-          placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
+        <div class="cmd-hl-wrap" id="steer-text-wrap">
+          <div class="cmd-hl-backdrop" id="steer-text-backdrop" aria-hidden="true"></div>
+          <textarea id="steer-text" rows="4"
+            placeholder="message zeus directly — steering / pivot instruction, delivered straight to its pane"></textarea>
+        </div>
         <div class="att-zone" id="steer-att-zone">
           <div class="att-chips" id="steer-chips-att" hidden></div>
           <div class="att-bar">
@@ -196,7 +199,10 @@
           </div>
           <div class="cmd-chips" id="editor-cmd-chips"></div>
           <label class="f-block grow" for="editor-text">spec — zeus' initial prompt, as fleshed out as possible
-            <textarea id="editor-text" spellcheck="false"></textarea>
+            <div class="cmd-hl-wrap" id="editor-text-wrap">
+              <div class="cmd-hl-backdrop" id="editor-text-backdrop" aria-hidden="true"></div>
+              <textarea id="editor-text" spellcheck="false"></textarea>
+            </div>
           </label>
           <div class="att-zone" id="editor-att-zone">
             <div class="att-chips" id="editor-chips-att" hidden></div>

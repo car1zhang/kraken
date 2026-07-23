@@ -3,3 +3,4 @@
 xcuserdata/
 /ios/build/
 /.claude/settings.json
+/.playwright-mcp/

@@ -538,13 +538,63 @@ body {
   font-size: 10px; letter-spacing: 1px;
 }
 .btn.steer-done:hover { background: var(--solved-soft); border-color: var(--solved); box-shadow: var(--glow-ok); }
-#steer-text {
+/* ---- command highlight: mirrored backdrop behind the steer/editor
+   textareas, so /info /spec /do /pr read highlighted (purple + glow)
+   inline — a <textarea> can't style substrings of its own value. The
+   wrapper is position:relative and otherwise unstyled; the textarea stays
+   normal-flow (so it alone drives the wrapper's height — dragging its
+   resize handle "just works", no ResizeObserver needed) while the backdrop
+   is position:absolute; inset:0 underneath it. Font/padding/border-width
+   are declared ONCE per pair via a selector union with the textarea's own
+   rule below, so the two surfaces can never drift out of alignment
+   (mismatched box models are exactly what causes glyph ghosting). See
+   refreshCmdHighlight in app.js. */
+.cmd-hl-wrap { position: relative; }
+.cmd-hl-backdrop {
+  position: absolute; inset: 0;
+  overflow: hidden;
+  white-space: pre-wrap; word-break: normal; overflow-wrap: break-word;
+  color: var(--text);
+  pointer-events: none;
+  /* The backdrop must match the TEXTAREA's UA-reset typography, not the
+     ancestor cascade: browsers reset letter-spacing/word-spacing/
+     text-transform/text-indent/text-align on form controls, but this is a
+     plain <div> that inherits them from wherever it sits in the DOM (e.g.
+     .editor-form label's letter-spacing: 1px) — left alone that drifted the
+     backdrop ~1px/char from the textarea's real glyphs (40px at column 40).
+     text-shadow:none is safe here too: the .cmd-hl span below sets its own
+     text-shadow and overrides this base rule for the glowing spans. */
+  letter-spacing: normal; word-spacing: normal; text-transform: none;
+  text-indent: 0; text-align: start; text-shadow: none;
+}
+.cmd-hl-backdrop .cmd-hl { color: var(--accent); text-shadow: var(--text-glow); }
+#steer-text-wrap { background: var(--raised); }
+#steer-text, #steer-text-backdrop {
   font: 12px/1.5 var(--sans);
-  background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2);
-  padding: 9px 11px; resize: vertical; min-height: 70px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  /* kills the ~6px inline-block descender strip a bare <textarea> reserves
+     below its content box — left as inline-block the backdrop and textarea
+     clientHeights disagree by that amount, which can clamp scrollTop sync
+     short by the same 6px */
+  display: block;
+}
+#steer-text {
+  background: transparent;
+  border-color: var(--hairline-2);
+  resize: vertical; min-height: 70px; width: 100%;
 }
 #steer-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+#steer-text::placeholder { color: var(--text-2); opacity: 1; }
+/* color:transparent (+ caret-color) only apply once JS has actually wired
+   the mirrored backdrop (attachCmdHighlight stamps .cmd-hl-on on the
+   wrapper) — unconditional transparent text would render invisible for
+   both composers if an earlier script exception ever left the mirror
+   unrendered. */
+.cmd-hl-wrap.cmd-hl-on #steer-text,
+.cmd-hl-wrap.cmd-hl-on #editor-text {
+  color: transparent; caret-color: var(--text);
+}
 .btn:disabled { opacity: 0.4; cursor: default; }
 .panel-body { overflow-y: auto; padding: 16px 20px; font-size: 12.5px; line-height: 1.6; }
 .panel-body.raw { white-space: pre-wrap; font: 11px/1.6 var(--mono); color: var(--text-2); }
@@ -689,13 +739,25 @@ body {
   font: 11px var(--mono); color: var(--text-2); padding: 0 4px;
 }
 .prereq-row .rm:hover { color: var(--counter); }
-#editor-text {
+#editor-text-wrap { background: var(--ground); }
+/* metric properties (font/padding/border-width) are declared ONCE for the
+   textarea/backdrop pair via this selector union, same reasoning as the
+   #steer-text union above — splitting them into separate rules is exactly
+   what lets the two surfaces' box models drift apart and ghosts the
+   glyphs. */
+#editor-text, #editor-text-backdrop {
   font: 12.5px/1.6 var(--sans);
-  background: var(--ground); color: var(--text);
-  border: 1px solid var(--hairline-2);
-  padding: 12px 14px; resize: vertical;
-  min-height: 32vh; tab-size: 2;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  tab-size: 2;
+  display: block;
 }
+#editor-text {
+  background: transparent;
+  border-color: var(--hairline-2);
+  resize: vertical; min-height: 32vh; width: 100%;
+}
+#editor-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
 
 .btn-new {
   width: 100%; padding: 13px 0;
