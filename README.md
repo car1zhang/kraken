@@ -61,7 +61,7 @@ Requires macOS, tmux, and Go ≥ 1.24 to build:
 make install
 ```
 
-This builds the binary, installs it to `~/.local/bin` as `kraken` with a `k` symlink, and drops zsh completion into your completions dir. `k o` focuses [ghostty](https://ghostty.org) windows via AppleScript, which needs Accessibility permission the first time.
+This builds the binary, installs it to `~/.local/bin` as `kraken` with a `k` symlink, and drops zsh completion into your completions dir. On a migrated machine (kraken.db present) the launchd job runs `kraken serve`, localhost-only by default — `make install SERVE_FLAGS=--tailnet` makes it bind the tailscale IP instead so the iOS app can reach the board. `k o` focuses [ghostty](https://ghostty.org) windows via AppleScript, which needs Accessibility permission the first time.
 
 ## How it works
 
