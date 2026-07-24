@@ -45,6 +45,8 @@ func main() {
 		cmdNewShell(rest)
 	case "c":
 		cmdNewClaude(rest)
+	case "account":
+		cmdAccount(rest)
 	case "daemon":
 		cmdDaemon(rest)
 	case "logevent":
@@ -87,6 +89,15 @@ Commands:
                       running cmd (drops back to the shell when cmd exits)
   k c [-c dir] <name> [prompt...]
                       new named claude in a new window of the current session
+  k account           show rotation mode (auto/manual) + a table of every
+                      Claude account (main + ~/.claude-pool slots): usage,
+                      identity, flags
+  k account auto      re-enable auto-rotation (no swap)
+  k account <slug>    manually switch the main login to pool slot <slug>,
+                      always — regardless of thresholds — and pin rotation to
+                      manual (k account auto to release it). note: a pool
+                      slot literally named "auto" can never be targeted this
+                      way — the auto keyword always wins
   k daemon            run the scheduler loop in the foreground (launchd runs
                       this at login via make install): queues ready jobs
                       (≤5 cells), derives working/blocked from cell activity,

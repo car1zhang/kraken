@@ -259,23 +259,35 @@ function chipsHTML(artifacts, slug, label) {
   return chips + toggle;
 }
 
-// zeusPillHTML renders the zeus status pill for crewHTML — "running" reads
-// as actively working (green), "question" flags a pending AskUserQuestion
-// (amber), anything else (including "waiting") falls back to the muted
-// waiting label rather than echoing an arbitrary status string verbatim.
+// zeusPillHTML renders the zeus status pill for crewHTML: one god icon
+// (cloud) whose color is the sole status indicator — "running" green,
+// "polling" cyan, "question" flags a pending AskUserQuestion (amber),
+// anything else (including "waiting") falls back to the muted default
+// rather than echoing an arbitrary status string verbatim. The name
+// survives only in the title attribute, for hover/assistive tech.
+const ZEUS_STATUS = {
+  running: { cls: "run", title: "zeus — running" },
+  polling: { cls: "polling", title: "zeus — polling" },
+  question: { cls: "question", title: "zeus — question" },
+};
 function zeusPillHTML(status) {
-  if (status === "running") return `<span class="crew-pill run">zeus ●</span>`;
-  if (status === "polling") return `<span class="crew-pill polling">zeus ↻ polling</span>`;
-  if (status === "question") return `<span class="crew-pill question">zeus ⚑ question</span>`;
-  return `<span class="crew-pill">zeus ○ waiting</span>`;
+  const s = ZEUS_STATUS[status] || { cls: "", title: "zeus — waiting" };
+  return `<span class="crew-pill${s.cls ? " " + s.cls : ""}" title="${esc(s.title)}">↯</span>`;
 }
 
 const CREW_ROLES = ["hephaestus", "athena", "hermes", "other"];
 
+// CREW_ICONS maps a crew role to its god's text-presentation glyph (VS15
+// forces monochrome rendering, matching the rest of the UI's icon glyphs —
+// ● ⚑ ↻ ⧉ ↺; zeus' ↯ has no emoji variant, so no VS15 needed there).
+// "other" has no god and keeps its plain text label.
+const CREW_ICONS = { hephaestus: "⚒︎", athena: "⚖︎", hermes: "✉︎" };
+
 // crewHTML renders the crew line: a zeus status pill plus one working/total
-// chip per subagent role present in the roster. Renders nothing for an old
-// server payload (no zeus_status, no roster) so the card looks exactly as it
-// did before these fields existed.
+// chip per subagent role present in the roster, each chip led by its god's
+// icon in place of the role name (icon replaces the name; the name moves to
+// title). Renders nothing for an old server payload (no zeus_status, no
+// roster) so the card looks exactly as it did before these fields existed.
 function crewHTML(j) {
   const roster = j.roster || [];
   if (!j.zeus_status && !roster.length) return "";
@@ -289,7 +301,12 @@ function crewHTML(j) {
   const chips = CREW_ROLES.filter((role) => counts[role])
     .map((role) => {
       const c = counts[role];
-      return `<span class="crew-chip${c.working > 0 ? " active" : ""}">${esc(role)} ${c.working}/${c.total}</span>`;
+      const icon = CREW_ICONS[role];
+      const label = icon
+        ? `<span class="crew-ico">${icon}</span> ${c.working}/${c.total}`
+        : `${esc(role)} ${c.working}/${c.total}`;
+      const title = `${role} — ${c.working} of ${c.total} working`;
+      return `<span class="crew-chip${c.working > 0 ? " active" : ""}" title="${esc(title)}">${label}</span>`;
     })
     .join("");
   if (!zeusPill && !chips) return "";
@@ -845,6 +862,11 @@ function showToast(message) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 4000);
 }
 
+// post() resolves with the parsed response body so callers that need a
+// response field beyond the {"ok": true} convention — e.g. peers/open's
+// additive "focus_error" — can read it without a second request; it
+// resolves to null on failure, so a bare truthy/falsy check still works at
+// every call site that only cares whether the request succeeded.
 async function post(url, body) {
   try {
     const r = await fetch(url, {
@@ -858,12 +880,12 @@ async function post(url, body) {
     // force a rebuild even if the jobs payload happens to match
     invalidateBoard();
     await refresh();
-    return true;
+    return data;
   } catch (e) {
     document.getElementById("tick-stat").textContent = "✕ " + e.message;
     invalidateBoard();
     await refresh();
-    return false;
+    return null;
   }
 }
 
@@ -1131,8 +1153,8 @@ document.addEventListener("click", (ev) => {
   const steerDone = ev.target.closest(".steer-done");
   if (steerDone) {
     steerDone.disabled = true;
-    post("/api/done", { slug: steerDone.dataset.slug }).then((ok) => {
-      if (ok) {
+    post("/api/done", { slug: steerDone.dataset.slug }).then((res) => {
+      if (res) {
         postDraft.cancel(); // done also clears the draft server-side
         clearSteerChips();
         clearSteerDocq();
@@ -1145,7 +1167,9 @@ document.addEventListener("click", (ev) => {
   }
   const tmuxOpen = ev.target.closest(".open-tmux");
   if (tmuxOpen) {
-    post("/api/peers/open", { slug: tmuxOpen.dataset.slug });
+    post("/api/peers/open", { slug: tmuxOpen.dataset.slug }).then((data) => {
+      if (data && data.focus_error) showToast(`couldn't focus the window: ${data.focus_error}`);
+    });
     return;
   }
   const ccpBtn = ev.target.closest(".u-ccp");
@@ -1171,6 +1195,27 @@ document.addEventListener("click", (ev) => {
       } catch {}
       ta.remove();
     }
+    return;
+  }
+  const makeMain = ev.target.closest(".u-make-main");
+  if (makeMain) {
+    if (usageActionInFlight) return;
+    const slug = makeMain.dataset.slug;
+    const email = makeMain.dataset.email || slug;
+    if (!confirm(`switch main to ${slug} (${email})? every running session migrates at its next token refresh, and rotation pins to manual.`)) {
+      return;
+    }
+    usageActionInFlight = true;
+    makeMain.disabled = true;
+    postUsageAction("/api/account/switch", { slug }, makeMain, "switch failed").finally(() => { usageActionInFlight = false; });
+    return;
+  }
+  const switchAuto = ev.target.closest(".u-switch-auto");
+  if (switchAuto) {
+    if (usageActionInFlight) return;
+    usageActionInFlight = true;
+    switchAuto.disabled = true;
+    postUsageAction("/api/account/mode", { mode: "auto" }, switchAuto, "mode switch failed").finally(() => { usageActionInFlight = false; });
     return;
   }
   if (ev.target.closest("#new-job")) {
@@ -1272,8 +1317,9 @@ function pastedFiles(ev) {
 // textarea (draft sync, autosave) see the change like any other keystroke.
 const CMD_CHIPS = ["/info", "/aim", "/do", "/pr"];
 
-// ---- command highlight: mirrored backdrop rendering /info /aim /do /pr in
-// purple-with-glow behind the (now text-transparent) composer textareas — a
+// ---- command highlight: mirrored backdrop rendering /info /aim /do /pr,
+// each in its own skill color with glow (info blue, aim red, do yellow, pr
+// green), behind the (now text-transparent) composer textareas — a
 // <textarea> can't style substrings of its own value, so the real glyphs
 // live in a sibling div instead (style.css's .cmd-hl-wrap/.cmd-hl-backdrop,
 // unioned with #steer-text/#editor-text's own rule for font/padding/
@@ -1284,13 +1330,22 @@ const CMD_CHIPS = ["/info", "/aim", "/do", "/pr"];
 // on a leading (^|\s) group in addition to the trailing \b: without it a
 // mid-word slash-run like "[image: /Users/x/pr-notes.png]" or a path such
 // as "web/static/do" lights up too, since \b alone only guards the *end* of
-// the match.
+// the match. Accepted gap: the (^|\s) anchor guards the *start* of a run of
+// non-whitespace, not "is actually a command" — a bracketed path whose
+// first segment happens to be a command still lights up (e.g.
+// "[image: /do/x.png]", since "/do" sits right after a space and "/"
+// satisfies \b same as a space would). Harmless in practice: kraken's own
+// upload paths are ~/.kraken/uploads/..., never /info, /aim, /do, or /pr.
 const CMD_HL_RE = new RegExp("(^|\\s)(/(?:" + CMD_CHIPS.map((c) => c.slice(1)).join("|") + "))\\b", "g");
 
 function cmdHighlightHTML(text) {
   // group 1 (the leading boundary char, or "" at start-of-text) is passed
-  // through untouched; only group 2 (the command itself) gets wrapped.
-  const highlighted = esc(text).replace(CMD_HL_RE, (_m, lead, cmd) => `${lead}<span class="cmd-hl">${cmd}</span>`);
+  // through untouched; only group 2 (the command itself) gets wrapped. The
+  // span always carries the generic .cmd-hl class (style.css's fallback
+  // color/glow) plus a per-command .cmd-hl-<name> class carrying the actual
+  // skill color — derived from cmd itself, not a hand-duplicated list, so it
+  // can only ever name one of CMD_CHIPS.
+  const highlighted = esc(text).replace(CMD_HL_RE, (_m, lead, cmd) => `${lead}<span class="cmd-hl cmd-hl-${cmd.slice(1)}">${cmd}</span>`);
   // a <textarea> reserves a trailing blank row that a pre-wrap div won't
   // unless told to — an unconditional sentinel newline reproduces it so
   // scrollTop syncing never runs the mirror out of vertical room before the
@@ -1368,15 +1423,48 @@ function attachCmdHighlight(textareaId) {
   });
 }
 
+// CMD_ACTIVE_RE: one boundary-anchored regex per command, same (^|\s)…\b
+// semantics as CMD_HL_RE above but scoped to a single command — lets a chip
+// ask "is my command present in the textarea" without matching a different
+// command's substring or a mid-word/path occurrence (mirrors iOS'
+// CmdChipsRow.isPresent). Built from CMD_CHIPS, not hand-duplicated.
+const CMD_ACTIVE_RE = Object.fromEntries(
+  CMD_CHIPS.map((cmd) => [cmd, new RegExp("(^|\\s)" + cmd + "\\b")]),
+);
+
+// cmdChipsContainers: textareaId -> chips containerId, registered by
+// attachCmdChips — lets refreshCmdChips (called from the same programmatic
+// ".value =" call sites as refreshCmdHighlight) find the right chip row
+// without every caller having to know both ids.
+const cmdChipsContainers = {};
+
+// refreshCmdChips re-evaluates one composer's chip row against its
+// textarea's *current* value, toggling "active" per chip. Call beside
+// refreshCmdHighlight everywhere a textarea's value changes without a real
+// keystroke (draft restore, form load, inserted text) — the live "input"
+// listener wired below covers real typing and chip-click insertion.
+function refreshCmdChips(textareaId) {
+  const containerId = cmdChipsContainers[textareaId];
+  const containerEl = containerId && document.getElementById(containerId);
+  const textarea = document.getElementById(textareaId);
+  if (!containerEl || !textarea) return;
+  const value = textarea.value;
+  for (const cmd of CMD_CHIPS) {
+    const btn = containerEl.querySelector(`.cmd-chip-${cmd.slice(1)}`);
+    if (btn) btn.classList.toggle("active", CMD_ACTIVE_RE[cmd].test(value));
+  }
+}
+
 function attachCmdChips(containerId, textareaId) {
   const containerEl = document.getElementById(containerId);
   const textarea = document.getElementById(textareaId);
   if (!textarea || !containerEl) return;
+  cmdChipsContainers[textareaId] = containerId;
   containerEl.innerHTML = "";
   for (const cmd of CMD_CHIPS) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "cmd-chip";
+    btn.className = `cmd-chip cmd-chip-${cmd.slice(1)}`;
     btn.textContent = cmd;
     // never let the button itself take focus — on mobile that dismisses and
     // then reopens the keyboard as focus bounces button -> textarea; the
@@ -1390,6 +1478,8 @@ function attachCmdChips(containerId, textareaId) {
     });
     containerEl.appendChild(btn);
   }
+  textarea.addEventListener("input", () => refreshCmdChips(textareaId));
+  refreshCmdChips(textareaId); // first paint
 }
 
 // ---- steer: mid-run instructions ----
@@ -1591,6 +1681,7 @@ function openSteer(slug, mode = "steer", opts = {}) {
       : "message zeus directly — steering / pivot instruction, delivered straight to its pane";
   text.value = "";
   refreshCmdHighlight("steer-text");
+  refreshCmdChips("steer-text");
   // fetch the shared draft after the composer is already showing empty —
   // only land it if the modal is still open for this slug and the user
   // hasn't started typing in the meantime
@@ -1601,6 +1692,7 @@ function openSteer(slug, mode = "steer", opts = {}) {
       if (text.value === "") {
         text.value = d.text || "";
         refreshCmdHighlight("steer-text");
+        refreshCmdChips("steer-text");
       }
     })
     .catch(() => {});
@@ -1687,9 +1779,9 @@ document.getElementById("steer-send").addEventListener("click", async () => {
   // cancel first — a debounce firing mid-send would land after the server's
   // clear and resurrect the sent message
   postDraft.cancel();
-  const ok = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug, text });
+  const res = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug, text });
   btn.disabled = false;
-  if (ok) {
+  if (res) {
     // cancel again — a keystroke during the in-flight send would have
     // scheduled a fresh sync that the pre-send cancel never saw
     postDraft.cancel();
@@ -1745,9 +1837,9 @@ document.getElementById("steer-kill").addEventListener("click", async () => {
   if (!confirm(`kill ${steerSlug}? the cell is torn down (artifacts preserved) and the job returns to draft.`)) return;
   const btn = document.getElementById("steer-kill");
   btn.disabled = true;
-  const ok = await post("/api/kill", { slug: steerSlug });
+  const res = await post("/api/kill", { slug: steerSlug });
   btn.disabled = false;
-  if (ok) {
+  if (res) {
     flushSteerDraft(); // kill doesn't clear the draft server-side — preserve it
     clearSteerChips();
     clearSteerDocq();
@@ -1831,8 +1923,12 @@ function insertAtCursor(textarea, text, opts) {
   textarea.selectionStart = textarea.selectionEnd = pos;
   // programmatic write — no native "input" event, so the command-highlight
   // backdrop (if this textarea has one) needs an explicit nudge; harmless
-  // no-op for textareas without a "-backdrop" sibling
-  if (textarea.id) refreshCmdHighlight(textarea.id);
+  // no-op for textareas without a "-backdrop" sibling. Same reasoning for
+  // the chip row's active state.
+  if (textarea.id) {
+    refreshCmdHighlight(textarea.id);
+    refreshCmdChips(textarea.id);
+  }
   return pos;
 }
 
@@ -1897,6 +1993,7 @@ function fillForm(d) {
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
   refreshCmdHighlight("editor-text");
+  refreshCmdChips("editor-text");
   document.getElementById("job-list").innerHTML = (d.slugs || []).map((x) => `<option value="${esc(x)}">`).join("");
 }
 
@@ -2054,8 +2151,8 @@ document.getElementById("editor-queue").addEventListener("click", async () => {
   const btn = document.getElementById("editor-queue");
   btn.disabled = true;
   await flushEditorAutosave(); // land any edit still sitting in the debounce window before queueing
-  const ok = await post("/api/queue", { slug: editorSlug });
-  if (ok) {
+  const res = await post("/api/queue", { slug: editorSlug });
+  if (res) {
     editorOverlay.hidden = true;
   } else {
     editorNote.textContent = "queue failed — see status bar";
@@ -2078,9 +2175,9 @@ document.getElementById("editor-dequeue").addEventListener("click", async () => 
   const prevCaptured = editorStateCaptured;
   editorOpenState = "draft";
   editorStateCaptured = true;
-  const ok = await post("/api/dequeue", { slug: editorSlug });
+  const res = await post("/api/dequeue", { slug: editorSlug });
   deq.disabled = false;
-  if (!ok) {
+  if (!res) {
     editorOpenState = prevState;
     editorStateCaptured = prevCaptured;
     editorNote.textContent = "cancel failed — see status bar";
@@ -2224,8 +2321,8 @@ document.addEventListener("paste", (ev) => {
 
 document.getElementById("editor-archive").addEventListener("click", async () => {
   if (!editorSlug) return;
-  const ok = await post("/api/archive", { slug: editorSlug });
-  if (ok) editorOverlay.hidden = true;
+  const res = await post("/api/archive", { slug: editorSlug });
+  if (res) editorOverlay.hidden = true;
   else editorNote.textContent = "archive failed — see status bar";
 });
 
@@ -2413,6 +2510,14 @@ const usageStat = document.getElementById("usage-stat");
 const usageOverlay = document.getElementById("usage-overlay");
 let usageData = null; // last successful /api/usage payload
 
+// usageActionInFlight gates both account-rotation click handlers below (make
+// main / switch back to auto) against a double-fire: a rapid double-click,
+// or the 60s poll's fetchUsage() replacing the button node mid-click (the
+// per-button .disabled flag alone can't catch that — a freshly re-rendered
+// button starts out enabled again even while the first click's request is
+// still in flight).
+let usageActionInFlight = false;
+
 // usageColorClass thresholds a percent into the same ok/warn/danger palette
 // used everywhere else in the board (solved/revealed/counter).
 function usageColorClass(percent) {
@@ -2467,7 +2572,13 @@ function usageStatHTML(data) {
   const stale = !data.daemon_ok || data.age_seconds > 900
     ? `<span class="u-stale">(stale ${Math.floor(data.age_seconds / 60)}m)</span>`
     : "";
-  const out = segs.join("") + poolHTML + stale;
+  // manual-pin chip: absent on an older server (rotation_mode undefined
+  // there, so this just never equals "manual") and absent in auto mode too
+  // — status quo look unless someone has actually pinned the main account.
+  const modeChip = data.rotation_mode === "manual"
+    ? `<span class="u-sep">·</span><span class="u-chip u-chip-warn">manual</span>`
+    : "";
+  const out = segs.join("") + poolHTML + modeChip + stale;
   // an account with no windows at all (fresh install, reauth everywhere)
   // must not leave a visible-but-blank widget
   return out || `<span class="dim">usage —</span>`;
@@ -2504,16 +2615,34 @@ function usageChipsHTML(a) {
 }
 
 // usageAccountHTML renders one account block: header line (slug, current
-// chip, email, tier, status chips, pool-only ccp button) plus a bar row per
-// window. Rows are empty (no session/weekly/models) for reauth/no_creds
-// accounts — the block then falls back to just the header.
-function usageAccountHTML(a) {
+// chip, email, tier, status chips, make-main + pool-only ccp buttons) plus a
+// bar row per window. Rows are empty (no session/weekly/models) for
+// reauth/no_creds accounts — the block then falls back to just the header.
+// `data` is the whole /api/usage payload (not just this account) — it's only
+// consulted for rotation_mode, to gate the make-main button off entirely on
+// an older server that never sends the field (see the click handler for
+// ".u-make-main" and the POST /api/account/switch contract).
+function usageAccountHTML(a, data) {
   const tier = esc((a.tier || "").replace(/^default_claude_/, ""));
   const rows = [usageBarHTML("session", a.session), usageBarHTML("weekly", a.weekly)]
     .concat((a.models || []).map((m) => usageBarHTML(m.name.toLowerCase(), m)))
     .filter(Boolean)
     .join("");
   const ccpBtn = a.current ? "" : `<button class="btn ghost mini u-ccp" data-slug="${esc(a.slug)}" title="copy ccp ${esc(a.slug)}">⧉ ccp</button>`;
+  // make-main: any non-current account with usable creds — cooling/stale
+  // rows still get the button (the server is the one that decides whether a
+  // switch to them actually succeeds), only no_creds/reauth rows don't. A
+  // row whose email mirrors the current main account's is also excluded:
+  // it's the save-back slot a rotation just parked the outgoing main creds
+  // into, and core refuses to ever rotate onto it (core.ErrSaveBackIsTarget)
+  // — every rotation would otherwise re-offer a "make main" button here that
+  // is guaranteed to fail.
+  const main = usageMainAccount(data);
+  const mirrorsMain = !!(a.email && main && main.email && a.email.toLowerCase() === main.email.toLowerCase());
+  const canMakeMain = data.rotation_mode !== undefined && !a.current && !a.no_creds && !a.reauth && !mirrorsMain;
+  const makeMainBtn = canMakeMain
+    ? `<button type="button" class="btn ghost mini u-make-main" data-slug="${esc(a.slug)}" data-email="${esc(a.email || a.slug)}" title="switch the main account to ${esc(a.slug)}">make main</button>`
+    : "";
   return `<div class="u-account">
     <div class="u-account-head">
       <span class="u-slug">${esc(a.slug)}</span>
@@ -2522,15 +2651,46 @@ function usageAccountHTML(a) {
       ${tier ? `<span class="u-chip">${tier}</span>` : ""}
       ${usageChipsHTML(a)}
       <span class="spacer"></span>
+      ${makeMainBtn}
       ${ccpBtn}
     </div>
     ${rows ? `<div class="u-rows">${rows}</div>` : ""}
   </div>`;
 }
 
+// rotationModeChipHTML renders the drilldown panel-head's always-visible
+// mode chip ("rotation: auto" / "rotation: manual"). Undefined
+// rotation_mode (older server) renders nothing, same gate as everywhere else
+// in this section.
+function rotationModeChipHTML(data) {
+  if (data.rotation_mode === undefined) return "";
+  const manual = data.rotation_mode === "manual";
+  return `<span class="u-chip ${manual ? "u-chip-warn" : "u-chip-ok"}">rotation: ${manual ? "manual" : "auto"}</span>`;
+}
+
+// manualBannerHTML renders the "pinned to X" banner at the top of the
+// drilldown body when rotation is manually pinned. rotation_set_at is unix
+// millis (0 = default/unset, per the API contract) — age() already treats a
+// falsy unix as "" so the trailing "<time> ago" clause just drops out
+// instead of rendering "0s ago" or similar nonsense. The CTA POSTs
+// /api/account/mode {mode:"auto"}; see the ".u-switch-auto" click handler.
+function manualBannerHTML(data) {
+  if (data.rotation_mode !== "manual") return "";
+  const main = usageMainAccount(data) || {};
+  const who = main.email || "main";
+  const setBy = data.rotation_set_by || "unknown";
+  const whenS = data.rotation_set_at ? age(Math.floor(data.rotation_set_at / 1000)) : "";
+  const when = whenS ? ` ${whenS} ago` : "";
+  return `<div class="u-manual-banner">
+    <span>pinned to ${esc(who)} by ${esc(setBy)}${when} — auto-rotation off</span>
+    <button type="button" class="btn ghost mini u-switch-auto">switch back to auto</button>
+  </div>`;
+}
+
 // renderUsageModal fills the drilldown's head (fetched-ago / daemon-down
 // warning) and body (one block per account, server order = current-first).
 function renderUsageModal(data) {
+  document.getElementById("usage-mode-chip").innerHTML = rotationModeChipHTML(data);
   const head = document.getElementById("usage-fetched");
   if (!data.available) {
     head.innerHTML = `<span class="dim">no data yet</span>`;
@@ -2541,9 +2701,42 @@ function renderUsageModal(data) {
   }
   const body = document.getElementById("usage-body");
   const accounts = data.accounts || [];
-  body.innerHTML = accounts.length
-    ? accounts.map(usageAccountHTML).join("")
-    : `<div class="empty">no usage data yet</div>`;
+  body.innerHTML = manualBannerHTML(data) + (accounts.length
+    ? accounts.map((a) => usageAccountHTML(a, data)).join("")
+    : `<div class="empty">no usage data yet</div>`);
+}
+
+// postUsageAction is the account-rotation counterpart of postReorder: POST,
+// and on success let fetchUsage() do the re-render (it repaints both the
+// header widget and, when open, this drilldown — same path a normal 60s
+// poll takes, so the new mode chip/banner/buttons just fall out of it). On
+// failure, toast the server's error and re-enable the button that triggered
+// it so a transient failure doesn't leave a dead control behind.
+async function postUsageAction(url, body, button, errLabel) {
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || String(r.status));
+    await fetchUsage();
+    return true;
+  } catch (e) {
+    showToast(`${errLabel}: ${e.message}`);
+    return false;
+  } finally {
+    // Always re-enable, not just on the catch path: fetchUsage() swallows
+    // its own network errors internally (see its try/catch) rather than
+    // throwing, so a POST success followed by a silently-failed refetch
+    // would otherwise skip both the catch branch above AND the re-render
+    // that would normally discard this (disabled) button node — leaving a
+    // dead, permanently-disabled control until the next 60s poll happens to
+    // succeed. Harmless no-op when the button was already discarded by a
+    // successful re-render.
+    if (button) button.disabled = false;
+  }
 }
 
 async function fetchUsage() {

@@ -251,8 +251,7 @@ struct JobFormView: View {
                 if editable {
                     CmdChipsRow(text: $spec)
                 }
-                TextEditor(text: $spec)
-                    .scrollContentBackground(.hidden)
+                HighlightingTextEditor(text: $spec)
                     .kField(minHeight: 160)
                     .listRowBackground(Color.clear)
                 if editable {

@@ -69,7 +69,7 @@ func cmdOpen(args []string) {
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	p := core.SelectPeer(strings.Join(args, " "), all)
-	msg, err := core.OpenPeer(p)
+	msg, _, err := core.OpenPeer(p)
 	if err != nil {
 		util.Die("%v", err)
 	}

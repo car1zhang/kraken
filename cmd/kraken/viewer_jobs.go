@@ -212,7 +212,7 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 		}
 		// drill into the cell: zeus pane
 		if p := m.peerNamed(jobs.ZeusName(j)); p != nil {
-			return m, m.jobsActionCmd("opening "+j.Slug, func() (string, error) { return core.OpenPeer(p) })
+			return m, m.jobsActionCmd("opening "+j.Slug, func() (string, error) { return openSelectedPeer(p) })
 		}
 		m.note, m.noteIsErr = "no live cell for "+j.Slug, true
 	case "a":

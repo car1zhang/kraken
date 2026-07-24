@@ -9,6 +9,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,8 +33,10 @@ import (
 //   - /api/reorder's success/failure shapes are the same {"ok":true} /
 //     {"error": string} convention; only its distinct request shape
 //     (reorderReq) gets its own spec below.
-//   - /api/peers/* action endpoints (spawn, send, kill, open, capture): need
-//     real tmux panes/sessions to reach their success path.
+//   - /api/peers/* action endpoints (spawn, send, kill, capture): need real
+//     tmux panes/sessions to reach their success path. /api/peers/open is the
+//     exception — its openPeerFunc test seam makes the success path
+//     reachable with no tmux, so it gets its own spec below.
 //   - /api/job/create and /api/job/save: exercised for behavior elsewhere
 //     (web_test.go) but not given their own assertShape spec here since they
 //     mirror /api/job/raw's shape exactly (see ios/API.md).
@@ -579,6 +582,53 @@ func TestPeersSendKeyWireShape(t *testing.T) {
 	assertShape(t, "/api/peers/send (key)", data, peersSendKeySpec)
 }
 
+// --- /api/peers/open (webpeers.go peersOpenHandler) ---
+//
+// openPeerFunc is swapped out the same way peersKillHandler's paneSessionFunc
+// is elsewhere in this package, so both of the handler's success shapes
+// (clean focus, and a raised session whose window failed to focus) are
+// reachable without a real tmux pane/session.
+
+var peersOpenSpec = map[string]fieldSpec{
+	"ok":          {kind: wireBool, required: true},
+	"note":        {kind: wireString, required: true},
+	"focus_error": {kind: wireString, required: false},
+}
+
+func TestPeersOpenWireShape(t *testing.T) {
+	source := func() []*core.Peer {
+		return []*core.Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
+	}
+	old := openPeerFunc
+	t.Cleanup(func() { openPeerFunc = old })
+	h := peersOpenHandler(source)
+
+	openPeerFunc = func(p *core.Peer) (string, core.RaiseOutcome, error) {
+		return "focused zeus (mobile, pane %2)", core.RaiseOutcome{}, nil
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", bytes.NewReader(mustJSON(t, map[string]any{"pane": "%2"})))
+	req.Header.Set("Content-Type", "application/json")
+	h(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/peers/open (clean success)", rec.Body.Bytes(), peersOpenSpec)
+
+	openPeerFunc = func(p *core.Peer) (string, core.RaiseOutcome, error) {
+		return "selected zeus (%2) — focus its window manually: boom",
+			core.RaiseOutcome{FocusErr: errors.New("boom")}, nil
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/peers/open", bytes.NewReader(mustJSON(t, map[string]any{"pane": "%2"})))
+	req.Header.Set("Content-Type", "application/json")
+	h(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/peers/open (focus_error)", rec.Body.Bytes(), peersOpenSpec)
+}
+
 // --- /api/health (webpeers.go) ---
 
 var healthSpec = map[string]fieldSpec{
@@ -614,11 +664,14 @@ func TestHealthWireShape(t *testing.T) {
 // --- usage: GET /api/usage (usage.go) ---
 
 var webUsageSpec = map[string]fieldSpec{
-	"available":   {kind: wireBool, required: true},
-	"fetched_at":  {kind: wireNumber, required: true},
-	"age_seconds": {kind: wireNumber, required: true},
-	"daemon_ok":   {kind: wireBool, required: true},
-	"accounts":    {kind: wireArray, required: true},
+	"available":       {kind: wireBool, required: true},
+	"fetched_at":      {kind: wireNumber, required: true},
+	"age_seconds":     {kind: wireNumber, required: true},
+	"daemon_ok":       {kind: wireBool, required: true},
+	"accounts":        {kind: wireArray, required: true},
+	"rotation_mode":   {kind: wireString, required: true},
+	"rotation_set_by": {kind: wireString, required: false},
+	"rotation_set_at": {kind: wireNumber, required: false},
 }
 
 // accountUsageSpec covers core.AccountUsage, the elements of webUsage's
@@ -652,7 +705,7 @@ var modelWindowSpec = map[string]fieldSpec{
 }
 
 func TestWebUsageWireShapeEmpty(t *testing.T) {
-	data, err := json.Marshal(webUsage{Accounts: []core.AccountUsage{}})
+	data, err := json.Marshal(webUsage{Accounts: []core.AccountUsage{}, RotationMode: "auto"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,10 +714,13 @@ func TestWebUsageWireShapeEmpty(t *testing.T) {
 
 func TestWebUsageWireShapePopulated(t *testing.T) {
 	wu := webUsage{
-		Available:  true,
-		FetchedAt:  1234567890,
-		AgeSeconds: 42,
-		DaemonOK:   true,
+		Available:     true,
+		FetchedAt:     1234567890,
+		AgeSeconds:    42,
+		DaemonOK:      true,
+		RotationMode:  "manual",
+		RotationSetBy: "cli",
+		RotationSetAt: 1234567890,
 		Accounts: []core.AccountUsage{{
 			Slug: "main", Email: "carl@example.com", DisplayName: "Carl",
 			Tier: "pro", Current: true,
@@ -710,6 +766,57 @@ func TestWebUsageWireShapePopulated(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "core.ModelWindow", modelData, modelWindowSpec)
+}
+
+// --- account rotation: POST /api/account/switch, POST /api/account/mode
+// (account.go) — custom request/response shapes, so each gets its own spec.
+// Handler behavior (method guards, validation, 409/500 branches) is covered
+// by account_test.go; this only pins the wire shapes. ---
+
+var accountSwitchReqSpec = map[string]fieldSpec{
+	"slug": {kind: wireString, required: true},
+}
+
+var accountSwitchRespSpec = map[string]fieldSpec{
+	"from": {kind: wireString, required: true},
+	"to":   {kind: wireString, required: true},
+	"mode": {kind: wireString, required: true},
+}
+
+func TestAccountSwitchWireShape(t *testing.T) {
+	reqData, err := json.Marshal(accountSwitchReq{Slug: "carl-work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountSwitchReq", reqData, accountSwitchReqSpec)
+
+	respData, err := json.Marshal(accountSwitchResp{From: "old@example.com", To: "new@example.com", Mode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountSwitchResp", respData, accountSwitchRespSpec)
+}
+
+var accountModeReqSpec = map[string]fieldSpec{
+	"mode": {kind: wireString, required: true},
+}
+
+var accountModeRespSpec = map[string]fieldSpec{
+	"mode": {kind: wireString, required: true},
+}
+
+func TestAccountModeWireShape(t *testing.T) {
+	reqData, err := json.Marshal(accountModeReq{Mode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountModeReq", reqData, accountModeReqSpec)
+
+	respData, err := json.Marshal(accountModeResp{Mode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "accountModeResp", respData, accountModeRespSpec)
 }
 
 // --- job editor: /api/job/raw, /api/job/form, /api/job/saveform ---

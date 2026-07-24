@@ -297,7 +297,7 @@ func (m *viewerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuild()
 		m.note, m.noteIsErr = "grouping: "+m.mode, false
 	case "enter":
-		return m, m.actOnSelected("opening", core.OpenPeer)
+		return m, m.actOnSelected("opening", openSelectedPeer)
 	case "b":
 		return m, m.actOnSelected("forking", core.BranchPeerWindow)
 	case "d":
@@ -352,7 +352,7 @@ func (m *viewerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				if m.view == "jobs" {
 					return m.handleJobsKey("enter")
 				}
-				return m, m.actOnSelected("opening", core.OpenPeer)
+				return m, m.actOnSelected("opening", openSelectedPeer)
 			}
 			m.setCursor(i)
 		}
@@ -360,7 +360,16 @@ func (m *viewerModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// actOnSelected runs an action (core.OpenPeer/core.BranchPeerWindow/core.KillPeer) against
+// openSelectedPeer adapts core.OpenPeer's (string, RaiseOutcome, error) to
+// actOnSelected's (string, error) shape — the viewer only ever shows the
+// note text (which already embeds a focus failure, see OpenPeer), so the
+// outcome value itself is dropped here.
+func openSelectedPeer(p *core.Peer) (string, error) {
+	note, _, err := core.OpenPeer(p)
+	return note, err
+}
+
+// actOnSelected runs an action (openSelectedPeer/core.BranchPeerWindow/core.KillPeer) against
 // the selected peer in a Cmd goroutine so slow AppleScript never freezes the
 // UI. Safe to hand the *core.Peer across goroutines: discovery allocates fresh
 // Peers every snapshot and the actions only read them.
