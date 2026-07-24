@@ -28,7 +28,7 @@ docs), questions in `questions.yaml` (not in any artifact) with globally numbere
 `.claude/skills/aim/SKILL.md` (paths relative to the worktree root — your cwd in a cell —
 not this skill's own base directory) for those rules if not already loaded this session; do not
 duplicate or drift from them — with one override: **diagram subagents run on `model: opus`**
-(sonnet produces visual artifacts and bad element placement), and every diagram brief must
+(Claude Opus 5; sonnet produces visual artifacts and bad element placement), and every diagram brief must
 include the anti-artifact rules: no overlapping elements, text measured against its box
 (~7px/char at 13px) and wrapped with tspans before it can overflow, edges attached to box
 borders and routed around (never through) other boxes, every coordinate inside the viewBox,
@@ -71,7 +71,7 @@ contain `{{CARD_TITLE}}`, `{{CAPTION}}`, or `<!-- DIAGRAM:` — if either check 
    review/reading guide, verification plan, notes. No questions requirement in explain mode,
    but `questions.yaml` is still the right home for anything genuinely open.
 4. **Diagrams via subagents, then wrap.** Each diagram is designed AND rendered by an
-   **Opus** subagent into a fragment file under the set's fragments dir (batch them in
+   **Opus** (`model: opus` — Claude Opus 5) subagent into a fragment file under the set's fragments dir (batch them in
    parallel; assign each a card-unique marker id and path-id prefix; include the
    anti-artifact rules and the full `hermes-contract.md` contents in every brief). After each
    fragment is written, run `python3 .claude/skills/aim/assets/lint_svg.py <fragment>

@@ -44,7 +44,7 @@ Take the artifact set produced by [[aim]] earlier in this conversation — `00-o
 - Honor the set's scope/non-goals/constraints section doc(s) strictly — do not expand scope.
 - Use `51-code-map.md` (where things live, review guide) as the file-targeting guide. Verify those paths still exist before relying on them.
 - For complex implementations (4+ files or multi-service), spawn a TeamCreate per the user's global preference rather than serial work in the main thread.
-- Use **Sonnet teammates for mechanical implementation** (`model: sonnet`): well-specified component tasks where the set already pins the design, file targets, and test plan. Reserve Opus/default-model teammates for tasks needing real judgment (ambiguous integration points, cross-cutting refactors, design gaps the set left open). The lead agent stays on the default model to plan, review teammate output, and integrate.
+- **Every teammate runs on Opus** (`model: opus` — Claude Opus 5): the mechanical component tasks the set already pins down as much as the judgment-heavy ones (ambiguous integration points, cross-cutting refactors, design gaps the set left open). Never drop a teammate to sonnet or haiku to save tokens, and never leave the model unset. The lead agent is on Opus too — it plans, reviews teammate output, and integrates.
 
 ### 5. Implement
 

@@ -53,6 +53,7 @@ func cmdNewClaude(args []string) {
 	}
 	name := rest[0]
 	argv := []string{core.ClaudeLauncher(), "--name", name}
+	argv = append(argv, core.ModelArgs("")...)
 	if prompt := strings.Join(rest[1:], " "); prompt != "" {
 		// "--" so a prompt starting with "-" can't be read as a claude flag
 		argv = append(argv, "--", prompt)

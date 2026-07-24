@@ -108,6 +108,31 @@ func TestZeusBrief(t *testing.T) {
 	// so a per-test check here would just duplicate that one)
 }
 
+// TestZeusBriefAllOpus pins the one-tier rule: every agent in a cell — zeus
+// itself (spawned with core.DefaultModel) and every subagent it names — runs
+// on Claude Opus 5. The Agent tool takes tier aliases rather than model ids,
+// so the brief must say `model: opus` and must never name a cheaper tier for
+// a crew role; hephaestus in particular used to be pinned to sonnet.
+func TestZeusBriefAllOpus(t *testing.T) {
+	for _, j := range []*Job{
+		{Slug: "opus-plain"},
+		{Slug: "opus-solo", Solo: true},
+		{Slug: "opus-skipdoc", SkipDoc: true},
+		{Slug: "opus-solo-skipdoc", Solo: true, SkipDoc: true},
+	} {
+		brief := zeusBrief(j)
+		if !strings.Contains(brief, "EVERY agent in this cell runs on Claude Opus 5") ||
+			!strings.Contains(brief, "`model: opus`") {
+			t.Errorf("%s brief missing the all-Opus rule", j.Slug)
+		}
+		for _, tier := range []string{"sonnet model", "haiku model", "fable model", "model: sonnet", "model: haiku", "model: fable"} {
+			if strings.Contains(brief, tier) {
+				t.Errorf("%s brief pins a crew role to %q — every agent is Opus 5", j.Slug, tier)
+			}
+		}
+	}
+}
+
 // TestZeusBriefImageHandling asserts the [image: <path>] hardening line
 // rides in every brief variant — it's not gated by solo or skip-doc, since
 // carl can attach images to any job's spec or a steering message.

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"kraken/internal/core"
 )
 
 const sampleJob = `---
@@ -111,7 +113,7 @@ func TestJobTemplateClean(t *testing.T) {
 
 func TestParseJobModel(t *testing.T) {
 	// model: any plain CLI token (shape check, not an allowlist); empty or
-	// absent means claude's default
+	// absent means core.DefaultModel (see TestCellClaudeArgs)
 	for _, val := range []string{"sonnet", "fable", "claude-opus-4-8", "us.anthropic.claude_v2"} {
 		src := "---\njob: x\nrepo: monolith\nmodel: " + val + "\n---\n"
 		j := ParseJob("x.job.md", []byte(src))
@@ -592,8 +594,9 @@ func TestCellClaudeArgs(t *testing.T) {
 	if !strings.Contains(joined, "--dangerously-skip-permissions") || !strings.Contains(joined, "--rc") {
 		t.Fatalf("cc-alias flags missing: %v", args)
 	}
-	if strings.Contains(joined, "--model") {
-		t.Fatalf("empty model must not add a --model flag: %v", args)
+	// no job model: kraken's own default rides along — never claude's config
+	if !strings.Contains(joined, "--model "+core.DefaultModel) {
+		t.Fatalf("empty model must fall back to core.DefaultModel: %v", args)
 	}
 	// a job's model: field rides along as --model <value>
 	withModel := strings.Join(cellClaudeArgs("sonnet"), " ")

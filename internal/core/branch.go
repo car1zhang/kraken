@@ -23,6 +23,29 @@ func ClaudeLauncher() string {
 	return "claude"
 }
 
+// DefaultModel is the claude model every claude kraken STARTS runs on — a
+// cell's zeus, `k c`, and the board's spawn action all route through ModelArgs
+// below (`k b` doesn't: a fork resumes a session rather than starting a new
+// agent — see ForkCmdString). It is an exact model id rather than the `opus`
+// alias so the tier kraken runs on only ever moves when someone edits this
+// line; the alias would silently follow whatever claude ships next. Subagent
+// models (hephaestus, athena, hermes) are a separate axis, pinned in
+// zeus' brief (jobs/crew.go), since the Agent tool takes tier aliases, not ids —
+// they land on the same tier (`model: opus`), so every agent in a cell is Opus 5.
+const DefaultModel = "claude-opus-5"
+
+// ModelArgs is the `--model` flag pair for a spawn: the caller's explicit model
+// (a job's `model:` field) when it has one, else DefaultModel. Always returns a
+// flag — kraken never leaves the model to claude's own config, so the model a
+// kraken-spawned agent runs on is always visible in its command line (which is
+// also where discovery reads it back from).
+func ModelArgs(model string) []string {
+	if model == "" {
+		model = DefaultModel
+	}
+	return []string{"--model", model}
+}
+
 // readPermissionMode scans a transcript for the last permission-mode record so
 // forks reopen with the same flags the session was running under.
 func readPermissionMode(path string) string {
@@ -120,6 +143,12 @@ func BranchGuard(p *Peer) error {
 
 // ForkCmdString builds the shell command that reopens p's session as a fork,
 // replaying the permission mode it was running under.
+//
+// Deliberately NOT a DefaultModel spawn site: a fork continues an existing
+// conversation rather than starting a new agent, so it inherits whatever the
+// resumed session runs on — and p.Model can't stand in either, since discovery
+// stores it display-shortened (claude-opus-5 → opus-5), which is not a value
+// `--model` accepts.
 func ForkCmdString(p *Peer) string {
 	return ShellCmdString(claudeArgs(transcriptPath(p.SessionID), "--fork-session", "-r", p.SessionID))
 }
