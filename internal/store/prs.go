@@ -11,18 +11,19 @@ type PR struct {
 	State         string
 	LastCommentAt string
 	BumpedSHA     string
+	ConflictState string
 }
 
-// SetPRWatermark stamps watchPRs' per-URL comment/CI watermarks. A no-op
-// when the URL isn't recorded for jobID (it was dropped between the
+// SetPRWatermark stamps watchPRs' per-URL comment/CI/conflict watermarks.
+// A no-op when the URL isn't recorded for jobID (it was dropped between the
 // caller's load and this write — nothing left to stamp). Does NOT bump
 // jobs.rev: watermarks are daemon bookkeeping invisible to the editor, and
 // bumping would 409 an open editor for a change it cannot see. UpsertPR
 // never touches these columns, so a state refresh preserves watermarks.
-func (s *Store) SetPRWatermark(jobID int64, url, lastCommentAt, bumpedSHA string) error {
+func (s *Store) SetPRWatermark(jobID int64, url, lastCommentAt, bumpedSHA, conflictState string) error {
 	_, err := s.db.Exec(
-		`UPDATE prs SET last_comment_at = ?, bumped_sha = ? WHERE job_id = ? AND url = ?`,
-		lastCommentAt, bumpedSHA, jobID, url,
+		`UPDATE prs SET last_comment_at = ?, bumped_sha = ?, conflict_state = ? WHERE job_id = ? AND url = ?`,
+		lastCommentAt, bumpedSHA, conflictState, jobID, url,
 	)
 	if err != nil {
 		return fmt.Errorf("set pr watermark %s for job %d: %w", url, jobID, err)
@@ -117,7 +118,7 @@ func (s *Store) ListPRs(jobID int64) ([]PR, error) {
 // the save's own remove-anything-not-named pass.
 func listPRsTx(x execer, jobID int64) ([]PR, error) {
 	rows, err := x.Query(
-		`SELECT url, state, COALESCE(last_comment_at, ''), COALESCE(bumped_sha, '')
+		`SELECT url, state, COALESCE(last_comment_at, ''), COALESCE(bumped_sha, ''), COALESCE(conflict_state, '')
 		 FROM prs WHERE job_id = ? ORDER BY rowid`,
 		jobID,
 	)
@@ -128,7 +129,7 @@ func listPRsTx(x execer, jobID int64) ([]PR, error) {
 	var out []PR
 	for rows.Next() {
 		var p PR
-		if err := rows.Scan(&p.URL, &p.State, &p.LastCommentAt, &p.BumpedSHA); err != nil {
+		if err := rows.Scan(&p.URL, &p.State, &p.LastCommentAt, &p.BumpedSHA, &p.ConflictState); err != nil {
 			return nil, fmt.Errorf("list prs for job %d: %w", jobID, err)
 		}
 		out = append(out, p)

@@ -138,6 +138,7 @@ func BuildSpawnArgv(kind, name, prompt, cmd string) ([]string, error) {
 			return nil, fmt.Errorf("claude spawn needs a name")
 		}
 		argv := []string{ClaudeLauncher(), "--dangerously-skip-permissions", "--name", name}
+		argv = append(argv, ModelArgs("")...)
 		if prompt != "" {
 			// "--" so a prompt starting with "-" can't be read as a claude flag
 			argv = append(argv, "--", prompt)

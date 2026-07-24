@@ -19,22 +19,22 @@ import (
 // targeted: migrate() always walks forward to the CURRENT schemaVersion, so
 // a test simulating "a v2 database" must hand migrate() something that
 // looks exactly like a real v2 database, or a later migration's SQL (e.g.
-// v4's `ALTER TABLE jobs DROP COLUMN skip_doc`) fails against a shape that
-// was never real — skip_doc, dropped only at v4, is still present at v1/v2/
-// v3, so rolling back to any of those must re-add it, not leave it gone.
+// v5's `ALTER TABLE jobs DROP COLUMN skip_doc`) fails against a shape that
+// was never real — skip_doc, dropped only at v5, is still present at v1-v4,
+// so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
-	// Reverse v5: drop feedback.job_id (added at v5, absent through v4).
-	if target < 5 {
+	// Reverse v6: drop feedback.job_id (added at v6, absent through v5).
+	if target < 6 {
 		if _, err := s.db.Exec(`ALTER TABLE feedback DROP COLUMN job_id`); err != nil {
-			t.Fatalf("downgrade to v%d (undo v5, drop feedback.job_id): %v", target, err)
+			t.Fatalf("downgrade to v%d (undo v6, drop feedback.job_id): %v", target, err)
 		}
 	}
-	// Reverse v4: re-add jobs.skip_doc (dropped at v4, present through v3),
-	// drop feedback's v4 columns (added at v4, absent through v3), and swap
+	// Reverse v5: re-add jobs.skip_doc (dropped at v5, present through v4),
+	// drop feedback's v5 columns (added at v5, absent through v4), and swap
 	// the relational questions table back for schemaV2's blob shape (the
-	// shape every version through v3 used).
-	if target < 4 {
+	// shape every version through v4 used).
+	if target < 5 {
 		for _, stmt := range []string{
 			`ALTER TABLE jobs ADD COLUMN skip_doc INTEGER NOT NULL DEFAULT 0`,
 			`ALTER TABLE feedback DROP COLUMN session`,
@@ -48,8 +48,14 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 			)`,
 		} {
 			if _, err := s.db.Exec(stmt); err != nil {
-				t.Fatalf("downgrade to v%d (undo v4) %q: %v", target, stmt, err)
+				t.Fatalf("downgrade to v%d (undo v5) %q: %v", target, stmt, err)
 			}
+		}
+	}
+	// Reverse v4: drop prs.conflict_state (added at v4, absent through v3).
+	if target < 4 {
+		if _, err := s.db.Exec(`ALTER TABLE prs DROP COLUMN conflict_state`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v4, drop prs.conflict_state): %v", target, err)
 		}
 	}
 	// Reverse v3: re-add jobs.type (dropped at v3, present through v2).
@@ -59,7 +65,7 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 		}
 	}
 	// Reverse v2: drop the questions table entirely — v1 never had one
-	// (must run after the v4-undo block above, which (re)creates it).
+	// (must run after the v5-undo block above, which (re)creates it).
 	if target < 2 {
 		if _, err := s.db.Exec(`DROP TABLE questions`); err != nil {
 			t.Fatalf("downgrade to v%d (undo v2, drop questions): %v", target, err)
@@ -75,8 +81,9 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 // no questions table, jobs.type and jobs.skip_doc both still present) from
 // before the doc-questions feature shipped. Reopening such a database must
 // walk forward through every migration up to the current schemaVersion —
-// creating the questions table (v2), dropping jobs.type (v3), and dropping
-// jobs.skip_doc plus restructuring questions into relational rows (v4) —
+// creating the questions table (v2), dropping jobs.type (v3), adding
+// prs.conflict_state (v4), and dropping jobs.skip_doc plus restructuring
+// questions into relational rows (v5) —
 // rather than silently leaving any of it undone (migrate() only applies
 // versions above the database's CURRENT version, so an in-place edit to an
 // already-released schemaV<N> string — the bug this test guards against —
@@ -167,8 +174,9 @@ func TestSchemaMigratesForwardFromV1(t *testing.T) {
 // column with its CHECK(type IN ('build','info')) constraint) from before the
 // job-level type concept was deleted. Reopening such a database must walk
 // forward through every migration up to the current schemaVersion — dropping
-// jobs.type (v3), then dropping jobs.skip_doc and restructuring questions
-// (v4) — go-sqlite3 bundles a modern SQLite with native ALTER TABLE ... DROP
+// jobs.type (v3), adding prs.conflict_state (v4), then dropping
+// jobs.skip_doc and restructuring questions (v5) —
+// go-sqlite3 bundles a modern SQLite with native ALTER TABLE ... DROP
 // COLUMN support (no rebuild-the-table dance needed), so each drop is a
 // single statement.
 func TestSchemaMigratesForwardFromV2(t *testing.T) {
@@ -271,7 +279,7 @@ func TestFreshOpenEndsAtCurrentSchemaVersion(t *testing.T) {
 		t.Fatalf("fresh open user_version = %d, want %d", version, schemaVersion)
 	}
 	// jobs.type/skip_doc must never exist on a freshly created database
-	// either (migrations[1..4] all apply inside the same transaction).
+	// either (migrations[1..6] all apply inside the same transaction).
 	rows, err := s.db.Query(`PRAGMA table_info(jobs)`)
 	if err != nil {
 		t.Fatalf("table_info: %v", err)
@@ -326,14 +334,14 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 	}
 }
 
-// TestSchemaV3ToV4MigratesQuestionsAndFeedback covers the v4 migration's
+// TestSchemaV4ToV5MigratesQuestionsAndFeedback covers the v5 migration's
 // full contract (54-feedback-contract.md): jobs.skip_doc drops, feedback
 // gains session/addressed/addressed_at defaulted empty on pre-existing
 // rows, and questions.yaml blob rows become relational question rows —
 // preserving file order as position — while a malformed blob is SKIPPED
 // with a logged event rather than aborting the whole migration (carl's
 // clean-cutover ruling: one-time move, best effort on bad legacy data).
-func TestSchemaV3ToV4MigratesQuestionsAndFeedback(t *testing.T) {
+func TestSchemaV4ToV5MigratesQuestionsAndFeedback(t *testing.T) {
 	// Opened directly (not via openTest) so the path is in hand for the
 	// real re-Open below, same pattern as the tests above.
 	dbPath := filepath.Join(t.TempDir(), "kraken.db")
@@ -355,15 +363,15 @@ func TestSchemaV3ToV4MigratesQuestionsAndFeedback(t *testing.T) {
 		t.Fatalf("seed feedback: %v", err)
 	}
 
-	// Roll this fresh (already-migrated-to-v4) database back to a
-	// v3-shaped one: re-add jobs.skip_doc, drop feedback's v4 columns, and
+	// Roll this fresh (already-migrated-to-v5) database back to a
+	// v4-shaped one: re-add jobs.skip_doc, drop feedback's v5 columns, and
 	// swap the relational questions table back out for schemaV2's blob
-	// shape, faithfully reproducing what a real pre-v4 kraken.db looks
+	// shape, faithfully reproducing what a real pre-v5 kraken.db looks
 	// like on disk. downgradeFreshDB seeds neither jobs nor the blob rows
 	// (goodID/badID/the feedback row above were created before the
 	// downgrade, so they already exist and survive it) — the legacy
 	// question blobs still need seeding by hand below.
-	downgradeFreshDB(t, s, 3)
+	downgradeFreshDB(t, s, 4)
 
 	goodBlob := []byte("questions:\n" +
 		"  - id: Q1\n" +
@@ -412,7 +420,7 @@ func TestSchemaV3ToV4MigratesQuestionsAndFeedback(t *testing.T) {
 		}
 		if name == "skip_doc" {
 			rows.Close()
-			t.Fatal("jobs.skip_doc survived migration to v4")
+			t.Fatal("jobs.skip_doc survived migration to v5")
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -485,16 +493,16 @@ func TestSchemaV3ToV4MigratesQuestionsAndFeedback(t *testing.T) {
 
 	// Fidelity check: the assertions above all ran an in-process
 	// s.migrate() call directly — roll the same on-disk file back to
-	// v3-shaped again, close it, and re-Open it for real, mirroring the
+	// v4-shaped again, close it, and re-Open it for real, mirroring the
 	// other migration tests' second-downgrade check.
-	downgradeFreshDB(t, s, 3)
+	downgradeFreshDB(t, s, 4)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close before re-Open: %v", err)
 	}
 
 	s2, err := Open(dbPath)
 	if err != nil {
-		t.Fatalf("re-Open a v3-shaped db: %v", err)
+		t.Fatalf("re-Open a v4-shaped db: %v", err)
 	}
 	defer s2.Close()
 
@@ -519,14 +527,14 @@ func TestSchemaV3ToV4MigratesQuestionsAndFeedback(t *testing.T) {
 	}
 }
 
-// TestSchemaV4ToV5BackfillsFeedbackJobID covers the v5 migration (B2):
-// existing feedback rows, seeded straight through the pre-v5 shape (no
+// TestSchemaV5ToV6BackfillsFeedbackJobID covers the v6 migration (B2):
+// existing feedback rows, seeded straight through the pre-v6 shape (no
 // job_id column), must have job_id backfilled by matching job_slug against
 // an active job's slug first, then an archived job's archived_name — and a
 // row matching neither (an orphaned fossil, e.g. its job was later
 // hard-deleted) must be left with job_id 0/NULL rather than failing the
-// whole migration, same best-effort ruling as v4's malformed-blob handling.
-func TestSchemaV4ToV5BackfillsFeedbackJobID(t *testing.T) {
+// whole migration, same best-effort ruling as v5's malformed-blob handling.
+func TestSchemaV5ToV6BackfillsFeedbackJobID(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "kraken.db")
 	s, err := Open(dbPath)
 	if err != nil {
@@ -547,9 +555,9 @@ func TestSchemaV4ToV5BackfillsFeedbackJobID(t *testing.T) {
 		t.Fatalf("ArchiveJob: %v", err)
 	}
 
-	downgradeFreshDB(t, s, 4)
+	downgradeFreshDB(t, s, 5)
 
-	// Seed three feedback rows straight through the raw v4 shape (no job_id
+	// Seed three feedback rows straight through the raw v5 shape (no job_id
 	// column yet): one matching an active job's slug, one matching an
 	// archived job's archived_name, and one matching neither (an orphan —
 	// e.g. its job was later hard-deleted, or the row simply predates
@@ -568,7 +576,7 @@ func TestSchemaV4ToV5BackfillsFeedbackJobID(t *testing.T) {
 	}
 
 	if err := s.migrate(); err != nil {
-		t.Fatalf("migrate from v4: %v", err)
+		t.Fatalf("migrate from v5: %v", err)
 	}
 
 	var version int
@@ -598,16 +606,16 @@ func TestSchemaV4ToV5BackfillsFeedbackJobID(t *testing.T) {
 	}
 }
 
-// TestSchemaV4ToV5AmbiguousSlugLeavesJobIDNull is the sibling case
-// TestSchemaV4ToV5BackfillsFeedbackJobID doesn't reach: a pre-v5 row whose
+// TestSchemaV5ToV6AmbiguousSlugLeavesJobIDNull is the sibling case
+// TestSchemaV5ToV6BackfillsFeedbackJobID doesn't reach: a pre-v6 row whose
 // job_slug matches an active job's slug AND an archived job's archived_name
 // at the same time (gen1 archived under its bare slug, freeing it; gen2
-// created live under the same name). Nothing in the pre-v5 data says which
+// created live under the same name). Nothing in the pre-v6 data says which
 // generation the row belongs to, so it must be left NULL. Resolving it to
 // the active job instead is destructive, not merely wrong: archiving that
 // job later rekeys by job_id and would drag every such row off the older
 // generation's card.
-func TestSchemaV4ToV5AmbiguousSlugLeavesJobIDNull(t *testing.T) {
+func TestSchemaV5ToV6AmbiguousSlugLeavesJobIDNull(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "kraken.db")
 	s, err := Open(dbPath)
 	if err != nil {
@@ -631,7 +639,7 @@ func TestSchemaV4ToV5AmbiguousSlugLeavesJobIDNull(t *testing.T) {
 		t.Fatalf("CreateJob gen2 (reusing the freed slug): %v", err)
 	}
 
-	downgradeFreshDB(t, s, 4)
+	downgradeFreshDB(t, s, 5)
 
 	if _, err := s.db.Exec(
 		`INSERT INTO feedback (job_slug, artifact, note, ts) VALUES (?, ?, ?, ?)`,
@@ -641,7 +649,7 @@ func TestSchemaV4ToV5AmbiguousSlugLeavesJobIDNull(t *testing.T) {
 	}
 
 	if err := s.migrate(); err != nil {
-		t.Fatalf("migrate from v4: %v", err)
+		t.Fatalf("migrate from v5: %v", err)
 	}
 
 	rows, err := s.ListFeedback(0)

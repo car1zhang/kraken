@@ -232,15 +232,13 @@ func LiveSessions() map[string]bool {
 // cellClaudeArgs mirrors carl's `cc` alias (claude --dangerously-skip-permissions
 // --rc): cell agents work unattended in their own worktree, so they run with
 // bypass permissions from birth. tmux commands never see shell aliases, so the
-// flags are spelled out here. A non-empty model (the job's model: field) rides
-// along as --model — both spawn paths (StartCell, ReactivateJob) share this,
-// so a job's model choice survives reactivation.
+// flags are spelled out here. The model always rides along as --model: the
+// job's model: field when it set one, else core.DefaultModel. Both spawn paths
+// (StartCell, ReactivateJob) share this, so a job's model choice survives
+// reactivation.
 func cellClaudeArgs(model string) []string {
 	args := []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	return args
+	return append(args, core.ModelArgs(model)...)
 }
 
 // jobPrompt is the spec portion of the job body — everything up to the

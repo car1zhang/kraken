@@ -30,9 +30,6 @@ import (
 const (
 	CellCap        = 15
 	DaemonInterval = 15 * time.Second
-	// PR tracking is throttled to every reapEvery-th tick (~1 min): gh
-	// calls per open cell are the daemon's only rate-limited traffic.
-	reapEvery = 4
 	// usage polling is throttled to every usageEvery-th tick (~5 min): each
 	// account fetch is a real network call, and usage windows don't move
 	// fast enough to justify polling every 15s tick.
@@ -695,8 +692,8 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 
 	d.pruneArtifactSyncState(jobs)
 
-	// PR tracker (throttled): record every PR shipped from a cell branch
-	// into the job's prs: list. A merge is a signal — one notification and
+	// PR tracker (every tick, 15s): record every PR shipped from a cell
+	// branch into the job's prs: list. A merge is a signal — one notification and
 	// a board chip — NEVER a teardown trigger; teardown lives only behind
 	// carl's explicit accept via board Done. Tracking continues
 	// through done — a merge after carl accepts still deserves recording —
@@ -705,7 +702,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// mirror: no PR tracking/polling/scanning/repair — every one of these
 	// shells out to gh and/or writes prs: history that only matters for a
 	// real cell's lifecycle.
-	if !mirror && d.tickN%reapEvery == 0 {
+	if !mirror {
 		for _, j := range jobs {
 			if !prTrackable(j) {
 				continue
@@ -714,11 +711,11 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			d.scanTranscriptPRs(j, all)
 			d.repairPRs(j, all)
 		}
-		// PR watcher (same throttled cadence, its own pass after the tracker
+		// PR watcher (same per-tick cadence, its own pass after the tracker
 		// above so every job's j.PRs is fully reconciled — state transitions,
 		// transcript attaches, repair drops — before watchPRs reads it): bump
 		// zeus' pane when an open PR of an active job gets a new comment/
-		// review or a newly-failing CI check.
+		// review, a newly-failing CI check, or a fresh merge conflict.
 		for _, j := range jobs {
 			d.watchPRs(j, all, live)
 		}
@@ -907,7 +904,7 @@ func (d *daemonState) trackPRs(j *Job) {
 	}
 	fetched, ok := listBranchPRs(dir, CellBranch(j))
 	if !ok {
-		// log the outage once per stretch, not every minute
+		// log the outage once per stretch, not every 15s tick
 		if key := "ghfail:" + j.Slug; d.Notified[key] == 0 {
 			dlogErr("%s: gh pr list failed — leaving prs alone", j.Slug)
 			d.Notified[key] = time.Now().Unix()
@@ -962,13 +959,23 @@ func (d *daemonState) trackPRs(j *Job) {
 //
 // After first sight, a newer comment/review timestamp bumps, and a head SHA
 // that differs from BumpedSHA while checks are failing bumps (once per SHA —
-// an unchanged SHA never re-bumps for the same standing failure). Both kinds
-// of news in the same pass fold into one message. bump is false, and both
-// watermarks pass through unchanged, when there is nothing new to report.
-func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA string) (bump bool, message string, newLastCommentAt, newBumpedSHA string) {
-	newLastCommentAt, newBumpedSHA = lastCommentAt, bumpedSHA
+// an unchanged SHA never re-bumps for the same standing failure). All kinds
+// of news in the same pass fold into one message. bump is false, and every
+// watermark passes through unchanged, when there is nothing new to report.
+//
+// Merge conflicts are watermarked by transition, not by SHA: the common
+// conflict arrives when the BASE moves under an unchanged head, so a
+// SHA-keyed watermark would never fire for it. conflictState remembers the
+// last decisive mergeability seen ("clean"/"conflicting", "" never seen);
+// gh's UNKNOWN (mergeability still being computed after a push) leaves it
+// untouched — never a bump, never a clear, so a standing conflict doesn't
+// re-bump on an UNKNOWN→CONFLICTING recompute. A conflict bumps even on
+// first sight (like a failing check, it's actionable right now); a clean
+// fetch silently records "clean", re-arming the conflict bump.
+func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflictState string) (bump bool, message string, newLastCommentAt, newBumpedSHA, newConflictState string) {
+	newLastCommentAt, newBumpedSHA, newConflictState = lastCommentAt, bumpedSHA, conflictState
 	if f.State != "open" {
-		return false, "", newLastCommentAt, newBumpedSHA
+		return false, "", newLastCommentAt, newBumpedSHA, newConflictState
 	}
 	firstSight := lastCommentAt == "" && bumpedSHA == ""
 
@@ -1000,13 +1007,31 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA string) 
 		newBumpedSHA = f.HeadSHA // seed silently — checks are green right now
 	}
 
-	return len(parts) > 0, strings.Join(parts, "; "), newLastCommentAt, newBumpedSHA
+	switch {
+	case f.Mergeable == "conflicting" && conflictState != "conflicting":
+		if f.BaseRef != "" {
+			parts = append(parts, fmt.Sprintf(
+				"%s has merge conflicts with %s — run git fetch origin && git rebase origin/%s in your worktree, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				url, f.BaseRef, f.BaseRef))
+		} else {
+			parts = append(parts, fmt.Sprintf(
+				"%s has merge conflicts with its base branch — fetch, rebase onto the base, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				url))
+		}
+		newConflictState = "conflicting"
+	case f.Mergeable == "mergeable":
+		newConflictState = "clean" // silent — re-arms the conflict bump
+	}
+	// any other Mergeable value (unknown, "") leaves conflictState untouched
+
+	return len(parts) > 0, strings.Join(parts, "; "), newLastCommentAt, newBumpedSHA, newConflictState
 }
 
 // watchPRs polls each open, recorded PR of an active (working/blocked) job
-// for new comments/reviews and failing CI, bumping zeus' pane once per new
-// comment-or-review timestamp and once per newly-failing head SHA (combined
-// into a single message when both land in the same pass). Job-file
+// for new comments/reviews, failing CI, and merge conflicts, bumping zeus'
+// pane once per new comment-or-review timestamp, once per newly-failing head
+// SHA, and once per fresh clean→conflicting mergeability transition
+// (combined into a single message when several land in the same pass). Job-file
 // watermark writes only happen after a successful SendToPeer — a failed send
 // leaves the watermark untouched so the next pass retries the same bump,
 // matching trackPRs' "state on disk only advances on a confirmed write"
@@ -1016,9 +1041,9 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA string) 
 // updatePRWatermark's patchPRs pass rewrites the WHOLE block from a fresh
 // re-parse and would silently and permanently drop any record a hand-edit
 // typo currently makes unparseable, clearing the error in the process), jobs
-// with no live cell, no working/blocked state, or no recorded open PR — the
-// throttled reapEvery cadence already bounds gh traffic; this bounds it
-// further to jobs that could plausibly need a bump right now.
+// with no live cell, no working/blocked state, or no recorded open PR —
+// with the tracker running every 15s tick, this gate is what bounds gh
+// traffic to jobs that could plausibly need a bump right now.
 func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
 	if !prTrackable(j) {
 		return
@@ -1051,7 +1076,7 @@ func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
 	for _, pr := range open {
 		fetched, ok := viewPRActivity(dir, pr.URL)
 		if !ok {
-			// log the outage once per stretch, not every minute — same
+			// log the outage once per stretch, not every 15s tick — same
 			// dedup shape as trackPRs' ghfail key
 			if key := "prwatchfail:" + j.Slug; d.Notified[key] == 0 {
 				dlogErr("%s: pr-watch fetch failed for %s — leaving watermarks alone", j.Slug, pr.URL)
@@ -1060,13 +1085,13 @@ func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
 			continue // gh failure: leave this PR's watermarks alone, retry next pass
 		}
 		delete(d.Notified, "prwatchfail:"+j.Slug)
-		bump, msg, newLastCommentAt, newBumpedSHA := watchDecision(pr.URL, fetched, pr.LastCommentAt, pr.BumpedSHA)
-		if newLastCommentAt == pr.LastCommentAt && newBumpedSHA == pr.BumpedSHA {
+		bump, msg, newLastCommentAt, newBumpedSHA, newConflictState := watchDecision(pr.URL, fetched, pr.LastCommentAt, pr.BumpedSHA, pr.ConflictState)
+		if newLastCommentAt == pr.LastCommentAt && newBumpedSHA == pr.BumpedSHA && newConflictState == pr.ConflictState {
 			continue // nothing changed, not even a first-sight seed
 		}
 		if !bump {
 			// seed-only: persist immediately, no cell message involved
-			if err := updatePRWatermark(j, pr.URL, newLastCommentAt, newBumpedSHA); err != nil {
+			if err := updatePRWatermark(j, pr.URL, newLastCommentAt, newBumpedSHA, newConflictState); err != nil {
 				dlogErr("%s: pr-watch seed write failed: %v", j.Slug, err)
 			}
 			continue
@@ -1080,7 +1105,7 @@ func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
 		}
 		if _, err := core.SendToPeer(zeus, msg); err != nil {
 			// dedup like the gh-fetch failure above: a question-blocked cell
-			// would otherwise write ~1 identical error line per minute
+			// would otherwise write ~4 identical error lines per minute
 			// overnight while carl is asleep
 			if key := "bumpfail:" + j.Slug; d.Notified[key] == 0 {
 				dlogErr("%s: pr-bump send failed: %v", j.Slug, err)
@@ -1089,7 +1114,7 @@ func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
 			continue // watermark stays put on disk — retried next pass
 		}
 		delete(d.Notified, "bumpfail:"+j.Slug)
-		if err := updatePRWatermark(j, pr.URL, newLastCommentAt, newBumpedSHA); err != nil {
+		if err := updatePRWatermark(j, pr.URL, newLastCommentAt, newBumpedSHA, newConflictState); err != nil {
 			dlogErr("%s: pr-watch watermark write failed: %v", j.Slug, err)
 			continue
 		}

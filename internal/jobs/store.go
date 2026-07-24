@@ -108,7 +108,8 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 	}
 	for _, p := range prs {
 		j.PRs = append(j.PRs, JobPR{URL: p.URL, State: p.State,
-			LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA})
+			LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA,
+			ConflictState: p.ConflictState})
 	}
 	return j
 }
@@ -243,7 +244,8 @@ func writeJobPRsToStore(st *store.Store, j *Job, prs []JobPR) error {
 	for _, p := range existing {
 		if !have[p.URL] {
 			merged = append(merged, JobPR{URL: p.URL, State: p.State,
-				LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA})
+				LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA,
+				ConflictState: p.ConflictState})
 		}
 	}
 	for _, p := range merged {
@@ -279,14 +281,15 @@ func appendJobPRToStore(st *store.Store, j *Job, pr JobPR) (attached bool, err e
 // store.SetPRWatermark is itself a no-op for an unrecorded URL, mirroring
 // the file path's dropped-between-load-and-write tolerance. The in-memory
 // copy updates only when the URL is still present.
-func updatePRWatermarkToStore(st *store.Store, j *Job, url, lastCommentAt, bumpedSHA string) error {
-	if err := st.SetPRWatermark(j.ID, url, lastCommentAt, bumpedSHA); err != nil {
+func updatePRWatermarkToStore(st *store.Store, j *Job, url, lastCommentAt, bumpedSHA, conflictState string) error {
+	if err := st.SetPRWatermark(j.ID, url, lastCommentAt, bumpedSHA, conflictState); err != nil {
 		return fmt.Errorf("pr watermark for %s: %w", j.Slug, err)
 	}
 	for i := range j.PRs {
 		if j.PRs[i].URL == url {
 			j.PRs[i].LastCommentAt = lastCommentAt
 			j.PRs[i].BumpedSHA = bumpedSHA
+			j.PRs[i].ConflictState = conflictState
 			break
 		}
 	}

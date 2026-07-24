@@ -429,7 +429,7 @@ for a doc/spec/explanation in words) — never a stored flag on the job.
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
-| `model` | string | always | claude model for zeus (`--model` value), `""` = claude's default; applied once at cell start |
+| `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default (`claude-opus-5`); applied once at cell start |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -442,7 +442,7 @@ for a doc/spec/explanation in words) — never a stored flag on the job.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = default), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) — see the form-GET note above.
+Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default, `claude-opus-5`), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) — see the form-GET note above.
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
