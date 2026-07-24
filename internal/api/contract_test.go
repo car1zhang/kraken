@@ -17,6 +17,7 @@ import (
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -166,30 +167,30 @@ var webBoardSpec = map[string]fieldSpec{
 }
 
 var webJobSpec = map[string]fieldSpec{
-	"slug":              {kind: wireString, required: true},
-	"repo":              {kind: wireString, required: true},
-	"state":             {kind: wireString, required: true},
-	"err":               {kind: wireString, required: false},
-	"outcome":           {kind: wireString, required: false},
-	"cell":              {kind: wireString, required: false},
-	"live":              {kind: wireBool, required: true},
-	"prereqs":           {kind: wireArray, required: false},
-	"artifacts":         {kind: wireArray, required: false},
-	"detail":            {kind: wireString, required: false},
-	"question":          {kind: wireObject, required: false},
-	"zeus_status":       {kind: wireString, required: false},
-	"wakeup":            {kind: wireObject, required: false},
-	"roster":            {kind: wireArray, required: false},
-	"health":            {kind: wireString, required: false},
-	"mtime":             {kind: wireNumber, required: true},
-	"archived":          {kind: wireBool, required: false},
-	"display_slug":      {kind: wireString, required: false},
-	"cell_gone":         {kind: wireBool, required: false},
-	"reactivatable":     {kind: wireBool, required: false},
-	"last_sent":         {kind: wireString, required: false},
-	"prs":               {kind: wireArray, required: false},
-	"doc_questions":     {kind: wireArray, required: false},
-	"doc_questions_err": {kind: wireString, required: false},
+	"slug":          {kind: wireString, required: true},
+	"repo":          {kind: wireString, required: true},
+	"state":         {kind: wireString, required: true},
+	"err":           {kind: wireString, required: false},
+	"outcome":       {kind: wireString, required: false},
+	"cell":          {kind: wireString, required: false},
+	"live":          {kind: wireBool, required: true},
+	"prereqs":       {kind: wireArray, required: false},
+	"artifacts":     {kind: wireArray, required: false},
+	"detail":        {kind: wireString, required: false},
+	"question":      {kind: wireObject, required: false},
+	"zeus_status":   {kind: wireString, required: false},
+	"wakeup":        {kind: wireObject, required: false},
+	"roster":        {kind: wireArray, required: false},
+	"health":        {kind: wireString, required: false},
+	"mtime":         {kind: wireNumber, required: true},
+	"archived":      {kind: wireBool, required: false},
+	"display_slug":  {kind: wireString, required: false},
+	"cell_gone":     {kind: wireBool, required: false},
+	"reactivatable": {kind: wireBool, required: false},
+	"last_sent":     {kind: wireString, required: false},
+	"prs":           {kind: wireArray, required: false},
+	"doc_questions": {kind: wireArray, required: false},
+	"feedback":      {kind: wireArray, required: false},
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
@@ -270,6 +271,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		Reactivatable: true,
 		LastSent:      "pivot to plan B",
 		DocQuestions:  []webDocQuestion{{ID: "Q1", Text: "which approach?", Importance: "P1", Answer: "A"}},
+		Feedback:      []webFeedback{{ID: 1, Artifact: "00-overview.md", Note: "tighten the intro", At: 1234567890}},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -368,6 +370,35 @@ func TestWebDocQuestionWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webDocQuestion (populated)", data, webDocQuestionSpec)
+}
+
+// webFeedbackSpec covers board.go's webFeedback, the elements of webJob's
+// "feedback" array — mirrors store.Feedback's field set (minus the snapshot
+// blob, which ListFeedbackMeta never surfaces on this path).
+var webFeedbackSpec = map[string]fieldSpec{
+	"id":           {kind: wireNumber, required: true},
+	"artifact":     {kind: wireString, required: true},
+	"note":         {kind: wireString, required: true},
+	"at":           {kind: wireNumber, required: true},
+	"addressed":    {kind: wireString, required: false},
+	"addressed_at": {kind: wireString, required: false},
+}
+
+func TestWebFeedbackWireShape(t *testing.T) {
+	data, err := json.Marshal(webFeedback{ID: 1, Artifact: "00-overview.md", Note: "tighten the intro", At: 1234567890})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webFeedback (empty optionals)", data, webFeedbackSpec)
+
+	data, err = json.Marshal(webFeedback{
+		ID: 1, Artifact: "00-overview.md", Note: "tighten the intro", At: 1234567890,
+		Addressed: "reworded the intro", AddressedAt: "2026-07-24T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webFeedback (populated)", data, webFeedbackSpec)
 }
 
 func TestJobPRWireShape(t *testing.T) {
@@ -837,7 +868,6 @@ var jobFormSpec = map[string]fieldSpec{
 	"ready":    {kind: wireBool, required: true},
 	"solo":     {kind: wireBool, required: true},
 	"model":    {kind: wireString, required: true},
-	"skip_doc": {kind: wireBool, required: true},
 	"prereqs":  {kind: wireArray, required: true},
 	"spec":     {kind: wireString, required: true},
 	"mtime":    {kind: wireNumber, required: true},
@@ -904,6 +934,55 @@ func TestJobSaveFormWireShape(t *testing.T) {
 	if _, ok := resp["mtime"].(json.Number); !ok {
 		t.Errorf("mtime = %#v, want json.Number", resp["mtime"])
 	}
+}
+
+// --- GET /api/feedback and GET /api/questions (feedback.go/questions.go) —
+// custom envelopes, not the standard {"ok"}/{"error"} shape, so each gets
+// its own spec exercised through the real handler. POST forms all resolve
+// to the standard {"ok":true}/{"error":string} shapes already covered by
+// the webAction-wrapped-endpoint convention noted above; their op dispatch
+// and validation are covered by feedback_test.go/questions_test.go instead.
+
+var feedbackGetSpec = map[string]fieldSpec{
+	"feedback": {kind: wireArray, required: true},
+}
+
+func TestFeedbackGetWireShape(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "contract-feedback", Repo: "monolith"})
+	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: "contract-feedback", Artifact: "00-overview.md", Note: "n"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feedback?slug=contract-feedback", nil)
+	rec := httptest.NewRecorder()
+	feedbackHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/feedback (GET)", rec.Body.Bytes(), feedbackGetSpec)
+}
+
+var questionsGetSpec = map[string]fieldSpec{
+	"questions": {kind: wireArray, required: true},
+}
+
+func TestQuestionsGetWireShape(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "contract-questions", Repo: "monolith"})
+	if err := st.UpsertQuestion(j.ID, store.DocQuestion{QID: "Q1", Text: "which approach?", Importance: "P1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/questions?slug=contract-questions", nil)
+	rec := httptest.NewRecorder()
+	questionsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/questions (GET)", rec.Body.Bytes(), questionsGetSpec)
 }
 
 // --- board reorder: POST /api/reorder (actions.go) — a custom request shape
@@ -985,9 +1064,12 @@ var uploadRespSpec = map[string]fieldSpec{
 }
 
 func TestUploadRoundTrip(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	// jobs.SaveUpload is store-only now (H1: no nil-store fallback left in
+	// saveUploadToStore) — the job itself must be a store row too, since
+	// wiring a store switches jobs.LoadJobs/JobBySlug onto it exclusively.
+	useTestStore(t)
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
-	writeTestJob(t, "contract-upload", "")
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "contract-upload", Repo: "monolith"})
 
 	png := smallPNG(t)
 	req := multipartUploadRequest(t, "contract-upload", "photo.png", png)
@@ -1051,9 +1133,12 @@ func TestUploadOversize413(t *testing.T) {
 }
 
 func TestUploadSniffOverridesFilename(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	// this path reaches jobs.SaveUpload (store-only now), unlike the
+	// oversize/unsupported-type cases above which 413/415 before ever
+	// calling it — so this one needs a store-backed job.
+	useTestStore(t)
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
-	writeTestJob(t, "contract-upload-sniff", "")
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "contract-upload-sniff", Repo: "monolith"})
 	// a real PNG's bytes, dressed up with a lying .jpg filename
 	req := multipartUploadRequest(t, "contract-upload-sniff", "photo.jpg", smallPNG(t))
 	rec := httptest.NewRecorder()
@@ -1147,6 +1232,11 @@ var logFileInfoSpec = map[string]fieldSpec{
 }
 
 func TestLogsWireShape(t *testing.T) {
+	// webLogFiles/webLogRead are store-only now (the single virtual "events"
+	// file — see logs.go's doc comment); util.LogEvent's sink additively
+	// lands the same call in both the JSONL file (unused by these handlers
+	// once a store is wired) and the events table once jobs.UseStore has run.
+	useTestStore(t)
 	t.Setenv("KRAKEN_LOGS_DIR", t.TempDir())
 	util.LogEvent("web", "info", "queue", "queue contract-test")
 
@@ -1157,11 +1247,10 @@ func TestLogsWireShape(t *testing.T) {
 	}
 	assertShape(t, "/api/logs/files", rec.Body.Bytes(), logFilesSpec)
 
-	files := util.ListLogFiles()
-	if len(files) != 1 {
-		t.Fatalf("want 1 log file, got %+v", files)
-	}
-	data, err := json.Marshal(files[0])
+	// util.LogFileInfo's own wire shape, pinned directly (store mode never
+	// calls util.ListLogFiles itself — webLogFiles builds the single virtual
+	// "events" entry inline instead).
+	data, err := json.Marshal(util.LogFileInfo{Name: "events", Size: 1, MTime: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

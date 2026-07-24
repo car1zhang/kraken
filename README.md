@@ -1,6 +1,6 @@
 # kraken
 
-A macOS CLI/TUI for wrangling live [Claude Code](https://claude.com/claude-code) and Codex sessions across tmux — and an orchestrator that runs whole jobs for you. When you have half a dozen agents running in different panes, windows, and sessions, `k` tells you what they're all doing and lets you act on any of them from wherever you are. Write a job spec as a markdown file, flip it ready, and the kraken daemon gives it a **cell** (its own git worktree + tmux session) staffed by a single agent, **zeus**, that researches and writes a spec, waits for your `/do` to build it, delegates implementation to subagents it manages itself, and opens the PR. There's no separate relay agent and no escalation inbox: zeus talks to you directly in its own pane, and kraken derives whether a cell is working or blocked from its transcript activity.
+A macOS CLI/TUI for wrangling live [Claude Code](https://claude.com/claude-code) and Codex sessions across tmux — and an orchestrator that runs whole jobs for you. When you have half a dozen agents running in different panes, windows, and sessions, `k` tells you what they're all doing and lets you act on any of them from wherever you are. Write a job spec as a markdown file, flip it ready, and `kraken serve` gives it a **cell** (its own git worktree + tmux session) staffed by a single agent, **zeus**, that researches and writes a spec, waits for your `/do` to build it, delegates implementation to subagents it manages itself, and opens the PR. There's no separate relay agent and no escalation inbox: zeus talks to you directly in its own pane, and kraken derives whether a cell is working or blocked from its transcript activity.
 
 ```
 $ k
@@ -24,10 +24,8 @@ $ k
 | `k k <sel>` | kill an agent or shell pane (refuses the current pane and nested agents) |
 | `k n [-c dir] [cmd…]` | new shell window in the current session, optionally running a command |
 | `k c [-c dir] <name> [prompt…]` | new named claude in a new window of the current session |
-| `k web` | file-mode-only web UI over `~/Documents/pluto` job files: kanban board, inline question answers, artifacts in the browser; refuses to start once this machine has migrated onto sqlite — run `k serve` there instead |
-| `k serve [-p port] [--tailnet] [-addr host:port] [--mirror]` | the sqlite-backed merged process: opens `~/.kraken/kraken.db`, runs the scheduler tick loop and nightly backups in the background, and serves the same web UI on localhost + the tailnet (dual-bind, automatic once tailscale is up) — the long-lived process real deployments run post-migration (launchd runs it at login via `make install`). `--mirror` is a local-testing-only variant against a sandbox DB — see [Local mirror testing](#local-mirror-testing) |
-| `k daemon` | the pre-migration scheduler loop, file-mode only (launchd runs it at login via `make install`, until this machine has run `kraken import`) |
-| `kraken import [--dry-run] [--force] [--reimport] [--live-sources]` | **cutover-only**: one-shot sweep of every file-mode job, artifact, upload, and log into `kraken.db`; a temporary migration verb, not a day-to-day one. `--live-sources` is a local-testing-only escape hatch — see [Local mirror testing](#local-mirror-testing) |
+| `k serve [-p port] [--tailnet] [-addr host:port] [--mirror]` | the one long-lived kraken process: opens `~/.kraken/kraken.db`, runs the scheduler tick loop and nightly backups in the background, and serves the web UI on localhost + the tailnet (dual-bind, automatic once tailscale is up) — launchd runs it at login via `make install`. `--mirror` is a local-testing-only variant against a sandbox DB — see [Local mirror testing](#local-mirror-testing) |
+| `kraken import [--dry-run] [--force] [--reimport] [--live-sources]` | **one-shot only**: sweeps any legacy file-mode job, artifact, upload, and log still on disk into `kraken.db`; a human-run migration verb, not a day-to-day one. `--live-sources` is a local-testing-only escape hatch — see [Local mirror testing](#local-mirror-testing) |
 
 `<sel>` is an index from `k ls`, `.` for the current pane, an exact pane id (`%3`), a session-uuid prefix (≥4 chars), or a substring match on name/project/tmux session.
 
@@ -61,21 +59,21 @@ Requires macOS, tmux, and Go ≥ 1.24 to build:
 make install
 ```
 
-This builds the binary, installs it to `~/.local/bin` as `kraken` with a `k` symlink, and drops zsh completion into your completions dir. On a migrated machine (kraken.db present) the launchd job runs `kraken serve`, which binds localhost and — automatically, whenever tailscale is up — the tailnet IP in the same process, so the iOS app reaches the board with no extra flags. `k o` focuses [ghostty](https://ghostty.org) windows via AppleScript, which needs Accessibility permission the first time.
+This builds the binary, installs it to `~/.local/bin` as `kraken` with a `k` symlink, and drops zsh completion into your completions dir. The launchd job runs `kraken serve`, which binds localhost and — automatically, whenever tailscale is up — the tailnet IP in the same process, so the iOS app reaches the board with no extra flags. `k o` focuses [ghostty](https://ghostty.org) windows via AppleScript, which needs Accessibility permission the first time.
 
 ## How it works
 
 Discovery is stateless: every invocation snapshots `tmux list-panes -a` and one `ps` run, walks each pane's process subtree looking for claude/codex processes, and enriches what it finds from the session files Claude Code already maintains (`~/.claude/sessions/`, transcripts under `~/.claude/projects/`) and codex's session index. Status is refined by peeking at pane content, so "blocked on a question" is detected even mid-turn. Teams of in-process agents are nested under their leads via `~/.claude/teams` configs.
 
-The one long-lived process is `kraken serve` post-migration (or the launchd-managed `kraken daemon`, pre-cutover) — and even it owns nothing it can't re-derive from durable state plus discovery after a restart. Durable state is `~/.kraken/kraken.db` once a machine has migrated; job files under `~/Documents/pluto` are the pre-cutover/file-mode store. Cells (worktree, doc source, artifacts) are plain directories under `~/.kraken/cells/`, disposable and rebuilt by the board's start action or the daemon. A cell's status isn't stored anywhere either — it's derived on every read from the job's state plus the cell's transcript activity under `~/.claude/projects/`.
+The one long-lived process is `kraken serve` — and even it owns nothing it can't re-derive from durable state plus discovery after a restart. Durable state is `~/.kraken/kraken.db`; preserved artifact flat-copies (`<slug>.<name>` files) and archived jobs' artifact copies still live as plain files under `~/Documents/pluto`/`~/Documents/pluto/archive` (by design — Q12), but a job's own spec/state now lives in the DB. Cells (worktree, doc source, artifacts) are plain directories under `~/.kraken/cells/`, disposable and rebuilt by the board's start action or the daemon. A cell's status isn't stored anywhere either — it's derived on every read from the job's state plus the cell's transcript activity under `~/.claude/projects/`.
 
-kraken is mid-migration from file-mode storage (job files plus size-rotated JSONL logs) to a single sqlite database. `kraken import` one-shot-sweeps the legacy file stores into `~/.kraken/kraken.db`; once that's run, `kraken serve` replaces `kraken daemon` + `k web` as the sole DB writer and the process real deployments should run.
+kraken migrated from file-mode storage (job files plus size-rotated JSONL logs) to a single sqlite database; `kraken serve` is the only runtime and the sole DB writer. `kraken import` remains as the one-shot sweep for any machine that still has legacy file data sitting around, and can itself be retired once run.
 
 Because discovery output can go stale between listing and acting, every targeted action (`k s`, `k k`, `k b`) re-verifies the pane still holds the agent you meant before touching it.
 
 ## Local mirror testing
 
-`kraken import --live-sources` plus `kraken serve --mirror` let you try the sqlite-backed UI/API against a **snapshot of your real data** — real jobs, real artifacts, real usage history — without writing to `~/.kraken/kraken.db` or touching the live `kraken daemon`/`kraken serve` process's cells at all. Everything below runs in a separate terminal, entirely off to the side of your real deployment.
+`kraken import --live-sources` plus `kraken serve --mirror` let you try the sqlite-backed UI/API against a **snapshot of your real data** — real jobs, real artifacts, real usage history — without writing to `~/.kraken/kraken.db` or touching the live `kraken serve` process's cells at all. Everything below runs in a separate terminal, entirely off to the side of your real deployment.
 
 Sandbox every path kraken would otherwise touch, in one shell — including a real **copy** of your pluto notes, not the live directory: preserved artifact copies (`<slug>.<name>` files) and archived jobs' artifact copies live as plain files under `~/Documents/pluto`/`~/Documents/pluto/archive` even in sqlite-backed mode (by design — see "How it works" above), untouched by `KRAKEN_DB_PATH` and the other overrides below, so skipping this step would leave the mirror's archive/unarchive/delete buttons (see caveats below) one gate slip away from touching your real notes:
 
@@ -95,7 +93,7 @@ kraken import --dry-run --live-sources   # counts only, writes nothing — sanit
 kraken import --live-sources             # the real sandbox import
 ```
 
-`--live-sources` is what lets this run even while your real `kraken daemon`/`kraken serve` is up: it skips the normal daemon-alive guard, but *only* because `KRAKEN_DB_PATH` above resolves somewhere other than the real `~/.kraken/kraken.db` — pointed at the real path (i.e. without the env override), it refuses. With `KRAKEN_PLUTO_DIR` pointed at the copy, `--live-sources` reads that copy instead of your real pluto dir — an equally valid import source, and one that leaves zero real-file exposure even if a future action slipped past a mirror-mode gate.
+`--live-sources` is what lets this run even while your real `kraken serve` is up: it skips the normal daemon-alive guard, but *only* because `KRAKEN_DB_PATH` above resolves somewhere other than the real `~/.kraken/kraken.db` — pointed at the real path (i.e. without the env override), it refuses. With `KRAKEN_PLUTO_DIR` pointed at the copy, `--live-sources` reads that copy instead of your real pluto dir — an equally valid import source, and one that leaves zero real-file exposure even if a future action slipped past a mirror-mode gate.
 
 Then serve the mirror on a different port:
 
@@ -103,7 +101,7 @@ Then serve the mirror on a different port:
 kraken serve --mirror -p 7778
 ```
 
-Open `http://127.0.0.1:7778` — same board, same UI, backed by the sandbox DB. `-p` (or `-addr`) must differ from the real deployment's default port 7777; `--mirror` refuses to start otherwise, so it can never squat where the real `k web` listens.
+Open `http://127.0.0.1:7778` — same board, same UI, backed by the sandbox DB. `-p` (or `-addr`) must differ from the real deployment's default port 7777; `--mirror` refuses to start otherwise, so it can never squat where the real `kraken serve` listens.
 
 **Two caveats, always:**
 

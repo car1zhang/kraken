@@ -306,58 +306,13 @@ func TestPreserveArtifactsSkipsSymlinkInArtifacts(t *testing.T) {
 	}
 }
 
-// TestPreserveArtifactsReservedQuestionsDestFlattensAside covers finding #2:
-// an artifact literally named artifacts/questions.yaml flattens (via
-// artifactPreserveList) to the SAME pluto dest, <slug>.questions.yaml, that
-// preserveArtifacts already uses for the cell's real doc-questions file.
-// The real questions.yaml copy runs first, and keep() never overwrites — so
-// pre-fix, the artifact's content was silently discarded at teardown with
-// nothing preserved for it. artifactPreserveList must pre-claim
-// "questions.yaml" so this artifact is de-duped aside to "questions-2.yaml",
-// and preserveArtifacts must end up preserving BOTH files.
-func TestPreserveArtifactsReservedQuestionsDestFlattensAside(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	plutoDir := t.TempDir()
-	t.Setenv("KRAKEN_PLUTO_DIR", plutoDir)
-
-	j := &Job{Slug: "reserved-questions"}
-	artDir := CellArtifacts(j)
-	if err := os.MkdirAll(artDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(artDir, "questions.yaml"), []byte("artifact content"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	qPath := filepath.Join(cellDir(j), "questions.yaml")
-	if err := os.WriteFile(qPath, []byte("- q: real\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	copied, err := preserveArtifacts(j, "/unused-repo-for-build-jobs")
-	if err != nil {
-		t.Fatalf("preserveArtifacts: %v", err)
-	}
-	if len(copied) != 2 {
-		t.Fatalf("want both the real questions file and the artifact preserved, got %+v", copied)
-	}
-
-	realDst := filepath.Join(plutoDir, "reserved-questions.questions.yaml")
-	artDst := filepath.Join(plutoDir, "reserved-questions.questions-2.yaml")
-	if data, err := os.ReadFile(realDst); err != nil || string(data) != "- q: real\n" {
-		t.Fatalf("real questions file not preserved: data=%q err=%v", data, err)
-	}
-	if data, err := os.ReadFile(artDst); err != nil || string(data) != "artifact content" {
-		t.Fatalf("artifact aliased to questions.yaml not preserved aside: data=%q err=%v", data, err)
-	}
-}
-
-// TestPreserveArtifactsCopiesQuestionsFile passes a bogus repo path (Q14:
-// the root-level *.md sweep is unconditional now, but ExistingWorktree
-// resolves to "" for a nonexistent repo, so the sweep itself is a no-op
-// here) exercising the full function: nested artifacts and questions.yaml
-// both land in the pluto dir under <slug>.<name>, and a second call never
-// overwrites either.
-func TestPreserveArtifactsCopiesQuestionsFile(t *testing.T) {
+// TestPreserveArtifactsNestedAndNeverOverwrites exercises the full
+// preserveArtifacts sweep: nested cell artifacts flatten into the pluto dir
+// under <slug>.<name>, and a second pass never overwrites an existing copy.
+// Questions are rows in kraken.db now, not a file, so an artifact literally
+// named "questions.yaml" preserves like any other file — no reserved name,
+// no dedupe-aside.
+func TestPreserveArtifactsNestedAndNeverOverwrites(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	plutoDir := t.TempDir()
 	t.Setenv("KRAKEN_PLUTO_DIR", plutoDir)
@@ -370,8 +325,7 @@ func TestPreserveArtifactsCopiesQuestionsFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(artDir, "figures", "a.svg"), []byte("svg"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	qPath := filepath.Join(cellDir(j), "questions.yaml")
-	if err := os.WriteFile(qPath, []byte("- q: one\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(artDir, "questions.yaml"), []byte("- q: one\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -389,7 +343,7 @@ func TestPreserveArtifactsCopiesQuestionsFile(t *testing.T) {
 		t.Fatalf("figures-a.svg not preserved: data=%q err=%v", data, err)
 	}
 	if data, err := os.ReadFile(qDst); err != nil || string(data) != "- q: one\n" {
-		t.Fatalf("questions.yaml not preserved: data=%q err=%v", data, err)
+		t.Fatalf("questions.yaml artifact not preserved: data=%q err=%v", data, err)
 	}
 
 	// change both sources, run again: never-overwrite means the pluto
@@ -397,7 +351,7 @@ func TestPreserveArtifactsCopiesQuestionsFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(artDir, "figures", "a.svg"), []byte("svg-v2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(qPath, []byte("- q: two\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(artDir, "questions.yaml"), []byte("- q: two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := preserveArtifacts(j, "/unused-repo-for-build-jobs"); err != nil {

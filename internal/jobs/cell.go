@@ -96,25 +96,17 @@ func CellArtifacts(j *Job) string {
 
 // AllArtifactPaths lists a job's artifacts from both homes: the live cell's
 // artifacts dir and the preserved <slug>.<name> copies in pluto (which are
-// all that remain after teardown). The preserved <slug>.questions.yaml copy
-// — that EXACT name only — is deliberately excluded: questions are not
-// artifacts (spec decision), so a doc-question thread must not surface in
-// the board's artifact list alongside real deliverables. A suffix match
-// instead of an exact one would also hide a real deliverable that simply
-// happens to end in ".questions.yaml" (e.g. an artifact named
-// notes.questions.yaml, flattened to <slug>.notes.questions.yaml) — the
-// exact-name check avoids that false positive.
+// all that remain after teardown). Questions are rows in kraken.db, not
+// files, so there is no reserved name to exclude here any more.
 func AllArtifactPaths(j *Job) []string {
 	out := ListArtifacts(j)
 	prefix := util.Slugify(j.Slug) + "."
-	questionsFile := prefix + "questions.yaml"
 	entries, err := os.ReadDir(PlutoDir())
 	if err != nil {
 		return out
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) ||
-			strings.HasSuffix(e.Name(), JobSuffix) || e.Name() == questionsFile {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || strings.HasSuffix(e.Name(), JobSuffix) {
 			continue
 		}
 		out = append(out, filepath.Join(PlutoDir(), e.Name()))
@@ -879,14 +871,7 @@ func dedupeDestName(name string, claimed map[string]int) string {
 // figures-a.svg both flatten to "figures-a.svg") is de-duped deterministically
 // within this one call via dedupeDestName — otherwise the loser was silently
 // dropped and then destroyed at teardown with nothing preserved for it.
-// "questions.yaml" itself is pre-claimed before the walk starts: it's
-// reserved for the cell's real doc-questions file, which preserveArtifacts
-// copies to <slug>.questions.yaml separately (never through this list), so
-// an artifact that happens to be named (or flatten to) exactly
-// "questions.yaml" must not land on that same pluto slot — pre-claiming it
-// routes such an artifact to "questions-2.yaml" via the same dedupe path
-// instead of silently losing it to keep()'s never-overwrite rule. Entries
-// are followed-then-checked for being a regular file (os.Stat, not
+// Entries are followed-then-checked for being a regular file (os.Stat, not
 // d.Type().IsRegular()): a valid symlink to a regular file is preserved,
 // same as ListArtifacts and the store sync both already treat it via
 // ReadFile; only a dangling symlink, a directory, or a device is skipped
@@ -902,7 +887,7 @@ func artifactPreserveList(root string) ([]preserveEntry, error) {
 		return nil, nil
 	}
 	var out []preserveEntry
-	claimed := map[string]int{"questions.yaml": 1}
+	claimed := map[string]int{}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err // unreadable entry: abort — a partial listing must not read as complete
@@ -935,9 +920,9 @@ func artifactPreserveList(root string) ([]preserveEntry, error) {
 
 // preserveArtifacts copies a finishing cell's deliverables into the pluto dir
 // as <slug>.<name> (never overwriting): everything in the cell's artifacts/
-// dir, recursing into subdirectories, the cell's questions.yaml if present,
-// plus uncommitted root-level *.md in the worktree (where a solo zeus might
-// leave a doc outside artifacts/) — unconditionally: Q14 removed the
+// dir, recursing into subdirectories, plus uncommitted root-level *.md in
+// the worktree (where a solo zeus might leave a doc outside artifacts/) —
+// unconditionally: Q14 removed the
 // build/info job-type split, so this sweep no longer skips itself for jobs
 // that also ship deliverables via a PR; a job's own uncommitted root notes
 // are always worth preserving regardless of whether it opened one. Teardown
@@ -965,17 +950,6 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 			return
 		}
 		copied = append(copied, dst)
-	}
-	// the questions.yaml copy runs FIRST, before the artifacts loop: dest
-	// names are de-duped within one artifactPreserveList call, but an
-	// artifact literally named questions.yaml would still land on the SAME
-	// pluto path (<slug>.questions.yaml) as the real doc-questions file if
-	// the artifacts loop claimed it first — keep()'s never-overwrite rule
-	// only protects whichever copy actually wrote first. Running the real
-	// questions.yaml copy first means it always wins that race.
-	qPath := QuestionsPath(j)
-	if info, err := os.Stat(qPath); err == nil && info.Mode().IsRegular() {
-		keep(qPath, "questions.yaml")
 	}
 	entries, err := artifactPreserveList(CellArtifacts(j))
 	if err != nil && firstErr == nil {

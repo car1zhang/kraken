@@ -349,7 +349,7 @@ func TestWebJobCreateStoreModeRowMatchesParsedTemplate(t *testing.T) {
 	}
 	if j.Repo != want.Repo || j.Base != want.Base ||
 		j.Ready != want.Ready || j.Solo != want.Solo || j.Model != want.Model ||
-		j.SkipDoc != want.SkipDoc || j.Body != want.Body {
+		j.Body != want.Body {
 		t.Fatalf("row = %+v, want fields matching the parsed template %+v", j, want)
 	}
 	if len(j.Prereqs) != len(want.Prereqs) {

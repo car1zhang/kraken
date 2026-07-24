@@ -10,7 +10,7 @@ func TestJobCRUDRoundTrip(t *testing.T) {
 	s := openTest(t)
 	j := &Job{
 		Slug: "roundtrip", Repo: "kraken", Base: "main",
-		Ready: true, Solo: false, Model: "opus", SkipDoc: true,
+		Ready: true, Solo: false, Model: "opus",
 		Body: "do the thing", State: "", Outcome: "", Session: "",
 	}
 	id, err := s.CreateJob(j)
@@ -28,7 +28,7 @@ func TestJobCRUDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if got.ID != id || got.Repo != "kraken" || got.Base != "main" || !got.Ready || !got.SkipDoc || got.Model != "opus" || got.Body != "do the thing" {
+	if got.ID != id || got.Repo != "kraken" || got.Base != "main" || !got.Ready || got.Model != "opus" || got.Body != "do the thing" {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
 
@@ -536,5 +536,242 @@ func TestDeleteJob(t *testing.T) {
 	}
 	if err := s.DeleteJob(id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete err = %v, want ErrNotFound", err)
+	}
+}
+
+// --- B2: ArchiveJob/UnarchiveJob re-key feedback.job_slug in the same
+// transaction as the move, since feedback rows have no FK to jobs.id and
+// key on the mutable job_slug column alone (see feedback.go's doc comment).
+// Without this, archiving/unarchiving either strands a job's feedback under
+// a slug nothing reads anymore, or — worse — a later job that reuses the
+// freed slug inherits the previous job's notes.
+
+func TestArchiveJobRekeysFeedback(t *testing.T) {
+	s := openTest(t)
+	id, err := s.CreateJob(&Job{Slug: "arch-me"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: id, JobSlug: "arch-me", Artifact: "00-overview.md", Note: "n1"}); err != nil {
+		t.Fatalf("AddFeedback: %v", err)
+	}
+
+	name, err := s.ArchiveJob(id)
+	if err != nil {
+		t.Fatalf("ArchiveJob: %v", err)
+	}
+	if name != "arch-me" {
+		t.Fatalf("archived name = %q, want arch-me", name)
+	}
+
+	fs, err := s.ListFeedback(id)
+	if err != nil {
+		t.Fatalf("ListFeedback(%d): %v", id, err)
+	}
+	if len(fs) != 1 || fs[0].Note != "n1" || fs[0].JobID != id {
+		t.Fatalf("feedback not re-keyed to archived name: %+v", fs)
+	}
+}
+
+// TestArchiveJobRekeysFeedbackOnSlugReuseCollision is B2's exact repro: a
+// job archives (feedback moves to archived_name "reuse", which — since this
+// is the FIRST archival of that slug — keeps the bare slug string with no
+// numbering, exactly the case where a string-only rekey would be unable to
+// tell the two generations apart), a NEW active job takes the freed slug
+// and adds its OWN feedback under that same live "reuse" string, then it
+// too archives, landing on the numbered "reuse-2". Each generation's
+// feedback must land on its own archived name only, disambiguated by
+// job_id — never bleeding onto the other card, and never left stranded
+// under the now-dead "reuse" slug.
+func TestArchiveJobRekeysFeedbackOnSlugReuseCollision(t *testing.T) {
+	s := openTest(t)
+	id1, err := s.CreateJob(&Job{Slug: "reuse"})
+	if err != nil {
+		t.Fatalf("CreateJob 1: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: id1, JobSlug: "reuse", Artifact: "a.md", Note: "gen1"}); err != nil {
+		t.Fatalf("AddFeedback gen1: %v", err)
+	}
+	name1, err := s.ArchiveJob(id1)
+	if err != nil {
+		t.Fatalf("ArchiveJob 1: %v", err)
+	}
+	if name1 != "reuse" {
+		t.Fatalf("name1 = %q, want reuse (no collision yet)", name1)
+	}
+
+	id2, err := s.CreateJob(&Job{Slug: "reuse"})
+	if err != nil {
+		t.Fatalf("CreateJob 2 (slug reuse): %v", err)
+	}
+	// gen2's feedback is added while its job_slug ("reuse") is IDENTICAL to
+	// gen1's already-archived job_slug — this is the moment a naive
+	// job_slug-only rekey could no longer tell the rows apart.
+	if _, err := s.AddFeedback(Feedback{JobID: id2, JobSlug: "reuse", Artifact: "a.md", Note: "gen2"}); err != nil {
+		t.Fatalf("AddFeedback gen2: %v", err)
+	}
+	name2, err := s.ArchiveJob(id2)
+	if err != nil {
+		t.Fatalf("ArchiveJob 2: %v", err)
+	}
+	if name2 != "reuse-2" {
+		t.Fatalf("name2 = %q, want reuse-2 (numbered on collision)", name2)
+	}
+
+	fs1, err := s.ListFeedback(id1)
+	if err != nil || len(fs1) != 1 || fs1[0].Note != "gen1" {
+		t.Fatalf("generation 1 feedback (job id %d) = %+v, err %v", id1, fs1, err)
+	}
+	fs2, err := s.ListFeedback(id2)
+	if err != nil || len(fs2) != 1 || fs2[0].Note != "gen2" {
+		t.Fatalf("generation 2 feedback (job id %d) = %+v, err %v", id2, fs2, err)
+	}
+	// note: fs1's own home ("reuse") is gen1's PERMANENT archived identity —
+	// it never becomes empty, since gen1 kept the bare slug string with no
+	// numbering (it archived first). The two checks above are what actually
+	// matter: each generation's notes land on — and stay on — its own card.
+}
+
+// TestUnarchiveJobRekeysFeedbackBack covers the reverse direction with a
+// genuine collision, so the archived name a row starts under (name2,
+// "una-2") actually differs from the slug it's restored to ("una") — an
+// unarchive that never collided (archived_name == the restored slug
+// already) wouldn't exercise the rekey at all.
+func TestUnarchiveJobRekeysFeedbackBack(t *testing.T) {
+	s := openTest(t)
+	id1, err := s.CreateJob(&Job{Slug: "una"})
+	if err != nil {
+		t.Fatalf("CreateJob 1: %v", err)
+	}
+	if _, err := s.ArchiveJob(id1); err != nil { // takes archived_name "una", no feedback of its own
+		t.Fatalf("ArchiveJob 1: %v", err)
+	}
+
+	id2, err := s.CreateJob(&Job{Slug: "una"}) // reuses the freed slug
+	if err != nil {
+		t.Fatalf("CreateJob 2: %v", err)
+	}
+	rowID, err := s.AddFeedback(Feedback{JobID: id2, JobSlug: "una", Artifact: "a.md", Note: "gen2-note"})
+	if err != nil {
+		t.Fatalf("AddFeedback: %v", err)
+	}
+	name2, err := s.ArchiveJob(id2)
+	if err != nil {
+		t.Fatalf("ArchiveJob 2: %v", err)
+	}
+	if name2 != "una-2" {
+		t.Fatalf("name2 = %q, want una-2 (una already taken by generation 1)", name2)
+	}
+
+	// generation 1 is still archived, so "una" is free for generation 2 to
+	// unarchive back into.
+	if err := s.UnarchiveJob(id2); err != nil {
+		t.Fatalf("UnarchiveJob: %v", err)
+	}
+
+	fs, err := s.ListFeedback(id2)
+	if err != nil || len(fs) != 1 || fs[0].Note != "gen2-note" {
+		t.Fatalf("feedback not re-keyed back to the restored slug: %+v (err %v)", fs, err)
+	}
+	// the row's job_slug column (display/provenance only, never the read
+	// key — see store.ListFeedback's doc comment) must itself have moved
+	// back off the stale numbered archive name, not just be reachable via
+	// job_id.
+	got, err := s.GetFeedback(rowID)
+	if err != nil {
+		t.Fatalf("GetFeedback: %v", err)
+	}
+	if got.JobSlug != "una" {
+		t.Fatalf("job_slug = %q after unarchive, want re-keyed back to \"una\" (not left on the stale archive name %q)", got.JobSlug, name2)
+	}
+}
+
+// TestListFeedbackSegregatesGenerationsDuringActiveWindow is the read-side
+// gap TestArchiveJobRekeysFeedbackOnSlugReuseCollision didn't cover: that
+// test only pins the FINAL state, once BOTH generations are archived under
+// distinct names. The window that actually matters — gen1 archived, gen2
+// freshly ACTIVE, both sharing the identical job_slug string "reuse-live"
+// for as long as gen2 stays active — is exactly where a job_slug-keyed read
+// could return either generation's rows for either card. ListFeedback/
+// ListFeedbackMeta must key on job_id and stay segregated throughout.
+func TestListFeedbackSegregatesGenerationsDuringActiveWindow(t *testing.T) {
+	s := openTest(t)
+	id1, err := s.CreateJob(&Job{Slug: "reuse-live"})
+	if err != nil {
+		t.Fatalf("CreateJob 1: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: id1, JobSlug: "reuse-live", Artifact: "a.md", Note: "gen1"}); err != nil {
+		t.Fatalf("AddFeedback gen1: %v", err)
+	}
+	name1, err := s.ArchiveJob(id1)
+	if err != nil {
+		t.Fatalf("ArchiveJob 1: %v", err)
+	}
+	if name1 != "reuse-live" {
+		t.Fatalf("name1 = %q, want reuse-live (no collision yet)", name1)
+	}
+
+	id2, err := s.CreateJob(&Job{Slug: "reuse-live"}) // reuses the freed slug WHILE gen1 stays archived
+	if err != nil {
+		t.Fatalf("CreateJob 2: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: id2, JobSlug: "reuse-live", Artifact: "a.md", Note: "gen2"}); err != nil {
+		t.Fatalf("AddFeedback gen2: %v", err)
+	}
+	// gen2 is ACTIVE and gen1 is ARCHIVED right now, both carrying the
+	// identical job_slug "reuse-live" — the exact window a job_slug-keyed
+	// read cannot survive.
+
+	fs1, err := s.ListFeedback(id1)
+	if err != nil || len(fs1) != 1 || fs1[0].Note != "gen1" {
+		t.Fatalf("gen1 (archived) ListFeedback(%d) = %+v, err %v", id1, fs1, err)
+	}
+	fs2, err := s.ListFeedback(id2)
+	if err != nil || len(fs2) != 1 || fs2[0].Note != "gen2" {
+		t.Fatalf("gen2 (active) ListFeedback(%d) = %+v, err %v", id2, fs2, err)
+	}
+	meta1, err := s.ListFeedbackMeta(id1)
+	if err != nil || len(meta1) != 1 || meta1[0].Note != "gen1" {
+		t.Fatalf("gen1 ListFeedbackMeta(%d) = %+v, err %v", id1, meta1, err)
+	}
+	meta2, err := s.ListFeedbackMeta(id2)
+	if err != nil || len(meta2) != 1 || meta2[0].Note != "gen2" {
+		t.Fatalf("gen2 ListFeedbackMeta(%d) = %+v, err %v", id2, meta2, err)
+	}
+	// the unscoped full sweep (jobID <= 0) still surfaces both.
+	all, err := s.ListFeedback(0)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("ListFeedback(0) full sweep = %+v, err %v", all, err)
+	}
+}
+
+// TestListFeedbackNullJobIDNeverMatchesAJobButSurvivesFullSweep covers a
+// pre-v5 fossil / DeleteJob-orphaned row (job_id NULL, scanned as JobID 0):
+// it must never be returned by a job_id-scoped read (a NULL column can never
+// equal a bound positive parameter in SQL) yet must still appear in the
+// unscoped full sweep every /dream nightly pass and carl's own board sweep
+// rely on.
+func TestListFeedbackNullJobIDNeverMatchesAJobButSurvivesFullSweep(t *testing.T) {
+	s := openTest(t)
+	id, err := s.CreateJob(&Job{Slug: "has-job"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	// JobID left zero inserts NULL (AddFeedback's own doc comment: 0 never
+	// collides with a real, AUTOINCREMENT-from-1 job id).
+	if _, err := s.AddFeedback(Feedback{JobSlug: "orphaned-slug", Artifact: "a.md", Note: "fossil"}); err != nil {
+		t.Fatalf("AddFeedback fossil: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: id, JobSlug: "has-job", Artifact: "a.md", Note: "real"}); err != nil {
+		t.Fatalf("AddFeedback real: %v", err)
+	}
+
+	scoped, err := s.ListFeedback(id)
+	if err != nil || len(scoped) != 1 || scoped[0].Note != "real" {
+		t.Fatalf("ListFeedback(%d) = %+v, err %v — the NULL-job_id fossil must not match", id, scoped, err)
+	}
+	all, err := s.ListFeedback(0)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("ListFeedback(0) full sweep = %+v, err %v — the fossil must still be reachable somehow", all, err)
 	}
 }

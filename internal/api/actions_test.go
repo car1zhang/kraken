@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"kraken/internal/jobs"
+	"kraken/internal/store"
 )
 
 // writeTestJobBody writes a job file with a caller-chosen body (spec text),
@@ -208,11 +209,16 @@ func postReorder(t *testing.T, column string, slugs []string) *httptest.Response
 	return rec
 }
 
+// Board order (jobs.LoadBoardOrder/SaveColumnOrder) is store-only now (H1:
+// file mode retired outright, no nil-store fallback left in order.go) — so
+// every reorder test that actually reaches SaveColumnOrder needs a wired
+// store, with the jobs themselves created as store rows to match (LoadJobs
+// only reads files when NO store is wired at all).
 func TestWebReorderHappyPath(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
-	writeTestJob(t, "reorder-a", "")
-	writeTestJob(t, "reorder-b", "")
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-a", Repo: "monolith", Ready: true, Body: "spec\n"})
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-b", Repo: "monolith", Ready: true, Body: "spec\n"})
 
 	rec := postReorder(t, "queued", []string{"reorder-b", "reorder-a"})
 	if rec.Code != http.StatusOK {
@@ -252,10 +258,10 @@ func TestWebReorderUnknownColumn(t *testing.T) {
 // actually occupy (a concurrent transition, or a stale board) is silently
 // dropped from the saved order rather than rejecting the whole reorder.
 func TestWebReorderDropsDepartedSlug(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
-	writeTestJobBody(t, "reorder-queued", "", "spec\n") // ready: false in writeTestJobBody -> draft
-	writeTestJob(t, "reorder-actually-queued", "")      // ready: true -> queued
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-queued", Repo: "monolith", Ready: false, Body: "spec\n"})         // ready: false -> draft
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-actually-queued", Repo: "monolith", Ready: true, Body: "spec\n"}) // ready: true -> queued
 
 	rec := postReorder(t, "queued", []string{"reorder-actually-queued", "reorder-queued"})
 	if rec.Code != http.StatusOK {

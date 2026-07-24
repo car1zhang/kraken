@@ -15,6 +15,7 @@ import (
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -495,40 +496,46 @@ func TestBoardCacheSingleFlight(t *testing.T) {
 	}
 }
 
-// writeArchiveFixture writes a minimal parseable job file into dir.
-func writeArchiveFixture(t *testing.T, dir, name, frontmatter string) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	content := "---\n" + frontmatter + "---\n\n# Spec\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+// TestArchivedArtifactServing covers both the DB-mirrored artifact LISTING
+// (archivedWebArtifacts, store-only now — LoadArchivedJobs has no file-mode
+// fallback left; see jobs/archive.go's own doc comment) and the FLAT-FILE
+// resolution a GET /api/artifact/.../archive/... request actually reads
+// bytes from (ArtifactPath, unchanged — archived pluto copies are still
+// plain files on disk regardless of storage mode).
+func TestArchivedArtifactServing(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "foo", Repo: "x"})
+	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "report.md", Bytes: []byte("x"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	return path
-}
-
-func TestArchivedArtifactServing(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	name, err := st.ArchiveJob(j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(jobs.ArchiveDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeArchiveFixture(t, jobs.ArchiveDir(), "foo-2.job.md", "job: foo\nrepo: x\n")
-	if err := os.WriteFile(filepath.Join(jobs.ArchiveDir(), "foo-2.report.md"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(jobs.ArchiveDir(), name+".report.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), "foo-2")
+	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), name)
+	if a == nil {
+		t.Fatal("archived job not found")
+	}
 	arts := archivedWebArtifacts(a)
-	if len(arts) != 1 || arts[0].Name != "report.md" || arts[0].URL != "/api/artifact/foo-2/archive/report.md" {
+	if len(arts) != 1 || arts[0].Name != "report.md" || arts[0].URL != "/api/artifact/"+name+"/archive/report.md" {
 		t.Fatalf("unexpected artifacts: %+v", arts)
 	}
-	if p, ok := ArtifactPath(a, "archive", "report.md"); !ok || p != filepath.Join(jobs.ArchiveDir(), "foo-2.report.md") {
+	if p, ok := ArtifactPath(a, "archive", "report.md"); !ok || p != filepath.Join(jobs.ArchiveDir(), name+".report.md") {
 		t.Fatalf("artifactPath archive: %q %v", p, ok)
 	}
 	// traversal and job files are refused
-	if _, ok := ArtifactPath(a, "archive", "../foo-2.report.md"); ok {
+	if _, ok := ArtifactPath(a, "archive", "../"+name+".report.md"); ok {
 		t.Fatal("traversal allowed")
 	}
 	if _, ok := ArtifactPath(a, "archive", "job.md"); ok {
-		// foo-2.job.md must not be reachable as artifact "job.md"
+		// <name>.job.md must not be reachable as artifact "job.md"
 		t.Fatal("job file served as artifact")
 	}
 	// an active job (no ArchivedName) never resolves in the archive home
@@ -537,24 +544,4 @@ func TestArchivedArtifactServing(t *testing.T) {
 	}
 }
 
-// TestJobArtifactsFileModeLiveStillListsPlutoCopies covers the
-// Q12 "a live cell always serves straight from the cell dir, skip the DB"
-// short-circuit is a store-mode-only rule. Pre-migration, file mode always
-// appended the pluto flat-copy listing regardless of liveness, and that must
-// stay exactly as it was — no store wired here, so live=true must not
-// suppress the pluto listing the way it now does in store mode.
-func TestJobArtifactsFileModeLiveStillListsPlutoCopies(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJob(t, "art-file-live", "")
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "art-file-live.report.html"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	j := jobs.JobBySlug(jobs.LoadJobs(), "art-file-live")
-	if j == nil {
-		t.Fatal("job not found")
-	}
-	arts := jobArtifacts(j, true)
-	if len(arts) != 1 || arts[0].Name != "report.html" {
-		t.Fatalf("want the pluto copy listed even though live=true (file mode), got %+v", arts)
-	}
-}
+// Note: file mode's dual-path board rendering is gone (Q11); jobArtifacts' Q12 short-circuit is unconditional now, so there's no remaining test seam here.

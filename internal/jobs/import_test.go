@@ -367,8 +367,10 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 	if rich.State != "done" || rich.Outcome != "shipped" || rich.Session != "sess-123" {
 		t.Fatalf("rich state/outcome/session: %+v", rich)
 	}
-	if !rich.SkipDoc || rich.Model != "opus" {
-		t.Fatalf("rich skip_doc/model: %+v", rich)
+	// skip-doc: true in the fixture is a tolerated legacy key — it must
+	// parse clean but leave no trace on the imported row (no field to set).
+	if rich.Model != "opus" {
+		t.Fatalf("rich model: %+v", rich)
 	}
 	if rich.Repo != "monolith" || rich.Base != "origin/develop" || rich.Teardown != "kill" {
 		t.Fatalf("rich repo/base/teardown: %+v", rich)
@@ -502,7 +504,7 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 		t.Fatalf("events count = %d, want 3", len(events))
 	}
 
-	feedback, err := st.ListFeedback("")
+	feedback, err := st.ListFeedback(0)
 	if err != nil {
 		t.Fatalf("ListFeedback: %v", err)
 	}
@@ -512,6 +514,17 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 	fb := feedback[0]
 	if fb.JobSlug != "rich" || fb.Artifact != "report.md" || fb.SnapshotExt != "png" {
 		t.Fatalf("feedback fields: %+v", fb)
+	}
+	// job_id, not job_slug, is what every read and ownership check keys on
+	// (schema v5) — an imported row that lands NULL is invisible to its own
+	// job's card. See TestImportFeedbackResolvesOwningJobID for the full
+	// resolution matrix.
+	richJob, err := st.GetJobBySlug("rich")
+	if err != nil {
+		t.Fatalf("GetJobBySlug rich: %v", err)
+	}
+	if fb.JobID != richJob.ID {
+		t.Fatalf("feedback job_id = %d, want rich's own id %d", fb.JobID, richJob.ID)
 	}
 	if !strings.Contains(fb.Note, "this diagram is confusing") {
 		t.Fatalf("feedback note: %q", fb.Note)
@@ -585,7 +598,7 @@ func TestImportAllIdempotent(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("events row count after 2 imports = %d, want 3", len(events))
 	}
-	feedback, err := st.ListFeedback("")
+	feedback, err := st.ListFeedback(0)
 	if err != nil {
 		t.Fatalf("ListFeedback: %v", err)
 	}
@@ -679,7 +692,7 @@ func TestImportAllDryRunWritesNothing(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("dry-run wrote %d event rows, want 0", len(events))
 	}
-	feedback, err := st.ListFeedback("")
+	feedback, err := st.ListFeedback(0)
 	if err != nil {
 		t.Fatalf("ListFeedback: %v", err)
 	}
@@ -1161,5 +1174,114 @@ func TestImportAllSlugifyCollisionReported(t *testing.T) {
 	}
 	if len(uploadsList) != 1 {
 		t.Fatalf("expected the upload dir attributed to the first (winning) slug only, got %+v", uploadsList)
+	}
+}
+
+// TestImportFeedbackResolvesOwningJobID pins the job_id resolution
+// importFeedback does before every insert. The legacy on-disk layout carries
+// only a job NAME, but job_id (schema v5) is what every read and ownership
+// check keys on, so a row imported with NULL job_id would be invisible to its
+// own job's card AND un-rekeyable by a later archive/unarchive. Four cases,
+// one import: a name matching an active job's slug, one matching an archived
+// job's archived_name, one matching BOTH (ambiguous — must stay NULL rather
+// than guess a generation), and one matching neither (a legitimate orphan).
+func TestImportFeedbackResolvesOwningJobID(t *testing.T) {
+	st := openImportTestStore(t)
+
+	activeID, err := st.CreateJob(&store.Job{Slug: "alpha"})
+	if err != nil {
+		t.Fatalf("CreateJob alpha: %v", err)
+	}
+	toArchive, err := st.CreateJob(&store.Job{Slug: "beta"})
+	if err != nil {
+		t.Fatalf("CreateJob beta: %v", err)
+	}
+	archivedName, err := st.ArchiveJob(toArchive)
+	if err != nil {
+		t.Fatalf("ArchiveJob beta: %v", err)
+	}
+	if archivedName != "beta" {
+		t.Fatalf("archived name = %q, want the bare slug (fixture assumption)", archivedName)
+	}
+	// "gamma" archives under its bare slug, freeing it — then a brand-new
+	// active job takes the freed slug. A pre-v5 feedback row saying only
+	// "gamma" can't say which generation it belongs to.
+	gammaOld, err := st.CreateJob(&store.Job{Slug: "gamma"})
+	if err != nil {
+		t.Fatalf("CreateJob gamma (gen1): %v", err)
+	}
+	if _, err := st.ArchiveJob(gammaOld); err != nil {
+		t.Fatalf("ArchiveJob gamma (gen1): %v", err)
+	}
+	if _, err := st.CreateJob(&store.Job{Slug: "gamma"}); err != nil {
+		t.Fatalf("CreateJob gamma (gen2): %v", err)
+	}
+
+	root := filepath.Join(t.TempDir(), "doc-feedback")
+	for _, e := range []struct{ dir, job, note string }{
+		{"100000-alpha", "alpha", "for the active job"},
+		{"100001-beta", "beta", "for the archived job"},
+		{"100002-gamma", "gamma", "ambiguous across two generations"},
+		{"100003-ghost", "ghost", "orphaned, no matching job"},
+	} {
+		mustWrite(t, filepath.Join(root, "2026-07-01", e.dir, "feedback.txt"),
+			[]byte("time: 2026-07-01T10:00:00Z\njob: "+e.job+"\nartifact: a.md\n\n"+e.note))
+		mustWrite(t, filepath.Join(root, "2026-07-01", e.dir, "snapshot.png"), []byte("snapshot-"+e.job))
+	}
+
+	rep, err := importFeedback(st, root, false)
+	if err != nil {
+		t.Fatalf("importFeedback: %v", err)
+	}
+	if rep.Found != 4 || rep.Imported != 4 {
+		t.Fatalf("feedback report = %+v, want 4 found / 4 imported", rep)
+	}
+
+	rows, err := st.ListFeedback(0)
+	if err != nil {
+		t.Fatalf("ListFeedback: %v", err)
+	}
+	byNote := map[string]store.Feedback{}
+	for _, f := range rows {
+		byNote[f.Note] = f
+	}
+	if got := byNote["for the active job"]; got.JobID != activeID {
+		t.Fatalf("active-slug row job_id = %d, want %d (%+v)", got.JobID, activeID, got)
+	}
+	if got := byNote["for the archived job"]; got.JobID != toArchive {
+		t.Fatalf("archived-name row job_id = %d, want %d (%+v)", got.JobID, toArchive, got)
+	}
+	if got := byNote["ambiguous across two generations"]; got.JobID != 0 {
+		t.Fatalf("ambiguous row job_id = %d, want 0/NULL (%+v)", got.JobID, got)
+	}
+	if got := byNote["orphaned, no matching job"]; got.JobID != 0 {
+		t.Fatalf("orphan row job_id = %d, want 0/NULL (%+v)", got.JobID, got)
+	}
+
+	// The resolved rows must actually be readable through the job-scoped
+	// read every card uses — the whole point of resolving job_id at all.
+	scoped, err := st.ListFeedback(activeID)
+	if err != nil {
+		t.Fatalf("ListFeedback(activeID): %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].Note != "for the active job" {
+		t.Fatalf("scoped read for the active job = %+v", scoped)
+	}
+
+	// Re-import stays idempotent: the dedup key is unchanged (job_slug,
+	// artifact, note, ts), so a second sweep adds nothing.
+	rep2, err := importFeedback(st, root, false)
+	if err != nil {
+		t.Fatalf("importFeedback (2nd): %v", err)
+	}
+	if rep2.Found != 4 || rep2.Imported != 4 {
+		t.Fatalf("2nd feedback report = %+v, want 4 found / 4 imported (all deduped)", rep2)
+	}
+	rows2, err := st.ListFeedback(0)
+	if err != nil {
+		t.Fatalf("ListFeedback (2nd): %v", err)
+	}
+	if len(rows2) != 4 {
+		t.Fatalf("feedback row count after 2 imports = %d, want 4", len(rows2))
 	}
 }

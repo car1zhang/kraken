@@ -111,8 +111,10 @@ func defaultCellsRoot() string {
 	return filepath.Join(util.Home(), ".kraken", "cells")
 }
 
-// defaultOrderPath mirrors order.go's unexported orderPath(). No env
-// override exists there today; ImportOptions.OrderPath is the only knob.
+// defaultOrderPath is the legacy ~/.kraken/order.json location order.go's
+// store-backed LoadBoardOrder/SaveColumnOrder no longer read — this is the
+// one-shot importer's own direct read of that file. No env override exists;
+// ImportOptions.OrderPath is the only knob.
 func defaultOrderPath() string {
 	return filepath.Join(util.Home(), ".kraken", "order.json")
 }
@@ -440,7 +442,7 @@ func upsertActiveJobRow(st *store.Store, j *Job, modTime time.Time) (int64, erro
 		millis := modTime.UnixMilli()
 		row := &store.Job{
 			Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-			Ready: j.Ready, Solo: j.Solo, Model: j.Model, SkipDoc: j.SkipDoc,
+			Ready: j.Ready, Solo: j.Solo, Model: j.Model,
 			Body: j.Body, State: j.State, Outcome: j.Outcome,
 			Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),
 			CreatedAt: millis, UpdatedAt: millis,
@@ -502,7 +504,7 @@ func syncJobChildren(st *store.Store, id int64, j *Job) error {
 func jobFieldsMap(j *Job) map[string]any {
 	return map[string]any{
 		"slug": j.Slug, "repo": j.Repo, "base": j.Base,
-		"ready": j.Ready, "solo": j.Solo, "model": j.Model, "skip_doc": j.SkipDoc,
+		"ready": j.Ready, "solo": j.Solo, "model": j.Model,
 		"body": j.Body, "state": j.State, "outcome": j.Outcome,
 		"session": j.Session, "teardown": j.Teardown, "run": runValue(j.Run),
 	}
@@ -540,10 +542,6 @@ func jobFieldsChanged(existing *store.Job, fields map[string]any) bool {
 			}
 		case "model":
 			if existing.Model != v.(string) {
-				return true
-			}
-		case "skip_doc":
-			if existing.SkipDoc != v.(bool) {
 				return true
 			}
 		case "body":
@@ -622,7 +620,7 @@ func importArchivedJobs(st *store.Store, files []parsedJobFile, dryRun bool) (St
 func upsertArchivedJobRow(st *store.Store, j *Job, archivedAtMillis int64) (int64, error) {
 	row := &store.Job{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-		Ready: j.Ready, Solo: j.Solo, Model: j.Model, SkipDoc: j.SkipDoc,
+		Ready: j.Ready, Solo: j.Solo, Model: j.Model,
 		Body: j.Body, State: j.State, Outcome: j.Outcome,
 		Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),
 		ArchivedAt: archivedAtMillis, ArchivedName: j.ArchivedName,
@@ -1096,12 +1094,60 @@ func eventKeyFromStore(e store.Event) string {
 
 // --- feedback ---
 
+// feedbackJobIDs builds importFeedback's name → owning-job-id resolver from
+// the store as it stands AFTER the job/archive passes have run (importFeedback
+// is called last in Run), so it sees both this run's freshly imported jobs and
+// anything a previous import already landed. The key space is the same one
+// feedback.job_slug is written in (api.feedbackJobKey): an active job's slug,
+// an archived job's numbered archived_name. A name that matches BOTH an active
+// job and an archived job maps to 0 — genuinely ambiguous input (a freed slug
+// reused by a new job, with the old generation archived under the bare name),
+// resolved the same non-destructive way migrateV5FeedbackJobID's ambiguous
+// case is: leave job_id NULL rather than attach the row to the wrong
+// generation and have a later archive/unarchive rekey drag it along.
+func feedbackJobIDs(st *store.Store) (map[string]int64, error) {
+	active, err := st.ListJobs()
+	if err != nil {
+		return nil, err
+	}
+	archived, err := st.ListArchivedJobs()
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]int64, len(active)+len(archived))
+	for _, j := range active {
+		if j.Slug == "" {
+			continue
+		}
+		byName[j.Slug] = j.ID
+	}
+	for _, a := range archived {
+		if a.ArchivedName == "" {
+			continue
+		}
+		if _, dup := byName[a.ArchivedName]; dup {
+			byName[a.ArchivedName] = 0 // ambiguous: also an active job's slug
+			continue
+		}
+		byName[a.ArchivedName] = a.ID
+	}
+	return byName, nil
+}
+
 // importFeedback walks PlutoDir()/doc-feedback/<day>/<entry>/ the same way
 // SaveArtifactFeedback (feedback.go) lays it out: a snapshot.<ext> file and
 // a feedback.txt whose header carries provenance and whose body (after the
 // first blank line) is the verbatim note. Like events, feedback rows have
 // no natural unique key, so idempotency uses the same pre-load-and-consume
 // dedup by (job_slug, artifact, note, ts).
+//
+// The legacy on-disk layout carries only a job NAME, but job_id — not
+// job_slug — is what every read and ownership check keys on since schema v5
+// (see store.Feedback's doc comment), so each parsed row's owning job id is
+// resolved through feedbackJobIDs before the insert. A row whose name matches
+// nothing (its job was never imported, or was hard-deleted) or matches
+// ambiguously is inserted with job_id NULL: still visible to the unscoped
+// full sweep, never attached to a job it may not belong to.
 func importFeedback(st *store.Store, root string, dryRun bool) (StoreReport, error) {
 	rep := StoreReport{}
 	dayEntries, err := os.ReadDir(root)
@@ -1112,7 +1158,12 @@ func importFeedback(st *store.Store, root string, dryRun bool) (StoreReport, err
 		return rep, fmt.Errorf("read %s: %w", root, err)
 	}
 
-	existing, err := st.ListFeedback("")
+	jobIDByName, err := feedbackJobIDs(st)
+	if err != nil {
+		return rep, err
+	}
+
+	existing, err := st.ListFeedback(0)
 	if err != nil {
 		return rep, err
 	}
@@ -1152,6 +1203,7 @@ func importFeedback(st *store.Store, root string, dryRun bool) (StoreReport, err
 				rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s/%s: %v", day, name, err))
 				continue
 			}
+			f.JobID = jobIDByName[f.JobSlug]
 			key := feedbackKey(f.JobSlug, f.Artifact, f.Note, f.TS)
 			if consumed[key] > 0 {
 				consumed[key]--

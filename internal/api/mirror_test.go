@@ -19,6 +19,10 @@ var mirrorGatedRoutes = []string{
 	"/api/start", "/api/kill", "/api/stop", "/api/steer",
 	"/api/question", "/api/retry", "/api/done", "/api/reactivate",
 	"/api/doc-question",
+	// feedback/questions: gated inline in their own handlers (not
+	// webAction-wrapped, since GET must stay reachable), same "mirror board
+	// is read-only, full stop" policy as every other gated route here.
+	"/api/feedback", "/api/questions",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",
@@ -87,6 +91,11 @@ func TestMirrorModePlutoRoutesConditional(t *testing.T) {
 	}
 
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	// past the gate, these handlers reach jobs.LoadJobs/LoadArchivedJobs,
+	// store-only now (H1) — a wired store is needed even though "nonexistent"
+	// never resolves to a real job (LoadJobs/LoadArchivedJobs themselves
+	// require ActiveStore() != nil to avoid a nil-pointer call).
+	useTestStore(t)
 	for _, path := range mirrorPlutoRoutes {
 		rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
 		if rec.Code == http.StatusForbidden {

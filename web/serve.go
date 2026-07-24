@@ -18,8 +18,8 @@ import (
 	"kraken/internal/util"
 )
 
-// Options are k web's already-parsed flags — cmd_web.go owns the flag
-// strings/usage text, so this is just what's left after parsing.
+// Options are kraken serve's already-parsed web flags — cmd_serve.go owns
+// the flag strings/usage text, so this is just what's left after parsing.
 type Options struct {
 	Port         string
 	Tailnet      bool
@@ -27,9 +27,8 @@ type Options struct {
 	// DisableSignalHandler skips Serve's own SIGTERM/SIGINT goroutine below.
 	// kraken serve (cmd_serve.go) registers its own shutdown handler — stop
 	// ticks, close the store, exit exactly once — and sets this so the two
-	// handlers don't race each other for which os.Exit(0) call wins; k web
-	// (cmd_web.go) leaves it false and keeps Serve's simple log-and-exit
-	// behavior unchanged.
+	// handlers don't race each other for which os.Exit(0) call wins; tests
+	// leave it false and keep Serve's simple log-and-exit behavior.
 	DisableSignalHandler bool
 	// Listener, when set, is used instead of Serve binding its own (E5): a
 	// caller that needs to know binding succeeded BEFORE starting other

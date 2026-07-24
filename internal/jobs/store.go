@@ -87,7 +87,6 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 		Ready:    sr.Ready,
 		Solo:     sr.Solo,
 		Model:    sr.Model,
-		SkipDoc:  sr.SkipDoc,
 		Body:     sr.Body,
 		State:    sr.State,
 		Outcome:  sr.Outcome,
@@ -363,12 +362,12 @@ func saveUploadToStore(st *store.Store, slug, ext string, data []byte) (name, pa
 
 // jobFieldValue converts one of WriteJobFields' variadic string keyvals
 // into the typed value store.UpdateJobFields expects, per jobFieldColumns'
-// column types (bool for ready/solo/skip_doc, int64 for run, string
+// column types (bool for ready/solo, int64 for run, string
 // otherwise). Unknown keys pass through as strings; store.UpdateJobFields
 // itself rejects anything outside its allowlist.
 func jobFieldValue(key, val string) any {
 	switch key {
-	case "ready", "solo", "skip_doc":
+	case "ready", "solo":
 		return val == "true"
 	case "run":
 		n, _ := strconv.Atoi(val)

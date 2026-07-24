@@ -6,41 +6,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"kraken/internal/store"
 )
 
-// writeArchiveFixture writes a minimal parseable job file into dir.
-func writeArchiveFixture(t *testing.T, dir, name, frontmatter string) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	content := "---\n" + frontmatter + "---\n\n# Spec\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func TestFreeArchiveName(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	if got := freeArchiveName("foo"); got != "foo" {
-		t.Fatalf("empty archive: got %q, want foo", got)
-	}
-	if err := os.MkdirAll(ArchiveDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeArchiveFixture(t, ArchiveDir(), "foo.job.md", "job: foo\nrepo: x\n")
-	if got := freeArchiveName("foo"); got != "foo-2" {
-		t.Fatalf("one taken: got %q, want foo-2", got)
-	}
-	writeArchiveFixture(t, ArchiveDir(), "foo-2.job.md", "job: foo\nrepo: x\n")
-	if got := freeArchiveName("foo"); got != "foo-3" {
-		t.Fatalf("two taken: got %q, want foo-3", got)
-	}
-}
+// archive_test.go — ArchiveJob/UnarchiveJob/DeleteArchivedJob are
+// store-backed (job rows), but preserved pluto artifacts stay real files
+// under PlutoDir()/ArchiveDir() even so (Q12) — every test here wires a
+// store (useTestStore) for the job rows and still exercises the artifact
+// file moves directly.
 
 func TestArchiveRefusesInFlight(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeArchiveFixture(t, PlutoDir(), "hot.job.md", "job: hot\nrepo: x\nready: true\nstate: working\n")
-	j := JobBySlug(LoadJobs(), "hot")
+	st := useTestStore(t)
+	mustCreateJob(t, st, store.Job{Slug: "hot", Repo: "x", Ready: true, State: "working"})
+	j := LoadJobBySlug("hot")
 	if j == nil {
 		t.Fatal("fixture didn't load")
 	}
@@ -48,20 +27,23 @@ func TestArchiveRefusesInFlight(t *testing.T) {
 		t.Fatalf("want kill-first error, got %v", err)
 	}
 	// a live session blocks archiving even for a done job
-	writeArchiveFixture(t, PlutoDir(), "warm.job.md", "job: warm\nrepo: x\nready: true\nstate: done\n")
-	j = JobBySlug(LoadJobs(), "warm")
+	mustCreateJob(t, st, store.Job{Slug: "warm", Repo: "x", Ready: true, State: "done"})
+	j = LoadJobBySlug("warm")
 	if _, err := ArchiveJob(j, map[string]bool{CellSession(j): true}); err == nil || !strings.Contains(err.Error(), "live cell") {
 		t.Fatalf("want live-cell error, got %v", err)
 	}
 }
 
 func TestArchiveUnarchiveRoundTrip(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeArchiveFixture(t, PlutoDir(), "foo.job.md", "job: foo\nrepo: x\nready: true\nstate: done\noutcome: PR merged\n")
+	st := useTestStore(t)
+	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x", Ready: true, State: "done", Outcome: "PR merged"})
 	if err := os.WriteFile(filepath.Join(PlutoDir(), "foo.report.md"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	j := JobBySlug(LoadJobs(), "foo")
+	j := LoadJobBySlug("foo")
 	name, err := ArchiveJob(j, map[string]bool{})
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +51,7 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if name != "foo" {
 		t.Fatalf("archived name: got %q, want foo", name)
 	}
-	if len(LoadJobs()) != 0 {
+	if LoadJobBySlug("foo") != nil {
 		t.Fatal("job still active after archive")
 	}
 	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo.report.md")); err != nil {
@@ -78,8 +60,8 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 
 	// the slug is free: a new active foo can exist, and archiving it numbers
 	// the archive copy
-	writeArchiveFixture(t, PlutoDir(), "foo.job.md", "job: foo\nrepo: x\n")
-	j2 := JobBySlug(LoadJobs(), "foo")
+	mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
+	j2 := LoadJobBySlug("foo")
 	name2, err := ArchiveJob(j2, map[string]bool{})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +83,7 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if err := UnarchiveJob(a); err != nil {
 		t.Fatal(err)
 	}
-	restored := JobBySlug(LoadJobs(), "foo")
+	restored := LoadJobBySlug("foo")
 	if restored == nil || restored.State != "done" || restored.Outcome != "PR merged" {
 		t.Fatalf("unarchive didn't preserve state/outcome: %+v", restored)
 	}
@@ -117,29 +99,37 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 }
 
 func TestDeleteArchivedJob(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	if err := os.MkdirAll(ArchiveDir(), 0o755); err != nil {
+	st := useTestStore(t)
+	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeArchiveFixture(t, ArchiveDir(), "foo.job.md", "job: foo\nrepo: x\n")
-	writeArchiveFixture(t, ArchiveDir(), "foo-2.job.md", "job: foo\nrepo: x\n")
-	for _, n := range []string{"foo.report.md", "foo-2.doc.html"} {
-		if err := os.WriteFile(filepath.Join(ArchiveDir(), n), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
+	if err := os.WriteFile(filepath.Join(PlutoDir(), "foo.report.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := ArchiveJob(LoadJobBySlug("foo"), map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
+	if err := os.WriteFile(filepath.Join(PlutoDir(), "foo.doc.html"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ArchiveJob(LoadJobBySlug("foo"), map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+
 	a := ArchivedJobByName(LoadArchivedJobs(), "foo")
 	if err := DeleteArchivedJob(a); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo.job.md")); !os.IsNotExist(err) {
-		t.Fatal("job file survived delete")
+	if ArchivedJobByName(LoadArchivedJobs(), "foo") != nil {
+		t.Fatal("job row survived delete")
 	}
 	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo.report.md")); !os.IsNotExist(err) {
 		t.Fatal("artifact survived delete")
 	}
 	// foo-2 (a different archived job that shares the slug) must be untouched
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo-2.job.md")); err != nil {
+	if ArchivedJobByName(LoadArchivedJobs(), "foo-2") == nil {
 		t.Fatal("delete of foo took foo-2 with it")
 	}
 	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo-2.doc.html")); err != nil {

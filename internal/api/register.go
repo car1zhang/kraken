@@ -4,8 +4,8 @@ import "net/http"
 
 // Register wires every JSON API route onto mux — the board, its move
 // actions, the job editor, and the peers/health endpoints. Route strings are
-// unchanged from when they lived in cmdWeb: the iOS app and web/app.js
-// address them by these exact paths.
+// wire-pinned: the iOS app and web/app.js address them by these exact
+// paths.
 func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", healthHandler)
 	mux.HandleFunc("/api/peers", peersHandler(defaultPeerSource))
@@ -25,6 +25,8 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/done", webAction("done", webDone))
 	mux.HandleFunc("/api/question", webAction("question", webAnswerQuestion))
 	mux.HandleFunc("/api/doc-question", webAction("doc-question", webAnswerDocQuestion))
+	mux.HandleFunc("/api/feedback", feedbackHandler)
+	mux.HandleFunc("/api/questions", questionsHandler)
 	mux.HandleFunc("/api/retry", webAction("retry", webRetry))
 	mux.HandleFunc("/api/kill", webAction("kill", webKill))
 	mux.HandleFunc("/api/steer", webAction("steer", webSteer))

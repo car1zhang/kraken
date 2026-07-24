@@ -146,15 +146,34 @@ function sortDocQuestions(list) {
   return [...open.map((x) => x.q), ...answered.map((x) => x.q)];
 }
 
-// docQuestionRowHTML renders one open doc question: importance badge, id +
-// text, optional context/recommendation, and the answer affordance (accept
-// the recommendation verbatim, or free-text). Nothing here talks to the
-// agent directly — a post() just records the answer in questions.yaml.
-function docQuestionRowHTML(j, q) {
+// reansweringDocQ tracks which already-answered questions are currently
+// reopened for a re-answer, keyed "<slug>|<id>" — module-level (not
+// localStorage-persisted, this is transient edit state) so it survives the
+// wholesale #board innerHTML rebuild every poll triggers (see
+// renderBoardDOM). A question leaves this set the moment its re-answer
+// posts successfully; a failed post leaves it in place so the row (and
+// whatever the user typed, preserved via snapshotDocInputs/restoreDocInputs)
+// stays open for a retry.
+const reansweringDocQ = new Set();
+const dqReanswerKey = (slug, id) => slug + "|" + id;
+
+// docQuestionRowHTML renders one editable doc-question row: importance
+// badge, id + text, optional context/recommendation, and the answer
+// affordance (accept the recommendation verbatim, or free-text). Used both
+// for a genuinely open question (prefill undefined) and for an answered
+// question reopened via reansweringDocQ (prefill = the current answer,
+// plus a cancel button back to the read-only view). Nothing here talks to
+// the agent directly — a post() just records the answer as a `questions`
+// row UPDATE.
+function docQuestionRowHTML(j, q, prefill) {
   const imp = (q.importance || "P2").toLowerCase();
   const rec = q.recommendation ? `<div class="dq-rec" title="${esc(q.recommendation)}">rec: ${esc(q.recommendation)}</div>` : "";
   const acceptBtn = q.recommendation
     ? `<button class="dq-accept" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}" data-text="${esc(q.recommendation)}">accept rec</button>`
+    : "";
+  const reanswering = prefill != null;
+  const cancelBtn = reanswering
+    ? `<button class="dq-reanswer-cancel" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}">cancel</button>`
     : "";
   return `<div class="dq-row">
     <div class="dq-head"><span class="dq-imp ${esc(imp)}">${esc(q.importance || "P2")}</span><span class="dq-q" title="${esc(q.text)}">${esc(q.id)} — ${esc(q.text)}</span></div>
@@ -162,8 +181,9 @@ function docQuestionRowHTML(j, q) {
     ${rec}
     <div class="dq-answer">
       ${acceptBtn}
-      <input class="dq-input" type="text" placeholder="answer…" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}">
+      <input class="dq-input" type="text" placeholder="answer…" value="${esc(prefill || "")}" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}">
       <button class="dq-send" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}">send</button>
+      ${cancelBtn}
     </div>
   </div>`;
 }
@@ -172,11 +192,13 @@ function docQuestionRowHTML(j, q) {
 // answered question — badge + id + question text stay visible (so the row
 // is still self-describing once it's one of several answered rows),
 // answered_at (if present) rides in a title attr rather than cluttering the
-// row itself.
-function docQuestionAnsweredHTML(q) {
+// row itself. Clickable (see the document click delegate) to reopen it as
+// an editable row via reansweringDocQ — answers are editable forever (Q13),
+// live or done.
+function docQuestionAnsweredHTML(j, q) {
   const imp = (q.importance || "P2").toLowerCase();
-  const title = q.answered_at ? ` title="answered ${esc(String(q.answered_at))}"` : "";
-  return `<div class="dq-row dq-answered"${title}>
+  const title = q.answered_at ? `answered ${String(q.answered_at)} — click to re-answer` : "click to re-answer";
+  return `<div class="dq-row dq-answered" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}" title="${esc(title)}">
     <div class="dq-head"><span class="dq-imp ${esc(imp)}">${esc(q.importance || "P2")}</span><span class="dq-q" title="${esc(q.text)}">${esc(q.id)} — ${esc(q.text)}</span></div>
     <div class="dq-answered-text">✓ ${esc(q.answer)}</div>
   </div>`;
@@ -186,22 +208,83 @@ function docQuestionAnsweredHTML(q) {
 // distinct from both artifact chips and the AskUserQuestion block above
 // (neutral panel vs. the counter-colored .question block). Renders nothing
 // when there's nothing to show, so old-server payloads (no doc_questions
-// field) and jobs with an empty questions.yaml look exactly as before.
+// field) and jobs with no questions look exactly as before. Questions are
+// rows in kraken.db now (file mode retired outright, Q11) — there is no
+// more malformed-file state to render.
 function docQuestionsHTML(j) {
-  if (j.doc_questions_err) {
-    return `<div class="doc-questions">
-      <div class="dq-row dq-malformed" title="${esc(j.doc_questions_err)}">questions file malformed — steer zeus to fix</div>
-    </div>`;
-  }
   const list = j.doc_questions || [];
   if (!list.length) return "";
   const sorted = sortDocQuestions(list);
-  const rows = sorted.map((q) => (q.answer ? docQuestionAnsweredHTML(q) : docQuestionRowHTML(j, q))).join("");
+  const rows = sorted
+    .map((q) => {
+      if (!q.answer) return docQuestionRowHTML(j, q);
+      const key = dqReanswerKey(j.slug, q.id);
+      return reansweringDocQ.has(key) ? docQuestionRowHTML(j, q, q.answer) : docQuestionAnsweredHTML(j, q);
+    })
+    .join("");
   const hasOpen = sorted.some((q) => !q.answer);
   return `<div class="doc-questions">
     ${rows}
-    ${hasOpen ? `<div class="dq-hint">answers land in questions.yaml — the agent reads them when it next works</div>` : ""}
+    ${hasOpen ? `<div class="dq-hint">answers are read by the agent next time it works</div>` : ""}
   </div>`;
+}
+
+// ---- job feedback (`feedback` rows in kraken.db, captured from the
+// artifact overlay — see openArtifact/panel-feedback below — and managed
+// here) ----
+//
+// fbEditing tracks which feedback rows are currently open for editing, by
+// row id — module-level for the same reason reansweringDocQ is: it must
+// survive the wholesale #board innerHTML rebuild every poll triggers. Keyed
+// on the bare id (unlike reansweringDocQ's slug|id) because feedback ids are
+// global kraken.db rowids, not per-job qids — two different jobs can never
+// share one, so there's nothing for the slug to disambiguate.
+const fbEditing = new Set();
+
+// feedbackRowHTML renders one feedback entry. An addressed entry (zeus posted
+// its own addressed/addressed_at) is dimmed and terminal — carl can still
+// edit or delete it, same as an open one, since a note staying accurate is
+// more useful than freezing it the moment zeus reacts to it. An open entry in
+// fbEditing shows an inline textarea (pre-filled with the current note)
+// instead of the note + edit/delete controls.
+function feedbackRowHTML(j, f) {
+  const addressedTitleAttr = f.addressed_at ? ` title="${esc("addressed " + String(f.addressed_at))}"` : "";
+  const addressed = f.addressed
+    ? `<div class="fb-addressed-text"${addressedTitleAttr}>✓ ${esc(f.addressed)}</div>`
+    : "";
+  if (fbEditing.has(String(f.id))) {
+    return `<div class="fb-row" data-fb-id="${esc(f.id)}">
+      <div class="fb-head"><span class="fb-artifact">${esc(f.artifact)}</span></div>
+      <textarea class="fb-edit-input" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">${esc(f.note)}</textarea>
+      <div class="fb-edit-actions">
+        <span class="fb-edit-note"></span>
+        <button class="fb-cancel" data-id="${esc(f.id)}">cancel</button>
+        <button class="fb-save" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">save</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="fb-row${f.addressed ? " fb-addressed" : ""}" data-fb-id="${esc(f.id)}">
+    <div class="fb-head">
+      <span class="fb-artifact">${esc(f.artifact)}</span>
+      <span class="fb-actions">
+        <button class="fb-edit" data-id="${esc(f.id)}">edit</button>
+        <button class="fb-delete" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">delete</button>
+      </span>
+    </div>
+    <div class="fb-note">${esc(f.note)}</div>
+    ${addressed}
+  </div>`;
+}
+
+// feedbackHTML renders a job's feedback panel — modeled on docQuestionsHTML
+// (own neutral panel, same empty-renders-nothing convention so a job with
+// no feedback array, from an older server or simply no notes yet, looks
+// exactly as before).
+function feedbackHTML(j) {
+  const list = j.feedback || [];
+  if (!list.length) return "";
+  const rows = list.map((f) => feedbackRowHTML(j, f)).join("");
+  return `<div class="job-feedback">${rows}</div>`;
 }
 
 // wakeupChipHTML renders a live cell's poll-timer chip: a countdown to its
@@ -356,6 +439,7 @@ function cardHTML(j, col) {
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
     ${docQuestionsHTML(j)}
+    ${feedbackHTML(j)}
     ${(col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
   </div>`;
 }
@@ -450,20 +534,24 @@ function render(board) {
   return { byCol, archived };
 }
 
-// snapshotDocInputs/restoreDocInputs preserve in-progress free-text doc-
-// question answers (value + focus + selection) across an innerHTML rebuild
-// of either surface that renders .dq-input: #board (renderBoardDOM's
-// wholesale replace on every changed poll) and #steer-docq (fillSteerContext
-// re-rendering the steer modal's own copy of the panel on open/chip-more/
-// post-answer). Both are wholesale replaces with no diffing, so anything
-// typed into a .dq-input is gone the instant either rebuilds unless snapshotted
-// first — every other composer lives in a modal textarea, whose draft is
+// snapshotDocInputs/restoreDocInputs preserve in-progress free-text inputs
+// (value + focus + selection) across an innerHTML rebuild of either surface
+// that renders .dq-input: #board (renderBoardDOM's wholesale replace on
+// every changed poll) and #steer-docq (fillSteerContext re-rendering the
+// steer modal's own copy of the panel on open/chip-more/post-answer). Both
+// are wholesale replaces with no diffing, so anything typed into a
+// .dq-input is gone the instant either rebuilds unless snapshotted first —
+// every other composer lives in a modal textarea, whose draft is
 // server-synced instead (see flushSteerDraft), which is why only .dq-input
-// needs this. Keyed on slug+id (both already ride as data attrs on
-// .dq-input) rather than DOM position, since sortDocQuestions can reorder
-// rows between polls, and rather than which surface rendered it, since the
-// same question can appear in both the card and an open steer modal at
-// once — a draft typed in one is meant to survive a rebuild of the other.
+// (and, since H6, the feedback panel's own .fb-edit-input — #board only, it
+// has no steer-modal copy) needs this. Keyed on slug+id (both already ride
+// as data attrs on every covered element) rather than DOM position, since
+// sortDocQuestions can reorder rows between polls, and rather than which
+// surface rendered it, since the same question can appear in both the card
+// and an open steer modal at once — a draft typed in one is meant to
+// survive a rebuild of the other. A .dq-input id ("Q<digits>") and an
+// .fb-edit-input id (a bare feedback row number) never collide as strings,
+// so both element kinds safely share one values map.
 //
 // The steer-modal copy is only ever a snapshot AUTHORITY while the modal is
 // actually visible: snapshotDocInputs skips anything inside a hidden
@@ -475,7 +563,12 @@ function render(board) {
 // even when empty, so a deliberately cleared draft on one surface actually
 // propagates as "cleared" instead of being overwritten by the other
 // surface's stale non-empty copy.
-const DQ_INPUT_SELECTOR = "#board .dq-input, #steer-docq .dq-input";
+const DQ_INPUT_SELECTOR = "#board .dq-input, #board .fb-edit-input, #steer-docq .dq-input";
+
+// SCROLL_PANEL_SELECTORS: card-embedded panels whose own scroll position
+// (see style.css's per-card max-height caps) must survive a #board rebuild
+// the same way input values do — see snapshotDocInputs/restoreDocInputs.
+const SCROLL_PANEL_SELECTORS = [".doc-questions", ".job-feedback"];
 
 function docInputKey(el) {
   return JSON.stringify([el.dataset.slug, el.dataset.id]);
@@ -521,8 +614,11 @@ function snapshotDocInputs() {
     focused = { key: docInputKey(active), start: active.selectionStart, end: active.selectionEnd };
   }
   const scroll = {};
-  document.querySelectorAll(".card[data-slug] .doc-questions").forEach((el) => {
-    if (el.scrollTop) scroll[el.closest(".card").dataset.slug] = el.scrollTop;
+  document.querySelectorAll(".card[data-slug]").forEach((card) => {
+    SCROLL_PANEL_SELECTORS.forEach((sel) => {
+      const el = card.querySelector(sel);
+      if (el && el.scrollTop) scroll[card.dataset.slug + sel] = el.scrollTop;
+    });
   });
   return { values, focused, scroll };
 }
@@ -543,14 +639,19 @@ function restoreDocInputs({ values, focused, scroll }) {
       }
     }
   }
-  // E5: .card .doc-questions gained a scroll cap (style.css) — renderBoardDOM
-  // replaces #board wholesale, which destroys the scroller and its scrollTop
-  // on every poll, so restore it per-card by slug the same way input values
-  // are restored above.
+  // E5: .card .doc-questions (and, since H6, .job-feedback) gained a scroll
+  // cap (style.css) — renderBoardDOM replaces #board wholesale, which
+  // destroys the scroller and its scrollTop on every poll, so restore it
+  // per-card+panel the same way input values are restored above.
   if (scroll && Object.keys(scroll).length) {
-    document.querySelectorAll(".card[data-slug] .doc-questions").forEach((el) => {
-      const slug = el.closest(".card").dataset.slug;
-      if (slug in scroll) el.scrollTop = scroll[slug];
+    document.querySelectorAll(".card[data-slug]").forEach((card) => {
+      SCROLL_PANEL_SELECTORS.forEach((sel) => {
+        const key = card.dataset.slug + sel;
+        if (key in scroll) {
+          const el = card.querySelector(sel);
+          if (el) el.scrollTop = scroll[key];
+        }
+      });
     });
   }
 }
@@ -609,6 +710,7 @@ function archivedCardHTML(j) {
     </div>
     ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
+    ${feedbackHTML(j)}
     <div class="review-row">
       <button class="btn unarchive" data-slug="${esc(j.slug)}">⬆ unarchive</button>
       <button class="btn danger delete" data-slug="${esc(j.slug)}">✕ delete forever</button>
@@ -1009,6 +1111,31 @@ let artifactURL = "";
 const isPage = (url) => /\.(html|svg|pdf)$/i.test(url);
 const isImage = (url) => /\.(png|jpe?g|gif|webp)$/i.test(url);
 
+// artifactParts recovers {slug, home, name} from an /api/artifact URL — the
+// same triple the overlay was opened with, needed to address a feedback post
+// at the exact artifact being viewed. This IS the overlay's own source of
+// truth for what's open (openArtifact's only record of the artifact is
+// artifactURL itself), so re-deriving from it here rather than threading a
+// separate slug/home/name through every chip is the same-source approach.
+// Cell-home names may themselves contain slashes (subpath artifacts), so
+// only the first two segments are split off.
+function artifactParts(url) {
+  const m = url.match(/^\/api\/artifact\/([^/]+)\/([^/]+)\/(.+)$/);
+  return m ? { slug: m[1], home: m[2], name: m[3] } : null;
+}
+
+let feedbackSavedTimer = null;
+
+function hideFeedbackForm() {
+  document.getElementById("feedback-form").hidden = true;
+  document.getElementById("feedback-text").value = "";
+  document.getElementById("feedback-note").textContent = "";
+  // a lingering "saved ✓" must never carry over to another artifact (or
+  // stack across rapid sends) — cancel the revert timer and reset now
+  clearTimeout(feedbackSavedTimer);
+  document.getElementById("panel-feedback").textContent = "feedback";
+}
+
 function openArtifact(url, name) {
   document.getElementById("panel-title").textContent = name;
   artifactURL = url;
@@ -1016,6 +1143,8 @@ function openArtifact(url, name) {
   showRaw = false;
   overlay.hidden = false;
   document.getElementById("panel-raw").hidden = isImage(url) || /\.pdf$/i.test(url);
+  document.getElementById("panel-feedback").hidden = false;
+  hideFeedbackForm();
   if (isImage(url)) {
     panelBody.className = "panel-body page";
     panelBody.innerHTML = `<img src="${esc(url)}" alt="artifact">`;
@@ -1053,6 +1182,15 @@ function openArtifact(url, name) {
 function sendDocQuestionAnswer(row, slug, id, text) {
   row.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
   return post("/api/doc-question", { slug, id, text }).then((ok) => {
+    if (ok) {
+      // success: leave re-answer mode so the next rebuild shows the fresh
+      // answer read-only again — post() already rebuilt once against the
+      // stale set, so force one more pass to reflect the cleared state now
+      // rather than waiting out the rest of the 3s poll interval.
+      reansweringDocQ.delete(dqReanswerKey(slug, id));
+      invalidateBoard();
+      refresh();
+    }
     if (steerOverlay && !steerOverlay.hidden && steerSlug === slug) {
       fillSteerContext(jobsBySlug[steerSlug], steerMode);
     }
@@ -1102,12 +1240,104 @@ document.addEventListener("click", (ev) => {
     sendDocQuestionAnswer(row, dqSend.dataset.slug, dqSend.dataset.id, text);
     return;
   }
+  const dqReanswerCancel = ev.target.closest(".dq-reanswer-cancel");
+  if (dqReanswerCancel) {
+    reansweringDocQ.delete(dqReanswerKey(dqReanswerCancel.dataset.slug, dqReanswerCancel.dataset.id));
+    invalidateBoard();
+    refresh();
+    // the same question can be showing inside an open steer modal (its own
+    // copy of this panel, see fillSteerContext) — the #board rebuild above
+    // never touches #steer-docq, so without this the modal's row would keep
+    // advertising a re-answer affordance that no longer does anything
+    if (steerOverlay && !steerOverlay.hidden && steerSlug === dqReanswerCancel.dataset.slug) {
+      fillSteerContext(jobsBySlug[steerSlug], steerMode);
+    }
+    return;
+  }
+  // reopen an answered doc question for editing — Q13: answers are editable
+  // forever, live or done. Must come after .dq-accept/.dq-send/
+  // .dq-reanswer-cancel (distinct classes, but keeping the open-row branches
+  // together above this one) and before the generic card-open fallback.
+  const dqAnswered = ev.target.closest(".dq-answered");
+  if (dqAnswered) {
+    reansweringDocQ.add(dqReanswerKey(dqAnswered.dataset.slug, dqAnswered.dataset.id));
+    invalidateBoard();
+    refresh();
+    // see the .dq-reanswer-cancel branch above — same reason: keep the open
+    // steer modal's own copy of this row in sync with the board's.
+    if (steerOverlay && !steerOverlay.hidden && steerSlug === dqAnswered.dataset.slug) {
+      fillSteerContext(jobsBySlug[steerSlug], steerMode);
+    }
+    return;
+  }
+  // ---- job feedback panel ----
+  const fbEdit = ev.target.closest(".fb-edit");
+  if (fbEdit) {
+    fbEditing.add(fbEdit.dataset.id);
+    invalidateBoard();
+    refresh();
+    return;
+  }
+  const fbCancel = ev.target.closest(".fb-cancel");
+  if (fbCancel) {
+    fbEditing.delete(fbCancel.dataset.id);
+    invalidateBoard();
+    refresh();
+    return;
+  }
+  const fbSave = ev.target.closest(".fb-save");
+  if (fbSave) {
+    const row = fbSave.closest(".fb-row");
+    const textarea = row.querySelector(".fb-edit-input");
+    const text = (textarea.value || "").trim();
+    const noteEl = row.querySelector(".fb-edit-note");
+    if (!text) {
+      if (noteEl) noteEl.textContent = "feedback is empty";
+      return;
+    }
+    const id = fbSave.dataset.id;
+    fbSave.disabled = true;
+    post("/api/feedback", { slug: fbSave.dataset.slug, id: Number(id), feedback: text }).then((ok) => {
+      if (ok) {
+        fbEditing.delete(id);
+        invalidateBoard();
+        refresh();
+        return;
+      }
+      // post() already rebuilt #board on the failure path (its own
+      // invalidateBoard()+refresh() inside the catch branch), which orphans
+      // `row`/`noteEl` captured above — writing into them would be a
+      // silent no-op. fbEditing still holds `id`, so the fresh row rendered
+      // read-only-editing again; re-query it by id to land the message.
+      const freshNote = document.querySelector(`.fb-row[data-fb-id="${CSS.escape(id)}"] .fb-edit-note`);
+      if (freshNote) {
+        freshNote.textContent = "save failed — see status bar";
+        return;
+      }
+      // no fresh row: the note is gone from the board entirely (deleted
+      // elsewhere, or its job left the view). The message has nowhere to
+      // land — the status bar already carries the failure — so drop the id
+      // rather than leaving fbEditing pinned to a row that will never render
+      // again, which would silently re-open an edit box if that id ever came
+      // back.
+      fbEditing.delete(id);
+    });
+    return;
+  }
+  const fbDelete = ev.target.closest(".fb-delete");
+  if (fbDelete) {
+    if (!confirm("delete this feedback note? this can't be undone.")) return;
+    fbDelete.disabled = true;
+    post("/api/feedback", { slug: fbDelete.dataset.slug, id: Number(fbDelete.dataset.id), delete: true });
+    return;
+  }
   // must come before the card-open fallback below (same reason as
   // .queue-cancel above): a click into the in-card free-text answer field
-  // should focus/type into it, not fall through to opening the steer/editor
-  // modal on top of it and stealing focus. See sendDocQuestionAnswer for the
-  // Enter-to-send keydown path on this same element.
-  if (ev.target.closest(".dq-input")) return;
+  // (doc-question or feedback edit) should focus/type into it, not fall
+  // through to opening the steer/editor modal on top of it and stealing
+  // focus. See sendDocQuestionAnswer for the Enter-to-send keydown path on
+  // the doc-question input.
+  if (ev.target.closest(".dq-input") || ev.target.closest(".fb-edit-input")) return;
   const retry = ev.target.closest(".retry");
   if (retry) {
     retry.disabled = true;
@@ -1239,10 +1469,10 @@ document.addEventListener("click", (ev) => {
 // had no keyboard submit path at all (only the .dq-send click above), and
 // it's the one text input on the board that isn't inside a form. Guard IME
 // composition (a CJK candidate's commit Enter also fires key:"Enter") and
-// modifier combos before preventDefault — this is prose, and a posted
-// answer can't be corrected (server refuses a second answer for the same
-// question), so swallowing a composition commit or a Shift/Alt+Enter here
-// would be unrecoverable.
+// modifier combos before preventDefault — this is prose, and even though a
+// posted answer is editable forever (Q13, via reansweringDocQ), swallowing a
+// composition commit or a Shift/Alt+Enter here would still silently eat
+// whatever the user just typed instead of sending it.
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Enter") return;
   if (ev.isComposing || ev.keyCode === 229 || ev.shiftKey || ev.altKey) return;
@@ -1649,7 +1879,6 @@ function specMetaHTML(d) {
     ["base", esc(d.base || "origin/main")],
     ["model", esc(d.model || "default")],
     ["solo", d.solo ? "✓" : "✗"],
-    ["skip doc", d.skip_doc ? "✓" : "✗"],
   ];
   const prereqs = d.prereqs || [];
   if (prereqs.length) {
@@ -1989,7 +2218,6 @@ function fillForm(d) {
   document.getElementById("f-model").value = d.model || "";
   editorReady = !!d.ready;
   document.getElementById("f-solo").checked = !!d.solo;
-  document.getElementById("f-skipdoc").checked = !!d.skip_doc;
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
   editorText.value = d.spec || "";
   refreshCmdHighlight("editor-text");
@@ -2011,7 +2239,6 @@ function readForm() {
     model: document.getElementById("f-model").value.trim(),
     ready: editorReady,
     solo: document.getElementById("f-solo").checked,
-    skip_doc: document.getElementById("f-skipdoc").checked,
     prereqs,
     spec: editorText.value,
     mtime: editorMTime,
@@ -2027,7 +2254,6 @@ function setFormReadOnly(readOnly) {
   document.getElementById("f-base").disabled = readOnly;
   document.getElementById("f-model").disabled = readOnly;
   document.getElementById("f-solo").disabled = readOnly;
-  document.getElementById("f-skipdoc").disabled = readOnly;
   document.getElementById("f-add-prereq").disabled = readOnly;
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));
@@ -2361,6 +2587,40 @@ document.getElementById("panel-raw").addEventListener("click", async () => {
   } else {
     panelBody.className = "panel-body md";
     panelBody.innerHTML = renderMD(rawText);
+  }
+});
+document.getElementById("panel-feedback").addEventListener("click", () => {
+  const form = document.getElementById("feedback-form");
+  form.hidden = !form.hidden;
+  if (!form.hidden) document.getElementById("feedback-text").focus();
+});
+document.getElementById("feedback-cancel").addEventListener("click", () => hideFeedbackForm());
+document.getElementById("feedback-send").addEventListener("click", async () => {
+  const note = document.getElementById("feedback-note");
+  const parts = artifactParts(artifactURL);
+  const text = document.getElementById("feedback-text").value.trim();
+  if (!parts) { note.textContent = "can't identify this artifact"; return; }
+  if (!text) { note.textContent = "feedback is empty"; return; }
+  const sendBtn = document.getElementById("feedback-send");
+  sendBtn.disabled = true;
+  try {
+    const r = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug: parts.slug, home: parts.home, name: parts.name, feedback: text }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || String(r.status));
+    hideFeedbackForm();
+    invalidateBoard(); // feedback rides the board payload — the card's panel must pick this up too
+    refresh();
+    const label = document.getElementById("panel-feedback");
+    label.textContent = "saved ✓";
+    feedbackSavedTimer = setTimeout(() => { label.textContent = "feedback"; }, 2000);
+  } catch (e) {
+    note.textContent = "failed: " + e.message;
+  } finally {
+    sendBtn.disabled = false;
   }
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });

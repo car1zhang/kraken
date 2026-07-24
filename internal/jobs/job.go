@@ -37,12 +37,7 @@ type Job struct {
 	// hand-authored like solo. Consumed exactly once per cell start
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
 	// model can't change out from under it. Empty means claude's default.
-	Model string `json:"model,omitempty"`
-	// SkipDoc skips the /aim → /do phase: zeus implements the spec directly,
-	// keeping the manual-test gate and PR pipeline. Valid on any job (Q14
-	// removed the build/info job-type distinction — the pipeline shape is now
-	// steered by carl and the /aim vs /info skill choice, not a job field).
-	SkipDoc bool     `json:"skip_doc,omitempty"`
+	Model   string   `json:"model,omitempty"`
 	Prereqs []Prereq `json:"prereqs,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
@@ -287,7 +282,11 @@ func ParseJob(name string, data []byte) *Job {
 				j.Model = val
 			}
 		case "skip-doc":
-			j.SkipDoc = j.boolField(k, val)
+			// tolerated legacy key: pluto job files predating the
+			// doc-iff-/aim-or-/info rule (Q14) may still carry a skip-doc:
+			// line. Keep consuming it, like type/auto-approve/success below,
+			// so those files still parse with Err == "" — just discard the
+			// value, never validate or error on it.
 		case "auto-approve":
 			// legacy field: removed from the schema, but existing pluto job
 			// files still carry auto-approve: keys (always a scalar). Keep
@@ -503,7 +502,6 @@ func JobTemplate(slug string) string {
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
 		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
 		"                          # applied once at cell start, default = claude's own default\n" +
-		"# skip-doc: true          # skip the /aim → /do phase — zeus implements the spec directly\n" +
 		"---\n"
 }
 

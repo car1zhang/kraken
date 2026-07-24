@@ -4,10 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
-	"sync"
 
 	"kraken/internal/util"
 )
@@ -36,84 +33,30 @@ func UploadsDir(slug string) string {
 	return filepath.Join(uploadsRoot(), s)
 }
 
-var uploadNamePattern = regexp.MustCompile(`^img-(\d+)\.`)
-
-// uploadMu serializes the scan-then-write in SaveUpload: two concurrent
-// HTTP uploads would otherwise both pick the same NNN (and collide on
-// AtomicWrite's tmp file). Single-process server, so a mutex suffices.
-var uploadMu sync.Mutex
-
-// nextUploadName scans dir for existing img-NNN.* files (any extension) and
-// picks the next sequential name; files that don't match the pattern —
-// stray or hand-placed — are ignored rather than colliding with or skipping
-// the sequence.
-func nextUploadName(dir, ext string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	max := 0
-	for _, e := range entries {
-		m := uploadNamePattern.FindStringSubmatch(e.Name())
-		if m == nil {
-			continue
-		}
-		if n, err := strconv.Atoi(m[1]); err == nil && n > max {
-			max = n
-		}
-	}
-	return fmt.Sprintf("img-%03d.%s", max+1, ext), nil
-}
-
 // SaveUpload writes data as the next sequential image for slug, returning
-// the assigned name and its absolute path — store-backed (bytes in the
-// uploads table, keyed by the job's store id) when a store is wired, else
-// atomically to slug's uploads dir. The path-returning contract is kept
-// even store-backed: a materialized copy is written alongside the DB row,
-// since callers (the "[image: <path>]" line Claude Code auto-ingests, per
+// the assigned name and its absolute path — bytes land in the uploads
+// table, keyed by the job's store id (saveUploadToStore). The path-
+// returning contract still materializes a copy alongside the DB row, since
+// callers (the "[image: <path>]" line Claude Code auto-ingests, per
 // crew.go) need a real file to hand the agent, not a blob.
 func SaveUpload(slug, ext string, data []byte) (name, path string, err error) {
 	ext = strings.TrimPrefix(ext, ".")
 	if ext == "" || strings.ContainsAny(ext, "/\\.") {
 		return "", "", fmt.Errorf("bad upload extension %q", ext)
 	}
-	if st := ActiveStore(); st != nil {
-		return saveUploadToStore(st, slug, ext, data)
-	}
-	dir := UploadsDir(slug)
-	if dir == "" {
-		return "", "", fmt.Errorf("slug %q slugifies to nothing", slug)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
-	}
-	uploadMu.Lock()
-	defer uploadMu.Unlock()
-	name, err = nextUploadName(dir, ext)
-	if err != nil {
-		return "", "", err
-	}
-	path = filepath.Join(dir, name)
-	if err := util.AtomicWrite(path, string(data)); err != nil {
-		return "", "", err
-	}
-	return name, path, nil
+	return saveUploadToStore(ActiveStore(), slug, ext, data)
 }
 
-// RemoveUploads deletes a job's entire uploads dir; a missing dir is not an
-// error — a job that never received an upload has nothing to clean up. An
-// empty-slugifying slug is a no-op rather than a RemoveAll on the root.
-// Store-backed, this also deletes the DB rows first: SaveUpload
-// writes both a blob row AND a materialized file, so cleanup must remove
-// both — the row-only delete left the on-disk copies behind forever.
+// RemoveUploads deletes a job's uploads: the store rows (when an active job
+// still exists under that slug) and the materialized uploads dir — a
+// missing dir is not an error, and an empty-slugifying slug is a no-op
+// rather than a RemoveAll on the shared uploads root.
 func RemoveUploads(slug string) error {
-	if st := ActiveStore(); st != nil {
-		if sr, err := st.GetJobBySlug(slug); err == nil {
-			if err := st.DeleteUploadsForJob(sr.ID); err != nil {
-				return err
-			}
-		} // no active job under that slug: nothing in the DB to remove, but the materialized dir below may still exist
-	}
+	if sr, err := ActiveStore().GetJobBySlug(slug); err == nil {
+		if err := ActiveStore().DeleteUploadsForJob(sr.ID); err != nil {
+			return err
+		}
+	} // no active job under that slug: nothing in the DB to remove, but the materialized dir below may still exist
 	dir := UploadsDir(slug)
 	if dir == "" {
 		return nil

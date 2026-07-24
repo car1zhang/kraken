@@ -301,40 +301,6 @@ func TestPrHookAttachesViaServerWhenAvailable(t *testing.T) {
 	}
 }
 
-// TestPrHookFailsOpenWhenServerUnreachable covers the fail-open contract:
-// PrHook must return normally (never os.Exit(1)) and fall back to the
-// direct file write when kraken serve can't be reached, in a file-mode
-// deployment. KRAKEN_DB_PATH is pointed at a path that doesn't exist so
-// storeModeDeployment() reliably reads false regardless of what's sitting in
-// the real developer machine's ~/.kraken/kraken.db.
-func TestPrHookFailsOpenWhenServerUnreachable(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	t.Setenv("KRAKEN_DB_PATH", filepath.Join(t.TempDir(), "kraken.db"))
-	path := filepath.Join(PlutoDir(), "yelp-dedupe.job.md")
-	if err := os.WriteFile(path, []byte("---\njob: yelp-dedupe\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\nready: true\nprereqs: []\nsolo: false\n---\n\nbody\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-	t.Setenv("KRAKEN_SERVE_ADDR", addr)
-
-	payload := `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"https://github.com/carl/kraken/pull/9\n"}}`
-	withStdin(t, payload, func() { PrHook("yelp-dedupe") })
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reparsed := ParseJob("yelp-dedupe.job.md", data)
-	if len(reparsed.PRs) != 1 || reparsed.PRs[0].URL != "https://github.com/carl/kraken/pull/9" {
-		t.Fatalf("want the direct-fallback write to have attached the PR, got %+v", reparsed.PRs)
-	}
-}
-
 // withStderrCapture redirects os.Stderr to a pipe for the duration of fn and
 // returns everything written to it — PrHook reports every outcome via a
 // single stderr line, so tests can assert on it directly.
@@ -356,22 +322,18 @@ func withStderrCapture(t *testing.T, fn func()) string {
 	return string(out)
 }
 
-// TestPrHookStoreModeSkipsDirectWriteWhenServerUnreachable covers:
-// a store-mode deployment (kraken.db exists on disk) whose serve process is
-// unreachable must NOT fall back to writing the job file directly — that
-// file isn't authoritative once serve owns the DB — and must report the loss
-// loudly instead of silently claiming success.
-func TestPrHookStoreModeSkipsDirectWriteWhenServerUnreachable(t *testing.T) {
+// TestPrHookSkipsDirectWriteWhenServerUnreachable covers the fail-open
+// contract: PrHook must return normally (never os.Exit(1)) when kraken
+// serve can't be reached, reporting the loss loudly on stderr rather than
+// falling back to writing the job file directly — that file isn't
+// authoritative once serve owns the DB (single-writer rule), so a hook
+// process must never write it.
+func TestPrHookSkipsDirectWriteWhenServerUnreachable(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	path := filepath.Join(PlutoDir(), "yelp-dedupe.job.md")
 	if err := os.WriteFile(path, []byte("---\njob: yelp-dedupe\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\nready: true\nprereqs: []\nsolo: false\n---\n\nbody\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dbPath := filepath.Join(t.TempDir(), "kraken.db")
-	if err := os.WriteFile(dbPath, []byte("not a real db, existence is all that matters here"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("KRAKEN_DB_PATH", dbPath)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -395,7 +357,7 @@ func TestPrHookStoreModeSkipsDirectWriteWhenServerUnreachable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if reparsed := ParseJob("yelp-dedupe.job.md", data); len(reparsed.PRs) != 0 {
-		t.Fatalf("job file was written despite a store-mode deployment: %+v", reparsed.PRs)
+		t.Fatalf("job file was written despite the POST failing: %+v", reparsed.PRs)
 	}
 }
 
@@ -468,5 +430,33 @@ func TestLoadJobBySlug(t *testing.T) {
 	// missing slug
 	if j := LoadJobBySlug("no-such-job"); j != nil {
 		t.Fatalf("LoadJobBySlug(missing) = %+v, want nil", j)
+	}
+}
+
+// TestServeBaseURL covers KRAKEN_SERVE_ADDR's three shapes a human might
+// type by hand (bare host:port, and either scheme already included) plus
+// the unset default — a scheme already present must never be doubled into
+// http://http://... (F11).
+func TestServeBaseURL(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"unset falls back to default", "", "http://" + defaultServeAddr},
+		{"bare host:port", "127.0.0.1:7777", "http://127.0.0.1:7777"},
+		{"http scheme already present", "http://127.0.0.1:7777", "http://127.0.0.1:7777"},
+		{"https scheme already present", "https://127.0.0.1:7777", "http://127.0.0.1:7777"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("KRAKEN_SERVE_ADDR", c.env)
+			if c.env == "" {
+				os.Unsetenv("KRAKEN_SERVE_ADDR")
+			}
+			if got := ServeBaseURL(); got != c.want {
+				t.Fatalf("ServeBaseURL() = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
