@@ -388,6 +388,41 @@ flow: an opacity pulse INSIDE the box's `<g>` (subtle — never scale, never mov
 **Unicode glyphs** — labels may use plain-text glyphs: ✓ ✗ ⚠ ∅ ⋯ × → ± ≥ ≤ ⏱. Escape
 `<` and `>` as `&lt;` / `&gt;`. No emoji.
 
+## Kind Tags
+
+No new classes — this is a labeling convention on parts you already have. Every component box
+states its **kind**: the concrete runtime/artifact identity (OS process, goroutine, CLI command,
+HTTP endpoint, Go package/module, function, type/struct, browser JS module, tmux pane + agent
+process, subagent, file/file format, sqlite table, or similar). Your brief supplies the kind for
+every box — you never guess one.
+
+**Small/normal box** — a second `<tspan>` line under the name, same `<text>` as the box label:
+
+```svg
+<g class="node">
+  <rect x="X" y="Y" width="W" height="H" rx="8"/>
+  <text x="CX" y="CY">
+    <tspan x="CX" dy="-0.6em">kraken serve</tspan>
+    <tspan x="CX" dy="1.2em">OS process</tspan>
+  </text>
+</g>
+```
+
+**Large box** (little room to spare, or the name itself already wraps multiple lines) — an
+adjacent `pill` naming the kind, placed just outside the box's top edge or corner, never
+overlapping the name:
+
+```svg
+<g class="pill">
+  <rect x="X" y="Y" width="W" height="26" rx="13"/>
+  <text x="CX" y="CY">OS process</text>
+</g>
+```
+
+**Boundary containers** (`group`) label as `<name> — <boundary type>`, e.g. `"kraken serve — one
+Go process"`, `"browser — carl's Mac, HTTP to serve"` — the boundary type is one of: machine,
+process, network, package, file-ownership.
+
 ## Root Element
 
 ```svg

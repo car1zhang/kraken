@@ -51,9 +51,9 @@ func TestPruneArtifactSyncStateDropsDoneArchivedAndVanished(t *testing.T) {
 	}
 }
 
-// TestDaemonGuardErr covers the single-instance startup guard shared by
-// RunDaemon and kraken serve's GuardServeStart: refuses only when
-// daemon.json names a DIFFERENT, currently-alive pid.
+// TestDaemonGuardErr covers the single-instance startup guard underlying
+// kraken serve's GuardServeStart: refuses only when daemon.json names a
+// DIFFERENT, currently-alive pid.
 func TestDaemonGuardErr(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -116,50 +116,6 @@ func TestDaemonConflictErrMentionsRemedy(t *testing.T) {
 func TestProcessIsKrakenFalseForUnrelatedProcess(t *testing.T) {
 	if ProcessIsKraken(os.Getppid()) {
 		t.Fatal("want false for the go test runner's own pid")
-	}
-}
-
-// TestGuardFileModeStart covers E2: `kraken daemon`/`k web` must refuse to
-// start file-mode against a machine that has already migrated onto the
-// sqlite store (kraken.db exists on disk), unless --force-file-mode. Uses a
-// temp HOME (not KRAKEN_DB_PATH) so this exercises store.DBPath()'s real
-// default resolution, matching how a genuine developer machine would look.
-func TestGuardFileModeStart(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dbPath := filepath.Join(home, ".kraken", "kraken.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// no db file yet: file mode is fine
-	if err := GuardFileModeStart(false); err != nil {
-		t.Fatalf("no kraken.db: want nil, got %v", err)
-	}
-
-	// db file now exists (e.g. `kraken import` ran on this machine, or
-	// kraken serve created it) but this process never wired a store
-	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err := GuardFileModeStart(false)
-	if err == nil {
-		t.Fatal("kraken.db exists, no store wired: want a refusal, got nil")
-	}
-	if !strings.Contains(err.Error(), "kraken serve") {
-		t.Fatalf("error = %q, want it to name kraken serve", err.Error())
-	}
-
-	// the force override bypasses the refusal
-	if err := GuardFileModeStart(true); err != nil {
-		t.Fatalf("forced: want nil, got %v", err)
-	}
-
-	// a process that DID wire a store (ActiveStore() != nil) is exempt too,
-	// db-exists or not
-	useTestStore(t)
-	if err := GuardFileModeStart(false); err != nil {
-		t.Fatalf("store wired: want nil, got %v", err)
 	}
 }
 
@@ -251,13 +207,10 @@ func TestStopServeTicksIdempotent(t *testing.T) {
 }
 
 func TestAutoArchivePass(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	stale := writeArchiveFixture(t, PlutoDir(), "stale.job.md", "job: stale\nrepo: x\nready: true\nstate: done\n")
-	old := time.Now().Add(-25 * time.Hour)
-	if err := os.Chtimes(stale, old, old); err != nil {
-		t.Fatal(err)
-	}
-	writeArchiveFixture(t, PlutoDir(), "fresh.job.md", "job: fresh\nrepo: x\nready: true\nstate: done\n")
+	st := useTestStore(t)
+	old := time.Now().Add(-25 * time.Hour).UnixMilli()
+	mustCreateJob(t, st, store.Job{Slug: "stale", Repo: "x", Ready: true, State: "done", UpdatedAt: old})
+	mustCreateJob(t, st, store.Job{Slug: "fresh", Repo: "x", Ready: true, State: "done"})
 
 	jobs := LoadJobs()
 	archived := autoArchivePass(jobs, map[string]bool{}, time.Now())
@@ -265,11 +218,8 @@ func TestAutoArchivePass(t *testing.T) {
 	if len(archived) != 1 || archived[0] != "stale" {
 		t.Fatalf("archived: got %v, want [stale]", archived)
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), "stale.job.md")); err != nil {
-		t.Fatal("stale job didn't land in archive/")
-	}
-	if _, err := os.Stat(filepath.Join(PlutoDir(), "fresh.job.md")); err != nil {
-		t.Fatal("fresh done job was archived too early")
+	if a := ArchivedJobByName(LoadArchivedJobs(), "stale"); a == nil {
+		t.Fatal("stale job didn't land in the archive")
 	}
 	remaining := LoadJobs()
 	if len(remaining) != 1 || remaining[0].Slug != "fresh" {

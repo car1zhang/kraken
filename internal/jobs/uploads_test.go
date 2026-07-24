@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -30,8 +31,15 @@ func TestUploadsDirHomeRelative(t *testing.T) {
 	}
 }
 
+// TestSaveUploadSequencing covers the jobs-package wrapper's own contract —
+// slug→job-id resolution and materializing a real, byte-identical file
+// alongside the DB row — not the NNN-numbering itself, which is
+// store.SaveUpload's job (see internal/store/uploads_test.go for that
+// coverage).
 func TestSaveUploadSequencing(t *testing.T) {
-	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	st := useTestStore(t)
+	mustCreateJob(t, st, store.Job{Slug: "job-a"})
+
 	// binary payload with a NUL and high bytes — SaveUpload claims byte
 	// fidelity through the string round-trip, so pin it
 	first := []byte{0x89, 'P', 'N', 'G', 0x00, 0xFF, 0xFE}
@@ -46,29 +54,22 @@ func TestSaveUploadSequencing(t *testing.T) {
 		t.Fatalf("round-trip mismatch: %q, %v", got, err)
 	}
 
-	dir := UploadsDir("job-a")
-	if err := os.WriteFile(filepath.Join(dir, "img-002.jpg"), []byte("second"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// a non-matching stray file must not perturb the sequence
-	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignore me"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	name, path, err = SaveUpload("job-a", "gif", []byte("third"))
+	name, path, err = SaveUpload("job-a", "gif", []byte("second"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name != "img-003.gif" {
-		t.Fatalf("third upload name = %q, want img-003.gif", name)
+	if name != "img-002.gif" {
+		t.Fatalf("second upload name = %q, want img-002.gif", name)
 	}
-	if got, err := os.ReadFile(path); err != nil || string(got) != "third" {
+	if got, err := os.ReadFile(path); err != nil || string(got) != "second" {
 		t.Fatalf("round-trip mismatch: %q, %v", got, err)
 	}
 }
 
 func TestSaveUploadExtAndSlugGuards(t *testing.T) {
-	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	st := useTestStore(t)
+	mustCreateJob(t, st, store.Job{Slug: "job-d"})
+
 	// a leading dot is normalized rather than doubling up (img-001..png)
 	if name, _, err := SaveUpload("job-d", ".png", []byte("x")); err != nil || name != "img-001.png" {
 		t.Fatalf("dotted ext: name=%q err=%v, want img-001.png", name, err)
@@ -81,44 +82,16 @@ func TestSaveUploadExtAndSlugGuards(t *testing.T) {
 	if _, _, err := SaveUpload("---", "png", []byte("x")); err == nil {
 		t.Fatal("empty-slugifying slug: expected error")
 	}
-}
-
-func TestSaveUploadPastThreeDigits(t *testing.T) {
-	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
-	dir := UploadsDir("job-e")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// a four-digit name must stay visible to the scan so nothing overwrites it
-	if err := os.WriteFile(filepath.Join(dir, "img-1000.png"), []byte("big"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	name, _, err := SaveUpload("job-e", "png", []byte("x"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if name != "img-1001.png" {
-		t.Fatalf("after img-1000, name = %q, want img-1001.png", name)
-	}
-}
-
-func TestSaveUploadDifferentSlugsIndependent(t *testing.T) {
-	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
-	nameA, _, err := SaveUpload("job-a", "png", []byte("a"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	nameB, _, err := SaveUpload("job-b", "png", []byte("b"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if nameA != "img-001.png" || nameB != "img-001.png" {
-		t.Fatalf("expected independent sequences, got %q and %q", nameA, nameB)
+	// no active job under this slug: the store lookup itself must fail
+	if _, _, err := SaveUpload("no-such-job", "png", []byte("x")); err == nil {
+		t.Fatal("no active job: expected error")
 	}
 }
 
 func TestRemoveUploadsIdempotent(t *testing.T) {
-	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	st := useTestStore(t)
+	mustCreateJob(t, st, store.Job{Slug: "job-c"})
+
 	if _, _, err := SaveUpload("job-c", "png", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +109,8 @@ func TestRemoveUploadsIdempotent(t *testing.T) {
 	if err := RemoveUploads("job-c"); err != nil {
 		t.Fatalf("second remove (already gone): %v", err)
 	}
-	// removing a slug that never had uploads must not error either
+	// removing a slug that never had uploads (and has no active job either)
+	// must not error either
 	if err := RemoveUploads("never-uploaded"); err != nil {
 		t.Fatalf("remove with no dir: %v", err)
 	}

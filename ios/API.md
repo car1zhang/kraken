@@ -5,14 +5,22 @@ consumes. Source of truth is the Go code (`web.go`, `webpeers.go`,
 `daemon.go`, `job.go`, `status.go`); this doc transcribes it, it does not
 define it independently.
 
-**Current contract**: `apiContract = 4` (web.go), mirrored by
-`APIClient.expectedContract` (APIClient.swift). `/api/health` and
+**Current contract**: `apiContract = 5` (web.go / internal/api — the Go
+constant + `contract_test.go` bump lands in the same commit as this doc, per
+CLAUDE.md's API-contract rule), mirrored by `APIClient.expectedContract`
+(APIClient.swift). `/api/health` and
 `/api/board` both serve `contract` (int) + `stale` (bool). v3 bumped when
 the auto-approve feature (and `auto_approve` on the job form GET/POST) was
 removed. v4 bumped when the job-level `type` (`build`|`info`) concept was
 deleted (Q14) — `type` removed from `/api/board`'s job objects and from the
 job form GET/POST shapes; the pipeline distinction now lives in `/aim` vs
-`/info` skill choice plus carl's `/do` steering, never a wire field.
+`/info` skill choice plus carl's `/do` steering, never a wire field. v5
+bumped when `skip_doc` was removed from the job form GET/POST shapes (the
+doc phase now runs purely from zeus' own read of the job spec text, never a
+stored flag) and `doc_questions_err` was removed from `/api/board`'s job
+objects (questions moved from a strictly-parsed `questions.yaml` file to
+relational rows in `kraken.db` — there is nothing left that can fail to
+parse).
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
 retyped, renamed, or removed. Additive keys never bump it: old clients
@@ -81,7 +89,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `live` | bool | always | |
 | `prereqs` | array (`webPrereq`) | omitempty | |
 | `artifacts` | array (`webArtifact`) | omitempty | |
-| `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 chars |
+| `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes) |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
 | `zeus_status` | string | omitempty | zeus' own refined status (running/polling/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
 | `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
@@ -92,10 +100,10 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `display_slug` | string | omitempty | original slug, archived jobs only |
 | `cell_gone` | bool | omitempty | started + non-done + tmux session vanished; worktree (incl. uncommitted WIP) still on disk — reactivate preserves it, done/kill discard it |
 | `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
-| `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 chars. Question-answer digit keypresses never appear (they're tool_results, not user text); started + non-done jobs (live or cell_gone) only |
+| `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 runes (not bytes). Question-answer digit keypresses never appear (they're tool_results, not user text); started + non-done jobs (live or cell_gone) only |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
-| `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not) from `questions.yaml`; started + non-done jobs only (live or `cell_gone` while the cell dir still exists; store/pluto-mirrored, read-only, once the cell dir is actually torn down); never set for archived jobs. Additive, no contract bump |
-| `doc_questions_err` | string | omitempty | set instead of `doc_questions` (never both) when a questions source exists but fails strict parse — render "questions file malformed". Additive, no contract bump |
+| `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not), served straight from `questions` rows in `kraken.db` — no file, no parse step, so there is no more cell-gone-read-only or malformed-file case; never set for archived jobs. Additive, no contract bump |
+| `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
 
@@ -122,8 +130,8 @@ rides on the wire), `options` (array of `webQuestionOption`, always).
 
 `webWakeup`: `reason` (string, always), `fires_at` (number, always — unix millis). Distinct from `Wakeup` on the peer wire shape only in that it drops `delay_seconds` — the client only needs `fires_at` for its countdown.
 
-`webDocQuestion` (one `questions.yaml` record, `jobs.DocQuestion`'s wire
-twin — same field set, same json tags):
+`webDocQuestion` (one `questions` row, `store.DocQuestion`'s wire twin — same
+field set, same json tags as the old `questions.yaml` record it replaces):
 
 | key | type | optionality | notes |
 |---|---|---|---|
@@ -134,6 +142,17 @@ twin — same field set, same json tags):
 | `recommendation` | string | omitempty | zeus' suggested answer |
 | `answer` | string | omitempty | carl's answer once posted; absent means still open |
 | `answered_at` | string | omitempty | RFC3339 timestamp, set alongside `answer` |
+
+`webFeedback` (one `feedback` row, `store.Feedback`'s wire twin):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | row id — the target for the edit/delete/addressed ops below |
+| `artifact` | string | always | artifact path/name the feedback is attached to |
+| `note` | string | always | latest note text — note is latest-only, an edit overwrites rather than appending |
+| `at` | number | always | unix millis the feedback was submitted (`ts` column) |
+| `addressed` | string | omitempty | zeus' own free-text account of how it addressed the note; absent means still open (this is prose, not a boolean) |
+| `addressed_at` | string | omitempty | RFC3339 timestamp, server-stamped alongside `addressed` |
 
 ### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
@@ -161,25 +180,130 @@ Response: same as above.
 
 Request: `webReq` — `slug` (string, required), `id` (string, required: the
 question id, e.g. `"Q1"`), `text` (string, required non-empty: the answer,
-capped at 4000 chars after trim — same cap convention as `last_sent`).
+capped at 4000 **runes** (not bytes) after trim — same cap convention as
+`last_sent`).
 Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure
 (409 for validation conflicts, same convention as the other board actions).
 Additive request field (`id`); no contract bump.
 
-Answers a single open doc question by patching `answer`/`answered_at` into
-the cell's `questions.yaml` (`jobs.AnswerDocQuestion`) — a surgical edit,
-never a re-serialize, so every line zeus wrote survives untouched. This is a
-plain file write: no tmux/pane interaction, and critically **no liveness
-requirement** beyond the cell dir existing — zeus may be dead, mid-recovery,
-or the tmux session simply gone, and the answer still lands, since the file
-is the record. Refused (409) when: `id` is empty, the job hasn't started or
-is already `done`, the job's cell dir doesn't exist (a fully torn-down job's
-questions are permanently read-only — "job's cell is gone — questions are
-read-only"), the answer text is empty, the question id doesn't exist, or
-that question was already answered (single-use per question — no
-overwriting a prior answer). Gated under mirror mode
-(`mirrorGatedActions`): it writes into a real cell dir, same as the other
-tmux-driving/filesystem-mutating board actions.
+Answers (or **re-answers**) one open doc question with a plain row UPDATE of
+`answer`/`answered_at` on the matching `questions` row in `kraken.db` —
+replaces the old `jobs.AnswerDocQuestion` surgical `questions.yaml` file
+edit. No tmux/pane interaction, and critically **no liveness requirement**:
+the row is the record, so this lands whether zeus is live, dead, mid-recovery,
+or the job is done — there is no more "job's cell is gone — questions are
+read-only" case, since rows have no cell dir to lose. Editability is free
+(Q13): a re-answer simply overwrites the prior `answer`/`answered_at`, so the
+old single-use-per-question restriction is gone too. Refused (409) when:
+`id` or `text` is empty, or the question id doesn't exist for that job.
+
+### `POST /api/feedback`
+
+One endpoint, three carl-facing forms distinguished by which fields are
+present (plus a fourth, zeus-facing form below) — `feedbackReq`:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `slug` | string | required | |
+| `home` | string | required for create | artifact home, same set as `/api/artifact/<slug>/<home>/<name>` (`cell`\|`pluto`\|`archive`) |
+| `name` | string | required for create | artifact name/path the feedback is attached to |
+| `id` | number | required for edit/delete | the feedback row id |
+| `feedback` | string | required for create/edit | the note text, capped at 8000 **runes** (not bytes) after trim — refused (400) over that, since the note rides every `/api/board` poll for as long as the card is visible |
+| `delete` | bool | set `true` for the delete form | |
+
+- **Create** — `{slug, home, name, feedback}`: resolves the artifact the
+  same way the artifact route does, INSERTs a row (snapshot of the artifact
+  as currently served, note, carl's session, submit timestamp). Works for
+  done/archived jobs too (Q2) — feedback rows are the only store, so there
+  is no live/dead split.
+- **Edit** — `{slug, id, feedback}`: UPDATEs the note and re-freezes the
+  snapshot from the artifact as currently served (Q4: snapshot always
+  re-freezes on edit). Refused (404) unless `slug` resolves to the SAME job
+  `id`'s row belongs to — an id alone is never enough to mutate another
+  job's feedback.
+- **Delete** — `{slug, id, delete: true}`: DELETEs the row (Q9). Same
+  slug-ownership check as edit.
+
+Response: `{"ok": true}` on success — no row echoed back; the board's next
+`/api/board` poll picks up the updated `feedback` array. Non-2xx
+`{"error": string}` on failure (404 for an unknown or not-yours row, 413 for
+an oversize request body).
+
+Not modeled: the zeus-facing fourth form, `{slug, id, addressed}` (UPDATEs
+only the zeus-owned `addressed`/`addressed_at` columns), is reached by zeus
+through the `kraken feedback addressed` cell verb, never by the iOS app —
+same convention as `/api/pr-attach`/`/api/logevent` above, so it is not in
+Models.swift/APIClient.swift. A non-empty `addressed` is capped at the same
+8000 **runes** after trim as `feedback` (refused 400 over that — `addressed`
+also rides every `/api/board` poll, and its writer is zeus, not a human). An
+explicitly empty `addressed` (`{slug, id, addressed: ""}`, as opposed to the
+key being absent) clears a prior addressed note back to open; the cell verb
+reaches that form as `kraken feedback addressed --clear <slug> <id>`.
+Sending `addressed` and `feedback` together is refused (400): they are two
+different forms, and the addressed branch wins the dispatch, so honoring the
+request would silently drop the note edit.
+
+### `GET /api/feedback?slug=`
+
+zeus-side read: open + addressed feedback entries for a job, re-read on
+every resume via the `kraken feedback get` cell verb. Not modeled in
+Models.swift/APIClient.swift — the iOS app reads feedback from the per-job
+`feedback` array on `/api/board` instead, never this endpoint directly.
+
+Response: `{"feedback": [webFeedback]}` (same `webFeedback` shape as the
+board's per-job array above). Always an array, never `null` — a job with no
+feedback yet serves `[]`.
+
+### `GET /api/questions?slug=`
+
+zeus-side read: every doc-question row for a job, re-read on every resume via
+the `kraken questions get` cell verb. Not modeled in
+Models.swift/APIClient.swift — the iOS app reads questions from the per-job
+`doc_questions` array on `/api/board` instead, never this endpoint directly.
+
+Response: `{"questions": [questionWire]}` — always an array, never `null`.
+`questionWire` is the same shape as the board's `doc_questions` entries:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | string | always | `Q<digits>` |
+| `text` | string | always | |
+| `context` | string | omitempty | |
+| `importance` | string | always | `P0`\|`P1`\|`P2` |
+| `recommendation` | string | omitempty | |
+| `answer` | string | omitempty | kraken-owned — written only by `/api/doc-question` |
+| `answered_at` | string | omitempty | RFC3339, kraken-owned |
+
+### `POST /api/questions`
+
+zeus-side write, reached through the `kraken questions set|add|update|remove`
+cell verbs; never called by the iOS app. Three forms, distinguished by which
+fields are present:
+
+- **Bulk set** — `{slug, questions: [questionWire]}`: upserts each entry by
+  id, deletes rows whose id is absent from the list, and PRESERVES the
+  kraken-owned `answer`/`answered_at` on every surviving row. Position is
+  assigned from each entry's position in the POSTED ARRAY (1-based), never
+  from a `position` field in the request body — array order IS the order,
+  matching `webDocQuestion`'s own wire contract (position never rides the
+  wire on read, so there's nothing for a caller to echo back on write
+  either). An empty or absent `questions` array is REFUSED (400) rather than
+  treated as "delete everything" — clearing the set must go through explicit
+  `remove` ops, so a malformed bulk write can never silently wipe answered
+  questions.
+- **Per-question add/update** — `{slug, op: "add"|"update", question:
+  questionWire}`: `add` with no (or zero) position appends after the current
+  last question, and is refused (409) if the id already exists — use
+  `update` to edit an existing question instead; `update` never reassigns
+  position (a text-only update leaves the question exactly where it was).
+- **Remove** — `{slug, op: "remove", qid}`.
+
+Validation is loud: a bad question id (not `Q<digits>`), a bad importance, or
+a duplicate id within one bulk set is a 400 whose `error` names the problem —
+the cell verbs surface it on stderr with a non-zero exit. An oversize request
+body (either endpoint) is a 413, not a 400.
+
+Response: `{"ok": true}` on success, `{"error": string}` otherwise.
 
 ### `POST /api/steer`
 
@@ -294,6 +418,10 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `GET /api/job/form?slug=` → map literal (web.go `webJobForm`)
 
+`skip_doc` is gone (v5, breaking): whether the doc phase runs is now purely
+zeus' own read of the job spec text (does it invoke `/aim`/`/info`, or ask
+for a doc/spec/explanation in words) — never a stored flag on the job.
+
 | key | type | optionality | notes |
 |---|---|---|---|
 | `slug` | string | always | |
@@ -302,7 +430,6 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | `ready` | bool | always | |
 | `solo` | bool | always | |
 | `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default (`claude-opus-5`); applied once at cell start |
-| `skip_doc` | bool | always | skip the /aim → /do phase, implement the spec directly |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -315,7 +442,7 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default, `claude-opus-5`), `skip_doc` (bool, optional to send), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default, `claude-opus-5`), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) — see the form-GET note above.
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.

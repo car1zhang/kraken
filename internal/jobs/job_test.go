@@ -138,28 +138,24 @@ func TestParseJobModel(t *testing.T) {
 	}
 }
 
-func TestParseJobSkipDoc(t *testing.T) {
-	j := ParseJob("x.job.md", []byte("---\njob: x\nrepo: monolith\nskip-doc: true\n---\n"))
-	if j.Err != "" || !j.SkipDoc {
-		t.Fatalf("skip-doc: err=%q skipdoc=%v", j.Err, j.SkipDoc)
-	}
-	if j := ParseJob("x.job.md", []byte("---\njob: x\nskip-doc: sure\n---\n")); j.Err == "" {
-		t.Error("bad skip-doc bool: expected Err")
-	}
-	// Q14: skip-doc is now valid on any job — there is no more job-level
-	// type to cross-check it against, so it never errors purely for being
-	// set, key order or not.
+// TestParseJobToleratesLegacySkipDoc covers carl's clean-cutover ruling:
+// skip-doc is no longer a job field (the doc phase is zeus' own call from
+// the spec text now), but legacy pluto job files predating that change may
+// still carry a skip-doc: line — ParseJob must accept and silently discard
+// it, at any value and any key position, never erroring, same tolerance as
+// the type/auto-approve/success legacy keys below.
+func TestParseJobToleratesLegacySkipDoc(t *testing.T) {
 	for _, src := range []string{
 		"---\njob: x\nrepo: monolith\nskip-doc: true\n---\n",
+		"---\njob: x\nrepo: monolith\nskip-doc: false\n---\n",
 		"---\njob: x\nskip-doc: true\nrepo: monolith\n---\n",
+		// even a hand-mangled value must not error — it's discarded, not
+		// validated, unlike a real boolField key
+		"---\njob: x\nrepo: monolith\nskip-doc: sure\n---\n",
 	} {
 		if j := ParseJob("x.job.md", []byte(src)); j.Err != "" {
-			t.Errorf("skip-doc: err=%q", j.Err)
+			t.Errorf("skip-doc %q: unexpected err=%q", src, j.Err)
 		}
-	}
-	// false is fine too — the checkbox merely untoggled
-	if j := ParseJob("x.job.md", []byte("---\njob: x\nrepo: monolith\nskip-doc: false\n---\n")); j.Err != "" {
-		t.Errorf("skip-doc false: err=%q", j.Err)
 	}
 }
 

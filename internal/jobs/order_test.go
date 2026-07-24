@@ -1,18 +1,16 @@
 package jobs
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
-
-	"kraken/internal/util"
 )
 
 // order_test.go — the kraken-owned board order store. ApplyColumnOrder is
-// pure (no filesystem); LoadBoardOrder/SaveColumnOrder point at a temp HOME
-// so they never touch the real ~/.kraken/order.json.
+// pure (no store access); LoadBoardOrder/SaveColumnOrder are thin wrappers
+// over store.GetBoardOrder/SetBoardColumn (which own dedup/empty-drop/
+// cross-column-removal — see internal/store's own board-order tests for
+// that coverage), so the tests here just confirm the wrapper wiring round-
+// trips through a real store.
 
 func TestApplyColumnOrder(t *testing.T) {
 	cases := []struct {
@@ -69,51 +67,19 @@ func TestApplyColumnOrder(t *testing.T) {
 	}
 }
 
-func TestLoadBoardOrderMissingFile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+func TestLoadBoardOrderEmptyStore(t *testing.T) {
+	useTestStore(t)
 	got := LoadBoardOrder()
 	if len(got) != 0 {
-		t.Fatalf("missing file: got %v, want empty map", got)
+		t.Fatalf("no columns saved yet: got %v, want empty map", got)
 	}
 	if got == nil {
-		t.Fatal("missing file: got nil map, want non-nil empty map")
-	}
-}
-
-func TestLoadBoardOrderCorruptJSON(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".kraken")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "order.json"), []byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := LoadBoardOrder()
-	if len(got) != 0 {
-		t.Fatalf("corrupt json: got %v, want empty map", got)
-	}
-}
-
-func TestLoadBoardOrderWrongShape(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".kraken")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "order.json"), []byte(`["not", "the", "right", "shape"]`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := LoadBoardOrder()
-	if len(got) != 0 {
-		t.Fatalf("wrong shape: got %v, want empty map", got)
+		t.Fatal("no columns saved yet: got nil map, want non-nil empty map")
 	}
 }
 
 func TestSaveColumnOrderRoundTrip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	useTestStore(t)
 
 	if err := SaveColumnOrder("queued", []string{"web-sse", "asr-eval"}); err != nil {
 		t.Fatal(err)
@@ -130,18 +96,10 @@ func TestSaveColumnOrderRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip: got %v, want %v", got, want)
 	}
-
-	data, err := os.ReadFile(filepath.Join(util.Home(), ".kraken", "order.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !json.Valid(data) {
-		t.Fatalf("file written is not valid JSON: %s", data)
-	}
 }
 
 func TestSaveColumnOrderPreservesOtherColumns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	useTestStore(t)
 
 	if err := SaveColumnOrder("queued", []string{"a", "b"}); err != nil {
 		t.Fatal(err)
@@ -164,7 +122,7 @@ func TestSaveColumnOrderPreservesOtherColumns(t *testing.T) {
 }
 
 func TestSaveColumnOrderDedupesAndDropsEmpties(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	useTestStore(t)
 
 	if err := SaveColumnOrder("queued", []string{"a", "", "b", "a", "", "c", "b"}); err != nil {
 		t.Fatal(err)
@@ -177,13 +135,10 @@ func TestSaveColumnOrderDedupesAndDropsEmpties(t *testing.T) {
 	}
 }
 
-// TestSaveColumnOrderRemovesFromOtherColumns covers L9: the file path must
-// mirror store.SetBoardColumn's one-column-per-slug invariant — a slug
-// moved into this column must vanish from every OTHER column's stored
-// order.json entry, not just get added here (previously a slug could end
-// up duplicated across two columns in file mode, unlike the store path).
+// TestSaveColumnOrderRemovesFromOtherColumns covers L9: a slug moved into
+// this column must vanish from every OTHER column, not just get added here.
 func TestSaveColumnOrderRemovesFromOtherColumns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	useTestStore(t)
 
 	if err := SaveColumnOrder("working", []string{"a", "b"}); err != nil {
 		t.Fatal(err)

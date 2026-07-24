@@ -23,7 +23,6 @@ type Job struct {
 	Ready        bool
 	Solo         bool
 	Model        string
-	SkipDoc      bool
 	Body         string
 	State        string
 	Outcome      string
@@ -53,7 +52,7 @@ func (j *Job) Archived() bool { return j.ArchivedAt != 0 }
 // blank fields, never errors". archived_at/archived_name are genuinely
 // nullable and scanned via sql.Null* below, so they're left bare.
 var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), ready, solo,
-	COALESCE(model,''), skip_doc, COALESCE(body,''), state, COALESCE(outcome,''),
+	COALESCE(model,''), COALESCE(body,''), state, COALESCE(outcome,''),
 	COALESCE(session,''), COALESCE(teardown,''), run, rev, COALESCE(created_at,0),
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,'')`
 
@@ -63,7 +62,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var archivedName sql.NullString
 	err := row.Scan(
 		&j.ID, &j.Slug, &j.Repo, &j.Base, &j.Ready, &j.Solo, &j.Model,
-		&j.SkipDoc, &j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
+		&j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 	)
 	if err != nil {
@@ -94,10 +93,10 @@ func (s *Store) CreateJob(j *Job) (int64, error) {
 		j.Rev = 1
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO jobs (slug, repo, base, ready, solo, model, skip_doc,
+		`INSERT INTO jobs (slug, repo, base, ready, solo, model,
 			body, state, outcome, session, teardown, run, rev, created_at, updated_at, err)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model,
 		j.Body, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.Rev,
 		j.CreatedAt, j.UpdatedAt, j.Err,
 	)
@@ -246,7 +245,7 @@ func loadJobsWithChildrenTx(tx *sql.Tx, query string) ([]*Job, map[int64][]Prere
 // into the generated statement.
 var jobFieldColumns = map[string]bool{
 	"slug": true, "repo": true, "base": true, "ready": true,
-	"solo": true, "model": true, "skip_doc": true, "body": true, "state": true,
+	"solo": true, "model": true, "body": true, "state": true,
 	"outcome": true, "session": true, "teardown": true, "run": true, "err": true,
 }
 
@@ -367,11 +366,11 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 			run = 1
 		}
 		res, err := s.db.Exec(
-			`INSERT INTO jobs (slug, repo, base, ready, solo, model, skip_doc,
+			`INSERT INTO jobs (slug, repo, base, ready, solo, model,
 				body, state, outcome, session, teardown, run, rev, created_at, updated_at,
 				archived_at, archived_name)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			rev, created, archivedAt, archivedAt, j.ArchivedName,
 		)
@@ -396,9 +395,9 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 		}
 		if _, err := s.db.Exec(
 			`UPDATE jobs SET slug = ?, repo = ?, base = ?, ready = ?, solo = ?,
-				model = ?, skip_doc = ?, body = ?, state = ?, outcome = ?, session = ?,
+				model = ?, body = ?, state = ?, outcome = ?, session = ?,
 				teardown = ?, run = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
-			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
+			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			archivedAt, archivedAt, id,
 		); err != nil {
@@ -443,14 +442,14 @@ func (s *Store) ArchiveJob(id int64) (string, error) {
 	}
 	defer tx.Rollback()
 
-	var slug string
-	if err := tx.QueryRow(`SELECT slug FROM jobs WHERE id = ? AND archived_at IS NULL`, id).Scan(&slug); err != nil {
+	var rawSlug string
+	if err := tx.QueryRow(`SELECT slug FROM jobs WHERE id = ? AND archived_at IS NULL`, id).Scan(&rawSlug); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("archive job %d: %w", id, ErrNotFound)
 		}
 		return "", fmt.Errorf("archive job %d: %w", id, err)
 	}
-	slug = util.Slugify(slug)
+	slug := util.Slugify(rawSlug)
 
 	name := slug
 	for n := 2; ; n++ {
@@ -471,6 +470,20 @@ func (s *Store) ArchiveJob(id int64) (string, error) {
 		now, name, now, id,
 	); err != nil {
 		return "", fmt.Errorf("archive job %d: %w", id, err)
+	}
+	// B2: feedback rows display-key on job_slug, so archiving must re-key
+	// every row from the job's active slug to the numbered archive name in
+	// the SAME transaction as the move, or a card's feedback either vanishes
+	// (a new job later reuses the freed slug) or cross-wires onto that new
+	// job. The WHERE clause matches on job_id (schema v5), not job_slug: a
+	// job_slug string match would move BOTH generations' rows the moment a
+	// freed slug is reused, since the FIRST archival of any slug keeps the
+	// bare slug as its archived_name (no numbering needed yet) — so a
+	// same-named active job's live rows and this job's already-archived
+	// rows share an identical job_slug string until job_id disambiguates
+	// them. id is jobs' own primary key, immune to that collision.
+	if _, err := tx.Exec(`UPDATE feedback SET job_slug = ? WHERE job_id = ?`, name, id); err != nil {
+		return "", fmt.Errorf("archive job %d: rekey feedback: %w", id, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("archive job %d: %w", id, err)
@@ -512,13 +525,23 @@ func (s *Store) UnarchiveJob(id int64) error {
 	); err != nil {
 		return fmt.Errorf("unarchive job %d: %w", id, err)
 	}
+	// B2's reverse direction: re-key feedback rows from the archive name
+	// back to the restored active slug, matched by job_id for the same
+	// collision-immunity reason as ArchiveJob's own rekey above.
+	if _, err := tx.Exec(`UPDATE feedback SET job_slug = ? WHERE job_id = ?`, slug, id); err != nil {
+		return fmt.Errorf("unarchive job %d: rekey feedback: %w", id, err)
+	}
 	return tx.Commit()
 }
 
 // DeleteJob permanently removes a job row. Prereqs, PRs, uploads, and
-// artifacts cascade via their FK ON DELETE CASCADE; events/feedback/drafts
-// key on job_slug rather than job_id and are untouched, same as the file
-// store today (an archived job's fossil events aren't deleted with it).
+// artifacts cascade via their FK ON DELETE CASCADE; events/drafts key on
+// job_slug only and are wholly untouched, same as the file store today (an
+// archived job's fossil events aren't deleted with it). feedback carries
+// job_id too (schema v5, ON DELETE SET NULL — used only to make archive/
+// unarchive's re-key unambiguous, see ArchiveJob/UnarchiveJob), so a
+// feedback row survives its job's hard-delete exactly like an event does;
+// only its now-meaningless job_id column nulls out, job_slug/note untouched.
 func (s *Store) DeleteJob(id int64) error {
 	res, err := s.db.Exec(`DELETE FROM jobs WHERE id = ?`, id)
 	if err != nil {

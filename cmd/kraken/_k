@@ -13,9 +13,9 @@ _k() {
         'n:new shell window, optionally running a command'
         'c:new named claude window with a prompt'
         'account:rotation status, or switch/pin the main Claude login (auto|<slug>)'
-        'daemon:run the scheduler loop in the foreground'
-        'web:web UI + sessions API (jobs kanban board, artifacts, peers API)'
-        'serve:merged sqlite-backed process — replaces daemon + web for real deployment'
+        'questions:cell-side verb — read/write a job'"'"'s open doc questions via kraken serve'
+        'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
+        'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
         'help:show help'
     )
@@ -47,6 +47,42 @@ _k() {
                 # — (:t) takes just the basename of each match.
                 targets+=(${CLAUDE_POOL_DIR:-$HOME/.claude-pool}/*(N/:t))
                 _describe -t targets 'target' targets
+            fi
+            ;;
+        questions)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'get:print open doc questions as JSON'
+                    'set:bulk-replace from a JSON array on stdin'
+                    'add:add one question from a JSON object on stdin'
+                    'update:update one question from a JSON object on stdin'
+                    'remove:remove one question by qid'
+                )
+                _describe -t ops 'op' ops
+            fi
+            # <slug> completion (word 4) is intentionally not offered: job
+            # identity lives only in kraken.db now (Q14/store-only jobs), and
+            # there is no cheap store-backed completion source the way
+            # 'k _complete' (tmux/ps discovery) or the pool dir listing
+            # (account, above) are.
+            ;;
+        feedback)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'get:print open+addressed feedback as JSON'
+                    'addressed:mark one feedback entry addressed'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == addressed ]]; then
+                # --clear is the only flag either verb takes: it posts the
+                # API's explicitly-empty addressed form, reopening the entry.
+                local -a fbflags
+                fbflags=(
+                    '--clear:clear the addressed note and reopen the entry'
+                )
+                _describe -t flags 'flag' fbflags
             fi
             ;;
     esac

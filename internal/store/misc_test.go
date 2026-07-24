@@ -81,20 +81,27 @@ func TestEventsJobSlugOptional(t *testing.T) {
 
 func TestFeedbackAddAndList(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.AddFeedback(Feedback{JobSlug: "doc-job", Artifact: "explain.html", Snapshot: []byte("<html>"), SnapshotExt: "html", Note: "confusing diagram", TS: 1}); err != nil {
+	docJobID, err := s.CreateJob(&Job{Slug: "doc-job"})
+	if err != nil {
+		t.Fatalf("CreateJob doc-job: %v", err)
+	}
+	if _, err := s.CreateJob(&Job{Slug: "other-job"}); err != nil {
+		t.Fatalf("CreateJob other-job: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: docJobID, JobSlug: "doc-job", Artifact: "explain.html", Snapshot: []byte("<html>"), SnapshotExt: "html", Note: "confusing diagram", TS: 1}); err != nil {
 		t.Fatalf("AddFeedback: %v", err)
 	}
 	if _, err := s.AddFeedback(Feedback{JobSlug: "other-job", Artifact: "spec.html", Note: "n/a", TS: 2}); err != nil {
 		t.Fatalf("AddFeedback other: %v", err)
 	}
-	list, err := s.ListFeedback("doc-job")
+	list, err := s.ListFeedback(docJobID)
 	if err != nil {
 		t.Fatalf("ListFeedback: %v", err)
 	}
 	if len(list) != 1 || list[0].Note != "confusing diagram" {
 		t.Fatalf("list = %+v", list)
 	}
-	all, err := s.ListFeedback("")
+	all, err := s.ListFeedback(0)
 	if err != nil {
 		t.Fatalf("ListFeedback all: %v", err)
 	}

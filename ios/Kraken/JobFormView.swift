@@ -35,7 +35,6 @@ struct JobFormView: View {
     @State private var ready = false
     @State private var solo = false
     @State private var model = ""
-    @State private var skipDoc = false
     @State private var prereqRows: [PrereqRow] = []
     @State private var spec = ""
     @State private var mtime: Int64 = 0
@@ -197,9 +196,6 @@ struct JobFormView: View {
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
                 Toggle("Solo (no subagent crew)", isOn: $solo)
-                    .font(.voice(13))
-                    .foregroundStyle(KTheme.text)
-                Toggle("Skip doc (skip /aim → /do: implement directly)", isOn: $skipDoc)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
             }
@@ -369,7 +365,7 @@ struct JobFormView: View {
     // once, the same idiom SpecSection uses for its `.task(id:)` key.
     private var autosaveSnapshotKey: String {
         let prereqsPart = prereqRows.map { "\($0.job)=\($0.gated)" }.joined(separator: ",")
-        return "\(repo)|\(base)|\(model)|\(solo)|\(skipDoc)|\(prereqsPart)|\(spec)"
+        return "\(repo)|\(base)|\(model)|\(solo)|\(prereqsPart)|\(spec)"
     }
 
     private func load() async {
@@ -382,7 +378,6 @@ struct JobFormView: View {
             ready = f.ready
             solo = f.solo
             model = f.model ?? ""
-            skipDoc = f.skipDoc ?? false
             prereqRows = f.prereqs.map { PrereqRow(job: $0.job, gated: $0.gated) }
             spec = f.spec
             mtime = f.mtime
@@ -463,7 +458,7 @@ struct JobFormView: View {
         let req = JobFormSaveRequest(
             slug: slug, repo: repo, base: base,
             ready: ready, solo: solo,
-            model: model.trimmingCharacters(in: .whitespaces), skipDoc: skipDoc,
+            model: model.trimmingCharacters(in: .whitespaces),
             prereqs: prereqRows.map { Prereq(job: $0.job, gated: $0.gated) },
             spec: spec, mtime: 0
         )

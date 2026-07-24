@@ -101,16 +101,14 @@ struct WebJob: Decodable, Identifiable {
     // Open/merged/closed PRs associated with this job, if any — additive key,
     // absent on older servers just like every other omitempty field here.
     let prs: [JobPR]?
-    // zeus' open doc questions (answered or not) from questions.yaml, for
-    // every started, non-done job (live or with a gone tmux session, still
-    // readable until the cell dir itself is torn down). Never both this and
-    // docQuestionsErr set — mutually exclusive per board.go's jobDocQuestions.
+    // zeus' open doc questions (answered or not), served straight from
+    // `questions` rows in kraken.db — no file, no parse step, so there is
+    // no more malformed-questions-file case (docQuestionsErr is gone, v5).
     // Additive key, absent on older servers.
     let docQuestions: [WebDocQuestion]?
-    // Set instead of docQuestions when a questions.yaml source exists but
-    // fails strict parse — render "questions file malformed" rather than
-    // showing stale/partial data. Additive key.
-    let docQuestionsErr: String?
+    // Per-job feedback entries (open + addressed), served straight from
+    // `feedback` rows in kraken.db. Additive key, absent on older servers.
+    let feedback: [WebFeedback]?
 
     var id: String { slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
@@ -128,7 +126,7 @@ struct WebJob: Decodable, Identifiable {
         case lastSent = "last_sent"
         case prs
         case docQuestions = "doc_questions"
-        case docQuestionsErr = "doc_questions_err"
+        case feedback
     }
 }
 
@@ -139,8 +137,9 @@ struct JobPR: Decodable {
     let state: String
 }
 
-// WebDocQuestion mirrors one questions.yaml record (board.go's webDocQuestion
-// / jobs.DocQuestion) — same field set, same json tags, straight field copy.
+// WebDocQuestion mirrors one `questions` row (board.go's webDocQuestion /
+// store.DocQuestion) — same field set, same json tags as the old
+// questions.yaml record it replaces, straight field copy.
 struct WebDocQuestion: Decodable, Identifiable {
     let id: String
     let text: String
@@ -157,6 +156,27 @@ struct WebDocQuestion: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, text, context, importance, recommendation, answer
         case answeredAt = "answered_at"
+    }
+}
+
+// WebFeedback mirrors one `feedback` row (board.go's webFeedback /
+// store.Feedback) — a note carl left on an artifact, plus zeus' addressed
+// state. `addressed` is zeus' own free-text account of how it addressed the
+// note (prose, not a boolean) — an empty/absent value means still open,
+// same absence-is-the-signal convention as WebDocQuestion.answer above.
+struct WebFeedback: Decodable, Identifiable {
+    let id: Int
+    let artifact: String
+    let note: String
+    let at: Int64
+    let addressed: String?
+    let addressedAt: String?
+
+    var isAddressed: Bool { !(addressed ?? "").isEmpty }
+
+    enum CodingKeys: String, CodingKey {
+        case id, artifact, note, at, addressed
+        case addressedAt = "addressed_at"
     }
 }
 
@@ -259,10 +279,11 @@ struct JobForm: Decodable {
     let base: String
     let ready: Bool
     let solo: Bool
-    // model/skipDoc are Optional for wire tolerance: an older server's
-    // payload simply lacks the keys, which must decode as the defaults.
+    // model is Optional for wire tolerance: an older server's payload
+    // simply lacks the key, which must decode as the default.
+    // skip_doc is gone (v5, breaking): the doc phase now runs purely from
+    // zeus' own read of the job spec text, never a stored flag.
     let model: String?
-    let skipDoc: Bool?
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -273,7 +294,7 @@ struct JobForm: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, base, ready, solo
-        case model, skipDoc = "skip_doc"
+        case model
         case prereqs, spec, mtime, editable, err, slugs, repos
     }
 }
@@ -301,6 +322,7 @@ struct Prereq: Codable {
 }
 
 // JobFormSaveRequest mirrors jobFormFields for POST /api/job/saveform.
+// skip_doc is gone (v5, breaking) — see JobForm above.
 struct JobFormSaveRequest: Encodable {
     let slug: String
     let repo: String
@@ -308,14 +330,13 @@ struct JobFormSaveRequest: Encodable {
     let ready: Bool
     let solo: Bool
     let model: String
-    let skipDoc: Bool
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, base, ready, solo
-        case model, skipDoc = "skip_doc"
+        case model
         case prereqs, spec, mtime
     }
 }
@@ -336,7 +357,7 @@ struct QuestionAnswerRequest: Encodable {
 }
 
 // DocQuestionAnswerRequest mirrors POST /api/doc-question: answers one
-// questions.yaml entry by id with a free-text answer — distinct from
+// doc-question row by id with a free-text answer — distinct from
 // QuestionAnswerRequest (the AskUserQuestion single-digit answer flow) since
 // doc questions are keyed by id and carry prose, not a 1-based option index.
 struct DocQuestionAnswerRequest: Encodable {
@@ -348,6 +369,32 @@ struct DocQuestionAnswerRequest: Encodable {
 struct SteerRequest: Encodable {
     let slug: String
     let text: String
+}
+
+// FeedbackCreateRequest mirrors POST /api/feedback's create form:
+// {slug, home, name, feedback}. `home` matches the artifact-route home set
+// ("cell"|"pluto"|"archive").
+struct FeedbackCreateRequest: Encodable {
+    let slug: String
+    let home: String
+    let name: String
+    let feedback: String
+}
+
+// FeedbackEditRequest mirrors POST /api/feedback's edit form:
+// {slug, id, feedback} — UPDATEs the note and re-freezes the snapshot.
+struct FeedbackEditRequest: Encodable {
+    let slug: String
+    let id: Int
+    let feedback: String
+}
+
+// FeedbackDeleteRequest mirrors POST /api/feedback's delete form:
+// {slug, id, delete: true}.
+struct FeedbackDeleteRequest: Encodable {
+    let slug: String
+    let id: Int
+    let delete: Bool
 }
 
 struct CreateJobRequest: Encodable {

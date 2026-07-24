@@ -13,18 +13,19 @@ Research an existing system, behavior, or question and produce an **explain-mode
 a brief `00-overview.md`, standalone diagram cards, and section docs that together transfer the
 current state of the world into the reader's head — what exists, why, how data flows, where code
 lives, how to verify or debug it, and what remains uncertain. This is the read-only sibling of
-/aim: it never proposes changes. Possible follow-ups belong in `questions.yaml` or a notes
+/aim: it never proposes changes. Possible follow-ups belong in the open-questions record or a notes
 section doc, and the canonical next step for a change is an /aim spec.
 
 /info IS /aim's explain mode, packaged as its own workflow. All of /aim's Core Rules apply
-verbatim — investigate before asking, progressive disclosure, spam diagrams, animate flow
-diagrams, worked examples (at least one exemplary diagram card tracing a concrete named instance
-with real field values through the system, plus example-data renderings in their natural
-shape — a 2D array as a .cell grid, a schedule as a day/time strip — never raw JSON prose),
-all-inline-SVG (never Mermaid/ASCII), subagent delegation for every diagram
+verbatim — investigate before asking, progressive disclosure, two core diagrams then tunnel,
+animate flow diagrams, worked examples (at least one exemplary diagram card tracing a concrete
+named instance with real field values through the system, plus example-data renderings in their
+natural shape — a 2D array as a .cell grid, a schedule as a day/time strip — never raw JSON
+prose), all-inline-SVG (never Mermaid/ASCII), subagent delegation for every diagram
 fragment, the artifact-set shape (`00-overview.md` + `1N`-`4N` diagram cards + `5N`+ section
-docs), questions in `questions.yaml` (not in any artifact) with globally numbered ids
-(`Q1, Q2, …`), and sharing the overview + set-root path after every edit round. Read
+docs), open questions (kraken.db rows in a cell, `questions.yaml` standalone — never in any
+artifact) with globally numbered ids (`Q1, Q2, …`), and sharing the overview + set-root path
+after every edit round. Read
 `.claude/skills/aim/SKILL.md` (paths relative to the worktree root — your cwd in a cell —
 not this skill's own base directory) for those rules if not already loaded this session; do not
 duplicate or drift from them — with one override: **diagram subagents run on `model: opus`**
@@ -53,6 +54,13 @@ pathlib.Path(FRAG).read_text()); pathlib.Path(OUT).write_text(t)"` (adapt `TITLE
 values). All three replacements are global — never hand-edited. Verify the output contains `<svg` and does NOT
 contain `{{CARD_TITLE}}`, `{{CAPTION}}`, or `<!-- DIAGRAM:` — if either check fails, the wrap failed; do not ship the card.
 
+/aim's "Two core diagrams, then tunnel" doctrine applies here too: in explain mode the architecture
+card is **current-state only** (no target panel — there is no proposed change to show), plus the
+end-to-end worked-example flow card, plus any tunnel cards a box genuinely needs. Every component
+box and `50-components.md` row carries a required **kind** tag (see /aim's Core Rules for the
+vocabulary and the Kind/Boundary table requirements) — never a vague noun like "service" unless
+that's literally what it is.
+
 ## Workflow
 
 1. **Frame the question** in 2-4 bullets: what the reader wants to understand, which system
@@ -61,15 +69,15 @@ contain `{{CARD_TITLE}}`, `{{CAPTION}}`, or `<!-- DIAGRAM:` — if either check 
 2. **Research until the set can be written responsibly.** Read the relevant `AGENTS.md` /
    `CLAUDE.md`, trace the active entrypoints with `rg`, read enough implementation to cite
    real paths, types, and behaviors. Fan out parallel Explore agents for broad sweeps. Every
-   codebase-answerable question gets answered here — `questions.yaml` is reserved for genuine
-   unknowns (missing history, ambiguous intent, things only production data can show).
+   codebase-answerable question gets answered here — the open-questions record is reserved for
+   genuine unknowns (missing history, ambiguous intent, things only production data can show).
 3. **Draft in explain mode.** Create the set root (see below for the exact path in a cell vs.
    standalone) and write `00-overview.md`: mental model, current architecture, data flow —
    very concise, 1-3 sentences per subsection, the diagram cards carry the detail. Then write
    section docs as needed: component walkthrough with per-component tables, key behaviors
    (success path, failure modes as they exist today), observability, low-level code map,
    review/reading guide, verification plan, notes. No questions requirement in explain mode,
-   but `questions.yaml` is still the right home for anything genuinely open.
+   but the open-questions record is still the right home for anything genuinely open.
 4. **Diagrams via subagents, then wrap.** Each diagram is designed AND rendered by an
    **Opus** (`model: opus` — Claude Opus 5) subagent into a fragment file under the set's fragments dir (batch them in
    parallel; assign each a card-unique marker id and path-id prefix; include the
@@ -87,19 +95,19 @@ contain `{{CARD_TITLE}}`, `{{CAPTION}}`, or `<!-- DIAGRAM:` — if either check 
    placeholder comment with the fragment file's raw contents — all replacements global, never hand-edited.
    Verify the output contains `<svg` and does NOT contain `{{CARD_TITLE}}`, `{{CAPTION}}`, or `<!-- DIAGRAM:`
    before shipping the card. Share the `00-overview.md` path plus the set root (never run `open` on anything).
-5. **Iterate.** Summarize the mental model and the highest-value open questions (by
-   `questions.yaml` id); fold answers and corrections into the relevant artifact each round.
+5. **Iterate.** Summarize the mental model and the highest-value open questions (by their
+   stable id); fold answers and corrections into the relevant artifact each round.
 
 ## Explain-mode discipline
 
 - Describe, never prescribe: no "should", no proposed refactors in the body. A tempting
-  improvement goes into `questions.yaml` ("worth changing X?") or a notes section doc.
+  improvement goes into the open-questions record ("worth changing X?") or a notes section doc.
 - Cite real code: file paths (and functions) for every load-bearing claim, so the reader can
   jump from any paragraph into the source.
 - Verification over assertion: for each key behavior, say how to SEE it being true — the
   test that covers it, the log/trace to read, the command to run, the fixture that encodes it.
 - Uncertainty is content: things you could not confirm are stated as such in an assumptions
-  section or `questions.yaml`, not smoothed over.
+  section or the open-questions record, not smoothed over.
 
 ## Inside a kraken info cell
 
@@ -108,11 +116,11 @@ deltas — the cell's brief wins wherever it is more specific:
 
 - The set root is `<cellDir>/artifacts/` — write `00-overview.md`, diagram cards
   (`1N-<id>.html`), and section docs (`5N-<section>.md`) directly there. Fragments stage at
-  `<cellDir>/doc/fragments/<id>.svg`. Questions, if any, go in `<cellDir>/questions.yaml` — a
-  sibling of `artifacts/`, never inside it. `artifacts/` is the only board-visible directory
-  and the deliverable.
+  `<cellDir>/doc/fragments/<id>.svg`. Questions, if any, are rows in `kraken.db` — managed via
+  `kraken questions get/set/add/update/remove` (see /aim's Core Rules), never a file.
+  `artifacts/` is the only board-visible directory and the deliverable.
 - Never run `open` (no browser in a cell); the board renders the artifacts.
-- Bake genuinely open items into `questions.yaml` rather than blocking on them. When finished
+- Bake genuinely open items into the open-questions record rather than blocking on them. When finished
   producing/editing the set, state what's ready in your final output and STOP (end the
   turn) — kraken derives the blocked state from your silence and shows your last words on
   the board; the human reads the artifacts and messages back directly. A decision that

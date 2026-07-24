@@ -223,21 +223,27 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 	}
 }
 
-func TestSerializeJobFileModelAndSkipDoc(t *testing.T) {
-	f := jobFormFields{Slug: "x", Repo: "kraken", Model: "sonnet", SkipDoc: true}
+func TestSerializeJobFileModel(t *testing.T) {
+	f := jobFormFields{Slug: "x", Repo: "kraken", Model: "sonnet"}
 	content := serializeJobFile(f, "", "", "", "", 0, nil, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
 		t.Fatalf("round-trip err: %s\n%s", j.Err, content)
 	}
-	if j.Model != "sonnet" || !j.SkipDoc {
-		t.Fatalf("model/skip-doc lost in round-trip: model=%q skipdoc=%v", j.Model, j.SkipDoc)
+	if j.Model != "sonnet" {
+		t.Fatalf("model lost in round-trip: model=%q", j.Model)
 	}
-	// conditional emission: defaults leave the file free of the new keys, so
-	// untouched jobs stay readable by older binaries
+	// conditional emission: a default model leaves the file free of the key,
+	// so untouched jobs stay readable by older binaries
 	content = serializeJobFile(jobFormFields{Slug: "x", Repo: "kraken"}, "", "", "", "", 0, nil, "")
-	if strings.Contains(content, "model:") || strings.Contains(content, "skip-doc:") {
-		t.Fatalf("default model/skip-doc serialized anyway:\n%s", content)
+	if strings.Contains(content, "model:") {
+		t.Fatalf("default model serialized anyway:\n%s", content)
+	}
+	// skip-doc is gone outright (v5, breaking): a legacy file still carrying
+	// the key must still parse (jobs.ParseJob tolerates it), but a form save
+	// must never write it back.
+	if strings.Contains(content, "skip-doc:") {
+		t.Fatalf("skip-doc must never be written by a form save:\n%s", content)
 	}
 }
 

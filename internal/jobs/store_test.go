@@ -12,8 +12,8 @@ import (
 )
 
 // useTestStore opens a temp-file store, wires the jobs package onto it
-// (UseStore), and unwires it (back to file mode) plus closes the DB on
-// test cleanup — every store-backed test in this file must call this
+// (UseStore), and unwires it (ActiveStore() back to nil) plus closes the DB
+// on test cleanup — every store-backed test in this file must call this
 // first so it never leaks a wired store into a later, unrelated test.
 func useTestStore(t *testing.T) *store.Store {
 	t.Helper()

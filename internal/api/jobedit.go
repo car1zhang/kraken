@@ -61,7 +61,7 @@ func composeRawJobContent(j *jobs.Job) string {
 	spec, logSection := splitBodyLog(j.Body)
 	fields := jobFormFields{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-		Ready: j.Ready, Solo: j.Solo, Model: j.Model, SkipDoc: j.SkipDoc,
+		Ready: j.Ready, Solo: j.Solo, Model: j.Model,
 		Prereqs: j.Prereqs, Spec: strings.TrimSpace(spec),
 	}
 	return serializeJobFile(fields, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
@@ -74,7 +74,7 @@ func composeRawJobContent(j *jobs.Job) string {
 func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	return map[string]any{
 		"slug": p.Slug, "repo": p.Repo, "base": p.Base,
-		"ready": p.Ready, "solo": p.Solo, "model": p.Model, "skip_doc": p.SkipDoc,
+		"ready": p.Ready, "solo": p.Solo, "model": p.Model,
 		"body": p.Body, "state": p.State, "outcome": p.Outcome,
 		"session": p.Session, "teardown": p.Teardown, "run": int64(p.Run),
 		// L6: p.Err is "" on a clean parse, which is exactly the value that
@@ -210,7 +210,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		parsed := jobs.ParseJob(slug+jobs.JobSuffix, []byte(template))
 		if _, err := st.CreateJob(&store.Job{
 			Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-			Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model, SkipDoc: parsed.SkipDoc,
+			Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model,
 			Body: parsed.Body,
 		}); err != nil {
 			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -363,7 +363,6 @@ type jobFormFields struct {
 	Ready   bool          `json:"ready"`
 	Solo    bool          `json:"solo"`
 	Model   string        `json:"model"`
-	SkipDoc bool          `json:"skip_doc"`
 	Prereqs []jobs.Prereq `json:"prereqs"`
 	Spec    string        `json:"spec"`
 	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
@@ -397,7 +396,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 	webJSON(w, http.StatusOK, map[string]any{
 		"slug": j.Slug, "repo": j.Repo, "base": j.Base,
 		"ready": j.Ready, "solo": j.Solo,
-		"model": j.Model, "skip_doc": j.SkipDoc,
+		"model":   j.Model,
 		"prereqs": prereqs,
 		"spec":    strings.TrimSpace(spec),
 		"mtime":   jobEditMTime(j), "editable": editableJob(j),
@@ -434,9 +433,6 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 	// jobs keep their files free of the new keys
 	if f.Model != "" {
 		fmt.Fprintf(&b, "model: %s\n", jobs.OneLine(f.Model))
-	}
-	if f.SkipDoc {
-		b.WriteString("skip-doc: true\n")
 	}
 	if state != "" {
 		fmt.Fprintf(&b, "state: %s\n", state)
@@ -526,7 +522,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(content))
 		fields := map[string]any{
 			"repo": req.Repo, "base": req.Base,
-			"ready": req.Ready, "solo": req.Solo, "model": req.Model, "skip_doc": req.SkipDoc,
+			"ready": req.Ready, "solo": req.Solo, "model": req.Model,
 			"body": body, "err": parsed.Err,
 		}
 		// L10: form saves always replace prereqs, never touch PRs (they're

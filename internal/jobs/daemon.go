@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,18 +15,17 @@ import (
 	"time"
 
 	"kraken/internal/core"
-	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
-// k daemon — the one long-lived kraken process (launchd-managed, installed by
-// make install). It hosts the scheduler poll: queue startable jobs under the
-// cell cap, derive each started job's working/blocked state from live pod
-// activity, watch cells for unhealthy zeuses (auto-retrying with backoff),
-// watch PRs for auto-reap, and write a heartbeat the viewer renders. It owns
-// no state that can't be re-derived from files + discovery — the in-memory
-// dedup maps only suppress duplicate notifications, and losing them on
-// restart merely re-notifies once.
+// kraken serve — the one long-lived kraken process (launchd-managed,
+// installed by make install). It hosts the scheduler poll: queue startable
+// jobs under the cell cap, derive each started job's working/blocked state
+// from live pod activity, watch cells for unhealthy zeuses (auto-retrying
+// with backoff), watch PRs for auto-reap, and write a heartbeat the viewer
+// renders. It owns no state that can't be re-derived from files + discovery
+// — the in-memory dedup maps only suppress duplicate notifications, and
+// losing them on restart merely re-notifies once.
 
 const (
 	CellCap        = 15
@@ -68,14 +66,15 @@ func daemonStatusPath() string {
 // wired: RunServeTicks stamps it every tick instead of writing
 // daemon.json, since serve's tick loop and the process reading
 // ReadDaemonStatus (its own web API) are the same process — no file
-// round-trip needed, and no daemon.json to leave stale for `k daemon` to
-// trip on. UseStore clears it (see store.go) so a not-yet-ticked serve
-// process reads as "no status" rather than a leftover value.
+// round-trip needed. UseStore clears it (see store.go) so a not-yet-ticked
+// serve process reads as "no status" rather than a leftover value.
 var inProcessDaemonStatus atomic.Pointer[DaemonStatus]
 
 // ReadDaemonStatus returns the daemon's last-known heartbeat: the
-// in-process value (set by RunServeTicks) when a store is wired, else
-// ~/.kraken/daemon.json — the `k daemon` / `k web` two-process contract.
+// in-process value (set by RunServeTicks) when a store is wired in THIS
+// process, else ~/.kraken/daemon.json — the file lets a separate process
+// (the viewer, `k v`, which never wires a store itself) read serve's
+// heartbeat too, since RunServeTicks writes both.
 func ReadDaemonStatus() (DaemonStatus, bool) {
 	if ActiveStore() != nil {
 		st := inProcessDaemonStatus.Load()
@@ -90,13 +89,13 @@ func ReadDaemonStatus() (DaemonStatus, bool) {
 // readDaemonStatusFile reads ~/.kraken/daemon.json directly, ignoring
 // whether a store is wired in THIS process. ReadDaemonStatus must keep
 // branching on ActiveStore for its normal callers (the web API, the
-// viewer), which want serve's own in-process status once wired — but the
-// single-instance startup guards (daemonGuardErr, used by both RunDaemon
-// and kraken serve's GuardServeStart) need the file unconditionally: by the
-// time kraken serve's guard runs, jobs.UseStore has already wired
-// ActiveStore in this process, so ReadDaemonStatus would otherwise report
-// this process' own (still-nil, not-yet-ticked) in-process status instead
-// of a DIFFERENT already-running daemon/serve process' file heartbeat.
+// viewer), which want serve's own in-process status once wired — but
+// GuardServeStart's single-instance startup guard (daemonGuardErr) needs
+// the file unconditionally: by the time kraken serve's guard runs,
+// jobs.UseStore has already wired ActiveStore in this process, so
+// ReadDaemonStatus would otherwise report this process' own (still-nil,
+// not-yet-ticked) in-process status instead of a DIFFERENT already-running
+// serve process' file heartbeat.
 func readDaemonStatusFile() (DaemonStatus, bool) {
 	var st DaemonStatus
 	data, err := os.ReadFile(daemonStatusPath())
@@ -137,8 +136,8 @@ var ProcessIsKraken = func(pid int) bool {
 	return strings.Contains(strings.ToLower(string(out)), "kraken")
 }
 
-// daemonGuardErr is the single-instance startup guard shared by RunDaemon
-// and kraken serve (GuardServeStart): refuses when daemon.json names a
+// daemonGuardErr is kraken serve's single-instance startup guard
+// (GuardServeStart): refuses when daemon.json names a
 // DIFFERENT, still-alive, ACTUALLY-kraken pid (processIsKraken, E14 —
 // closes the pid-recycling false-positive above). Always reads the file
 // directly (readDaemonStatusFile), not ReadDaemonStatus, so it works the
@@ -164,38 +163,11 @@ func daemonConflictErr(pid int) error {
 	return fmt.Errorf("daemon already running (pid %d) — if this is stale (daemon.json outlived the process, or its pid was recycled), remove ~/.kraken/daemon.json and retry", pid)
 }
 
-// GuardFileModeStart is E2's startup guard for the two legacy file-mode
-// entry points, `kraken daemon` (RunDaemon) and `k web` (cmd_web.go):
-// refuses to start file-mode against a machine that has already migrated
-// onto the sqlite store. ActiveStore() != nil means this very process
-// wired one itself (never true for these two commands, which never call
-// UseStore) — the real signal is store.DBPath() existing on disk at all,
-// which only happens once `kraken import` has run. Starting the file-mode
-// daemon/web server on top of that would silently read/write the stale
-// job-file copies while `kraken serve` (if also running) owns the
-// authoritative DB, or — worse — race it if serve isn't running yet.
-// force is the explicit override for genuine emergencies (serve is broken
-// and file-mode is needed as a stopgap); the error names `kraken serve` so
-// the normal remedy is obvious without reading source.
-func GuardFileModeStart(force bool) error {
-	if force {
-		return nil
-	}
-	if ActiveStore() != nil {
-		return nil
-	}
-	if _, err := os.Stat(store.DBPath()); err == nil {
-		return fmt.Errorf("kraken.db exists at %s but this process isn't using it — this deployment has migrated to `kraken serve`; run that instead (pass --force-file-mode to start this file-mode command anyway)", store.DBPath())
-	}
-	return nil
-}
-
-// GuardServeStart is kraken serve's own startup guard (mirrors RunDaemon's
-// check): called synchronously by cmd_serve BEFORE starting the tick loop
-// or binding the web server, so a standalone `kraken daemon` (or a second
-// `kraken serve`) already running makes serve refuse cleanly and exit
-// non-zero instead of silently double-running the scheduler underneath a
-// web server that came up anyway.
+// GuardServeStart is kraken serve's own startup guard: called synchronously
+// by cmd_serve BEFORE starting the tick loop or binding the web server, so a
+// second `kraken serve` already running makes this one refuse cleanly and
+// exit non-zero instead of silently double-running the scheduler underneath
+// a web server that came up anyway.
 //
 // L7 (reverse direction of runImport's own GuardServeStart check): also
 // refuses while a `kraken import` is mid-sweep, signaled by the
@@ -218,10 +190,11 @@ func GuardServeStart() error {
 }
 
 // writeDaemonStatusFile persists st to ~/.kraken/daemon.json, creating the
-// parent dir if needed. Historically RunDaemon-only; RunServeTicks now
-// writes it too (so `kraken daemon`'s own startup guard trips while `kraken
-// serve` is running the scheduler) in addition to the in-process status it
-// already keeps. Best-effort: a failed write is silently skipped, matching
+// parent dir if needed. RunServeTicks writes it every tick (so a second
+// `kraken serve`'s own startup guard trips while this one is running the
+// scheduler, and so a separate process like the viewer can read it — see
+// ReadDaemonStatus) in addition to the in-process status it already keeps.
+// Best-effort: a failed write is silently skipped, matching
 // every other heartbeat/status write in this package.
 func writeDaemonStatusFile(st DaemonStatus) {
 	if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
@@ -360,101 +333,39 @@ func (d *daemonState) pruneArtifactSyncState(jobs []*Job) {
 // up to ~10s and must never overlap itself or stretch the scheduler loop.
 var usagePassRunning atomic.Bool
 
-// RunDaemon runs the scheduler loop in the foreground: queue startable jobs,
-// derive live state, watch for unhealthy cells, track PRs, write a heartbeat.
-// Never returns. forceFileMode is `k daemon`'s --force-file-mode override of
-// GuardFileModeStart's migrated-deployment refusal (E2).
-func RunDaemon(forceFileMode bool) {
-	if err := daemonGuardErr(); err != nil {
-		util.Die("%v", err)
-	}
-	if err := GuardFileModeStart(forceFileMode); err != nil {
-		util.Die("%v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(daemonStatusPath()), 0o755); err != nil {
-		util.Die("mkdir %s: %v", filepath.Dir(daemonStatusPath()), err)
-	}
-	util.InitSelfCheck()
-	d := newDaemon()
-	st := DaemonStatus{PID: os.Getpid(), StartedAt: time.Now().Unix()}
-	dlogEvent("info", "daemon-start", "daemon up (pid %d, cap %d cells, tick %s)", st.PID, CellCap, DaemonInterval)
-	// launchd stops the daemon with SIGTERM (make install's kickstart -k,
-	// logout, unload); log the shutdown so the event log shows every daemon
-	// lifecycle edge, not just the starts
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		s := <-sigc
-		dlogEvent("info", "daemon-stop", "daemon stopping (pid %d, %v)", os.Getpid(), s)
-		os.Exit(0)
-	}()
-	// TCC watchdog: reading ~/Documents from a launchd process blocks in
-	// open() until macOS consent is granted — and every reinstall changes the
-	// binary's code hash, revoking the previous grant. A silently-hung first
-	// tick must get loud (notify doesn't touch protected paths, so it works
-	// even while blocked).
-	firstTick := make(chan struct{})
-	go func() {
-		select {
-		case <-firstTick:
-		case <-time.After(45 * time.Second):
-			dlog("first tick still not done after 45s — likely blocked on a macOS Documents-access prompt (TCC re-consent after reinstall)")
-			notify("kraken daemon blocked", "approve the Documents-access dialog (or grant Full Disk Access) — reinstalls reset it")
-		}
-	}()
-	first := true
-	for {
-		cells, err := d.tick(false)
-		if first {
-			close(firstTick)
-			first = false
-		}
-		st.LastTick, st.Cells, st.LastError, st.Stale = time.Now().Unix(), cells, "", util.IsSelfStale()
-		if err != nil {
-			st.LastError = err.Error()
-			dlogEvent("error", "tick-error", "tick error: %v", err)
-		}
-		writeDaemonStatusFile(st)
-		time.Sleep(DaemonInterval)
-	}
-}
-
 // ServeOpts configures RunServeTicks' per-tick behavior. The zero value is
 // the normal kraken serve scheduler; Mirror selects the local
 // mirror-testing mode (`kraken serve --mirror`, cmd_serve.go): a read-only
 // scheduler variant for testing feature parity against real data without
 // ever touching real tmux/git/gh, popping a real OS notification, or
-// conflicting with the live daemon.json heartbeat a genuine `kraken daemon`
-// or `kraken serve` process depends on.
+// conflicting with the live daemon.json heartbeat a genuine `kraken serve`
+// process depends on.
 type ServeOpts struct {
 	Mirror bool
 }
 
-// RunServeTicks runs the scheduler tick loop for kraken serve: the same
-// per-tick scheduling as RunDaemon, minus the concerns that only make sense
-// for the standalone `k daemon` process — no TCC-watchdog goroutine (serve
-// isn't launchd-managed the same way) and no SIGTERM/SIGINT handling here
-// (cmd_serve registers its own, since web.Serve's own signal handling
-// already covers HTTP shutdown and this goroutine additionally needs
-// StopServeTicks/the store closed in the right order). It DOES perform the
-// same startup guard as RunDaemon (daemonGuardErr — dies loudly, matching
-// RunDaemon's util.Die, as a backstop in case it's ever reached without
-// cmd_serve's own GuardServeStart pre-check having already refused) and the
-// same daemon.json heartbeat write RunDaemon does, on top of (not instead
+// RunServeTicks runs the scheduler tick loop for kraken serve, as a
+// goroutine alongside web.Serve — no SIGTERM/SIGINT handling here (cmd_serve
+// registers its own, since web.Serve's own signal handling already covers
+// HTTP shutdown and this goroutine additionally needs StopServeTicks/the
+// store closed in the right order). It performs the single-instance startup
+// guard (daemonGuardErr — dies loudly, as a backstop in case it's ever
+// reached without cmd_serve's own GuardServeStart pre-check having already
+// refused, matching this package's util.Die-on-fatal-startup-error
+// convention) and writes the daemon.json heartbeat on top of (not instead
 // of) the in-process status inProcessDaemonStatus/ReadDaemonStatus serves —
-// resurrecting the heartbeat file is deliberate: it's what lets a
-// standalone `kraken daemon` refuse to start while serve is running.
-// Callers run this as a goroutine alongside web.Serve; it returns only once
-// StopServeTicks is called (serve's shutdown path). UseStore must already
-// have been called — every accessor tick() touches (LoadJobs,
-// WriteJobFields, ...) is only store-backed once wired.
+// the file lets a second `kraken serve` refuse to start while this one is
+// running, and lets a separate process (the viewer) read the heartbeat too.
+// It returns only once StopServeTicks is called (serve's shutdown path).
+// UseStore must already have been called — every accessor tick() touches
+// (LoadJobs, WriteJobFields, ...) is only store-backed once wired.
 //
 // opts.Mirror skips both of those: no daemonGuardErr check (mirror is
-// designed to run ALONGSIDE a live daemon/serve process against a separate
-// sandbox DB and port, never to contend with it for the single-instance
-// slot) and no daemon.json write, ever — a mirror process must never be
-// mistaken for the real daemon/serve by another process' own guard check.
-// The in-process heartbeat (inProcessDaemonStatus/ReadDaemonStatus) still
+// designed to run ALONGSIDE a live serve process against a separate sandbox
+// DB and port, never to contend with it for the single-instance slot) and
+// no daemon.json write, ever — a mirror process must never be mistaken for
+// the real serve process by another process' own guard check. The
+// in-process heartbeat (inProcessDaemonStatus/ReadDaemonStatus) still
 // updates normally, so the mirror process' own board header shows a live
 // status.
 func RunServeTicks(opts ServeOpts) {

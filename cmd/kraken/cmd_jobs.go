@@ -16,9 +16,10 @@ import (
 // board/web UI is the only supported path for starting, completing,
 // archiving, or reactivating a job (Q14: "every job interaction is
 // web/mobile"). What remains here isn't a job verb in that sense: pr-hook
-// is a Claude Code tool hook, logevent is plumbing for non-Go writers (the
-// Makefile's install target), and daemon is the long-lived scheduler
-// process itself.
+// is a Claude Code tool hook, and logevent is plumbing for non-Go writers
+// (the Makefile's install target). The scheduler itself now runs only as
+// part of `kraken serve` (cmd_serve.go) — there is no standalone daemon
+// entry point.
 
 // --- pr-hook ---
 
@@ -35,7 +36,7 @@ import (
 // would otherwise assume. See jobs.SetHookServeAddr / cell.go's
 // prHookCommand for where the hook command string gets built. Setting the
 // equivalent env vars for the rest of this (short-lived, one-shot) process
-// is simplest: PrHook/storeModeDeployment already read
+// is simplest: PrHook already reads
 // KRAKEN_SERVE_ADDR/KRAKEN_DB_PATH exactly this way for tests.
 func cmdPrHook(args []string) {
 	var slug string
@@ -96,18 +97,4 @@ func cmdLogEvent(args []string) {
 	if !posted {
 		util.LogEvent(src, "info", event, msg)
 	}
-}
-
-// --- k daemon ---
-
-func cmdDaemon(args []string) {
-	force := false
-	for _, a := range args {
-		if a == "--force-file-mode" {
-			force = true
-			continue
-		}
-		util.Die("usage: k daemon [--force-file-mode]")
-	}
-	jobs.RunDaemon(force)
 }

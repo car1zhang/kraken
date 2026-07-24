@@ -47,18 +47,18 @@ func main() {
 		cmdNewClaude(rest)
 	case "account":
 		cmdAccount(rest)
-	case "daemon":
-		cmdDaemon(rest)
 	case "logevent":
 		cmdLogEvent(rest)
-	case "web":
-		cmdWeb(rest)
 	case "serve":
 		cmdServe(rest)
 	case "import":
 		cmdImport(rest)
 	case "pr-hook":
 		cmdPrHook(rest)
+	case "questions":
+		cmdQuestions(rest)
+	case "feedback":
+		cmdFeedback(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":
@@ -98,26 +98,21 @@ Commands:
                       manual (k account auto to release it). note: a pool
                       slot literally named "auto" can never be targeted this
                       way — the auto keyword always wins
-  k daemon            run the scheduler loop in the foreground (launchd runs
-                      this at login via make install): queues ready jobs
-                      (≤5 cells), derives working/blocked from cell activity,
-                      tracks each job's PRs (merge = notification + board
-                      chip, never teardown), notifies on blocked cells,
-                      writes ~/.kraken/daemon.json
-  k web [-p port] [--tailnet] [-addr host:port]
-                      web UI + sessions API (default 127.0.0.1:7777): jobs as
-                      a kanban board, artifacts rendered in the browser,
-                      AskUserQuestion prompts answered inline; GET/POST
-                      /api/peers* let a device on the tailnet list/read/message
-                      live sessions. --tailnet binds the Mac's tailscale IP
-                      (100.64.0.0/10) instead of localhost; -addr sets an
-                      explicit bind and overrides both -p and --tailnet
   k serve [-p port] [--tailnet] [-addr host:port]
-                      merged process (sqlite migration): opens ~/.kraken/kraken.db,
-                      runs the scheduler tick loop + nightly backup rotation as
-                      background goroutines, and serves k web's same UI/API in
-                      the foreground, all store-backed. Replaces k daemon + k web
-                      for real deployment; same flags as k web
+                      the one long-lived kraken process (launchd runs this at
+                      login via make install): opens ~/.kraken/kraken.db, runs
+                      the scheduler tick loop (queues ready jobs (≤5 cells),
+                      derives working/blocked from cell activity, tracks each
+                      job's PRs — merge = notification + board chip, never
+                      teardown) + nightly backup rotation as background
+                      goroutines, and serves the web UI/API (default
+                      127.0.0.1:7777) in the foreground: jobs as a kanban
+                      board, artifacts rendered in the browser, AskUserQuestion
+                      prompts answered inline; GET/POST /api/peers* let a
+                      device on the tailnet list/read/message live sessions.
+                      --tailnet binds the Mac's tailscale IP (100.64.0.0/10)
+                      instead of localhost; -addr sets an explicit bind and
+                      overrides both -p and --tailnet
   k import [--dry-run] [--force] [--reimport]
                       one-shot sqlite-migration cutover: sweeps every file
                       store (job files, board order, uploads, artifacts,
@@ -126,6 +121,23 @@ Commands:
                       already-populated/already-imported database without
                       --force/--reimport; --dry-run reports counts without
                       writing anything. Human-run once per machine at cutover.
+  k questions get|set|add|update|remove <slug> ...
+                      cell-side verb zeus uses instead of hand-rolled curl to
+                      read/write its own open doc questions, proxied over
+                      localhost to 'kraken serve': get prints the list as
+                      JSON; set bulk-replaces it from a JSON array on stdin;
+                      add/update read one question object from stdin; remove
+                      takes a bare qid. A 400 (bad qid/importance) or an
+                      unreachable serve prints a clean message to stderr and
+                      exits non-zero.
+  k feedback get|addressed <slug> ...
+                      cell-side verb zeus uses to read carl's per-artifact
+                      feedback and record how it addressed an entry, proxied
+                      the same way as 'k questions'; get prints open+
+                      addressed entries as JSON, addressed <slug> <id>
+                      <text...> marks one entry addressed (text from args,
+                      or stdin if omitted), addressed --clear <slug> <id>
+                      clears a prior addressed note and reopens the entry.
 
 <sel>: index from 'k ls', '.' for the current pane, an exact pane id (%3), or
 substring match on name/project/agent/tmux-session; also a session-uuid

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"kraken/internal/jobs"
+	"kraken/internal/store"
 )
 
 // smallPNG returns a minimal but fully valid, sniffable 1x1 PNG.
@@ -77,7 +78,11 @@ func TestSniffImageExt(t *testing.T) {
 }
 
 func TestUploadPathValidation(t *testing.T) {
+	// jobs.SaveUpload is store-only now (H1: no nil-store fallback), so a
+	// store row for the seed slug must exist before it can write anything.
+	useTestStore(t)
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "upload-path-test", Repo: "monolith"})
 
 	// seed a real uploaded file so the "valid" case can resolve to a real
 	// path, plus a four-digit name — the sequence is unbounded past 999 and

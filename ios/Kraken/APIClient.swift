@@ -34,7 +34,9 @@ actor APIClient {
 
     // Mirrors web.go's apiContract constant — bump together, breaking
     // changes only (additive fields don't need a bump). See ios/API.md.
-    static let expectedContract = 4
+    // v5: skip_doc removed from the job form shapes, doc_questions_err
+    // removed from /api/board's job objects.
+    static let expectedContract = 5
 
     private let session: URLSession
     // Multi-MB image uploads over cellular can easily take longer than the
@@ -217,15 +219,43 @@ actor APIClient {
         )
     }
 
-    /// Answers one open doc question (questions.yaml) by id with a free-text
+    /// Answers (or re-answers) one open doc question by id with a free-text
     /// answer — distinct from answerQuestion's 1-based digit answer to an
     /// AskUserQuestion prompt. No liveness requirement server-side: this is a
-    /// surgical file edit, so it lands even if zeus/the cell's tmux session
-    /// is dead, as long as the cell dir still exists.
+    /// plain `questions` row UPDATE in kraken.db, so it lands even if zeus/
+    /// the cell's tmux session is dead, or the job is done — rows are always
+    /// answerable, and editability is free (a re-answer just overwrites).
     func answerDocQuestion(baseURL: String, slug: String, id: String, text: String) async throws {
         let _: OkResponse = try await post(
             baseURL: baseURL, path: "/api/doc-question",
             body: DocQuestionAnswerRequest(slug: slug, id: id, text: text)
+        )
+    }
+
+    /// Attaches a new feedback note to an artifact (home: "cell"|"pluto"|
+    /// "archive", matching the artifact-route home set). Works for done/
+    /// archived jobs too — feedback rows are the only store.
+    func createFeedback(baseURL: String, slug: String, home: String, name: String, feedback: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/feedback",
+            body: FeedbackCreateRequest(slug: slug, home: home, name: name, feedback: feedback)
+        )
+    }
+
+    /// Edits an existing feedback note's text; the server re-freezes its
+    /// snapshot from the artifact as currently served.
+    func editFeedback(baseURL: String, slug: String, id: Int, feedback: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/feedback",
+            body: FeedbackEditRequest(slug: slug, id: id, feedback: feedback)
+        )
+    }
+
+    /// Deletes a feedback note.
+    func deleteFeedback(baseURL: String, slug: String, id: Int) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/feedback",
+            body: FeedbackDeleteRequest(slug: slug, id: id, delete: true)
         )
     }
 

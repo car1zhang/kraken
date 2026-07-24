@@ -2,16 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -55,10 +55,10 @@ const docAnswerMaxLen = 4000
 //     archive/ subdir) — preserved artifact flat-copies live as plain
 //     files on disk regardless of storage mode (see jobs/archive.go) — so
 //     they run in mirror mode only when PlutoDir is a sandbox copy.
-//   - doc-question (webAnswerDocQuestion → jobs.AnswerDocQuestion) writes
-//     into questions.yaml inside a real cell dir — no tmux/pane involved,
-//     but still a real filesystem mutation outside the sandbox DB, same
-//     reasoning as the tmux-driving actions above.
+//   - doc-question (webAnswerDocQuestion → store.AnswerQuestion) is now a
+//     pure DB row UPDATE with no tmux/pane/file involved at all — gated
+//     anyway, same "mirror board is read-only, full stop" policy that keeps
+//     webQueue/webDequeue as the one deliberate exception below.
 //
 // webQueue and webDequeue stay UNGATED: each only flips the ready DB field
 // and never touches any file outside the sandbox DB. Under mirror the tick
@@ -264,16 +264,13 @@ func sendDigit(p *core.Peer, digit string) error {
 	return exec.Command("tmux", "send-keys", "-l", "-t", p.Pane, digit).Run()
 }
 
-// webAnswerDocQuestion is the doc-questions panel's answer submit: a
-// surgical file edit (jobs.AnswerDocQuestion), never a re-serialize, into
-// the cell's questions.yaml. Unlike webAnswerQuestion (the interactive
-// AskUserQuestion digit-press), this needs NO live agent at all — zeus may
-// be dead, mid-teardown-recovery, or the tmux session simply gone; the file
-// is the record, and answering it is carl updating that record directly.
-// The only liveness requirement is that the cell DIR itself still exists:
-// once a job's cell is actually torn down, questions.yaml (and everything
-// else in the cell dir) is gone for good, and the job's answers as last
-// synced to the store become permanently read-only.
+// webAnswerDocQuestion is the doc-questions panel's answer submit: a plain
+// row UPDATE of answer/answered_at on the matching `questions` row in
+// kraken.db (store.AnswerQuestion). Unlike webAnswerQuestion (the
+// interactive AskUserQuestion digit-press), this needs NO live agent and no
+// live CELL either (Q13): the row is the record, live or done, so
+// re-answering is always allowed and there is no "cell is gone — read-only"
+// refusal.
 func webAnswerDocQuestion(req webReq) error {
 	j, _, err := webJobFor(req.Slug)
 	if err != nil {
@@ -283,15 +280,10 @@ func webAnswerDocQuestion(req webReq) error {
 	if id == "" {
 		return fmt.Errorf("missing question id")
 	}
-	if !j.Started() || j.State == "done" {
-		return fmt.Errorf("%s hasn't started (or is already done) — no questions to answer", j.Slug)
-	}
-	path := jobs.QuestionsPath(j)
-	if _, err := os.Stat(filepath.Dir(path)); err != nil {
-		return fmt.Errorf("%s's cell is gone — questions are read-only", j.Slug)
-	}
-	// jobs.AnswerDocQuestion also guards empty-after-trim, but check here
-	// too so the error names the field the way carl's UI labels it.
+	// store.AnswerQuestion performs no trimming or length validation itself
+	// — it's a plain UPDATE — so these checks are the only enforcement, and
+	// the TRIMMED value (not req.Text) is what must actually get stored
+	// below, or the cap above is trivially bypassable with padding.
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
 		return fmt.Errorf("answer must not be empty")
@@ -299,19 +291,16 @@ func webAnswerDocQuestion(req webReq) error {
 	if n := len([]rune(text)); n > docAnswerMaxLen {
 		return fmt.Errorf("answer too long (%d chars, max %d)", n, docAnswerMaxLen)
 	}
-	if err := jobs.AnswerDocQuestion(path, id, req.Text, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		// jobs.AnswerDocQuestion's "no questions file at <path>" names the
-		// real filesystem path — the cell dir existing but the file itself
-		// missing (a fresh reactivate, a save that hasn't landed yet), same
-		// case webAnswerDocQuestion just proved isn't "cell is gone". Every
-		// other error it returns (already answered / no such question /
-		// empty answer) is already path-free and passes through unchanged.
-		if strings.HasPrefix(err.Error(), "no questions file at ") {
-			return fmt.Errorf("no questions file for this job")
+	st := jobs.ActiveStore()
+	if st == nil {
+		return fmt.Errorf("no store wired")
+	}
+	if err := st.AnswerQuestion(j.ID, id, text, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("no such question %q", id)
 		}
 		return err
 	}
-	jobs.SyncQuestionsNow(j)
 	return nil
 }
 

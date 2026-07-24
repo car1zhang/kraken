@@ -803,30 +803,19 @@ struct JobDetailView: View {
                         }
                     }
                 }
-                if !(job.docQuestionsErr ?? "").isEmpty || !(job.docQuestions ?? []).isEmpty {
+                if !(job.docQuestions ?? []).isEmpty {
                     kSection("Doc questions") {
-                        if !(job.docQuestionsErr ?? "").isEmpty {
-                            // The server string already carries its own header
-                            // ("questions file malformed: …" / "questions file
-                            // unreadable: …") — show it as-is rather than
-                            // prefixing a second, duplicate line.
-                            Text(job.docQuestionsErr ?? "")
-                                .font(.voice(13))
-                                .foregroundStyle(KTheme.revealed)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-                        } else {
-                            ForEach(sortedDocQuestions) { q in
-                                DocQuestionCard(item: q) { text in
-                                    answerDocQuestion(id: q.id, text: text)
-                                }
+                        ForEach(sortedDocQuestions) { q in
+                            DocQuestionCard(item: q) { text in
+                                answerDocQuestion(id: q.id, text: text)
                             }
-                            if sortedDocQuestions.contains(where: { !$0.isAnswered }) {
-                                Text("answers land in questions.yaml — the agent reads them when it next works")
-                                    .font(.voice(11))
-                                    .foregroundStyle(KTheme.text2)
-                                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
-                                    .listRowBackground(Color.clear)
-                            }
+                        }
+                        if sortedDocQuestions.contains(where: { !$0.isAnswered }) {
+                            Text("answers land in kraken.db — the agent reads them when it next resumes")
+                                .font(.voice(11))
+                                .foregroundStyle(KTheme.text2)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
+                                .listRowBackground(Color.clear)
                         }
                     }
                 }
@@ -1277,7 +1266,7 @@ private struct QuestionSummary: View {
     }
 }
 
-/// One questions.yaml record. Open questions render the full card (badge +
+/// One doc-question row. Open questions render the full card (badge +
 /// text + context + recommendation + accept/free-text answer controls);
 /// answered ones collapse to a single dimmed "✓ <answer>" row. `onAnswer`
 /// carries the answer text straight up to JobDetailView's answerDocQuestion,

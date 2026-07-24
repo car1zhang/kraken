@@ -2,9 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +13,7 @@ import (
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -30,7 +29,12 @@ import (
 // /api/board's webJob and the job form GET/POST shapes; the pipeline
 // distinction now lives in /aim vs /info skill choice plus carl's /do
 // steering, never a wire field.
-const apiContract = 4
+// v5: skip_doc was removed from the job form GET/POST shapes (the doc phase
+// now runs purely from zeus' own read of the job spec text, never a stored
+// flag) and doc_questions_err was removed from /api/board's job objects
+// (questions moved from a strictly-parsed questions.yaml file to relational
+// rows in kraken.db — there is nothing left that can fail to parse).
+const apiContract = 5
 
 type webArtifact struct {
 	Name string `json:"name"`
@@ -109,13 +113,14 @@ func webWakeupFrom(w *core.Wakeup) *webWakeup {
 	return &webWakeup{Reason: w.Reason, FiresAt: w.FiresAt}
 }
 
-// webDocQuestion mirrors one questions.yaml record (jobs.DocQuestion) for
-// the wire — same field set, same json tags, so it's a straight field copy
+// webDocQuestion mirrors one `questions` row (store.DocQuestion) for the
+// wire — same field set (qid renamed to id), so it's a straight field copy
 // rather than a renaming DTO like webQuestion above. Kept as its own type
-// (not a reuse of jobs.DocQuestion directly) for the same reason webJob
+// (not a reuse of store.DocQuestion directly) for the same reason webJob
 // never embeds a jobs.Job: the wire shape is a deliberate, independently
 // evolvable contract, not whatever the internal struct happens to carry.
-// Every key here is additive — no apiContract bump.
+// Every key here is additive — no apiContract bump. Position never rides
+// the wire: ordering is expressed purely by array order.
 type webDocQuestion struct {
 	ID             string `json:"id"`
 	Text           string `json:"text"`
@@ -126,21 +131,85 @@ type webDocQuestion struct {
 	AnsweredAt     string `json:"answered_at,omitempty"`
 }
 
-// webDocQuestionsFrom converts jobs.DocQuestion rows into the wire DTO. nil
-// in, nil out — buildWebBoard relies on that to leave webJob.DocQuestions
-// unset (omitempty) rather than an empty-but-present array.
-func webDocQuestionsFrom(qs []jobs.DocQuestion) []webDocQuestion {
-	if qs == nil {
+// webDocQuestionsFrom converts store.DocQuestion rows into the wire DTO. A
+// nil or empty slice converts to nil so buildWebBoard leaves
+// webJob.DocQuestions unset (omitempty) rather than an empty-but-present
+// array.
+func webDocQuestionsFrom(qs []store.DocQuestion) []webDocQuestion {
+	if len(qs) == 0 {
 		return nil
 	}
 	out := make([]webDocQuestion, len(qs))
 	for i, q := range qs {
 		out[i] = webDocQuestion{
-			ID: q.ID, Text: q.Text, Context: q.Context, Importance: q.Importance,
+			ID: q.QID, Text: q.Text, Context: q.Context, Importance: q.Importance,
 			Recommendation: q.Recommendation, Answer: q.Answer, AnsweredAt: q.AnsweredAt,
 		}
 	}
 	return out
+}
+
+// jobQuestions resolves j's doc questions straight from kraken.db — the
+// SAME path for a live cell or a long-done job (Q13: rows are always
+// answerable, live or dead), replacing the old cell-dir/pluto-fallback/
+// malformed-parse tangle jobDocQuestions used to walk. nil (never an error)
+// when no store is wired or the job predates a store row.
+func jobQuestions(st *store.Store, j *jobs.Job) []webDocQuestion {
+	if st == nil || j.ID == 0 {
+		return nil
+	}
+	qs, err := st.ListQuestions(j.ID)
+	if err != nil {
+		util.LogEvent("web", "error", "board", fmt.Sprintf("list questions for %s: %v", j.Slug, err))
+		return nil
+	}
+	return webDocQuestionsFrom(qs)
+}
+
+// webFeedback mirrors one `feedback` row (store.Feedback) for the wire —
+// additive, no apiContract bump. Never carries the snapshot bytes
+// themselves (those are served through the artifact/feedback-view routes,
+// not the board poll) — this is ListFeedbackMeta's own contract.
+type webFeedback struct {
+	ID          int64  `json:"id"`
+	Artifact    string `json:"artifact"`
+	Note        string `json:"note"`
+	At          int64  `json:"at"`
+	Addressed   string `json:"addressed,omitempty"`
+	AddressedAt string `json:"addressed_at,omitempty"`
+}
+
+// webFeedbackFrom converts store.Feedback rows into the wire DTO — same
+// nil/empty-to-nil convention as webDocQuestionsFrom.
+func webFeedbackFrom(fs []store.Feedback) []webFeedback {
+	if len(fs) == 0 {
+		return nil
+	}
+	out := make([]webFeedback, len(fs))
+	for i, f := range fs {
+		out[i] = webFeedback{
+			ID: f.ID, Artifact: f.Artifact, Note: f.Note, At: f.TS,
+			Addressed: f.Addressed, AddressedAt: f.AddressedAt,
+		}
+	}
+	return out
+}
+
+// jobFeedback resolves jobID's feedback entries straight from kraken.db —
+// scoped on the job's own immutable id, not its (mutable, reusable) slug, so
+// this works for live, done, AND archived jobs identically (Q2) without ever
+// cross-wiring onto a different generation of a reused slug (see
+// store.ListFeedback's doc comment). nil when no store is wired.
+func jobFeedback(st *store.Store, jobID int64) []webFeedback {
+	if st == nil {
+		return nil
+	}
+	fs, err := st.ListFeedbackMeta(jobID)
+	if err != nil {
+		util.LogEvent("web", "error", "board", fmt.Sprintf("list feedback for job %d: %v", jobID, err))
+		return nil
+	}
+	return webFeedbackFrom(fs)
 }
 
 type webJob struct {
@@ -201,16 +270,15 @@ type webJob struct {
 	// PRs mirrors the job file's kraken-owned prs: list — every PR the
 	// cell ever shipped, rendered by the clients as linked state chips.
 	PRs []jobs.JobPR `json:"prs,omitempty"`
-	// DocQuestions mirrors the job's questions.yaml (zeus' open doc
-	// questions, answered or not) for every started, non-done job — live or
-	// with a gone tmux session, read-only after teardown once the cell dir
-	// itself is gone (see jobDocQuestions). Never set for archived jobs.
+	// DocQuestions mirrors zeus' open doc questions (answered or not),
+	// served straight from `questions` rows in kraken.db — live or dead, no
+	// file, no parse step, so there is no more malformed-file case (see
+	// jobQuestions). Never set for archived jobs.
 	DocQuestions []webDocQuestion `json:"doc_questions,omitempty"`
-	// DocQuestionsErr is set instead of DocQuestions, never both, when a
-	// questions source exists but fails strict parse (jobs.ParseDocQuestions)
-	// — the UIs render "questions file malformed" rather than showing stale
-	// or partial data.
-	DocQuestionsErr string `json:"doc_questions_err,omitempty"`
+	// Feedback mirrors this job's open+addressed feedback entries, served
+	// straight from `feedback` rows in kraken.db (see jobFeedback) — works
+	// for live, done, and archived jobs alike (Q2).
+	Feedback []webFeedback `json:"feedback,omitempty"`
 }
 
 type webBoard struct {
@@ -268,19 +336,12 @@ func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
 	}
 	add(cellEntries)
 
-	if st := jobs.ActiveStore(); st != nil {
-		// Q12's "a live cell always serves straight from the cell dir"
-		// short-circuit is a store-mode-only rule: file mode's pre-migration
-		// behavior always appended the pluto flat-copy listing regardless of
-		// liveness, and that must stay exactly as it was — only
-		// gate on live when a store is actually wired.
-		if live {
-			return out
-		}
-		add(storeArtifactList(j.Slug, j.ID, "pluto"))
-		add(plutoFlatArtifacts(j))
+	// Q12: a live cell always serves straight from the cell dir — nothing
+	// else to add once cellEntries is in.
+	if live {
 		return out
 	}
+	add(storeArtifactList(j.Slug, j.ID, "pluto"))
 	add(plutoFlatArtifacts(j))
 	return out
 }
@@ -291,16 +352,6 @@ func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
 // (L4+E6) share one implementation.
 func plutoFlatArtifacts(j *jobs.Job) []webArtifact {
 	prefix := util.Slugify(j.Slug) + "."
-	// the preserved <slug>.questions.yaml copy is deliberately excluded,
-	// same as jobs.AllArtifactPaths' own exclusion (cell.go) — that EXACT
-	// name only: questions are not artifacts, so a doc-question thread must
-	// never surface in the board's artifact list alongside real
-	// deliverables, but a suffix match would also hide a real deliverable
-	// that simply happens to end in ".questions.yaml" (e.g. an artifact
-	// named notes.questions.yaml, flattened to <slug>.notes.questions.yaml)
-	// — the exact-name check avoids that false positive, and matches
-	// AllArtifactPaths' semantics exactly so both sides agree.
-	questionsFile := prefix + "questions.yaml"
 	entries, err := os.ReadDir(jobs.PlutoDir())
 	if err != nil {
 		return nil
@@ -308,94 +359,12 @@ func plutoFlatArtifacts(j *jobs.Job) []webArtifact {
 	var out []webArtifact
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, prefix) ||
-			strings.HasSuffix(name, jobs.JobSuffix) || name == questionsFile {
+		if e.IsDir() || !strings.HasPrefix(name, prefix) || strings.HasSuffix(name, jobs.JobSuffix) {
 			continue
 		}
 		out = append(out, webArtifact{Name: strings.TrimPrefix(name, prefix), URL: "/api/artifact/" + j.Slug + "/pluto/" + strings.TrimPrefix(name, prefix)})
 	}
 	return out
-}
-
-// jobDocQuestions resolves j's doc-questions for the wire: the populated
-// list, or a human-readable parse-failure message — never both (mirrors
-// DocQuestions/DocQuestionsErr's own "never both" contract). Precedence
-// follows the SAME live/dead split as jobArtifacts, but keyed on the cell
-// DIR's existence on disk rather than jobArtifacts' tmux-liveness flag:
-// answering a doc question needs no live agent (see webAnswerDocQuestion —
-// "zeus may be dead; the file is the record"), so as long as the cell dir is
-// still there — tmux session alive OR CellGone-but-not-torn-down — the file
-// itself is the freshest, most authoritative source. Only once the cell dir
-// is actually removed (a real teardown) does this fall back to the
-// store-mirrored row — and, exactly like jobArtifacts' cell ∪ store ∪ pluto
-// union, the store row is NOT trusted as the sole record once it exists:
-// whenever the store yields nothing usable (no row, a lookup error, or a
-// present-but-empty row), this falls through to the pluto flat copy instead
-// of returning "nothing to show". That fallback matters: a job can be
-// reactivated into a fresh cell with no questions.yaml, a live-cell sync
-// tick then deletes the (now-stale) store row, and a SECOND teardown leaves
-// the store with no row at all — but the answers from the first run are
-// still sitting in the pluto flat copy preserveArtifacts wrote back then.
-// Without this fallback those answers become permanently unreachable even
-// though the bytes are still on disk.
-func jobDocQuestions(j *jobs.Job) (qs []webDocQuestion, errMsg string) {
-	// QuestionsPath is <cellDir>/questions.yaml; its parent IS the cell dir,
-	// so stat'ing that parent is "does the cell dir exist" without a
-	// separate exported cellDir accessor.
-	if _, err := os.Stat(filepath.Dir(jobs.QuestionsPath(j))); err == nil {
-		dqs, perr := jobs.LoadDocQuestions(jobs.QuestionsPath(j))
-		if perr != nil {
-			return nil, docQuestionsErrMsg(perr)
-		}
-		return webDocQuestionsFrom(dqs), ""
-	}
-
-	if st := jobs.ActiveStore(); st != nil && j.ID != 0 {
-		q, err := st.GetQuestions(j.ID)
-		if err == nil && len(q.Bytes) > 0 {
-			dqs, perr := jobs.ParseDocQuestions(q.Bytes)
-			if perr != nil {
-				return nil, docQuestionsErrMsg(perr)
-			}
-			return webDocQuestionsFrom(dqs), ""
-		}
-		// store yielded nothing usable — ErrNotFound (never synced, or the
-		// row was since deleted), any other lookup failure, or a
-		// present-but-empty row — so fall through to the pluto flat copy
-		// below rather than returning here; see this func's doc comment.
-	}
-
-	// file mode fallback, and store mode's own fallback once the row is
-	// gone or empty: the preserved <slug>.questions.yaml flat copy, same
-	// dir/naming convention as plutoFlatArtifacts.
-	data, err := os.ReadFile(filepath.Join(jobs.PlutoDir(), util.Slugify(j.Slug)+".questions.yaml"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, "" // no preserved copy either: a valid "nothing to show" state
-		}
-		return nil, "questions file unreadable"
-	}
-	dqs, perr := jobs.ParseDocQuestions(data)
-	if perr != nil {
-		return nil, docQuestionsErrMsg(perr)
-	}
-	return webDocQuestionsFrom(dqs), ""
-}
-
-// docQuestionsErrMsg turns a LoadDocQuestions/ParseDocQuestions error into a
-// wire-safe doc_questions_err. jobs.ParseDocQuestions' own errors are
-// line-anchored ("line N: ...") and already path-free, so they pass through
-// under the "malformed" label; anything else reaching here is a stat/read
-// failure LoadDocQuestions surfaced verbatim (questions.yaml is a directory,
-// EACCES, a symlink loop) — an *fs.PathError carrying an absolute
-// filesystem path, which must never reach the wire, so it collapses to a
-// fixed, path-free message instead of being mislabelled "malformed".
-func docQuestionsErrMsg(err error) string {
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
-		return "questions file unreadable"
-	}
-	return "questions file malformed: " + err.Error()
 }
 
 // storeArtifactList lists jobID's DB-mirrored artifacts (store/artifacts.go,
@@ -486,14 +455,16 @@ func ArtifactPath(j *jobs.Job, home, name string) (string, bool) {
 // L11: home is now a required parameter, refused outright when "cell" —
 // Q12's rule is that a live cell's artifacts are NEVER DB-backed, only
 // ever served straight off disk. Without this, a caller that fell back to
-// ArtifactBytes after an ArtifactPath("cell", ...) miss (feedback.go does
-// exactly this: ArtifactPath first, ArtifactBytes as the fallback) could
-// have the DB serve bytes for a same-named artifact that actually lives
-// under a DIFFERENT home (e.g. a "pluto" flat copy sharing a filename with
-// a would-be cell file) — silently mislabeling which home the returned
-// bytes actually came from. Also refuses any name ending in jobs.JobSuffix
-// — mirroring ArtifactPath's own "job files are never artifacts" refusal,
-// which ArtifactBytes never had (a name reconstructing to a job file's own
+// ArtifactBytes after an ArtifactPath("cell", ...) miss (feedback.go's
+// resolveArtifact does exactly this for non-cell homes: ArtifactBytes
+// first, ArtifactPath as the fallback — the same precedence artifactHandler
+// itself serves bytes from, B6) could have the DB serve bytes for a
+// same-named artifact that actually lives under a DIFFERENT home (e.g. a
+// "pluto" flat copy sharing a filename with a would-be cell file) —
+// silently mislabeling which home the returned bytes actually came from.
+// Also refuses any name ending in jobs.JobSuffix — mirroring ArtifactPath's
+// own "job files are never artifacts" refusal, which ArtifactBytes never
+// had (a name reconstructing to a job file's own
 // suffix must never be servable as an artifact, DB-backed or not).
 func ArtifactBytes(j *jobs.Job, home, name string) (data []byte, mimeType string, ok bool) {
 	if home == "cell" {
@@ -663,6 +634,7 @@ func buildWebBoard() webBoard {
 	live := jobs.LiveSessions()
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
+	activeStore := jobs.ActiveStore()
 	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale()}
 	order := jobs.LoadBoardOrder()
 	byState := map[string][]webJob{}
@@ -678,13 +650,12 @@ func buildWebBoard() webBoard {
 			Prereqs: prereqs, Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
 			ModTime: j.ModTime.Unix(),
 			PRs:     j.PRs,
-		}
-		if j.Started() && j.State != "done" {
-			// keyed on the cell dir's own existence, not tmux liveness — see
-			// jobDocQuestions' doc comment. Populated for BOTH branches
-			// below (live tmux session or CellGone), which is why this sits
-			// ahead of the live/dead split rather than inside it.
-			wj.DocQuestions, wj.DocQuestionsErr = jobDocQuestions(j)
+			// DocQuestions/Feedback: one uniform path straight off the store,
+			// live or dead, any state — no file, no cell-dir liveness check
+			// (see jobQuestions/jobFeedback). Never set for archived jobs,
+			// which ride a separate loop below.
+			DocQuestions: jobQuestions(activeStore, j),
+			Feedback:     jobFeedback(activeStore, j.ID),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -756,24 +727,23 @@ func buildWebBoard() webBoard {
 			State: "archived", Archived: true, DisplaySlug: a.Slug,
 			Err: a.Err, Outcome: a.Outcome,
 			Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
+			// Feedback (Q2: works for archived jobs too) is keyed on the
+			// job's own immutable id — same as the active loop above — not
+			// the archive name, so a later reuse of the freed slug can never
+			// cross-wire onto this card. DocQuestions is deliberately absent
+			// here — never set for archived jobs.
+			Feedback: jobFeedback(activeStore, a.ID),
 		})
 	}
 	return board
 }
 
 // archivedWebArtifacts lists an archived job's artifact copies for the
-// wire: store mode lists from the DB (storeArtifactList), file mode from
-// the archive home on disk — same split as jobArtifacts' non-live branch.
+// wire, from the DB (storeArtifactList) — the cell's artifacts tree is
+// already store-mirrored by the time a job can be archived (teardown's
+// syncArtifactsNow already ran).
 func archivedWebArtifacts(a *jobs.Job) []webArtifact {
-	if jobs.ActiveStore() != nil {
-		return storeArtifactList(a.ArchivedName, a.ID, "archive")
-	}
-	var out []webArtifact
-	for _, p := range jobs.ArchivedArtifactPaths(a) {
-		name := strings.TrimPrefix(filepath.Base(p), a.ArchivedName+".")
-		out = append(out, webArtifact{Name: name, URL: "/api/artifact/" + a.ArchivedName + "/archive/" + name})
-	}
-	return out
+	return storeArtifactList(a.ArchivedName, a.ID, "archive")
 }
 
 // boardHandler serves the memoized board snapshot.

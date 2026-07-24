@@ -1,6 +1,13 @@
 package store
 
-import "fmt"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+)
 
 // schemaVersion is the current embedded schema version, tracked in SQLite's
 // own PRAGMA user_version so migrate() is a no-op on an already-current
@@ -10,8 +17,16 @@ import "fmt"
 // version 3 drops jobs.type (Q14 — the build/info job-level type concept is
 // gone; the pipeline distinction now lives in /aim vs /info skill choice
 // plus carl's /do steering, never a stored column), version 4 adds
-// prs.conflict_state.
-const schemaVersion = 4
+// prs.conflict_state, version 5 drops jobs.skip_doc, extends feedback with
+// session/addressed/addressed_at, and restructures the blob-canonical
+// questions table into relational rows (parse-migrating the old blobs
+// once). Version 6 (B2, a 54-feedback-contract follow-up) adds
+// feedback.job_id: archive/unarchive must re-key a job's feedback rows by an
+// immutable id, since the mutable job_slug string alone can't disambiguate
+// which rows are "mine" once a freed slug is reused by another job (see
+// store.ArchiveJob's doc comment) — job_slug itself is untouched as every
+// read path's lookup key.
+const schemaVersion = 6
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -187,18 +202,403 @@ const schemaV4 = `
 ALTER TABLE prs ADD COLUMN conflict_state TEXT NOT NULL DEFAULT '';
 `
 
-// migrations maps a target user_version to the SQL that gets a freshly
+// schemaV5 (54-feedback-contract.md, Q11/Q14 steering): drops jobs.skip_doc
+// (the doc phase is zeus' own call from the spec text, never a stored
+// flag); extends feedback with the columns the new addressed/session
+// contract needs; and restructures questions from a blob-canonical mirror
+// of questions.yaml into real relational rows. The restructure can't be
+// pure SQL — the old blob bytes need the hand-rolled questions.yaml parser
+// (in Go) to become rows — so this is the first migration that pairs SQL
+// with a Go hook (see migrationStep, migrateV5Questions below): the SQL
+// below only gets the shape ready (rename the blob table out of the way,
+// create the new relational one), and migrateV5Questions does the actual
+// parse-and-insert plus the final DROP of the renamed blob table, all
+// inside the same migrate() transaction.
+const schemaV5 = `
+ALTER TABLE jobs DROP COLUMN skip_doc;
+
+ALTER TABLE feedback ADD COLUMN session TEXT NOT NULL DEFAULT '';
+ALTER TABLE feedback ADD COLUMN addressed TEXT NOT NULL DEFAULT '';
+ALTER TABLE feedback ADD COLUMN addressed_at TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE questions RENAME TO questions_blob;
+
+-- Relational doc-questions, one row per question (replaces the blob mirror
+-- of questions.yaml): position preserves the author's file/list order;
+-- answer/answered_at are the kraken-owned columns (written only when carl
+-- answers from the board — zeus-owned writes must preserve them).
+CREATE TABLE questions (
+	job_id         INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+	qid            TEXT NOT NULL,
+	text           TEXT NOT NULL DEFAULT '',
+	context        TEXT NOT NULL DEFAULT '',
+	importance     TEXT NOT NULL DEFAULT '',
+	recommendation TEXT NOT NULL DEFAULT '',
+	answer         TEXT NOT NULL DEFAULT '',
+	answered_at    TEXT NOT NULL DEFAULT '',
+	position       INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (job_id, qid)
+);
+`
+
+// schemaV6 (B2): adds feedback.job_id, an immutable FK to jobs.id used only
+// to make ArchiveJob/UnarchiveJob's re-key of feedback.job_slug unambiguous
+// (see ArchiveJob's doc comment) — every read path keeps using job_slug
+// exactly as before, this column is write-side plumbing only. ON DELETE SET
+// NULL rather than CASCADE: DeleteJob's contract is that a feedback row
+// survives its job's hard-delete as a fossil (same as an events row does),
+// so the column nulls out instead of taking the row with it. go-sqlite3's
+// bundled SQLite supports ALTER TABLE ... ADD COLUMN with a REFERENCES
+// clause directly, same as schemaV3/schemaV4/schemaV5's in-place ALTERs — no
+// rebuild-the-table dance needed.
+const schemaV6 = `
+ALTER TABLE feedback ADD COLUMN job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL;
+`
+
+// migrationStep is one migration: SQL applied first, then an optional Go
+// hook run afterward inside the SAME transaction. Every migration before
+// v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
+// format, so v5's blob-to-rows restructure needed an escape hatch into Go.
+// Wrapping v1-v4 as migrationStep{sql: schemaVN} (hook left nil) changes
+// nothing about how they run: migrate() below still just execs the string
+// and moves on when hook is nil, byte-identical to the old map[int]string
+// behavior.
+type migrationStep struct {
+	sql  string
+	hook func(tx *sql.Tx) error
+}
+
+// migrations maps a target user_version to the step that gets a freshly
 // created (or older) database there. migrations[1] is the original
 // release; migrations[2] adds the questions table; migrations[3] drops
-// jobs.type; migrations[4] adds prs.conflict_state. Future schema changes
-// append migrations[5], migrations[6], ... rather than editing an existing
-// schemaV<N> string in place, so a database created under an older binary
-// still migrates forward correctly.
-var migrations = map[int]string{
-	1: schemaV1,
-	2: schemaV2,
-	3: schemaV3,
-	4: schemaV4,
+// jobs.type; migrations[4] adds prs.conflict_state; migrations[5] drops
+// jobs.skip_doc, extends feedback, and restructures questions into
+// relational rows (migrateV5Questions below); migrations[6] adds
+// feedback.job_id and backfills it for existing rows (migrateV6FeedbackJobID
+// below). Future schema changes append migrations[7], migrations[8], ...
+// rather than editing an existing schemaV<N> string (or hook) in place, so a
+// database created under an older binary still migrates forward correctly.
+var migrations = map[int]migrationStep{
+	1: {sql: schemaV1},
+	2: {sql: schemaV2},
+	3: {sql: schemaV3},
+	4: {sql: schemaV4},
+	5: {sql: schemaV5, hook: migrateV5Questions},
+	6: {sql: schemaV6, hook: migrateV6FeedbackJobID},
+}
+
+// migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
+// renamed the old blob table to questions_blob and created the new
+// relational questions table by the time this runs. It reads every
+// questions_blob row, parses its bytes with parseLegacyQuestions (a copy of
+// jobs.ParseDocQuestions' logic — store cannot import jobs, see that
+// function's doc comment), and inserts one questions row per parsed
+// question, position stamped from the parsed item's order in the file (top
+// to bottom, matching how questions.yaml was always read).
+//
+// carl's clean-cutover ruling (54-feedback-contract.md): migrations are
+// one-time best-effort moves of existing data, never required to succeed
+// perfectly. A blob that fails to parse is SKIPPED, not fatal — logged into
+// the events table (in this same transaction, so the note only survives if
+// the migration itself commits) and the migration continues with the next
+// blob. Not routed through util.LogEvent: that forwards through eventSink,
+// which jobs.UseStore wires to a *different*, already-open Store's
+// AppendEvent — calling it here, mid-migration on a Store that isn't even
+// finished opening yet, would be either a no-op (nothing wired this early)
+// or circular, neither of which is what "log-and-continue" means here.
+// Once every blob is handled, questions_blob is dropped — its job is done.
+func migrateV5Questions(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT job_id, bytes FROM questions_blob`)
+	if err != nil {
+		return fmt.Errorf("read questions_blob: %w", err)
+	}
+	type blobRow struct {
+		jobID int64
+		bytes []byte
+	}
+	var blobs []blobRow
+	for rows.Next() {
+		var b blobRow
+		if err := rows.Scan(&b.jobID, &b.bytes); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan questions_blob row: %w", err)
+		}
+		blobs = append(blobs, b)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read questions_blob rows: %w", err)
+	}
+	rows.Close()
+
+	for _, b := range blobs {
+		qs, perr := parseLegacyQuestions(b.bytes)
+		if perr != nil {
+			var slug string
+			// Best-effort only: an orphaned blob row (no matching job)
+			// shouldn't exist (questions_blob's job_id carried an
+			// ON DELETE CASCADE FK), but if it somehow does, slug just
+			// stays empty rather than failing the whole migration over a
+			// cosmetic lookup.
+			_ = tx.QueryRow(`SELECT slug FROM jobs WHERE id = ?`, b.jobID).Scan(&slug)
+			if _, err := tx.Exec(
+				`INSERT INTO events (ts, src, level, event, msg, job_slug) VALUES (?, ?, ?, ?, ?, ?)`,
+				time.Now().UnixMilli(), "migrate", "error", "questions-migration-skip",
+				fmt.Sprintf("job %d: legacy questions.yaml blob dropped, unparseable: %v", b.jobID, perr),
+				slug,
+			); err != nil {
+				return fmt.Errorf("log skipped blob for job %d: %w", b.jobID, err)
+			}
+			continue
+		}
+		for i, q := range qs {
+			if _, err := tx.Exec(
+				`INSERT INTO questions (job_id, qid, text, context, importance, recommendation, answer, answered_at, position)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				b.jobID, q.ID, q.Text, q.Context, q.Importance, q.Recommendation, q.Answer, q.AnsweredAt, i,
+			); err != nil {
+				return fmt.Errorf("insert migrated question %s for job %d: %w", q.ID, b.jobID, err)
+			}
+		}
+	}
+
+	if _, err := tx.Exec(`DROP TABLE questions_blob`); err != nil {
+		return fmt.Errorf("drop questions_blob: %w", err)
+	}
+	return nil
+}
+
+// migrateV6FeedbackJobID is migrations[6]'s Go hook: schemaV6's SQL has
+// already added the (NULL-default) feedback.job_id column by the time this
+// runs. Every existing row's job_slug is matched against both an active
+// job's slug and an archived job's archived_name (each uniquely indexed —
+// jobs_active_slug, jobs_archived_name — so at most one row can match on
+// each side), and job_id is backfilled only when EXACTLY ONE side matches.
+// A row whose slug matches NEITHER (its job was hard-deleted, or the row is
+// otherwise an orphan) is left with job_id NULL, same "best-effort, log and
+// continue" ruling as migrateV5Questions — it was already unreachable by id
+// before this column existed, so nothing regresses.
+//
+// A row whose slug matches BOTH an active job and an archived job is
+// genuinely ambiguous — the pre-v6 data can't tell which generation of a
+// reused slug the row actually belongs to — and is ALSO left NULL rather
+// than resolved to either side: silently attaching it to the active job
+// would move it out from under the archived job's card the moment
+// migrateV6FeedbackJobID's write-side sibling (ArchiveJob/UnarchiveJob's
+// job_id rekey) runs again, which is strictly worse than the row simply not
+// appearing on any card until a human sorts out the collision by hand.
+func migrateV6FeedbackJobID(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT id, job_slug FROM feedback WHERE job_slug != ''`)
+	if err != nil {
+		return fmt.Errorf("read feedback rows for job_id backfill: %w", err)
+	}
+	type feedbackRow struct {
+		id   int64
+		slug string
+	}
+	var toBackfill []feedbackRow
+	for rows.Next() {
+		var r feedbackRow
+		if err := rows.Scan(&r.id, &r.slug); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan feedback row for job_id backfill: %w", err)
+		}
+		toBackfill = append(toBackfill, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read feedback rows for job_id backfill: %w", err)
+	}
+	rows.Close()
+
+	for _, r := range toBackfill {
+		var activeID int64
+		err := tx.QueryRow(`SELECT id FROM jobs WHERE slug = ? AND archived_at IS NULL`, r.slug).Scan(&activeID)
+		activeMatch := err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("resolve active job for feedback %d (slug %q): %w", r.id, r.slug, err)
+		}
+
+		var archivedID int64
+		err = tx.QueryRow(`SELECT id FROM jobs WHERE archived_name = ? AND archived_at IS NOT NULL`, r.slug).Scan(&archivedID)
+		archivedMatch := err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("resolve archived job for feedback %d (slug %q): %w", r.id, r.slug, err)
+		}
+
+		var jobID int64
+		switch {
+		case activeMatch && archivedMatch:
+			continue // ambiguous: matches both a live job and an archived one — leave job_id NULL
+		case activeMatch:
+			jobID = activeID
+		case archivedMatch:
+			jobID = archivedID
+		default:
+			continue // orphan: no active or archived job currently matches — leave job_id NULL
+		}
+		if _, err := tx.Exec(`UPDATE feedback SET job_id = ? WHERE id = ?`, jobID, r.id); err != nil {
+			return fmt.Errorf("backfill job_id for feedback %d: %w", r.id, err)
+		}
+	}
+	return nil
+}
+
+// legacyQuestion is parseLegacyQuestions' output shape — field-for-field the
+// same as jobs.DocQuestion, but store cannot import jobs (util ← store ←
+// core ← jobs ← api ← web: importing upward would both invert the layering
+// and create an import cycle), so this is its own copy, used only here.
+// It is also deliberately decoupled from this package's own DocQuestion:
+// migration code is frozen at what the v5 cutover needed, so a future
+// DocQuestion field change can never silently alter how legacy blobs parse.
+type legacyQuestion struct {
+	ID             string
+	Text           string
+	Context        string
+	Importance     string
+	Recommendation string
+	Answer         string
+	AnsweredAt     string
+}
+
+var (
+	legacyQuestionIDRe  = regexp.MustCompile(`^Q[0-9]+$`)
+	legacyImportanceSet = map[string]bool{"P0": true, "P1": true, "P2": true}
+)
+
+// parseLegacyQuestions exists ONLY for the v5 migration (migrateV5Questions
+// above): a trimmed copy of jobs.ParseDocQuestions' hand-rolled
+// questions.yaml subset —
+//
+//	questions:
+//	  - id: Q1
+//	    text: ...
+//	    context: ...
+//	    importance: P0
+//	    recommendation: ...
+//	    answer: ...
+//	    answered-at: ...
+//
+// — ported here because store cannot import jobs (see legacyQuestion's doc
+// comment) to reuse the original parser directly. Deliberately less strict
+// than the original: this runs once, against blob bytes that already
+// passed the original strict parser when zeus/carl wrote them, so its job
+// is "recover what's recoverable, in file order," not "re-validate from
+// scratch." An unknown continuation key is ignored rather than rejected; a
+// value is trimmed of surrounding whitespace but not otherwise sanitized.
+// What it still refuses — a missing/malformed header, a bad or duplicate
+// id, a value line outside any item, a stray/misindented line, a missing
+// text, or a bad importance — mirrors the shapes the original parser could
+// never have written in the first place, so hitting one of those means the
+// blob is genuinely corrupt, not just reformatted; the caller
+// (migrateV5Questions) skips that blob entirely rather than guessing at a
+// partial recovery. An empty file, or one that's only blank lines/
+// full-line comments, is a valid "no questions" state: nil, nil.
+func parseLegacyQuestions(data []byte) ([]legacyQuestion, error) {
+	s := strings.TrimPrefix(string(data), "\ufeff")
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+
+	headerLine := -1
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		headerLine = i
+		break
+	}
+	if headerLine < 0 {
+		return nil, nil
+	}
+	if strings.TrimRight(lines[headerLine], " \t") != "questions:" {
+		return nil, fmt.Errorf("line %d: expected \"questions:\" header, got %q", headerLine+1, lines[headerLine])
+	}
+
+	var out []legacyQuestion
+	seen := map[string]bool{}
+	var cur *legacyQuestion
+
+	finish := func() error {
+		if cur == nil {
+			return nil
+		}
+		if cur.Text == "" {
+			return fmt.Errorf("item %s missing text", cur.ID)
+		}
+		if !legacyImportanceSet[cur.Importance] {
+			return fmt.Errorf("item %s bad importance %q", cur.ID, cur.Importance)
+		}
+		out = append(out, *cur)
+		cur = nil
+		return nil
+	}
+
+	isItemStart := func(line string) bool {
+		return len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ' && strings.HasPrefix(line[2:], "- id:")
+	}
+	isContinuation := func(line string) bool {
+		return len(line) > 4 && line[:4] == "    " && line[4] != ' ' && line[4] != '\t'
+	}
+
+	for i := headerLine + 1; i < len(lines); i++ {
+		line := lines[i]
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+
+		switch {
+		case isItemStart(line):
+			if err := finish(); err != nil {
+				return nil, err
+			}
+			rest := strings.TrimPrefix(line[2:], "- ")
+			key, val, ok := strings.Cut(rest, ":")
+			if !ok || strings.TrimSpace(key) != "id" {
+				return nil, fmt.Errorf("line %d: item must start with \"- id: Qn\", got %q", i+1, t)
+			}
+			id := strings.TrimSpace(val)
+			if !legacyQuestionIDRe.MatchString(id) {
+				return nil, fmt.Errorf("line %d: bad id %q, want Q<digits>", i+1, id)
+			}
+			if seen[id] {
+				return nil, fmt.Errorf("line %d: duplicate id %q", i+1, id)
+			}
+			seen[id] = true
+			cur = &legacyQuestion{ID: id}
+
+		case isContinuation(line):
+			if cur == nil {
+				return nil, fmt.Errorf("line %d: value line outside any item %q", i+1, t)
+			}
+			key, val, ok := strings.Cut(line[4:], ":")
+			if !ok {
+				return nil, fmt.Errorf("line %d: bad line %q", i+1, t)
+			}
+			v := strings.TrimSpace(val)
+			switch strings.TrimSpace(key) {
+			case "text":
+				cur.Text = v
+			case "context":
+				cur.Context = v
+			case "importance":
+				cur.Importance = v
+			case "recommendation":
+				cur.Recommendation = v
+			case "answer":
+				cur.Answer = v
+			case "answered-at":
+				cur.AnsweredAt = v
+			}
+
+		default:
+			return nil, fmt.Errorf("line %d: stray/misindented line %q", i+1, t)
+		}
+	}
+	if err := finish(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // migrate reads the database's current PRAGMA user_version and applies
@@ -231,12 +631,17 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("kraken.db is schema v%d but this binary only knows v%d — upgrade the binary", version, schemaVersion)
 	}
 	for v := version + 1; v <= schemaVersion; v++ {
-		stmt, ok := migrations[v]
+		step, ok := migrations[v]
 		if !ok {
 			return fmt.Errorf("no migration registered for version %d", v)
 		}
-		if _, err := tx.Exec(stmt); err != nil {
+		if _, err := tx.Exec(step.sql); err != nil {
 			return fmt.Errorf("apply migration %d: %w", v, err)
+		}
+		if step.hook != nil {
+			if err := step.hook(tx); err != nil {
+				return fmt.Errorf("apply migration %d hook: %w", v, err)
+			}
 		}
 		// PRAGMA user_version doesn't accept a bound parameter; v is our
 		// own int constant, never user input.
