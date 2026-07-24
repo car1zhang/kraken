@@ -8,7 +8,7 @@ import (
 
 func TestSyncArtifactsTrueMirror(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "artifact-job", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "artifact-job"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestSyncArtifactsTrueMirror(t *testing.T) {
 
 func TestSyncArtifactsEmptySetDeletesAll(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "wipe", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "wipe"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestSyncArtifactsEmptySetDeletesAll(t *testing.T) {
 // in `files` still lands normally.
 func TestSyncArtifactsUnchangedSkipsUpsertAndSurvives(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "unchanged-job", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "unchanged-job"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestSyncArtifactsUnchangedSkipsUpsertAndSurvives(t *testing.T) {
 // files nor unchanged on a later sync gets deleted, same as a plain vanish.
 func TestSyncArtifactsUnchangedStillDeletedWhenDropped(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "unchanged-vanish", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "unchanged-vanish"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestSyncArtifactsUnchangedStillDeletedWhenDropped(t *testing.T) {
 
 func TestListArtifactMeta(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "meta-job", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "meta-job"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestListArtifactMeta(t *testing.T) {
 
 func TestGetArtifactNotFound(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "missing-art", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "missing-art"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

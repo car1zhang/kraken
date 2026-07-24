@@ -7,7 +7,7 @@ import (
 
 func TestSaveUploadRejectsInvalidExt(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "bad-ext", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "bad-ext"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestSaveUploadRejectsInvalidExt(t *testing.T) {
 
 func TestSaveUploadSequentialNaming(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "upload-job", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "upload-job"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -60,11 +60,11 @@ func TestSaveUploadSequentialNaming(t *testing.T) {
 
 func TestSaveUploadPerJobSequencing(t *testing.T) {
 	s := openTest(t)
-	id1, err := s.CreateJob(&Job{Slug: "job-a", Type: "build"})
+	id1, err := s.CreateJob(&Job{Slug: "job-a"})
 	if err != nil {
 		t.Fatalf("CreateJob 1: %v", err)
 	}
-	id2, err := s.CreateJob(&Job{Slug: "job-b", Type: "build"})
+	id2, err := s.CreateJob(&Job{Slug: "job-b"})
 	if err != nil {
 		t.Fatalf("CreateJob 2: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestSaveUploadPerJobSequencing(t *testing.T) {
 
 func TestUpsertUploadNamedPreservesNameAndUpserts(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "named-upload", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "named-upload"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestUpsertUploadNamedPreservesNameAndUpserts(t *testing.T) {
 
 func TestDeleteUploadsForJob(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "cleanup", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "cleanup"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

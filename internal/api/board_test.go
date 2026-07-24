@@ -100,17 +100,17 @@ func TestWebJobJSONShapeEmpty(t *testing.T) {
 	// a bare webJob (the common case: a draft/queued/done job with no live
 	// cell) must not emit any of the live-cell-only fields, and must never
 	// emit "escalations" — that field no longer exists on the type at all.
-	data, err := json.Marshal(webJob{Slug: "x", Type: "build", Repo: "monolith", State: "draft"})
+	data, err := json.Marshal(webJob{Slug: "x", Repo: "monolith", State: "draft"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(data)
-	for _, absent := range []string{"escalations", "detail", "question", "wakeup", "roster", "zeus_status", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts"} {
+	for _, absent := range []string{"escalations", "type", "detail", "question", "wakeup", "roster", "zeus_status", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts"} {
 		if strings.Contains(s, `"`+absent+`"`) {
 			t.Errorf("empty webJob JSON unexpectedly has %q: %s", absent, s)
 		}
 	}
-	for _, want := range []string{`"slug":"x"`, `"type":"build"`, `"state":"draft"`, `"live":false`, `"mtime":0`} {
+	for _, want := range []string{`"slug":"x"`, `"repo":"monolith"`, `"state":"draft"`, `"live":false`, `"mtime":0`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("webJob JSON missing %q: %s", want, s)
 		}
@@ -119,7 +119,7 @@ func TestWebJobJSONShapeEmpty(t *testing.T) {
 
 func TestWebJobJSONShapePopulated(t *testing.T) {
 	wj := webJob{
-		Slug: "x", Type: "build", Repo: "monolith", State: "blocked", Live: true,
+		Slug: "x", Repo: "monolith", State: "blocked", Live: true,
 		Detail: "zeus said something",
 		Question: &webQuestion{
 			ToolUseID: "tu_1",

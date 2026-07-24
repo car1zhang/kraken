@@ -10,7 +10,6 @@ import (
 
 const sampleJob = `---
 job: yelp-dedupe          # slug; this file is yelp-dedupe.job.md
-type: build               # build | info
 repo: monolith            # substring-matched against existing repos (alphabetic tiebreak);
                           # no match → job errors, surfaced in the viewer
 ready: true               # flip to true to queue
@@ -36,7 +35,7 @@ func TestParseJobFull(t *testing.T) {
 	if j.Err != "" {
 		t.Fatalf("unexpected err: %s", j.Err)
 	}
-	if j.Slug != "yelp-dedupe" || j.Type != "build" || j.Repo != "monolith" {
+	if j.Slug != "yelp-dedupe" || j.Repo != "monolith" {
 		t.Fatalf("identity: %+v", j)
 	}
 	if !j.Ready || j.Solo {
@@ -70,7 +69,6 @@ func TestParseJobTemplateDefaults(t *testing.T) {
 	// the pluto template as expanded: empty prereqs with inline comment lines
 	src := `---
 job: name
-type: build
 repo: monolith            # substring-matched
 ready: false              # flip to true to queue
 prereqs: []               # - job: other-slug
@@ -139,26 +137,27 @@ func TestParseJobModel(t *testing.T) {
 }
 
 func TestParseJobSkipDoc(t *testing.T) {
-	j := ParseJob("x.job.md", []byte("---\njob: x\ntype: build\nrepo: monolith\nskip-doc: true\n---\n"))
+	j := ParseJob("x.job.md", []byte("---\njob: x\nrepo: monolith\nskip-doc: true\n---\n"))
 	if j.Err != "" || !j.SkipDoc {
-		t.Fatalf("skip-doc build: err=%q skipdoc=%v", j.Err, j.SkipDoc)
+		t.Fatalf("skip-doc: err=%q skipdoc=%v", j.Err, j.SkipDoc)
 	}
-	if j := ParseJob("x.job.md", []byte("---\njob: x\ntype: build\nskip-doc: sure\n---\n")); j.Err == "" {
+	if j := ParseJob("x.job.md", []byte("---\njob: x\nskip-doc: sure\n---\n")); j.Err == "" {
 		t.Error("bad skip-doc bool: expected Err")
 	}
-	// info jobs have no doc→send split to skip: strict-loud, regardless of
-	// key order relative to type
+	// Q14: skip-doc is now valid on any job — there is no more job-level
+	// type to cross-check it against, so it never errors purely for being
+	// set, key order or not.
 	for _, src := range []string{
-		"---\njob: x\ntype: info\nskip-doc: true\n---\n",
-		"---\njob: x\nskip-doc: true\ntype: info\n---\n",
+		"---\njob: x\nrepo: monolith\nskip-doc: true\n---\n",
+		"---\njob: x\nskip-doc: true\nrepo: monolith\n---\n",
 	} {
-		if j := ParseJob("x.job.md", []byte(src)); !strings.Contains(j.Err, "skip-doc") {
-			t.Errorf("skip-doc on info job: err=%q", j.Err)
+		if j := ParseJob("x.job.md", []byte(src)); j.Err != "" {
+			t.Errorf("skip-doc: err=%q", j.Err)
 		}
 	}
-	// false on an info job is fine — the checkbox merely untoggled
-	if j := ParseJob("x.job.md", []byte("---\njob: x\ntype: info\nrepo: monolith\nskip-doc: false\n---\n")); j.Err != "" {
-		t.Errorf("skip-doc false on info job: err=%q", j.Err)
+	// false is fine too — the checkbox merely untoggled
+	if j := ParseJob("x.job.md", []byte("---\njob: x\nrepo: monolith\nskip-doc: false\n---\n")); j.Err != "" {
+		t.Errorf("skip-doc false: err=%q", j.Err)
 	}
 }
 
@@ -168,7 +167,6 @@ func TestParseJobStrict(t *testing.T) {
 	cases := map[string]string{
 		"no frontmatter":     "just some text\n",
 		"unterminated":       "---\njob: x\n",
-		"bad type":           "---\ntype: banana\n---\n",
 		"colonless line":     "---\nnonsense\n---\n",
 		"unknown key":        "---\nraedy: true\n---\n",
 		"duplicate key":      "---\nrepo: a\nrepo: b\n---\n",
@@ -238,26 +236,24 @@ func TestParseJobTeardownMarker(t *testing.T) {
 	}
 }
 
-func TestParseJobType(t *testing.T) {
-	cases := map[string]struct {
-		wantType string
-		wantErr  bool
-	}{
-		"---\ntype: build\n---\n":    {"build", false},
-		"---\ntype: info\n---\n":     {"info", false},
-		"---\ntype: explore\n---\n":  {"info", false},  // legacy alias
-		"---\ntype: question\n---\n": {"info", false},  // legacy alias
-		"---\ntype:\n---\n":          {"build", false}, // empty keeps default
-		"---\n---\n":                 {"build", false}, // absent keeps default
-		"---\ntype: garbage\n---\n":  {"build", true},
-	}
-	for src, want := range cases {
+// TestParseJobTypeLegacyDiscard covers Q14: the job-level type concept is
+// gone, so the type: frontmatter key is now a consumed-and-discarded legacy
+// key exactly like auto-approve/success — ANY value (including the old
+// explore/question aliases, or outright garbage) must parse clean, never
+// erroring, and never surviving anywhere on the parsed Job.
+func TestParseJobTypeLegacyDiscard(t *testing.T) {
+	for _, src := range []string{
+		"---\ntype: build\n---\n",
+		"---\ntype: info\n---\n",
+		"---\ntype: explore\n---\n",  // legacy alias
+		"---\ntype: question\n---\n", // legacy alias
+		"---\ntype:\n---\n",          // empty
+		"---\n---\n",                 // absent
+		"---\ntype: garbage\n---\n",  // previously an error; now just discarded
+	} {
 		j := ParseJob("x.job.md", []byte(src))
-		if j.Type != want.wantType {
-			t.Errorf("%q: type = %q, want %q", src, j.Type, want.wantType)
-		}
-		if (j.Err != "") != want.wantErr {
-			t.Errorf("%q: err = %q, wantErr %v", src, j.Err, want.wantErr)
+		if j.Err != "" {
+			t.Errorf("%q: unexpected err %q", src, j.Err)
 		}
 	}
 }

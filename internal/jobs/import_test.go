@@ -85,8 +85,8 @@ const feedbackHeaderFixture = "time: 2026-07-01T10:00:00Z\njob: rich\nhome: /Use
 
 // legacyJobFixture exercises every legacy frontmatter shape that existing
 // pluto job files still carry: auto-approve: (discarded scalar), success: |
-// (discarded block scalar), and type: explore (parses as info) — all of
-// which must still import with Err == "".
+// (discarded block scalar), and type: explore (Q14: discarded, like
+// auto-approve/success) — all of which must still import with Err == "".
 const legacyJobFixture = `---
 job: legacy
 type: explore
@@ -429,7 +429,10 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug minimal: %v", err)
 	}
-	if minimal.Type != "info" || minimal.Ready {
+	// minimalJobFixture carries a legacy type: info line (Q14: the key is
+	// now consumed-and-discarded, like auto-approve/success) — this is the
+	// designated legacy-discard coverage; the row must still import clean.
+	if minimal.Ready {
 		t.Fatalf("minimal round trip: %+v", minimal)
 	}
 
@@ -1071,8 +1074,8 @@ func TestImportAllLegacyKeysImportCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if legacy.Type != "info" || !legacy.Ready {
-		t.Fatalf("legacy job round trip (type: explore -> info, auto-approve/success discarded): %+v", legacy)
+	if !legacy.Ready {
+		t.Fatalf("legacy job round trip (type: explore, auto-approve/success all discarded): %+v", legacy)
 	}
 }
 

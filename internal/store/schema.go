@@ -6,8 +6,11 @@ import "fmt"
 // own PRAGMA user_version so migrate() is a no-op on an already-current
 // database (open/migrate idempotence). Bump this and append a new
 // migration step when the schema changes; version 1 creates everything the
-// spec's Data Model section calls for.
-const schemaVersion = 1
+// spec's Data Model section calls for, version 2 adds the questions table,
+// version 3 drops jobs.type (Q14 — the build/info job-level type concept is
+// gone; the pipeline distinction now lives in /aim vs /info skill choice
+// plus carl's /do steering, never a stored column).
+const schemaVersion = 3
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -50,9 +53,10 @@ CREATE TABLE jobs (
 	-- store-mode equivalent — a store-backed job with garbage raw content
 	-- saved clean instead of pinning to draft like an unparseable file does.
 	-- Added by editing schemaV1 in place rather than a new migrations[2]
-	-- entry: this schema has never shipped (still v1, no real kraken.db has
-	-- been created against it yet), so there's nothing to migrate forward —
-	-- see the schemaVersion doc comment.
+	-- entry: this column shipped before any real kraken.db existed, so
+	-- there was nothing to migrate forward at the time. Schema changes
+	-- since then (e.g. the questions table) can't assume that anymore and
+	-- append migrations[N] instead — see the schemaVersion doc comment.
 	err           TEXT NOT NULL DEFAULT ''
 );
 
@@ -143,13 +147,45 @@ CREATE TABLE kv (
 );
 `
 
+// schemaV2 adds the doc-questions table. It could not be folded into
+// schemaV1 in place (the way the jobs.err column was): a real kraken.db
+// already existed at user_version 1 without this table by the time the
+// doc-questions feature landed, and migrate() only ever applies versions
+// above the database's current one — an in-place edit to schemaV1 would
+// never run against that database. This is the pattern every future schema
+// change should follow: append migrations[N+1], never edit an already-
+// released schemaV<N> string in place.
+const schemaV2 = `
+-- Doc-questions file, blob-canonical like artifacts: one row per job,
+-- questions.yaml bytes, synced on the same triggers as the artifacts table
+-- (jobs/sync.go).
+CREATE TABLE questions (
+	job_id INTEGER PRIMARY KEY NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+	bytes  BLOB,
+	mtime  INTEGER NOT NULL DEFAULT 0 -- caller-supplied unix millis
+);
+`
+
+// schemaV3 drops jobs.type (Q14): go-sqlite3 bundles a modern SQLite with
+// native ALTER TABLE ... DROP COLUMN support (no rebuild-the-table dance
+// needed), and the column carried a CHECK constraint but no index, so
+// dropping it is the entire migration. Like schemaV2, this could not be
+// folded into schemaV1 in place — a real kraken.db already exists with the
+// column by the time this shipped.
+const schemaV3 = `
+ALTER TABLE jobs DROP COLUMN type;
+`
+
 // migrations maps a target user_version to the SQL that gets a freshly
-// created (or older) database there. Only version 1 exists today; future
-// schema changes append migrations[2], migrations[3], ... rather than
-// editing schemaV1 in place, so a database created under an older binary
-// still migrates forward correctly.
+// created (or older) database there. migrations[1] is the original
+// release; migrations[2] adds the questions table; migrations[3] drops
+// jobs.type. Future schema changes append migrations[4], migrations[5], ...
+// rather than editing an existing schemaV<N> string in place, so a database
+// created under an older binary still migrates forward correctly.
 var migrations = map[int]string{
 	1: schemaV1,
+	2: schemaV2,
+	3: schemaV3,
 }
 
 // migrate reads the database's current PRAGMA user_version and applies
@@ -171,6 +207,15 @@ func (s *Store) migrate() error {
 	var version int
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
+	}
+	// A db written by a newer binary (user_version > schemaVersion) must
+	// never be opened: migrate()'s loop below is a strict no-op in that
+	// case (version+1 > schemaVersion), so without this guard an old binary
+	// would silently proceed to query columns/tables a later migration
+	// added or removed — surfacing as confusing deep-query failures (e.g.
+	// "no such column") instead of a clear upgrade message at Open().
+	if version > schemaVersion {
+		return fmt.Errorf("kraken.db is schema v%d but this binary only knows v%d — upgrade the binary", version, schemaVersion)
 	}
 	for v := version + 1; v <= schemaVersion; v++ {
 		stmt, ok := migrations[v]

@@ -180,7 +180,7 @@ func TestBackupNowWritesAndRotates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if _, err := st.CreateJob(&store.Job{Slug: "seed", Type: "info"}); err != nil {
+	if _, err := st.CreateJob(&store.Job{Slug: "seed"}); err != nil {
 		t.Fatal(err)
 	}
 

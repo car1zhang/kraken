@@ -11,7 +11,7 @@ import (
 
 func TestSaveJobEditAppliesAllThreeAtomically(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "edit-all", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "edit-all"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestSaveJobEditAppliesAllThreeAtomically(t *testing.T) {
 // leave prereqs/PRs completely untouched — not partially applied.
 func TestSaveJobEditStaleRevRollsBackEverything(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "edit-stale", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "edit-stale"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestSaveJobEditStaleRevRollsBackEverything(t *testing.T) {
 // no-op.
 func TestSaveJobEditSkipsPrereqsAndPRsWhenToldTo(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "edit-skip", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "edit-skip"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestSaveJobEditSkipsPrereqsAndPRsWhenToldTo(t *testing.T) {
 // syncStorePRs (api/jobedit.go, pre-L10) had.
 func TestSaveJobEditPRSyncRemovesUnlisted(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "edit-prsync", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "edit-prsync"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

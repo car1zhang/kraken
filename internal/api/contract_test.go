@@ -166,29 +166,30 @@ var webBoardSpec = map[string]fieldSpec{
 }
 
 var webJobSpec = map[string]fieldSpec{
-	"slug":          {kind: wireString, required: true},
-	"type":          {kind: wireString, required: true},
-	"repo":          {kind: wireString, required: true},
-	"state":         {kind: wireString, required: true},
-	"err":           {kind: wireString, required: false},
-	"outcome":       {kind: wireString, required: false},
-	"cell":          {kind: wireString, required: false},
-	"live":          {kind: wireBool, required: true},
-	"prereqs":       {kind: wireArray, required: false},
-	"artifacts":     {kind: wireArray, required: false},
-	"detail":        {kind: wireString, required: false},
-	"question":      {kind: wireObject, required: false},
-	"zeus_status":   {kind: wireString, required: false},
-	"wakeup":        {kind: wireObject, required: false},
-	"roster":        {kind: wireArray, required: false},
-	"health":        {kind: wireString, required: false},
-	"mtime":         {kind: wireNumber, required: true},
-	"archived":      {kind: wireBool, required: false},
-	"display_slug":  {kind: wireString, required: false},
-	"cell_gone":     {kind: wireBool, required: false},
-	"reactivatable": {kind: wireBool, required: false},
-	"last_sent":     {kind: wireString, required: false},
-	"prs":           {kind: wireArray, required: false},
+	"slug":              {kind: wireString, required: true},
+	"repo":              {kind: wireString, required: true},
+	"state":             {kind: wireString, required: true},
+	"err":               {kind: wireString, required: false},
+	"outcome":           {kind: wireString, required: false},
+	"cell":              {kind: wireString, required: false},
+	"live":              {kind: wireBool, required: true},
+	"prereqs":           {kind: wireArray, required: false},
+	"artifacts":         {kind: wireArray, required: false},
+	"detail":            {kind: wireString, required: false},
+	"question":          {kind: wireObject, required: false},
+	"zeus_status":       {kind: wireString, required: false},
+	"wakeup":            {kind: wireObject, required: false},
+	"roster":            {kind: wireArray, required: false},
+	"health":            {kind: wireString, required: false},
+	"mtime":             {kind: wireNumber, required: true},
+	"archived":          {kind: wireBool, required: false},
+	"display_slug":      {kind: wireString, required: false},
+	"cell_gone":         {kind: wireBool, required: false},
+	"reactivatable":     {kind: wireBool, required: false},
+	"last_sent":         {kind: wireString, required: false},
+	"prs":               {kind: wireArray, required: false},
+	"doc_questions":     {kind: wireArray, required: false},
+	"doc_questions_err": {kind: wireString, required: false},
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
@@ -236,7 +237,7 @@ func TestWebBoardWireShape(t *testing.T) {
 }
 
 func TestWebJobWireShapeEmpty(t *testing.T) {
-	data, err := json.Marshal(webJob{Slug: "x", Type: "build", Repo: "monolith", State: "draft"})
+	data, err := json.Marshal(webJob{Slug: "x", Repo: "monolith", State: "draft"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +246,7 @@ func TestWebJobWireShapeEmpty(t *testing.T) {
 
 func TestWebJobWireShapePopulated(t *testing.T) {
 	wj := webJob{
-		Slug: "x", Type: "build", Repo: "monolith", State: "blocked", Live: true,
+		Slug: "x", Repo: "monolith", State: "blocked", Live: true,
 		Err: "e", Outcome: "o", Cell: "cell-x",
 		Prereqs:   []webPrereq{{Job: "y", Gated: true, Done: false}},
 		Artifacts: []webArtifact{{Name: "a", URL: "/api/artifact/x/cell/a"}},
@@ -268,6 +269,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		CellGone:      true,
 		Reactivatable: true,
 		LastSent:      "pivot to plan B",
+		DocQuestions:  []webDocQuestion{{ID: "Q1", Text: "which approach?", Importance: "P1", Answer: "A"}},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -335,6 +337,37 @@ func TestWebAgentWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webAgent", data, webAgentSpec)
+}
+
+// webDocQuestionSpec covers board.go's webDocQuestion, the elements of
+// webJob's "doc_questions" array — mirrors jobs.DocQuestion's own field set
+// verbatim, same json tags, so id/text/importance are always-present and
+// context/recommendation/answer/answered_at are omitempty.
+var webDocQuestionSpec = map[string]fieldSpec{
+	"id":             {kind: wireString, required: true},
+	"text":           {kind: wireString, required: true},
+	"context":        {kind: wireString, required: false},
+	"importance":     {kind: wireString, required: true},
+	"recommendation": {kind: wireString, required: false},
+	"answer":         {kind: wireString, required: false},
+	"answered_at":    {kind: wireString, required: false},
+}
+
+func TestWebDocQuestionWireShape(t *testing.T) {
+	data, err := json.Marshal(webDocQuestion{ID: "Q1", Text: "which approach?", Importance: "P1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webDocQuestion (empty optionals)", data, webDocQuestionSpec)
+
+	data, err = json.Marshal(webDocQuestion{
+		ID: "Q1", Text: "which approach?", Context: "some background",
+		Importance: "P0", Recommendation: "go with A", Answer: "A", AnsweredAt: "2026-07-23T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webDocQuestion (populated)", data, webDocQuestionSpec)
 }
 
 func TestJobPRWireShape(t *testing.T) {
@@ -799,7 +832,6 @@ var jobRawSpec = map[string]fieldSpec{
 
 var jobFormSpec = map[string]fieldSpec{
 	"slug":     {kind: wireString, required: true},
-	"type":     {kind: wireString, required: true},
 	"repo":     {kind: wireString, required: true},
 	"base":     {kind: wireString, required: true},
 	"ready":    {kind: wireBool, required: true},
@@ -851,7 +883,7 @@ func TestJobSaveFormWireShape(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-saveform", "")
 
-	body := mustJSON(t, map[string]any{"slug": "contract-saveform", "type": "build", "repo": "monolith"})
+	body := mustJSON(t, map[string]any{"slug": "contract-saveform", "repo": "monolith"})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -1074,7 +1106,7 @@ func TestJobSaveFormConflictWireShape(t *testing.T) {
 	// nowhere near 1) reliably mismatches the file's actual mtime without
 	// needing to fetch it first.
 	body := mustJSON(t, map[string]any{
-		"slug": "contract-saveform-conflict", "type": "build", "repo": "monolith", "mtime": 1,
+		"slug": "contract-saveform-conflict", "repo": "monolith", "mtime": 1,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec := httptest.NewRecorder()

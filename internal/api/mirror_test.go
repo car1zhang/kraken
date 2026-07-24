@@ -18,6 +18,7 @@ import (
 var mirrorGatedRoutes = []string{
 	"/api/start", "/api/kill", "/api/stop", "/api/steer",
 	"/api/question", "/api/retry", "/api/done", "/api/reactivate",
+	"/api/doc-question",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",

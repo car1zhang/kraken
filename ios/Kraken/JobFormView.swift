@@ -30,7 +30,6 @@ struct JobFormView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var type = "build"
     @State private var repo = ""
     @State private var base = ""
     @State private var ready = false
@@ -138,13 +137,6 @@ struct JobFormView: View {
                         .foregroundStyle(KTheme.revealed)
                 }
             }
-            kSection("Type") {
-                Picker("Type", selection: $type) {
-                    Text("build").tag("build")
-                    Text("info").tag("info")
-                }
-                .pickerStyle(.segmented)
-            }
             kSection("Repo") {
                 TextField("repo", text: $repo)
                     .autocorrectionDisabled()
@@ -207,7 +199,7 @@ struct JobFormView: View {
                 Toggle("Solo (no subagent crew)", isOn: $solo)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
-                Toggle("Skip doc (build only: implement directly)", isOn: $skipDoc)
+                Toggle("Skip doc (skip /aim → /do: implement directly)", isOn: $skipDoc)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
             }
@@ -377,7 +369,7 @@ struct JobFormView: View {
     // once, the same idiom SpecSection uses for its `.task(id:)` key.
     private var autosaveSnapshotKey: String {
         let prereqsPart = prereqRows.map { "\($0.job)=\($0.gated)" }.joined(separator: ",")
-        return "\(type)|\(repo)|\(base)|\(model)|\(solo)|\(skipDoc)|\(prereqsPart)|\(spec)"
+        return "\(repo)|\(base)|\(model)|\(solo)|\(skipDoc)|\(prereqsPart)|\(spec)"
     }
 
     private func load() async {
@@ -385,7 +377,6 @@ struct JobFormView: View {
         fetchError = nil
         do {
             let f = try await APIClient.shared.fetchJobForm(baseURL: baseURL, slug: slug)
-            type = f.type
             repo = f.repo
             base = f.base
             ready = f.ready
@@ -470,7 +461,7 @@ struct JobFormView: View {
     private func performAutosave() async {
         syncState = .syncing
         let req = JobFormSaveRequest(
-            slug: slug, type: type, repo: repo, base: base,
+            slug: slug, repo: repo, base: base,
             ready: ready, solo: solo,
             model: model.trimmingCharacters(in: .whitespaces), skipDoc: skipDoc,
             prereqs: prereqRows.map { Prereq(job: $0.job, gated: $0.gated) },

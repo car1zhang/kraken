@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
@@ -18,7 +21,18 @@ import (
 type webReq struct {
 	Slug string `json:"slug"`
 	Text string `json:"text,omitempty"`
+	// ID is doc-question-only (POST /api/doc-question's question id, e.g.
+	// "Q1"): additive, every other webAction handler simply ignores it.
+	ID string `json:"id,omitempty"`
 }
+
+// docAnswerMaxLen caps a doc-question answer's length (after trim, counted
+// in runes so multi-byte text isn't penalized), same cap convention
+// ios/API.md already documents for last_sent/Detail: a board answer field
+// isn't a place for pasted essays, and an unbounded answer gets re-served
+// inside every /api/board payload for as long as the job is
+// started+non-done (see athena-edge's C-E3).
+const docAnswerMaxLen = 4000
 
 // mirrorGatedActions names every webAction whose handler reaches into a
 // REAL tmux pane, worktree, or agent process — found by reading every
@@ -41,6 +55,10 @@ type webReq struct {
 //     archive/ subdir) — preserved artifact flat-copies live as plain
 //     files on disk regardless of storage mode (see jobs/archive.go) — so
 //     they run in mirror mode only when PlutoDir is a sandbox copy.
+//   - doc-question (webAnswerDocQuestion → jobs.AnswerDocQuestion) writes
+//     into questions.yaml inside a real cell dir — no tmux/pane involved,
+//     but still a real filesystem mutation outside the sandbox DB, same
+//     reasoning as the tmux-driving actions above.
 //
 // webQueue and webDequeue stay UNGATED: each only flips the ready DB field
 // and never touches any file outside the sandbox DB. Under mirror the tick
@@ -48,14 +66,15 @@ type webReq struct {
 // mirror-queued job simply sits in the queued column — which is exactly
 // what draft→queued parity testing needs to show.
 var mirrorGatedActions = map[string]bool{
-	"start":      true,
-	"kill":       true,
-	"stop":       true,
-	"steer":      true,
-	"question":   true,
-	"retry":      true,
-	"done":       true,
-	"reactivate": true,
+	"start":        true,
+	"kill":         true,
+	"stop":         true,
+	"steer":        true,
+	"question":     true,
+	"retry":        true,
+	"done":         true,
+	"reactivate":   true,
+	"doc-question": true,
 }
 
 // mirrorPlutoActions are DB-local moves whose only real-world side effect
@@ -243,6 +262,57 @@ func sendDigit(p *core.Peer, digit string) error {
 		return fmt.Errorf("the pane no longer shows the question — refresh the board")
 	}
 	return exec.Command("tmux", "send-keys", "-l", "-t", p.Pane, digit).Run()
+}
+
+// webAnswerDocQuestion is the doc-questions panel's answer submit: a
+// surgical file edit (jobs.AnswerDocQuestion), never a re-serialize, into
+// the cell's questions.yaml. Unlike webAnswerQuestion (the interactive
+// AskUserQuestion digit-press), this needs NO live agent at all — zeus may
+// be dead, mid-teardown-recovery, or the tmux session simply gone; the file
+// is the record, and answering it is carl updating that record directly.
+// The only liveness requirement is that the cell DIR itself still exists:
+// once a job's cell is actually torn down, questions.yaml (and everything
+// else in the cell dir) is gone for good, and the job's answers as last
+// synced to the store become permanently read-only.
+func webAnswerDocQuestion(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		return fmt.Errorf("missing question id")
+	}
+	if !j.Started() || j.State == "done" {
+		return fmt.Errorf("%s hasn't started (or is already done) — no questions to answer", j.Slug)
+	}
+	path := jobs.QuestionsPath(j)
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("%s's cell is gone — questions are read-only", j.Slug)
+	}
+	// jobs.AnswerDocQuestion also guards empty-after-trim, but check here
+	// too so the error names the field the way carl's UI labels it.
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		return fmt.Errorf("answer must not be empty")
+	}
+	if n := len([]rune(text)); n > docAnswerMaxLen {
+		return fmt.Errorf("answer too long (%d chars, max %d)", n, docAnswerMaxLen)
+	}
+	if err := jobs.AnswerDocQuestion(path, id, req.Text, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		// jobs.AnswerDocQuestion's "no questions file at <path>" names the
+		// real filesystem path — the cell dir existing but the file itself
+		// missing (a fresh reactivate, a save that hasn't landed yet), same
+		// case webAnswerDocQuestion just proved isn't "cell is gone". Every
+		// other error it returns (already answered / no such question /
+		// empty answer) is already path-free and passes through unchanged.
+		if strings.HasPrefix(err.Error(), "no questions file at ") {
+			return fmt.Errorf("no questions file for this job")
+		}
+		return err
+	}
+	jobs.SyncQuestionsNow(j)
+	return nil
 }
 
 // webRetry pokes an unhealthy cell agent; shared core in jobs.RetryCell.

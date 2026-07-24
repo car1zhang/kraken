@@ -27,7 +27,6 @@ import (
 type Job struct {
 	Slug string `json:"slug"`
 	File string `json:"file"`
-	Type string `json:"type"` // build | info (legacy explore/question parse as info)
 	Repo string `json:"repo"`
 	// Base is the ref the cell's worktree branches from; empty means the
 	// default (origin/main, falling back to main).
@@ -39,8 +38,10 @@ type Job struct {
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
 	// model can't change out from under it. Empty means claude's default.
 	Model string `json:"model,omitempty"`
-	// SkipDoc (build jobs only) skips the /aim → /do phase: zeus implements
-	// the spec directly, keeping the manual-test gate and PR pipeline.
+	// SkipDoc skips the /aim → /do phase: zeus implements the spec directly,
+	// keeping the manual-test gate and PR pipeline. Valid on any job (Q14
+	// removed the build/info job-type distinction — the pipeline shape is now
+	// steered by carl and the /aim vs /info skill choice, not a job field).
 	SkipDoc bool     `json:"skip_doc,omitempty"`
 	Prereqs []Prereq `json:"prereqs,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
@@ -211,7 +212,7 @@ var validStates = map[string]bool{
 // ParseJob parses one job file's bytes. name is the file's base name, used to
 // derive the slug when the frontmatter omits or mangles `job:`.
 func ParseJob(name string, data []byte) *Job {
-	j := &Job{Slug: strings.TrimSuffix(name, JobSuffix), Type: "build"}
+	j := &Job{Slug: strings.TrimSuffix(name, JobSuffix)}
 	// CRLF-saved files would otherwise bake \r into values (and straight into
 	// the zeus prompt); job files are line-oriented text, so normalize
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
@@ -264,16 +265,13 @@ func ParseJob(name string, data []byte) *Job {
 				j.Slug = val
 			}
 		case "type":
-			switch val {
-			case "build", "info":
-				j.Type = val
-			case "explore", "question":
-				// legacy values: existing pluto job files must keep working
-				j.Type = "info"
-			case "":
-			default:
-				j.addErr(fmt.Sprintf("unknown type %q", val))
-			}
+			// legacy field: removed from the schema (Q14 — job type is gone;
+			// the pipeline distinction now lives in /aim vs /info skill
+			// choice plus carl's /do steering, never a job field), but
+			// existing pluto job files still carry type: keys (build, info,
+			// and the older explore/question aliases). Keep consuming the
+			// line so those files still parse with Err == "" — just discard
+			// the value, exactly like auto-approve/success below.
 		case "repo":
 			j.Repo = val
 		case "base":
@@ -347,11 +345,6 @@ func ParseJob(name string, data []byte) *Job {
 	}
 	if j.Slug == "" {
 		j.Slug = strings.TrimSuffix(name, JobSuffix)
-	}
-	// cross-field check after the loop — key order in the file is free, so
-	// type may not be known yet when skip-doc parses
-	if j.SkipDoc && j.Type != "build" {
-		j.addErr("skip-doc only applies to build jobs")
 	}
 	return j
 }
@@ -500,7 +493,6 @@ func parsePrereqs(j *Job, fm []string, i *int) []Prereq {
 func JobTemplate(slug string) string {
 	return "---\n" +
 		"job: " + slug + " # slug; this file is " + slug + ".job.md\n" +
-		"type: build               # build | info\n" +
 		"repo: monolith            # substring-matched against existing repos (alphabetic tiebreak);\n" +
 		"                          # no match → job errors, surfaced in the viewer\n" +
 		"# base: origin/main       # optional: ref the worktree branches from (default origin/main, else main)\n" +
@@ -511,7 +503,7 @@ func JobTemplate(slug string) string {
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
 		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
 		"                          # applied once at cell start, default = claude's own default\n" +
-		"# skip-doc: true          # build only: skip the /aim → /do phase — zeus implements the spec directly\n" +
+		"# skip-doc: true          # skip the /aim → /do phase — zeus implements the spec directly\n" +
 		"---\n"
 }
 

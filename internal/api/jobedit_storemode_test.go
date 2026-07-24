@@ -32,7 +32,7 @@ func mustCreateStoreJob(t *testing.T, st *store.Store, j store.Job) *jobs.Job {
 func TestWebJobRawStoreModeRoundTrip(t *testing.T) {
 	useTestStore(t)
 	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{
-		Slug: "raw-store", Type: "build", Repo: "monolith", Body: "\nsome spec text\n",
+		Slug: "raw-store", Repo: "monolith", Body: "\nsome spec text\n",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/job/raw?slug=raw-store", nil)
@@ -61,12 +61,12 @@ func TestWebJobRawStoreModeRoundTrip(t *testing.T) {
 	if parsed.Err != "" {
 		t.Fatalf("composed raw content doesn't parse: %s\ncontent:\n%s", parsed.Err, content)
 	}
-	if parsed.Repo != "monolith" || parsed.Type != "build" {
+	if parsed.Repo != "monolith" {
 		t.Fatalf("round-tripped fields: %+v", parsed)
 	}
 
 	// edit it back through webJobSave with a modified spec.
-	newContent := "---\njob: raw-store\ntype: build\nrepo: other-repo\nready: false\nprereqs: []\nsolo: false\n---\n\nedited spec\n"
+	newContent := "---\njob: raw-store\nrepo: other-repo\nready: false\nprereqs: []\nsolo: false\n---\n\nedited spec\n"
 	saveBody := mustJSON(t, map[string]any{"slug": "raw-store", "content": newContent, "mtime": mtime})
 	saveReq := httptest.NewRequest(http.MethodPost, "/api/job/save", bytes.NewReader(saveBody))
 	saveRec := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func TestWebJobSaveStoreModeUnparseablePreservesFields(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
 	j := mustCreateStoreJob(t, st, store.Job{
-		Slug: "garbage-store", Type: "build", Repo: "monolith", State: "done", Session: "sess-abc",
+		Slug: "garbage-store", Repo: "monolith", State: "done", Session: "sess-abc",
 	})
 	if err := st.UpsertPR(j.ID, "https://github.com/x/y/pull/1", "open"); err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestWebJobSaveStoreModeUnparseablePreservesFields(t *testing.T) {
 	if reloaded == nil {
 		t.Fatal("job missing after unparseable save")
 	}
-	if reloaded.Type != "build" || reloaded.Repo != "monolith" || reloaded.State != "done" || reloaded.Session != "sess-abc" {
+	if reloaded.Repo != "monolith" || reloaded.State != "done" || reloaded.Session != "sess-abc" {
 		t.Fatalf("frontmatter fields clobbered by an unparseable save: %+v", reloaded)
 	}
 	if reloaded.Body != garbage {
@@ -165,7 +165,7 @@ func TestWebJobSaveStoreModeUnparseablePreservesFields(t *testing.T) {
 func TestWebJobSaveStoreModeGarbageContentPinsToDraft(t *testing.T) {
 	useTestStore(t)
 	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{
-		Slug: "garbage-pin", Type: "build", Repo: "monolith", Ready: true,
+		Slug: "garbage-pin", Repo: "monolith", Ready: true,
 	})
 
 	garbage := "not even frontmatter, just plain text"
@@ -213,7 +213,7 @@ func TestWebJobSaveStoreModeGarbageContentPinsToDraft(t *testing.T) {
 
 func TestWebJobSaveStoreModeStaleRevConflict(t *testing.T) {
 	useTestStore(t)
-	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "stale-store", Type: "build", Repo: "monolith"})
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "stale-store", Repo: "monolith"})
 
 	content := "---\njob: stale-store\ntype: build\nrepo: monolith\nready: false\nprereqs: []\nsolo: false\n---\n\nx\n"
 	body := mustJSON(t, map[string]any{"slug": "stale-store", "content": content, "mtime": 999})
@@ -240,14 +240,14 @@ func TestWebJobSaveStoreModeStaleRevConflict(t *testing.T) {
 func TestWebJobSaveFormStoreModeStaleAfterPRAttach(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "pr-interleave", Type: "build", Repo: "monolith"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "pr-interleave", Repo: "monolith"})
 	loadedMTime := j.Rev // the editor's "opened at rev 1" snapshot
 
 	if err := st.UpsertPR(j.ID, "https://github.com/carl/kraken/pull/1", "open"); err != nil {
 		t.Fatalf("UpsertPR: %v", err)
 	}
 
-	body := mustJSON(t, jobFormFields{Slug: "pr-interleave", Type: "build", Repo: "other", MTime: mtimeToken(loadedMTime)})
+	body := mustJSON(t, jobFormFields{Slug: "pr-interleave", Repo: "other", MTime: mtimeToken(loadedMTime)})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -269,10 +269,10 @@ func TestWebJobSaveFormStoreModeStaleAfterPRAttach(t *testing.T) {
 
 func TestWebJobSaveFormStoreModeRevAndForce(t *testing.T) {
 	useTestStore(t)
-	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "form-store", Type: "build", Repo: "monolith"})
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "form-store", Repo: "monolith"})
 
 	// a stale mtime refuses...
-	body := mustJSON(t, jobFormFields{Slug: "form-store", Type: "build", Repo: "other", MTime: 999})
+	body := mustJSON(t, jobFormFields{Slug: "form-store", Repo: "other", MTime: 999})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -281,7 +281,7 @@ func TestWebJobSaveFormStoreModeRevAndForce(t *testing.T) {
 	}
 
 	// ...but Force overrides it.
-	body = mustJSON(t, jobFormFields{Slug: "form-store", Type: "build", Repo: "other", MTime: 999, Force: true})
+	body = mustJSON(t, jobFormFields{Slug: "form-store", Repo: "other", MTime: 999, Force: true})
 	req = httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -308,7 +308,7 @@ func TestWebJobCreateStoreMode(t *testing.T) {
 	if j == nil {
 		t.Fatal("job not created in store")
 	}
-	if j.Type != "build" || j.Repo != "monolith" {
+	if j.Repo != "monolith" {
 		t.Fatalf("defaults not applied: %+v", j)
 	}
 
@@ -347,7 +347,7 @@ func TestWebJobCreateStoreModeRowMatchesParsedTemplate(t *testing.T) {
 	if j == nil {
 		t.Fatal("job not created in store")
 	}
-	if j.Type != want.Type || j.Repo != want.Repo || j.Base != want.Base ||
+	if j.Repo != want.Repo || j.Base != want.Base ||
 		j.Ready != want.Ready || j.Solo != want.Solo || j.Model != want.Model ||
 		j.SkipDoc != want.SkipDoc || j.Body != want.Body {
 		t.Fatalf("row = %+v, want fields matching the parsed template %+v", j, want)
@@ -360,11 +360,11 @@ func TestWebJobCreateStoreModeRowMatchesParsedTemplate(t *testing.T) {
 func TestWebJobFormStoreModePrereqsRoundTrip(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	mustCreateStoreJob(t, st, store.Job{Slug: "dep-store", Type: "build", Repo: "monolith"})
-	mustCreateStoreJob(t, st, store.Job{Slug: "form-prereq-store", Type: "build", Repo: "monolith"})
+	mustCreateStoreJob(t, st, store.Job{Slug: "dep-store", Repo: "monolith"})
+	mustCreateStoreJob(t, st, store.Job{Slug: "form-prereq-store", Repo: "monolith"})
 
 	body := mustJSON(t, jobFormFields{
-		Slug: "form-prereq-store", Type: "build", Repo: "monolith",
+		Slug: "form-prereq-store", Repo: "monolith",
 		Prereqs: []jobs.Prereq{{Job: "dep-store", Gated: true}},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))

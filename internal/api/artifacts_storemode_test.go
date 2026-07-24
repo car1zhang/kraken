@@ -19,7 +19,7 @@ import (
 func TestJobArtifactsStoreModeNonLive(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-done", Type: "build", Repo: "monolith", State: "done"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-done", Repo: "monolith", State: "done"})
 
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{
 		{Path: "report.html", Bytes: []byte("<html></html>"), Mtime: 1},
@@ -51,7 +51,7 @@ func TestJobArtifactsStoreModeNonLive(t *testing.T) {
 func TestJobArtifactsStoreModeLiveSkipsDB(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-live", Type: "build", Repo: "monolith"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-live", Repo: "monolith"})
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "x.txt", Bytes: []byte("x"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestJobArtifactsStoreModeLiveSkipsDB(t *testing.T) {
 func TestJobArtifactsStoreModeUnionsStoreAndPluto(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-union", Type: "info", Repo: "monolith", State: "done"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-union", Repo: "monolith", State: "done"})
 
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{
 		{Path: "report.html", Bytes: []byte("<html></html>"), Mtime: 1},
@@ -86,7 +86,7 @@ func TestJobArtifactsStoreModeUnionsStoreAndPluto(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "art-union.dup.md"), []byte("pluto version"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// pluto-only.md: exists ONLY as a pluto flat copy (e.g. an info job's
+	// pluto-only.md: exists ONLY as a pluto flat copy (e.g. a job's
 	// root-level doc, preserved straight from the worktree root by
 	// preserveArtifacts — never synced into the artifacts table at all
 	// since syncCellArtifacts only mirrors the artifacts/ subdir).
@@ -114,7 +114,7 @@ func TestJobArtifactsStoreModeUnionsStoreAndPluto(t *testing.T) {
 }
 
 // TestJobArtifactsStoreModeInfoJobPlutoOnly is L4+E6's named "info-job
-// pluto-only case": a store-backed info job with NO artifacts-table rows
+// pluto-only case": a store-backed job with NO artifacts-table rows
 // at all (the common case for a job whose only deliverable is a root-level
 // doc preserveArtifacts copied straight into pluto) must still list that
 // doc — before L4/E6, store mode's union of cell ∪ store ONLY made this
@@ -122,7 +122,7 @@ func TestJobArtifactsStoreModeUnionsStoreAndPluto(t *testing.T) {
 func TestJobArtifactsStoreModeInfoJobPlutoOnly(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "info-only", Type: "info", Repo: "monolith", State: "done"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "info-only", Repo: "monolith", State: "done"})
 	// deliberately NO st.SyncArtifacts call — nothing in the artifacts table.
 
 	if err := os.MkdirAll(jobs.PlutoDir(), 0o755); err != nil {
@@ -144,7 +144,7 @@ func TestJobArtifactsStoreModeInfoJobPlutoOnly(t *testing.T) {
 func TestArtifactBytesResolvesFromStore(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-bytes", Type: "build", Repo: "monolith"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-bytes", Repo: "monolith"})
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "doc.html", Bytes: []byte("<h1>hi</h1>"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestArtifactBytesResolvesFromStore(t *testing.T) {
 func TestArtifactBytesRefusesCellHome(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-cell-refuse", Type: "build", Repo: "monolith"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-cell-refuse", Repo: "monolith"})
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "same-name.txt", Bytes: []byte("db bytes"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestArtifactBytesRefusesCellHome(t *testing.T) {
 func TestArtifactBytesRefusesJobSuffix(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-jobsuffix", Type: "build", Repo: "monolith"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-jobsuffix", Repo: "monolith"})
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "sneaky.job.md", Bytes: []byte("nope"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestArtifactBytesNoStoreWired(t *testing.T) {
 func TestArchivedWebArtifactsStoreMode(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-archived", Type: "build", Repo: "monolith", State: "done"})
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-archived", Repo: "monolith", State: "done"})
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "final.md", Bytes: []byte("done"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}

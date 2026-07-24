@@ -86,8 +86,8 @@ func TestUseStoreNilUninstallsEventSink(t *testing.T) {
 
 func TestLoadJobsStoreBacked(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "bbb", Type: "build", State: "", Ready: true})
-	mustCreateJob(t, st, store.Job{Slug: "aaa", Type: "info"})
+	mustCreateJob(t, st, store.Job{Slug: "bbb", State: "", Ready: true})
+	mustCreateJob(t, st, store.Job{Slug: "aaa"})
 
 	jobs := LoadJobs()
 	if len(jobs) != 2 {
@@ -106,13 +106,13 @@ func TestLoadJobsStoreBacked(t *testing.T) {
 
 func TestLoadJobBySlugStoreBacked(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "solo-job", Type: "info"})
+	mustCreateJob(t, st, store.Job{Slug: "solo-job"})
 
 	j := LoadJobBySlug("solo-job")
 	if j == nil {
 		t.Fatal("want a job, got nil")
 	}
-	if j.Slug != "solo-job" || j.Type != "info" {
+	if j.Slug != "solo-job" {
 		t.Fatalf("unexpected job: %+v", j)
 	}
 	if LoadJobBySlug("nope") != nil {
@@ -122,7 +122,7 @@ func TestLoadJobBySlugStoreBacked(t *testing.T) {
 
 func TestWriteJobFieldsStoreBacked(t *testing.T) {
 	st := useTestStore(t)
-	sr := mustCreateJob(t, st, store.Job{Slug: "wf", Type: "build"})
+	sr := mustCreateJob(t, st, store.Job{Slug: "wf"})
 	j := LoadJobBySlug("wf")
 
 	if err := WriteJobFields(j, "state", "working", "session", "sess-1"); err != nil {
@@ -170,7 +170,7 @@ func TestWriteJobFieldsStoreBacked(t *testing.T) {
 // stale the instant the first writer commits) and its field would be lost.
 func TestWriteJobFieldsStoreBackedConcurrentDifferentFields(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "concurrent-wf", Type: "build"})
+	mustCreateJob(t, st, store.Job{Slug: "concurrent-wf"})
 	a := LoadJobBySlug("concurrent-wf")
 	b := LoadJobBySlug("concurrent-wf") // independent snapshot, same starting rev as a
 
@@ -194,7 +194,7 @@ func TestWriteJobFieldsStoreBackedConcurrentDifferentFields(t *testing.T) {
 
 func TestPRHelpersStoreBacked(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "pr-job", Type: "build"})
+	mustCreateJob(t, st, store.Job{Slug: "pr-job"})
 	j := LoadJobBySlug("pr-job")
 
 	attached, err := appendJobPR(j, JobPR{URL: "https://github.com/x/y/pull/1", State: "open"})
@@ -242,7 +242,7 @@ func TestPRHelpersStoreBacked(t *testing.T) {
 
 func TestArchiveUnarchiveDeleteStoreBacked(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "arch-me", Type: "info", State: "done"})
+	mustCreateJob(t, st, store.Job{Slug: "arch-me", State: "done"})
 	j := LoadJobBySlug("arch-me")
 
 	name, err := ArchiveJob(j, map[string]bool{})
@@ -295,7 +295,7 @@ func TestBoardOrderStoreBacked(t *testing.T) {
 
 func TestSaveUploadStoreBacked(t *testing.T) {
 	st := useTestStore(t)
-	sr := mustCreateJob(t, st, store.Job{Slug: "up-job", Type: "build"})
+	sr := mustCreateJob(t, st, store.Job{Slug: "up-job"})
 	uploadsDir := t.TempDir()
 	t.Setenv("KRAKEN_UPLOADS_DIR", uploadsDir)
 
@@ -338,7 +338,7 @@ func TestSaveUploadStoreBacked(t *testing.T) {
 // here).
 func TestSaveUploadStoreBackedRejectsUnslugifiableSlugBeforeInsert(t *testing.T) {
 	st := useTestStore(t)
-	sr := mustCreateJob(t, st, store.Job{Slug: "up-job-bad-slug", Type: "build"})
+	sr := mustCreateJob(t, st, store.Job{Slug: "up-job-bad-slug"})
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
 
 	_, _, err := SaveUpload("!!!", "png", []byte("x"))

@@ -126,6 +126,84 @@ function questionHTML(j) {
   </div>`;
 }
 
+// ---- doc questions (questions.yaml, distinct from AskUserQuestion above) --
+//
+// docQuestionsOpenP0 counts open (unanswered) P0 doc questions for a job —
+// cheap enough to fold into the card-level "flagged" state and the header
+// flag counter alongside j.question/j.health.
+function docQuestionsOpenP0(j) {
+  return (j.doc_questions || []).filter((q) => q.importance === "P0" && !q.answer).length;
+}
+
+// sortDocQuestions orders open questions first (P0 < P1 < P2, ties keep file
+// order — Array#sort is stable), then answered questions last in file order.
+const DQ_IMPORTANCE_RANK = { P0: 0, P1: 1, P2: 2 };
+function sortDocQuestions(list) {
+  const open = [];
+  const answered = [];
+  list.forEach((q, i) => (q.answer ? answered : open).push({ q, i }));
+  open.sort((a, b) => (DQ_IMPORTANCE_RANK[a.q.importance] ?? 3) - (DQ_IMPORTANCE_RANK[b.q.importance] ?? 3) || a.i - b.i);
+  return [...open.map((x) => x.q), ...answered.map((x) => x.q)];
+}
+
+// docQuestionRowHTML renders one open doc question: importance badge, id +
+// text, optional context/recommendation, and the answer affordance (accept
+// the recommendation verbatim, or free-text). Nothing here talks to the
+// agent directly — a post() just records the answer in questions.yaml.
+function docQuestionRowHTML(j, q) {
+  const imp = (q.importance || "P2").toLowerCase();
+  const rec = q.recommendation ? `<div class="dq-rec" title="${esc(q.recommendation)}">rec: ${esc(q.recommendation)}</div>` : "";
+  const acceptBtn = q.recommendation
+    ? `<button class="dq-accept" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}" data-text="${esc(q.recommendation)}">accept rec</button>`
+    : "";
+  return `<div class="dq-row">
+    <div class="dq-head"><span class="dq-imp ${esc(imp)}">${esc(q.importance || "P2")}</span><span class="dq-q" title="${esc(q.text)}">${esc(q.id)} — ${esc(q.text)}</span></div>
+    ${q.context ? `<div class="dq-ctx" title="${esc(q.context)}">${esc(q.context)}</div>` : ""}
+    ${rec}
+    <div class="dq-answer">
+      ${acceptBtn}
+      <input class="dq-input" type="text" placeholder="answer…" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}">
+      <button class="dq-send" data-slug="${esc(j.slug)}" data-id="${esc(q.id)}">send</button>
+    </div>
+  </div>`;
+}
+
+// docQuestionAnsweredHTML renders a dimmed, read-only row for an already
+// answered question — badge + id + question text stay visible (so the row
+// is still self-describing once it's one of several answered rows),
+// answered_at (if present) rides in a title attr rather than cluttering the
+// row itself.
+function docQuestionAnsweredHTML(q) {
+  const imp = (q.importance || "P2").toLowerCase();
+  const title = q.answered_at ? ` title="answered ${esc(String(q.answered_at))}"` : "";
+  return `<div class="dq-row dq-answered"${title}>
+    <div class="dq-head"><span class="dq-imp ${esc(imp)}">${esc(q.importance || "P2")}</span><span class="dq-q" title="${esc(q.text)}">${esc(q.id)} — ${esc(q.text)}</span></div>
+    <div class="dq-answered-text">✓ ${esc(q.answer)}</div>
+  </div>`;
+}
+
+// docQuestionsHTML renders a job's doc-review questions section — visually
+// distinct from both artifact chips and the AskUserQuestion block above
+// (neutral panel vs. the counter-colored .question block). Renders nothing
+// when there's nothing to show, so old-server payloads (no doc_questions
+// field) and jobs with an empty questions.yaml look exactly as before.
+function docQuestionsHTML(j) {
+  if (j.doc_questions_err) {
+    return `<div class="doc-questions">
+      <div class="dq-row dq-malformed" title="${esc(j.doc_questions_err)}">questions file malformed — steer zeus to fix</div>
+    </div>`;
+  }
+  const list = j.doc_questions || [];
+  if (!list.length) return "";
+  const sorted = sortDocQuestions(list);
+  const rows = sorted.map((q) => (q.answer ? docQuestionAnsweredHTML(q) : docQuestionRowHTML(j, q))).join("");
+  const hasOpen = sorted.some((q) => !q.answer);
+  return `<div class="doc-questions">
+    ${rows}
+    ${hasOpen ? `<div class="dq-hint">answers land in questions.yaml — the agent reads them when it next works</div>` : ""}
+  </div>`;
+}
+
 // wakeupChipHTML renders a live cell's poll-timer chip: a countdown to its
 // next ScheduleWakeup tick, computed from wakeup.fires_at against wall-clock
 // time. The full board rebuild is skipped when the payload hasn't changed —
@@ -250,7 +328,7 @@ function cardHTML(j, col) {
     .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  return `<div class="card editable ${j.question || j.health ? "flagged" : ""}" style="--state:${color}"
+  return `<div class="card editable ${j.question || j.health || docQuestionsOpenP0(j) ? "flagged" : ""}" style="--state:${color}"
       draggable="true" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
@@ -260,7 +338,6 @@ function cardHTML(j, col) {
     ${wakeupChipHTML(j)}
     ${prs ? `<div class="prs">${prs}</div>` : ""}
     <div class="meta">
-      <span>${esc(j.type)}</span>
       <span>${esc(j.repo)}</span>
       ${j.live ? `<span>${esc(j.cell)}</span>` : ""}
       <span data-age="${j.mtime}">${age(j.mtime)}</span>
@@ -278,6 +355,7 @@ function cardHTML(j, col) {
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
+    ${docQuestionsHTML(j)}
     ${(col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
   </div>`;
 }
@@ -294,6 +372,7 @@ function checkStaleModals() {
     if (!j || j.state !== steerOpenState) {
       flushSteerDraft(); // text survives server-side even though the modal is closing itself
       clearSteerChips();
+      clearSteerDocq();
       steerOverlay.hidden = true;
     }
   }
@@ -336,6 +415,7 @@ function render(board) {
     byCol[j.health ? "blocked" : columnFor(j.state)].push(j);
     if (j.question) flags++;
     if (j.health) flags++;
+    flags += docQuestionsOpenP0(j);
   }
   checkStaleModals();
 
@@ -370,9 +450,115 @@ function render(board) {
   return { byCol, archived };
 }
 
+// snapshotDocInputs/restoreDocInputs preserve in-progress free-text doc-
+// question answers (value + focus + selection) across an innerHTML rebuild
+// of either surface that renders .dq-input: #board (renderBoardDOM's
+// wholesale replace on every changed poll) and #steer-docq (fillSteerContext
+// re-rendering the steer modal's own copy of the panel on open/chip-more/
+// post-answer). Both are wholesale replaces with no diffing, so anything
+// typed into a .dq-input is gone the instant either rebuilds unless snapshotted
+// first — every other composer lives in a modal textarea, whose draft is
+// server-synced instead (see flushSteerDraft), which is why only .dq-input
+// needs this. Keyed on slug+id (both already ride as data attrs on
+// .dq-input) rather than DOM position, since sortDocQuestions can reorder
+// rows between polls, and rather than which surface rendered it, since the
+// same question can appear in both the card and an open steer modal at
+// once — a draft typed in one is meant to survive a rebuild of the other.
+//
+// The steer-modal copy is only ever a snapshot AUTHORITY while the modal is
+// actually visible: snapshotDocInputs skips anything inside a hidden
+// #steer-overlay, so a closed-but-not-yet-cleared modal can't outrank the
+// card's own (visible) copy in document order. clearSteerDocq() (below)
+// additionally empties #steer-docq on every close path, so in practice a
+// hidden modal never holds a .dq-input at all — the closest() check here is
+// defense in depth for the instant between the two. Values are recorded
+// even when empty, so a deliberately cleared draft on one surface actually
+// propagates as "cleared" instead of being overwritten by the other
+// surface's stale non-empty copy.
+const DQ_INPUT_SELECTOR = "#board .dq-input, #steer-docq .dq-input";
+
+function docInputKey(el) {
+  return JSON.stringify([el.dataset.slug, el.dataset.id]);
+}
+
+// clearSteerDocq empties #steer-docq's rendered doc-questions panel. Called
+// from every path that hides the steer overlay so a closed modal can never
+// hold a zombie .dq-input that would otherwise outrank the visible card copy
+// in snapshotDocInputs/restoreDocInputs. openSteer always repopulates it via
+// fillSteerContext on the next open.
+//
+// Some close paths (checkStaleModals' auto-close) fire between polls, ahead
+// of the next renderBoardDOM snapshot — without help, a draft typed in the
+// modal but never sent would be destroyed here before it ever reaches the
+// card. So before wiping, carry any non-empty modal draft into the card's
+// own copy of the same question — but never clobber a non-empty card draft;
+// that one's the user's most recent typing and wins.
+function clearSteerDocq() {
+  const docqEl = document.getElementById("steer-docq");
+  if (!docqEl) return;
+  const modalValues = {};
+  docqEl.querySelectorAll(".dq-input").forEach((el) => {
+    if (el.value) modalValues[docInputKey(el)] = el.value;
+  });
+  if (Object.keys(modalValues).length) {
+    document.querySelectorAll("#board .dq-input").forEach((el) => {
+      const key = docInputKey(el);
+      if (!el.value && key in modalValues) el.value = modalValues[key];
+    });
+  }
+  docqEl.innerHTML = "";
+}
+
+function snapshotDocInputs() {
+  const values = {};
+  document.querySelectorAll(DQ_INPUT_SELECTOR).forEach((el) => {
+    if (el.closest("#steer-overlay")?.hidden) return; // hidden surface is never a snapshot authority
+    values[docInputKey(el)] = el.value;
+  });
+  const active = document.activeElement;
+  let focused = null;
+  if (active && active.matches && active.matches(DQ_INPUT_SELECTOR)) {
+    focused = { key: docInputKey(active), start: active.selectionStart, end: active.selectionEnd };
+  }
+  const scroll = {};
+  document.querySelectorAll(".card[data-slug] .doc-questions").forEach((el) => {
+    if (el.scrollTop) scroll[el.closest(".card").dataset.slug] = el.scrollTop;
+  });
+  return { values, focused, scroll };
+}
+
+function restoreDocInputs({ values, focused, scroll }) {
+  if (Object.keys(values).length || focused) {
+    let focusEl = null;
+    document.querySelectorAll(DQ_INPUT_SELECTOR).forEach((el) => {
+      if (el.closest("#steer-overlay")?.hidden) return; // never restore into / focus a hidden surface
+      const key = docInputKey(el);
+      if (key in values) el.value = values[key];
+      if (focused && key === focused.key) focusEl = el;
+    });
+    if (focusEl) {
+      focusEl.focus();
+      if (focused.start != null) {
+        try { focusEl.setSelectionRange(focused.start, focused.end); } catch {}
+      }
+    }
+  }
+  // E5: .card .doc-questions gained a scroll cap (style.css) — renderBoardDOM
+  // replaces #board wholesale, which destroys the scroller and its scrollTop
+  // on every poll, so restore it per-card by slug the same way input values
+  // are restored above.
+  if (scroll && Object.keys(scroll).length) {
+    document.querySelectorAll(".card[data-slug] .doc-questions").forEach((el) => {
+      const slug = el.closest(".card").dataset.slug;
+      if (slug in scroll) el.scrollTop = scroll[slug];
+    });
+  }
+}
+
 // renderBoardDOM is the expensive part of render(): only called when
 // board.jobs actually changed (see refresh()).
 function renderBoardDOM(byCol, archived) {
+  const dqState = snapshotDocInputs();
   document.getElementById("board").innerHTML = COLUMNS.map(
     (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
       <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
@@ -383,6 +569,7 @@ function renderBoardDOM(byCol, archived) {
       ${c.key === "done" ? archiveDrawerHTML(archived) : ""}
     </section>`,
   ).join("");
+  restoreDocInputs(dqState);
 }
 
 // updateAges refreshes the age chips and wakeup countdowns in place without
@@ -417,7 +604,6 @@ function archivedCardHTML(j) {
       <span class="state">● archived</span>
     </div>
     <div class="meta">
-      <span>${esc(j.type)}</span>
       <span>${esc(j.repo)}</span>
       <span data-age="${j.mtime}">${age(j.mtime)}</span>
     </div>
@@ -500,6 +686,16 @@ function flipMove(cardsEl, cardEl, anchor) {
 }
 
 document.addEventListener("dragstart", (ev) => {
+  // drag-selecting text inside the in-card doc-question input/button row
+  // must not also start a card drag — some browsers treat a press-and-drag
+  // gesture starting on/over a form control inside a draggable ancestor as
+  // dragging the ancestor rather than selecting text, which would turn
+  // "select my typed answer to fix a word" into "post a real column move".
+  if (ev.target.closest(".doc-questions")) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    return;
+  }
   const card = ev.target.closest(".card[draggable='true']");
   if (!card) return;
   dragging = { slug: card.dataset.slug, from: card.dataset.col };
@@ -844,6 +1040,26 @@ function openArtifact(url, name) {
     .catch((e) => { panelBody.textContent = "failed to load: " + e; });
 }
 
+// sendDocQuestionAnswer posts one doc-question answer (either "accept rec"
+// or free-text send), disabling the row's controls synchronously so a
+// double-click/double-Enter can't double-post. Shared by the click handler's
+// .dq-accept/.dq-send branches and the Enter-to-send keydown handler below.
+// Always re-fills the steer modal's own doc-questions panel afterward if
+// that's the surface the answer was submitted from — on success so the row
+// flips to answered, and on failure too (post() never rejects, it resolves
+// false and already invalidates+refreshes the board), so a failed post
+// re-enables the row's controls for a retry instead of leaving them dead
+// until the modal is closed and reopened.
+function sendDocQuestionAnswer(row, slug, id, text) {
+  row.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
+  return post("/api/doc-question", { slug, id, text }).then((ok) => {
+    if (steerOverlay && !steerOverlay.hidden && steerSlug === slug) {
+      fillSteerContext(jobsBySlug[steerSlug], steerMode);
+    }
+    return ok;
+  });
+}
+
 document.addEventListener("click", (ev) => {
   // must come before the .chip branch below — chip-more also matches .chip
   // (it needs the same size/padding) but must never open an artifact
@@ -871,6 +1087,27 @@ document.addEventListener("click", (ev) => {
     post("/api/question", { slug: qopt.dataset.slug, text: qopt.dataset.idx });
     return;
   }
+  const dqAccept = ev.target.closest(".dq-accept");
+  if (dqAccept) {
+    const row = dqAccept.closest(".dq-row");
+    sendDocQuestionAnswer(row, dqAccept.dataset.slug, dqAccept.dataset.id, dqAccept.dataset.text);
+    return;
+  }
+  const dqSend = ev.target.closest(".dq-send");
+  if (dqSend) {
+    const row = dqSend.closest(".dq-row");
+    const input = row.querySelector(".dq-input");
+    const text = (input.value || "").trim();
+    if (!text) return;
+    sendDocQuestionAnswer(row, dqSend.dataset.slug, dqSend.dataset.id, text);
+    return;
+  }
+  // must come before the card-open fallback below (same reason as
+  // .queue-cancel above): a click into the in-card free-text answer field
+  // should focus/type into it, not fall through to opening the steer/editor
+  // modal on top of it and stealing focus. See sendDocQuestionAnswer for the
+  // Enter-to-send keydown path on this same element.
+  if (ev.target.closest(".dq-input")) return;
   const retry = ev.target.closest(".retry");
   if (retry) {
     retry.disabled = true;
@@ -920,6 +1157,7 @@ document.addEventListener("click", (ev) => {
       if (res) {
         postDraft.cancel(); // done also clears the draft server-side
         clearSteerChips();
+        clearSteerDocq();
         steerOverlay.hidden = true;
       } else {
         steerDone.disabled = false;
@@ -995,6 +1233,25 @@ document.addEventListener("click", (ev) => {
     if (liveCol === "working" || liveCol === "blocked") openSteer(slug, liveCol === "blocked" ? "unblock" : "steer");
     else openEditor(slug);
   }
+});
+
+// Enter-to-send for the in-card free-text doc-question answer — .dq-input
+// had no keyboard submit path at all (only the .dq-send click above), and
+// it's the one text input on the board that isn't inside a form. Guard IME
+// composition (a CJK candidate's commit Enter also fires key:"Enter") and
+// modifier combos before preventDefault — this is prose, and a posted
+// answer can't be corrected (server refuses a second answer for the same
+// question), so swallowing a composition commit or a Shift/Alt+Enter here
+// would be unrecoverable.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter") return;
+  if (ev.isComposing || ev.keyCode === 229 || ev.shiftKey || ev.altKey) return;
+  const input = ev.target.closest(".dq-input");
+  if (!input) return;
+  ev.preventDefault();
+  const text = (input.value || "").trim();
+  if (!text) return;
+  sendDocQuestionAnswer(input.closest(".dq-row"), input.dataset.slug, input.dataset.id, text);
 });
 
 // ---- attachments: paste/drop/pick images into a composer, upload each
@@ -1310,6 +1567,7 @@ function fillSteerContext(j, mode) {
   const detailEl = document.getElementById("steer-detail");
   const lastSentEl = document.getElementById("steer-lastsent");
   const chipsEl = document.getElementById("steer-chips");
+  const docqEl = document.getElementById("steer-docq");
 
   const crew = mode !== "reactivate" && j && crewHTML(j);
   // PRs are job history, not cell state — shown in every mode, including
@@ -1318,6 +1576,21 @@ function fillSteerContext(j, mode) {
   const detail = j && j.detail;
   const lastSent = j && j.last_sent;
   const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
+  // doc questions are job history (questions.yaml), not cell state — shown
+  // in every mode including reactivate, same as prs above; a torn-down
+  // job's questions are still readable, answering just errors via toast.
+  // This rebuild (below) is wholesale, same hazard as renderBoardDOM's —
+  // snapshot/restore around it so a draft survives. openSteer flips
+  // steerOverlay.hidden = false before calling this, so on a fresh open the
+  // snapshot below sees the (now-visible) card's draft as the authority and
+  // the restore step seeds it straight into the freshly-rendered #steer-docq
+  // input — a card-side draft populates a just-opened modal. On a state flip
+  // that force-closes the modal, checkStaleModals does touch steer-docq's
+  // DOM (via clearSteerDocq), but that function now carries any non-empty
+  // modal draft into the card's own copy first, so the close itself doesn't
+  // lose it either — this snapshot/restore pair and clearSteerDocq's
+  // carry-forward now cover both directions between the two draft copies.
+  const docq = j ? docQuestionsHTML(j) : "";
 
   crewEl.hidden = !crew;
   crewEl.innerHTML = crew || "";
@@ -1335,7 +1608,12 @@ function fillSteerContext(j, mode) {
   chipsEl.hidden = !artifacts;
   chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, j.slug, j.slug) : "";
 
-  container.hidden = !crew && !prs && !detail && !lastSent && !artifacts;
+  const dqState = snapshotDocInputs();
+  docqEl.hidden = !docq;
+  docqEl.innerHTML = docq;
+  restoreDocInputs(dqState);
+
+  container.hidden = !crew && !prs && !detail && !lastSent && !artifacts && !docq;
 }
 
 // liveDisplayColumn mirrors render()'s column bucketing for a single job:
@@ -1362,12 +1640,11 @@ function steerActionsHTML(j) {
 }
 
 // specMetaHTML renders compact read-only rows from the /api/job/form payload
-// already fetched in openSteer — repo/base/solo/prereqs (plus type), shown
-// above the rendered spec markdown so the modal answers "what is this cell
-// running with" without leaving it.
+// already fetched in openSteer — repo/base/solo/prereqs, shown above the
+// rendered spec markdown so the modal answers "what is this cell running
+// with" without leaving it.
 function specMetaHTML(d) {
   const rows = [
-    ["type", esc(d.type || "—")],
     ["repo", esc(d.repo || "—")],
     ["base", esc(d.base || "origin/main")],
     ["model", esc(d.model || "default")],
@@ -1422,6 +1699,11 @@ function openSteer(slug, mode = "steer", opts = {}) {
   document.getElementById("steer-note").textContent = "";
   document.getElementById("steer-send").textContent =
     mode === "reactivate" ? "reactivate ⌘⏎" : mode === "unblock" ? "unblock ⌘⏎" : "send ⌘⏎";
+  // must flip visible before fillSteerContext: its snapshot/restore pair
+  // treats a hidden #steer-overlay as never the snapshot/restore authority,
+  // so the freshly-rendered modal input needs to already read as "visible"
+  // for the restore step to seed it with the card's current draft.
+  steerOverlay.hidden = false;
   fillSteerContext(jobsBySlug[slug], mode);
 
   const liveCol = liveDisplayColumn(slug);
@@ -1472,7 +1754,6 @@ function openSteer(slug, mode = "steer", opts = {}) {
       .catch(() => {});
   }
 
-  steerOverlay.hidden = false;
   text.focus();
 }
 
@@ -1505,6 +1786,7 @@ document.getElementById("steer-send").addEventListener("click", async () => {
     // scheduled a fresh sync that the pre-send cancel never saw
     postDraft.cancel();
     clearSteerChips();
+    clearSteerDocq();
     steerOverlay.hidden = true;
   } else {
     document.getElementById("steer-note").textContent = "send failed — see status bar";
@@ -1519,7 +1801,7 @@ document.getElementById("steer-text").addEventListener("input", (ev) => {
 attachCmdChips("steer-cmd-chips", "steer-text");
 attachCmdHighlight("steer-text");
 steerOverlay.addEventListener("click", (ev) => {
-  if (ev.target === steerOverlay) { flushSteerDraft(); clearSteerChips(); steerOverlay.hidden = true; }
+  if (ev.target === steerOverlay) { flushSteerDraft(); clearSteerChips(); clearSteerDocq(); steerOverlay.hidden = true; }
 });
 document.getElementById("steer-att-btn").addEventListener("click", () => {
   document.getElementById("steer-att-input").click();
@@ -1560,6 +1842,7 @@ document.getElementById("steer-kill").addEventListener("click", async () => {
   if (res) {
     flushSteerDraft(); // kill doesn't clear the draft server-side — preserve it
     clearSteerChips();
+    clearSteerDocq();
     steerOverlay.hidden = true;
   } else {
     document.getElementById("steer-note").textContent = "cancel failed — see status bar";
@@ -1695,7 +1978,6 @@ function prereqRowHTML(p) {
 // when it's set but not among d.repos, so an existing job with an unusual
 // repo still round-trips instead of silently resetting to "—".
 function fillForm(d) {
-  document.getElementById("f-type").value = d.type || "build";
   const repos = d.repos || [];
   const repoSel = document.getElementById("f-repo");
   repoSel.innerHTML =
@@ -1724,7 +2006,6 @@ function readForm() {
     .filter((p) => p.job);
   return {
     slug: editorSlug,
-    type: document.getElementById("f-type").value,
     repo: document.getElementById("f-repo").value.trim(),
     base: document.getElementById("f-base").value.trim(),
     model: document.getElementById("f-model").value.trim(),
@@ -1742,7 +2023,6 @@ function readForm() {
 // spec textarea stays readonly rather than disabled so it's still
 // selectable/copyable.
 function setFormReadOnly(readOnly) {
-  document.getElementById("f-type").disabled = readOnly;
   document.getElementById("f-repo").disabled = readOnly;
   document.getElementById("f-base").disabled = readOnly;
   document.getElementById("f-model").disabled = readOnly;
@@ -2090,7 +2370,7 @@ overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.h
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if (!overlay.hidden) { overlay.hidden = true; return; }
-  if (!steerOverlay.hidden) { flushSteerDraft(); clearSteerChips(); steerOverlay.hidden = true; return; }
+  if (!steerOverlay.hidden) { flushSteerDraft(); clearSteerChips(); clearSteerDocq(); steerOverlay.hidden = true; return; }
   if (!editorOverlay.hidden) { flushEditorAutosave(); editorOverlay.hidden = true; return; }
   if (!usageOverlay.hidden) { usageOverlay.hidden = true; return; }
 });
@@ -2181,7 +2461,7 @@ function renderDag(board) {
         style="left:${p.x}px;top:${p.y}px;--state:${stateColor(j.state)}"
         data-slug="${esc(j.slug)}" data-editable="${editable}">
         <span class="slug">${esc(j.slug)}</span>
-        <span class="nstate">● ${esc(j.state)}</span><span class="ntype">${esc(j.type)}</span>
+        <span class="nstate">● ${esc(j.state)}</span><span class="nrepo">${esc(j.repo)}</span>
       </div>`;
     })
     .join("");

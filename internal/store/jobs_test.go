@@ -9,7 +9,7 @@ import (
 func TestJobCRUDRoundTrip(t *testing.T) {
 	s := openTest(t)
 	j := &Job{
-		Slug: "roundtrip", Type: "build", Repo: "kraken", Base: "main",
+		Slug: "roundtrip", Repo: "kraken", Base: "main",
 		Ready: true, Solo: false, Model: "opus", SkipDoc: true,
 		Body: "do the thing", State: "", Outcome: "", Session: "",
 	}
@@ -59,7 +59,7 @@ func TestGetJobBySlugNotFound(t *testing.T) {
 
 func TestUpdateJobFieldsBumpsRevAndTouchesOnlyGivenColumns(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "update-me", Type: "build", Body: "orig"})
+	id, err := s.CreateJob(&Job{Slug: "update-me", Body: "orig"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestUpdateJobFieldsBumpsRevAndTouchesOnlyGivenColumns(t *testing.T) {
 // and ListJobs (jobColumns' COALESCE(err,”)).
 func TestJobErrColumnRoundTrips(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "err-job", Type: "build", Err: "bad frontmatter"})
+	id, err := s.CreateJob(&Job{Slug: "err-job", Err: "bad frontmatter"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -132,11 +132,11 @@ func TestJobErrColumnRoundTrips(t *testing.T) {
 // per-job ListPrereqs/ListPRs would have returned separately.
 func TestLoadJobsWithChildren(t *testing.T) {
 	s := openTest(t)
-	id1, err := s.CreateJob(&Job{Slug: "with-children-a", Type: "build"})
+	id1, err := s.CreateJob(&Job{Slug: "with-children-a"})
 	if err != nil {
 		t.Fatalf("CreateJob 1: %v", err)
 	}
-	id2, err := s.CreateJob(&Job{Slug: "with-children-b", Type: "info"})
+	id2, err := s.CreateJob(&Job{Slug: "with-children-b"})
 	if err != nil {
 		t.Fatalf("CreateJob 2: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestLoadJobsWithChildren(t *testing.T) {
 // the archive path (L12).
 func TestLoadArchivedJobsWithChildren(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "archived-children", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "archived-children"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestLoadArchivedJobsWithChildren(t *testing.T) {
 
 func TestUpdateJobFieldsStaleRev(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "stale", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "stale"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestUpdateJobFieldsMissingRowIsNotFound(t *testing.T) {
 
 func TestUpdateJobFieldsArchivedRowIsImmutable(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "frozen", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "frozen"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -246,10 +246,10 @@ func TestUpdateJobFieldsArchivedRowIsImmutable(t *testing.T) {
 
 func TestUpdateJobFieldsSlugCollision(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.CreateJob(&Job{Slug: "taken-slug", Type: "build"}); err != nil {
+	if _, err := s.CreateJob(&Job{Slug: "taken-slug"}); err != nil {
 		t.Fatalf("CreateJob 1: %v", err)
 	}
-	id2, err := s.CreateJob(&Job{Slug: "movable", Type: "build"})
+	id2, err := s.CreateJob(&Job{Slug: "movable"})
 	if err != nil {
 		t.Fatalf("CreateJob 2: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestUpdateJobFieldsSlugCollision(t *testing.T) {
 
 func TestUpdateJobFieldsRejectsUnknownColumn(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "guard", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "guard"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestUpdateJobFieldsRejectsUnknownColumn(t *testing.T) {
 
 func TestArchiveFreesSlug(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "freeme", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "freeme"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestArchiveFreesSlug(t *testing.T) {
 	}
 
 	// slug is now free for a brand new active job
-	newID, err := s.CreateJob(&Job{Slug: "freeme", Type: "info"})
+	newID, err := s.CreateJob(&Job{Slug: "freeme"})
 	if err != nil {
 		t.Fatalf("CreateJob after archive: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestArchiveFreesSlug(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if active.ID != newID || active.Type != "info" {
+	if active.ID != newID {
 		t.Fatalf("active job lookup returned wrong row: %+v", active)
 	}
 }
@@ -308,7 +308,7 @@ func TestArchiveFreesSlug(t *testing.T) {
 // as a filesystem-safe artifact-file prefix.
 func TestArchiveJobNumbersOffSlugifiedName(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "Weird Slug!!", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "Weird Slug!!"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestArchiveJobNumbersOffSlugifiedName(t *testing.T) {
 
 func TestArchiveNumberedNameOnCollision(t *testing.T) {
 	s := openTest(t)
-	id1, err := s.CreateJob(&Job{Slug: "dup", Type: "build"})
+	id1, err := s.CreateJob(&Job{Slug: "dup"})
 	if err != nil {
 		t.Fatalf("CreateJob 1: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestArchiveNumberedNameOnCollision(t *testing.T) {
 		t.Fatalf("name1 = %q, want dup", name1)
 	}
 
-	id2, err := s.CreateJob(&Job{Slug: "dup", Type: "build"})
+	id2, err := s.CreateJob(&Job{Slug: "dup"})
 	if err != nil {
 		t.Fatalf("CreateJob 2: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestArchiveNumberedNameOnCollision(t *testing.T) {
 
 func TestUnarchiveRefusesWhenSlugTaken(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "taken", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "taken"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestUnarchiveRefusesWhenSlugTaken(t *testing.T) {
 		t.Fatalf("ArchiveJob: %v", err)
 	}
 	// a new active job takes the freed slug
-	if _, err := s.CreateJob(&Job{Slug: "taken", Type: "build"}); err != nil {
+	if _, err := s.CreateJob(&Job{Slug: "taken"}); err != nil {
 		t.Fatalf("CreateJob (reuse slug): %v", err)
 	}
 
@@ -378,7 +378,7 @@ func TestUnarchiveRefusesWhenSlugTaken(t *testing.T) {
 
 func TestUnarchiveRestoresJob(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "comeback", Type: "build", State: "done"})
+	id, err := s.CreateJob(&Job{Slug: "comeback", State: "done"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -409,8 +409,8 @@ func TestUnarchiveRestoresJob(t *testing.T) {
 func TestListJobsToleratesRawNullColumns(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.DB().Exec(
-		`INSERT INTO jobs (slug, type, archived_at, archived_name) VALUES (?, ?, NULL, NULL)`,
-		"raw-null", "build",
+		`INSERT INTO jobs (slug, archived_at, archived_name) VALUES (?, NULL, NULL)`,
+		"raw-null",
 	); err != nil {
 		t.Fatalf("raw insert: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestListJobsToleratesRawNullColumns(t *testing.T) {
 func TestCreateArchivedJobInsertsAndUpserts(t *testing.T) {
 	s := openTest(t)
 	j := &Job{
-		Slug: "helper-catalog", Type: "info", Repo: "kraken", Ready: true,
+		Slug: "helper-catalog", Repo: "kraken", Ready: true,
 		Body: "spec text", State: "done", Outcome: "closed",
 		ArchivedAt: 1000, ArchivedName: "helper-catalog",
 	}
@@ -472,7 +472,7 @@ func TestCreateArchivedJobInsertsAndUpserts(t *testing.T) {
 	// re-run with changed fields, same ArchivedName: must update in place,
 	// not insert a second row
 	j2 := &Job{
-		Slug: "helper-catalog", Type: "info", Body: "updated spec",
+		Slug: "helper-catalog", Body: "updated spec",
 		State: "done", Outcome: "closed", ArchivedAt: 2000, ArchivedName: "helper-catalog",
 	}
 	id2, err := s.CreateArchivedJob(j2)
@@ -498,12 +498,12 @@ func TestCreateArchivedJobInsertsAndUpserts(t *testing.T) {
 
 func TestCreateArchivedJobCoexistsWithActiveSlug(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.CreateJob(&Job{Slug: "dup", Type: "build"}); err != nil {
+	if _, err := s.CreateJob(&Job{Slug: "dup"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
 	// an archived row sharing the active job's slug (but a different,
 	// numbered ArchivedName) must not collide on jobs_active_slug
-	if _, err := s.CreateArchivedJob(&Job{Slug: "dup", Type: "build", ArchivedAt: 1000, ArchivedName: "dup-2"}); err != nil {
+	if _, err := s.CreateArchivedJob(&Job{Slug: "dup", ArchivedAt: 1000, ArchivedName: "dup-2"}); err != nil {
 		t.Fatalf("CreateArchivedJob: %v", err)
 	}
 	active, err := s.ListJobs()
@@ -524,7 +524,7 @@ func TestCreateArchivedJobCoexistsWithActiveSlug(t *testing.T) {
 
 func TestDeleteJob(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "deleteme", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "deleteme"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

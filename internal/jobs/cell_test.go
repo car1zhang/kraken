@@ -2,6 +2,8 @@ package jobs
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -439,5 +441,55 @@ func TestReactivatePrompt(t *testing.T) {
 				t.Errorf("reactivatePrompt(%q, %q) = %q, want %q", c.message, c.rebaseNote, prompt, c.wantPrompt)
 			}
 		})
+	}
+}
+
+// --- AllArtifactPaths ---
+
+// TestAllArtifactPathsExcludesQuestionsFile covers findings #10 and #4.
+// #10: the preserved <slug>.questions.yaml pluto copy is not an artifact
+// (spec decision) and must not surface in AllArtifactPaths alongside real
+// deliverables, even though it lives in the same flat pluto namespace under
+// the same <slug>. prefix as everything else preserveArtifacts writes.
+// #4: a suffix-match exclusion (strings.HasSuffix(name, ".questions.yaml"))
+// is too broad — it also hides a real deliverable that simply happens to
+// END in ".questions.yaml", e.g. an artifact named notes.questions.yaml
+// flattened to <slug>.notes.questions.yaml. Only the EXACT reserved name
+// may be excluded.
+func TestAllArtifactPathsExcludesQuestionsFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	plutoDir := t.TempDir()
+	t.Setenv("KRAKEN_PLUTO_DIR", plutoDir)
+
+	j := &Job{Slug: "artifact-paths-job"}
+	realArtifact := filepath.Join(plutoDir, "artifact-paths-job.figures-a.svg")
+	questionsFile := filepath.Join(plutoDir, "artifact-paths-job.questions.yaml")
+	namedLikeQuestions := filepath.Join(plutoDir, "artifact-paths-job.notes.questions.yaml")
+	if err := os.WriteFile(realArtifact, []byte("svg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(questionsFile, []byte("- q: one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(namedLikeQuestions, []byte("real deliverable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := AllArtifactPaths(j)
+	for _, p := range paths {
+		if p == questionsFile {
+			t.Fatalf("questions.yaml pluto copy must not appear in AllArtifactPaths, got %+v", paths)
+		}
+	}
+	wantPresent := map[string]bool{realArtifact: false, namedLikeQuestions: false}
+	for _, p := range paths {
+		if _, ok := wantPresent[p]; ok {
+			wantPresent[p] = true
+		}
+	}
+	for want, found := range wantPresent {
+		if !found {
+			t.Fatalf("want %q to appear in AllArtifactPaths, got %+v", want, paths)
+		}
 	}
 }

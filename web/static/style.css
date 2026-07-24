@@ -420,6 +420,68 @@ body {
 .q-opt:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
 .q-opt:disabled { opacity: 0.4; cursor: default; }
 
+/* doc-review questions (questions.yaml) — deliberately a neutral/accent
+   panel, not the counter-colored .question block above, so "an
+   AskUserQuestion is blocking the pane" and "zeus has an open doc question"
+   read as two different kinds of thing at a glance. */
+.doc-questions {
+  margin-top: 7px; padding: 6px 8px;
+  background: var(--raised);
+  border-left: 2px solid var(--hairline-2);
+  font-size: 11px; line-height: 1.45;
+}
+/* cap card-embedded panels only (many/long questions shouldn't make a card
+   taller than the viewport and bury every other card in its column — see
+   athena-edge-de.md #8); the steer modal's copy is left uncapped, matching
+   how .steer-spec-body/.steer-detail scope their own caps only within the
+   modal — the modal doesn't need one here since .panel-body already scrolls
+   the whole composer (max-height: 86vh, overflow-y: auto, style.css:654) */
+.card .doc-questions { max-height: 340px; overflow-y: auto; }
+.dq-row { margin-top: 7px; }
+.dq-row:first-child { margin-top: 0; }
+.dq-malformed { color: var(--revealed); overflow-wrap: anywhere; }
+.dq-head { display: flex; align-items: baseline; gap: 5px; }
+.dq-imp {
+  flex: none;
+  font: 9px var(--mono); letter-spacing: 0.5px;
+  border: 1px solid var(--hairline-2); color: var(--text-2);
+  padding: 1px 4px;
+}
+.dq-imp.p0 { color: var(--counter); border-color: var(--counter-soft); }
+.dq-imp.p1 { color: var(--revealed); border-color: var(--revealed-soft); }
+.dq-imp.p2 { color: var(--text-2); }
+.dq-q {
+  color: var(--text); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dq-ctx {
+  color: var(--text-2); font-size: 10px; margin-top: 2px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dq-rec {
+  color: var(--text-2); font-size: 10.5px; font-style: italic; margin-top: 3px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dq-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
+.dq-accept, .dq-send {
+  font: 10px var(--mono);
+  background: transparent; color: var(--accent);
+  border: 1px solid var(--accent-soft);
+  padding: 3px 8px; cursor: pointer;
+}
+.dq-accept:hover, .dq-send:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
+.dq-accept:disabled, .dq-send:disabled, .dq-input:disabled { opacity: 0.4; cursor: default; }
+.dq-input {
+  flex: 1 1 120px; min-width: 80px;
+  font: 10px var(--mono); color: var(--text);
+  background: var(--surface); border: 1px solid var(--hairline-2);
+  padding: 3px 6px;
+}
+.dq-input:focus { outline: none; border-color: var(--accent); }
+.dq-row.dq-answered { color: var(--text-2); opacity: 0.65; font-size: 10.5px; }
+.dq-answered-text { margin-top: 2px; overflow-wrap: anywhere; }
+.dq-hint { color: var(--text-2); opacity: 0.55; font-size: 9px; margin-top: 7px; }
+
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .chip {
   font: 10px var(--mono);
@@ -922,7 +984,7 @@ body {
 .dag-node.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
 .dag-node .slug { font: 700 11px var(--mono); display: block; word-break: break-all; }
 .dag-node .nstate { font: 9.5px var(--mono); color: var(--state, var(--text-2)); }
-.dag-node .ntype { font: 9.5px var(--mono); color: var(--text-2); margin-left: 8px; }
+.dag-node .nrepo { font: 9.5px var(--mono); color: var(--text-2); margin-left: 8px; }
 .dag-empty { color: var(--text-2); opacity: 0.5; font-size: 11px; padding: 30px; text-align: center; }
 
 @media (max-width: 1200px) { .board { grid-template-columns: repeat(3, minmax(200px, 1fr)); } }

@@ -57,7 +57,6 @@ struct DaemonStatus: Decodable {
 
 struct WebJob: Decodable, Identifiable {
     let slug: String
-    let type: String
     let repo: String
     let state: String
     let err: String?
@@ -102,13 +101,23 @@ struct WebJob: Decodable, Identifiable {
     // Open/merged/closed PRs associated with this job, if any — additive key,
     // absent on older servers just like every other omitempty field here.
     let prs: [JobPR]?
+    // zeus' open doc questions (answered or not) from questions.yaml, for
+    // every started, non-done job (live or with a gone tmux session, still
+    // readable until the cell dir itself is torn down). Never both this and
+    // docQuestionsErr set — mutually exclusive per board.go's jobDocQuestions.
+    // Additive key, absent on older servers.
+    let docQuestions: [WebDocQuestion]?
+    // Set instead of docQuestions when a questions.yaml source exists but
+    // fails strict parse — render "questions file malformed" rather than
+    // showing stale/partial data. Additive key.
+    let docQuestionsErr: String?
 
     var id: String { slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
     var title: String { displaySlug ?? slug }
 
     enum CodingKeys: String, CodingKey {
-        case slug, type, repo, state, err, outcome, cell, live
+        case slug, repo, state, err, outcome, cell, live
         case prereqs, detail, question, wakeup
         case zeusStatus = "zeus_status"
         case roster, artifacts, health, mtime
@@ -118,6 +127,8 @@ struct WebJob: Decodable, Identifiable {
         case reactivatable
         case lastSent = "last_sent"
         case prs
+        case docQuestions = "doc_questions"
+        case docQuestionsErr = "doc_questions_err"
     }
 }
 
@@ -126,6 +137,27 @@ struct WebJob: Decodable, Identifiable {
 struct JobPR: Decodable {
     let url: String
     let state: String
+}
+
+// WebDocQuestion mirrors one questions.yaml record (board.go's webDocQuestion
+// / jobs.DocQuestion) — same field set, same json tags, straight field copy.
+struct WebDocQuestion: Decodable, Identifiable {
+    let id: String
+    let text: String
+    let context: String?
+    let importance: String
+    let recommendation: String?
+    let answer: String?
+    let answeredAt: String?
+
+    /// An empty/absent `answer` means still open; `answered_at` always rides
+    /// alongside a non-empty answer, so `answer` alone is the source of truth.
+    var isAnswered: Bool { !(answer ?? "").isEmpty }
+
+    enum CodingKeys: String, CodingKey {
+        case id, text, context, importance, recommendation, answer
+        case answeredAt = "answered_at"
+    }
 }
 
 struct WebPrereq: Decodable {
@@ -223,7 +255,6 @@ struct JobRaw: Decodable {
 // when empty, hence Optional even though the map always includes the key.
 struct JobForm: Decodable {
     let slug: String
-    let type: String
     let repo: String
     let base: String
     let ready: Bool
@@ -241,7 +272,7 @@ struct JobForm: Decodable {
     let repos: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case slug, type, repo, base, ready, solo
+        case slug, repo, base, ready, solo
         case model, skipDoc = "skip_doc"
         case prereqs, spec, mtime, editable, err, slugs, repos
     }
@@ -272,7 +303,6 @@ struct Prereq: Codable {
 // JobFormSaveRequest mirrors jobFormFields for POST /api/job/saveform.
 struct JobFormSaveRequest: Encodable {
     let slug: String
-    let type: String
     let repo: String
     let base: String
     let ready: Bool
@@ -284,7 +314,7 @@ struct JobFormSaveRequest: Encodable {
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
-        case slug, type, repo, base, ready, solo
+        case slug, repo, base, ready, solo
         case model, skipDoc = "skip_doc"
         case prereqs, spec, mtime
     }
@@ -302,6 +332,16 @@ struct SlugRequest: Encodable {
 // separate `digit` field the Go handler doesn't know about.
 struct QuestionAnswerRequest: Encodable {
     let slug: String
+    let text: String
+}
+
+// DocQuestionAnswerRequest mirrors POST /api/doc-question: answers one
+// questions.yaml entry by id with a free-text answer — distinct from
+// QuestionAnswerRequest (the AskUserQuestion single-digit answer flow) since
+// doc questions are keyed by id and carry prose, not a 1-based option index.
+struct DocQuestionAnswerRequest: Encodable {
+    let slug: String
+    let id: String
     let text: String
 }
 

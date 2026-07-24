@@ -44,7 +44,7 @@ Create a GitHub PR for the current branch.
 6. Return the PR URL.
 
 7. After the PR is created, decide whether to poll it:
-   - Inside a kraken cell, polling is unconditional: always poll checks until green (fixing failures) — never ask, since there's no board turn to ask on.
+   - Inside a kraken cell, never poll: confirm from `gh pr create`'s output (or the board) that the pr-hook attached the PR, then report the PR URL — noting it as awaiting checks — and STOP. Kraken's daemon watches every open PR of the job's cell for failing CI or new comments and bumps your pane when either happens — when bumped: fix failing CI, and address new review comments per the repo conventions; do this only once bumped, not preemptively. If no bump ever arrives, the job is NOT done silently — the PR simply stays awaiting checks. Polling your own PR from inside the cell duplicates the daemon's job and wastes the turn.
    - Outside a cell (this skill used standalone from carl's personal skill bank): if the user's original message clearly indicates polling, such as "create a PR and watch it", "ship this", or "create and poll", use the `poll-pr` skill immediately with the PR URL; if it clearly indicates no polling, such as "just create the PR", "draft only", or "don't watch it", do not poll; if unclear, ask whether to poll the PR until green.
 
 ## Style Guidelines

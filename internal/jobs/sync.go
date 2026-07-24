@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -40,6 +41,40 @@ func syncArtifactsNow(j *Job, reason string) {
 	if err := syncCellArtifacts(st, j.ID, j); err != nil {
 		dlog("%s: artifact sync (%s) failed: %v", j.Slug, reason, err)
 	}
+	// questions.yaml rides the exact same triggers as the artifacts table
+	// (serve-startup, working→blocked, teardown) — no separate call sites,
+	// same soft-fail contract: never blocks scheduling or teardown.
+	if err := syncQuestionsFile(st, j.ID, j); err != nil {
+		dlog("%s: questions sync (%s) failed: %v", j.Slug, reason, err)
+	}
+}
+
+// syncQuestionsFile mirrors j's live cell questions.yaml into the store's
+// questions table, same true-mirror spirit as syncCellArtifacts but for a
+// single file: absent file INSIDE A LIVE cell dir means the row is deleted
+// (zeus really did remove/never-write the file), present means upsert
+// (bytes + mtime-millis). A missing cell dir entirely is a SKIP, not a
+// deletion — same L3 rationale as syncCellArtifacts' root guard: a resumed
+// teardown re-running after cellDir was already removed, or a serve-startup
+// sync racing a job whose cell is already gone, must not read "no cell dir"
+// as "questions were deleted."
+func syncQuestionsFile(st *store.Store, jobID int64, j *Job) error {
+	if _, err := os.Stat(cellDir(j)); err != nil {
+		return nil // cell dir missing: skip rather than mirror-to-empty (see L3 above)
+	}
+	path := QuestionsPath(j)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return st.DeleteQuestions(jobID)
+		}
+		return fmt.Errorf("questions %s: %w", path, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("questions %s: %w", path, err)
+	}
+	return st.UpsertQuestions(jobID, data, info.ModTime().UnixMilli())
 }
 
 // syncCellArtifacts walks j's live cell artifacts dir (ListArtifacts —

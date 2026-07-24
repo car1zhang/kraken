@@ -183,7 +183,7 @@ func TestTickFirstTickSyncsAlreadyBlockedJobArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	sj := mustCreateJob(t, st, store.Job{
-		Slug: "already-blocked", Type: "info", Repo: "fake-repo",
+		Slug: "already-blocked", Repo: "fake-repo",
 		Ready: true, State: "blocked",
 	})
 	j := JobBySlug(LoadJobs(), sj.Slug)
@@ -284,48 +284,47 @@ func TestPRTrackable(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "working build job",
-			job:  &Job{Type: "build", State: "working"},
+			name: "working job",
+			job:  &Job{State: "working"},
 			want: true,
 		},
 		{
-			name: "blocked build job",
-			job:  &Job{Type: "build", State: "blocked"},
+			name: "blocked job",
+			job:  &Job{State: "blocked"},
 			want: true,
 		},
 		{
-			name: "done build job stays tracked",
-			job:  &Job{Type: "build", State: "done"},
+			name: "done job stays tracked",
+			job:  &Job{State: "done"},
 			want: true,
 		},
 		{
 			name: "never-started draft with no PR history",
-			job:  &Job{Type: "build", State: ""},
+			job:  &Job{State: ""},
 			want: false,
 		},
 		{
 			name: "killed back to draft keeps its PR history tracked",
-			job:  &Job{Type: "build", State: "", PRs: []JobPR{{URL: "https://x/pull/1", State: "merged"}}},
+			job:  &Job{State: "", PRs: []JobPR{{URL: "https://x/pull/1", State: "merged"}}},
 			want: true,
 		},
 		{
-			name: "info job never tracked",
-			job:  &Job{Type: "info", State: "working"},
-			want: false,
-		},
-		{
-			name: "done info job with PRs still gated by type",
-			job:  &Job{Type: "info", State: "done", PRs: []JobPR{{URL: "https://x/pull/9", State: "open"}}},
-			want: false,
+			// Q14: there is no job-level type gate any more — a purely
+			// explanatory job simply never opens a PR, so a done job with
+			// recorded PRs stays tracked regardless of what kind of job it
+			// was (previously excluded here by a "type == info" check).
+			name: "done job with PRs stays tracked",
+			job:  &Job{State: "done", PRs: []JobPR{{URL: "https://x/pull/9", State: "open"}}},
+			want: true,
 		},
 		{
 			name: "re-queued killed job keeps tracking",
-			job:  &Job{Type: "build", State: "queued", PRs: []JobPR{{URL: "https://x/pull/2", State: "open"}}},
+			job:  &Job{State: "queued", PRs: []JobPR{{URL: "https://x/pull/2", State: "open"}}},
 			want: true,
 		},
 		{
 			name: "unparseable job never tracked",
-			job:  &Job{Type: "build", State: "working", Err: "duplicate slug"},
+			job:  &Job{State: "working", Err: "duplicate slug"},
 			want: false,
 		},
 	}
@@ -894,7 +893,7 @@ func TestBranchFamily(t *testing.T) {
 func TestTickMirrorNeverStartsACell(t *testing.T) {
 	st := useTestStore(t)
 	sj := mustCreateJob(t, st, store.Job{
-		Slug: "mirror-queued", Type: "info", Repo: "fake-repo", Ready: true,
+		Slug: "mirror-queued", Repo: "fake-repo", Ready: true,
 	})
 
 	d := newDaemon()
@@ -925,7 +924,7 @@ func TestTickMirrorSkipsAutoArchive(t *testing.T) {
 	st := useTestStore(t)
 	old := time.Now().Add(-48 * time.Hour).UnixMilli()
 	sj := mustCreateJob(t, st, store.Job{
-		Slug: "mirror-old-done", Type: "info", Repo: "fake-repo", State: "done",
+		Slug: "mirror-old-done", Repo: "fake-repo", State: "done",
 		// UpdatedAt set directly at creation (CreateJob only defaults it to
 		// "now" when left zero) so autoArchivable's 24h-old gate is already
 		// satisfied without a second write bumping it back to now.

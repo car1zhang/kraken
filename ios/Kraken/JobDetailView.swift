@@ -600,6 +600,13 @@ struct JobDetailView: View {
     @State private var showingReactivate = false
     @State private var showingSteerToast = false
     @State private var showingArtifact: WebArtifact?
+    // Local optimistic overlay of doc-question answers (id -> answer text).
+    // `job` is a frozen snapshot for the sheet's whole lifetime (BoardView's
+    // sheet(item:) never rewrites it while open — see mergedDocQuestions),
+    // so without this an answered row would never visibly flip. Naturally
+    // reset on every fresh presentation since a new sheet gets a new View
+    // instance (and thus fresh @State).
+    @State private var docQuestionOverlay: [String: String] = [:]
 
     private var column: BoardColumn { BoardTheme.column(for: job) }
     private var isUnhealthy: Bool { !(job.health ?? "").isEmpty }
@@ -678,9 +685,6 @@ struct JobDetailView: View {
                             .font(.data(11))
                             .foregroundStyle(BoardTheme.color(forState: job.state))
                         Spacer()
-                        Text(job.type)
-                            .font(.data(11))
-                            .foregroundStyle(KTheme.text2)
                     }
                     if let wakeup = job.wakeup, job.state == "working" {
                         WakeupChip(wakeup: wakeup)
@@ -796,6 +800,33 @@ struct JobDetailView: View {
                                 .foregroundStyle(KTheme.text2)
                                 .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
                                 .listRowBackground(Color.clear)
+                        }
+                    }
+                }
+                if !(job.docQuestionsErr ?? "").isEmpty || !(job.docQuestions ?? []).isEmpty {
+                    kSection("Doc questions") {
+                        if !(job.docQuestionsErr ?? "").isEmpty {
+                            // The server string already carries its own header
+                            // ("questions file malformed: …" / "questions file
+                            // unreadable: …") — show it as-is rather than
+                            // prefixing a second, duplicate line.
+                            Text(job.docQuestionsErr ?? "")
+                                .font(.voice(13))
+                                .foregroundStyle(KTheme.revealed)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                        } else {
+                            ForEach(sortedDocQuestions) { q in
+                                DocQuestionCard(item: q) { text in
+                                    answerDocQuestion(id: q.id, text: text)
+                                }
+                            }
+                            if sortedDocQuestions.contains(where: { !$0.isAnswered }) {
+                                Text("answers land in questions.yaml — the agent reads them when it next works")
+                                    .font(.voice(11))
+                                    .foregroundStyle(KTheme.text2)
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
+                                    .listRowBackground(Color.clear)
+                            }
                         }
                     }
                 }
@@ -1049,15 +1080,20 @@ struct JobDetailView: View {
 
     // One row per artifact tree node: a file opens ArtifactView exactly as
     // before (full relative name + url — the server resolves nested paths,
-    private func runAction(_ action: @escaping () async throws -> Void) {
+    private func runAction(
+        dismissOnSuccess: Bool = true,
+        onSuccess: (() -> Void)? = nil,
+        _ action: @escaping () async throws -> Void
+    ) {
         isBusy = true
         errorMessage = nil
         Task {
             do {
                 try await action()
                 isBusy = false
+                onSuccess?()
                 onUpdate()
-                dismiss()
+                if dismissOnSuccess { dismiss() }
             } catch {
                 isBusy = false
                 errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
@@ -1079,6 +1115,51 @@ struct JobDetailView: View {
     // as every other action.
     private func answerQuestion(digit: Int) {
         runAction { try await APIClient.shared.answerQuestion(baseURL: baseURL, slug: job.slug, digit: digit) }
+    }
+
+    // job.docQuestions with any locally-answered overlay applied (see
+    // docQuestionOverlay) — the sheet's `job` never refreshes on its own
+    // while open, so this is what lets an answer visibly flip without
+    // dismissing.
+    private var mergedDocQuestions: [WebDocQuestion] {
+        (job.docQuestions ?? []).map { q in
+            guard let overlay = docQuestionOverlay[q.id], !q.isAnswered else { return q }
+            return WebDocQuestion(
+                id: q.id, text: q.text, context: q.context, importance: q.importance,
+                recommendation: q.recommendation, answer: overlay, answeredAt: q.answeredAt)
+        }
+    }
+
+    // Matches web's sortDocQuestions exactly (app.js): open questions first
+    // (importance rank P0 < P1 < P2, ties keep server order), answered
+    // questions last (server order). The explicit `offset` tiebreak is
+    // load-bearing — unlike JS's Array#sort (guaranteed stable since
+    // ES2019), Swift's sorted(by:) is documented as NOT guaranteed stable.
+    private var sortedDocQuestions: [WebDocQuestion] {
+        let rank: [String: Int] = ["P0": 0, "P1": 1, "P2": 2]
+        let indexed = Array(mergedDocQuestions.enumerated())
+        let open = indexed.filter { !$0.element.isAnswered }
+        let answered = indexed.filter { $0.element.isAnswered }
+        let sortedOpen = open.sorted { a, b in
+            let ra = rank[a.element.importance] ?? 3
+            let rb = rank[b.element.importance] ?? 3
+            if ra != rb { return ra < rb }
+            return a.offset < b.offset
+        }
+        let sortedAnswered = answered.sorted { $0.offset < $1.offset }
+        return sortedOpen.map(\.element) + sortedAnswered.map(\.element)
+    }
+
+    // Submitting a Doc Questions answer (free text or "Accept recommendation")
+    // — same busy/error/onUpdate handling as answerQuestion above, but
+    // non-dismissing: doc questions are an N-item list, not a one-shot
+    // action, so answering one shouldn't bounce the user out of the sheet.
+    // On success, record it in the local overlay so the row flips to
+    // answered immediately (see mergedDocQuestions/docQuestionOverlay).
+    private func answerDocQuestion(id: String, text: String) {
+        runAction(dismissOnSuccess: false, onSuccess: { docQuestionOverlay[id] = text }) {
+            try await APIClient.shared.answerDocQuestion(baseURL: baseURL, slug: job.slug, id: id, text: text)
+        }
     }
 }
 
@@ -1193,6 +1274,95 @@ private struct QuestionSummary: View {
         .padding(10)
         .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
         .listRowBackground(KTheme.counterSoft)
+    }
+}
+
+/// One questions.yaml record. Open questions render the full card (badge +
+/// text + context + recommendation + accept/free-text answer controls);
+/// answered ones collapse to a single dimmed "✓ <answer>" row. `onAnswer`
+/// carries the answer text straight up to JobDetailView's answerDocQuestion,
+/// which posts it and re-runs the same busy/error/dismiss handling as every
+/// other board action.
+private struct DocQuestionCard: View {
+    let item: WebDocQuestion
+    var onAnswer: (String) -> Void
+
+    @State private var answerText = ""
+
+    private var badgeColor: Color {
+        switch item.importance {
+        case "P0": return KTheme.counter
+        case "P1": return KTheme.revealed
+        default: return KTheme.text2
+        }
+    }
+
+    // Outlined-stroke treatment matching PRChip.chipLabel (no filled tint) —
+    // used for both the open and answered states so the badge reads the
+    // same regardless of which branch renders it.
+    private var badge: some View {
+        Text(item.importance)
+            .font(.data(9, weight: .semibold))
+            .foregroundStyle(badgeColor)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .overlay(Rectangle().stroke(badgeColor, lineWidth: 1))
+    }
+
+    var body: some View {
+        if item.isAnswered {
+            HStack(alignment: .top, spacing: 8) {
+                badge
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.text)
+                        .font(.voice(12))
+                        .foregroundStyle(KTheme.text2)
+                    Text("✓ \(item.answer ?? "")")
+                        .font(.voice(12, weight: .semibold))
+                        .foregroundStyle(KTheme.solved)
+                }
+            }
+            .opacity(0.6)
+            .padding(.vertical, 2)
+            .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12))
+            .listRowBackground(Color.clear)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                badge
+                Text(item.text)
+                    .font(.voice(13, weight: .semibold))
+                    .foregroundStyle(KTheme.text)
+                if let context = item.context, !context.isEmpty {
+                    Text(context)
+                        .font(.voice(12))
+                        .foregroundStyle(KTheme.text2)
+                }
+                if let recommendation = item.recommendation, !recommendation.isEmpty {
+                    Text("suggests: \(recommendation)")
+                        .font(.voice(12))
+                        .foregroundStyle(KTheme.polling)
+                    Button("Accept recommendation") {
+                        onAnswer(recommendation)
+                    }
+                    .font(.data(11, weight: .semibold))
+                    .buttonStyle(.bordered)
+                }
+                HStack(spacing: 6) {
+                    TextField("answer", text: $answerText)
+                        .kField()
+                    Button("Send") {
+                        let trimmed = answerText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        onAnswer(trimmed)
+                    }
+                    .font(.data(11, weight: .semibold))
+                    .buttonStyle(.borderedProminent)
+                    .disabled(answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(10)
+            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        }
     }
 }
 
