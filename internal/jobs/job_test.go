@@ -947,7 +947,7 @@ func TestUpdatePRWatermark(t *testing.T) {
 	j := ParseJob("x.job.md", []byte(src))
 	j.File = path
 
-	if err := updatePRWatermark(j, "https://x/pull/1", "2024-02-01T00:00:00Z", "sha1"); err != nil {
+	if err := updatePRWatermark(j, "https://x/pull/1", "2024-02-01T00:00:00Z", "sha1", "conflicting"); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -959,7 +959,7 @@ func TestUpdatePRWatermark(t *testing.T) {
 		t.Fatalf("reparsed job errored: %s", reparsed.Err)
 	}
 	want := []JobPR{
-		{URL: "https://x/pull/1", State: "open", LastCommentAt: "2024-02-01T00:00:00Z", BumpedSHA: "sha1"},
+		{URL: "https://x/pull/1", State: "open", LastCommentAt: "2024-02-01T00:00:00Z", BumpedSHA: "sha1", ConflictState: "conflicting"},
 		{URL: "https://x/pull/2", State: "open", LastCommentAt: "2024-01-01T00:00:00Z", BumpedSHA: "sha0"},
 	}
 	if len(reparsed.PRs) != 2 || reparsed.PRs[0] != want[0] || reparsed.PRs[1] != want[1] {
@@ -972,7 +972,7 @@ func TestUpdatePRWatermark(t *testing.T) {
 	// URL no longer on disk (simulating a concurrent drop): no-op, no error,
 	// and the file is left byte-for-byte as read.
 	before, _ := os.ReadFile(path)
-	if err := updatePRWatermark(j, "https://x/pull/999", "2024-03-01T00:00:00Z", "sha2"); err != nil {
+	if err := updatePRWatermark(j, "https://x/pull/999", "2024-03-01T00:00:00Z", "sha2", "clean"); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.ReadFile(path)

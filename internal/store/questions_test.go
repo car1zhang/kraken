@@ -102,9 +102,10 @@ func TestSchemaV1ToV2MigratesQuestionsTable(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	// Roll this fresh (already-migrated-to-v3) database back to a
+	// Roll this fresh (already-migrated-to-current) database back to a
 	// v1-shaped one: drop the questions table schemaV2 created, re-add the
-	// jobs.type column migrations[3] (Q14) drops, and reset user_version to
+	// jobs.type column migrations[3] (Q14) drops, drop the
+	// prs.conflict_state column schemaV4 adds, and reset user_version to
 	// 1, faithfully reproducing what a real pre-questions, pre-Q14
 	// kraken.db looks like on disk.
 	if _, err := s.db.Exec(`DROP TABLE questions`); err != nil {
@@ -112,6 +113,9 @@ func TestSchemaV1ToV2MigratesQuestionsTable(t *testing.T) {
 	}
 	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN type TEXT NOT NULL DEFAULT 'build'`); err != nil {
 		t.Fatalf("re-add type column: %v", err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE prs DROP COLUMN conflict_state`); err != nil {
+		t.Fatalf("drop conflict_state column: %v", err)
 	}
 	if _, err := s.db.Exec(`PRAGMA user_version = 1`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
@@ -156,6 +160,9 @@ func TestSchemaV1ToV2MigratesQuestionsTable(t *testing.T) {
 	}
 	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN type TEXT NOT NULL DEFAULT 'build'`); err != nil {
 		t.Fatalf("re-add type column (2nd downgrade): %v", err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE prs DROP COLUMN conflict_state`); err != nil {
+		t.Fatalf("drop conflict_state column (2nd downgrade): %v", err)
 	}
 	if _, err := s.db.Exec(`PRAGMA user_version = 1`); err != nil {
 		t.Fatalf("reset user_version (2nd downgrade): %v", err)

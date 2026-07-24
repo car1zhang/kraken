@@ -62,13 +62,19 @@ func viewPRHead(dir, url string) (headRefName string, ok bool) {
 	return rec.HeadRefName, true
 }
 
-// prWatchFetch is one open PR's freshly fetched comment/review/CI state —
-// exactly what watchDecision (daemon.go) needs to decide whether to bump.
-// State is lowercased open|merged|closed, same normalization as
-// viewPRState/listBranchPRs.
+// prWatchFetch is one open PR's freshly fetched comment/review/CI/merge
+// state — exactly what watchDecision (daemon.go) needs to decide whether to
+// bump. State is lowercased open|merged|closed, same normalization as
+// viewPRState/listBranchPRs. Mergeable is gh's mergeable enum lowercased
+// (mergeable|conflicting|unknown, "" if absent) — GitHub computes it lazily
+// after a push, so unknown is a normal transient state, never a conflict
+// signal. BaseRef is the PR's base branch name, used only to word the
+// conflict bump message.
 type prWatchFetch struct {
 	State         string
 	HeadSHA       string
+	Mergeable     string
+	BaseRef       string
 	LastCommentAt string   // newest non-viewer comment / any review createdAt/submittedAt (RFC3339), "" if none
 	FailingChecks []string // statusCheckRollup entries with a failing conclusion (see failingConclusions), by name
 }
@@ -146,8 +152,9 @@ func latestActivityAt(comments []prActivityComment, reviews []prActivityReview, 
 	return latest
 }
 
-// viewPRActivity asks gh for one PR's state, head SHA, comments, reviews, and
-// CI rollup — the one gh call watchPRs makes per open PR per pass. ok=false
+// viewPRActivity asks gh for one PR's state, head SHA, mergeability, base
+// branch, comments, reviews, and CI rollup — the one gh call watchPRs makes
+// per open PR per pass. ok=false
 // on any failure (auth, rate limit, no gh, bad JSON, timeout): unknown must
 // never touch a recorded watermark, same defensive style as viewPRState/
 // viewPRHead above. Bounded by prWatchTimeout so a hung network can't stall
@@ -156,16 +163,18 @@ func viewPRActivity(dir, url string) (prWatchFetch, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), prWatchTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", url, "--json",
-		"state,headRefOid,author,comments,reviews,statusCheckRollup")
+		"state,headRefOid,mergeable,baseRefName,author,comments,reviews,statusCheckRollup")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
 		return prWatchFetch{}, false
 	}
 	var rec struct {
-		State      string `json:"state"`
-		HeadRefOid string `json:"headRefOid"`
-		Author     struct {
+		State       string `json:"state"`
+		HeadRefOid  string `json:"headRefOid"`
+		Mergeable   string `json:"mergeable"`
+		BaseRefName string `json:"baseRefName"`
+		Author      struct {
 			Login string `json:"login"`
 		} `json:"author"`
 		Comments          []prActivityComment `json:"comments"`
@@ -182,6 +191,8 @@ func viewPRActivity(dir, url string) (prWatchFetch, bool) {
 	f := prWatchFetch{
 		State:         strings.ToLower(rec.State),
 		HeadSHA:       rec.HeadRefOid,
+		Mergeable:     strings.ToLower(rec.Mergeable),
+		BaseRef:       rec.BaseRefName,
 		LastCommentAt: latestActivityAt(rec.Comments, rec.Reviews, rec.Author.Login),
 	}
 	for _, c := range rec.StatusCheckRollup {

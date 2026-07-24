@@ -102,3 +102,32 @@ func TestRemovePR(t *testing.T) {
 		t.Fatalf("pr not removed: %+v", prs)
 	}
 }
+
+// TestSetPRWatermarkRoundTrip covers all three watchPRs watermarks landing
+// and reading back, and the unrecorded-URL no-op contract.
+func TestSetPRWatermarkRoundTrip(t *testing.T) {
+	s := openTest(t)
+	id, err := s.CreateJob(&Job{Slug: "pr-wm"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	url := "https://github.com/example/kraken/pull/5"
+	if err := s.UpsertPR(id, url, "open"); err != nil {
+		t.Fatalf("UpsertPR: %v", err)
+	}
+	if err := s.SetPRWatermark(id, url, "2024-01-01T00:00:00Z", "sha1", "conflicting"); err != nil {
+		t.Fatalf("SetPRWatermark: %v", err)
+	}
+	// unrecorded URL: no-op, no error
+	if err := s.SetPRWatermark(id, "https://github.com/example/kraken/pull/999", "x", "y", "z"); err != nil {
+		t.Fatalf("SetPRWatermark unrecorded: %v", err)
+	}
+	prs, err := s.ListPRs(id)
+	if err != nil {
+		t.Fatalf("ListPRs: %v", err)
+	}
+	want := PR{URL: url, State: "open", LastCommentAt: "2024-01-01T00:00:00Z", BumpedSHA: "sha1", ConflictState: "conflicting"}
+	if len(prs) != 1 || prs[0] != want {
+		t.Fatalf("got %+v, want [%+v]", prs, want)
+	}
+}

@@ -955,12 +955,12 @@ func TestTickMirrorSkipsAutoArchive(t *testing.T) {
 // regardless of history, and a PR that isn't (still) open never bumps.
 func TestWatchDecision(t *testing.T) {
 	cases := []struct {
-		name                             string
-		fetch                            prWatchFetch
-		lastCommentAt, bumpedSHA         string
-		wantBump                         bool
-		wantMessageContains              []string
-		wantLastCommentAt, wantBumpedSHA string
+		name                                                string
+		fetch                                               prWatchFetch
+		lastCommentAt, bumpedSHA, conflictState             string
+		wantBump                                            bool
+		wantMessageContains                                 []string
+		wantLastCommentAt, wantBumpedSHA, wantConflictState string
 	}{
 		{
 			name:              "no change is a no-op",
@@ -1091,10 +1091,117 @@ func TestWatchDecision(t *testing.T) {
 			wantLastCommentAt: "",
 			wantBumpedSHA:     "",
 		},
+		{
+			// the load-bearing conflict case: the base moved under an
+			// UNCHANGED head, so a SHA-keyed watermark would never fire —
+			// the clean→conflicting transition must.
+			name:                "fresh conflict on an unchanged head bumps with a rebase message",
+			fetch:               prWatchFetch{State: "open", HeadSHA: "sha1", Mergeable: "conflicting", BaseRef: "main"},
+			lastCommentAt:       "2024-01-01T00:00:00Z",
+			bumpedSHA:           "sha1",
+			conflictState:       "clean",
+			wantBump:            true,
+			wantMessageContains: []string{"merge conflicts", "git rebase origin/main", "--force-with-lease"},
+			wantLastCommentAt:   "2024-01-01T00:00:00Z",
+			wantBumpedSHA:       "sha1",
+			wantConflictState:   "conflicting",
+		},
+		{
+			name:              "standing conflict never re-bumps",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "sha1", Mergeable: "conflicting", BaseRef: "main"},
+			lastCommentAt:     "2024-01-01T00:00:00Z",
+			bumpedSHA:         "sha1",
+			conflictState:     "conflicting",
+			wantBump:          false,
+			wantLastCommentAt: "2024-01-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+			wantConflictState: "conflicting",
+		},
+		{
+			// gh recomputes mergeability lazily after a push; UNKNOWN must
+			// neither bump nor clear, or a standing conflict would re-bump on
+			// the UNKNOWN→CONFLICTING recompute.
+			name:              "unknown mergeability leaves the conflict watermark untouched",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "sha1", Mergeable: "unknown"},
+			lastCommentAt:     "2024-01-01T00:00:00Z",
+			bumpedSHA:         "sha1",
+			conflictState:     "conflicting",
+			wantBump:          false,
+			wantLastCommentAt: "2024-01-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+			wantConflictState: "conflicting",
+		},
+		{
+			name:              "conflict resolved records clean silently, re-arming the bump",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "sha2", Mergeable: "mergeable"},
+			lastCommentAt:     "2024-01-01T00:00:00Z",
+			bumpedSHA:         "sha1",
+			conflictState:     "conflicting",
+			wantBump:          false,
+			wantLastCommentAt: "2024-01-01T00:00:00Z",
+			wantBumpedSHA:     "sha1",
+			wantConflictState: "clean",
+		},
+		{
+			// like a failing check, a conflict is actionable right now — it
+			// bumps even on the tick kraken starts watching the PR, while the
+			// comment history still seeds silently.
+			name: "first sight conflicting bumps even while comment history seeds silently",
+			fetch: prWatchFetch{
+				State: "open", HeadSHA: "sha1", Mergeable: "conflicting", BaseRef: "main",
+				LastCommentAt: "2023-06-01T00:00:00Z",
+			},
+			lastCommentAt:       "",
+			bumpedSHA:           "",
+			conflictState:       "",
+			wantBump:            true,
+			wantMessageContains: []string{"merge conflicts"},
+			wantLastCommentAt:   "2023-06-01T00:00:00Z",
+			wantBumpedSHA:       "sha1",
+			wantConflictState:   "conflicting",
+		},
+		{
+			name:              "first sight mergeable seeds clean without bumping",
+			fetch:             prWatchFetch{State: "open", HeadSHA: "sha1", Mergeable: "mergeable"},
+			lastCommentAt:     "",
+			bumpedSHA:         "",
+			conflictState:     "",
+			wantBump:          false,
+			wantLastCommentAt: "",
+			wantBumpedSHA:     "sha1",
+			wantConflictState: "clean",
+		},
+		{
+			name: "a new comment and a fresh conflict in the same pass combine into one message",
+			fetch: prWatchFetch{
+				State: "open", HeadSHA: "sha1", Mergeable: "conflicting", BaseRef: "main",
+				LastCommentAt: "2024-01-02T00:00:00Z",
+			},
+			lastCommentAt:       "2024-01-01T00:00:00Z",
+			bumpedSHA:           "sha1",
+			conflictState:       "clean",
+			wantBump:            true,
+			wantMessageContains: []string{"new comment or review", "merge conflicts"},
+			wantLastCommentAt:   "2024-01-02T00:00:00Z",
+			wantBumpedSHA:       "sha1",
+			wantConflictState:   "conflicting",
+		},
+		{
+			name:                "conflict with an unknown base still bumps with a generic message",
+			fetch:               prWatchFetch{State: "open", HeadSHA: "sha1", Mergeable: "conflicting"},
+			lastCommentAt:       "2024-01-01T00:00:00Z",
+			bumpedSHA:           "sha1",
+			conflictState:       "clean",
+			wantBump:            true,
+			wantMessageContains: []string{"merge conflicts", "its base branch"},
+			wantLastCommentAt:   "2024-01-01T00:00:00Z",
+			wantBumpedSHA:       "sha1",
+			wantConflictState:   "conflicting",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			bump, msg, newLastCommentAt, newBumpedSHA := watchDecision("https://x/pull/1", c.fetch, c.lastCommentAt, c.bumpedSHA)
+			bump, msg, newLastCommentAt, newBumpedSHA, newConflictState := watchDecision("https://x/pull/1", c.fetch, c.lastCommentAt, c.bumpedSHA, c.conflictState)
 			if bump != c.wantBump {
 				t.Errorf("bump = %v, want %v (msg %q)", bump, c.wantBump, msg)
 			}
@@ -1103,6 +1210,9 @@ func TestWatchDecision(t *testing.T) {
 			}
 			if newBumpedSHA != c.wantBumpedSHA {
 				t.Errorf("newBumpedSHA = %q, want %q", newBumpedSHA, c.wantBumpedSHA)
+			}
+			if newConflictState != c.wantConflictState {
+				t.Errorf("newConflictState = %q, want %q", newConflictState, c.wantConflictState)
 			}
 			for _, want := range c.wantMessageContains {
 				if !strings.Contains(msg, want) {

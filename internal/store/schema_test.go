@@ -24,12 +24,16 @@ func TestSchemaV2ToV3DropsTypeColumn(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	// Roll this fresh (already-migrated-to-v3) database back to a v2-shaped
-	// one: re-add the type column schemaV1 originally created (with a seeded
-	// row using it) and reset user_version to 2, faithfully reproducing what
-	// a real pre-Q14 kraken.db looks like on disk.
+	// Roll this fresh (already-migrated-to-current) database back to a
+	// v2-shaped one: re-add the type column schemaV1 originally created (with
+	// a seeded row using it), drop the prs.conflict_state column schemaV4
+	// adds, and reset user_version to 2, faithfully reproducing what a real
+	// pre-Q14 kraken.db looks like on disk.
 	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN type TEXT NOT NULL DEFAULT 'build'`); err != nil {
 		t.Fatalf("re-add type column: %v", err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE prs DROP COLUMN conflict_state`); err != nil {
+		t.Fatalf("drop conflict_state column: %v", err)
 	}
 	if _, err := s.db.Exec(`INSERT INTO jobs (slug, type, repo) VALUES ('v2-shaped', 'info', 'kraken')`); err != nil {
 		t.Fatalf("seed v2-shaped row: %v", err)
@@ -49,8 +53,8 @@ func TestSchemaV2ToV3DropsTypeColumn(t *testing.T) {
 	if version != schemaVersion {
 		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 	}
-	if version != 3 {
-		t.Fatalf("user_version = %d, want 3", version)
+	if version != 4 {
+		t.Fatalf("user_version = %d, want 4", version)
 	}
 
 	// the type column must be gone.
@@ -90,6 +94,9 @@ func TestSchemaV2ToV3DropsTypeColumn(t *testing.T) {
 	// TestSchemaV1ToV2MigratesQuestionsTable's second-downgrade check.
 	if _, err := s.db.Exec(`ALTER TABLE jobs ADD COLUMN type TEXT NOT NULL DEFAULT 'build'`); err != nil {
 		t.Fatalf("re-add type column (2nd downgrade): %v", err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE prs DROP COLUMN conflict_state`); err != nil {
+		t.Fatalf("drop conflict_state column (2nd downgrade): %v", err)
 	}
 	if _, err := s.db.Exec(`PRAGMA user_version = 2`); err != nil {
 		t.Fatalf("reset user_version (2nd downgrade): %v", err)
