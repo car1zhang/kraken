@@ -666,6 +666,11 @@ function showToast(message) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 4000);
 }
 
+// post() resolves with the parsed response body so callers that need a
+// response field beyond the {"ok": true} convention — e.g. peers/open's
+// additive "focus_error" — can read it without a second request; it
+// resolves to null on failure, so a bare truthy/falsy check still works at
+// every call site that only cares whether the request succeeded.
 async function post(url, body) {
   try {
     const r = await fetch(url, {
@@ -679,12 +684,12 @@ async function post(url, body) {
     // force a rebuild even if the jobs payload happens to match
     invalidateBoard();
     await refresh();
-    return true;
+    return data;
   } catch (e) {
     document.getElementById("tick-stat").textContent = "✕ " + e.message;
     invalidateBoard();
     await refresh();
-    return false;
+    return null;
   }
 }
 
@@ -911,8 +916,8 @@ document.addEventListener("click", (ev) => {
   const steerDone = ev.target.closest(".steer-done");
   if (steerDone) {
     steerDone.disabled = true;
-    post("/api/done", { slug: steerDone.dataset.slug }).then((ok) => {
-      if (ok) {
+    post("/api/done", { slug: steerDone.dataset.slug }).then((res) => {
+      if (res) {
         postDraft.cancel(); // done also clears the draft server-side
         clearSteerChips();
         steerOverlay.hidden = true;
@@ -924,7 +929,9 @@ document.addEventListener("click", (ev) => {
   }
   const tmuxOpen = ev.target.closest(".open-tmux");
   if (tmuxOpen) {
-    post("/api/peers/open", { slug: tmuxOpen.dataset.slug });
+    post("/api/peers/open", { slug: tmuxOpen.dataset.slug }).then((data) => {
+      if (data && data.focus_error) showToast(`couldn't focus the window: ${data.focus_error}`);
+    });
     return;
   }
   const ccpBtn = ev.target.closest(".u-ccp");
@@ -1470,9 +1477,9 @@ document.getElementById("steer-send").addEventListener("click", async () => {
   // cancel first — a debounce firing mid-send would land after the server's
   // clear and resurrect the sent message
   postDraft.cancel();
-  const ok = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug, text });
+  const res = await post(steerMode === "reactivate" ? "/api/reactivate" : "/api/steer", { slug, text });
   btn.disabled = false;
-  if (ok) {
+  if (res) {
     // cancel again — a keystroke during the in-flight send would have
     // scheduled a fresh sync that the pre-send cancel never saw
     postDraft.cancel();
@@ -1527,9 +1534,9 @@ document.getElementById("steer-kill").addEventListener("click", async () => {
   if (!confirm(`kill ${steerSlug}? the cell is torn down (artifacts preserved) and the job returns to draft.`)) return;
   const btn = document.getElementById("steer-kill");
   btn.disabled = true;
-  const ok = await post("/api/kill", { slug: steerSlug });
+  const res = await post("/api/kill", { slug: steerSlug });
   btn.disabled = false;
-  if (ok) {
+  if (res) {
     flushSteerDraft(); // kill doesn't clear the draft server-side — preserve it
     clearSteerChips();
     steerOverlay.hidden = true;
@@ -1843,8 +1850,8 @@ document.getElementById("editor-queue").addEventListener("click", async () => {
   const btn = document.getElementById("editor-queue");
   btn.disabled = true;
   await flushEditorAutosave(); // land any edit still sitting in the debounce window before queueing
-  const ok = await post("/api/queue", { slug: editorSlug });
-  if (ok) {
+  const res = await post("/api/queue", { slug: editorSlug });
+  if (res) {
     editorOverlay.hidden = true;
   } else {
     editorNote.textContent = "queue failed — see status bar";
@@ -1867,9 +1874,9 @@ document.getElementById("editor-dequeue").addEventListener("click", async () => 
   const prevCaptured = editorStateCaptured;
   editorOpenState = "draft";
   editorStateCaptured = true;
-  const ok = await post("/api/dequeue", { slug: editorSlug });
+  const res = await post("/api/dequeue", { slug: editorSlug });
   deq.disabled = false;
-  if (!ok) {
+  if (!res) {
     editorOpenState = prevState;
     editorStateCaptured = prevCaptured;
     editorNote.textContent = "cancel failed — see status bar";
@@ -2013,8 +2020,8 @@ document.addEventListener("paste", (ev) => {
 
 document.getElementById("editor-archive").addEventListener("click", async () => {
   if (!editorSlug) return;
-  const ok = await post("/api/archive", { slug: editorSlug });
-  if (ok) editorOverlay.hidden = true;
+  const res = await post("/api/archive", { slug: editorSlug });
+  if (res) editorOverlay.hidden = true;
   else editorNote.textContent = "archive failed — see status bar";
 });
 
