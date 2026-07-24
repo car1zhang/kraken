@@ -100,17 +100,21 @@ type Prereq struct {
 // (open|merged|closed), kraken-owned like state/session/run. The PR number
 // clients display is derived from the URL, so nothing else is sent to clients.
 //
-// LastCommentAt and BumpedSHA are the daemon's watchPRs watermarks (RFC3339
-// newest-comment-or-review timestamp already bumped for, and the head OID
-// whose failing checks were already bumped for) — frontmatter-only, kraken-
-// owned exactly like url/state, but deliberately `json:"-"`: they must never
-// reach the API wire (see api/contract_test.go's TestJobPRWireShape, which
-// pins jobs.JobPR's exact JSON shape to url+state).
+// LastCommentAt, BumpedSHA, and ConflictState are the daemon's watchPRs
+// watermarks (RFC3339 newest-comment-or-review timestamp already bumped for,
+// the head OID whose failing checks were already bumped for, and the last-
+// known merge-conflict state: "" never fetched, "clean", or "conflicting" —
+// bumped for on the clean→conflicting transition) — frontmatter-only,
+// kraken-owned exactly like url/state, but deliberately `json:"-"`: they
+// must never reach the API wire (see api/contract_test.go's
+// TestJobPRWireShape, which pins jobs.JobPR's exact JSON shape to
+// url+state).
 type JobPR struct {
 	URL           string `json:"url"`
 	State         string `json:"state"`
 	LastCommentAt string `json:"-"`
 	BumpedSHA     string `json:"-"`
+	ConflictState string `json:"-"`
 }
 
 const JobSuffix = ".job.md"
@@ -404,6 +408,8 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 				p.LastCommentAt = stripComment(v)
 			case "bumped-sha":
 				p.BumpedSHA = stripComment(v)
+			case "conflict-state":
+				p.ConflictState = stripComment(v)
 			default:
 				j.addErr("unknown prs key " + strings.TrimSpace(k))
 			}
@@ -814,6 +820,9 @@ func patchPRs(content string, prs []JobPR) (string, error) {
 			if p.BumpedSHA != "" {
 				block = append(block, "    bumped-sha: "+OneLine(p.BumpedSHA))
 			}
+			if p.ConflictState != "" {
+				block = append(block, "    conflict-state: "+OneLine(p.ConflictState))
+			}
 		}
 	}
 	lines := strings.Split(content, "\n")
@@ -962,17 +971,18 @@ func removeJobPRs(j *Job, drop map[string]bool) (removed []string, err error) {
 	return removed, nil
 }
 
-// updatePRWatermark persists watchPRs' per-URL comment/CI watermarks for one
-// recorded PR. Store-backed via store.SetPRWatermark when a store is wired;
-// else the file path re-reads fresh first (mirroring writeJobPRs/
-// appendJobPR/removeJobPRs' read-fresh-then-patch pattern) so a concurrent
-// tracker write or hand edit isn't clobbered with stale bytes. A no-op if the
-// URL isn't present — it must have been dropped (repair pass, hand edit)
-// between load and write, and there is nothing left to stamp a watermark
-// onto; the caller's own copy of j.PRs is left alone in that case too.
-func updatePRWatermark(j *Job, url, lastCommentAt, bumpedSHA string) error {
+// updatePRWatermark persists watchPRs' per-URL comment/CI/conflict
+// watermarks for one recorded PR. Store-backed via store.SetPRWatermark when
+// a store is wired; else the file path re-reads fresh first (mirroring
+// writeJobPRs/appendJobPR/removeJobPRs' read-fresh-then-patch pattern) so a
+// concurrent tracker write or hand edit isn't clobbered with stale bytes. A
+// no-op if the URL isn't present — it must have been dropped (repair pass,
+// hand edit) between load and write, and there is nothing left to stamp a
+// watermark onto; the caller's own copy of j.PRs is left alone in that case
+// too.
+func updatePRWatermark(j *Job, url, lastCommentAt, bumpedSHA, conflictState string) error {
 	if st := ActiveStore(); st != nil {
-		return updatePRWatermarkToStore(st, j, url, lastCommentAt, bumpedSHA)
+		return updatePRWatermarkToStore(st, j, url, lastCommentAt, bumpedSHA, conflictState)
 	}
 	data, err := os.ReadFile(j.File)
 	if err != nil {
@@ -984,6 +994,7 @@ func updatePRWatermark(j *Job, url, lastCommentAt, bumpedSHA string) error {
 		if fresh.PRs[i].URL == url {
 			fresh.PRs[i].LastCommentAt = lastCommentAt
 			fresh.PRs[i].BumpedSHA = bumpedSHA
+			fresh.PRs[i].ConflictState = conflictState
 			found = true
 			break
 		}

@@ -9,8 +9,9 @@ import "fmt"
 // spec's Data Model section calls for, version 2 adds the questions table,
 // version 3 drops jobs.type (Q14 — the build/info job-level type concept is
 // gone; the pipeline distinction now lives in /aim vs /info skill choice
-// plus carl's /do steering, never a stored column).
-const schemaVersion = 3
+// plus carl's /do steering, never a stored column), version 4 adds
+// prs.conflict_state.
+const schemaVersion = 4
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -176,16 +177,28 @@ const schemaV3 = `
 ALTER TABLE jobs DROP COLUMN type;
 `
 
+// schemaV4 adds watchPRs' third watermark: the PR's last-known merge-
+// conflict state (empty never fetched / 'clean' / 'conflicting'), bumped-for
+// on the clean→conflicting transition. Sibling of last_comment_at/
+// bumped_sha — bookkeeping, not a job mutation, so SetPRWatermark still
+// doesn't bump jobs.rev. Like schemaV2/V3, appended rather than folded into
+// schemaV1: real kraken.db files already exist without the column.
+const schemaV4 = `
+ALTER TABLE prs ADD COLUMN conflict_state TEXT NOT NULL DEFAULT '';
+`
+
 // migrations maps a target user_version to the SQL that gets a freshly
 // created (or older) database there. migrations[1] is the original
 // release; migrations[2] adds the questions table; migrations[3] drops
-// jobs.type. Future schema changes append migrations[4], migrations[5], ...
-// rather than editing an existing schemaV<N> string in place, so a database
-// created under an older binary still migrates forward correctly.
+// jobs.type; migrations[4] adds prs.conflict_state. Future schema changes
+// append migrations[5], migrations[6], ... rather than editing an existing
+// schemaV<N> string in place, so a database created under an older binary
+// still migrates forward correctly.
 var migrations = map[int]string{
 	1: schemaV1,
 	2: schemaV2,
 	3: schemaV3,
+	4: schemaV4,
 }
 
 // migrate reads the database's current PRAGMA user_version and applies
