@@ -1,13 +1,19 @@
 package jobs
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync/atomic"
+	"time"
+
+	"kraken/internal/store"
 )
 
 // prhook.go — `kraken pr-hook <slug>`, wired as a Claude Code PostToolUse
@@ -146,36 +152,163 @@ func repoOriginPrefix(dir string) (string, bool) {
 	return originToPrefix(string(out)), true
 }
 
+// defaultServeAddr is kraken serve's default bind address (matches
+// cmd_serve.go/cmd_web.go's own "7777" default) — the fallback when
+// KRAKEN_SERVE_ADDR isn't set.
+const defaultServeAddr = "127.0.0.1:7777"
+
+// ServeBaseURL is the localhost base URL kraken serve's HTTP API is
+// expected at: KRAKEN_SERVE_ADDR overrides for tests/non-default ports,
+// else defaultServeAddr. Exported (L8/S12) so PrHook (below) and
+// cmdLogEvent (cmd_jobs.go) share this ONE implementation instead of each
+// hand-rolling the same "env override, else 127.0.0.1:7777" fallback —
+// they'd drifted out of sync once (cmd_jobs.go's copy never learned the
+// hook-addr propagation E7 added here).
+func ServeBaseURL() string {
+	if a := os.Getenv("KRAKEN_SERVE_ADDR"); a != "" {
+		return "http://" + a
+	}
+	return "http://" + defaultServeAddr
+}
+
+// hookServeAddr (E7) is the bind address kraken serve actually resolved —
+// which can differ from a naive default guess (--tailnet, or "-p 0"
+// letting the OS pick a port) — recorded via SetHookServeAddr once at serve
+// startup and read by cell.go's krakenHookEntry when installing a cell's
+// PostToolUse hook. A pr-hook invocation runs as a brand-new OS process
+// spawned by that hook (not a goroutine in kraken serve's own process), so
+// it inherits none of serve's flags or in-memory state — only whatever the
+// hook's command string bakes in — which is exactly why this can't just be
+// "read ServeBaseURL() from inside StartCell": StartCell/installHookSettings
+// run in kraken serve's process, but the hook COMMAND runs in an entirely
+// different one, later, inside the cell.
+var hookServeAddr atomic.Pointer[string]
+
+// SetHookServeAddr records addr for every StartCell/ReactivateJob hook
+// install for the rest of this process's lifetime. cmd_serve.go calls this
+// once, right after net.Listen resolves the real bind address — file-mode
+// `k daemon`/`k web` never call it, so their cells' hooks fall back to
+// defaultServeAddr exactly as before E7. A package-level setter rather than
+// threading addr through StartCell's signature (jobs.tick() → StartCell is
+// shared with file mode, which has no addr to pass).
+func SetHookServeAddr(addr string) {
+	hookServeAddr.Store(&addr)
+}
+
+// currentHookServeAddr returns what SetHookServeAddr last recorded, or ""
+// if it was never called.
+func currentHookServeAddr() string {
+	if p := hookServeAddr.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// prAttachHTTPTimeout bounds the POST to kraken serve: a hook call blocks a
+// zeus tool turn, so this must fail fast (server down, port unreachable)
+// rather than hang the agent waiting on a dead connection.
+const prAttachHTTPTimeout = 3 * time.Second
+
+// postPRAttach POSTs one {slug,url} pair to kraken serve's /api/pr-attach —
+// the new localhost mutation endpoint that replaced this hook's direct file/
+// store write (spec: "localhost mutation API additions"). Returns true only
+// on a 200 response; any error (server down, timeout, non-200) is false, so
+// the caller can fall back to the direct write.
+func postPRAttach(slug, url string) bool {
+	body, err := json.Marshal(map[string]string{"slug": slug, "url": url})
+	if err != nil {
+		return false
+	}
+	client := http.Client{Timeout: prAttachHTTPTimeout}
+	resp, err := client.Post(ServeBaseURL()+"/api/pr-attach", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// AttachJobPR is the dual-mode PR-attach entry point exposed to the api
+// package's /api/pr-attach handler: api sits above jobs in the dependency
+// chain (util ← store ← core ← jobs ← api ← web) and can't reach the
+// unexported appendJobPR directly, so this is a one-line exported wrapper
+// around the exact same store/file dual-mode logic PrHook's own fallback
+// path uses below.
+func AttachJobPR(j *Job, url string) (attached bool, err error) {
+	return appendJobPR(j, JobPR{URL: url, State: "open"})
+}
+
+// storeModeDeployment reports whether this deployment has migrated onto the
+// sqlite store: kraken.db exists on disk. PrHook runs as its own
+// `kraken pr-hook` CLI invocation (see its own doc comment) and never calls
+// UseStore itself, so ActiveStore() is always nil in this process regardless
+// of deployment mode — the DB file's mere existence is the only real signal
+// available here for "is kraken serve the authoritative writer now, so the
+// direct-file fallback below must NOT run."
+func storeModeDeployment() bool {
+	_, err := os.Stat(store.DBPath())
+	return err == nil
+}
+
 // PrHook is `kraken pr-hook <slug>`'s body: read one JSON hook payload from
 // stdin, and — when it's a successful `gh pr create` in the job's own
-// repo — attach the printed PR URL(s) via appendJobPR. Always returns
-// (never os.Exit(1)); every failure is a single stderr line.
+// repo — attach the printed PR URL(s), preferring a POST to kraken serve's
+// /api/pr-attach (the sole DB writer once serve is deployed and the only
+// path that needs nothing but slug+url — the server does its own job
+// lookup). The local LoadJobBySlug call below is NOT a precondition for
+// that POST: it exists solely to (a) narrow extractPRURLs to the job's own
+// repo via the origin prefix, and (b) supply a *Job for the direct-file
+// fallback when the POST fails in a file-mode deployment. A board-created
+// job that lives only as a store row (no job file on disk) makes j nil
+// here — the POST attempt must still fire, matching any repo (prefix ==
+// ""), and just has no local fallback to fall back to. When that POST
+// fails, the direct appendJobPR file write is only safe as a fallback in a
+// file-mode deployment with a resolved job; a store-mode one
+// (storeModeDeployment) has no authoritative job file to write to (kraken
+// serve owns kraken.db, and LoadJobBySlug's file-based fallback resolves
+// nothing there), so that case is reported loudly instead — the PR shipped,
+// but kraken doesn't know about it until serve comes back and the daemon's
+// branch-list poll notices. Always returns (never os.Exit(1)); every
+// outcome is a single stderr line.
 func PrHook(slug string) {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pr-hook %s: read stdin: %v\n", slug, err)
 		return
 	}
+	// tolerate j == nil: the POST-first path below needs only slug+url, and
+	// a store-only (board-created) job has no file to load here at all
 	j := LoadJobBySlug(slug)
-	if j == nil {
-		fmt.Fprintf(os.Stderr, "pr-hook %s: no such job\n", slug)
-		return
-	}
 	prefix := ""
-	if dir, err := ResolveRepo(j.Repo); err == nil {
-		if p, ok := repoOriginPrefix(dir); ok {
-			prefix = p
+	if j != nil {
+		if dir, err := ResolveRepo(j.Repo); err == nil {
+			if p, ok := repoOriginPrefix(dir); ok {
+				prefix = p
+			}
+			// origin unreadable: fail open below with prefix == "" (matches
+			// any repo) rather than silently dropping a PR the command
+			// really made
 		}
-		// origin unreadable: fail open below with prefix == "" (matches any
-		// repo) rather than silently dropping a PR the command really made
 	}
 	for _, url := range extractPRURLs(raw, prefix) {
+		if postPRAttach(slug, url) {
+			fmt.Fprintf(os.Stderr, "pr-hook %s: attached %s (via kraken serve)\n", slug, url)
+			continue
+		}
+		if j == nil {
+			fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (serve unreachable, no local job file to fall back to): %s\n", slug, url)
+			continue
+		}
+		if storeModeDeployment() {
+			fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (serve unreachable): %s\n", slug, url)
+			continue
+		}
 		attached, err := appendJobPR(j, JobPR{URL: url, State: "open"})
 		switch {
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "pr-hook %s: attach %s failed: %v\n", slug, url, err)
 		case attached:
-			fmt.Fprintf(os.Stderr, "pr-hook %s: attached %s\n", slug, url)
+			fmt.Fprintf(os.Stderr, "pr-hook %s: attached %s (direct fallback — kraken serve unreachable)\n", slug, url)
 		}
 	}
 }

@@ -18,9 +18,27 @@ func UsageSnapshotPath() string {
 	return filepath.Join(util.Home(), ".kraken", "usage.json")
 }
 
+// usageSnapshotKVKey is the kv-table key the store-backed path stashes the
+// snapshot under (jobs/store.go's UpdateJobFields-adjacent kv usage,
+// mirroring the daemon's "serve_started_at" key) — a singleton row, same
+// shape as the file it replaces.
+const usageSnapshotKVKey = "usage_snapshot"
+
 // ReadUsageSnapshot loads the snapshot, defensively: a missing or corrupt
-// file reads as "no snapshot yet", never an error.
+// value reads as "no snapshot yet", never an error. Store-backed (kv key
+// usageSnapshotKVKey) when a store is wired, else the file.
 func ReadUsageSnapshot() (core.UsageSnapshot, bool) {
+	if st := ActiveStore(); st != nil {
+		raw, err := st.GetKV(usageSnapshotKVKey)
+		if err != nil {
+			return core.UsageSnapshot{}, false
+		}
+		var snap core.UsageSnapshot
+		if json.Unmarshal([]byte(raw), &snap) != nil {
+			return core.UsageSnapshot{}, false
+		}
+		return snap, true
+	}
 	return readUsageSnapshotFrom(UsageSnapshotPath())
 }
 
@@ -72,12 +90,18 @@ func mergeUsage(prev core.UsageSnapshot, fresh []core.AccountUsage, now int64) c
 	return core.UsageSnapshot{FetchedAt: now, Accounts: accounts}
 }
 
-// writeUsageSnapshot marshals and atomically writes snap to path at 0600 —
-// AtomicWrite itself writes 0644, so perms are tightened after the rename.
+// writeUsageSnapshot marshals snap and persists it: store-backed (kv key
+// usageSnapshotKVKey) when a store is wired — path is unused in that case,
+// callers still pass UsageSnapshotPath() unconditionally — else atomically
+// to path at 0600 (AtomicWrite itself writes 0644, so perms are tightened
+// after the rename).
 func writeUsageSnapshot(snap core.UsageSnapshot, path string) error {
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
+	}
+	if st := ActiveStore(); st != nil {
+		return st.SetKV(usageSnapshotKVKey, string(data))
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

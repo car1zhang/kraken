@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -404,6 +405,90 @@ func TestPeersOpenHandlerUnknownPane(t *testing.T) {
 	h(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPeersOpenHandlerCleanSuccess(t *testing.T) {
+	source := func() []*core.Peer {
+		return []*core.Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
+	}
+	old := openPeerFunc
+	openPeerFunc = func(p *core.Peer) (string, core.RaiseOutcome, error) {
+		return "focused zeus (mobile, pane %2)", core.RaiseOutcome{}, nil
+	}
+	t.Cleanup(func() { openPeerFunc = old })
+	h := peersOpenHandler(source)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", strings.NewReader(`{"pane":"%2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["ok"] != true {
+		t.Errorf("ok = %v", resp["ok"])
+	}
+	if resp["note"] != "focused zeus (mobile, pane %2)" {
+		t.Errorf("note = %v", resp["note"])
+	}
+	if _, present := resp["focus_error"]; present {
+		t.Errorf("focus_error should be absent on clean success, got %v", resp["focus_error"])
+	}
+}
+
+func TestPeersOpenHandlerFocusErrorSurfaced(t *testing.T) {
+	source := func() []*core.Peer {
+		return []*core.Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
+	}
+	old := openPeerFunc
+	openPeerFunc = func(p *core.Peer) (string, core.RaiseOutcome, error) {
+		return "selected zeus (%2) — focus its window manually: osascript via tmux run-shell failed",
+			core.RaiseOutcome{FocusErr: errors.New("osascript via tmux run-shell failed: boom")}, nil
+	}
+	t.Cleanup(func() { openPeerFunc = old })
+	h := peersOpenHandler(source)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", strings.NewReader(`{"pane":"%2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["ok"] != true {
+		t.Errorf("ok = %v", resp["ok"])
+	}
+	if resp["focus_error"] != "osascript via tmux run-shell failed: boom" {
+		t.Errorf("focus_error = %v", resp["focus_error"])
+	}
+}
+
+func TestPeersOpenHandlerHardError(t *testing.T) {
+	source := func() []*core.Peer {
+		return []*core.Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
+	}
+	old := openPeerFunc
+	openPeerFunc = func(p *core.Peer) (string, core.RaiseOutcome, error) {
+		return "", core.RaiseOutcome{}, errors.New("tmux session mobile is gone")
+	}
+	t.Cleanup(func() { openPeerFunc = old })
+	h := peersOpenHandler(source)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", strings.NewReader(`{"pane":"%2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "tmux session mobile is gone") {
+		t.Errorf("body = %s", w.Body.String())
 	}
 }
 

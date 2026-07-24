@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,36 @@ import (
 // file is one comfortable fetch on mobile, big enough to hold days of
 // normal traffic.
 const logMaxBytes = 512 * 1024
+
+// eventSink, when set, receives every LogEvent call in addition to (not
+// instead of) the JSONL file write below. util sits below store in the
+// dependency chain (util ← store ← core ← jobs ← api ← web) so it cannot
+// import store directly to append into the events table itself; jobs.
+// UseStore wires this hook to a store-backed append once kraken serve owns
+// storage. Deliberately additive rather than a replacement: every existing
+// reader of the JSONL files (util.ListLogFiles/ReadLogFile, the web log
+// viewer, this package's own tests, api/contract_test.go) never wires a
+// store, so removing the file write on that path would silently break all
+// of them. nil (the default) is a no-op. Stored behind an atomic.Pointer
+// rather than a plain var: production only ever sets it once, at kraken
+// serve's startup before any tick/request goroutine can call LogEvent, but
+// tests wire and unwire it around individual cases in the same process,
+// racing against other tests' still-running background goroutines (e.g.
+// the daemon's fire-and-forget usage-pass goroutine) that call LogEvent
+// concurrently — a plain var read/write there is a genuine data race under
+// -race, not just a test artifact.
+var eventSink atomic.Pointer[func(src, level, event, msg string)]
+
+// SetEventSink registers (or, passed nil, clears) the hook LogEvent forwards
+// every entry to. See eventSink's doc comment for why this is additive (and
+// why it's atomic).
+func SetEventSink(fn func(src, level, event, msg string)) {
+	if fn == nil {
+		eventSink.Store(nil)
+		return
+	}
+	eventSink.Store(&fn)
+}
 
 // LogEntry is one logged event. Level is "info" or "error"; Src names the
 // writing surface (daemon | web | cli | install); Event is a short stable
@@ -102,6 +133,9 @@ func currentLogFile(now time.Time) string {
 // every failure path returns silently — callers log as a side effect of
 // real work, and that work must proceed unlogged rather than fail.
 func LogEvent(src, level, event, msg string) {
+	if sink := eventSink.Load(); sink != nil {
+		(*sink)(src, level, event, msg)
+	}
 	if err := os.MkdirAll(LogsDir(), 0o755); err != nil {
 		return
 	}

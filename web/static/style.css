@@ -9,6 +9,10 @@
   --counter: #FF4D9D; --counter-soft: #3D1428;
   --solved: #4ADE80; --solved-soft: #0F2E1D;
   --revealed: #F5B84D; --revealed-soft: #33260E;
+  /* "polling" status (a claude mid poll-loop on a pending ScheduleWakeup) —
+     cyan, mirroring ios/Kraken/Theme.swift KTheme.polling and util/ansi.go's
+     StatusColor("polling") = Cyan on the CLI side. */
+  --polling: #22D3EE; --polling-soft: #0E2E33;
   --glow: 0 0 12px rgba(158, 123, 255, 0.30), 0 0 2px rgba(158, 123, 255, 0.7);
   --glow-hot: 0 0 10px rgba(255, 77, 157, 0.28), 0 0 2px rgba(255, 77, 157, 0.7);
   --scanline-ink: rgba(255, 255, 255, 0.011);
@@ -19,6 +23,22 @@
   --glow-warn: 0 0 10px rgba(245, 184, 77, 0.3);
   --zebra: rgba(255, 255, 255, 0.02);
   --text-glow: 0 0 1px var(--accent), 0 0 9px var(--accent);
+  /* skill palette: one color per pipeline command (/info /aim /do /pr),
+     used by the command-highlight backdrop and chips (see app.js's
+     cmdHighlightHTML/attachCmdChips) — each gets a glow pair mirroring
+     --glow/--text-glow above. */
+  --skill-info: #5EA8FF; --skill-info-soft: #102A45;
+  --skill-aim: #FF6B6B; --skill-aim-soft: #3A1414;
+  --skill-do: #F5D34D; --skill-do-soft: #332B0E;
+  --skill-pr: #4ADE80; --skill-pr-soft: #0F2E1D;
+  --glow-skill-info: 0 0 12px rgba(94, 168, 255, 0.30), 0 0 2px rgba(94, 168, 255, 0.7);
+  --text-glow-skill-info: 0 0 1px var(--skill-info), 0 0 9px var(--skill-info);
+  --glow-skill-aim: 0 0 12px rgba(255, 107, 107, 0.30), 0 0 2px rgba(255, 107, 107, 0.7);
+  --text-glow-skill-aim: 0 0 1px var(--skill-aim), 0 0 9px var(--skill-aim);
+  --glow-skill-do: 0 0 12px rgba(245, 211, 77, 0.30), 0 0 2px rgba(245, 211, 77, 0.7);
+  --text-glow-skill-do: 0 0 1px var(--skill-do), 0 0 9px var(--skill-do);
+  --glow-skill-pr: 0 0 12px rgba(74, 222, 128, 0.30), 0 0 2px rgba(74, 222, 128, 0.7);
+  --text-glow-skill-pr: 0 0 1px var(--skill-pr), 0 0 9px var(--skill-pr);
   --sans: "Avenir Next", "Helvetica Neue", -apple-system, sans-serif;
   --mono: "SF Mono", "Menlo", monospace;
   --ease: cubic-bezier(0.9, 0, 0.1, 1);
@@ -36,6 +56,7 @@
   --counter: #C0105F; --counter-soft: #FBDFEC;
   --solved: #178A44; --solved-soft: #DCF3E4;
   --revealed: #8A5106; --revealed-soft: #F7ECD4;
+  --polling: #0E7490; --polling-soft: #D9F2F7;
   --glow: 0 1px 6px rgba(107, 63, 224, 0.25);
   --glow-hot: 0 1px 6px rgba(192, 16, 95, 0.22);
   --glow-ok: 0 1px 4px rgba(23, 138, 68, 0.3);
@@ -46,6 +67,27 @@
   --drop-tint-hover: rgba(107, 63, 224, 0.08);
   --zebra: rgba(0, 0, 0, 0.025);
   --text-glow: none;
+  /* skill palette, light siblings — same darkened-for-white-contrast pattern
+     as the rest of this block; text-glows follow --text-glow: none above,
+     since light mode never glows text. info/do/pr are darkened past the
+     naive "same pattern" hex to clear 4.5:1 against both --raised (#E3E9F1)
+     and their own -soft fill (WCAG AA, verified with a script — info
+     4.60/4.60, do 4.64/4.96, pr 4.61/4.82); aim's initial pick already
+     cleared both (4.61/4.52) so it's untouched. pr's contrast-driven hex no
+     longer matches --solved's light value, so it stays its own literal
+     rather than aliasing --solved. */
+  --skill-info: #1866C4; --skill-info-soft: #DCEAFB;
+  --skill-aim: #C42B2B; --skill-aim-soft: #FBE0E0;
+  --skill-do: #7B6505; --skill-do-soft: #F7F0D4;
+  --skill-pr: #14773B; --skill-pr-soft: #DCF3E4;
+  --glow-skill-info: 0 1px 6px rgba(24, 102, 196, 0.25);
+  --text-glow-skill-info: none;
+  --glow-skill-aim: 0 1px 6px rgba(196, 43, 43, 0.25);
+  --text-glow-skill-aim: none;
+  --glow-skill-do: 0 1px 6px rgba(123, 101, 5, 0.25);
+  --text-glow-skill-do: none;
+  --glow-skill-pr: 0 1px 6px rgba(20, 119, 59, 0.25);
+  --text-glow-skill-pr: none;
   color-scheme: light;
 }
 
@@ -324,9 +366,12 @@ body {
 .roster-dot { margin-right: 2px; }
 .roster-dot.on { color: var(--solved); }
 
-/* crew line: zeus status pill + one working/total chip per subagent role.
-   Shown on both working and blocked live cards (see crewHTML) — muted by
-   default, colored only when something on the row is actually active. */
+/* crew line: zeus's god icon (color IS its status) + one god-icon working/
+   total chip per subagent role. Shown on both working and blocked live cards
+   (see zeusPillHTML/crewHTML) — muted by default, colored only when
+   something on the row is actually active. The god's name lives only in the
+   title attribute, so hover/assistive tech still reads "zeus", "hephaestus",
+   etc. */
 .crew { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .steer-context .crew { margin-top: 0; }
 .crew-pill, .crew-chip {
@@ -334,13 +379,30 @@ body {
   padding: 2px 7px; border: 1px solid var(--hairline-2);
   color: var(--text-2);
 }
+/* the zeus pill collapses to a single glyph — its own 7px/side padding
+   already gives a lone glyph the same breathing room a chip's glyph+text
+   gets, so no extra min-width is needed; just bump the font size a touch
+   since there's no working/total text to carry the row's height. The god
+   glyphs inside crew chips (.crew-ico spans) get the same bump so icons
+   read at one size everywhere while counts stay at the chip's 10px. */
+.crew-pill, .crew-ico { font-size: 13px; }
 .crew-pill.run { color: var(--solved); border-color: var(--solved-soft); }
-.crew-pill.question { color: var(--counter); border-color: var(--counter-soft); }
-.crew-pill.polling { color: var(--accent); border-color: var(--accent-soft); }
+/* question/polling colors match the zeus status hues everywhere else
+   (--revealed = amber question state, --polling = cyan, see
+   ios/Kraken/Theme.swift KTheme and internal/util/ansi.go's StatusColor) rather than
+   the pink/purple UI accents, which mean something else in this UI. */
+.crew-pill.question { color: var(--revealed); border-color: var(--revealed-soft); }
+.crew-pill.polling { color: var(--polling); border-color: var(--polling-soft); }
 .crew-chip.active { color: var(--solved); border-color: var(--solved-soft); }
 
-/* a pending AskUserQuestion: header + option buttons, answered by a click */
-.question {
+/* a pending AskUserQuestion: header + option buttons, answered by a click.
+   Scoped to its two actual render parents (card body, steer-actions modal —
+   see questionHTML's call sites in app.js) rather than a bare .question
+   class: the zeus status pill also carries a "question" status class, and a
+   bare .question rule here would tie the `.crew-pill, .crew-chip` base rule
+   (equal 0,1,0 specificity, earlier in source) and win, wrecking that
+   pill's padding/border/font. */
+.card > .question, .steer-actions > .question {
   margin-top: 7px; padding: 6px 8px;
   background: var(--counter-soft);
   border-left: 2px solid var(--counter);
@@ -400,6 +462,7 @@ body {
   font: 11px var(--mono); letter-spacing: 0.3px;
   padding: 8px 16px;
   max-width: min(720px, calc(100vw - 32px));
+  white-space: pre-wrap; word-break: break-word;
   opacity: 0; pointer-events: none;
   transition: opacity 160ms var(--ease), transform 160ms var(--ease);
 }
@@ -544,8 +607,9 @@ body {
 }
 .btn.steer-done:hover { background: var(--solved-soft); border-color: var(--solved); box-shadow: var(--glow-ok); }
 /* ---- command highlight: mirrored backdrop behind the steer/editor
-   textareas, so /info /aim /do /pr read highlighted (purple + glow)
-   inline — a <textarea> can't style substrings of its own value. The
+   textareas, so /info /aim /do /pr each read highlighted inline in their own
+   skill color + glow (info blue, aim red, do yellow, pr green) — a
+   <textarea> can't style substrings of its own value. The
    wrapper is position:relative and otherwise unstyled; the textarea stays
    normal-flow (so it alone drives the wrapper's height — dragging its
    resize handle "just works", no ResizeObserver needed) while the backdrop
@@ -567,12 +631,33 @@ body {
      plain <div> that inherits them from wherever it sits in the DOM (e.g.
      .editor-form label's letter-spacing: 1px) — left alone that drifted the
      backdrop ~1px/char from the textarea's real glyphs (40px at column 40).
-     text-shadow:none is safe here too: the .cmd-hl span below sets its own
-     text-shadow and overrides this base rule for the glowing spans. */
+     text-shadow:none is safe here too: the generic .cmd-hl rule and the
+     per-skill .cmd-hl-<name> rules below both set their own text-shadow,
+     overriding this base rule for every command span. */
   letter-spacing: normal; word-spacing: normal; text-transform: none;
   text-indent: 0; text-align: start; text-shadow: none;
 }
+/* cmdHighlightHTML always emits the generic .cmd-hl class plus a
+   .cmd-hl-<name> class derived from CMD_CHIPS. .cmd-hl-on (the JS-failure
+   gate) and the shared textarea/backdrop metrics key off the *wrapper* and
+   #steer-text/#editor-text ids respectively, not off .cmd-hl — .cmd-hl's
+   only job is this generic fallback color, so a command that ever ships
+   without a hand-listed .cmd-hl-<name> rule below still renders instead of
+   inheriting plain body text. */
 .cmd-hl-backdrop .cmd-hl { color: var(--accent); text-shadow: var(--text-glow); }
+/* per-skill color: each .cmd-hl-<name> aliases the shared custom props
+   consumed by the one rule below it, so a fifth skill is one alias line
+   plus a CMD_CHIPS entry in app.js, not a new color rule. */
+.cmd-hl-backdrop .cmd-hl-info { --skill: var(--skill-info); --skill-glow: var(--text-glow-skill-info); }
+.cmd-hl-backdrop .cmd-hl-aim  { --skill: var(--skill-aim);  --skill-glow: var(--text-glow-skill-aim); }
+.cmd-hl-backdrop .cmd-hl-do   { --skill: var(--skill-do);   --skill-glow: var(--text-glow-skill-do); }
+.cmd-hl-backdrop .cmd-hl-pr   { --skill: var(--skill-pr);   --skill-glow: var(--text-glow-skill-pr); }
+.cmd-hl-backdrop .cmd-hl-info,
+.cmd-hl-backdrop .cmd-hl-aim,
+.cmd-hl-backdrop .cmd-hl-do,
+.cmd-hl-backdrop .cmd-hl-pr {
+  color: var(--skill); text-shadow: var(--skill-glow);
+}
 #steer-text-wrap { background: var(--raised); }
 #steer-text, #steer-text-backdrop {
   font: 12px/1.5 var(--sans);
@@ -633,17 +718,41 @@ body {
 .answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
 
 /* command chips: one-tap /info /aim /do /pr insertion above a composer
-   textarea. Deliberately not .chip/.chips — that class is claimed by the
-   delegated document click handler that opens an artifact panel. */
+   textarea, colored per skill (info blue, aim red, do yellow, pr green) —
+   inactive rests in its -soft border, hover/active (command present in the
+   textarea, see attachCmdChips) fills with the -soft tint and glows. The
+   base rule's own color/border-color is the generic accent fallback for a
+   command lacking a hand-listed .cmd-chip-<name> rule below (rest color
+   only — hover/active feedback still needs the per-skill rule, unlike
+   .cmd-hl-backdrop .cmd-hl's complete fallback). Deliberately not .chip/.chips
+   — that class is claimed by the delegated document click handler that
+   opens an artifact panel. */
 .cmd-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .cmd-chip {
   font: 10px var(--mono);
-  background: transparent; color: var(--accent);
-  border: 1px solid var(--accent-soft);
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid;
+  border-color: var(--accent-soft);
   padding: 2px 7px; cursor: pointer;
-  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+  transition: background 80ms var(--ease), box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
-.cmd-chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
+/* each .cmd-chip-<name> aliases the shared custom props consumed by the one
+   rule set below it — a fifth skill is one alias line plus a CMD_CHIPS
+   entry in app.js, not a new color/hover/active rule. */
+.cmd-chip-info { --skill: var(--skill-info); --skill-soft: var(--skill-info-soft); --skill-glow: var(--glow-skill-info); }
+.cmd-chip-aim  { --skill: var(--skill-aim);  --skill-soft: var(--skill-aim-soft);  --skill-glow: var(--glow-skill-aim); }
+.cmd-chip-do   { --skill: var(--skill-do);   --skill-soft: var(--skill-do-soft);   --skill-glow: var(--glow-skill-do); }
+.cmd-chip-pr   { --skill: var(--skill-pr);   --skill-soft: var(--skill-pr-soft);   --skill-glow: var(--glow-skill-pr); }
+.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr {
+  color: var(--skill); border-color: var(--skill-soft);
+}
+.cmd-chip-info:hover, .cmd-chip-info.active,
+.cmd-chip-aim:hover, .cmd-chip-aim.active,
+.cmd-chip-do:hover, .cmd-chip-do.active,
+.cmd-chip-pr:hover, .cmd-chip-pr.active {
+  background: var(--skill-soft); border-color: var(--skill); box-shadow: var(--skill-glow);
+}
 
 /* attachment chips: paste/drop/pick images into the steer and editor
    composers. Deliberately not .chip/.chips (that class opens an artifact

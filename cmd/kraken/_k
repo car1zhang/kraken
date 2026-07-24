@@ -12,12 +12,11 @@ _k() {
         'k:kill a pane (claude or shell)'
         'n:new shell window, optionally running a command'
         'c:new named claude window with a prompt'
-        'j:job board (every *.job.md in pluto)'
         'account:rotation status, or switch/pin the main Claude login (auto|<slug>)'
-        'start:start a job manually (worktree + cell + zeus)'
-        'done:manually complete a started job'
         'daemon:run the scheduler loop in the foreground'
-        'migrate:migrate jobs stuck in the old crew model states (terminal -> done, in-flight -> torn down)'
+        'web:web UI + sessions API (jobs kanban board, artifacts, peers API)'
+        'serve:merged sqlite-backed process — replaces daemon + web for real deployment'
+        'import:one-shot sqlite-migration cutover (human-run once per machine)'
         'help:show help'
     )
 
@@ -35,13 +34,6 @@ _k() {
                     peers+=("${value}:${desc}")
                 done < <(command k _complete 2>/dev/null)
                 _describe -V -t peers 'session' peers -M 'm:{-_ }={-_ } l:|=* r:|=*'
-            fi
-            ;;
-        start|done)
-            if (( CURRENT == 3 )); then
-                local -a jobs
-                jobs=(${(f)"$(command ls ~/Documents/pluto 2>/dev/null | command sed -n 's/\.job\.md$//p')"})
-                _describe -t jobs 'job' jobs
             fi
             ;;
         account)

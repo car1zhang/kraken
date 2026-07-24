@@ -114,7 +114,9 @@ func printAccountTable(snap core.UsageSnapshot) {
 			accountFlags(color, a, now, mainEmail),
 		})
 	}
-	util.PrintTable(rows)
+	for _, line := range util.FormatTableLines(rows) {
+		fmt.Println(line)
+	}
 }
 
 // windowPct renders a usage window's percent, "-" (dimmed) when unknown.

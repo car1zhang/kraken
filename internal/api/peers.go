@@ -80,6 +80,10 @@ func isCellPane(session string) bool {
 // so peersKillHandler's fresh re-verify doesn't have to shell out to tmux.
 var paneSessionFunc = core.CurrentPaneSession
 
+// openPeerFunc raises a peer's tmux/Ghostty window; swapped out in tests so
+// peersOpenHandler's success path doesn't have to shell out to tmux/osascript.
+var openPeerFunc = core.OpenPeer
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "host": host, "contract": apiContract, "stale": util.IsSelfStale()})
@@ -357,11 +361,8 @@ func peersOpenHandler(source peerSource) http.HandlerFunc {
 				webJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("no session in pane %s", req.Pane)})
 				return
 			}
-			if _, err := core.OpenPeer(p); err != nil {
-				webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-				return
-			}
-			webJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			note, outcome, err := openPeerFunc(p)
+			respondOpened(w, req.Pane, note, outcome, err)
 			return
 		}
 		j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
@@ -374,10 +375,31 @@ func peersOpenHandler(source peerSource) http.HandlerFunc {
 			webJSON(w, http.StatusConflict, map[string]string{"error": "no live cell agent"})
 			return
 		}
-		if _, err := core.OpenPeer(zeus); err != nil {
-			webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-			return
-		}
-		webJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		note, outcome, err := openPeerFunc(zeus)
+		respondOpened(w, req.Slug, note, outcome, err)
 	}
+}
+
+// respondOpened writes peersOpenHandler's response and logs the outcome —
+// all three altitudes (hard error, clean success, raised-but-unfocused) live
+// here so the two call sites above stay a one-liner each, mirroring
+// webAction's shape in actions.go. A hard error from openPeerFunc fails the
+// request outright; otherwise clean success and a raised-but-unfocused
+// window both count as a successful open (ok: true), with a set FocusErr
+// surfaced to the web board as an additive "focus_error" key so its toast can
+// explain why the ⧉ tmux button didn't actually bring a window forward.
+func respondOpened(w http.ResponseWriter, target, note string, outcome core.RaiseOutcome, err error) {
+	if err != nil {
+		util.LogEvent("web", "error", "open", fmt.Sprintf("open %s: %v", target, err))
+		webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	resp := map[string]any{"ok": true, "note": note}
+	if outcome.FocusErr != nil {
+		resp["focus_error"] = outcome.FocusErr.Error()
+		util.LogEvent("web", "error", "open", fmt.Sprintf("open %s: %v", target, outcome.FocusErr))
+	} else {
+		util.LogEvent("web", "info", "open", fmt.Sprintf("open %s: %s", target, note))
+	}
+	webJSON(w, http.StatusOK, resp)
 }

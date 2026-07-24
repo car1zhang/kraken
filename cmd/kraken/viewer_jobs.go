@@ -18,8 +18,8 @@ import (
 // Claudes that aren't part of a job stay in the sessions view, untouched.
 
 // buildJobRows derives the selectable rows: the board, in the same lifecycle
-// order k j uses (sortJobs — live cells first, then actionable, then
-// paperwork).
+// order the web board uses (sortJobs — live cells first, then actionable,
+// then paperwork).
 func buildJobRows(js []*jobs.Job) []*jobs.Job {
 	bySlug := map[string]*jobs.Job{}
 	for _, j := range js {
@@ -213,7 +213,7 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 		}
 		// drill into the cell: zeus pane
 		if p := m.peerNamed(jobs.ZeusName(j)); p != nil {
-			return m, m.jobsActionCmd("opening "+j.Slug, func() (string, error) { return core.OpenPeer(p) })
+			return m, m.jobsActionCmd("opening "+j.Slug, func() (string, error) { return openSelectedPeer(p) })
 		}
 		m.note, m.noteIsErr = "no live cell for "+j.Slug, true
 	case "a":

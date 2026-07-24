@@ -9,6 +9,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,8 +33,10 @@ import (
 //   - /api/reorder's success/failure shapes are the same {"ok":true} /
 //     {"error": string} convention; only its distinct request shape
 //     (reorderReq) gets its own spec below.
-//   - /api/peers/* action endpoints (spawn, send, kill, open, capture): need
-//     real tmux panes/sessions to reach their success path.
+//   - /api/peers/* action endpoints (spawn, send, kill, capture): need real
+//     tmux panes/sessions to reach their success path. /api/peers/open is the
+//     exception — its openPeerFunc test seam makes the success path
+//     reachable with no tmux, so it gets its own spec below.
 //   - /api/job/create and /api/job/save: exercised for behavior elsewhere
 //     (web_test.go) but not given their own assertShape spec here since they
 //     mirror /api/job/raw's shape exactly (see ios/API.md).
@@ -544,6 +547,53 @@ func TestPeersSendKeyWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "/api/peers/send (key)", data, peersSendKeySpec)
+}
+
+// --- /api/peers/open (webpeers.go peersOpenHandler) ---
+//
+// openPeerFunc is swapped out the same way peersKillHandler's paneSessionFunc
+// is elsewhere in this package, so both of the handler's success shapes
+// (clean focus, and a raised session whose window failed to focus) are
+// reachable without a real tmux pane/session.
+
+var peersOpenSpec = map[string]fieldSpec{
+	"ok":          {kind: wireBool, required: true},
+	"note":        {kind: wireString, required: true},
+	"focus_error": {kind: wireString, required: false},
+}
+
+func TestPeersOpenWireShape(t *testing.T) {
+	source := func() []*core.Peer {
+		return []*core.Peer{{Pane: "%2", Name: "zeus", TmuxSession: "mobile"}}
+	}
+	old := openPeerFunc
+	t.Cleanup(func() { openPeerFunc = old })
+	h := peersOpenHandler(source)
+
+	openPeerFunc = func(p *core.Peer) (string, core.RaiseOutcome, error) {
+		return "focused zeus (mobile, pane %2)", core.RaiseOutcome{}, nil
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/open", bytes.NewReader(mustJSON(t, map[string]any{"pane": "%2"})))
+	req.Header.Set("Content-Type", "application/json")
+	h(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/peers/open (clean success)", rec.Body.Bytes(), peersOpenSpec)
+
+	openPeerFunc = func(p *core.Peer) (string, core.RaiseOutcome, error) {
+		return "selected zeus (%2) — focus its window manually: boom",
+			core.RaiseOutcome{FocusErr: errors.New("boom")}, nil
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/peers/open", bytes.NewReader(mustJSON(t, map[string]any{"pane": "%2"})))
+	req.Header.Set("Content-Type", "application/json")
+	h(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/peers/open (focus_error)", rec.Body.Bytes(), peersOpenSpec)
 }
 
 // --- /api/health (webpeers.go) ---

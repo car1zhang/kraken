@@ -176,3 +176,30 @@ func TestSaveColumnOrderDedupesAndDropsEmpties(t *testing.T) {
 		t.Fatalf("dedupe/drop-empty: got %v, want %v", got, want)
 	}
 }
+
+// TestSaveColumnOrderRemovesFromOtherColumns covers L9: the file path must
+// mirror store.SetBoardColumn's one-column-per-slug invariant — a slug
+// moved into this column must vanish from every OTHER column's stored
+// order.json entry, not just get added here (previously a slug could end
+// up duplicated across two columns in file mode, unlike the store path).
+func TestSaveColumnOrderRemovesFromOtherColumns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := SaveColumnOrder("working", []string{"a", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	// "a" moves to queued, and appears twice in the input — first
+	// occurrence wins, and it must vanish from working in the same save.
+	if err := SaveColumnOrder("queued", []string{"a", "c", "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := LoadBoardOrder()
+	want := map[string][]string{
+		"queued":  {"a", "c"},
+		"working": {"b"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cross-column removal: got %v, want %v", got, want)
+	}
+}
