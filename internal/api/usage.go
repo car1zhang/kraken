@@ -16,15 +16,24 @@ var readUsageSnapshot = jobs.ReadUsageSnapshot
 // usageNow is time.Now, swapped out in tests for a deterministic age_seconds.
 var usageNow = time.Now
 
+// readRotationState is jobs.ReadRotationState, swapped out in tests so
+// usageHandler doesn't need a real ~/.kraken/rotation.json on disk — mirrors
+// readUsageSnapshot's swappable-var pattern above.
+var readRotationState = jobs.ReadRotationState
+
 // webUsage is GET /api/usage's response shape. Additive endpoint — apiContract
 // is not bumped for it (no key on any existing shape is retyped, renamed, or
-// removed).
+// removed). RotationMode/RotationSetBy/RotationSetAt were themselves added
+// additively (Slice C) — see jobs.RotationState.
 type webUsage struct {
-	Available  bool                `json:"available"`
-	FetchedAt  int64               `json:"fetched_at"`  // unix millis of the pass; 0 when unavailable
-	AgeSeconds int64               `json:"age_seconds"` // 0 when unavailable
-	DaemonOK   bool                `json:"daemon_ok"`
-	Accounts   []core.AccountUsage `json:"accounts"`
+	Available     bool                `json:"available"`
+	FetchedAt     int64               `json:"fetched_at"`  // unix millis of the pass; 0 when unavailable
+	AgeSeconds    int64               `json:"age_seconds"` // 0 when unavailable
+	DaemonOK      bool                `json:"daemon_ok"`
+	Accounts      []core.AccountUsage `json:"accounts"`
+	RotationMode  string              `json:"rotation_mode"`             // "auto" or "manual"
+	RotationSetBy string              `json:"rotation_set_by,omitempty"` // "cli"/"web"/"" (auto-default)
+	RotationSetAt int64               `json:"rotation_set_at,omitempty"` // unix millis; 0 when auto-default
 }
 
 // usageHandler serves the daemon's last usage pass. Read-only: GET only.
@@ -60,11 +69,15 @@ func usageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	rot := readRotationState()
 	webJSON(w, http.StatusOK, webUsage{
-		Available:  available,
-		FetchedAt:  snap.FetchedAt,
-		AgeSeconds: ageSeconds,
-		DaemonOK:   daemonOK,
-		Accounts:   accounts,
+		Available:     available,
+		FetchedAt:     snap.FetchedAt,
+		AgeSeconds:    ageSeconds,
+		DaemonOK:      daemonOK,
+		Accounts:      accounts,
+		RotationMode:  rot.Mode,
+		RotationSetBy: rot.SetBy,
+		RotationSetAt: rot.SetAt,
 	})
 }

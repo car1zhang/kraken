@@ -959,6 +959,27 @@ document.addEventListener("click", (ev) => {
     }
     return;
   }
+  const makeMain = ev.target.closest(".u-make-main");
+  if (makeMain) {
+    if (usageActionInFlight) return;
+    const slug = makeMain.dataset.slug;
+    const email = makeMain.dataset.email || slug;
+    if (!confirm(`switch main to ${slug} (${email})? every running session migrates at its next token refresh, and rotation pins to manual.`)) {
+      return;
+    }
+    usageActionInFlight = true;
+    makeMain.disabled = true;
+    postUsageAction("/api/account/switch", { slug }, makeMain, "switch failed").finally(() => { usageActionInFlight = false; });
+    return;
+  }
+  const switchAuto = ev.target.closest(".u-switch-auto");
+  if (switchAuto) {
+    if (usageActionInFlight) return;
+    usageActionInFlight = true;
+    switchAuto.disabled = true;
+    postUsageAction("/api/account/mode", { mode: "auto" }, switchAuto, "mode switch failed").finally(() => { usageActionInFlight = false; });
+    return;
+  }
   if (ev.target.closest("#new-job")) {
     openEditor(null);
     return;
@@ -2209,6 +2230,14 @@ const usageStat = document.getElementById("usage-stat");
 const usageOverlay = document.getElementById("usage-overlay");
 let usageData = null; // last successful /api/usage payload
 
+// usageActionInFlight gates both account-rotation click handlers below (make
+// main / switch back to auto) against a double-fire: a rapid double-click,
+// or the 60s poll's fetchUsage() replacing the button node mid-click (the
+// per-button .disabled flag alone can't catch that — a freshly re-rendered
+// button starts out enabled again even while the first click's request is
+// still in flight).
+let usageActionInFlight = false;
+
 // usageColorClass thresholds a percent into the same ok/warn/danger palette
 // used everywhere else in the board (solved/revealed/counter).
 function usageColorClass(percent) {
@@ -2263,7 +2292,13 @@ function usageStatHTML(data) {
   const stale = !data.daemon_ok || data.age_seconds > 900
     ? `<span class="u-stale">(stale ${Math.floor(data.age_seconds / 60)}m)</span>`
     : "";
-  const out = segs.join("") + poolHTML + stale;
+  // manual-pin chip: absent on an older server (rotation_mode undefined
+  // there, so this just never equals "manual") and absent in auto mode too
+  // — status quo look unless someone has actually pinned the main account.
+  const modeChip = data.rotation_mode === "manual"
+    ? `<span class="u-sep">·</span><span class="u-chip u-chip-warn">manual</span>`
+    : "";
+  const out = segs.join("") + poolHTML + modeChip + stale;
   // an account with no windows at all (fresh install, reauth everywhere)
   // must not leave a visible-but-blank widget
   return out || `<span class="dim">usage —</span>`;
@@ -2300,16 +2335,34 @@ function usageChipsHTML(a) {
 }
 
 // usageAccountHTML renders one account block: header line (slug, current
-// chip, email, tier, status chips, pool-only ccp button) plus a bar row per
-// window. Rows are empty (no session/weekly/models) for reauth/no_creds
-// accounts — the block then falls back to just the header.
-function usageAccountHTML(a) {
+// chip, email, tier, status chips, make-main + pool-only ccp buttons) plus a
+// bar row per window. Rows are empty (no session/weekly/models) for
+// reauth/no_creds accounts — the block then falls back to just the header.
+// `data` is the whole /api/usage payload (not just this account) — it's only
+// consulted for rotation_mode, to gate the make-main button off entirely on
+// an older server that never sends the field (see the click handler for
+// ".u-make-main" and the POST /api/account/switch contract).
+function usageAccountHTML(a, data) {
   const tier = esc((a.tier || "").replace(/^default_claude_/, ""));
   const rows = [usageBarHTML("session", a.session), usageBarHTML("weekly", a.weekly)]
     .concat((a.models || []).map((m) => usageBarHTML(m.name.toLowerCase(), m)))
     .filter(Boolean)
     .join("");
   const ccpBtn = a.current ? "" : `<button class="btn ghost mini u-ccp" data-slug="${esc(a.slug)}" title="copy ccp ${esc(a.slug)}">⧉ ccp</button>`;
+  // make-main: any non-current account with usable creds — cooling/stale
+  // rows still get the button (the server is the one that decides whether a
+  // switch to them actually succeeds), only no_creds/reauth rows don't. A
+  // row whose email mirrors the current main account's is also excluded:
+  // it's the save-back slot a rotation just parked the outgoing main creds
+  // into, and core refuses to ever rotate onto it (core.ErrSaveBackIsTarget)
+  // — every rotation would otherwise re-offer a "make main" button here that
+  // is guaranteed to fail.
+  const main = usageMainAccount(data);
+  const mirrorsMain = !!(a.email && main && main.email && a.email.toLowerCase() === main.email.toLowerCase());
+  const canMakeMain = data.rotation_mode !== undefined && !a.current && !a.no_creds && !a.reauth && !mirrorsMain;
+  const makeMainBtn = canMakeMain
+    ? `<button type="button" class="btn ghost mini u-make-main" data-slug="${esc(a.slug)}" data-email="${esc(a.email || a.slug)}" title="switch the main account to ${esc(a.slug)}">make main</button>`
+    : "";
   return `<div class="u-account">
     <div class="u-account-head">
       <span class="u-slug">${esc(a.slug)}</span>
@@ -2318,15 +2371,46 @@ function usageAccountHTML(a) {
       ${tier ? `<span class="u-chip">${tier}</span>` : ""}
       ${usageChipsHTML(a)}
       <span class="spacer"></span>
+      ${makeMainBtn}
       ${ccpBtn}
     </div>
     ${rows ? `<div class="u-rows">${rows}</div>` : ""}
   </div>`;
 }
 
+// rotationModeChipHTML renders the drilldown panel-head's always-visible
+// mode chip ("rotation: auto" / "rotation: manual"). Undefined
+// rotation_mode (older server) renders nothing, same gate as everywhere else
+// in this section.
+function rotationModeChipHTML(data) {
+  if (data.rotation_mode === undefined) return "";
+  const manual = data.rotation_mode === "manual";
+  return `<span class="u-chip ${manual ? "u-chip-warn" : "u-chip-ok"}">rotation: ${manual ? "manual" : "auto"}</span>`;
+}
+
+// manualBannerHTML renders the "pinned to X" banner at the top of the
+// drilldown body when rotation is manually pinned. rotation_set_at is unix
+// millis (0 = default/unset, per the API contract) — age() already treats a
+// falsy unix as "" so the trailing "<time> ago" clause just drops out
+// instead of rendering "0s ago" or similar nonsense. The CTA POSTs
+// /api/account/mode {mode:"auto"}; see the ".u-switch-auto" click handler.
+function manualBannerHTML(data) {
+  if (data.rotation_mode !== "manual") return "";
+  const main = usageMainAccount(data) || {};
+  const who = main.email || "main";
+  const setBy = data.rotation_set_by || "unknown";
+  const whenS = data.rotation_set_at ? age(Math.floor(data.rotation_set_at / 1000)) : "";
+  const when = whenS ? ` ${whenS} ago` : "";
+  return `<div class="u-manual-banner">
+    <span>pinned to ${esc(who)} by ${esc(setBy)}${when} — auto-rotation off</span>
+    <button type="button" class="btn ghost mini u-switch-auto">switch back to auto</button>
+  </div>`;
+}
+
 // renderUsageModal fills the drilldown's head (fetched-ago / daemon-down
 // warning) and body (one block per account, server order = current-first).
 function renderUsageModal(data) {
+  document.getElementById("usage-mode-chip").innerHTML = rotationModeChipHTML(data);
   const head = document.getElementById("usage-fetched");
   if (!data.available) {
     head.innerHTML = `<span class="dim">no data yet</span>`;
@@ -2337,9 +2421,42 @@ function renderUsageModal(data) {
   }
   const body = document.getElementById("usage-body");
   const accounts = data.accounts || [];
-  body.innerHTML = accounts.length
-    ? accounts.map(usageAccountHTML).join("")
-    : `<div class="empty">no usage data yet</div>`;
+  body.innerHTML = manualBannerHTML(data) + (accounts.length
+    ? accounts.map((a) => usageAccountHTML(a, data)).join("")
+    : `<div class="empty">no usage data yet</div>`);
+}
+
+// postUsageAction is the account-rotation counterpart of postReorder: POST,
+// and on success let fetchUsage() do the re-render (it repaints both the
+// header widget and, when open, this drilldown — same path a normal 60s
+// poll takes, so the new mode chip/banner/buttons just fall out of it). On
+// failure, toast the server's error and re-enable the button that triggered
+// it so a transient failure doesn't leave a dead control behind.
+async function postUsageAction(url, body, button, errLabel) {
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || String(r.status));
+    await fetchUsage();
+    return true;
+  } catch (e) {
+    showToast(`${errLabel}: ${e.message}`);
+    return false;
+  } finally {
+    // Always re-enable, not just on the catch path: fetchUsage() swallows
+    // its own network errors internally (see its try/catch) rather than
+    // throwing, so a POST success followed by a silently-failed refetch
+    // would otherwise skip both the catch branch above AND the re-render
+    // that would normally discard this (disabled) button node — leaving a
+    // dead, permanently-disabled control until the next 60s poll happens to
+    // succeed. Harmless no-op when the button was already discarded by a
+    // successful re-render.
+    if (button) button.disabled = false;
+  }
 }
 
 async function fetchUsage() {

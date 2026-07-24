@@ -254,6 +254,14 @@ func jobPrompt(j *Job) string {
 	return strings.TrimSpace(body)
 }
 
+// rotationGate is a package-level indirection to RotationGate. TestMain
+// (testmain_test.go) swaps it to a no-op for the whole jobs test binary —
+// StartCell/ReactivateJob must never shell out to the real keychain/network
+// from a test that spawns a cell, even one that doesn't care about rotation
+// at all; a test that specifically wants to assert on gate invocation
+// re-swaps it locally.
+var rotationGate = RotationGate
+
 // StartCell creates a job's cell: worktree off the base ref, tmux session,
 // zeus pane, identity marker, state write. Callers have validated the job
 // (parseable, ready, unstarted, prereqs met) — this owns mechanics only, and
@@ -266,6 +274,9 @@ func StartCell(j *Job, repo string) error {
 	if old := ExistingWorktree(j, repo); old != "" {
 		return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", old, repo, old)
 	}
+	// below the cheap rejections above (already-live, leftover worktree): a
+	// rejected spawn must not pay for a usage fetch or a swap
+	rotationGate("start " + j.Slug)
 	wt := CellWorktree(j, repo)
 	base, err := baseRef(j, repo)
 	if err != nil {
@@ -1091,6 +1102,10 @@ func ReactivateJob(j *Job, session, message string) error {
 		}
 		return fmt.Errorf("%s: %v", j.Slug, err)
 	}
+	// below the cheap rejections above (unparseable job, no recorded session,
+	// already-live, unresolved repo, reactivateMode's worktree-exists check):
+	// a rejected spawn must not pay for a usage fetch or a swap
+	rotationGate("reactivate " + j.Slug)
 	for _, d := range []string{cellDir(j), CellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)

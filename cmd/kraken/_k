@@ -12,6 +12,7 @@ _k() {
         'k:kill a pane (claude or shell)'
         'n:new shell window, optionally running a command'
         'c:new named claude window with a prompt'
+        'account:rotation status, or switch/pin the main Claude login (auto|<slug>)'
         'daemon:run the scheduler loop in the foreground'
         'web:web UI + sessions API (jobs kanban board, artifacts, peers API)'
         'serve:merged sqlite-backed process — replaces daemon + web for real deployment'
@@ -33,6 +34,19 @@ _k() {
                     peers+=("${value}:${desc}")
                 done < <(command k _complete 2>/dev/null)
                 _describe -V -t peers 'session' peers -M 'm:{-_ }={-_ } l:|=* r:|=*'
+            fi
+            ;;
+        account)
+            if (( CURRENT == 3 )); then
+                local -a targets
+                targets=(auto)
+                # glob-qualified: (N) nullglob (no error on zero matches),
+                # (/) directories only — cooldowns.json and the
+                # .rotation-inflight journal file live alongside the slot
+                # dirs in the same pool dir and must not show up as targets
+                # — (:t) takes just the basename of each match.
+                targets+=(${CLAUDE_POOL_DIR:-$HOME/.claude-pool}/*(N/:t))
+                _describe -t targets 'target' targets
             fi
             ;;
     esac

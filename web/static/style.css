@@ -461,7 +461,7 @@ body {
   box-shadow: var(--glow-hot);
   font: 11px var(--mono); letter-spacing: 0.3px;
   padding: 8px 16px;
-  max-width: min(90vw, 640px);
+  max-width: min(720px, calc(100vw - 32px));
   white-space: pre-wrap; word-break: break-word;
   opacity: 0; pointer-events: none;
   transition: opacity 160ms var(--ease), transform 160ms var(--ease);
@@ -560,6 +560,10 @@ body {
 }
 .panel-title { font: 700 11.5px var(--mono); letter-spacing: 1px; }
 .panel-title::after { content: "▊"; color: var(--accent); margin-left: 4px; }
+/* empty on an older server (rotation_mode undefined — see
+   rotationModeChipHTML in app.js): collapse out of the panel-head's flex
+   gap entirely so the row looks pixel-identical to before this chip existed */
+#usage-mode-chip:empty { display: none; }
 /* button system: solid buttons (base .btn — accent fill) just glow on
    hover; outline buttons (ghost/unarchive/delete/reactivate/retry/
    steer-done) rest with a faint -soft border and no background, and on
@@ -793,9 +797,23 @@ body {
   padding: 2px 6px; border: 1px solid var(--hairline-2); color: var(--text-2);
 }
 .u-chip-current { color: var(--accent); border-color: var(--accent-soft); }
+.u-chip-ok { color: var(--solved); border-color: var(--solved-soft); }
 .u-chip-warn { color: var(--revealed); border-color: var(--revealed-soft); }
 .u-chip-danger { color: var(--counter); border-color: var(--counter-soft); cursor: help; }
 .u-chip-dim { opacity: 0.6; }
+/* rotation manual-pin banner: top of the usage drilldown body, only when
+   rotation_mode is "manual" (see manualBannerHTML in app.js) */
+.u-manual-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+  padding: 7px 11px; margin-bottom: 12px;
+  background: var(--revealed-soft);
+  border: 1px solid var(--revealed);
+  color: var(--revealed);
+  font: 11px var(--mono);
+  letter-spacing: 0.2px;
+}
+.u-manual-banner .btn { flex: none; }
 /* bare .dim spans inside the usage widget/modal (email, "usage —",
    fetched-ago) — .stat.dim/.roster-row .dim don't reach them */
 .usage-stat .dim,

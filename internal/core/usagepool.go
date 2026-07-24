@@ -216,9 +216,17 @@ func slotKeychainService(slotDir string) string {
 	return "Claude Code-credentials-" + hex.EncodeToString(sum[:])[:8]
 }
 
+// claudeJSONPath mirrors the securityFind/securityAdd swappable-var pattern
+// so tests never touch the real ~/.claude.json. Lives here (rather than in
+// rotation.go, which is its heaviest consumer) so mainAccountMeta and every
+// rotation.go caller share the exact same swappable path.
+var claudeJSONPath = func() string {
+	return filepath.Join(util.Home(), ".claude.json")
+}
+
 func mainAccountMeta() accountMeta {
 	var meta accountMeta
-	data, err := os.ReadFile(filepath.Join(util.Home(), ".claude.json"))
+	data, err := os.ReadFile(claudeJSONPath())
 	if err != nil {
 		return meta
 	}
