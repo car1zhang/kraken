@@ -330,11 +330,11 @@ func TestClipLine(t *testing.T) {
 // as its own selectable row, keyed to its position in m.jrows.
 func TestBuildJobLinesFiveStates(t *testing.T) {
 	js := []*jobs.Job{
-		{Slug: "d1", Type: "build", Ready: false}, // never started, not ready
-		{Slug: "q1", Type: "build", Ready: true},  // ready, never started
-		{Slug: "w1", Type: "build", Ready: true, State: "working"},
-		{Slug: "b1", Type: "build", Ready: true, State: "blocked"},
-		{Slug: "done1", Type: "build", Ready: true, State: "done"},
+		{Slug: "d1", Ready: false}, // never started, not ready
+		{Slug: "q1", Ready: true},  // ready, never started
+		{Slug: "w1", Ready: true, State: "working"},
+		{Slug: "b1", Ready: true, State: "blocked"},
+		{Slug: "done1", Ready: true, State: "done"},
 	}
 	m := &viewerModel{
 		view: "jobs", loaded: true, width: 100, height: 40,
@@ -373,8 +373,8 @@ func TestBuildJobLinesFiveStates(t *testing.T) {
 }
 
 func TestJobRowKeyAnchorsCursorAcrossRefresh(t *testing.T) {
-	a := &jobs.Job{Slug: "a", Type: "build", Ready: true}
-	b := &jobs.Job{Slug: "b", Type: "build", Ready: true}
+	a := &jobs.Job{Slug: "a", Ready: true}
+	b := &jobs.Job{Slug: "b", Ready: true}
 	m := &viewerModel{
 		view: "jobs", loaded: true, width: 100, height: 40,
 		rawJobs: []*jobs.Job{a, b}, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
@@ -383,7 +383,7 @@ func TestJobRowKeyAnchorsCursorAcrossRefresh(t *testing.T) {
 	m.setCursor(1) // b
 	// next snapshot: same jobs, new *jobs.Job values (as a fresh LoadJobs() would
 	// produce) — the cursor must still follow slug "b"
-	m.rawJobs = []*jobs.Job{{Slug: "a", Type: "build", Ready: true}, {Slug: "b", Type: "build", Ready: true}}
+	m.rawJobs = []*jobs.Job{{Slug: "a", Ready: true}, {Slug: "b", Ready: true}}
 	m.rebuild()
 	if m.cursor != 1 || m.jselected().Slug != "b" {
 		t.Errorf("cursor should follow job b, got %d (%v)", m.cursor, m.jselected())

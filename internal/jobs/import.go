@@ -439,7 +439,7 @@ func upsertActiveJobRow(st *store.Store, j *Job, modTime time.Time) (int64, erro
 	if existing == nil {
 		millis := modTime.UnixMilli()
 		row := &store.Job{
-			Slug: j.Slug, Type: j.Type, Repo: j.Repo, Base: j.Base,
+			Slug: j.Slug, Repo: j.Repo, Base: j.Base,
 			Ready: j.Ready, Solo: j.Solo, Model: j.Model, SkipDoc: j.SkipDoc,
 			Body: j.Body, State: j.State, Outcome: j.Outcome,
 			Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),
@@ -501,7 +501,7 @@ func syncJobChildren(st *store.Store, id int64, j *Job) error {
 // the original file had).
 func jobFieldsMap(j *Job) map[string]any {
 	return map[string]any{
-		"slug": j.Slug, "type": j.Type, "repo": j.Repo, "base": j.Base,
+		"slug": j.Slug, "repo": j.Repo, "base": j.Base,
 		"ready": j.Ready, "solo": j.Solo, "model": j.Model, "skip_doc": j.SkipDoc,
 		"body": j.Body, "state": j.State, "outcome": j.Outcome,
 		"session": j.Session, "teardown": j.Teardown, "run": runValue(j.Run),
@@ -520,10 +520,6 @@ func jobFieldsChanged(existing *store.Job, fields map[string]any) bool {
 		switch k {
 		case "slug":
 			if existing.Slug != v.(string) {
-				return true
-			}
-		case "type":
-			if existing.Type != v.(string) {
 				return true
 			}
 		case "repo":
@@ -625,7 +621,7 @@ func importArchivedJobs(st *store.Store, files []parsedJobFile, dryRun bool) (St
 // insert-or-update keyed on ArchivedName.
 func upsertArchivedJobRow(st *store.Store, j *Job, archivedAtMillis int64) (int64, error) {
 	row := &store.Job{
-		Slug: j.Slug, Type: j.Type, Repo: j.Repo, Base: j.Base,
+		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
 		Ready: j.Ready, Solo: j.Solo, Model: j.Model, SkipDoc: j.SkipDoc,
 		Body: j.Body, State: j.State, Outcome: j.Outcome,
 		Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),

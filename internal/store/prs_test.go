@@ -4,7 +4,7 @@ import "testing"
 
 func TestUpsertPRDedupAndStateUpdate(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "pr-job", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "pr-job"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestUpsertPRDedupAndStateUpdate(t *testing.T) {
 // against a rev that predates a PR attach/remove can clobber it.
 func TestUpsertPRBumpsJobRev(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "pr-rev-job", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "pr-rev-job"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestUpsertPRBumpsJobRev(t *testing.T) {
 
 func TestRemovePRBumpsJobRev(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "pr-rev-remove", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "pr-rev-remove"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestRemovePRBumpsJobRev(t *testing.T) {
 
 func TestRemovePR(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "pr-remove", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "pr-remove"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

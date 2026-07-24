@@ -1,68 +1,67 @@
 ---
 name: do
-description: "Implement the system described by an /aim spec or explain artifact produced earlier in this conversation. Resolves any P0 open questions with the user first, then writes the code. Use when the user asks for /do, \"send it\", \"ship the doc\", \"implement the spec\", \"build what we specced\", or similar phrasing after an /aim artifact has been created."
+description: "Implement the system described by an /aim artifact set produced earlier in this conversation. Resolves any P0 open questions in questions.yaml with the user first, then writes the code. Use when the user asks for /do, \"send it\", \"ship the doc\", \"implement the spec\", \"build what we specced\", or similar phrasing after an /aim artifact set has been created."
 ---
 
-# Do — Implement A Spec Artifact
+# Do — Implement An Artifact Set
 
-Take a spec/explain artifact produced by [[aim]] earlier in this conversation and implement it. The doc is the source of truth for scope, components, constraints, and testing. Before writing code, resolve any `P0` items from the doc's Open Questions table with the user.
+Take the artifact set produced by [[aim]] earlier in this conversation — `00-overview.md`, its diagram cards, and its section docs — and implement it. The set is the source of truth for scope, components, constraints, and testing. Before writing code, resolve any `P0` entries in the set's `questions.yaml` with the user.
 
 ## Preconditions
 
-- An `/aim` artifact must exist for this conversation. It is usually an HTML file under `~/designs/<slug>.spec.html` or `~/designs/<slug>.explain.html` created by the [[aim]] skill (older artifacts may be `.spec.md` / `.explain.md`).
+- An `/aim` artifact set must exist for this conversation: a set root directory (standalone: `~/designs/<slug>/`; in a kraken cell: `<cellDir>/artifacts/`) containing `00-overview.md`. A sibling `questions.yaml` (standalone: `~/designs/<slug>.questions.yaml`; in a cell: `<cellDir>/questions.yaml`) may or may not exist — it's optional, and its absence just means no open questions were raised. Older conversations may instead have a single flattened `~/designs/<slug>.spec.html` / `.explain.html` from the legacy template flow (or `.spec.md` / `.explain.md`) — treat that file itself as the doc in that case.
 - If no such artifact exists in this conversation:
   - Do **not** start implementing.
   - Tell the user: "No /aim artifact found in this conversation — run /aim first, then /do."
-  - Stop. Do not infer a spec from prior chat messages alone; the doc file is the contract.
+  - Stop. Do not infer a spec from prior chat messages alone; the artifact set is the contract.
 
 ## Workflow
 
-### 1. Locate The Doc
+### 1. Locate And Read The Set
 
-- Identify the most recent `/aim` artifact path mentioned in this conversation.
-- Read it in full. The doc is the source of truth — do not rely on chat memory of what it said.
-- If the user passes an explicit path as an argument, use that instead.
+- Identify the most recent `/aim` set root mentioned in this conversation (or the explicit path the user passes as an argument).
+- Read `00-overview.md` in full, then every `.md` file in the set root other than `00-overview.md` in full (covers `5N-*.md` and any `6N+` section docs), then `questions.yaml` in full if it exists. The set is the source of truth — do not rely on chat memory of what it said. (Diagram cards are supporting detail; skim captions/titles rather than reading every SVG body.)
+- If working from a legacy single-file doc instead, read it in full the same way.
+- `questions.yaml` is OPTIONAL: its absence means zero open questions for this set — skip straight to implementation (do not refuse or treat a missing file as an error).
+- If any section doc this workflow names (`50-components.md`, `51-code-map.md`, `52-testing-plan.md`) — or one referenced elsewhere in the set (e.g. by `51-code-map.md`'s review guide) — is absent, say so explicitly and fall back to `00-overview.md` plus whatever section docs do exist — never invent content to fill the gap. A solo set legitimately has none of the three named docs; that is not an error.
 
 ### 2. Resolve P0 Open Questions
 
-- Find the `Open Questions` table in the doc.
-- Collect every row with `Importance` = `P0`.
-- For each P0 question, ask the user with `AskUserQuestion`. Group related questions into one call (up to 4 questions per call).
-- Skip questions the user has already answered earlier in this conversation; cite the prior answer instead of re-asking.
-- If there are no P0 questions, skip straight to implementation.
+- Collect every `questions.yaml` entry with `importance: P0` and no `answer:` key yet.
+- For each unresolved P0, ask the user with `AskUserQuestion`. Group related questions into one call (up to 4 questions per call).
+- An entry that already has an `answer:` (and `answered-at:`) is a **decision, not a question** — never re-ask it; treat the answer as settled and cite it if relevant. In a kraken cell those two keys arrive as silent file edits from carl answering on the board, not as pane messages — re-read `questions.yaml` before this step to pick up anything answered since the set was last read.
+- If there are no unresolved P0 entries, skip straight to implementation.
 - Do **not** ask P1/P2 questions unless the user requests it — state assumptions for those if they block progress, and surface them after implementation.
 
-### 3. Update The Doc With Resolved Decisions
+### 3. Record Newly Resolved Decisions
 
-- After P0 answers come in, edit the doc:
-  - Move resolved P0 rows out of Open Questions into an `Assumptions` or new `Decisions` section, noting the answer.
-  - Keep P1/P2 rows in Open Questions untouched.
-- This keeps the doc the durable record once implementation starts.
+- After P0 answers come in outside a cell (where there's no board to append `answer:`/`answered-at:` for you), edit `questions.yaml` yourself: remove the resolved entry and note the decision in the relevant section doc (an `Assumptions`/`Decisions` note) instead. Leave P1/P2 entries untouched.
+- In a kraken cell, never write `answer:`/`answered-at:` yourself — that's kraken's job once carl answers from the board.
 
 ### 4. Plan The Implementation
 
-- Build a TaskCreate plan grouped by the doc's `Components` table. One task per component is a good default.
-- Honor the doc's `Scope`, `Non-Goals`, and `Constraints And Principles` strictly — do not expand scope.
-- Use the doc's `Low-Level Code Map` / `Where Things Live` as the file-targeting guide. Verify those paths still exist before relying on them.
+- Build a TaskCreate plan grouped by `50-components.md`'s component table. One task per component is a good default.
+- Honor the set's scope/non-goals/constraints section doc(s) strictly — do not expand scope.
+- Use `51-code-map.md` (where things live, review guide) as the file-targeting guide. Verify those paths still exist before relying on them.
 - For complex implementations (4+ files or multi-service), spawn a TeamCreate per the user's global preference rather than serial work in the main thread.
-- Use **Sonnet teammates for mechanical implementation** (`model: sonnet`): well-specified component tasks where the doc already pins the design, file targets, and test plan. Reserve Opus/default-model teammates for tasks needing real judgment (ambiguous integration points, cross-cutting refactors, design gaps the doc left open). The lead agent stays on the default model to plan, review teammate output, and integrate.
+- Use **Sonnet teammates for mechanical implementation** (`model: sonnet`): well-specified component tasks where the set already pins the design, file targets, and test plan. Reserve Opus/default-model teammates for tasks needing real judgment (ambiguous integration points, cross-cutting refactors, design gaps the set left open). The lead agent stays on the default model to plan, review teammate output, and integrate.
 
 ### 5. Implement
 
-- Follow the per-component test plans from the doc (unit / integration / e2e) as you write each component.
-- Match the project's existing conventions; do not introduce new abstractions the doc did not call for.
+- Follow the per-component test plans from `50-components.md` (unit / integration / e2e) as you write each component.
+- Match the project's existing conventions; do not introduce new abstractions the set did not call for.
 - Mark each TaskCreate task complete as soon as it is done.
 
-### 6. Verify Against The Doc
+### 6. Verify Against The Set
 
-- Run the doc's `Testing Plan` checks that are practical locally (unit tests, type checks, targeted integration tests).
+- Run `52-testing-plan.md`'s checks that are practical locally (unit tests, type checks, targeted integration tests).
 - For UI changes, open the feature in a browser before reporting done.
 - If a check is not runnable locally, say so explicitly.
 
 ### 7. Report Back
 
-- One short summary: what shipped, which P0 answers shaped it, what was deferred to remaining open questions, and what verification was run.
-- Do not re-summarize the doc itself — link to it.
+- One short summary: what shipped, which P0 answers shaped it, what was deferred to remaining `questions.yaml` entries, and what verification was run.
+- Do not re-summarize the set itself — link to `00-overview.md`.
 
 ### 8. Clean Up Agents
 

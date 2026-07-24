@@ -35,7 +35,7 @@ func TestOpenMigrateIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
-	if _, err := s1.CreateJob(&Job{Slug: "a", Type: "build"}); err != nil {
+	if _, err := s1.CreateJob(&Job{Slug: "a"}); err != nil {
 		t.Fatalf("seed CreateJob: %v", err)
 	}
 	if err := s1.Close(); err != nil {
@@ -92,7 +92,7 @@ func TestPragmasApplied(t *testing.T) {
 
 func TestForeignKeyCascade(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "cascade", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "cascade"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestForeignKeyCascade(t *testing.T) {
 
 func TestBackupProducesOpenableDB(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.CreateJob(&Job{Slug: "backup-me", Type: "info"}); err != nil {
+	if _, err := s.CreateJob(&Job{Slug: "backup-me", Repo: "kraken"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
 	dest := filepath.Join(t.TempDir(), "backups", "kraken.db")
@@ -140,7 +140,7 @@ func TestBackupProducesOpenableDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup missing seeded row: %v", err)
 	}
-	if j.Type != "info" {
+	if j.Repo != "kraken" {
 		t.Errorf("backup row mangled: %+v", j)
 	}
 }

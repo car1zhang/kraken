@@ -14,8 +14,8 @@ import (
 )
 
 // viewer_jobs.go — the J-toggled job board inside k v: every job with state,
-// type, repo, prereqs and live cell, plus daemon health in the header.
-// Claudes that aren't part of a job stay in the sessions view, untouched.
+// repo, prereqs and live cell, plus daemon health in the header. Claudes
+// that aren't part of a job stay in the sessions view, untouched.
 
 // buildJobRows derives the selectable rows: the board, in the same lifecycle
 // order the web board uses (sortJobs — live cells first, then actionable,
@@ -122,7 +122,7 @@ func (m *viewerModel) buildJobLines() []viewLine {
 	bySlug := m.jobsBySlug()
 	now := time.Now()
 	lines = append(lines, viewLine{text: util.Paint(true, util.Cyan, "JOBS"), row: -1})
-	header := []string{"  #", "STATE", "JOB", "TYPE", "REPO", "PREREQS", "CREW", "CELL", "ART", "AGE"}
+	header := []string{"  #", "STATE", "JOB", "REPO", "PREREQS", "CREW", "CELL", "ART", "AGE"}
 	for i, h := range header {
 		header[i] = util.Paint(true, util.Cyan, h)
 	}
@@ -174,7 +174,6 @@ func (m *viewerModel) buildJobLines() []viewLine {
 			marker + util.Paint(color, util.Dim, fmt.Sprintf("%2d", idx+1)),
 			util.Paint(color, jobs.JobStateColor(state), "● "+state) + stateMark,
 			util.Paint(color, util.Cyan, j.Slug),
-			j.Type,
 			repo,
 			jobs.PrereqCell(j, bySlug, color),
 			crew,

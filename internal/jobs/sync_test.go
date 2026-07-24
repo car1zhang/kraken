@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,7 +42,7 @@ func TestSyncCellArtifactsNestedAndBinary(t *testing.T) {
 	writeArtifact(t, j, "top.txt", []byte("hello"), time.Hour)
 	writeArtifact(t, j, "icons/sub/icon.png", binary, time.Hour)
 
-	id, err := st.CreateJob(&store.Job{Slug: j.Slug, Type: "info"})
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func TestSyncCellArtifactsVanishDeletesRow(t *testing.T) {
 	p1 := writeArtifact(t, j, "keep.md", []byte("a"), time.Hour)
 	writeArtifact(t, j, "gone.md", []byte("b"), time.Hour)
 
-	id, err := st.CreateJob(&store.Job{Slug: j.Slug, Type: "info"})
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +126,7 @@ func TestSyncCellArtifactsSkipsUnchangedBytes(t *testing.T) {
 	j := &Job{Slug: "sync-unchanged"}
 	writeArtifact(t, j, "stable.md", []byte("v1"), time.Hour)
 
-	id, err := st.CreateJob(&store.Job{Slug: j.Slug, Type: "info"})
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +184,7 @@ func TestSyncCellArtifactsMissingRootSkipsSync(t *testing.T) {
 	j := &Job{Slug: "sync-missing-root"}
 	writeArtifact(t, j, "keep.md", []byte("a"), time.Hour)
 
-	id, err := st.CreateJob(&store.Job{Slug: j.Slug, Type: "info"})
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +216,142 @@ func TestSyncArtifactsNowNoopWithoutStore(t *testing.T) {
 	// a pure no-op — in particular, it must not panic on a job with ID 0
 	// and no live cell dir.
 	syncArtifactsNow(&Job{Slug: "unwired"}, "test")
+}
+
+func TestSyncQuestionsFileUpsertsAndDeletes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	j := &Job{Slug: "questions-sync"}
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// cell dir doesn't exist yet either: a no-op, row stays absent (L3-style
+	// guard — see TestSyncQuestionsFileMissingCellDirSkips below for the
+	// case that actually matters, a cell dir gone AFTER a row was seeded).
+	if err := syncQuestionsFile(st, id, j); err != nil {
+		t.Fatalf("sync with no cell dir: %v", err)
+	}
+	if _, err := st.GetQuestions(id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected no questions row before any file exists, got err=%v", err)
+	}
+
+	qPath := QuestionsPath(j)
+	if err := os.MkdirAll(filepath.Dir(qPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(qPath, []byte("- q: one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncQuestionsFile(st, id, j); err != nil {
+		t.Fatalf("sync with file present: %v", err)
+	}
+	q, err := st.GetQuestions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(q.Bytes) != "- q: one\n" {
+		t.Fatalf("want questions row upserted, got %q", q.Bytes)
+	}
+
+	// the file vanishes but the cell dir stays (e.g. the file was deleted
+	// by hand): the next sync must mirror that as a row deletion.
+	if err := os.Remove(qPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncQuestionsFile(st, id, j); err != nil {
+		t.Fatalf("sync after removal: %v", err)
+	}
+	if _, err := st.GetQuestions(id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected questions row deleted after file removal, got err=%v", err)
+	}
+}
+
+// TestSyncQuestionsFileMissingCellDirSkips covers the mirror-to-empty bug a
+// missing cellDir used to trigger: syncQuestionsFile's os.Stat on
+// QuestionsPath took the IsNotExist branch for a cell dir that was already
+// removed (a resumed teardown re-running after cellDir was already deleted
+// by an earlier, interrupted pass — see syncCellArtifacts' L3 guard for the
+// same rationale on the artifacts side), which read exactly like "the file
+// was deleted" and destroyed the durable row. A missing cell dir must be a
+// pure skip; only a cell dir that DOES exist, with the file itself absent,
+// may delete the row.
+func TestSyncQuestionsFileMissingCellDirSkips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	j := &Job{Slug: "questions-missing-celldir"}
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	qPath := QuestionsPath(j)
+	if err := os.MkdirAll(filepath.Dir(qPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(qPath, []byte("- q: one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncQuestionsFile(st, id, j); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+	if _, err := st.GetQuestions(id); err != nil {
+		t.Fatalf("want a seeded row, got err=%v", err)
+	}
+
+	// the whole cell dir disappears, not just the file.
+	if err := os.RemoveAll(cellDir(j)); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncQuestionsFile(st, id, j); err != nil {
+		t.Fatalf("sync against a missing cell dir must not error: %v", err)
+	}
+	q, err := st.GetQuestions(id)
+	if err != nil {
+		t.Fatalf("seeded row must survive a missing cell dir untouched, got err=%v", err)
+	}
+	if string(q.Bytes) != "- q: one\n" {
+		t.Fatalf("seeded row content changed: %q", q.Bytes)
+	}
+}
+
+func TestSyncArtifactsNowAlsoSyncsQuestions(t *testing.T) {
+	useTestStore(t)
+	j := &Job{Slug: "questions-via-now"}
+	id, err := ActiveStore().CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.ID = id
+
+	qPath := QuestionsPath(j)
+	if err := os.MkdirAll(filepath.Dir(qPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(qPath, []byte("- q: via-now\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	syncArtifactsNow(j, "test")
+
+	q, err := ActiveStore().GetQuestions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(q.Bytes) != "- q: via-now\n" {
+		t.Fatalf("want questions synced via syncArtifactsNow, got %q", q.Bytes)
+	}
 }
 
 func TestSyncArtifactsNowNoopWithoutJobID(t *testing.T) {

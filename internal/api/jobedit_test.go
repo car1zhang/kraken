@@ -13,40 +13,6 @@ import (
 	"kraken/internal/jobs"
 )
 
-func TestWebJobSaveFormTypeValidation(t *testing.T) {
-	// build/info are the only two accepted values now; legacy explore/question
-	// values (still parseable from disk, per jobs.ParseJob) must be refused on save
-	// so new job files can't be written with them.
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJob(t, "form-type", "")
-	for _, typ := range []string{"explore", "question", "banana", ""} {
-		body, _ := json.Marshal(jobFormFields{Slug: "form-type", Type: typ, Repo: "monolith"})
-		req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
-		rec := httptest.NewRecorder()
-		webJobSaveForm(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("type %q: got status %d, want 400", typ, rec.Code)
-			continue
-		}
-		var resp map[string]string
-		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("type %q: bad response json: %v", typ, err)
-		}
-		if resp["error"] != "type must be build or info" {
-			t.Errorf("type %q: error = %q", typ, resp["error"])
-		}
-	}
-	for _, typ := range []string{"build", "info"} {
-		body, _ := json.Marshal(jobFormFields{Slug: "form-type", Type: typ, Repo: "monolith"})
-		req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
-		rec := httptest.NewRecorder()
-		webJobSaveForm(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("type %q: got status %d, want 200 (body %s)", typ, rec.Code, rec.Body.String())
-		}
-	}
-}
-
 // TestWebJobRawAndFormEmitNumericMTime pins the response side of the wire
 // contract: the shipped iOS app decodes mtime as Int64, so a JSON string
 // (the old UnixNano encoding) fails to parse there.
@@ -117,7 +83,7 @@ func TestWebJobSaveFormMTimeLock(t *testing.T) {
 		t.Fatalf("form mtime = %#v (%T), want float64", form["mtime"], form["mtime"])
 	}
 
-	body, _ := json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": mtime - 1})
+	body, _ := json.Marshal(map[string]any{"slug": "mtime-lock", "repo": "monolith", "mtime": mtime - 1})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -125,7 +91,7 @@ func TestWebJobSaveFormMTimeLock(t *testing.T) {
 		t.Fatalf("mismatched numeric mtime: got status %d, want 409 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": mtime - 1, "force": true})
+	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "repo": "monolith", "mtime": mtime - 1, "force": true})
 	req = httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -144,7 +110,7 @@ func TestWebJobSaveFormMTimeLock(t *testing.T) {
 	// the force save above moved the file's on-disk mtime forward, so the
 	// matching case now has to use that fresh value rather than the mtime
 	// fetched before it.
-	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": savedMTime})
+	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "repo": "monolith", "mtime": savedMTime})
 	req = httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -152,7 +118,7 @@ func TestWebJobSaveFormMTimeLock(t *testing.T) {
 		t.Fatalf("matching numeric mtime: got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "type": "build", "repo": "monolith", "mtime": "1"})
+	body, _ = json.Marshal(map[string]any{"slug": "mtime-lock", "repo": "monolith", "mtime": "1"})
 	req = httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	webJobSaveForm(rec, req)
@@ -167,7 +133,7 @@ func TestWebJobSaveFormMTimeLock(t *testing.T) {
 func TestWebJobSaveMTimeLock(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "raw-mtime-lock", "")
-	content := "---\njob: raw-mtime-lock\ntype: build\nrepo: monolith\nready: true\n---\n\n# Spec\n"
+	content := "---\njob: raw-mtime-lock\nrepo: monolith\nready: true\n---\n\n# Spec\n"
 
 	rawReq := httptest.NewRequest(http.MethodGet, "/api/job/raw?slug=raw-mtime-lock", nil)
 	rawRec := httptest.NewRecorder()
@@ -239,7 +205,7 @@ func TestWebJobSaveMTimeLock(t *testing.T) {
 // standing CI failure would re-bump on the very next pass since BumpedSHA
 // reset to "" reads as first-sight-not-yet-seeded again.
 func TestSerializeJobFilePreservesPRs(t *testing.T) {
-	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Ready: true}
+	f := jobFormFields{Slug: "x", Repo: "kraken", Ready: true}
 	prs := []jobs.JobPR{
 		{URL: "https://github.com/example/repo/pull/1", State: "merged"},
 		{
@@ -258,7 +224,7 @@ func TestSerializeJobFilePreservesPRs(t *testing.T) {
 }
 
 func TestSerializeJobFileModelAndSkipDoc(t *testing.T) {
-	f := jobFormFields{Slug: "x", Type: "build", Repo: "kraken", Model: "sonnet", SkipDoc: true}
+	f := jobFormFields{Slug: "x", Repo: "kraken", Model: "sonnet", SkipDoc: true}
 	content := serializeJobFile(f, "", "", "", "", 0, nil, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
@@ -269,14 +235,14 @@ func TestSerializeJobFileModelAndSkipDoc(t *testing.T) {
 	}
 	// conditional emission: defaults leave the file free of the new keys, so
 	// untouched jobs stay readable by older binaries
-	content = serializeJobFile(jobFormFields{Slug: "x", Type: "build", Repo: "kraken"}, "", "", "", "", 0, nil, "")
+	content = serializeJobFile(jobFormFields{Slug: "x", Repo: "kraken"}, "", "", "", "", 0, nil, "")
 	if strings.Contains(content, "model:") || strings.Contains(content, "skip-doc:") {
 		t.Fatalf("default model/skip-doc serialized anyway:\n%s", content)
 	}
 }
 
 func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
-	f := jobFormFields{Slug: "x", Type: "build", Repo: "r"}
+	f := jobFormFields{Slug: "x", Repo: "r"}
 	content := serializeJobFile(f, "done", "shipped", "abc-123", "", 2, nil, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
@@ -298,7 +264,7 @@ func TestSerializeJobFilePreservesSessionAndRun(t *testing.T) {
 // outcome/session/run already do — serializeJobFile is what both the file
 // and store raw-save paths use to render it back out.
 func TestSerializeJobFilePreservesTeardown(t *testing.T) {
-	f := jobFormFields{Slug: "x", Type: "build", Repo: "r"}
+	f := jobFormFields{Slug: "x", Repo: "r"}
 	content := serializeJobFile(f, "working", "", "", "kill", 0, nil, "")
 	j := jobs.ParseJob("x.job.md", []byte(content))
 	if j.Err != "" {
@@ -342,7 +308,7 @@ func TestWebJobSaveFormPreservesLegacyLogSection(t *testing.T) {
 	save := func(mtime float64) ([]byte, float64) {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{
-			"slug": "legacy-log", "type": "build", "repo": "monolith", "spec": "do the thing", "mtime": mtime,
+			"slug": "legacy-log", "repo": "monolith", "spec": "do the thing", "mtime": mtime,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
@@ -383,7 +349,7 @@ func TestWebJobSaveFormNoLegacyLogSectionGainsNone(t *testing.T) {
 	writeTestJob(t, "no-log", "")
 
 	body, _ := json.Marshal(map[string]any{
-		"slug": "no-log", "type": "build", "repo": "monolith", "spec": "do the thing", "force": true,
+		"slug": "no-log", "repo": "monolith", "spec": "do the thing", "force": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec := httptest.NewRecorder()

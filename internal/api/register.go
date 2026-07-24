@@ -22,6 +22,7 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dequeue", webAction("dequeue", webDequeue))
 	mux.HandleFunc("/api/done", webAction("done", webDone))
 	mux.HandleFunc("/api/question", webAction("question", webAnswerQuestion))
+	mux.HandleFunc("/api/doc-question", webAction("doc-question", webAnswerDocQuestion))
 	mux.HandleFunc("/api/retry", webAction("retry", webRetry))
 	mux.HandleFunc("/api/kill", webAction("kill", webKill))
 	mux.HandleFunc("/api/steer", webAction("steer", webSteer))

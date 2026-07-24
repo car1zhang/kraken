@@ -38,7 +38,7 @@ func useTestStore(t *testing.T) *store.Store {
 // live cell always serves off disk, even store-backed).
 func TestArtifactHandlerStoreMode(t *testing.T) {
 	st := useTestStore(t)
-	id, err := st.CreateJob(&store.Job{Slug: "store-art", Type: "build", Repo: "monolith"})
+	id, err := st.CreateJob(&store.Job{Slug: "store-art", Repo: "monolith"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestArtifactHandlerStoreMode(t *testing.T) {
 // TestUploadGETStoreMode covers deliverable 3 through the real mux route.
 func TestUploadGETStoreMode(t *testing.T) {
 	st := useTestStore(t)
-	if _, err := st.CreateJob(&store.Job{Slug: "store-upload", Type: "build", Repo: "monolith"}); err != nil {
+	if _, err := st.CreateJob(&store.Job{Slug: "store-upload", Repo: "monolith"}); err != nil {
 		t.Fatal(err)
 	}
 	name, _, err := jobs.SaveUpload("store-upload", "png", []byte("\x89PNGfakebytes"))

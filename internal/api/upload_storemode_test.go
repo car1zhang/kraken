@@ -13,7 +13,7 @@ import (
 // row.
 func TestUploadBytesRoundTrip(t *testing.T) {
 	useTestStore(t)
-	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "upload-store", Type: "build", Repo: "monolith"})
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "upload-store", Repo: "monolith"})
 
 	png := []byte("\x89PNG\x0D\x0A\x1A\x0Afakepngbytes")
 	name, path, err := jobs.SaveUpload("upload-store", "png", png)
@@ -41,7 +41,7 @@ func TestUploadBytesRoundTrip(t *testing.T) {
 
 func TestUploadBytesFallsThroughWhenNotFound(t *testing.T) {
 	useTestStore(t)
-	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "upload-store-miss", Type: "build", Repo: "monolith"})
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "upload-store-miss", Repo: "monolith"})
 
 	if _, _, ok := UploadBytes("upload-store-miss", "img-001.png"); ok {
 		t.Fatal("want ok=false for an upload that was never saved")

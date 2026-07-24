@@ -34,7 +34,7 @@ actor APIClient {
 
     // Mirrors web.go's apiContract constant — bump together, breaking
     // changes only (additive fields don't need a bump). See ios/API.md.
-    static let expectedContract = 3
+    static let expectedContract = 4
 
     private let session: URLSession
     // Multi-MB image uploads over cellular can easily take longer than the
@@ -214,6 +214,18 @@ actor APIClient {
         let _: OkResponse = try await post(
             baseURL: baseURL, path: "/api/question",
             body: QuestionAnswerRequest(slug: slug, text: String(digit))
+        )
+    }
+
+    /// Answers one open doc question (questions.yaml) by id with a free-text
+    /// answer — distinct from answerQuestion's 1-based digit answer to an
+    /// AskUserQuestion prompt. No liveness requirement server-side: this is a
+    /// surgical file edit, so it lands even if zeus/the cell's tmux session
+    /// is dead, as long as the cell dir still exists.
+    func answerDocQuestion(baseURL: String, slug: String, id: String, text: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/doc-question",
+            body: DocQuestionAnswerRequest(slug: slug, id: id, text: text)
         )
     }
 

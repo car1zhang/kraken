@@ -967,17 +967,19 @@ func autoArchivePass(jobs []*Job, live map[string]bool, now time.Time) []string 
 }
 
 // prTrackable reports whether the PR tracker should poll a job: any
-// parse-clean build job that could have shipped PRs. Done jobs stay
-// tracked (a merge after carl accepts still deserves recording) — the
-// tracker only stops when the job is archived, which removes the file
-// from LoadJobs' namespace entirely. A never-started job is skipped
-// only while it has no recorded PRs: kill returns a job to draft with
-// its prs: history intact, and those records should keep refreshing.
+// parse-clean job that could have shipped PRs (Q14 removed the build/info
+// job-type split — a purely explanatory job simply never opens one, so there
+// is nothing left to gate on here). Done jobs stay tracked (a merge after
+// carl accepts still deserves recording) — the tracker only stops when the
+// job is archived, which removes the file from LoadJobs' namespace entirely.
+// A never-started job is skipped only while it has no recorded PRs: kill
+// returns a job to draft with its prs: history intact, and those records
+// should keep refreshing.
 func prTrackable(j *Job) bool {
-	return j.Err == "" && j.Type == "build" && (j.Started() || len(j.PRs) > 0)
+	return j.Err == "" && (j.Started() || len(j.PRs) > 0)
 }
 
-// trackPRs reconciles one build job's recorded prs: list against what gh
+// trackPRs reconciles one job's recorded prs: list against what gh
 // reports for the cell branch. Job-file writes only — never tmux, git, or
 // state. Every outcome worth noting gets a dlog line unconditionally (the
 // old reap loop logged only on state change, which is how a failing
@@ -1104,7 +1106,7 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA string) 
 // leaves the watermark untouched so the next pass retries the same bump,
 // matching trackPRs' "state on disk only advances on a confirmed write"
 // discipline. Skipped entirely (no gh calls) for jobs that aren't
-// prTrackable (same Err/Type eligibility as the tracker's own gate): an
+// prTrackable (same Err eligibility as the tracker's own gate): an
 // unparseable job must never have its prs: block rewritten, since
 // updatePRWatermark's patchPRs pass rewrites the WHOLE block from a fresh
 // re-parse and would silently and permanently drop any record a hand-edit

@@ -1,0 +1,112 @@
+<meta charset="utf-8">
+<title>{{CARD_TITLE}}</title>
+<!--
+  DIAGRAM CARD TEMPLATE — one standalone artifact per diagram (10-<id>.html .. 49-<id>.html).
+  - Filled in per diagram by the doc pipeline's wrap step: the CARD_TITLE tokens in the title
+    above and the h1 below, and the CAPTION token in the figcaption below, are substituted by zeus
+    (title plus a self-sufficient 2-4 sentence caption, HTML-escaped); the DIAGRAM placeholder
+    comment inside the figure below is substituted with the lint-clean hermes fragment's raw svg
+    contents by a mechanical python one-liner (see .claude/skills/aim/SKILL.md, Core Rules,
+    "Wrap, don't flatten") — zeus never reads or writes SVG bodies.
+  - This file is deliberately a BODY FRAGMENT — no DOCTYPE, html, head, or body tags. Browsers
+    render it fine when opened locally, and every card stays self-contained (inline CSS, one
+    inline SVG, no external assets) so it can be viewed or shared on its own.
+  - The caption must be fully self-sufficient: readable and meaningful with no other artifact
+    open — state what the figure shows and what to take away, not just a label.
+  - The style block below is copied from spec-template.html's shared diagram CSS: all svg/
+    figure/root-var rules verbatim (same classes, same dark-mode + reduced-motion handling), so a
+    card renders identically to the other cards and legacy templates, with the prose-only rules
+    (h2-h4, code/pre, table, blockquote.meta) trimmed since a card has no prose beyond its own
+    title.
+-->
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
+    --surface: #f6f8fa; --accent: #0969da;
+    --ok: #1a7f37; --warn: #9a6700; --danger: #d1242f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+      --surface: #161b22; --accent: #4493f8;
+      --ok: #3fb950; --warn: #d29922; --danger: #f85149;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 940px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem;
+  }
+  h1 { font-size: 1.9rem; border-bottom: 1px solid var(--line); padding-bottom: .4rem; }
+  /* Diagram slots */
+  figure.diagram { margin: 1.25rem 0; border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; background: var(--surface); overflow-x: auto; }
+  figure.diagram figcaption { margin-top: .6rem; font-size: .85rem; color: var(--muted); }
+  /* ===== Shared SVG styling — HARDENED (this block is deliverable D1) ===== */
+  svg { display: block; width: 100%; height: auto; font-family: inherit; }
+  /* Baseline safety net: zero-specificity defaults so NO shape can ever render as SVG's
+     default solid black. Class rules below always win; explicit fill/stroke attrs are respected. */
+  svg :where(rect, circle, ellipse, polygon):not([fill]) { fill: var(--surface); }
+  svg :where(rect, circle, ellipse, polygon):not([stroke]) { stroke: var(--line); }
+  svg :where(path):not([fill]) { fill: none; }
+  svg :where(path):not([stroke]):not([class]) { stroke: var(--muted); }
+  svg text { fill: var(--fg); font-size: 13px; }
+  /* Dual selectors: match both <g class="node"><rect/></g> AND bare <rect class="node"/> */
+  svg .node rect, svg rect.node { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .node text, svg .store text, svg .lane text { text-anchor: middle; dominant-baseline: middle; }
+  svg .accent rect, svg rect.accent { stroke: var(--accent); stroke-width: 1.8; }
+  svg .accent text, svg text.accent { fill: var(--accent); font-weight: 600; }
+  svg .group > rect, svg rect.group { fill: none; stroke: var(--line); stroke-dasharray: 5 4; }
+  svg .group > text, svg text.group { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .store rect, svg rect.store, svg .store ellipse, svg ellipse.store, svg .store path
+    { fill: var(--surface); stroke: var(--fg); stroke-width: 1.2; }
+  svg .lane rect, svg rect.lane { fill: var(--surface); stroke: var(--line); }
+  svg .edge { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  svg .edge.dashed { stroke-dasharray: 5 4; }
+  svg .edgeLabel { fill: var(--muted); font-size: 12px; text-anchor: middle; }
+  svg .arrowhead { fill: var(--muted); stroke: none; }
+  svg .flow-dot { fill: var(--accent); stroke: none; }
+  svg .cell rect, svg rect.cell { fill: var(--bg); stroke: var(--line); }
+  svg .cell text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
+  svg .step circle { fill: var(--accent); stroke: none; }
+  svg .step text { fill: var(--bg); font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
+  /* Semantic status classes — the sanctioned replacement for ad-hoc hex colors */
+  svg .ok rect, svg rect.ok { stroke: var(--ok); }
+  svg .ok text, svg text.ok { fill: var(--ok); }
+  svg .warn rect, svg rect.warn { stroke: var(--warn); }
+  svg .warn text, svg text.warn { fill: var(--warn); }
+  svg .danger rect, svg rect.danger { stroke: var(--danger); }
+  svg .danger text, svg text.danger { fill: var(--danger); }
+  svg .edge.ok { stroke: var(--ok); } svg .edge.warn { stroke: var(--warn); } svg .edge.danger { stroke: var(--danger); }
+  svg .edge.ok + marker path, svg .edge.warn + marker path { } /* markers inherit .arrowhead */
+  svg .pill rect { fill: var(--surface); stroke: var(--muted); }
+  svg .pill text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .decision path { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .decision text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .actor circle { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor path { fill: none; stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor text { fill: var(--fg); font-size: 12px; text-anchor: middle; }
+  svg .badge circle { fill: var(--surface); stroke: var(--line); }
+  svg .badge text { fill: var(--fg); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
+  svg .bar rect { fill: var(--accent); stroke: none; }
+  svg .bar.ok rect { fill: var(--ok); } svg .bar.warn rect { fill: var(--warn); } svg .bar.danger rect { fill: var(--danger); }
+  svg .axis { stroke: var(--muted); stroke-width: 1; fill: none; }
+  svg .region rect, svg .region ellipse, svg .region path { fill: var(--accent); opacity: .12; stroke: none; }
+  svg .region.ok rect { fill: var(--ok); } svg .region.warn rect { fill: var(--warn); } svg .region.danger rect { fill: var(--danger); }
+  svg .region text { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .title { fill: var(--fg); font-size: 14px; font-weight: 600; text-anchor: start; }
+  svg .note { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .dim { opacity: .45; }
+  @media (prefers-reduced-motion: reduce) {
+    svg .flow-dot { display: none; }
+    figure.diagram * { animation: none !important; }
+  }
+</style>
+
+<h1>{{CARD_TITLE}}</h1>
+
+<figure class="diagram">
+  <!-- DIAGRAM: {{DIAGRAM_ID}} -->
+  <figcaption>{{CAPTION}}</figcaption>
+</figure>

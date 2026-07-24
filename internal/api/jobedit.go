@@ -60,7 +60,7 @@ func jobEditMTime(j *jobs.Job) int64 {
 func composeRawJobContent(j *jobs.Job) string {
 	spec, logSection := splitBodyLog(j.Body)
 	fields := jobFormFields{
-		Slug: j.Slug, Type: j.Type, Repo: j.Repo, Base: j.Base,
+		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
 		Ready: j.Ready, Solo: j.Solo, Model: j.Model, SkipDoc: j.SkipDoc,
 		Prereqs: j.Prereqs, Spec: strings.TrimSpace(spec),
 	}
@@ -73,7 +73,7 @@ func composeRawJobContent(j *jobs.Job) string {
 // submitted overwrites the whole record" semantics field-for-field.
 func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	return map[string]any{
-		"slug": p.Slug, "type": p.Type, "repo": p.Repo, "base": p.Base,
+		"slug": p.Slug, "repo": p.Repo, "base": p.Base,
 		"ready": p.Ready, "solo": p.Solo, "model": p.Model, "skip_doc": p.SkipDoc,
 		"body": p.Body, "state": p.State, "outcome": p.Outcome,
 		"session": p.Session, "teardown": p.Teardown, "run": int64(p.Run),
@@ -203,13 +203,13 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		// abandoned right after creation (never actually saved) leaves that
 		// exact template behind, comments included, on next raw-view/edit.
 		// Deriving the row from the same template text is how the store path
-		// matches that: a second hardcoded "type build, repo monolith,
-		// ready/solo false" literal here was a duplicate source of truth that
-		// could silently drift from JobTemplate's own defaults.
+		// matches that: a second hardcoded "repo monolith, ready/solo false"
+		// literal here was a duplicate source of truth that could silently
+		// drift from JobTemplate's own defaults.
 		template := jobs.JobTemplate(slug)
 		parsed := jobs.ParseJob(slug+jobs.JobSuffix, []byte(template))
 		if _, err := st.CreateJob(&store.Job{
-			Slug: slug, Type: parsed.Type, Repo: parsed.Repo, Base: parsed.Base,
+			Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
 			Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model, SkipDoc: parsed.SkipDoc,
 			Body: parsed.Body,
 		}); err != nil {
@@ -235,8 +235,8 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		// annotated skeleton's authoring guidance (field explanations, valid
 		// choices, examples) that file mode's fresh JobTemplate gives a brand
 		// new job. Returning the template verbatim here matches file mode's
-		// UX exactly; the row's own defaults (type build, repo monolith, ...)
-		// already agree with what the template documents, and the first real
+		// UX exactly; the row's own defaults (repo monolith, ...) already
+		// agree with what the template documents, and the first real
 		// save parses whatever the user submits same as file mode always has.
 		webJSON(w, http.StatusOK, map[string]any{
 			"slug": slug, "content": jobs.JobTemplate(slug), "mtime": jobEditMTime(j), "editable": true,
@@ -291,7 +291,7 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		// mirroring file mode's contract exactly, only the body changes —
 		// jobFieldsFromParsed(parsed) would otherwise write whatever
 		// ParseJob's best-effort extraction pulled from garbled text
-		// (defaults like type "build", empty repo, ready false, ...)
+		// (defaults like empty repo, ready false, empty spec, ...)
 		// straight over the row's real frontmatter columns. Prereqs/PRs stay
 		// untouched too: parsed.Prereqs/parsed.PRs are equally untrustworthy
 		// when Err is set.
@@ -358,7 +358,6 @@ func splitBodyLog(body string) (spec, log string) {
 
 type jobFormFields struct {
 	Slug    string        `json:"slug"`
-	Type    string        `json:"type"`
 	Repo    string        `json:"repo"`
 	Base    string        `json:"base"`
 	Ready   bool          `json:"ready"`
@@ -396,7 +395,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 		prereqs = []jobs.Prereq{}
 	}
 	webJSON(w, http.StatusOK, map[string]any{
-		"slug": j.Slug, "type": j.Type, "repo": j.Repo, "base": j.Base,
+		"slug": j.Slug, "repo": j.Repo, "base": j.Base,
 		"ready": j.Ready, "solo": j.Solo,
 		"model": j.Model, "skip_doc": j.SkipDoc,
 		"prereqs": prereqs,
@@ -414,7 +413,6 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "job: %s\n", f.Slug)
-	fmt.Fprintf(&b, "type: %s\n", f.Type)
 	fmt.Fprintf(&b, "repo: %s\n", jobs.OneLine(f.Repo))
 	if f.Base != "" {
 		fmt.Fprintf(&b, "base: %s\n", jobs.OneLine(f.Base))
@@ -497,12 +495,6 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	switch req.Type {
-	case "build", "info":
-	default:
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be build or info"})
-		return
-	}
 	j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
 	if j == nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
@@ -533,7 +525,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
 		parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(content))
 		fields := map[string]any{
-			"type": req.Type, "repo": req.Repo, "base": req.Base,
+			"repo": req.Repo, "base": req.Base,
 			"ready": req.Ready, "solo": req.Solo, "model": req.Model, "skip_doc": req.SkipDoc,
 			"body": body, "err": parsed.Err,
 		}

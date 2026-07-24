@@ -8,7 +8,7 @@ import (
 
 func TestReplacePrereqs(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "prereq-job", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "prereq-job"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

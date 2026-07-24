@@ -56,7 +56,7 @@ func TestConcurrentOpenBothSucceed(t *testing.T) {
 	// every handle must agree on the same, single copy of the data — a lost
 	// race that silently re-ran schemaV1 twice would fail on the second
 	// CREATE TABLE rather than no-op.
-	if _, err := stores[0].CreateJob(&Job{Slug: "post-race", Type: "build"}); err != nil {
+	if _, err := stores[0].CreateJob(&Job{Slug: "post-race"}); err != nil {
 		t.Fatalf("CreateJob after concurrent open: %v", err)
 	}
 }
@@ -69,7 +69,7 @@ func TestConcurrentOpenBothSucceed(t *testing.T) {
 // actually won their optimistic-concurrency check.
 func TestConcurrentMixedOps(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "concurrent", Type: "build"})
+	id, err := s.CreateJob(&Job{Slug: "concurrent"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

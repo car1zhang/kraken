@@ -674,7 +674,7 @@ private struct JobCardView: View {
                         .font(.voice(10))
                 }
             }
-            Text("\(job.type) · \(job.repo)")
+            Text(job.repo)
                 .font(.data(11))
                 .foregroundStyle(KTheme.text2)
             HStack(spacing: 6) {

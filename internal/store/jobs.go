@@ -18,7 +18,6 @@ import (
 type Job struct {
 	ID           int64
 	Slug         string
-	Type         string
 	Repo         string
 	Base         string
 	Ready        bool
@@ -53,7 +52,7 @@ func (j *Job) Archived() bool { return j.ArchivedAt != 0 }
 // a blank field rather than error the whole query — repo rule: "degrade to
 // blank fields, never errors". archived_at/archived_name are genuinely
 // nullable and scanned via sql.Null* below, so they're left bare.
-var jobColumns = `id, slug, type, COALESCE(repo,''), COALESCE(base,''), ready, solo,
+var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), ready, solo,
 	COALESCE(model,''), skip_doc, COALESCE(body,''), state, COALESCE(outcome,''),
 	COALESCE(session,''), COALESCE(teardown,''), run, rev, COALESCE(created_at,0),
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,'')`
@@ -63,7 +62,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var archivedAt sql.NullInt64
 	var archivedName sql.NullString
 	err := row.Scan(
-		&j.ID, &j.Slug, &j.Type, &j.Repo, &j.Base, &j.Ready, &j.Solo, &j.Model,
+		&j.ID, &j.Slug, &j.Repo, &j.Base, &j.Ready, &j.Solo, &j.Model,
 		&j.SkipDoc, &j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 	)
@@ -95,10 +94,10 @@ func (s *Store) CreateJob(j *Job) (int64, error) {
 		j.Rev = 1
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO jobs (slug, type, repo, base, ready, solo, model, skip_doc,
+		`INSERT INTO jobs (slug, repo, base, ready, solo, model, skip_doc,
 			body, state, outcome, session, teardown, run, rev, created_at, updated_at, err)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.Slug, j.Type, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
 		j.Body, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.Rev,
 		j.CreatedAt, j.UpdatedAt, j.Err,
 	)
@@ -246,7 +245,7 @@ func loadJobsWithChildrenTx(tx *sql.Tx, query string) ([]*Job, map[int64][]Prere
 // an allowlist so a caller-supplied key can never smuggle arbitrary SQL
 // into the generated statement.
 var jobFieldColumns = map[string]bool{
-	"slug": true, "type": true, "repo": true, "base": true, "ready": true,
+	"slug": true, "repo": true, "base": true, "ready": true,
 	"solo": true, "model": true, "skip_doc": true, "body": true, "state": true,
 	"outcome": true, "session": true, "teardown": true, "run": true, "err": true,
 }
@@ -368,11 +367,11 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 			run = 1
 		}
 		res, err := s.db.Exec(
-			`INSERT INTO jobs (slug, type, repo, base, ready, solo, model, skip_doc,
+			`INSERT INTO jobs (slug, repo, base, ready, solo, model, skip_doc,
 				body, state, outcome, session, teardown, run, rev, created_at, updated_at,
 				archived_at, archived_name)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			j.Slug, j.Type, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			rev, created, archivedAt, archivedAt, j.ArchivedName,
 		)
@@ -396,10 +395,10 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 			run = 1
 		}
 		if _, err := s.db.Exec(
-			`UPDATE jobs SET slug = ?, type = ?, repo = ?, base = ?, ready = ?, solo = ?,
+			`UPDATE jobs SET slug = ?, repo = ?, base = ?, ready = ?, solo = ?,
 				model = ?, skip_doc = ?, body = ?, state = ?, outcome = ?, session = ?,
 				teardown = ?, run = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
-			j.Slug, j.Type, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
+			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.SkipDoc,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			archivedAt, archivedAt, id,
 		); err != nil {

@@ -50,7 +50,7 @@ func TestPrAttachHandlerHappyPath(t *testing.T) {
 
 func TestPrAttachHandlerStoreMode(t *testing.T) {
 	useTestStore(t)
-	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "pr-attach-store", Type: "build", Repo: "monolith"})
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "pr-attach-store", Repo: "monolith"})
 
 	body := mustJSON(t, prAttachReq{Slug: "pr-attach-store", URL: "https://github.com/carl/kraken/pull/3"})
 	req := httptest.NewRequest(http.MethodPost, "/api/pr-attach", bytes.NewReader(body))

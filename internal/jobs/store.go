@@ -82,7 +82,6 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 	j := &Job{
 		ID:       sr.ID,
 		Slug:     sr.Slug,
-		Type:     sr.Type,
 		Repo:     sr.Repo,
 		Base:     sr.Base,
 		Ready:    sr.Ready,

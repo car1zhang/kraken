@@ -5,11 +5,14 @@ consumes. Source of truth is the Go code (`web.go`, `webpeers.go`,
 `daemon.go`, `job.go`, `status.go`); this doc transcribes it, it does not
 define it independently.
 
-**Current contract**: `apiContract = 3` (web.go), mirrored by
+**Current contract**: `apiContract = 4` (web.go), mirrored by
 `APIClient.expectedContract` (APIClient.swift). `/api/health` and
 `/api/board` both serve `contract` (int) + `stale` (bool). v3 bumped when
 the auto-approve feature (and `auto_approve` on the job form GET/POST) was
-removed.
+removed. v4 bumped when the job-level `type` (`build`|`info`) concept was
+deleted (Q14) — `type` removed from `/api/board`'s job objects and from the
+job form GET/POST shapes; the pipeline distinction now lives in `/aim` vs
+`/info` skill choice plus carl's `/do` steering, never a wire field.
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
 retyped, renamed, or removed. Additive keys never bump it: old clients
@@ -70,7 +73,6 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | key | type | optionality | notes |
 |---|---|---|---|
 | `slug` | string | always | archived jobs: numbered archive file base |
-| `type` | string | always | `build` \| `info` |
 | `repo` | string | always | |
 | `state` | string | always | draft/queued/working/blocked/done/archived |
 | `err` | string | omitempty | |
@@ -92,6 +94,8 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
 | `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 chars. Question-answer digit keypresses never appear (they're tool_results, not user text); started + non-done jobs (live or cell_gone) only |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
+| `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not) from `questions.yaml`; started + non-done jobs only (live or `cell_gone` while the cell dir still exists; store/pluto-mirrored, read-only, once the cell dir is actually torn down); never set for archived jobs. Additive, no contract bump |
+| `doc_questions_err` | string | omitempty | set instead of `doc_questions` (never both) when a questions source exists but fails strict parse — render "questions file malformed". Additive, no contract bump |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
 
@@ -118,6 +122,19 @@ rides on the wire), `options` (array of `webQuestionOption`, always).
 
 `webWakeup`: `reason` (string, always), `fires_at` (number, always — unix millis). Distinct from `Wakeup` on the peer wire shape only in that it drops `delay_seconds` — the client only needs `fires_at` for its countdown.
 
+`webDocQuestion` (one `questions.yaml` record, `jobs.DocQuestion`'s wire
+twin — same field set, same json tags):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | string | always | `Q<digits>`, e.g. `Q1` |
+| `text` | string | always | the question itself |
+| `context` | string | omitempty | |
+| `importance` | string | always | `P0` \| `P1` \| `P2` |
+| `recommendation` | string | omitempty | zeus' suggested answer |
+| `answer` | string | omitempty | carl's answer once posted; absent means still open |
+| `answered_at` | string | omitempty | RFC3339 timestamp, set alongside `answer` |
+
 ### `POST /api/queue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 ### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
@@ -140,6 +157,30 @@ naming `/api/kill` as the correct recovery instead.
 
 Request: `webReq` — `slug` (string), `text` (string: a single digit `"1"`–`"9"`, the 1-based option index).
 Response: same as above.
+
+### `POST /api/doc-question`
+
+Request: `webReq` — `slug` (string, required), `id` (string, required: the
+question id, e.g. `"Q1"`), `text` (string, required non-empty: the answer,
+capped at 4000 chars after trim — same cap convention as `last_sent`).
+Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure
+(409 for validation conflicts, same convention as the other board actions).
+Additive request field (`id`); no contract bump.
+
+Answers a single open doc question by patching `answer`/`answered_at` into
+the cell's `questions.yaml` (`jobs.AnswerDocQuestion`) — a surgical edit,
+never a re-serialize, so every line zeus wrote survives untouched. This is a
+plain file write: no tmux/pane interaction, and critically **no liveness
+requirement** beyond the cell dir existing — zeus may be dead, mid-recovery,
+or the tmux session simply gone, and the answer still lands, since the file
+is the record. Refused (409) when: `id` is empty, the job hasn't started or
+is already `done`, the job's cell dir doesn't exist (a fully torn-down job's
+questions are permanently read-only — "job's cell is gone — questions are
+read-only"), the answer text is empty, the question id doesn't exist, or
+that question was already answered (single-use per question — no
+overwriting a prior answer). Gated under mirror mode
+(`mirrorGatedActions`): it writes into a real cell dir, same as the other
+tmux-driving/filesystem-mutating board actions.
 
 ### `POST /api/steer`
 
@@ -257,13 +298,12 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 | key | type | optionality | notes |
 |---|---|---|---|
 | `slug` | string | always | |
-| `type` | string | always | |
 | `repo` | string | always | |
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
 | `model` | string | always | claude model for zeus (`--model` value), `""` = claude's default; applied once at cell start |
-| `skip_doc` | bool | always | build only: skip the /aim → /do phase, implement the spec directly |
+| `skip_doc` | bool | always | skip the /aim → /do phase, implement the spec directly |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -276,11 +316,11 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `type` (string, must be `build`|`info`), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = default), `skip_doc` (bool, optional to send — build only), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
+Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = default), `skip_doc` (bool, optional to send), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true).
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
-Errors: 400 (bad type), 404 (no such job), 409 (not editable, or mtime conflict), 500.
+Errors: 404 (no such job), 409 (not editable, or mtime conflict), 500.
 
 ---
 

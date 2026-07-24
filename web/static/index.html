@@ -114,6 +114,7 @@
           <div class="steer-detail" id="steer-detail" hidden></div>
           <div class="last-sent" id="steer-lastsent" hidden></div>
           <div class="chips" id="steer-chips" hidden></div>
+          <div class="steer-docq" id="steer-docq" hidden></div>
         </div>
         <div class="steer-actions" id="steer-actions" hidden></div>
         <div class="steer-spec" id="steer-spec" hidden>
@@ -178,11 +179,6 @@
         </div>
         <div class="editor-form" id="editor-form" hidden>
           <div class="f-row">
-            <label>type
-              <select id="f-type">
-                <option>build</option><option>info</option>
-              </select>
-            </label>
             <label>repo <select id="f-repo"></select></label>
             <label>base <input id="f-base" placeholder="origin/main" spellcheck="false"></label>
             <label>model <input id="f-model" list="model-list" placeholder="default" spellcheck="false"
@@ -190,7 +186,7 @@
             <span class="f-toggles">
               <label class="check"><input type="checkbox" id="f-solo"> solo</label>
               <label class="check"><input type="checkbox" id="f-skipdoc"
-                title="build only: skip the /aim → /do phase — zeus implements the spec directly"> skip doc</label>
+                title="skip the /aim → /do phase — zeus implements the spec directly"> skip doc</label>
             </span>
           </div>
           <div class="f-block">

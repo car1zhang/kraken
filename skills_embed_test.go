@@ -12,7 +12,11 @@ import (
 // the four kraken-owned skills and that each SKILL.md's renamed frontmatter
 // took: this can only be checked from package main, since the embed.FS
 // itself (skillsFS) lives here, not in jobs (jobs only sees the fs.Sub'd
-// jobs.SkillsFS assigned by init()).
+// jobs.SkillsFS assigned by init()). It also pins the three worktree-relative
+// path helpers zeus' brief depends on — jobs.HermesContractPath,
+// jobs.LintSvgPath, and jobs.DiagramCardPath — to real files inside that
+// embedded tree, and pins the diagram-card.html template's own placeholder
+// counts and header-comment shape.
 func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 	want := map[string]string{
 		"info": "info",
@@ -41,15 +45,50 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 // TestCrewPathsPinnedToEmbeddedTree guards against the exact failure the
 // reviewer flagged: a rename of an embedded skill asset passes CI (nothing
 // else references the literal path) but silently breaks every doc job,
-// since jobs.HermesContractPath/LintSvgPath are plain string builders with
-// no compile-time link to the embedded tree. Asserting the paths they
-// return actually exist in jobs.SkillsFS pins the brief's paths to reality.
+// since jobs.HermesContractPath/LintSvgPath/DiagramCardPath are plain string
+// builders with no compile-time link to the embedded tree. Asserting the
+// paths they return actually exist in jobs.SkillsFS pins the brief's paths
+// to reality.
 func TestCrewPathsPinnedToEmbeddedTree(t *testing.T) {
-	for _, path := range []string{jobs.HermesContractPath(), jobs.LintSvgPath()} {
+	for _, path := range []string{jobs.HermesContractPath(), jobs.LintSvgPath(), jobs.DiagramCardPath()} {
 		rel := strings.TrimPrefix(path, ".claude/skills/")
 		if _, err := fs.ReadFile(jobs.SkillsFS, rel); err != nil {
 			t.Errorf("jobs.SkillsFS missing %q (from %s): %v", rel, path, err)
 		}
+	}
+}
+
+// TestDiagramCardTemplateHeaderDoesNotSelfTerminate guards against the exact
+// bug a prior review round caught: the diagram-card.html header comment used
+// to embed the literal "<!-- DIAGRAM: {{DIAGRAM_ID}} -->" placeholder (and
+// other stray "-->" sequences) inside its own explanatory comment. The first
+// "-->" a browser (or a naive substring scan) sees closes the OUTER comment
+// early, so everything between that point and the comment's real close
+// renders as visible body text in every single card. Asserting exactly one
+// DIAGRAM placeholder in the whole embedded file, and exactly one "-->"
+// before <style> (the comment's own, real close), pins the fix.
+func TestDiagramCardTemplateHeaderDoesNotSelfTerminate(t *testing.T) {
+	data, err := fs.ReadFile(jobs.SkillsFS, "aim/assets/diagram-card.html")
+	if err != nil {
+		t.Fatalf("read embedded aim/assets/diagram-card.html: %v", err)
+	}
+	content := string(data)
+	if n := strings.Count(content, "<!-- DIAGRAM: {{DIAGRAM_ID}} -->"); n != 1 {
+		t.Errorf("diagram-card.html has %d occurrences of the DIAGRAM placeholder comment, want exactly 1", n)
+	}
+	if n := strings.Count(content, "{{CARD_TITLE}}"); n != 2 {
+		t.Errorf("diagram-card.html has %d occurrences of {{CARD_TITLE}}, want exactly 2 (title + h1)", n)
+	}
+	if n := strings.Count(content, "{{CAPTION}}"); n != 1 {
+		t.Errorf("diagram-card.html has %d occurrences of {{CAPTION}}, want exactly 1 (figcaption)", n)
+	}
+	styleIdx := strings.Index(content, "<style>")
+	if styleIdx < 0 {
+		t.Fatal("diagram-card.html missing <style> block")
+	}
+	head := content[:styleIdx]
+	if n := strings.Count(head, "-->"); n != 1 {
+		t.Errorf("diagram-card.html header (before <style>) contains %d occurrences of \"-->\", want exactly 1 (the header comment's own real close) — a second occurrence means the comment self-terminates early and everything after renders as visible body text", n)
 	}
 }
 
