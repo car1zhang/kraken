@@ -399,6 +399,8 @@ body {
   box-shadow: var(--glow-hot);
   font: 11px var(--mono); letter-spacing: 0.3px;
   padding: 8px 16px;
+  max-width: min(90vw, 640px);
+  white-space: pre-wrap; word-break: break-word;
   opacity: 0; pointer-events: none;
   transition: opacity 160ms var(--ease), transform 160ms var(--ease);
 }

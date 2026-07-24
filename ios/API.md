@@ -364,7 +364,8 @@ Errors: 404 (no session in pane, or pane gone on re-verify), 409 (belongs to a j
 ### `POST /api/peers/open` — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
 
 Request: exactly one of `{"pane": string}` or `{"slug": string}`.
-Response: `{"ok": true}`.
+Response: `{"ok": true, "note": string}` (human-readable outcome).
+`focus_error` (string) is additionally present when the session was raised but bringing its Ghostty window to the front failed — the window still needs a manual switch-to. Both keys are additive (no `apiContract` bump).
 Errors: 400 (both or neither of pane/slug set), 404 (no session in pane / no job / no live cell agent), 409 (open failure).
 
 ---

@@ -295,8 +295,16 @@ func StartCell(j *Job, repo string) error {
 	if prompt := jobPrompt(j); prompt != "" {
 		argv = append(argv, "--", prompt)
 	}
-	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
-		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
+	var newSessionStderr bytes.Buffer
+	newSessionCmd := exec.Command("tmux", "new-session", "-d",
+		"-x", strconv.Itoa(core.DetachedSessionCols), "-y", strconv.Itoa(core.DetachedSessionRows),
+		"-s", sess, "-c", wt,
+		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv))
+	newSessionCmd.Stderr = &newSessionStderr
+	if err := newSessionCmd.Run(); err != nil {
+		if newSessionStderr.Len() > 0 {
+			return fmt.Errorf("tmux new-session: %v: %s (worktree left at %s)", err, strings.TrimSpace(newSessionStderr.String()), wt)
+		}
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)
 	}
 	// cell identity marker: reap verifies it before any teardown
@@ -1146,8 +1154,16 @@ func ReactivateJob(j *Job, session, message string) error {
 	if hasPrompt {
 		argv = append(argv, "--", prompt)
 	}
-	if err := exec.Command("tmux", "new-session", "-d", "-s", sess, "-c", wt,
-		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv)).Run(); err != nil {
+	var newSessionStderr bytes.Buffer
+	newSessionCmd := exec.Command("tmux", "new-session", "-d",
+		"-x", strconv.Itoa(core.DetachedSessionCols), "-y", strconv.Itoa(core.DetachedSessionRows),
+		"-s", sess, "-c", wt,
+		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv))
+	newSessionCmd.Stderr = &newSessionStderr
+	if err := newSessionCmd.Run(); err != nil {
+		if newSessionStderr.Len() > 0 {
+			return fmt.Errorf("tmux new-session: %v: %s (worktree left at %s)", err, strings.TrimSpace(newSessionStderr.String()), wt)
+		}
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)
 	}
 	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", util.Slugify(j.Slug)).Run()

@@ -14,6 +14,20 @@ import (
 	"kraken/internal/util"
 )
 
+// DetachedSessionCols and DetachedSessionRows size every kraken-created
+// detached tmux session generously: a session born via `new-session -d` with
+// no -x/-y otherwise starts at tmux's default-size 80x24 and stays there
+// until a client first attaches (window-size latest), which starves pane
+// splits in a never-attached cell. This covers the never-attached case, not
+// every path: with window-size latest the resize is sticky, so a session
+// attached once from a small terminal stays small after detach and can still
+// starve later; explicit -x/-y also overrides a larger user default-size
+// downward for kraken-created sessions.
+const (
+	DetachedSessionCols = 250
+	DetachedSessionRows = 60
+)
+
 // NewWindow opens a new window in the caller's tmux session running argv (an
 // interactive shell when empty) and reports where it landed.
 func NewWindow(dir string, argv []string) string {
@@ -79,7 +93,9 @@ func EnsureSession(name, dir string) error {
 		return nil
 	}
 	var stderr bytes.Buffer
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", dir)
+	cmd := exec.Command("tmux", "new-session", "-d",
+		"-x", strconv.Itoa(DetachedSessionCols), "-y", strconv.Itoa(DetachedSessionRows),
+		"-s", name, "-c", dir)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		// a concurrent spawn may have won the race and created the session
@@ -168,10 +184,12 @@ func RaiseSession(session string) (RaiseOutcome, error) {
 }
 
 // OpenPeer jumps to a claude: selects its tmux window/pane and raises its
-// Ghostty window. Returns a human-readable note on success.
-func OpenPeer(p *Peer) (string, error) {
+// Ghostty window. Returns a human-readable note on success, plus the raise
+// outcome so a caller can tell a clean focus apart from one that raised the
+// session but failed to bring its window to the front (see RaiseOutcome).
+func OpenPeer(p *Peer) (string, RaiseOutcome, error) {
 	if p.Pane == "" {
-		return "", fmt.Errorf("%s has no pane (in-process teammate)", DisplayName(p))
+		return "", RaiseOutcome{}, fmt.Errorf("%s has no pane (in-process teammate)", DisplayName(p))
 	}
 	// point the session at the target pane first: attached clients follow
 	// immediately, and a fresh attach lands directly on it
@@ -179,21 +197,39 @@ func OpenPeer(p *Peer) (string, error) {
 	_ = exec.Command("tmux", "select-pane", "-t", p.Pane).Run()
 	out, err := RaiseSession(p.TmuxSession)
 	if err != nil {
-		return "", err
+		return "", RaiseOutcome{}, err
 	}
 	switch {
 	case out.Attached:
-		return fmt.Sprintf("attached %s in a new ghostty window → %s (%s)", p.TmuxSession, DisplayName(p), p.Pane), nil
+		return fmt.Sprintf("attached %s in a new ghostty window → %s (%s)", p.TmuxSession, DisplayName(p), p.Pane), out, nil
 	case out.FocusErr != nil:
-		return fmt.Sprintf("selected %s (%s) — focus its window manually: %v", DisplayName(p), p.Pane, out.FocusErr), nil
+		return fmt.Sprintf("selected %s (%s) — focus its window manually: %v", DisplayName(p), p.Pane, out.FocusErr), out, nil
 	default:
-		return fmt.Sprintf("focused %s (%s, pane %s)", DisplayName(p), p.TmuxSession, p.Pane), nil
+		return fmt.Sprintf("focused %s (%s, pane %s)", DisplayName(p), p.TmuxSession, p.Pane), out, nil
 	}
 }
 
 // focusGhosttyWindow raises the Ghostty window whose title starts with
-// "<session>:" — requires tmux set-titles on (title-string leads with #S) and
-// Accessibility access for the caller.
+// "<session>:" (requires tmux set-titles on, so the title-string leads with
+// #S) by running the AppleScript inside the tmux server's own process
+// context via `tmux run-shell`, rather than execing osascript directly:
+// kraken serve runs as a launchd agent with no Accessibility grant, while the
+// tmux server's context has it, since a human granted it when first running
+// tmux interactively. The session being raised is guaranteed to be alive in
+// that server already, so tmux is guaranteed reachable here. `k o` run from a
+// terminal goes through this exact same path.
+//
+// Two real limitations remain: (a) the tmux server only carries Accessibility
+// when it was born from a context that already had the grant — if kraken
+// serve's daemon is ever the one to *start* the tmux server (e.g. after a
+// reboot, launchd-started serve issues the first `new-session` from StartCell
+// before any terminal has opened one), run-shell inherits that same TCC
+// denial and every focus fails until the tmux server is restarted from a
+// granted context; per decision D1 this surfaces as an explained failure
+// (FocusErr), never silently. (b) the temp AppleScript file is written by
+// serve's uid and read back by the tmux server process — this assumes both
+// run as the same user sharing the same $TMPDIR, true for the documented
+// LaunchAgent layout but not guaranteed in general.
 func focusGhosttyWindow(session string) error {
 	// iterate every Ghostty process: windows kraken opens via `open -na`
 	// belong to a second app instance
@@ -213,12 +249,33 @@ tell application "System Events"
 end tell
 end timeout
 return "notfound"`, session+":")
-	out, err := exec.Command("osascript", "-e", script).Output()
+	f, err := os.CreateTemp("", "kraken-focus-*.applescript")
 	if err != nil {
-		return fmt.Errorf("osascript (accessibility granted?): %v", err)
+		return fmt.Errorf("write applescript temp file: %v", err)
 	}
-	if strings.TrimSpace(string(out)) != "ok" {
-		return fmt.Errorf("no ghostty window titled %q (is 'set-titles on' active?)", session+":")
+	defer os.Remove(f.Name())
+	_, writeErr := f.WriteString(script)
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return fmt.Errorf("write applescript temp file: %v", err)
+	}
+	// osascript's own stderr is the diagnosable part of a failure (e.g. an
+	// accessibility denial) — redirect it into the run-shell command's stdout
+	// ourselves, since tmux run-shell only ever forwards stdout to us and
+	// otherwise collapses a failure into a bare "returned <code>" line.
+	out, err := exec.Command("tmux", "run-shell", "osascript '"+f.Name()+"' 2>&1").CombinedOutput()
+	trimmed := strings.TrimSpace(string(out))
+	if err != nil {
+		return fmt.Errorf("osascript via tmux run-shell failed (%v): %s", err, trimmed)
+	}
+	// the script's own answer ("ok"/"notfound") is always the last line —
+	// stderr merged in above can add earlier lines (e.g. a stray objc[…]
+	// warning) on an otherwise-successful raise, and those must not be
+	// mistaken for the sentinel.
+	lines := strings.Split(trimmed, "\n")
+	sentinel := lines[len(lines)-1]
+	if sentinel != "ok" {
+		return fmt.Errorf("no ghostty window titled %q (is 'set-titles on' active?): %s", session+":", trimmed)
 	}
 	return nil
 }
