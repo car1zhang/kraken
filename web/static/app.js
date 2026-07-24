@@ -1647,7 +1647,7 @@ function specMetaHTML(d) {
   const rows = [
     ["repo", esc(d.repo || "—")],
     ["base", esc(d.base || "origin/main")],
-    ["model", esc(d.model || "default")],
+    ["model", esc(d.model || "claude-opus-5")],
     ["solo", d.solo ? "✓" : "✗"],
     ["skip doc", d.skip_doc ? "✓" : "✗"],
   ];

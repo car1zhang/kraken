@@ -36,7 +36,8 @@ type Job struct {
 	// Model is the Claude model zeus runs on (`claude --model <value>`),
 	// hand-authored like solo. Consumed exactly once per cell start
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
-	// model can't change out from under it. Empty means claude's default.
+	// model can't change out from under it. Empty means core.DefaultModel,
+	// kraken's own default — never "whatever claude's config says".
 	Model string `json:"model,omitempty"`
 	// SkipDoc skips the /aim → /do phase: zeus implements the spec directly,
 	// keeping the manual-test gate and PR pipeline. Valid on any job (Q14
@@ -502,7 +503,7 @@ func JobTemplate(slug string) string {
 		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
 		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
-		"                          # applied once at cell start, default = claude's own default\n" +
+		"                          # applied once at cell start, default = " + core.DefaultModel + "\n" +
 		"# skip-doc: true          # skip the /aim → /do phase — zeus implements the spec directly\n" +
 		"---\n"
 }

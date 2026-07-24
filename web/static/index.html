@@ -182,8 +182,8 @@
           <div class="f-row">
             <label>repo <select id="f-repo"></select></label>
             <label>base <input id="f-base" placeholder="origin/main" spellcheck="false"></label>
-            <label>model <input id="f-model" list="model-list" placeholder="default" spellcheck="false"
-              title="claude model for zeus (--model value) — applied once at cell start"></label>
+            <label>model <input id="f-model" list="model-list" placeholder="claude-opus-5" spellcheck="false"
+              title="claude model for zeus (--model value) — applied once at cell start; empty = kraken's default, claude-opus-5"></label>
             <span class="f-toggles">
               <label class="check"><input type="checkbox" id="f-solo"> solo</label>
               <label class="check"><input type="checkbox" id="f-skipdoc"
@@ -214,7 +214,7 @@
       </div>
       <datalist id="job-list"></datalist>
       <datalist id="model-list">
-        <option value="fable"><option value="opus"><option value="sonnet"><option value="haiku">
+        <option value="claude-opus-5"><option value="fable"><option value="opus"><option value="sonnet"><option value="haiku">
       </datalist>
     </div>
   </div>
