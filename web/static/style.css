@@ -982,6 +982,17 @@ body {
   border: 1px solid var(--hairline-2); padding: 8px 10px; resize: vertical;
 }
 .f-label { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+/* the editor's copy of the doc-questions panel — the click-into surface for a
+   done job's questions, which the board card no longer renders (settledJob in
+   app.js). Labeled (the card and steer copies aren't) because the editor is
+   otherwise all spec-authoring: an unlabeled panel of questions here would
+   read as part of the form. Capped like the card copy rather than left
+   uncapped like the steer one — the editor's own body scrolls, but the spec
+   textarea below it is the thing you came for, and a long question list
+   shouldn't push it off-screen. */
+.editor-docq { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.editor-docq-head { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
+.editor-docq .doc-questions { margin-top: 0; max-height: 40vh; overflow-y: auto; }
 .mini-add {
   background: none; border: 1px solid var(--hairline-2); cursor: pointer;
   font: 10px var(--mono); color: var(--text-2); padding: 1px 7px;
