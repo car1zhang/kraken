@@ -80,8 +80,19 @@ func TestZeusBrief(t *testing.T) {
 		"end-to-end flows", "ONE concrete worked example", "tunnel cards",
 		"DEFAULT, not a cap",
 		// 50-components.md must require a Kind row ahead of responsibility,
-		// plus a Boundary row
-		"Kind entry", "Boundary row", "OS process", "sqlite table",
+		// plus a Boundary row. The kind vocabulary is no longer an ad-hoc
+		// parenthetical in the brief: it comes from the contract's sanctioned
+		// Shape Kit list, and the kind is what picks the box's silhouette.
+		"Kind entry", "Boundary row",
+		"sanctioned kind list in the Shape Kit section",
+		"kind determines its box's silhouette",
+		// hermes gets box → kind pairs, never a shape class: the kind → shape
+		// lookup is hermes' mechanical step, and an unlisted kind stays TEXT in
+		// zeus' brief — hermes, not zeus, names the fallback silhouette (so no
+		// shape class ever enters zeus' vocabulary)
+		"`box → kind` pair", "derives the shape mechanically from the kind",
+		"kind → shape table", "never dictate a shape class yourself",
+		"still states its honest kind in text", "hermes picks the fallback silhouette",
 		// the store-rows questions verb contract (54), replacing the old
 		// questions.yaml format block
 		"kraken questions get x", "kraken questions set x",
@@ -214,11 +225,20 @@ func TestZeusBriefSolo(t *testing.T) {
 			t.Errorf("solo brief missing questions verb contract text %q", want)
 		}
 	}
-	// bare "diagram-card.html" is the strictly stronger absence check
-	// (DiagramCardPath() is a substring of it, and worktree-relative
-	// path pins for it already live in TestZeusBrief's loop) —
-	// don't duplicate the full path here
-	for _, unwanted := range []string{"hermes-contract.md", "lint_svg.py", "diagram-card.html"} {
+	for _, unwanted := range []string{
+		// bare "diagram-card.html" is the strictly stronger absence check
+		// (DiagramCardPath() is a substring of it, and worktree-relative
+		// path pins for it already live in TestZeusBrief's loop) —
+		// don't duplicate the full path here
+		"hermes-contract.md", "lint_svg.py", "diagram-card.html",
+		// the shape vocabulary rides with the hermes pipeline (both the Kind
+		// sentence and the box → kind assignment rule are non-solo only), so a
+		// solo brief — which renders no diagrams at all — must carry none of
+		// it; every sentence in that pair is pinned here, so moving any part
+		// of either one outside the !Solo gate fails loudly
+		"sanctioned kind list", "silhouette", "box → kind", "shape class",
+		"kind → shape", "fallback silhouette",
+	} {
 		if strings.Contains(brief, unwanted) {
 			t.Errorf("solo brief should not mention %q (no doc pipeline subagents)", unwanted)
 		}

@@ -1,0 +1,20 @@
+<svg viewBox="0 0 860 320" role="img" aria-label="Three levels of component nesting: a machine holding a store holding a table, one level past the limit.">
+  <text class="title" x="16" y="26">two levels of component nesting, never three</text>
+
+  <g class="machine holds">
+    <rect x="40" y="60" width="400" height="220" rx="2"/>
+    <path d="M 40,60 L 52,48 H 452 L 440,60 Z"/>
+    <path d="M 440,60 L 452,48 V 268 L 440,280"/>
+    <text x="120" y="78">carl's Mac</text>
+    <g class="store holds">
+      <path d="M 60,100 a 90,10 0 0,1 180,0 v 140 a 90,10 0 0,1 -180,0 z"/>
+      <ellipse cx="150" cy="100" rx="90" ry="10"/>
+      <text x="120" y="124">kraken.db</text>
+      <g class="table">
+        <rect x="80" y="140" width="140" height="72" rx="2"/>
+        <path d="M 80,160 H 220 M 150,160 V 212 M 80,186 H 220"/>
+        <text x="150" y="151">jobs</text>
+      </g>
+    </g>
+  </g>
+</svg>

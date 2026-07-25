@@ -55,13 +55,13 @@
     <text x="715" y="60"><tspan x="715">lint_svg.py</tspan><tspan x="715" dy="1.2em">(new asset)</tspan></text>
   </g>
 
-  <g class="node store">
-    <rect x="620" y="175" width="190" height="42" rx="8"/>
+  <g class="file">
+    <path d="M 620,175 h 176 l 14,14 v 28 h -190 z M 796,175 v 14 h 14"/>
     <text x="715" y="200">fragments/&lt;id&gt;.svg</text>
   </g>
 
-  <g class="node store">
-    <rect x="620" y="320" width="190" height="42" rx="8"/>
+  <g class="file">
+    <path d="M 620,320 h 176 l 14,14 v 28 h -190 z M 796,320 v 14 h 14"/>
     <text x="715" y="345">artifacts/&lt;slug&gt;.html</text>
   </g>
 

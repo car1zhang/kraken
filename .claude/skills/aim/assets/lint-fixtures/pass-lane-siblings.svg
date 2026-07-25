@@ -1,0 +1,32 @@
+<svg viewBox="0 0 860 240" role="img" aria-label="Two swimlane headers with lifelines dropping below them, each participant's boxes drawn as siblings on its lifeline.">
+  <text class="title" x="16" y="26">participants hang off the lifeline, beside the lane header</text>
+
+  <g class="lane">
+    <rect x="60" y="44" width="200" height="48" rx="6"/>
+    <text x="160" y="72">daemon</text>
+  </g>
+  <path class="edge dashed" d="M 160,92 V 220"/>
+
+  <g class="lane">
+    <rect x="560" y="44" width="200" height="48" rx="6"/>
+    <text x="660" y="72">zeus</text>
+  </g>
+  <path class="edge dashed" d="M 660,92 V 220"/>
+
+  <g class="proc">
+    <rect x="80" y="112" width="160" height="50" rx="2"/>
+    <rect x="84" y="116" width="152" height="42" rx="1"/>
+    <text x="160" y="141">kraken serve</text>
+  </g>
+
+  <g class="event">
+    <path d="M 300,116 H 500 L 516,141 L 500,166 H 300 Z"/>
+    <text x="400" y="145">pane bump</text>
+  </g>
+
+  <g class="agent">
+    <rect x="580" y="112" width="160" height="50" rx="10"/>
+    <path class="spark" d="M 594,122 Q 595.6,128.4 599,130 Q 595.6,131.6 594,138 Q 592.4,131.6 589,130 Q 592.4,128.4 594,122 Z"/>
+    <text x="670" y="141">zeus</text>
+  </g>
+</svg>

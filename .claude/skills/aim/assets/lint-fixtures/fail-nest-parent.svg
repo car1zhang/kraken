@@ -1,0 +1,13 @@
+<svg viewBox="0 0 860 180" role="img" aria-label="A table nested inside an llm sparkle, a silhouette with no rectangular interior.">
+  <text class="title" x="16" y="26">a leaf silhouette cannot hold a component</text>
+
+  <g class="llm">
+    <path class="spark" d="M 120,50 Q 124,66 132,70 Q 124,74 120,90 Q 116,74 108,70 Q 116,66 120,50 Z"/>
+    <text x="120" y="120">claude-opus-5</text>
+    <g class="table">
+      <rect x="200" y="50" width="140" height="72" rx="2"/>
+      <path d="M 200,70 H 340 M 270,70 V 122 M 200,96 H 340"/>
+      <text x="270" y="61">jobs</text>
+    </g>
+  </g>
+</svg>

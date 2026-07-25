@@ -1,0 +1,37 @@
+<svg viewBox="0 0 860 300" role="img" aria-label="Two warn-tier containment mistakes: a function hanging out of its package's content well, and a process holding an endpoint without the holds modifier.">
+  <text class="title" x="16" y="26">children stay inside the parent's content well</text>
+
+  <g class="pkg holds">
+    <rect x="40" y="60" width="220" height="150" rx="2"/>
+    <rect x="34" y="76" width="14" height="10" rx="1"/>
+    <rect x="34" y="188" width="14" height="10" rx="1"/>
+    <text x="110" y="86">internal/jobs</text>
+    <g class="fn">
+      <rect x="46" y="100" width="230" height="44" rx="2"/>
+      <path d="M 54,100 V 144 M 268,100 V 144"/>
+      <text x="161" y="124">deriveState()</text>
+    </g>
+  </g>
+
+  <g class="proc">
+    <rect x="420" y="60" width="240" height="120" rx="2"/>
+    <rect x="424" y="64" width="232" height="112" rx="1"/>
+    <text x="540" y="86">kraken serve</text>
+    <g class="iface">
+      <rect x="454" y="100" width="190" height="44" rx="8"/>
+      <path d="M 447,122 H 454"/>
+      <circle cx="442" cy="122" r="5"/>
+      <text x="549" y="122">GET /api/board</text>
+    </g>
+  </g>
+
+  <g class="node holds">
+    <rect x="690" y="60" width="150" height="120" rx="8"/>
+    <text x="704" y="86">board</text>
+    <g class="type">
+      <rect x="696" y="100" width="140" height="44" rx="2"/>
+      <path d="M 696,122 H 836"/>
+      <text x="766" y="114">Peer</text>
+    </g>
+  </g>
+</svg>

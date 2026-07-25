@@ -1,0 +1,101 @@
+<svg viewBox="0 0 860 540" role="img" aria-label="The five legal shape-inside-shape containments: a store holding tables, a machine holding a process and a store, a package holding functions, a process holding endpoints, and a window holding data cells. Each parent carries the holds modifier.">
+  <text class="title" x="16" y="26">five legal containments — the parent's silhouette is the boundary</text>
+
+  <!-- 1. store holds table -->
+  <g class="store holds">
+    <path d="M 40,80 a 95,10 0 0,1 190,0 v 210 a 95,10 0 0,1 -190,0 z"/>
+    <ellipse cx="135" cy="80" rx="95" ry="10"/>
+    <text x="80" y="106">kraken.db</text>
+    <g class="table">
+      <rect x="70" y="120" width="130" height="72" rx="2"/>
+      <path d="M 70,140 H 200 M 135,140 V 192 M 70,166 H 200"/>
+      <text x="135" y="131">jobs</text>
+    </g>
+    <g class="table">
+      <rect x="70" y="200" width="130" height="72" rx="2"/>
+      <path d="M 70,220 H 200 M 135,220 V 272 M 70,246 H 200"/>
+      <text x="135" y="211">questions</text>
+    </g>
+  </g>
+
+  <!-- 2. machine holds proc + store -->
+  <g class="machine holds">
+    <rect x="300" y="112" width="256" height="150" rx="2"/>
+    <path d="M 300,112 L 312,100 H 568 L 556,112 Z"/>
+    <path d="M 556,112 L 568,100 V 250 L 556,262"/>
+    <text x="360" y="130">carl's Mac</text>
+    <g class="proc">
+      <rect x="320" y="146" width="150" height="50" rx="2"/>
+      <rect x="324" y="150" width="142" height="42" rx="1"/>
+      <text x="395" y="175">serve</text>
+    </g>
+    <g class="store">
+      <path d="M 320,214 a 60,10 0 0,1 120,0 v 24 a 60,10 0 0,1 -120,0 z"/>
+      <ellipse cx="380" cy="214" rx="60" ry="10"/>
+      <text x="380" y="240">kraken.db</text>
+    </g>
+  </g>
+
+  <!-- 3. pkg holds fn -->
+  <g class="pkg holds">
+    <rect x="620" y="112" width="200" height="150" rx="2"/>
+    <rect x="614" y="128" width="14" height="10" rx="1"/>
+    <rect x="614" y="240" width="14" height="10" rx="1"/>
+    <text x="700" y="138">internal/jobs</text>
+    <g class="fn">
+      <rect x="634" y="150" width="172" height="44" rx="2"/>
+      <path d="M 642,150 V 194 M 798,150 V 194"/>
+      <text x="720" y="174">deriveState()</text>
+    </g>
+    <g class="fn">
+      <rect x="634" y="204" width="172" height="44" rx="2"/>
+      <path d="M 642,204 V 248 M 798,204 V 248"/>
+      <text x="720" y="228">nextTick()</text>
+    </g>
+  </g>
+
+  <!-- 4. proc holds iface -->
+  <g class="proc holds">
+    <rect x="40" y="330" width="240" height="160" rx="2"/>
+    <rect x="44" y="334" width="232" height="152" rx="1"/>
+    <text x="110" y="352">kraken serve</text>
+    <g class="iface">
+      <rect x="80" y="366" width="184" height="44" rx="8"/>
+      <path d="M 73,388 H 80"/>
+      <circle cx="68" cy="388" r="5"/>
+      <text x="172" y="388">GET /api/board</text>
+    </g>
+    <g class="iface">
+      <rect x="80" y="426" width="184" height="44" rx="8"/>
+      <path d="M 73,448 H 80"/>
+      <circle cx="68" cy="448" r="5"/>
+      <text x="172" y="448">POST /answer</text>
+    </g>
+  </g>
+
+  <!-- 5. ui holds cell -->
+  <g class="ui holds">
+    <rect x="330" y="330" width="280" height="160" rx="6"/>
+    <path d="M 330,348 H 610"/>
+    <circle cx="342" cy="339" r="2.5"/>
+    <circle cx="351" cy="339" r="2.5"/>
+    <circle cx="360" cy="339" r="2.5"/>
+    <text x="400" y="368">board SPA</text>
+    <g class="cell head">
+      <rect x="346" y="380" width="180" height="26" rx="3"/>
+      <text x="436" y="397">job</text>
+    </g>
+    <g class="cell head">
+      <rect x="530" y="380" width="66" height="26" rx="3"/>
+      <text x="563" y="397">state</text>
+    </g>
+    <g class="cell">
+      <rect x="346" y="410" width="180" height="26" rx="3"/>
+      <text x="436" y="427">pr-hooks</text>
+    </g>
+    <g class="cell ok">
+      <rect x="530" y="410" width="66" height="26" rx="3"/>
+      <text x="563" y="427">working</text>
+    </g>
+  </g>
+</svg>

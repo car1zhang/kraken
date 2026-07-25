@@ -1,0 +1,14 @@
+<svg viewBox="0 0 860 200" role="img" aria-label="A process box nested inside a table, which holds only its own body cells.">
+  <text class="title" x="16" y="26">a table holds cells, never a component box</text>
+
+  <g class="table">
+    <rect x="40" y="60" width="300" height="110" rx="2"/>
+    <path d="M 40,80 H 340 M 190,80 V 170 M 40,125 H 340"/>
+    <text x="190" y="71">jobs</text>
+    <g class="proc">
+      <rect x="56" y="92" width="120" height="50" rx="2"/>
+      <rect x="60" y="96" width="112" height="42" rx="1"/>
+      <text x="116" y="121">serve</text>
+    </g>
+  </g>
+</svg>

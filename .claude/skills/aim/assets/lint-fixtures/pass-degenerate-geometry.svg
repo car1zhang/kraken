@@ -1,0 +1,29 @@
+<svg viewBox="0 0 860 240" role="img" aria-label="Three boxes the geometry rules cannot measure honestly: a group drawing no body rect, a child carrying a path with no moveto, and a parent smaller than its own content well.">
+  <text class="title" x="16" y="26">a box the rules cannot measure is left alone, never guessed at</text>
+
+  <g class="node">
+    <path class="spark" d="M 120,60 Q 121.6,66.4 125,68 Q 121.6,69.6 120,76 Q 118.4,69.6 115,68 Q 118.4,66.4 120,60 Z"/>
+    <path class="spark" d="M 142,72 Q 143,76 145,77 Q 143,78 142,82 Q 141,78 139,77 Q 141,76 142,72 Z"/>
+    <text x="128" y="104">claude opus 5</text>
+  </g>
+
+  <g class="proc holds">
+    <rect x="300" y="50" width="220" height="140" rx="2"/>
+    <rect x="304" y="54" width="212" height="132" rx="1"/>
+    <text x="314" y="72">kraken serve</text>
+    <g class="fn">
+      <rect x="330" y="90" width="160" height="50" rx="2"/>
+      <path d="Z"/>
+      <text x="410" y="120">Serve()</text>
+    </g>
+  </g>
+
+  <g class="group">
+    <rect x="600" y="50" width="30" height="30" rx="8"/>
+    <text x="614" y="68">svc</text>
+    <g class="proc">
+      <rect x="606" y="76" width="20" height="12" rx="1"/>
+      <text x="616" y="86">a</text>
+    </g>
+  </g>
+</svg>

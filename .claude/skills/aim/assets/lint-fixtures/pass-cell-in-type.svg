@@ -1,0 +1,40 @@
+<svg viewBox="0 0 860 240" role="img" aria-label="A type whose fields are a stack of cells, and a queue whose pending items are the same, both drawn inside leaf-only silhouettes.">
+  <text class="title" x="16" y="26">a cell is data, so it may sit inside any silhouette</text>
+
+  <g class="type">
+    <rect x="40" y="60" width="200" height="140" rx="2"/>
+    <path d="M 40,82 H 240"/>
+    <text x="140" y="74">Peer</text>
+    <g class="cell head">
+      <rect x="56" y="94" width="168" height="24" rx="3"/>
+      <text x="140" y="110">field</text>
+    </g>
+    <g class="cell">
+      <rect x="56" y="124" width="168" height="24" rx="3"/>
+      <text x="140" y="140">Slug string</text>
+    </g>
+    <g class="cell">
+      <rect x="56" y="154" width="168" height="24" rx="3"/>
+      <text x="140" y="170">Depth int</text>
+    </g>
+  </g>
+
+  <g class="queue">
+    <rect x="448" y="68" width="180" height="120" rx="8"/>
+    <rect x="444" y="72" width="180" height="120" rx="8"/>
+    <rect x="440" y="76" width="180" height="120" rx="8"/>
+    <text x="530" y="92">pending bumps</text>
+    <g class="cell">
+      <rect x="456" y="104" width="148" height="24" rx="3"/>
+      <text x="530" y="120">pr #41 ci red</text>
+    </g>
+    <g class="cell">
+      <rect x="456" y="134" width="148" height="24" rx="3"/>
+      <text x="530" y="150">pr #42 comment</text>
+    </g>
+    <g class="cell">
+      <rect x="456" y="164" width="148" height="24" rx="3"/>
+      <text x="530" y="180">pr #43 merged</text>
+    </g>
+  </g>
+</svg>

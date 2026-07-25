@@ -1,0 +1,30 @@
+<svg viewBox="0 0 860 260" role="img" aria-label="Two packages whose overhanging function boxes are still measured through a bare group wrapper, on the parent side and on the child side.">
+  <text class="title" x="16" y="26">a bare g around geometry must not hide it from the well check</text>
+
+  <g class="pkg holds">
+    <g>
+      <rect x="40" y="60" width="200" height="120" rx="2"/>
+    </g>
+    <rect x="34" y="72" width="14" height="10" rx="1"/>
+    <rect x="34" y="158" width="14" height="10" rx="1"/>
+    <text x="54" y="86">internal/jobs</text>
+    <g class="fn">
+      <rect x="60" y="190" width="120" height="40" rx="2"/>
+      <path d="M 68,190 V 230 M 172,190 V 230"/>
+      <text x="120" y="214">Run()</text>
+    </g>
+  </g>
+
+  <g class="pkg holds">
+    <rect x="440" y="60" width="200" height="120" rx="2"/>
+    <rect x="434" y="72" width="14" height="10" rx="1"/>
+    <rect x="434" y="158" width="14" height="10" rx="1"/>
+    <text x="454" y="86">internal/api</text>
+    <g class="fn">
+      <g>
+        <rect x="460" y="190" width="120" height="40" rx="2"/>
+      </g>
+      <text x="520" y="214">Register()</text>
+    </g>
+  </g>
+</svg>

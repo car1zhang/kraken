@@ -1,0 +1,17 @@
+<svg viewBox="0 0 860 180" role="img" aria-label="A machine and an interface whose labels fill their contract-defined usable width exactly, neither of them a width warning.">
+  <text class="title" x="16" y="26">the width table is measured against the box, not the body rect</text>
+
+  <g class="machine">
+    <rect x="20" y="52" width="188" height="88" rx="2"/>
+    <path d="M 20,52 L 32,40 H 220 L 208,52 Z"/>
+    <path d="M 208,52 L 220,40 V 128 L 208,140"/>
+    <text x="114" y="96">carl's Mac, dev laptop</text>
+  </g>
+
+  <g class="iface">
+    <rect x="336" y="50" width="204" height="44" rx="8"/>
+    <path d="M 329,72 H 336"/>
+    <circle cx="324" cy="72" r="5"/>
+    <text x="438" y="72">POST /api/jobs/{slug}/qs</text>
+  </g>
+</svg>
