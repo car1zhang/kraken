@@ -187,6 +187,13 @@
           <input id="editor-slug" placeholder="job-slug" spellcheck="false">
           <button class="btn" id="editor-create">create</button>
         </div>
+        <!-- doc questions: off the board for a done/archived job (see
+             settledJob in app.js), so this modal — what a plain click on a
+             done card opens — is where they're read and answered. Above the
+             form, not below it: on a done job the questions are what you
+             clicked in for, and the spec textarea would otherwise push them
+             past the fold. -->
+        <div class="editor-docq" id="editor-docq" hidden></div>
         <div class="editor-form" id="editor-form" hidden>
           <div class="f-row">
             <label>repo <select id="f-repo"></select></label>

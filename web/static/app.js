@@ -128,10 +128,28 @@ function questionHTML(j) {
 
 // ---- doc questions (questions.yaml, distinct from AskUserQuestion above) --
 //
+// settledJob: a done or archived job. Its questions are history, not a
+// standing ask — nobody is waiting on an answer to keep working — so they
+// stay off the board entirely (no panel on the card, no flag) and live one
+// click into the job instead: the editor modal for a done job
+// (fillEditorDocq), the steer modal in reactivate mode, the artifact-side
+// surfaces. Answering there still works exactly as before (Q13: answers are
+// editable forever, live or done); it just no longer competes for board
+// space with the jobs that are actually running. Archived jobs never carry
+// doc_questions on the wire at all (board.go), so this only ever fires for
+// done ones — it's stated here anyway so the rule reads the same on both
+// sides of the wire.
+function settledJob(j) {
+  return !!j && (j.archived || j.state === "done");
+}
+
 // docQuestionsOpenP0 counts open (unanswered) P0 doc questions for a job —
 // cheap enough to fold into the card-level "flagged" state and the header
-// flag counter alongside j.question/j.health.
+// flag counter alongside j.question/j.health. A settled job contributes 0:
+// its questions aren't visible on the board, so flagging the board for them
+// would point at something nothing on that surface shows.
 function docQuestionsOpenP0(j) {
+  if (settledJob(j)) return 0;
   return (j.doc_questions || []).filter((q) => q.importance === "P0" && !q.answer).length;
 }
 
@@ -438,7 +456,7 @@ function cardHTML(j, col) {
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
-    ${docQuestionsHTML(j)}
+    ${settledJob(j) ? "" : docQuestionsHTML(j)}
     ${feedbackHTML(j)}
     ${(col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
   </div>`;
@@ -471,6 +489,7 @@ function checkStaleModals() {
       }
     } else if (!j || j.state !== editorOpenState) {
       flushEditorAutosave();
+      clearEditorDocq();
       editorOverlay.hidden = true;
     }
     // freshest jobsBySlug just landed — e.g. a just-created job finally
@@ -535,35 +554,45 @@ function render(board) {
 }
 
 // snapshotDocInputs/restoreDocInputs preserve in-progress free-text inputs
-// (value + focus + selection) across an innerHTML rebuild of either surface
+// (value + focus + selection) across an innerHTML rebuild of any surface
 // that renders .dq-input: #board (renderBoardDOM's wholesale replace on
-// every changed poll) and #steer-docq (fillSteerContext re-rendering the
-// steer modal's own copy of the panel on open/chip-more/post-answer). Both
-// are wholesale replaces with no diffing, so anything typed into a
-// .dq-input is gone the instant either rebuilds unless snapshotted first —
+// every changed poll), #steer-docq (fillSteerContext re-rendering the steer
+// modal's own copy of the panel on open/chip-more/post-answer), and
+// #editor-docq (fillEditorDocq doing the same for the job editor, which is
+// where a done job's questions live now — see settledJob). All are
+// wholesale replaces with no diffing, so anything typed into a
+// .dq-input is gone the instant one rebuilds unless snapshotted first —
 // every other composer lives in a modal textarea, whose draft is
 // server-synced instead (see flushSteerDraft), which is why only .dq-input
 // (and, since H6, the feedback panel's own .fb-edit-input — #board only, it
-// has no steer-modal copy) needs this. Keyed on slug+id (both already ride
+// has no modal copy) needs this. Keyed on slug+id (both already ride
 // as data attrs on every covered element) rather than DOM position, since
 // sortDocQuestions can reorder rows between polls, and rather than which
 // surface rendered it, since the same question can appear in both the card
-// and an open steer modal at once — a draft typed in one is meant to
+// and an open modal at once — a draft typed in one is meant to
 // survive a rebuild of the other. A .dq-input id ("Q<digits>") and an
 // .fb-edit-input id (a bare feedback row number) never collide as strings,
 // so both element kinds safely share one values map.
 //
-// The steer-modal copy is only ever a snapshot AUTHORITY while the modal is
+// A modal copy is only ever a snapshot AUTHORITY while that modal is
 // actually visible: snapshotDocInputs skips anything inside a hidden
-// #steer-overlay, so a closed-but-not-yet-cleared modal can't outrank the
-// card's own (visible) copy in document order. clearSteerDocq() (below)
-// additionally empties #steer-docq on every close path, so in practice a
-// hidden modal never holds a .dq-input at all — the closest() check here is
-// defense in depth for the instant between the two. Values are recorded
+// #steer-overlay/#editor-overlay, so a closed-but-not-yet-cleared modal
+// can't outrank the card's own (visible) copy in document order.
+// clearSteerDocq()/clearEditorDocq() (below) additionally empty the panel on
+// every close path, so in practice a hidden modal never holds a .dq-input at
+// all — the closest() check here is defense in depth for the instant between
+// the two. Values are recorded
 // even when empty, so a deliberately cleared draft on one surface actually
 // propagates as "cleared" instead of being overwritten by the other
 // surface's stale non-empty copy.
-const DQ_INPUT_SELECTOR = "#board .dq-input, #board .fb-edit-input, #steer-docq .dq-input";
+const DQ_INPUT_SELECTOR =
+  "#board .dq-input, #board .fb-edit-input, #steer-docq .dq-input, #editor-docq .dq-input";
+
+// the modal surfaces DQ_INPUT_SELECTOR reaches into — snapshot/restore skip
+// an input inside whichever of these is currently hidden, so a
+// closed-but-not-yet-cleared modal can never outrank the visible card copy
+// in document order.
+const HIDDEN_DOCQ_SURFACE = "#steer-overlay, #editor-overlay";
 
 // SCROLL_PANEL_SELECTORS: card-embedded panels whose own scroll position
 // (see style.css's per-card max-height caps) must survive a #board rebuild
@@ -574,20 +603,23 @@ function docInputKey(el) {
   return JSON.stringify([el.dataset.slug, el.dataset.id]);
 }
 
-// clearSteerDocq empties #steer-docq's rendered doc-questions panel. Called
-// from every path that hides the steer overlay so a closed modal can never
-// hold a zombie .dq-input that would otherwise outrank the visible card copy
-// in snapshotDocInputs/restoreDocInputs. openSteer always repopulates it via
-// fillSteerContext on the next open.
+// clearModalDocq empties a modal's rendered doc-questions panel (#steer-docq
+// or #editor-docq). Called from every path that hides that overlay so a
+// closed modal can never hold a zombie .dq-input that would otherwise
+// outrank the visible card copy in snapshotDocInputs/restoreDocInputs. Each
+// modal repopulates its panel on the next open (fillSteerContext /
+// fillEditorDocq).
 //
 // Some close paths (checkStaleModals' auto-close) fire between polls, ahead
 // of the next renderBoardDOM snapshot — without help, a draft typed in the
 // modal but never sent would be destroyed here before it ever reaches the
 // card. So before wiping, carry any non-empty modal draft into the card's
 // own copy of the same question — but never clobber a non-empty card draft;
-// that one's the user's most recent typing and wins.
-function clearSteerDocq() {
-  const docqEl = document.getElementById("steer-docq");
+// that one's the user's most recent typing and wins. A settled job's card
+// has no copy to carry into (see settledJob), so that draft is simply
+// dropped — same as any other unsent text in a modal that's closing.
+function clearModalDocq(elID) {
+  const docqEl = document.getElementById(elID);
   if (!docqEl) return;
   const modalValues = {};
   docqEl.querySelectorAll(".dq-input").forEach((el) => {
@@ -602,10 +634,13 @@ function clearSteerDocq() {
   docqEl.innerHTML = "";
 }
 
+const clearSteerDocq = () => clearModalDocq("steer-docq");
+const clearEditorDocq = () => clearModalDocq("editor-docq");
+
 function snapshotDocInputs() {
   const values = {};
   document.querySelectorAll(DQ_INPUT_SELECTOR).forEach((el) => {
-    if (el.closest("#steer-overlay")?.hidden) return; // hidden surface is never a snapshot authority
+    if (el.closest(HIDDEN_DOCQ_SURFACE)?.hidden) return; // hidden surface is never a snapshot authority
     values[docInputKey(el)] = el.value;
   });
   const active = document.activeElement;
@@ -627,7 +662,7 @@ function restoreDocInputs({ values, focused, scroll }) {
   if (Object.keys(values).length || focused) {
     let focusEl = null;
     document.querySelectorAll(DQ_INPUT_SELECTOR).forEach((el) => {
-      if (el.closest("#steer-overlay")?.hidden) return; // never restore into / focus a hidden surface
+      if (el.closest(HIDDEN_DOCQ_SURFACE)?.hidden) return; // never restore into / focus a hidden surface
       const key = docInputKey(el);
       if (key in values) el.value = values[key];
       if (focused && key === focused.key) focusEl = el;
@@ -1169,12 +1204,28 @@ function openArtifact(url, name) {
     .catch((e) => { panelBody.textContent = "failed to load: " + e; });
 }
 
+// refreshModalDocq re-renders whichever open modal carries its own copy of
+// slug's doc-questions panel — the steer modal (via fillSteerContext, which
+// rebuilds the whole context block) or the job editor (fillEditorDocq). The
+// #board rebuild every action triggers never touches modal DOM, so without
+// this a row inside an open modal keeps advertising state the board has
+// already moved past — and for a done job the modal is the only surface
+// showing the question at all (settledJob).
+function refreshModalDocq(slug) {
+  if (steerOverlay && !steerOverlay.hidden && steerSlug === slug) {
+    fillSteerContext(jobsBySlug[slug], steerMode);
+  }
+  if (editorOverlay && !editorOverlay.hidden && editorSlug === slug) {
+    fillEditorDocq(jobsBySlug[slug]);
+  }
+}
+
 // sendDocQuestionAnswer posts one doc-question answer (either "accept rec"
 // or free-text send), disabling the row's controls synchronously so a
 // double-click/double-Enter can't double-post. Shared by the click handler's
 // .dq-accept/.dq-send branches and the Enter-to-send keydown handler below.
-// Always re-fills the steer modal's own doc-questions panel afterward if
-// that's the surface the answer was submitted from — on success so the row
+// Always re-fills an open modal's own doc-questions panel afterward (see
+// refreshModalDocq) — on success so the row
 // flips to answered, and on failure too (post() never rejects, it resolves
 // false and already invalidates+refreshes the board), so a failed post
 // re-enables the row's controls for a retry instead of leaving them dead
@@ -1191,9 +1242,7 @@ function sendDocQuestionAnswer(row, slug, id, text) {
       invalidateBoard();
       refresh();
     }
-    if (steerOverlay && !steerOverlay.hidden && steerSlug === slug) {
-      fillSteerContext(jobsBySlug[steerSlug], steerMode);
-    }
+    refreshModalDocq(slug);
     return ok;
   });
 }
@@ -1245,13 +1294,11 @@ document.addEventListener("click", (ev) => {
     reansweringDocQ.delete(dqReanswerKey(dqReanswerCancel.dataset.slug, dqReanswerCancel.dataset.id));
     invalidateBoard();
     refresh();
-    // the same question can be showing inside an open steer modal (its own
-    // copy of this panel, see fillSteerContext) — the #board rebuild above
-    // never touches #steer-docq, so without this the modal's row would keep
-    // advertising a re-answer affordance that no longer does anything
-    if (steerOverlay && !steerOverlay.hidden && steerSlug === dqReanswerCancel.dataset.slug) {
-      fillSteerContext(jobsBySlug[steerSlug], steerMode);
-    }
+    // the same question can be showing inside an open modal (its own copy of
+    // this panel) — the #board rebuild above never touches modal DOM, so
+    // without this the modal's row would keep advertising a re-answer
+    // affordance that no longer does anything
+    refreshModalDocq(dqReanswerCancel.dataset.slug);
     return;
   }
   // reopen an answered doc question for editing — Q13: answers are editable
@@ -1263,11 +1310,9 @@ document.addEventListener("click", (ev) => {
     reansweringDocQ.add(dqReanswerKey(dqAnswered.dataset.slug, dqAnswered.dataset.id));
     invalidateBoard();
     refresh();
-    // see the .dq-reanswer-cancel branch above — same reason: keep the open
-    // steer modal's own copy of this row in sync with the board's.
-    if (steerOverlay && !steerOverlay.hidden && steerSlug === dqAnswered.dataset.slug) {
-      fillSteerContext(jobsBySlug[steerSlug], steerMode);
-    }
+    // see the .dq-reanswer-cancel branch above — same reason: keep an open
+    // modal's own copy of this row in sync with the board's.
+    refreshModalDocq(dqAnswered.dataset.slug);
     return;
   }
   // ---- job feedback panel ----
@@ -2338,6 +2383,32 @@ async function loadForm(slug) {
   if (d.err) editorNote.textContent = "current file won't run: " + d.err;
 }
 
+// fillEditorDocq renders the job editor's own copy of the doc-questions
+// panel — the click-into surface for a done job's questions, which the card
+// no longer shows (settledJob). Rendered for any job that has questions, not
+// just done ones: the editor is also what a click on a draft/queued/dead
+// card opens, and a question is worth reading wherever you land on the job.
+// Wholesale replace, same hazard as fillSteerContext's — snapshot/restore
+// around it so a draft typed on either surface survives, plus the panel's own
+// scrollTop (this copy is capped, style.css, and the scroller itself is what
+// gets replaced — without this, answering one question in a long list throws
+// you back to the top). snapshotDocInputs' scroll map only covers card-
+// embedded panels, hence the local save/restore here.
+function fillEditorDocq(j) {
+  const el = document.getElementById("editor-docq");
+  const docq = j ? docQuestionsHTML(j) : "";
+  const prev = el.querySelector(".doc-questions");
+  const scrollTop = prev ? prev.scrollTop : 0;
+  const dqState = snapshotDocInputs();
+  el.hidden = !docq;
+  el.innerHTML = docq ? `<div class="editor-docq-head">questions</div>${docq}` : "";
+  restoreDocInputs(dqState);
+  if (scrollTop) {
+    const next = el.querySelector(".doc-questions");
+    if (next) next.scrollTop = scrollTop;
+  }
+}
+
 function openEditor(slug) {
   editorSlug = slug;
   editorMTime = 0;
@@ -2360,7 +2431,12 @@ function openEditor(slug) {
   document.getElementById("editor-reactivate").hidden = true;
   document.getElementById("editor-hint").textContent = "";
   document.getElementById("editor-slug").value = "";
+  // flip visible before filling, for the same reason openSteer does: the
+  // snapshot/restore pair inside fillEditorDocq treats a hidden
+  // #editor-overlay as never the authority, so the freshly-rendered panel
+  // has to already read as visible for a card-side draft to seed it
   editorOverlay.hidden = false;
+  fillEditorDocq(slug ? jobsBySlug[slug] : null);
   if (isNew) {
     document.getElementById("editor-slug").focus();
     return;
@@ -2379,6 +2455,7 @@ document.getElementById("editor-queue").addEventListener("click", async () => {
   await flushEditorAutosave(); // land any edit still sitting in the debounce window before queueing
   const res = await post("/api/queue", { slug: editorSlug });
   if (res) {
+    clearEditorDocq();
     editorOverlay.hidden = true;
   } else {
     editorNote.textContent = "queue failed — see status bar";
@@ -2416,6 +2493,7 @@ document.getElementById("editor-dequeue").addEventListener("click", async () => 
 // prompt), same as the card's ↺ button
 document.getElementById("editor-reactivate").addEventListener("click", () => {
   if (!editorSlug) return;
+  clearEditorDocq();
   editorOverlay.hidden = true;
   openSteer(editorSlug, "reactivate");
 });
@@ -2548,12 +2626,12 @@ document.addEventListener("paste", (ev) => {
 document.getElementById("editor-archive").addEventListener("click", async () => {
   if (!editorSlug) return;
   const res = await post("/api/archive", { slug: editorSlug });
-  if (res) editorOverlay.hidden = true;
+  if (res) { clearEditorDocq(); editorOverlay.hidden = true; }
   else editorNote.textContent = "archive failed — see status bar";
 });
 
 editorOverlay.addEventListener("click", (ev) => {
-  if (ev.target === editorOverlay) { flushEditorAutosave(); editorOverlay.hidden = true; }
+  if (ev.target === editorOverlay) { flushEditorAutosave(); clearEditorDocq(); editorOverlay.hidden = true; }
 });
 document.getElementById("editor-form").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
@@ -2631,7 +2709,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if (!overlay.hidden) { overlay.hidden = true; return; }
   if (!steerOverlay.hidden) { flushSteerDraft(); clearSteerChips(); clearSteerDocq(); steerOverlay.hidden = true; return; }
-  if (!editorOverlay.hidden) { flushEditorAutosave(); editorOverlay.hidden = true; return; }
+  if (!editorOverlay.hidden) { flushEditorAutosave(); clearEditorDocq(); editorOverlay.hidden = true; return; }
   if (!usageOverlay.hidden) { usageOverlay.hidden = true; return; }
 });
 
