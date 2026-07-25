@@ -52,52 +52,102 @@
   svg :where(path):not([fill]) { fill: none; }
   svg :where(path):not([stroke]):not([class]) { stroke: var(--muted); }
   svg text { fill: var(--fg); font-size: 13px; }
-  /* Dual selectors: match both <g class="node"><rect/></g> AND bare <rect class="node"/> */
-  svg .node rect, svg rect.node { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
-  svg .node text, svg .store text, svg .lane text { text-anchor: middle; dominant-baseline: middle; }
-  svg .accent rect, svg rect.accent { stroke: var(--accent); stroke-width: 1.8; }
-  svg .accent text, svg text.accent { fill: var(--accent); font-weight: 600; }
+  /* Dual selectors: match both <g class="node"><rect/></g> AND bare <rect class="node"/>.
+     Every SHAPE rule uses the direct-child combinator (>): containment nests a child <g> inside
+     its parent <g>, and a descendant selector would repaint the nested child's own geometry. */
+  svg .node > rect, svg rect.node { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .node > text, svg .store > text, svg .lane > text { text-anchor: middle; dominant-baseline: middle; }
+  svg .accent > rect, svg rect.accent { stroke: var(--accent); stroke-width: 1.8; }
+  svg .accent > text, svg text.accent { fill: var(--accent); font-weight: 600; }
   svg .group > rect, svg rect.group { fill: none; stroke: var(--line); stroke-dasharray: 5 4; }
   svg .group > text, svg text.group { fill: var(--muted); font-size: 12px; text-anchor: start; }
-  svg .store rect, svg rect.store, svg .store ellipse, svg ellipse.store, svg .store path
+  svg .store > rect, svg rect.store, svg .store > ellipse, svg ellipse.store, svg .store > path
     { fill: var(--surface); stroke: var(--fg); stroke-width: 1.2; }
-  svg .lane rect, svg rect.lane { fill: var(--surface); stroke: var(--line); }
+  svg .lane > rect, svg rect.lane { fill: var(--surface); stroke: var(--line); }
   svg .edge { stroke: var(--muted); stroke-width: 1.3; fill: none; }
   svg .edge.dashed { stroke-dasharray: 5 4; }
   svg .edgeLabel { fill: var(--muted); font-size: 12px; text-anchor: middle; }
   svg .arrowhead { fill: var(--muted); stroke: none; }
   svg .flow-dot { fill: var(--accent); stroke: none; }
-  svg .cell rect, svg rect.cell { fill: var(--bg); stroke: var(--line); }
-  svg .cell text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
-  svg .step circle { fill: var(--accent); stroke: none; }
-  svg .step text { fill: var(--bg); font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
+  svg .cell > rect, svg rect.cell { fill: var(--bg); stroke: var(--line); }
+  svg .cell > text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
+  svg .step > circle { fill: var(--accent); stroke: none; }
+  svg .step > text { fill: var(--bg); font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
   /* Semantic status classes — the sanctioned replacement for ad-hoc hex colors */
-  svg .ok rect, svg rect.ok { stroke: var(--ok); }
-  svg .ok text, svg text.ok { fill: var(--ok); }
-  svg .warn rect, svg rect.warn { stroke: var(--warn); }
-  svg .warn text, svg text.warn { fill: var(--warn); }
-  svg .danger rect, svg rect.danger { stroke: var(--danger); }
-  svg .danger text, svg text.danger { fill: var(--danger); }
+  svg .ok > rect, svg rect.ok { stroke: var(--ok); }
+  svg .ok > text, svg text.ok { fill: var(--ok); }
+  svg .warn > rect, svg rect.warn { stroke: var(--warn); }
+  svg .warn > text, svg text.warn { fill: var(--warn); }
+  svg .danger > rect, svg rect.danger { stroke: var(--danger); }
+  svg .danger > text, svg text.danger { fill: var(--danger); }
   svg .edge.ok { stroke: var(--ok); } svg .edge.warn { stroke: var(--warn); } svg .edge.danger { stroke: var(--danger); }
   svg .edge.ok + marker path, svg .edge.warn + marker path { } /* markers inherit .arrowhead */
-  svg .pill rect { fill: var(--surface); stroke: var(--muted); }
-  svg .pill text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
-  svg .decision path { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
-  svg .decision text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
-  svg .actor circle { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
-  svg .actor path { fill: none; stroke: var(--fg); stroke-width: 1.2; }
-  svg .actor text { fill: var(--fg); font-size: 12px; text-anchor: middle; }
-  svg .badge circle { fill: var(--surface); stroke: var(--line); }
-  svg .badge text { fill: var(--fg); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
-  svg .bar rect { fill: var(--accent); stroke: none; }
-  svg .bar.ok rect { fill: var(--ok); } svg .bar.warn rect { fill: var(--warn); } svg .bar.danger rect { fill: var(--danger); }
+  svg .pill > rect { fill: var(--surface); stroke: var(--muted); }
+  svg .pill > text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .decision > path { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .decision > text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .actor > circle { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor > path { fill: none; stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor > text { fill: var(--fg); font-size: 12px; text-anchor: middle; }
+  svg .badge > circle { fill: var(--surface); stroke: var(--line); }
+  svg .badge > text { fill: var(--fg); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
+  svg .bar > rect { fill: var(--accent); stroke: none; }
+  svg .bar.ok > rect { fill: var(--ok); } svg .bar.warn > rect { fill: var(--warn); } svg .bar.danger > rect { fill: var(--danger); }
   svg .axis { stroke: var(--muted); stroke-width: 1; fill: none; }
-  svg .region rect, svg .region ellipse, svg .region path { fill: var(--accent); opacity: .12; stroke: none; }
-  svg .region.ok rect { fill: var(--ok); } svg .region.warn rect { fill: var(--warn); } svg .region.danger rect { fill: var(--danger); }
-  svg .region text { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .region > rect, svg .region > ellipse, svg .region > path { fill: var(--accent); opacity: .12; stroke: none; }
+  svg .region.ok > rect { fill: var(--ok); } svg .region.warn > rect { fill: var(--warn); } svg .region.danger > rect { fill: var(--danger); }
+  svg .region > text { fill: var(--muted); font-size: 12px; text-anchor: start; }
   svg .title { fill: var(--fg); font-size: 14px; font-weight: 600; text-anchor: start; }
   svg .note { fill: var(--muted); font-size: 12px; text-anchor: start; }
   svg .dim { opacity: .45; }
+  /* ===== Shape kit: one silhouette per component kind ===== */
+  /* Compute family — bg fill, fg outline */
+  svg .proc > rect, svg .cli > rect, svg .thread > rect, svg .fn > rect, svg .ui > rect,
+  svg .iface > rect, svg .pkg > rect, svg .machine > rect, svg .agent > rect,
+  svg .event > path, svg .timer > circle, svg .cloud > path
+    { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  /* Inner detail strokes: dividers, subroutine bars, clock hands, stems, 3D faces.
+     agent is deliberately absent: its only direct <path> child is the spark badge, not inner detail. */
+  svg .proc > rect + rect, svg .cli > path, svg .fn > path, svg .ui > path, svg .iface > path,
+  svg .timer > path, svg .table > path, svg .type > path, svg .machine > path
+    { fill: none; stroke: var(--muted); stroke-width: 1; }
+  /* Small solid detail shapes: window dots, lollipop knob, component tabs */
+  svg .ui > circle, svg .iface > circle, svg .pkg > rect + rect, svg .pkg > rect + rect + rect
+    { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+  /* thread is lightweight/ephemeral: dashed outline */
+  svg .thread > rect { stroke-dasharray: 5 4; }
+  /* Data family — surface fill, fg outline */
+  svg .store > path, svg .store > ellipse, svg .table > rect, svg .file > path,
+  svg .queue > rect, svg .type > rect
+    { fill: var(--surface); stroke: var(--fg); stroke-width: 1.2; }
+  svg .cell.head > rect { fill: var(--surface); }
+  /* Every shape centers its label the way .node does */
+  svg .proc > text, svg .cli > text, svg .thread > text, svg .fn > text, svg .agent > text,
+  svg .timer > text, svg .iface > text, svg .event > text, svg .ui > text, svg .table > text,
+  svg .file > text, svg .queue > text, svg .type > text, svg .pkg > text, svg .machine > text,
+  svg .cloud > text, svg .llm > text
+    { text-anchor: middle; dominant-baseline: middle; }
+  /* A parent holding children moves its label to a top-left band (wins over the rule above) */
+  svg .holds > text
+    { text-anchor: start; dominant-baseline: auto; font-size: 12px; fill: var(--muted); }
+  /* Status variants must reach path/circle/ellipse silhouettes, not just rects.
+     Direct children only, so edges and arrowheads are never caught. */
+  svg .accent > rect, svg .accent > path, svg .accent > circle, svg .accent > ellipse
+    { stroke: var(--accent); stroke-width: 1.8; }
+  svg .ok > rect, svg .ok > path, svg .ok > circle, svg .ok > ellipse { stroke: var(--ok); }
+  svg .warn > rect, svg .warn > path, svg .warn > circle, svg .warn > ellipse { stroke: var(--warn); }
+  svg .danger > rect, svg .danger > path, svg .danger > circle, svg .danger > ellipse { stroke: var(--danger); }
+  /* bar and region are fill-carried, never stroked — reassert after the status variants,
+     whose (0,1,2) selectors would otherwise give them an outline they never had */
+  svg .bar > rect, svg .region > rect, svg .region > ellipse, svg .region > path { stroke: none; }
+  /* The sparkle: a filled accent mark, not an outlined silhouette — accent-filled at any size.
+     A spark badge is legal inside ANY silhouette, and every per-shape rule that could hit it
+     (svg .fn > path, svg .store > path, svg .event > path, svg .region > path, the status
+     variants, ...) is specificity (0,1,2). So this rule must BOTH out-specify them — hence
+     `svg path.spark`, also (0,1,2) — and come last, to win the source-order tiebreak.
+     Do not "simplify" it back to a bare `svg .spark`: at (0,1,1) it loses to every one of those
+     rules and the badge renders as a hollow gray outline in every card. */
+  svg path.spark, svg .spark { fill: var(--accent); stroke: none; }
   @media (prefers-reduced-motion: reduce) {
     svg .flow-dot { display: none; }
     figure.diagram * { animation: none !important; }

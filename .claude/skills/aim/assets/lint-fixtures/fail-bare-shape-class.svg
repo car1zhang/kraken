@@ -1,0 +1,5 @@
+<svg viewBox="0 0 860 120" role="img" aria-label="A shape class placed directly on a rect instead of on the wrapping group.">
+  <text class="title" x="16" y="26">shape classes belong on the wrapping group</text>
+
+  <rect class="proc" x="30" y="44" width="180" height="52" rx="2"/>
+</svg>

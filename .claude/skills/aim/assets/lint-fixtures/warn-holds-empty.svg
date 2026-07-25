@@ -1,0 +1,14 @@
+<svg viewBox="0 0 860 140" role="img" aria-label="A process and an unclassed group, each carrying the holds modifier with nothing nested inside it.">
+  <text class="title" x="16" y="26">holds on a childless box only restyles its label</text>
+
+  <g class="proc holds">
+    <rect x="40" y="50" width="200" height="70" rx="2"/>
+    <rect x="44" y="54" width="192" height="62" rx="1"/>
+    <text x="54" y="72">kraken serve</text>
+  </g>
+
+  <g class="holds">
+    <rect x="300" y="50" width="200" height="70" rx="2"/>
+    <text x="314" y="72">no silhouette, same restyle</text>
+  </g>
+</svg>

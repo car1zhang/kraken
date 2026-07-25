@@ -1,0 +1,8 @@
+<svg viewBox="0 0 860 120" role="img" aria-label="A group carrying two shape classes at once, the retired node store combo.">
+  <text class="title" x="16" y="26">a box may carry only one shape class</text>
+
+  <g class="node store">
+    <rect x="30" y="44" width="180" height="52" rx="8"/>
+    <text x="120" y="70">kraken.db</text>
+  </g>
+</svg>

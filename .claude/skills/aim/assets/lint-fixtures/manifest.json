@@ -2,38 +2,159 @@
   {
     "file": "fail-tiling-defeat.svg",
     "expect": "fail",
+    "warnings": 0,
     "note": "bare-shape classes (rect class=group/store/node, not <g>-wrapped) -> CLASS_PLACEMENT"
   },
   {
     "file": "fail-markdown-pipeline.svg",
     "expect": "fail",
+    "warnings": 0,
     "note": "bare-shape classes (rect/text class=node/group/store, not <g>-wrapped) -> CLASS_PLACEMENT; also fill=\"none\" attrs -> PAINT_ATTR"
   },
   {
     "file": "fail-target-surfaces.svg",
     "expect": "fail",
-    "note": "embedded <style> block + hex color literals -> STYLE_BLOCK + COLOR_LITERAL"
+    "warnings": 4,
+    "note": "embedded <style> block + hex color literals -> STYLE_BLOCK + COLOR_LITERAL; the four warnings are pre-existing TEXT_OVERFLOW near the right margin"
   },
   {
     "file": "fail-component-map.svg",
     "expect": "fail",
+    "warnings": 0,
     "note": "embedded <style> block with CSS custom properties -> STYLE_BLOCK"
   },
   {
     "file": "fail-banned-element.svg",
     "expect": "fail",
+    "warnings": 0,
     "note": "<script>/<foreignObject>/<image> present -> BANNED_ELEMENT (ban-list line 155)"
+  },
+  {
+    "file": "fail-shape-combo.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "<g class=\"node store\"> -> exactly one SHAPE_COMBO failure; the retired legacy combo"
+  },
+  {
+    "file": "fail-bare-shape-class.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "<rect class=\"proc\"> -> CLASS_PLACEMENT; the 17 silhouettes belong on a <g>"
+  },
+  {
+    "file": "fail-nest-parent.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "a table nested inside an llm -> one NEST_PARENT failure and nothing else; an llm may not hold anything, so it is never also told to add \"holds\""
+  },
+  {
+    "file": "fail-nest-parent-table.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "a proc nested inside a table -> NEST_PARENT; a table's interior is its own body cells, and a cell is the one child any silhouette may take"
+  },
+  {
+    "file": "fail-nest-parent-lane.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "a proc nested inside a lane -> NEST_PARENT; a lane is a swimlane HEADER, a small box with a lifeline dropping below it, and the contract names it never-a-parent twice and gives it no content-well row"
+  },
+  {
+    "file": "fail-nest-depth.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "machine > store > table -> NEST_DEPTH; the limit is two levels of component nesting"
+  },
+  {
+    "file": "warn-shape-text-fit.svg",
+    "expect": "pass",
+    "warnings": 4,
+    "note": "four SHAPE_TEXT_FIT warnings, never a failure: an fn label wider than W-40, and — since the rule measures path-drawn silhouettes too — a store wider than W-40, a decision wider than W-60 and a cloud wider than W-60"
+  },
+  {
+    "file": "warn-nest-well.svg",
+    "expect": "pass",
+    "warnings": 3,
+    "note": "left: an fn rect overhanging a pkg well on both sides -> NEST_WELL. middle: a proc holding a component without \"holds\" -> HOLDS_MISSING, and the parent is nestable so the advice is actionable. right: a type overhanging node's own well -> NEST_WELL. All warn-tier"
+  },
+  {
+    "file": "warn-geom-wrapped.svg",
+    "expect": "pass",
+    "warnings": 2,
+    "note": "two NEST_WELL warnings through a bare <g>: the first pkg wraps its own body rect, the second fn wraps its child rect. Geometry is collected through any <g> that names no silhouette, so a wrapper cannot switch NEST_WELL and SHAPE_TEXT_FIT off while every number still parses and nothing reports it"
+  },
+  {
+    "file": "warn-holds-empty.svg",
+    "expect": "pass",
+    "warnings": 2,
+    "note": "\"holds\" on a childless proc and on a childless unclassed <g> -> two HOLDS_EMPTY. The modifier restyles the label to a muted 12px band by class alone, so a <g> that names no silhouette gets the same silent visual regression"
+  },
+  {
+    "file": "warn-geom-unparseable.svg",
+    "expect": "pass",
+    "warnings": 3,
+    "note": "width=\"180px\" (legal SVG), width=\"abc\" (a typo) and font-size=\"NaN\" (which parses as a float, then compares False against everything) -> three GEOM_UNPARSEABLE warnings; without the rule all three boxes report clean while the checks that read those numbers are switched off or silently defaulted"
+  },
+  {
+    "file": "pass-nest-node.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "a proc and a store nested inside a \"node holds\" -> clean; node is a plain rounded rect with a real interior and its own content well, so the fallback silhouette is no less capable than the silhouettes it stands in for"
+  },
+  {
+    "file": "pass-lane-siblings.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "two swimlane headers with lifelines dropping below them and each participant's boxes drawn as SIBLINGS on its lifeline -> clean; this is the markup a sequence diagram uses, and the shape a lane may never take is in fail-nest-parent-lane.svg"
+  },
+  {
+    "file": "pass-degenerate-geometry.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "three boxes no rule may guess at -> clean: a node drawing only sparkle paths and no body rect (a rect-drawn silhouette without its rect is not measured), a child carrying <path d=\"Z\"> with no moveto (which must contribute no point rather than the origin), and a group smaller than its own well insets (an inverted well is skipped, not reported against every child)"
+  },
+  {
+    "file": "pass-cell-in-type.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "a cell stack inside a type and inside a queue -> clean; Q11 makes a type's fields and a queue's items cells, and a cell is data rather than a component, so it is legal inside any silhouette"
+  },
+  {
+    "file": "pass-shape-offsets.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "an iface and a machine whose labels fill their contract width exactly -> no SHAPE_TEXT_FIT; pins that the width table is measured against the box W, not the narrower body rect those two draw (subtracting both would warn on a correctly sized box)"
   },
   {
     "file": "pass-current-state.svg",
     "expect": "pass",
     "marker_id": "arrow-current-state",
+    "warnings": 0,
     "note": "clean contract-conforming fragment from this spec's own doc"
   },
   {
     "file": "pass-code-map.svg",
     "expect": "pass",
     "marker_id": "arrow-code-map",
-    "note": "clean contract-conforming fragment from this spec's own doc"
+    "warnings": 1,
+    "note": "clean contract-conforming fragment from this spec's own doc; its two former \"node store\" boxes are now \"file\" documents. The one warning is a pre-existing TEXT_OVERFLOW on an edgeLabel near the right margin, unrelated to the shape kit"
+  },
+  {
+    "file": "pass-shape-kit.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "all 17 new silhouettes, each correctly classed on its own <g>, plus spark on <path>. The cloud is the contract's own recipe, whose three arc endpoints walk x from X to X+W, so its measured width is exactly W and its W-60 row is really checked"
+  },
+  {
+    "file": "pass-nesting.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "the five legal containments (store>table, machine>proc+store, pkg>fn, proc>iface, ui>cell), every parent carrying \"holds\" and every child — including the iface lollipop knob, which is a <circle> outside its rect — inside the parent's well"
+  },
+  {
+    "file": "pass-negative-controls.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "combos that must NOT trip SHAPE_COMBO: cell head, node accent, bar ok, region warn, store holds, edge dashed ok, a spark path inside an agent, and ui > table > cell. Both \"holds\" parents really do hold something, so neither draws HOLDS_EMPTY"
   }
 ]

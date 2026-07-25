@@ -1,0 +1,63 @@
+<svg viewBox="0 0 860 320" role="img" aria-label="Negative controls for the one-shape-class rule: cell head, node accent, bar ok, region warn, store holds, edge dashed ok, a sparkle path inside an agent, and a window holding a table holding cells.">
+  <text class="title" x="16" y="26">modifier and paint classes compose with one silhouette</text>
+
+  <g class="cell head">
+    <rect x="30" y="50" width="120" height="26" rx="3"/>
+    <text x="90" y="67">kind</text>
+  </g>
+
+  <g class="node accent">
+    <rect x="30" y="90" width="150" height="46" rx="8"/>
+    <text x="105" y="117">fallback</text>
+  </g>
+
+  <g class="bar ok">
+    <rect x="30" y="152" width="150" height="18" rx="4"/>
+  </g>
+
+  <g class="region warn">
+    <rect x="30" y="186" width="150" height="60" rx="6"/>
+    <text x="44" y="206">phase two</text>
+  </g>
+
+  <path class="edge dashed ok" d="M 200,120 H 300"/>
+
+  <g class="agent">
+    <rect x="330" y="90" width="180" height="60" rx="10"/>
+    <path class="spark" d="M 344,102 Q 345.6,108.4 349,110 Q 345.6,111.6 344,118 Q 342.4,111.6 339,110 Q 342.4,108.4 344,102 Z"/>
+    <text x="432" y="120">zeus</text>
+  </g>
+
+  <g class="store holds">
+    <path d="M 330,190 a 90,10 0 0,1 180,0 v 90 a 90,10 0 0,1 -180,0 z"/>
+    <ellipse cx="420" cy="190" rx="90" ry="10"/>
+    <text x="344" y="204">kraken.db</text>
+    <g class="table">
+      <rect x="350" y="214" width="140" height="50" rx="2"/>
+      <path d="M 350,232 H 490 M 420,232 V 264 M 350,248 H 490"/>
+      <text x="420" y="226">jobs</text>
+    </g>
+  </g>
+
+  <g class="ui holds">
+    <rect x="560" y="60" width="270" height="200" rx="6"/>
+    <path d="M 560,78 H 830"/>
+    <circle cx="572" cy="69" r="2.5"/>
+    <circle cx="581" cy="69" r="2.5"/>
+    <circle cx="590" cy="69" r="2.5"/>
+    <text x="640" y="98">board SPA</text>
+    <g class="table">
+      <rect x="576" y="110" width="200" height="120" rx="2"/>
+      <path d="M 576,130 H 776 M 676,130 V 230 M 576,180 H 776"/>
+      <text x="676" y="121">jobs</text>
+      <g class="cell head">
+        <rect x="586" y="140" width="80" height="26" rx="3"/>
+        <text x="626" y="157">slug</text>
+      </g>
+      <g class="cell">
+        <rect x="686" y="140" width="80" height="26" rx="3"/>
+        <text x="726" y="157">state</text>
+      </g>
+    </g>
+  </g>
+</svg>

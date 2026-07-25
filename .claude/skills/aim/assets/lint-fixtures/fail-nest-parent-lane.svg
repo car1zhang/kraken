@@ -1,0 +1,13 @@
+<svg viewBox="0 0 860 200" role="img" aria-label="A process box nested inside a swimlane header, which the Shape Kit forbids.">
+  <text class="title" x="16" y="26">a lane is a swimlane header, not a container</text>
+
+  <g class="lane">
+    <rect x="60" y="50" width="220" height="48" rx="6"/>
+    <text x="170" y="78">daemon</text>
+    <g class="proc">
+      <rect x="80" y="112" width="180" height="50" rx="2"/>
+      <rect x="84" y="116" width="172" height="42" rx="1"/>
+      <text x="170" y="141">kraken serve</text>
+    </g>
+  </g>
+</svg>

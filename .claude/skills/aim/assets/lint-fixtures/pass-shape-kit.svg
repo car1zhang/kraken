@@ -1,0 +1,114 @@
+<svg viewBox="0 0 860 580" role="img" aria-label="Specimen sheet of the seventeen shape-kit silhouettes, each on its own correctly classed group: proc, cli, thread, fn, agent, llm, timer, iface, event, ui, table, file, queue, type, pkg, machine, and cloud.">
+  <text class="title" x="16" y="26">every new silhouette, one shape class per g</text>
+
+  <!-- row 1: proc, cli, thread, fn -->
+  <g class="proc">
+    <rect x="30" y="56" width="170" height="64" rx="2"/>
+    <rect x="34" y="60" width="162" height="56" rx="1"/>
+    <text x="115" y="88">serve</text>
+  </g>
+
+  <g class="cli">
+    <rect x="240" y="56" width="170" height="64" rx="4"/>
+    <path d="M 240,72 H 410"/>
+    <text x="325" y="96">&gt;_ k ls</text>
+  </g>
+
+  <g class="thread">
+    <rect x="450" y="56" width="170" height="64" rx="32"/>
+    <text x="535" y="88">tick loop</text>
+  </g>
+
+  <g class="fn">
+    <rect x="660" y="56" width="170" height="64" rx="2"/>
+    <path d="M 668,56 V 120 M 822,56 V 120"/>
+    <text x="745" y="88">deriveState()</text>
+  </g>
+
+  <!-- row 2: agent, llm, timer, iface -->
+  <g class="agent">
+    <rect x="30" y="160" width="170" height="64" rx="10"/>
+    <path class="spark" d="M 44,168 Q 45.6,174.4 49,176 Q 45.6,177.6 44,184 Q 42.4,177.6 39,176 Q 42.4,174.4 44,168 Z"/>
+    <text x="127" y="192">zeus</text>
+  </g>
+
+  <g class="llm">
+    <path class="spark" d="M 280,160 Q 284,176 292,180 Q 284,184 280,200 Q 276,184 268,180 Q 276,176 280,160 Z"/>
+    <path class="spark" d="M 306,156 Q 307.6,162.4 311,164 Q 307.6,165.6 306,172 Q 304.4,165.6 301,164 Q 304.4,162.4 306,156 Z"/>
+    <text x="290" y="222">claude-opus-5</text>
+  </g>
+
+  <g class="timer">
+    <circle cx="535" cy="190" r="26"/>
+    <path d="M 535,190 V 176 M 535,190 H 555"/>
+    <text x="535" y="234">tick</text>
+  </g>
+
+  <g class="iface">
+    <rect x="676" y="160" width="154" height="64" rx="8"/>
+    <path d="M 669,192 H 676"/>
+    <circle cx="664" cy="192" r="5"/>
+    <text x="753" y="192">GET /board</text>
+  </g>
+
+  <!-- row 3: event, ui, table, file -->
+  <g class="event">
+    <path d="M 30,264 H 184 L 200,296 L 184,328 H 30 Z"/>
+    <text x="107" y="296">pr-hook</text>
+  </g>
+
+  <g class="ui">
+    <rect x="240" y="264" width="170" height="64" rx="6"/>
+    <path d="M 240,282 H 410"/>
+    <circle cx="252" cy="273" r="2.5"/>
+    <circle cx="261" cy="273" r="2.5"/>
+    <circle cx="270" cy="273" r="2.5"/>
+    <text x="325" y="305">board SPA</text>
+  </g>
+
+  <g class="table">
+    <rect x="450" y="264" width="170" height="80" rx="2"/>
+    <path d="M 450,284 H 620 M 535,284 V 344 M 450,314 H 620"/>
+    <text x="535" y="275">jobs</text>
+  </g>
+
+  <g class="file">
+    <path d="M 660,264 h 156 l 14,14 v 66 h -170 z M 816,264 v 14 h 14"/>
+    <text x="745" y="306">job file</text>
+  </g>
+
+  <!-- row 4: queue, type, pkg, machine -->
+  <g class="queue">
+    <rect x="38" y="360" width="162" height="64" rx="8"/>
+    <rect x="34" y="364" width="162" height="64" rx="8"/>
+    <rect x="30" y="368" width="162" height="64" rx="8"/>
+    <text x="111" y="400">bumps</text>
+  </g>
+
+  <g class="type">
+    <rect x="240" y="368" width="170" height="70" rx="2"/>
+    <path d="M 240,390 H 410"/>
+    <text x="325" y="380">Peer</text>
+    <text x="325" y="414">struct</text>
+  </g>
+
+  <g class="pkg">
+    <rect x="466" y="368" width="164" height="70" rx="2"/>
+    <rect x="460" y="380" width="14" height="10" rx="1"/>
+    <rect x="460" y="416" width="14" height="10" rx="1"/>
+    <text x="554" y="403">jobs</text>
+  </g>
+
+  <g class="machine">
+    <rect x="660" y="380" width="158" height="58" rx="2"/>
+    <path d="M 660,380 L 672,368 H 830 L 818,380 Z"/>
+    <path d="M 818,380 L 830,368 V 426 L 818,438"/>
+    <text x="739" y="409">carl's Mac</text>
+  </g>
+
+  <!-- row 5: cloud -->
+  <g class="cloud">
+    <path d="M 60,518.4 a 30,28.16 0 0,1 60,0 a 40,46.64 0 0,1 80,0 a 30,24.64 0 0,1 60,0 v 14.96 a 28,24.64 0 0,1 -28,24.64 h -144 a 28,24.64 0 0,1 -28,-24.64 z"/>
+    <text x="160" y="536.4">GitHub API</text>
+  </g>
+</svg>

@@ -1,0 +1,18 @@
+<svg viewBox="0 0 860 140" role="img" aria-label="Three boxes carrying a width with a unit, a width that is a typo, and a font-size of NaN, none of which any measurement rule can read.">
+  <text class="title" x="16" y="26">an unmeasurable coordinate switches three checks off silently</text>
+
+  <g class="node">
+    <rect x="40" y="50" width="180px" height="60" rx="8"/>
+    <text x="130" y="84">legal SVG, unmeasurable</text>
+  </g>
+
+  <g class="node">
+    <rect x="300" y="50" width="abc" height="60" rx="8"/>
+    <text x="390" y="84">a typo, same blind spot</text>
+  </g>
+
+  <g class="node">
+    <rect x="560" y="50" width="180" height="60" rx="8"/>
+    <text x="650" y="84" font-size="NaN">NaN parses, then hides</text>
+  </g>
+</svg>
