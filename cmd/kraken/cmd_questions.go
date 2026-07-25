@@ -14,8 +14,10 @@ import (
 // cmd_questions.go — `k questions get|set|add|update|remove <slug>
 // ...`: the cell-side verb family for zeus' own open doc questions,
 // proxying to kraken serve's GET/POST /api/questions
-// (internal/api/questions.go). Exact spellings match crew.go's zeusBrief
-// verbatim — see its "Questions are rows in kraken.db" paragraph.
+// (internal/api/questions.go). zeus learns the read verb from crew.go's
+// zeusBrief (its "Open questions and carl's per-artifact feedback are rows"
+// paragraph) and the four WRITE verbs from .claude/skills/aim/SKILL.md's
+// Core Rules, which the brief points it at; the spellings here match both.
 //
 // Behavior contract (all five ops):
 //   - success: GET prints the server's JSON to stdout verbatim, exit 0; a

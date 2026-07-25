@@ -139,7 +139,7 @@ short form, with /info's overrides:
 5. **Iterate on demand.** Each request → deeper research on that area → one new artifact + a
    one-line pointer added to the overview. Correct anything the deeper read disproved.
 
-## Inside a kraken cell
+## Inside A Kraken Cell
 
 When invoked by a kraken job brief (the brief will say so and give paths), apply these deltas —
 the cell's brief wins wherever it is more specific:
@@ -153,11 +153,17 @@ the cell's brief wins wherever it is more specific:
   carl's per-artifact feedback arrives as rows, and each open entry gets addressed and marked with
   `kraken feedback addressed <slug> <id> <text>`.)
 - Never run `open` (no browser in a cell); the board renders the artifacts.
-- When finished with a round, state what's ready plus the "go deeper" menu in your final output and
-  STOP (end the turn) — kraken derives the blocked state from your silence and shows your last words
-  on the board; carl reads the artifacts and messages back directly. A decision that genuinely
-  cannot be defaulted may use `AskUserQuestion` — kraken surfaces the options as buttons — but that
-  is for blockers, not for the routine uncertainty that belongs inline. Never declare the job done;
-  accepting is carl's move.
-- An /info job never gets a `/do` and never opens a PR.
+- **Each round ends with one line, then you stop.** Say exactly:
+
+  `explanation ready: <set root>/00-overview.md (+N diagrams, M sections)`
+
+  followed by the "go deeper" menu in the same line, and STOP (end the turn).
+  Use `0` where a count is zero — never omit the clause. There is no questions clause, because there are
+  never any questions. Kraken derives the blocked state from your silence and shows your last words
+  on the board; carl reads the artifacts and messages back directly, and each reply is the next
+  round. A decision that genuinely cannot be defaulted may use `AskUserQuestion` — kraken surfaces
+  the options as buttons — but that is for blockers, not for the routine uncertainty that belongs
+  inline. Never declare the job done; accepting is carl's move.
+- An /info job never gets a `/do`, has no phase 2, and never opens a PR — carl accepts the
+  artifacts straight from the board instead.
 - `solo: true` on the job means no subagents at all: prose only — no diagram cards in any round.

@@ -15,9 +15,9 @@ import (
 // cmd_feedback.go — `k feedback get|addressed <slug> ...`: zeus' own
 // read/write surface for carl's per-artifact feedback, proxying to kraken
 // serve's GET /api/feedback and POST /api/feedback (internal/api/feedback.go).
-// Exact spellings match crew.go's zeusBrief verbatim — see its "carl can
-// attach feedback" paragraph. zeus only ever reads entries and marks them
-// addressed; creation/edit/delete are carl-facing board actions this verb
+// Exact spellings match the "Open questions and carl's per-artifact
+// feedback are rows" paragraph in crew.go's zeusBrief, which is where zeus
+// learns these verbs. zeus only ever reads entries and marks them addressed; creation/edit/delete are carl-facing board actions this verb
 // deliberately does NOT expose.
 //
 // Same behavior contract as cmd_questions.go: GET prints server JSON

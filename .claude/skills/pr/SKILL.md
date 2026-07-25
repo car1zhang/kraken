@@ -47,6 +47,13 @@ Create a GitHub PR for the current branch.
    - Inside a kraken cell, never poll: confirm from `gh pr create`'s output (or the board) that the pr-hook attached the PR, then report the PR URL — noting it as awaiting checks — and STOP. Kraken's daemon watches every open PR of the job's cell for failing CI or new comments and bumps your pane when either happens — when bumped: fix failing CI, and address new review comments per the repo conventions; do this only once bumped, not preemptively. If no bump ever arrives, the job is NOT done silently — the PR simply stays awaiting checks. Polling your own PR from inside the cell duplicates the daemon's job and wastes the turn.
    - Outside a cell (this skill used standalone from carl's personal skill bank): if the user's original message clearly indicates polling, such as "create a PR and watch it", "ship this", or "create and poll", use the `poll-pr` skill immediately with the PR URL; if it clearly indicates no polling, such as "just create the PR", "draft only", or "don't watch it", do not poll; if unclear, ask whether to poll the PR until green.
 
+## Inside A Kraken Cell
+
+- **PRs are per-slice, not per-job.** Kraken records every PR opened from the cell's branch on the job's board, and a PR merging NEVER ends the job — teardown happens only when carl accepts it from the board.
+- **You never need to report the URL for the board's sake.** A PostToolUse hook attaches each PR the instant `gh pr create` returns; report it to carl anyway as your closing line, noting it as awaiting checks.
+- **Recycle the branch after a merge.** If a PR of yours merges and more work arrives, reset the branch before starting it — `git fetch origin && git checkout -B <cell branch> origin/main` — then ship the follow-up as a new PR. The cell branch is the one named in your brief.
+- Never poll (step 7 above): the daemon watches for you.
+
 ## Style Guidelines
 
 - **Branch name**: `carl/<short-kebab-name>`, for example `carl/yelp-dedupe` or `carl/telecom-null-sid`.

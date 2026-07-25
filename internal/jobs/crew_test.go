@@ -6,153 +6,71 @@ import (
 	"testing"
 )
 
-// crew_test.go — zeus' brief content matrix. There is no hermes pane agent
-// and no escalation-file relay any more: hermes is only a per-diagram
-// subagent name inside zeus' own brief. Q14 removed the job-level build/info
-// type entirely: which Phase-1 path a job takes — the /aim SPEC path or the
-// lighter /info EXPLANATION path (one brief overview, a go-deeper menu, and
-// zero questions rows) — is zeus' own call from what the job spec asks for,
-// and whether phase 2 (implement + PR) ever happens is carl's call via /do.
-// There is likewise no more job-level skip-doc
-// field (the "job-shape cleanup" companion to Q14): whether Phase 1 (the
-// doc pipeline) runs at all is also zeus' own call, made from the job spec
-// text per the doc-gating rule, so every doc-pipeline paragraph rides in
-// every brief variant now — gated only by Solo, never by a doc-skip flag.
-// These tests assert that unified contract across the solo flag, in the
-// same string-contains style as the rest of the job tests.
+// crew_test.go — zeus' brief content matrix. The brief carries only what no
+// skill can know: identity, the cell's real paths, how carl is reached, the
+// model tier, the delegation crew, the self-destruction guardrails, and which
+// skill governs each phase. Every procedure it used to inline — the artifact
+// set's shape, the whole diagram pipeline, the questions write verbs, the
+// build report, the PR conventions — now lives in .claude/skills/{info,aim,
+// do,pr}, pinned by skills_embed_test.go. So this file asserts two things:
+// the brief still says everything only it can say, and it no longer restates
+// anything a skill owns (TestZeusBriefDoesNotRestateSkills).
+//
+// There is no job-level type (Q14) and no skip-doc field: whether Phase 1 runs
+// at all, and which of its two paths it takes — the /aim SPEC path or the
+// lighter /info EXPLANATION path — is zeus' own call from the job spec text,
+// and whether phase 2 happens is carl's call via /do. Every gating paragraph
+// therefore rides in every brief variant, gated only by Solo.
 
 func TestZeusBrief(t *testing.T) {
 	j := &Job{Slug: "x"}
 	brief := zeusBrief(j)
 	for _, want := range []string{
-		"zeus", "hephaestus", "athena", "/aim", "'/do'", "/pr", "PR", "manual test ready",
-		"AskUserQuestion", CellArtifacts(j), "TaskStop",
-		// a merged PR is never job completion; follow-ups recycle the branch
-		"never ends the job", "checkout -B " + CellBranch(j) + " origin/main",
-		// hermes briefs must carry the style contract verbatim and be lint-gated
-		// (full-path pins for HermesContractPath/LintSvgPath live in the
-		// worktree-relative loop below — no need to duplicate the bare
-		// filename here too)
-		"--marker-id",
-		// the lint command must be anchored to the worktree root, since the
-		// fragment path is absolute but the lint script path is worktree-relative
-		"from the worktree root",
+		"zeus", "hephaestus", "athena", "AskUserQuestion", "TaskStop",
+		// the cell's real paths — the one block of facts a skill cannot
+		// derive, and the reason the skills can speak in <cellDir> terms
+		"Cell paths", CellArtifacts(j), docFragmentsDir(j),
+		"only board-visible directory",
+		// both row families arrive as silent updates, so the re-read rule
+		// lives in the brief (in context every turn) rather than in a skill
+		// (read once per phase)
+		"SILENT row updates", "EVERY resume",
+		"kraken questions get x", "kraken feedback get x",
+		"kraken feedback addressed x",
+		"kraken owns feedback entry creation and edits",
 		// three named single-dimension athena review variants, dispatched in
 		// parallel, with a targeted (not full) re-review on a blocking finding
 		"athena-logic", "athena-edge", "athena-style",
 		"dispatched in parallel", "one message, three Agent calls",
 		"re-review with only the flagging variant(s)",
-		// /pr is a same-named-shadow risk, so zeus must read the worktree
-		// copy by path rather than invoking it by name
+		// the doc-gating rule: zeus' own call from the spec text, never a job
+		// field, with skip as the stated default
+		"Doc gating", "/aim or /info", "doc, spec, or explanation", "DEFAULT",
+		"the job spec is the contract; implement immediately",
+		// Phase 1's two paths, each delegating to its skill BY PATH (a
+		// personal skill of the same name would shadow it)
+		"Phase 1 has TWO paths", "EXPLANATION path", "SPEC path", "BY PATH",
+		".claude/skills/info/SKILL.md", ".claude/skills/aim/SKILL.md",
+		"LIGHTER than /aim", "zero questions rows",
+		// the gates themselves are cell policy: /do opens phase 2, and an
+		// explanation job never gets one
+		"'/do'", "never gets a '/do'", "never opens a PR",
+		// phase 2 delegates to the do skill, then the pr skill — the latter
+		// read by path, since /pr is a same-named-shadow risk
+		"Phase 2", ".claude/skills/do/SKILL.md", ".claude/skills/pr/SKILL.md",
 		"do NOT invoke /pr by name",
-		// the doc phase is a flat artifact SET, not a single combined doc:
-		// the overview is referenced by its real path
-		docOverviewPath(j),
-		// the mode-scoped floor: spec mode requires the testing-plan section
-		// doc; explain mode does not
-		filepath.Join(CellArtifacts(j), "52-testing-plan.md"), "REQUIRED",
-		"spec mode", "explain mode", "encouraged, not required",
-		// a purely explanatory job never gets a /do or a PR — carl accepts
-		// straight from the board (the unified ending's other half)
-		"never gets a '/do'", "carl accepts the artifact set straight from the board",
-		// the wrap step must quote the template's REAL placeholder literally,
-		// and pin the str.replace (never re.sub) mechanism
-		"<!-- DIAGRAM: {{DIAGRAM_ID}} -->", "{{CARD_TITLE}}", "{{CAPTION}}",
-		"str.replace", "re.sub", "10-49",
-		// TITLE/CAPTION land in markup positions (title, h1, figcaption), so
-		// the wrap one-liner must escape them, never the fragment
-		"html.escape", "NEVER escape the fragment",
-		// diagram ids must be pinned unique across the whole set, distinct
-		// from the marker-id/arrow-id relaxation
-		"unique across the WHOLE set",
-		// no self-polling: kraken's daemon watches the PR and bumps the pane
-		"bumps your pane",
-		// PR-bump handling: fix CI AND address review comments, plus the
-		// awaiting-checks safety net so a silent job isn't mistaken for done
-		"address new review comments", "awaiting checks", "NOT done silently",
-		// the doc-gating rule (job-shape cleanup, Q14's companion): zeus'
-		// own call from the spec text, never a job field, with skip as the
-		// stated default
-		"Doc gating", "/info", "DEFAULT",
-		// Phase 1's two paths: the EXPLANATION path is /info read by path
-		// (the personal-skill shadow), one brief overview + a go-deeper menu,
-		// one artifact per requested round, and zero questions rows — never
-		// /aim's set. The SPEC path keeps the /aim pipeline and the /do gate.
-		"Phase 1 has TWO paths", "EXPLANATION path", "SPEC path",
-		".claude/skills/info/SKILL.md", "BY PATH",
-		"'go deeper' menu", "exactly ONE focused artifact",
-		"NEVER create questions rows on it",
-		"Questions are a SPEC-path tool only",
-		"explanation ready: " + docOverviewPath(j),
-		// phase 2 closes with the build report: what shipped, where reality
-		// diverged from the plan, complications, deferrals, verification —
-		// with "None" written out rather than the section dropped
-		buildReportPath(j), "`.claude/skills/do/SKILL.md`",
-		"what ACTUALLY happened", "every discrepancy between the plan",
-		"'None' is an explicit line",
-		// the two-core diagram doctrine (53): architecture + end-to-end
-		// flows, spec-mode combined current/target card drawn by one hermes,
-		// tunnel cards as extras
-		"ONE COMBINED card", "current-state panel", "target-state panel",
-		"SAME hermes", "never split current/target across two hermes agents",
-		"end-to-end flows", "ONE concrete worked example", "tunnel cards",
-		"DEFAULT, not a cap",
-		// 50-components.md must require a Kind row ahead of responsibility,
-		// plus a Boundary row. The kind vocabulary is no longer an ad-hoc
-		// parenthetical in the brief: it comes from the contract's sanctioned
-		// Shape Kit list, and the kind is what picks the box's silhouette.
-		"Kind entry", "Boundary row",
-		"sanctioned kind list in the Shape Kit section",
-		"kind determines its box's silhouette",
-		// hermes gets box → kind pairs, never a shape class: the kind → shape
-		// lookup is hermes' mechanical step, and an unlisted kind stays TEXT in
-		// zeus' brief — hermes, not zeus, names the fallback silhouette (so no
-		// shape class ever enters zeus' vocabulary)
-		"`box → kind` pair", "derives the shape mechanically from the kind",
-		"kind → shape table", "never dictate a shape class yourself",
-		"still states its honest kind in text", "hermes picks the fallback silhouette",
-		// the store-rows questions verb contract (54), replacing the old
-		// questions.yaml format block
-		"kraken questions get x", "kraken questions set x",
-		"kraken questions add|update|remove x", "Q<digits>", "P0/P1/P2",
-		"kraken owns `answer`/`answered-at`",
-		// add/update read one question object on stdin, same as set; remove
-		// takes a bare qid arg with no stdin — so zeus doesn't try inline
-		// JSON args first and burn a turn
-		"add/update read one question object on stdin", "remove takes a bare qid arg",
-		// the new feedback verb contract (54)
-		"kraken feedback get x", "kraken feedback addressed x",
-		"kraken owns feedback entry creation and edits",
+		// no self-polling, and a merge is not completion
+		"bumps your pane", "never ends the job",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("brief missing %q", want)
 		}
 	}
-	// the contract/lint/card-template paths must be worktree-RELATIVE (zeus'
-	// cwd is the worktree) — never home-relative, never a bare ~-prefixed
-	// path (which filepath.IsAbs alone would miss), and always rooted at
-	// .claude/skills/
-	for _, path := range []string{HermesContractPath(), LintSvgPath(), DiagramCardPath()} {
-		if filepath.IsAbs(path) || strings.HasPrefix(path, "~") || !strings.HasPrefix(path, ".claude/skills/") || !strings.Contains(brief, path) {
-			t.Errorf("brief does not reference a worktree-relative .claude/skills/ path (got %q)", path)
-		}
-	}
 	for _, unwanted := range []string{
-		// "plan.md" dropped from this list: 52-testing-plan.md is now a
-		// legitimate required artifact name and legitimately contains that
-		// substring — "done.md" alone still guards the old per-job
-		// plan/done file convention.
 		"done.md", "hermes pane", "relay", "Success criteria",
 		"/send", "/doc skill", "you inherit carl's user skills",
-		// /info is read by path, never invoked by name (a personal skill of
-		// the same name shadows it) — the positive pin lives in the wanted
-		// loop above
 		"invoke /info by name", "type:", "(type:",
-		// self-polling is gone (the daemon watches PRs now) — bare "poll"
-		// never appears in any brief variant. "flatten"/"Flatten"/"flattened"
-		// likewise appear zero times in any brief variant now (the clause is
-		// "no single combined doc file"), so the bare token is safe and
-		// strictly stronger than the old 3-word exact-phrase pin.
+		// self-polling is gone (the daemon watches PRs now)
 		"flatten", "poll",
 		// questions.yaml is retired outright: questions are rows now
 		"questions.yaml", "answered-at:", "- id: Q1",
@@ -163,9 +81,103 @@ func TestZeusBrief(t *testing.T) {
 			t.Errorf("brief still mentions %q", unwanted)
 		}
 	}
-	// escalation-disclaimer coverage lives in TestZeusBriefEscalationDisclaimer
-	// (it loops over both brief variants; "escalation" is an ungated line so
-	// a per-test check here would just duplicate that one)
+}
+
+// TestZeusBriefDoesNotRestateSkills is the anti-duplication guard, and it is
+// the test that would have caught the outage this split fixed.
+//
+// The brief used to inline the entire /aim pipeline — the diagram-card wrap
+// one-liner, the lint loop, the hermes-contract rule, the artifact numbering —
+// verbatim from .claude/skills/aim/SKILL.md, which installSkills materializes
+// into the very worktree zeus is told to read skills from. It reached 17.5KB,
+// which is past tmux's ~16KB command ceiling, and every cell spawn died with
+// `command too long`. Staging the brief in a file (spawnCommand) removed that
+// ceiling, so size alone can no longer fail loudly — which makes this the only
+// thing standing between a small clarifying sentence and a re-duplicated
+// pipeline that drifts from the skill zeus actually obeys.
+//
+// Each token below names a procedure a skill owns. A brief that needs to
+// mention one of them is a brief making a decision that belongs in the skill.
+func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
+	for _, j := range []*Job{{Slug: "dedupe-plain"}, {Slug: "dedupe-solo", Solo: true}} {
+		brief := zeusBrief(j)
+		for _, owned := range []struct{ token, owner string }{
+			// the diagram pipeline, in full — aim/SKILL.md Core Rules
+			{"hermes", "aim"},
+			{"hermes-contract.md", "aim"},
+			{"lint_svg.py", "aim"},
+			{"--marker-id", "aim"},
+			{"diagram-card.html", "aim"},
+			{"{{CARD_TITLE}}", "aim"},
+			{"{{CAPTION}}", "aim"},
+			{"<!-- DIAGRAM:", "aim"},
+			{"str.replace", "aim"},
+			{"re.sub", "aim"},
+			{"silhouette", "aim"},
+			{"sanctioned kind list", "aim"},
+			{"box → kind", "aim"},
+			{"tunnel card", "aim"},
+			{"worked example", "aim"},
+			// the artifact set's shape and filenames — aim/SKILL.md
+			{"00-overview.md", "aim"},
+			{"50-components.md", "aim"},
+			{"51-code-map.md", "aim"},
+			{"52-testing-plan.md", "aim"},
+			{"10-49", "aim"},
+			{"spec mode", "aim"},
+			{"explain mode", "aim"},
+			// the questions WRITE verbs — aim/SKILL.md Core Rules. The read
+			// verb and the silent-update rule deliberately stay in the brief.
+			{"kraken questions set", "aim"},
+			{"kraken questions add", "aim"},
+			{"Q<digits>", "aim"},
+			{"P0/P1/P2", "aim"},
+			// each phase's exact stop line — the skills' cell sections
+			{"doc ready for review", "aim"},
+			{"explanation ready", "info"},
+			{"'go deeper' menu", "info"},
+			{"manual test ready", "do"},
+			{"90-build-report.md", "do"},
+			// PR mechanics — pr/SKILL.md
+			{"gh pr create", "pr"},
+			{"checkout -B", "pr"},
+			{"git fetch origin", "pr"},
+		} {
+			if strings.Contains(brief, owned.token) {
+				t.Errorf("%s brief restates %q, which .claude/skills/%s/SKILL.md owns — "+
+					"the brief must point at the skill, not copy it (a copy drifts, and whichever "+
+					"one zeus reads first is the one it obeys)", j.Slug, owned.token, owned.owner)
+			}
+		}
+	}
+}
+
+// TestZeusBriefStaysLean caps the brief well under tmux's ~16KB command limit.
+// spawnCommand means that limit no longer applies to the brief at all, so this
+// is not a mechanism guard — it is a second, cruder net under
+// TestZeusBriefDoesNotRestateSkills, catching bulk that arrives as prose the
+// token list does not happen to name.
+func TestZeusBriefStaysLean(t *testing.T) {
+	const ceiling = 10_000
+	brief := zeusBrief(&Job{Slug: "lean"})
+	if len(brief) > ceiling {
+		t.Errorf("brief is %d bytes, over the %d-byte ceiling — procedure has crept back in from "+
+			"the skills; move it to .claude/skills/ rather than raising this number", len(brief), ceiling)
+	}
+}
+
+// TestCrewAssetPathsAreWorktreeRelative pins the three skill-asset paths to
+// the shape zeus can actually resolve: its cwd IS the worktree, so a
+// home-relative or absolute path would miss. The paths are no longer named in
+// the brief (the aim skill spells them out instead), so the presence half of
+// this check lives in skills_embed_test.go, which asserts each one both exists
+// in the embedded tree and is still referenced by the SKILL.md that uses it.
+func TestCrewAssetPathsAreWorktreeRelative(t *testing.T) {
+	for _, path := range []string{HermesContractPath(), LintSvgPath(), DiagramCardPath()} {
+		if filepath.IsAbs(path) || strings.HasPrefix(path, "~") || !strings.HasPrefix(path, ".claude/skills/") {
+			t.Errorf("asset path %q is not worktree-relative under .claude/skills/", path)
+		}
+	}
 }
 
 // TestZeusBriefAllOpus pins the one-tier rule: every agent in a cell — zeus
@@ -215,60 +227,28 @@ func TestZeusBriefSolo(t *testing.T) {
 	if strings.Contains(brief, "Delegate implementation slices to subagents you name hephaestus") {
 		t.Error("solo brief still describes the hephaestus/athena delegation crew")
 	}
-	// the ending's build-shaped branches use a second, independent phrasing
-	// for the same delegation ("subagents named hephaestus", not "subagents
-	// you name hephaestus") — pin it too, since that was the actual
-	// self-contradiction: a solo brief could say "no subagents at all" AND
-	// still delegate here
+	// the phase-2 paragraph must not silently re-introduce a crew either —
+	// that self-contradiction ("no subagents at all" AND delegate here) is
+	// exactly what the second, independently-worded delegation sentence used
+	// to cause
 	if strings.Contains(brief, "subagents named hephaestus") {
-		t.Error("solo brief still describes the ending's hephaestus/athena delegation crew")
+		t.Error("solo brief still describes a second hephaestus/athena delegation crew")
 	}
-	if strings.Contains(brief, "hermes") {
-		t.Error("solo brief should not mention hermes (no diagram subagents)")
-	}
-	// solo still writes the overview by hand (no subagent needed for
-	// prose), but never a diagram card (there's no hermes to render one),
-	// so the contract/lint/card-template paths should not appear
-	if !strings.Contains(brief, docOverviewPath(j)) {
-		t.Errorf("solo brief missing %q", docOverviewPath(j))
-	}
-	// solo jobs get the FULL questions verb contract too (gated only on
-	// Solo for the SUBAGENT parts, never for the questions/feedback verb
-	// paragraphs, which are unconditional) — the ids, importance, kraken's
-	// answer/answered-at ownership, and the re-read-on-resume rule all apply
+	// solo still gets the full cell-paths and row-reading contract: only the
+	// SUBAGENT paragraphs are gated on Solo
 	for _, want := range []string{
-		"kraken owns `answer`/`answered-at`", "re-read it on EVERY resume",
-		"kraken questions get z", "Q<digits>", "P0/P1/P2",
+		"Cell paths", CellArtifacts(j), "kraken questions get z", "EVERY resume",
 	} {
 		if !strings.Contains(brief, want) {
-			t.Errorf("solo brief missing questions verb contract text %q", want)
-		}
-	}
-	for _, unwanted := range []string{
-		// bare "diagram-card.html" is the strictly stronger absence check
-		// (DiagramCardPath() is a substring of it, and worktree-relative
-		// path pins for it already live in TestZeusBrief's loop) —
-		// don't duplicate the full path here
-		"hermes-contract.md", "lint_svg.py", "diagram-card.html",
-		// the shape vocabulary rides with the hermes pipeline (both the Kind
-		// sentence and the box → kind assignment rule are non-solo only), so a
-		// solo brief — which renders no diagrams at all — must carry none of
-		// it; every sentence in that pair is pinned here, so moving any part
-		// of either one outside the !Solo gate fails loudly
-		"sanctioned kind list", "silhouette", "box → kind", "shape class",
-		"kind → shape", "fallback silhouette",
-	} {
-		if strings.Contains(brief, unwanted) {
-			t.Errorf("solo brief should not mention %q (no doc pipeline subagents)", unwanted)
+			t.Errorf("solo brief missing %q", want)
 		}
 	}
 }
 
-// TestZeusBriefDocGatingUnconditional asserts the doc-gating rule and every
-// doc-pipeline paragraph ride in the brief regardless of any job field —
-// there is no more skip-doc flag to gate them on, so a plain job and a solo
-// job both see the identical doc-gating text (only the subagent-specific
-// hermes paragraphs differ, covered by TestZeusBriefSolo).
+// TestZeusBriefDocGatingUnconditional asserts the gating rule and the phase
+// pointers ride in the brief regardless of any job field — there is no
+// skip-doc flag to gate them on, so a plain job and a solo job see identical
+// gating text (only the subagent paragraphs differ, per TestZeusBriefSolo).
 func TestZeusBriefDocGatingUnconditional(t *testing.T) {
 	for _, j := range []*Job{
 		{Slug: "gate-plain"},
@@ -279,17 +259,15 @@ func TestZeusBriefDocGatingUnconditional(t *testing.T) {
 			"Doc gating:", "/aim or /info", "doc, spec, or explanation",
 			"skipping the doc phase is the DEFAULT",
 			"the job spec is the contract; implement immediately",
-			"Phase 1 — only when the doc-gating rule above says to take it",
-			"If instead the doc-gating rule says to skip (the default)",
-			"there is no spec doc and no '/do' gate",
-			// the path split rides in every variant too — solo changes who
-			// writes the artifacts, never which path a job takes
 			"Phase 1 has TWO paths", "EXPLANATION path", "SPEC path",
-			"NEVER create questions rows on it",
-			"an explanation (/info) job never creates any",
+			".claude/skills/info/SKILL.md", ".claude/skills/aim/SKILL.md",
+			"Phase 2", ".claude/skills/do/SKILL.md",
+			// each skill's cell section, not the brief, owns the phase's
+			// closing line — the brief must send zeus there for it
+			"\"Inside A Kraken Cell\" section",
 		} {
 			if !strings.Contains(brief, want) {
-				t.Errorf("%s brief missing doc-gating text %q", j.Slug, want)
+				t.Errorf("%s brief missing gating text %q", j.Slug, want)
 			}
 		}
 	}
@@ -297,9 +275,7 @@ func TestZeusBriefDocGatingUnconditional(t *testing.T) {
 
 // TestZeusBriefEscalationDisclaimer asserts every brief variant that
 // mentions "escalation" only does so to disclaim it (there is no escalation
-// file) — never describes one as an active mechanism. The line is ungated,
-// so it rides in both brief shapes; loop over them here rather than
-// duplicating the same check inside each per-workflow test.
+// file) — never describes one as an active mechanism.
 func TestZeusBriefEscalationDisclaimer(t *testing.T) {
 	for _, j := range []*Job{
 		{Slug: "esc-plain"},
@@ -341,10 +317,27 @@ func TestZeusBriefSelfDestructiveGuard(t *testing.T) {
 	}
 }
 
+// TestZeusBriefNeverDeclaresDone pins the completion boundary in every
+// variant: accepting is carl's move, and a merged PR is not acceptance.
+func TestZeusBriefNeverDeclaresDone(t *testing.T) {
+	for _, j := range []*Job{
+		{Slug: "done-plain"},
+		{Slug: "done-solo", Solo: true},
+	} {
+		brief := zeusBrief(j)
+		for _, want := range []string{"Never declare the job done", "never ends the job"} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s (solo=%v) brief missing %q", j.Slug, j.Solo, want)
+			}
+		}
+	}
+}
+
 // TestZeusBriefSkillsPrecedence asserts the worktree .claude/skills/
 // precedence sentence rides in every brief variant — it's not gated by
 // solo, since kraken materializes its own skills into every cell worktree
-// regardless of workflow.
+// regardless of workflow. With every procedure now living in those skills,
+// this sentence is what makes the whole split work.
 func TestZeusBriefSkillsPrecedence(t *testing.T) {
 	for _, j := range []*Job{
 		{Slug: "prec-plain"},
@@ -358,36 +351,6 @@ func TestZeusBriefSkillsPrecedence(t *testing.T) {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s (solo=%v) brief missing skills-precedence text %q", j.Slug, j.Solo, want)
 			}
-		}
-	}
-}
-
-// TestZeusBriefBuildReport pins phase 2's closing artifact in every brief
-// variant: solo changes who writes the code, never whether the run gets
-// written up. The report is the only place a plan's wrong assumptions ever
-// surface — a phase 2 that ends at "manual test ready" with green tests
-// leaves carl no record of what the implementation had to work around.
-func TestZeusBriefBuildReport(t *testing.T) {
-	for _, j := range []*Job{
-		{Slug: "report-plain"},
-		{Slug: "report-solo", Solo: true},
-	} {
-		brief := zeusBrief(j)
-		for _, want := range []string{
-			buildReportPath(j), "`.claude/skills/do/SKILL.md`",
-			"what ACTUALLY happened", "every discrepancy between the plan",
-			"complications hit", "what verification you ran",
-			"'None' is an explicit line",
-		} {
-			if !strings.Contains(brief, want) {
-				t.Errorf("%s (solo=%v) brief missing build-report text %q", j.Slug, j.Solo, want)
-			}
-		}
-		// the report lands in the artifacts dir (the only board-visible
-		// directory) and in the 90 band, so it sorts after the section docs
-		if !strings.HasPrefix(buildReportPath(j), CellArtifacts(j)) ||
-			!strings.HasSuffix(buildReportPath(j), "/90-build-report.md") {
-			t.Errorf("%s build-report path %q is not <artifacts>/90-build-report.md", j.Slug, buildReportPath(j))
 		}
 	}
 }

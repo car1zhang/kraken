@@ -16,7 +16,7 @@ import (
 // took: this can only be checked from package main, since the embed.FS
 // itself (skillsFS) lives here, not in jobs (jobs only sees the fs.Sub'd
 // jobs.SkillsFS assigned by init()). It also pins the three worktree-relative
-// path helpers zeus' brief depends on — jobs.HermesContractPath,
+// path helpers the aim skill depends on — jobs.HermesContractPath,
 // jobs.LintSvgPath, and jobs.DiagramCardPath — to real files inside that
 // embedded tree, and pins the diagram-card.html template's own placeholder
 // counts and header-comment shape.
@@ -47,16 +47,92 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 
 // TestCrewPathsPinnedToEmbeddedTree guards against the exact failure the
 // reviewer flagged: a rename of an embedded skill asset passes CI (nothing
-// else references the literal path) but silently breaks every doc job,
-// since jobs.HermesContractPath/LintSvgPath/DiagramCardPath are plain string
-// builders with no compile-time link to the embedded tree. Asserting the
-// paths they return actually exist in jobs.SkillsFS pins the brief's paths
-// to reality.
+// else references the literal path) but silently breaks every doc job, since
+// jobs.HermesContractPath/LintSvgPath/DiagramCardPath are plain string
+// builders with no compile-time link to the embedded tree.
+//
+// Both halves of the coupling are asserted, because the consumer moved. The
+// paths used to be spelled out in zeus' brief; the brief now delegates the
+// whole diagram pipeline to .claude/skills/aim/SKILL.md, which names them as
+// literal markdown strings — so the check is that each path resolves to a real
+// embedded file AND is still referenced by the skill that sends an agent to it.
 func TestCrewPathsPinnedToEmbeddedTree(t *testing.T) {
+	aim := readEmbedded(t, "aim/SKILL.md")
 	for _, path := range []string{jobs.HermesContractPath(), jobs.LintSvgPath(), jobs.DiagramCardPath()} {
 		rel := strings.TrimPrefix(path, ".claude/skills/")
 		if _, err := fs.ReadFile(jobs.SkillsFS, rel); err != nil {
 			t.Errorf("jobs.SkillsFS missing %q (from %s): %v", rel, path, err)
+		}
+		if !strings.Contains(aim, path) {
+			t.Errorf("aim/SKILL.md no longer references %q — zeus' brief delegates the diagram "+
+				"pipeline to that skill, so if the skill stops naming this asset nothing points at it "+
+				"at all", path)
+		}
+	}
+}
+
+// TestSkillsOwnTheCellContract pins the procedure that moved OUT of zeus'
+// brief and into these skills. The brief now carries only what no skill can
+// know (identity, the cell's real paths, the crew, which skill governs each
+// phase); everything below is the other side of that split, and
+// TestZeusBriefDoesNotRestateSkills in internal/jobs asserts the brief does not
+// keep a second copy of any of it.
+//
+// Without this test the dedupe is one-directional: deleting a rule from a
+// SKILL.md would leave nothing anywhere, and the only symptom would be a doc
+// job quietly doing the wrong thing.
+func TestSkillsOwnTheCellContract(t *testing.T) {
+	for _, c := range []struct {
+		skill string
+		want  []string
+	}{
+		{"aim", []string{
+			// the artifact set's shape and its mode-scoped required floor
+			"00-overview.md", "50-components.md", "51-code-map.md", "52-testing-plan.md",
+			"10-<id>.html", "Spec mode", "Explain mode",
+			// the diagram pipeline in full
+			"hermes-contract.md", "lint_svg.py", "diagram-card.html",
+			"{{CARD_TITLE}}", "{{CAPTION}}", "<!-- DIAGRAM: {{DIAGRAM_ID}} -->",
+			"str.replace", "re.sub", "--marker-id", "model: opus",
+			"box → kind", "kind → shape table", "never dictate coordinates, markup, or a shape class",
+			// the questions WRITE verbs (the brief keeps only the read verb
+			// and the silent-update rule)
+			"kraken questions set", "kraken questions add|update|remove",
+			"P0", "answer", "answered-at",
+			// the cell section: paths in <cellDir> terms, the stop line, the gate
+			"Inside A Kraken Cell", "<cellDir>/artifacts/", "<cellDir>/doc/fragments/",
+			"doc ready for review:", "Use `0` where a count is zero",
+			"`/do` is carl's move", "Never declare the job done",
+		}},
+		{"info", []string{
+			"Inside A Kraken Cell", "<cellDir>/artifacts/",
+			"explanation ready:", "go deeper", "Use `0` where a count is zero",
+			// /info's defining constraint: lighter than /aim, and never any questions
+			"No open questions. Ever.", "never gets a `/do`", "never opens a PR",
+			"Never run `kraken questions` write verbs",
+			"kraken feedback addressed",
+		}},
+		{"do", []string{
+			"90-build-report.md", "Discrepancies vs. the plan", "Complications",
+			"Deferred", "Verification",
+			// the cell section: the crew, the gate, the handoff to /pr
+			"Inside A Kraken Cell", "hephaestus", "athena-logic", "athena-edge", "athena-style",
+			"manual test ready:", "`.claude/skills/pr/SKILL.md`", "do NOT invoke `/pr` by name",
+			"JOB SPEC is the contract", "Never declare the job done",
+		}},
+		{"pr", []string{
+			"Inside A Kraken Cell", "carl/", "gh pr create",
+			"git fetch origin && git checkout -B", "NEVER ends the job",
+			"awaiting checks", "Never poll",
+		}},
+	} {
+		src := readEmbedded(t, c.skill+"/SKILL.md")
+		for _, want := range c.want {
+			if !strings.Contains(src, want) {
+				t.Errorf(".claude/skills/%s/SKILL.md no longer contains %q — zeus' brief delegates "+
+					"this to the skill and keeps no copy, so dropping it here drops it everywhere",
+					c.skill, want)
+			}
 		}
 	}
 }
@@ -456,28 +532,23 @@ func diffReport(nameA, a, nameB, b string) string {
 	return out.String()
 }
 
-// TestContractSectionsReferencedByBrief pins the contract anchors that zeus'
-// brief and the aim skill send him to by NAME. TestCrewPathsPinnedToEmbeddedTree
-// above pins that hermes-contract.md exists; nothing pinned what is inside it,
-// so renaming a heading kept CI green while every doc job pointed zeus at a
-// section that no longer existed.
+// TestContractSectionsReferencedBySkills pins the contract anchors that
+// .claude/skills/aim/SKILL.md sends an agent to by NAME.
+// TestCrewPathsPinnedToEmbeddedTree above pins that hermes-contract.md exists;
+// nothing pinned what is inside it, so renaming a heading kept CI green while
+// every doc job pointed zeus at a section that no longer existed.
 //
-// The dependent strings, as of this change:
-//
-//   - internal/jobs/crew.go's brief: "...named with a kind from the sanctioned
-//     kind list in the Shape Kit section of <HermesContractPath()>..." and
-//     "...hermes derives the shape mechanically from the kind via the
-//     contract's kind → shape table..." (both pinned in crew_test.go's
-//     brief-content matrix).
-//   - .claude/skills/aim/SKILL.md, Core Rules: "...taken from the sanctioned
-//     kind list in the Shape Kit section of
-//     `.claude/skills/aim/assets/hermes-contract.md` — that section's kind →
-//     shape table is the source of truth..." and "...a component you cannot
-//     honestly name a kind for falls back to the plain `node` rounded rect..."
+// The dependent strings all live in aim/SKILL.md's Core Rules now (zeus' brief
+// used to carry its own copy and no longer does — see
+// TestZeusBriefDoesNotRestateSkills): "...taken from the sanctioned kind list
+// in the Shape Kit section of `.claude/skills/aim/assets/hermes-contract.md` —
+// that section's kind → shape table is the source of truth..." and "...a
+// component you cannot honestly name a kind for falls back to the plain `node`
+// rounded rect..."
 //
 // So: the "Shape Kit" section heading, the kind → shape lookup heading beneath
 // it, and the fallback row that gives an unlisted kind a shape must all exist.
-func TestContractSectionsReferencedByBrief(t *testing.T) {
+func TestContractSectionsReferencedBySkills(t *testing.T) {
 	contract := readEmbedded(t, "aim/assets/hermes-contract.md")
 	for _, anchor := range []struct{ what, text string }{
 		{"the Shape Kit section heading (brief + SKILL.md say \"the Shape Kit section of\" the contract)", "\n## Shape Kit\n"},
@@ -485,14 +556,14 @@ func TestContractSectionsReferencedByBrief(t *testing.T) {
 		{"the `node` fallback row (brief: a component with no listed kind still gets a silhouette; SKILL.md: \"falls back to the plain `node` rounded rect\")", "| anything genuinely outside the list above | `node` |"},
 	} {
 		if !strings.Contains(contract, anchor.text) {
-			t.Errorf("aim/assets/hermes-contract.md is missing %s: no %q — zeus' brief and aim/SKILL.md point at it by name, so a rename here silently breaks every doc job", anchor.what, anchor.text)
+			t.Errorf("aim/assets/hermes-contract.md is missing %s: no %q — aim/SKILL.md points at it by name, so a rename here silently breaks every doc job", anchor.what, anchor.text)
 		}
 	}
 	// The fallback bullet in the Shape Kit prose is the same contract stated in
-	// words; keep both, since the brief leans on the behaviour and the table row
+	// words; keep both, since the skill leans on the behaviour and the table row
 	// alone would not tell hermes the kind text survives the fallback.
 	if !strings.Contains(contract, "falls back to plain `node`") {
-		t.Error("aim/assets/hermes-contract.md is missing the `node` fallback rule (\"falls back to plain `node`\") — the brief tells zeus an unnamed kind still gets a shape, and this is where hermes learns which")
+		t.Error("aim/assets/hermes-contract.md is missing the `node` fallback rule (\"falls back to plain `node`\") — aim/SKILL.md tells zeus an unnamed kind still gets a shape, and this is where hermes learns which")
 	}
 }
 

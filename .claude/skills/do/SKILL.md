@@ -96,6 +96,21 @@ Once verification passes and the report is written, tear down everything spawned
 - Do this even when implementation failed or was cut short — a partial run must not leave orphaned agents behind.
 - Exception: if a teammate is mid-way through work the user explicitly asked to keep running (e.g. a long verification job), say so in the report instead of killing it.
 
+## Inside A Kraken Cell
+
+When a kraken job brief sends you here, these deltas apply — the brief wins wherever it is more specific, and it is the only place the cell's real paths appear:
+
+- **There may be no artifact set at all.** Skipping the doc phase is a kraken job's default: when Phase 1 never ran, the JOB SPEC is the contract and it is what you implement, exactly as written. The Preconditions refusal above applies to standalone `/do`, not here — a cell with no set root is the normal case, not an error.
+- **The crew is the brief's crew.** Implementation slices go to subagents named hephaestus and each is reviewed by athena-logic / athena-edge / athena-style in parallel, all on `model: opus` — the brief spells out the exact contract, including the solo case (no subagents at all). Use it instead of TeamCreate here.
+- **Write `90-build-report.md` into the brief's SET ROOT** (`<cellDir>/artifacts/`), per Write The Build Report above. It is written on EVERY phase 2, including a job that never had an artifact set — a job spec is still a plan reality can diverge from.
+- **Stop at the manual-test gate.** After the tests and linters pass and the report is written, say:
+
+  `manual test ready: <urls + what to try>`
+
+  and STOP (end the turn). Do not proceed to a PR on your own — carl's reply is what passes the gate.
+- **When his reply passes it**, shut any test services down and follow `.claude/skills/pr/SKILL.md` in your worktree for branch and PR conventions — read it BY PATH; do NOT invoke `/pr` by name, since a personal skill of that name would shadow it.
+- Never declare the job done — accepting or merging is carl's move, never yours.
+
 ## Boundaries
 
 - /do is for implementing an existing doc, not for re-spec'ing. If the user wants scope changes mid-implementation, update the doc first (or hand back to [[aim]]) before continuing to code.
