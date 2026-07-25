@@ -1,6 +1,6 @@
 ---
 name: info
-description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). Skill for explaining existing systems and answering deep questions about current behavior — the explain workflow. Produces an explain-mode artifact set (an /aim explain-mode overview, standalone diagram cards via Opus subagents, and section docs) without proposing changes. Absorbs what kraken explore/question jobs do. Use when the user asks for /info, \"explain this system\", \"how does X work end to end\", \"document the current behavior of X\", \"investigate and write up X\", \"answer this question with a doc\", or when a kraken info-job brief invokes it. For proposed/future changes use /aim spec mode instead."
+description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). Skill for explaining existing systems and answering deep questions about current behavior — the explain workflow. Researches deeply, then answers with ONE brief high-level overview and the minimum artifacts that answer the question; goes deeper only where the reader asks. Never opens open questions (that is /aim's job) and never proposes changes. Use when the user asks for /info, \"explain this system\", \"how does X work end to end\", \"document the current behavior of X\", \"investigate and write up X\", \"answer this question with a doc\", or when a kraken info-job brief invokes it. For proposed/future changes use /aim spec mode instead."
 ---
 
 # Info — Explain An Existing System
@@ -9,122 +9,155 @@ description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). 
 > header above says `Base directory ... ~/.claude/skills/info`, the personal copy shadowed
 > this one (personal beats project on a name collision).
 
-Research an existing system, behavior, or question and produce an **explain-mode artifact set**:
-a brief `00-overview.md`, standalone diagram cards, and section docs that together transfer the
-current state of the world into the reader's head — what exists, why, how data flows, where code
-lives, how to verify or debug it, and what remains uncertain. This is the read-only sibling of
-/aim: it never proposes changes. Possible follow-ups belong in the open-questions record or a notes
-section doc, and the canonical next step for a change is an /aim spec.
+Answer a question about a system that already exists. Research it deeply; explain it briefly.
+The deliverable is a conversation, not a book: a short high-level `00-overview.md` first, then
+whatever depth the reader actually asks for, one area at a time.
 
-/info IS /aim's explain mode, packaged as its own workflow. All of /aim's Core Rules apply
-verbatim — investigate before asking, progressive disclosure, two core diagrams then tunnel,
-animate flow diagrams, worked examples (at least one exemplary diagram card tracing a concrete
-named instance with real field values through the system, plus example-data renderings in their
-natural shape — a 2D array as a .cell grid, a schedule as a day/time strip — never raw JSON
-prose), all-inline-SVG (never Mermaid/ASCII), subagent delegation for every diagram
-fragment, the artifact-set shape (`00-overview.md` + `1N`-`4N` diagram cards + `5N`+ section
-docs), open questions (kraken.db rows in a cell, `questions.yaml` standalone — never in any
-artifact) with globally numbered ids (`Q1, Q2, …`), and sharing the overview + set-root path
-after every edit round. Read
-`.claude/skills/aim/SKILL.md` (paths relative to the worktree root — your cwd in a cell —
-not this skill's own base directory) for those rules if not already loaded this session; do not
-duplicate or drift from them — with one override: **diagram subagents run on `model: opus`**
-(Claude Opus 5; sonnet produces visual artifacts and bad element placement), and every diagram brief must
-include the anti-artifact rules: no overlapping elements, text measured against its box
-(~7px/char at 13px) and wrapped with tspans before it can overflow, edges attached to box
-borders and routed around (never through) other boxes, every coordinate inside the viewBox,
-generous whitespace between groups. Every diagram brief must also carry the **full contents
-of `.claude/skills/aim/assets/hermes-contract.md` verbatim** (same worktree-relative sourcing; the parts-kit style contract —
-hermes composes from that catalog, it never invents markup or color); after each fragment is
-written, run `python3 .claude/skills/aim/assets/lint_svg.py <fragment> --marker-id arrow-<id>
---prefix <prefix>` (same worktree-relative sourcing) and feed line-numbered violations back as a fresh fix-round brief to a new
-subagent (max 2 fix rounds, then debug the fragment source directly). Only lint-clean fragments
-get wrapped into cards, per /aim's "Wrap, don't flatten" rule: copy `.claude/skills/aim/assets/diagram-card.html`
-to `<set-root>/10-<id>.html` (taking the next free number in `10-49`, assigned by you sequentially — needing
-more than the band means over-decomposition, merge; never use 3-digit prefixes) and mechanically substitute all
-three placeholders with a python one-liner using `str.replace` (never `re.sub` — a fragment containing `\1` or
-`\g` crashes `re.sub`'s replacement parsing), substituting in one pass — never let an earlier replacement's value
-introduce a later token. HTML-escape `&`, `<`, `>` in the title and caption — they land in markup; NEVER escape
-the fragment (it is markup). Fill the `{{CARD_TITLE}}` token (occurs twice: the `<title>` and
-the `<h1>`) and the `{{CAPTION}}` token (occurs once, in the `<figcaption>`) first, then substitute the literal
-`<!-- DIAGRAM: {{DIAGRAM_ID}} -->` placeholder comment with the fragment file's raw contents — e.g.
-`python3 -c "import pathlib, html; t = pathlib.Path('.claude/skills/aim/assets/diagram-card.html').read_text(); t =
-t.replace('{{CARD_TITLE}}', html.escape(TITLE)).replace('{{CAPTION}}', html.escape(CAPTION)).replace('<!-- DIAGRAM: {{DIAGRAM_ID}} -->',
-pathlib.Path(FRAG).read_text()); pathlib.Path(OUT).write_text(t)"` (adapt `TITLE`/`CAPTION`/`FRAG`/`OUT` to real
-values). All three replacements are global — never hand-edited. Verify the output contains `<svg` and does NOT
-contain `{{CARD_TITLE}}`, `{{CAPTION}}`, or `<!-- DIAGRAM:` — if either check fails, the wrap failed; do not ship the card.
+This is the read-only sibling of /aim — it never proposes changes — and it is deliberately
+**lighter** than /aim: /info is not "/aim explain mode with a different name", and it must not
+produce /aim's artifact set by default.
 
-/aim's "Two core diagrams, then tunnel" doctrine applies here too: in explain mode the architecture
-card is **current-state only** (no target panel — there is no proposed change to show), plus the
-end-to-end worked-example flow card, plus any tunnel cards a box genuinely needs. Every component
-box and `50-components.md` row carries a required **kind** tag (see /aim's Core Rules for the
-vocabulary and the Kind/Boundary table requirements) — never a vague noun like "service" unless
-that's literally what it is.
+## The two rules that define this skill
 
-## Workflow
+**1. Deep research, brief output.** Depth of investigation and length of output are independent
+knobs. Read the code until you actually understand it — entrypoints, call paths, the awkward
+branches, the tests that pin behavior — then write the *short* version. Every claim traces to a
+real path you read. Never pad the overview to look thorough; the research is what makes it
+trustworthy, not the word count.
 
-1. **Frame the question** in 2-4 bullets: what the reader wants to understand, which system
-   or flow is in scope, what depth is right (overview vs. code-level), what is explicitly out
-   of scope.
-2. **Research until the set can be written responsibly.** Read the relevant `AGENTS.md` /
-   `CLAUDE.md`, trace the active entrypoints with `rg`, read enough implementation to cite
-   real paths, types, and behaviors. Fan out parallel Explore agents for broad sweeps. Every
-   codebase-answerable question gets answered here — the open-questions record is reserved for
-   genuine unknowns (missing history, ambiguous intent, things only production data can show).
-3. **Draft in explain mode.** Create the set root (see below for the exact path in a cell vs.
-   standalone) and write `00-overview.md`: mental model, current architecture, data flow —
-   very concise, 1-3 sentences per subsection, the diagram cards carry the detail. Then write
-   section docs as needed: component walkthrough with per-component tables, key behaviors
-   (success path, failure modes as they exist today), observability, low-level code map,
-   review/reading guide, verification plan, notes. No questions requirement in explain mode,
-   but the open-questions record is still the right home for anything genuinely open.
-4. **Diagrams via subagents, then wrap.** Each diagram is designed AND rendered by an
-   **Opus** (`model: opus` — Claude Opus 5) subagent into a fragment file under the set's fragments dir (batch them in
-   parallel; assign each a card-unique marker id and path-id prefix; include the
-   anti-artifact rules and the full `hermes-contract.md` contents in every brief). After each
-   fragment is written, run `python3 .claude/skills/aim/assets/lint_svg.py <fragment>
-   --marker-id arrow-<id> --prefix <prefix>` (same worktree-relative sourcing) and feed line-numbered violations back as a fresh
-   fix-round brief (max 2 rounds, then debug the fragment source directly). Only lint-clean
-   fragments get wrapped, per /aim's "Wrap, don't flatten" rule: copy `.claude/skills/aim/assets/diagram-card.html`
-   to `<set-root>/10-<id>.html` (taking the next free number in `10-49`, assigned by you sequentially) and
-   mechanically substitute all three placeholders with a python one-liner using `str.replace` (never `re.sub`
-   — a fragment containing `\1` or `\g` crashes `re.sub`'s replacement parsing), substituting in one pass —
-   never let an earlier replacement's value introduce a later token. HTML-escape `&`, `<`, `>` in the title
-   and caption — they land in markup; NEVER escape the fragment (it is markup). Fill `{{CARD_TITLE}}` (occurs
-   twice) and `{{CAPTION}}` (occurs once) first, then substitute the literal `<!-- DIAGRAM: {{DIAGRAM_ID}} -->`
-   placeholder comment with the fragment file's raw contents — all replacements global, never hand-edited.
-   Verify the output contains `<svg` and does NOT contain `{{CARD_TITLE}}`, `{{CAPTION}}`, or `<!-- DIAGRAM:`
-   before shipping the card. Share the `00-overview.md` path plus the set root (never run `open` on anything).
-5. **Iterate.** Summarize the mental model and the highest-value open questions (by their
-   stable id); fold answers and corrections into the relevant artifact each round.
+**2. No open questions. Ever.** /info never writes an open-questions record — not `kraken
+questions add/set/update` in a cell, not `questions.yaml` standalone. Questions belong to /aim.
+Uncertainty that survives research is one honest line inside the artifact it belongs to ("X is
+not confirmed: <what you'd need to check>"), never a row and never a batch of prompts. If one
+thing genuinely blocks the whole explanation, ask it directly in chat — a single question, not
+a list — and keep going with a stated default while you wait.
+
+## First pass: one brief overview
+
+The default first deliverable is exactly one file: `00-overview.md`, and it stays short — a page
+at most. Assume the reader wants orientation, not the complete tour. It covers, tersely:
+
+| Part | Length | Content |
+|---|---|---|
+| The answer | 2-5 sentences | The direct answer to what was asked, up front. |
+| Mental model | 3-6 sentences or a small table | The handful of moving parts and how they relate — the shape a reader needs to reason about the rest. |
+| How it actually flows | 3-8 lines | One concrete pass through the system, real names and values, in order. |
+| Where it lives | small table | The 3-8 files/functions that matter, one line each, so the reader can jump into source. |
+| Not confirmed | 0-3 lines | Anything research could not settle. Omit the section entirely when there is nothing. |
+| Go deeper | 3-6 bullets | Named areas you researched but deliberately did not expand, one line each — the menu the reader picks from. |
+
+That last row is the point of the whole skill: it is how the reader steers the next round. Name
+areas concretely ("the retry/backoff path in `daemon.go`", "how conflict state is resolved on
+import"), never vaguely ("more detail on the backend").
+
+**Diagrams in the first pass: at most one, usually zero.** Add a single diagram card only when the
+mental model is genuinely spatial or flow-shaped and a picture *replaces* prose rather than
+decorating it. Otherwise offer it as a "go deeper" item and render it when asked. Never ship the
+/aim two-core-diagram pair on a first pass.
+
+**What the first pass does NOT include**, unless the request explicitly asks for it: a components
+table, a code map beyond the small "where it lives" table, a testing/verification plan, an
+assumptions doc, a scope doc, per-component test coverage, or any `5N` section doc at all. These
+are /aim's required floor, not /info's. Shipping them unasked is the failure mode this skill
+exists to prevent.
+
+## Later passes: one area, one artifact
+
+When the reader picks an area (or asks a follow-up), go as deep as that area needs and add **one**
+artifact for it — a `50-<topic>.md` section doc (numbered sequentially from 50 as topics arrive)
+or a `1N-<id>.html` diagram card. Keep `00-overview.md` as the index: add a one-line pointer to
+the new artifact, and correct anything the deeper read proved wrong.
+
+Do not retro-fit the rest of /aim's set because a second artifact now exists. Each round adds only
+what was asked for. A five-round conversation should end with five focused artifacts, not a
+generated spec.
 
 ## Explain-mode discipline
 
-- Describe, never prescribe: no "should", no proposed refactors in the body. A tempting
-  improvement goes into the open-questions record ("worth changing X?") or a notes section doc.
-- Cite real code: file paths (and functions) for every load-bearing claim, so the reader can
-  jump from any paragraph into the source.
-- Verification over assertion: for each key behavior, say how to SEE it being true — the
-  test that covers it, the log/trace to read, the command to run, the fixture that encodes it.
-- Uncertainty is content: things you could not confirm are stated as such in an assumptions
-  section or the open-questions record, not smoothed over.
+- **Describe, never prescribe.** No "should", no proposed refactors. A tempting improvement is
+  one parenthetical observation at most, or the reader's cue to start an /aim spec.
+- **Cite real code.** File paths (and functions) for every load-bearing claim, so any paragraph
+  is jumpable into source. `file.go:120` style is ideal.
+- **Verification over assertion.** For a key behavior, say how to SEE it: the test that covers it,
+  the log line, the command to run, the fixture that encodes it. One pointer beats a paragraph.
+- **Uncertainty is content, not a question.** Say what you could not confirm, in place, and move on.
+- **Answer the question that was asked.** Scope creep into neighboring subsystems is what makes
+  explanations unreadable; mention the neighbor in one line and put it on the "go deeper" menu.
 
-## Inside a kraken info cell
+## Diagrams, when a round calls for one
 
-When invoked by a kraken info-job brief (the brief will say so and give paths), apply these
-deltas — the cell's brief wins wherever it is more specific:
+Diagrams follow /aim's mechanics exactly — read `.claude/skills/aim/SKILL.md` (paths relative to
+the worktree root, your cwd in a cell, not this skill's base directory) for the full rules. The
+short form, with /info's overrides:
 
-- The set root is `<cellDir>/artifacts/` — write `00-overview.md`, diagram cards
-  (`1N-<id>.html`), and section docs (`5N-<section>.md`) directly there. Fragments stage at
-  `<cellDir>/doc/fragments/<id>.svg`. Questions, if any, are rows in `kraken.db` — managed via
-  `kraken questions get/set/add/update/remove` (see /aim's Core Rules), never a file.
-  `artifacts/` is the only board-visible directory and the deliverable.
+- Each diagram is designed AND rendered by a subagent on **`model: opus`** (Claude Opus 5 — sonnet
+  misplaces elements), writing one complete `<svg>` fragment to the set's fragments dir
+  (`<cellDir>/doc/fragments/<id>.svg` in a cell). You never read or write SVG bodies.
+- Every brief carries the **full contents of `.claude/skills/aim/assets/hermes-contract.md`
+  verbatim**, the diagram's exact content, a card-unique `arrow-<id>` marker id and path-id prefix,
+  the fragment output path, and the anti-artifact rules: no overlapping elements, text measured
+  against its box (~7px/char at 13px) and wrapped with tspans before it can overflow, edges attached
+  to box borders and routed around (never through) other boxes, every coordinate inside the viewBox,
+  generous whitespace between groups.
+- Boxes are `box → kind` pairs using the sanctioned kind list in the contract's Shape Kit section;
+  the subagent derives the silhouette from the kind — never dictate a shape class.
+- Lint before wrapping: `python3 .claude/skills/aim/assets/lint_svg.py <fragment> --marker-id
+  arrow-<id> --prefix <prefix>`. Feed line-numbered violations back as a fresh fix-round brief to a
+  new subagent (max 2 rounds, then debug the fragment source directly). Only lint-clean fragments
+  get wrapped.
+- Wrap per /aim's "Wrap, don't flatten" rule: copy `.claude/skills/aim/assets/diagram-card.html`
+  to `<set-root>/10-<id>.html` (next free number in `10-49`, assigned sequentially; never 3-digit
+  prefixes) and substitute all three placeholders with a python one-liner using `str.replace`
+  (never `re.sub` — a fragment containing `\1` or `\g` crashes its replacement parsing), in one
+  pass, never letting an earlier replacement introduce a later token. HTML-escape `&`, `<`, `>` in
+  the title and caption; NEVER escape the fragment (it is markup). Fill `{{CARD_TITLE}}` (occurs
+  twice) and `{{CAPTION}}` (occurs once) first, then replace the literal
+  `<!-- DIAGRAM: {{DIAGRAM_ID}} -->` comment with the fragment's raw contents — e.g.
+  `python3 -c "import pathlib, html; t = pathlib.Path('.claude/skills/aim/assets/diagram-card.html').read_text(); t =
+  t.replace('{{CARD_TITLE}}', html.escape(TITLE)).replace('{{CAPTION}}', html.escape(CAPTION)).replace('<!-- DIAGRAM: {{DIAGRAM_ID}} -->',
+  pathlib.Path(FRAG).read_text()); pathlib.Path(OUT).write_text(t)"` (adapt `TITLE`/`CAPTION`/`FRAG`/`OUT`).
+  Verify the output contains `<svg` and contains none of `{{CARD_TITLE}}`, `{{CAPTION}}`,
+  `<!-- DIAGRAM:` — if either check fails the wrap failed; do not ship the card.
+- Diagram ids are unique across the whole set (an id names both the fragment file and the card
+  file). Explain-mode architecture diagrams are **current state only** — there is no target panel,
+  because nothing is being proposed.
+- All diagrams are inline SVG — never Mermaid, never ASCII art.
+
+## Workflow
+
+1. **Frame the question** in 2-4 bullets: what the reader wants to understand, what is in scope,
+   what depth is right, what is explicitly out of scope. Keep this in chat, not in an artifact.
+2. **Research until you could write the long version** — read the relevant `CLAUDE.md` / `AGENTS.md`,
+   trace entrypoints with `rg`, read enough implementation to cite real paths, types, and behaviors,
+   and fan out parallel `Explore` agents for broad sweeps. Every codebase-answerable question gets
+   answered here; none of them become open questions.
+3. **Write the short version.** Create the set root and write `00-overview.md` per the table above.
+   Add at most one diagram card, and only if it earns its place.
+4. **Share and stop.** Give the `00-overview.md` path plus the set root (never run `open`), then
+   state the "go deeper" menu in your final message so the reader can pick. Then stop — the next
+   round is theirs to steer.
+5. **Iterate on demand.** Each request → deeper research on that area → one new artifact + a
+   one-line pointer added to the overview. Correct anything the deeper read disproved.
+
+## Inside a kraken cell
+
+When invoked by a kraken job brief (the brief will say so and give paths), apply these deltas —
+the cell's brief wins wherever it is more specific:
+
+- The set root is `<cellDir>/artifacts/`: write `00-overview.md` there, plus any later diagram
+  cards (`1N-<id>.html`) and topic docs (`5N-<topic>.md`) as rounds are requested. Fragments stage
+  at `<cellDir>/doc/fragments/<id>.svg`. `artifacts/` is the only board-visible directory and is
+  the deliverable.
+- **Never run `kraken questions` write verbs on an /info job** — no `add`, `set`, `update`, or
+  `remove`. An /info job's questions list stays empty. (`kraken feedback get <slug>` still applies:
+  carl's per-artifact feedback arrives as rows, and each open entry gets addressed and marked with
+  `kraken feedback addressed <slug> <id> <text>`.)
 - Never run `open` (no browser in a cell); the board renders the artifacts.
-- Bake genuinely open items into the open-questions record rather than blocking on them. When finished
-  producing/editing the set, state what's ready in your final output and STOP (end the
-  turn) — kraken derives the blocked state from your silence and shows your last words on
-  the board; the human reads the artifacts and messages back directly. A decision that
-  genuinely cannot be defaulted may use AskUserQuestion — kraken surfaces the options as
-  buttons. Never declare the job done; accepting is the human's move.
-- `solo: true` on the job means no subagents at all: skip the diagram pipeline and write
-  prose-only section docs plus `00-overview.md` (no diagram cards at all).
+- When finished with a round, state what's ready plus the "go deeper" menu in your final output and
+  STOP (end the turn) — kraken derives the blocked state from your silence and shows your last words
+  on the board; carl reads the artifacts and messages back directly. A decision that genuinely
+  cannot be defaulted may use `AskUserQuestion` — kraken surfaces the options as buttons — but that
+  is for blockers, not for the routine uncertainty that belongs inline. Never declare the job done;
+  accepting is carl's move.
+- An /info job never gets a `/do` and never opens a PR.
+- `solo: true` on the job means no subagents at all: prose only — no diagram cards in any round.
