@@ -9,9 +9,11 @@ import (
 // crew_test.go — zeus' brief content matrix. There is no hermes pane agent
 // and no escalation-file relay any more: hermes is only a per-diagram
 // subagent name inside zeus' own brief. Q14 removed the job-level build/info
-// type entirely: the spec-vs-explain (/aim) mode is zeus' own call from what
-// the job spec asks for, and whether phase 2 (implement + PR) ever happens
-// is carl's call via /do. There is likewise no more job-level skip-doc
+// type entirely: which Phase-1 path a job takes — the /aim SPEC path or the
+// lighter /info EXPLANATION path (one brief overview, a go-deeper menu, and
+// zero questions rows) — is zeus' own call from what the job spec asks for,
+// and whether phase 2 (implement + PR) ever happens is carl's call via /do.
+// There is likewise no more job-level skip-doc
 // field (the "job-shape cleanup" companion to Q14): whether Phase 1 (the
 // doc pipeline) runs at all is also zeus' own call, made from the job spec
 // text per the doc-gating rule, so every doc-pipeline paragraph rides in
@@ -72,6 +74,22 @@ func TestZeusBrief(t *testing.T) {
 		// own call from the spec text, never a job field, with skip as the
 		// stated default
 		"Doc gating", "/info", "DEFAULT",
+		// Phase 1's two paths: the EXPLANATION path is /info read by path
+		// (the personal-skill shadow), one brief overview + a go-deeper menu,
+		// one artifact per requested round, and zero questions rows — never
+		// /aim's set. The SPEC path keeps the /aim pipeline and the /do gate.
+		"Phase 1 has TWO paths", "EXPLANATION path", "SPEC path",
+		".claude/skills/info/SKILL.md", "BY PATH",
+		"'go deeper' menu", "exactly ONE focused artifact",
+		"NEVER create questions rows on it",
+		"Questions are a SPEC-path tool only",
+		"explanation ready: " + docOverviewPath(j),
+		// phase 2 closes with the build report: what shipped, where reality
+		// diverged from the plan, complications, deferrals, verification —
+		// with "None" written out rather than the section dropped
+		buildReportPath(j), "`.claude/skills/do/SKILL.md`",
+		"what ACTUALLY happened", "every discrepancy between the plan",
+		"'None' is an explicit line",
 		// the two-core diagram doctrine (53): architecture + end-to-end
 		// flows, spec-mode combined current/target card drawn by one hermes,
 		// tunnel cards as extras
@@ -126,9 +144,10 @@ func TestZeusBrief(t *testing.T) {
 		// plan/done file convention.
 		"done.md", "hermes pane", "relay", "Success criteria",
 		"/send", "/doc skill", "you inherit carl's user skills",
-		// there is no separate /info skill invocation any more — /aim covers
-		// both modes now
-		"do NOT invoke /info", "type:", "(type:",
+		// /info is read by path, never invoked by name (a personal skill of
+		// the same name shadows it) — the positive pin lives in the wanted
+		// loop above
+		"invoke /info by name", "type:", "(type:",
 		// self-polling is gone (the daemon watches PRs now) — bare "poll"
 		// never appears in any brief variant. "flatten"/"Flatten"/"flattened"
 		// likewise appear zero times in any brief variant now (the clause is
@@ -263,6 +282,11 @@ func TestZeusBriefDocGatingUnconditional(t *testing.T) {
 			"Phase 1 — only when the doc-gating rule above says to take it",
 			"If instead the doc-gating rule says to skip (the default)",
 			"there is no spec doc and no '/do' gate",
+			// the path split rides in every variant too — solo changes who
+			// writes the artifacts, never which path a job takes
+			"Phase 1 has TWO paths", "EXPLANATION path", "SPEC path",
+			"NEVER create questions rows on it",
+			"an explanation (/info) job never creates any",
 		} {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s brief missing doc-gating text %q", j.Slug, want)
@@ -334,6 +358,36 @@ func TestZeusBriefSkillsPrecedence(t *testing.T) {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s (solo=%v) brief missing skills-precedence text %q", j.Slug, j.Solo, want)
 			}
+		}
+	}
+}
+
+// TestZeusBriefBuildReport pins phase 2's closing artifact in every brief
+// variant: solo changes who writes the code, never whether the run gets
+// written up. The report is the only place a plan's wrong assumptions ever
+// surface — a phase 2 that ends at "manual test ready" with green tests
+// leaves carl no record of what the implementation had to work around.
+func TestZeusBriefBuildReport(t *testing.T) {
+	for _, j := range []*Job{
+		{Slug: "report-plain"},
+		{Slug: "report-solo", Solo: true},
+	} {
+		brief := zeusBrief(j)
+		for _, want := range []string{
+			buildReportPath(j), "`.claude/skills/do/SKILL.md`",
+			"what ACTUALLY happened", "every discrepancy between the plan",
+			"complications hit", "what verification you ran",
+			"'None' is an explicit line",
+		} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s (solo=%v) brief missing build-report text %q", j.Slug, j.Solo, want)
+			}
+		}
+		// the report lands in the artifacts dir (the only board-visible
+		// directory) and in the 90 band, so it sorts after the section docs
+		if !strings.HasPrefix(buildReportPath(j), CellArtifacts(j)) ||
+			!strings.HasSuffix(buildReportPath(j), "/90-build-report.md") {
+			t.Errorf("%s build-report path %q is not <artifacts>/90-build-report.md", j.Slug, buildReportPath(j))
 		}
 	}
 }

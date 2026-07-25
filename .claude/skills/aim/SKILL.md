@@ -166,6 +166,8 @@ Use spec mode for systems that do not exist yet, changes to existing systems, mi
 
 Use explain mode for systems that already exist or behavior the user wants to understand. Focus on what exists, why it exists, how data flows, how components interact, where code lives, how to debug/review it, what tests or traces verify it, and what remains uncertain. Do not propose changes unless the user asks; put possible follow-ups in the open-questions record or a notes section doc.
 
+Explain mode here is the **full artifact set** for an existing system — reach for it when the user explicitly wants that. For an ordinary "how does X work?", `/info` is the lighter path: the same depth of research, but one brief overview first and deeper artifacts only where the reader asks, with no open-questions record at all (questions are /aim's, never /info's).
+
 ## Spec / Design Boundary
 
 Spec territory:

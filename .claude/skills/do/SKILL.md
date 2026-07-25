@@ -1,15 +1,15 @@
 ---
 name: do
-description: "Implement the system described by an /aim artifact set produced earlier in this conversation. Resolves any P0 open questions in questions.yaml with the user first, then writes the code. Use when the user asks for /do, \"send it\", \"ship the doc\", \"implement the spec\", \"build what we specced\", or similar phrasing after an /aim artifact set has been created."
+description: "Implement the system described by an /aim artifact set produced earlier in this conversation. Resolves any P0 open questions with the user first, then writes the code, then records what actually happened in a brief 90-build-report.md — what shipped, where reality diverged from the plan, what fought back. Use when the user asks for /do, \"send it\", \"ship the doc\", \"implement the spec\", \"build what we specced\", or similar phrasing after an /aim artifact set has been created."
 ---
 
 # Do — Implement An Artifact Set
 
-Take the artifact set produced by [[aim]] earlier in this conversation — `00-overview.md`, its diagram cards, and its section docs — and implement it. The set is the source of truth for scope, components, constraints, and testing. Before writing code, resolve any `P0` entries in the set's `questions.yaml` with the user.
+Take the artifact set produced by [[aim]] earlier in this conversation — `00-overview.md`, its diagram cards, and its section docs — and implement it. The set is the source of truth for scope, components, constraints, and testing. Before writing code, resolve any `P0` entries in the set's open-questions record with the user; after the code is verified, write `90-build-report.md` — the brief record of what shipped and where reality diverged from the plan.
 
 ## Preconditions
 
-- An `/aim` artifact set must exist for this conversation: a set root directory (standalone: `~/designs/<slug>/`; in a kraken cell: `<cellDir>/artifacts/`) containing `00-overview.md`. A sibling `questions.yaml` (standalone: `~/designs/<slug>.questions.yaml`; in a cell: `<cellDir>/questions.yaml`) may or may not exist — it's optional, and its absence just means no open questions were raised. Older conversations may instead have a single flattened `~/designs/<slug>.spec.html` / `.explain.html` from the legacy template flow (or `.spec.md` / `.explain.md`) — treat that file itself as the doc in that case.
+- An `/aim` artifact set must exist for this conversation: a set root directory (standalone: `~/designs/<slug>/`; in a kraken cell: `<cellDir>/artifacts/`) containing `00-overview.md`. The open-questions record is optional and lives outside the set: standalone, a sibling `~/designs/<slug>.questions.yaml`; in a cell, rows in `kraken.db` read with `kraken questions get <slug>`. A missing file or an empty list just means no open questions were raised (an `/info` explanation job never has any by design). Older conversations may instead have a single flattened `~/designs/<slug>.spec.html` / `.explain.html` from the legacy template flow (or `.spec.md` / `.explain.md`) — treat that file itself as the doc in that case.
 - If no such artifact exists in this conversation:
   - Do **not** start implementing.
   - Tell the user: "No /aim artifact found in this conversation — run /aim first, then /do."
@@ -20,23 +20,23 @@ Take the artifact set produced by [[aim]] earlier in this conversation — `00-o
 ### 1. Locate And Read The Set
 
 - Identify the most recent `/aim` set root mentioned in this conversation (or the explicit path the user passes as an argument).
-- Read `00-overview.md` in full, then every `.md` file in the set root other than `00-overview.md` in full (covers `5N-*.md` and any `6N+` section docs), then `questions.yaml` in full if it exists. The set is the source of truth — do not rely on chat memory of what it said. (Diagram cards are supporting detail; skim captions/titles rather than reading every SVG body.)
+- Read `00-overview.md` in full, then every `.md` file in the set root other than `00-overview.md` in full (covers `5N-*.md` and any `6N+` section docs), then the open-questions record in full (standalone: `questions.yaml` if it exists; in a cell: `kraken questions get <slug>`). The set is the source of truth — do not rely on chat memory of what it said. (Diagram cards are supporting detail; skim captions/titles rather than reading every SVG body.)
 - If working from a legacy single-file doc instead, read it in full the same way.
-- `questions.yaml` is OPTIONAL: its absence means zero open questions for this set — skip straight to implementation (do not refuse or treat a missing file as an error).
+- The open-questions record is OPTIONAL: a missing `questions.yaml` (or an empty `kraken questions get`) means zero open questions for this set — skip straight to implementation (do not refuse or treat it as an error).
 - If any section doc this workflow names (`50-components.md`, `51-code-map.md`, `52-testing-plan.md`) — or one referenced elsewhere in the set (e.g. by `51-code-map.md`'s review guide) — is absent, say so explicitly and fall back to `00-overview.md` plus whatever section docs do exist — never invent content to fill the gap. A solo set legitimately has none of the three named docs; that is not an error.
 
 ### 2. Resolve P0 Open Questions
 
-- Collect every `questions.yaml` entry with `importance: P0` and no `answer:` key yet.
+- Collect every open-questions entry with `importance: P0` and no answer yet.
 - For each unresolved P0, ask the user with `AskUserQuestion`. Group related questions into one call (up to 4 questions per call).
-- An entry that already has an `answer:` (and `answered-at:`) is a **decision, not a question** — never re-ask it; treat the answer as settled and cite it if relevant. In a kraken cell those two keys arrive as silent file edits from carl answering on the board, not as pane messages — re-read `questions.yaml` before this step to pick up anything answered since the set was last read.
+- An entry that already has an answer (and `answered-at`) is a **decision, not a question** — never re-ask it; treat the answer as settled and cite it if relevant. In a kraken cell those two fields arrive as silent row updates from carl answering on the board, never as pane messages — re-run `kraken questions get <slug>` before this step to pick up anything answered since the set was last read.
 - If there are no unresolved P0 entries, skip straight to implementation.
 - Do **not** ask P1/P2 questions unless the user requests it — state assumptions for those if they block progress, and surface them after implementation.
 
 ### 3. Record Newly Resolved Decisions
 
-- After P0 answers come in outside a cell (where there's no board to append `answer:`/`answered-at:` for you), edit `questions.yaml` yourself: remove the resolved entry and note the decision in the relevant section doc (an `Assumptions`/`Decisions` note) instead. Leave P1/P2 entries untouched.
-- In a kraken cell, never write `answer:`/`answered-at:` yourself — that's kraken's job once carl answers from the board.
+- After P0 answers come in outside a cell (where there's no board to append `answer`/`answered-at` for you), edit `questions.yaml` yourself: remove the resolved entry and note the decision in the relevant section doc (an `Assumptions`/`Decisions` note) instead. Leave P1/P2 entries untouched.
+- In a kraken cell, never write `answer`/`answered-at` yourself — that's kraken's job once carl answers from the board.
 
 ### 4. Plan The Implementation
 
@@ -58,12 +58,36 @@ Take the artifact set produced by [[aim]] earlier in this conversation — `00-o
 - For UI changes, open the feature in a browser before reporting done.
 - If a check is not runnable locally, say so explicitly.
 
-### 7. Report Back
+### 7. Write The Build Report
 
-- One short summary: what shipped, which P0 answers shaped it, what was deferred to remaining `questions.yaml` entries, and what verification was run.
-- Do not re-summarize the set itself — link to `00-overview.md`.
+Always write **one brief artifact** recording what actually happened: `90-build-report.md` in the
+set root (in a kraken cell: `<cellDir>/artifacts/90-build-report.md`). The `90` band sorts it last,
+after the overview, the cards, and the section docs. Write it even when the implementation went
+exactly to plan, and even when there was no `/aim` set to begin with (a job spec implemented
+directly is still a plan reality can diverge from).
 
-### 8. Clean Up Agents
+Keep it to a page. It is a record of the *delta between plan and reality*, not a second copy of the
+set — link to `00-overview.md` rather than restating it. Sections, in order:
+
+| Section | Content |
+|---|---|
+| What shipped | One row/bullet per component or slice, each naming the files it landed in. Terse. |
+| Discrepancies vs. the plan | **The point of this artifact.** Every place reality diverged from the set (or the job spec): what the plan said, what you did instead, and why. Wrong assumption in the spec, an API that doesn't work as described, a component that turned out unnecessary, a boundary drawn in the wrong place — all of it. If nothing diverged, write "None" as an explicit line; never omit the section. |
+| Complications | What fought back and how it was resolved or worked around — flaky/blocked tests, missing fixtures, ordering constraints, an unrelated bug hit on the way. Include ones you resolved; they are the cheap warning for the next person. |
+| Deferred | Scope deliberately left out, each with the reason and what it would take. Includes P1/P2 questions that stayed open. |
+| Verification | What was actually run and its result, plus anything that could not be run locally. |
+
+Uncomfortable findings belong here in plain words: a spec section that turned out wrong, a
+decision that made the implementation awkward, an estimate that was off. A build report that reads
+like the plan was perfect is a report that isn't worth writing.
+
+### 8. Report Back
+
+- One short summary in chat: what shipped, which P0 answers shaped it, what verification was run,
+  and the headline discrepancy if there was one.
+- Link `90-build-report.md` and `00-overview.md` — do not re-summarize either in chat.
+
+### 9. Clean Up Agents
 
 Once verification passes and the report is written, tear down everything spawned during implementation — do not leave agents idling after the task is done:
 
