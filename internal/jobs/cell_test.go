@@ -166,12 +166,78 @@ func TestMergeHookSettings(t *testing.T) {
 			if c.wantErr {
 				return
 			}
+			// every render also carries the agent-teams switches the cell's
+			// crew depends on; TestMergeTeammateSettings owns their semantics,
+			// so fold them into each expectation here rather than restating
+			// them in a table that is about hook merging
+			wantEnv, ok := c.want["env"].(map[string]any)
+			if !ok {
+				wantEnv = map[string]any{}
+			}
+			wantEnv[teamsEnvVar] = "1"
+			c.want["env"] = wantEnv
+			c.want["teammateMode"] = "tmux"
 			var gotParsed map[string]any
 			if err := json.Unmarshal(got, &gotParsed); err != nil {
 				t.Fatalf("mergeHookSettings(%q) produced invalid JSON: %v\n%s", c.existing, err, got)
 			}
 			if !reflect.DeepEqual(gotParsed, c.want) {
 				t.Errorf("mergeHookSettings(%q) = %s, want %v", c.existing, got, c.want)
+			}
+		})
+	}
+}
+
+// TestMergeTeammateSettings pins the switches that make zeus' brief true.
+// The brief tells zeus that naming an Agent call buys a real tmux pane, a
+// nestTeams row, and a SendMessage address — all properties of Claude Code's
+// agent-teams feature, which is off unless these two settings are present. If
+// the cell stops writing them, nothing fails loudly: the crew quietly becomes
+// in-process subagents while the brief keeps describing panes that no longer
+// exist, and carl loses the ability to watch or attach to any of the work.
+// The preserve cases matter just as much — this file is merged into a repo's
+// own checked-in settings, so a deliberate local choice must survive.
+func TestMergeTeammateSettings(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		parsed  map[string]any
+		wantEnv map[string]any
+		wantMod any
+	}{
+		{
+			name:    "fresh render gets both switches",
+			parsed:  map[string]any{},
+			wantEnv: map[string]any{teamsEnvVar: "1"},
+			wantMod: "tmux",
+		},
+		{
+			name:    "existing env keys survive alongside",
+			parsed:  map[string]any{"env": map[string]any{"FOO": "bar"}},
+			wantEnv: map[string]any{"FOO": "bar", teamsEnvVar: "1"},
+			wantMod: "tmux",
+		},
+		{
+			// a repo that deliberately picked its own backend keeps it:
+			// kraken states a requirement, it does not overrule a choice
+			name:    "explicit teammateMode is not overruled",
+			parsed:  map[string]any{"teammateMode": "in-process"},
+			wantEnv: map[string]any{teamsEnvVar: "1"},
+			wantMod: "in-process",
+		},
+		{
+			name:    "explicit opt-out of the flag is not overruled",
+			parsed:  map[string]any{"env": map[string]any{teamsEnvVar: "0"}},
+			wantEnv: map[string]any{teamsEnvVar: "0"},
+			wantMod: "tmux",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			mergeTeammateSettings(c.parsed)
+			if !reflect.DeepEqual(c.parsed["env"], c.wantEnv) {
+				t.Errorf("env = %v, want %v", c.parsed["env"], c.wantEnv)
+			}
+			if c.parsed["teammateMode"] != c.wantMod {
+				t.Errorf("teammateMode = %v, want %v", c.parsed["teammateMode"], c.wantMod)
 			}
 		})
 	}

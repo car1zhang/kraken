@@ -456,12 +456,48 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 		hooks["PostToolUse"] = append(postToolUse, krakenHookEntry(slug, krakenBin))
 		parsed["hooks"] = hooks
 	}
+	mergeTeammateSettings(parsed)
 	out, err := json.MarshalIndent(parsed, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	return append(out, '\n'), nil
 }
+
+// mergeTeammateSettings turns on the agent-teams backing that zeus' brief
+// spends a paragraph depending on. The brief tells zeus that naming an Agent
+// call buys it a real tmux pane, a row core.nestTeams can hang under the cell,
+// and a SendMessage address — but every one of those is a property of Claude
+// Code's teams feature, which is off unless CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+// is set and teammateMode picks the tmux backend. Left to the user's personal
+// ~/.claude/settings.json, the whole crew silently degrades to in-process
+// subagents the moment that file changes — with the brief still confidently
+// describing panes that no longer exist. Writing both into the cell's own
+// settings.json makes the claim self-contained: kraken states the requirement
+// where it enforces it.
+//
+// Merged, never clobbered, matching the hook entry beside it: an existing env
+// block keeps its other keys, and a repo that has deliberately chosen its own
+// teammateMode keeps that choice rather than having kraken overrule it.
+func mergeTeammateSettings(parsed map[string]any) {
+	env, ok := parsed["env"].(map[string]any)
+	if !ok {
+		env = map[string]any{}
+	}
+	if _, set := env[teamsEnvVar]; !set {
+		env[teamsEnvVar] = "1"
+	}
+	parsed["env"] = env
+	if _, set := parsed["teammateMode"]; !set {
+		parsed["teammateMode"] = "tmux"
+	}
+}
+
+// teamsEnvVar gates Claude Code's agent-teams feature. Named here rather than
+// inlined because it is the single string the cell's whole delegation model
+// rests on: if it is renamed upstream (or the feature graduates and the flag
+// disappears), this constant is what a grep for the breakage lands on.
+const teamsEnvVar = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 
 // hasHookCommand reports whether any PostToolUse group in groups already
 // contains a hook whose command exactly matches command.

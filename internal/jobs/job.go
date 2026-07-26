@@ -506,7 +506,7 @@ func JobTemplate(slug string) string {
 		"prereqs: []               # - job: other-slug\n" +
 		"                          #   gated: true   → when it completes, you review its outcome\n" +
 		"                          #                   in the TUI and release this job (human gate)\n" +
-		"solo: false               # true → zeus works alone: no subagent crew, prose-only doc (no diagram subagents)\n" +
+		"solo: false               # true → zeus works alone: no teammate crew at all, prose-only doc (no diagram agents)\n" +
 		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
 		"                          # applied once at cell start, default = " + core.DefaultModel + "\n" +
 		"---\n"

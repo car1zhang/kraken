@@ -43,6 +43,10 @@ func TestZeusBrief(t *testing.T) {
 		"athena-logic", "athena-edge", "athena-style",
 		"dispatched in parallel", "one message, three Agent calls",
 		"re-review with only the flagging variant(s)",
+		// the crew are TEAMMATES: named Agent-tool spawns with real panes, not
+		// anonymous in-process subagents
+		"delegate real work, it goes to TEAMMATES",
+		"implementation slices to teammates you name hephaestus",
 		// the doc-gating rule: zeus' own call from the spec text, never a job
 		// field, with skip as the stated default
 		"Doc gating", "/aim or /info", "doc, spec, or explanation", "DEFAULT",
@@ -221,21 +225,29 @@ func TestZeusBriefImageHandling(t *testing.T) {
 func TestZeusBriefSolo(t *testing.T) {
 	j := &Job{Slug: "z", Solo: true}
 	brief := zeusBrief(j)
-	if !strings.Contains(brief, "no subagents at all") {
-		t.Error("solo brief missing the no-subagents sentence")
+	if !strings.Contains(brief, "no teammates and no subagents at all") {
+		t.Error("solo brief missing the no-teammates/no-subagents sentence")
 	}
-	if strings.Contains(brief, "Delegate implementation slices to subagents you name hephaestus") {
+	// solo means alone: not even the one sanctioned unnamed use (read-only
+	// exploration) survives, so the carve-out must be disclaimed here
+	if !strings.Contains(brief, "not even a read-only exploration subagent") {
+		t.Error("solo brief does not close the read-only-exploration carve-out")
+	}
+	if strings.Contains(brief, "implementation slices to teammates you name hephaestus") ||
+		strings.Contains(brief, "delegate real work, it goes to TEAMMATES") {
 		t.Error("solo brief still describes the hephaestus/athena delegation crew")
 	}
 	// the phase-2 paragraph must not silently re-introduce a crew either —
-	// that self-contradiction ("no subagents at all" AND delegate here) is
-	// exactly what the second, independently-worded delegation sentence used
-	// to cause
-	if strings.Contains(brief, "subagents named hephaestus") {
-		t.Error("solo brief still describes a second hephaestus/athena delegation crew")
+	// that self-contradiction ("no teammates and no subagents at all" AND
+	// delegate here) is exactly what the second, independently-worded
+	// delegation sentence used to cause
+	for _, crew := range []string{"subagents named hephaestus", "teammates named hephaestus"} {
+		if strings.Contains(brief, crew) {
+			t.Errorf("solo brief still describes a second hephaestus/athena delegation crew (%q)", crew)
+		}
 	}
 	// solo still gets the full cell-paths and row-reading contract: only the
-	// SUBAGENT paragraphs are gated on Solo
+	// CREW paragraphs are gated on Solo
 	for _, want := range []string{
 		"Cell paths", CellArtifacts(j), "kraken questions get z", "EVERY resume",
 	} {
@@ -290,13 +302,142 @@ func TestZeusBriefEscalationDisclaimer(t *testing.T) {
 
 func TestZeusBriefSubagentHygiene(t *testing.T) {
 	brief := zeusBrief(&Job{Slug: "hygiene"})
-	if !strings.Contains(brief, "the moment a subagent or teammate finishes its task, stop it (TaskStop)") {
-		t.Error("brief missing the subagent-hygiene clause")
+	if !strings.Contains(brief, "stop an agent (TaskStop") {
+		t.Error("brief missing the crew-hygiene clause")
 	}
-	// solo jobs run no subagents at all, so the hygiene clause is moot
+	// hygiene fires on ACCEPTANCE, not on the agent reporting done. Stopping
+	// at "done" kills the teammate one step before the gate that judges it —
+	// the lint run, the athena round — and the fix round then has to address
+	// an agent that no longer exists, which is exactly what the skills forbid
+	// (they require resuming the same one). This clause is what sequences the
+	// two rules; without it they contradict each other.
+	for _, want := range []string{
+		"the moment its work is ACCEPTED, not the moment it reports done",
+		"the gate that judges its output has passed it",
+		"Once accepted, stop it immediately",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief hygiene clause missing %q — teardown must not race the fix round", want)
+		}
+	}
+	// a teammate holds a real tmux pane, so the hygiene clause has to say how
+	// TaskStop addresses one — a pane left resident is visible clutter in `k v`
+	if !strings.Contains(brief, "a teammate stops by its bare name") {
+		t.Error("brief does not say how TaskStop addresses a teammate")
+	}
+	// solo jobs run no teammates or subagents at all, so the hygiene clause is moot
 	solo := zeusBrief(&Job{Slug: "hygiene-solo", Solo: true})
 	if strings.Contains(solo, "TaskStop") {
-		t.Error("solo brief should not mention TaskStop hygiene — it has no subagents to stop")
+		t.Error("solo brief should not mention TaskStop hygiene — it has no agents to stop")
+	}
+}
+
+// TestZeusBriefTeammatesNotSubagents pins the distinction the cell depends on:
+// every agent that WRITES something or returns a verdict zeus acts on is a
+// teammate — an Agent-tool call carrying a `name`, which is what buys it a tmux
+// pane, a team-config row core.nestTeams can hang under this cell, and an
+// address SendMessage can reach for a second round. Anonymous in-process
+// subagents keep exactly one job, read-only exploration, and a brief that blurs
+// the two gives carl a cell whose real work happens in panes he cannot see.
+func TestZeusBriefTeammatesNotSubagents(t *testing.T) {
+	brief := zeusBrief(&Job{Slug: "teammates"})
+	for _, want := range []struct{ token, why string }{
+		// (a) the crew is named as teammates, not subagents
+		{"implementation slices to teammates you name hephaestus", "hephaestus is a teammate"},
+		{"review it with three teammates you name athena-logic, athena-edge, and athena-style", "the athena variants are teammates"},
+		// (b) the mechanism: a `name` on the Agent tool, and what it buys
+		{"A teammate is an Agent-tool call that passes a `name`", "the teammate mechanism"},
+		{"its own tmux pane", "why naming matters to kraken: a real pane"},
+		{"`k ls`/`k v`", "a teammate is visible to carl through kraken"},
+		{"SendMessage", "a named teammate is resumable for the fix round"},
+		// (c) the single carve-out for unnamed subagents
+		{"The ONE exception is read-only exploration", "the only sanctioned unnamed use"},
+		{"writing nothing", "an exploration subagent produces no artifact"},
+		{"If an agent will write a file or judge someone's output, it is a teammate", "the decision rule"},
+		{"a verdict means an accept/reject judgment on work product, not a finding", "the carve-out stays decidable at the margin"},
+	} {
+		if !strings.Contains(brief, want.token) {
+			t.Errorf("brief missing %q (%s)", want.token, want.why)
+		}
+	}
+	// the old wording delegated real work to anonymous subagents; if it comes
+	// back, hephaestus and athena lose their panes and their addressability
+	for _, stale := range []string{
+		"Delegate implementation slices to subagents you name hephaestus",
+		"three subagents you name athena-logic",
+	} {
+		if strings.Contains(brief, stale) {
+			t.Errorf("brief still delegates real work to anonymous subagents: %q", stale)
+		}
+	}
+}
+
+// TestZeusBriefDelegationIsEarned guards the other half of the teammate rule.
+// Insisting on teammates for real work reads, on its own, like an instruction
+// to delegate everything — and a zeus that briefs a hephaestus for a two-file
+// edit spends more context writing the brief than the edit would have cost.
+// The brief must therefore gate delegation on work that genuinely splits, and
+// must keep the review pass ungated: reviews are independent by construction,
+// so they parallelize even when the edit was zeus' own.
+func TestZeusBriefDelegationIsEarned(t *testing.T) {
+	brief := zeusBrief(&Job{Slug: "earned"})
+	for _, want := range []struct{ token, why string }{
+		{"work that actually parallelizes", "delegation is gated on parallelism"},
+		{"just make the edit yourself", "small self-contained changes stay with zeus"},
+		{"parallelizable implementation slices", "hephaestus takes the splittable work"},
+		{"run them in parallel every time", "the review pass itself is never gated"},
+		{"on your own edits exactly as on a teammate's", "review is not gated the same way"},
+	} {
+		if !strings.Contains(brief, want.token) {
+			t.Errorf("brief missing %q (%s)", want.token, want.why)
+		}
+	}
+	// solo already forbids the crew outright, so the gate is meaningless there
+	// and must not add bulk to a brief that cannot act on it
+	if strings.Contains(zeusBrief(&Job{Slug: "earned-solo", Solo: true}), "work that actually parallelizes") {
+		t.Error("solo brief carries the delegation gate despite having no crew to gate")
+	}
+}
+
+// TestZeusBriefNoTerminalQuestions pins carl's steering: he does not watch the
+// cell's pane, so an interactive prompt there is invisible AND blocking — the
+// cell reads as working while nothing moves. The board's status detail is
+// zeus' last message, which makes "default, state it, keep going" the only
+// path that actually reaches him. The rule is strictest for spawned agents:
+// kraken reads zeus' transcript alone, so a teammate's prompt cannot surface
+// anywhere at all.
+func TestZeusBriefNoTerminalQuestions(t *testing.T) {
+	for _, j := range []*Job{{Slug: "q-plain"}, {Slug: "q-solo", Solo: true}} {
+		brief := zeusBrief(j)
+		for _, want := range []struct{ token, why string }{
+			{"must NOT ask carl questions through an interactive terminal prompt", "the rule itself"},
+			{"he does not watch it", "why a prompt is invisible"},
+			{"just stalls the cell", "an unseen prompt is not merely useless, it blocks"},
+			{"pick the most defensible default", "what to do instead"},
+			{"FINAL message", "where an unresolved decision goes"},
+			{"last resort", "AskUserQuestion is not a convenience"},
+		} {
+			if !strings.Contains(brief, want.token) {
+				t.Errorf("%s brief missing %q (%s)", j.Slug, want.token, want.why)
+			}
+		}
+	}
+	// the spawned-agent ban only makes sense where agents can be spawned
+	plain := zeusBrief(&Job{Slug: "q-crew"})
+	for _, want := range []string{
+		"A teammate or subagent must never ask carl anything at all",
+		"decide and report, never to prompt",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("brief missing spawned-agent question ban %q", want)
+		}
+	}
+	// the rule it replaced invited the prompt as a normal move; a brief
+	// carrying both says "don't ask" and "you may ask" in adjacent sentences
+	for _, j := range []*Job{{Slug: "q-plain"}, {Slug: "q-solo", Solo: true}} {
+		if strings.Contains(zeusBrief(j), "you may use AskUserQuestion") {
+			t.Errorf("%s brief re-admits the permissive AskUserQuestion wording", j.Slug)
+		}
 	}
 }
 
