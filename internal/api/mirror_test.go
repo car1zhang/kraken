@@ -33,10 +33,13 @@ var mirrorGatedRoutes = []string{
 // that table with mirror mode OFF, and letting POST /api/update reach its
 // real handler there would shell out to git against the real checkout and,
 // on a clean tree, actually fork a detached updater that rebuilds and
-// reinstalls this machine's binary. Its mirror-off liveness is covered in
-// update_test.go instead, where every seam is stubbed and HOME is a temp
-// dir.
-var mirrorGatedGlobalRoutes = []string{"/api/update"}
+// reinstalls this machine's binary. POST /api/ship-ios is the same hazard
+// wearing a different coat — its real handler forks a run that archives the
+// iOS app and uploads it to App Store Connect under a build number that can
+// never be reused. Their mirror-off liveness is covered in update_test.go
+// and shipios_test.go instead, where every seam is stubbed and HOME is a
+// temp dir.
+var mirrorGatedGlobalRoutes = []string{"/api/update", "/api/ship-ios"}
 
 // mirrorPlutoRoutes mirror mirrorPlutoActions: gated under mirror mode only
 // while PlutoDir is NOT sandboxed (their sole real-world side effect is

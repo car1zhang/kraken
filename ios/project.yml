@@ -24,10 +24,32 @@ targets:
         SWIFT_VERSION: "5.10"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The default build number, and only the default: ship-testflight.sh
+        # overrides it on the xcodebuild command line with
+        # `CURRENT_PROJECT_VERSION=$(git rev-list --count HEAD)`. It lives here
+        # as a build SETTING rather than a literal in the plist below so that
+        # override is possible at all — CFBundleVersion references it as
+        # $(CURRENT_PROJECT_VERSION) and Xcode substitutes at build time.
+        # App Store Connect burns a (CFBundleShortVersionString, CFBundleVersion)
+        # pair permanently on first upload and will never accept that pair
+        # again, so a plain `1` here would let exactly one upload succeed.
+        CURRENT_PROJECT_VERSION: 1
     info:
       path: Generated-Info.plist
       properties:
         CFBundleDisplayName: Kraken
+        # Substituted from the CURRENT_PROJECT_VERSION build setting above at
+        # build time, so `xcodebuild CURRENT_PROJECT_VERSION=<n>` reaches the
+        # shipped Info.plist. Verify with `plutil -p <built app>/Info.plist`
+        # after changing anything here: a $(SETTING) that doesn't resolve does
+        # not error, it just lands in the bundle as the literal string.
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Declares the app uses no non-exempt encryption (it does none beyond
+        # system TLS). Without this key EVERY upload parks in App Store Connect
+        # behind a manual export-compliance question, and the build cannot go
+        # to TestFlight testers until a human clicks through it — which would
+        # defeat the point of shipping from the board.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -44,10 +66,13 @@ targets:
         # the public internet.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        # "job blocked" local notifications (no APNs — needs a paid dev
-        # account carl doesn't have): BGAppRefreshTask polls the board and
-        # fires a local notification for newly-blocked jobs. See
-        # NotificationManager.swift.
+        # "job blocked" notifications are LOCAL, not APNs — deliberately, to
+        # keep the app free of a push server, not because push is unavailable:
+        # this is a paid Apple Developer membership (its provisioning profiles
+        # carry a 1-year expiry; free personal teams get 7 days), which is also
+        # what makes the TestFlight pipeline in ship-testflight.sh possible.
+        # BGAppRefreshTask polls the board and fires a local notification for
+        # newly-blocked jobs. See NotificationManager.swift.
         UIBackgroundModes:
           - fetch
         BGTaskSchedulerPermittedIdentifiers:

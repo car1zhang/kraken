@@ -15,6 +15,7 @@
 		25E71118EA12AF32276973CB /* BoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30DCCDA162DA2E0C253F4EA3 /* BoardView.swift */; };
 		3C38197611F50EC43EE8E30E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FF9D9DA885804C0FEC0248E /* Assets.xcassets */; };
 		44C27A0EC3914943FCF8A6D4 /* DraftStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58DEA929F5C3CDC02AD93B1 /* DraftStoreTests.swift */; };
+		4B8AC3B17AEE418F8CE1BB80 /* ShipIOSDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */; };
 		54994C7136E33E7D02D336C4 /* KrakenApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4936914ABA5DBD9E4D304398 /* KrakenApp.swift */; };
 		55CAF5860D71C1D1935A1687 /* AppRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA367B655DF24A06788B2CD3 /* AppRouter.swift */; };
 		62092765D34198BD9F5C6968 /* HighlightingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07DC03F331A02353F8207836 /* HighlightingTextEditor.swift */; };
@@ -69,6 +70,7 @@
 		4FF9D9DA885804C0FEC0248E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5117FF8926CD3DAFCE9CC2FE /* KrakenTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6790EB0668AC92E70C34E1CB /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
+		6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShipIOSDecodeTests.swift; sourceTree = "<group>"; };
 		6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactView.swift; sourceTree = "<group>"; };
 		6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewJobSheet.swift; sourceTree = "<group>"; };
 		7F80ED1D258C4D24F4AE6965 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
@@ -120,6 +122,7 @@
 				210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */,
 				AF39E397D495995DF61C69ED /* MarkdownHTMLParityTests.swift */,
 				8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */,
+				6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */,
 				21990B7F0784450E2DF9B2F4 /* UpdateDecodeTests.swift */,
 				C5E28FB088DDAA43E812172C /* UsageDecodeTests.swift */,
 			);
@@ -284,6 +287,7 @@
 				0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */,
 				9A8EFAF4AA6DBDC088CF875F /* MarkdownHTMLParityTests.swift in Sources */,
 				AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */,
+				4B8AC3B17AEE418F8CE1BB80 /* ShipIOSDecodeTests.swift in Sources */,
 				1FEE8E3C18E0B4C8CBCF15DE /* UpdateDecodeTests.swift in Sources */,
 				0EFEC88E51F813044F76BA6B /* UsageDecodeTests.swift in Sources */,
 			);
@@ -366,6 +370,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = DDUUFX5L3W;
 				INFOPLIST_FILE = "Generated-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -482,6 +487,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = DDUUFX5L3W;
 				INFOPLIST_FILE = "Generated-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;

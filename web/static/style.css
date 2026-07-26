@@ -168,7 +168,14 @@ body {
    something to say — amber when origin/main is ahead, accent while the run
    builds, cyan across the restart gap, green when it lands, pink on a
    refusal or a failure. Every hue is an existing state color, so the button
-   reads the same language as the cards below it. */
+   reads the same language as the cards below it.
+
+   Worn by BOTH long-running-job controls in the header — ⟳ UPDATE and its
+   sibling ⇧ SHIP iOS (the ship-ios section in app.js). They share these
+   classes and a single pair of painters on purpose: two buttons that mean
+   "kick off a slow thing and watch it" should not look like two different
+   kinds of thing. .gap is the update button's alone — a ship never restarts
+   the server, so it has no gap state to paint. */
 .upd {
   background: none; border: 1px solid transparent; cursor: pointer;
   font: 10px var(--mono); letter-spacing: 2px;
@@ -221,7 +228,9 @@ body {
 /* the update banner borrows the stale banner's shape (both report on the
    binary, not on a job) and recolors per outcome: cyan while the server is
    restarting under us, pink when the run failed. Its amber default is the
-   "done, reloading…" line. */
+   "done, reloading…" line. #ship-banner wears the same class for its own
+   run — the amber default there is the "uploaded, but TestFlight still has
+   to process it" line. */
 .update-banner.cyan {
   background: var(--polling-soft); border-bottom-color: var(--polling); color: var(--polling);
 }

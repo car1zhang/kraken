@@ -67,6 +67,11 @@
          controls in the columns below. Label/class are rewritten every
          render by renderUpdate() in app.js. -->
     <button class="upd" id="update-btn"><span class="gly">⟳</span>UPDATE</button>
+    <!-- ship the iOS app to TestFlight: archive, export, upload to App Store
+         Connect. Same chrome weight and same .upd state machine as the
+         update button beside it (see the ship-ios section in app.js) — the
+         two are siblings, and reading as one control family is the point. -->
+    <button class="upd" id="ship-btn"><span class="gly">⇧</span>SHIP iOS</button>
     <button class="theme-btn" id="theme-toggle" title="theme: system → light → dark"></button>
     <span class="stat dim" id="tick-stat"></span>
   </header>
@@ -75,6 +80,12 @@
        finished run, pink on a failure. Same slot as the stale banner, since
        both report on the binary rather than on any one job. -->
   <div class="update-banner" id="update-banner" hidden></div>
+  <!-- the ship run's own strip, borrowing the update banner's shape and
+       colors. It exists mainly to carry one sentence the button has no room
+       for: a finished ship means the build reached App Store Connect, NOT
+       that any phone has it. Nothing on this Mac was replaced, so unlike the
+       update banner there is no reload to offer. -->
+  <div class="update-banner" id="ship-banner" hidden></div>
 
   <main class="board" id="board"></main>
   <main class="dag" id="dag" hidden>

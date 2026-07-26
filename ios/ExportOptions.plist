@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Options for `xcodebuild -exportArchive` (ios/ship-testflight.sh, step 4).
+  Key names and legal values are not folklore: they come from
+  `xcodebuild -help`, section "Available keys for -exportOptionsPlist", under
+  the Xcode this repo builds with (26.3). Re-read that section before editing —
+  an unrecognized key here is silently ignored, exactly like a mistyped -X
+  ldflags path on the Go side.
+-->
+<plist version="1.0">
+<dict>
+  <!--
+    app-store-connect is the CURRENT spelling. Xcode 26.3 still accepts the
+    older `app-store`, but its own help marks it "(deprecated: use
+    app-store-connect)". Same story for ad-hoc→release-testing and
+    development→debugging. Use the live name, not the one in older blog posts.
+  -->
+  <key>method</key>
+  <string>app-store-connect</string>
+
+  <key>teamID</key>
+  <string>DDUUFX5L3W</string>
+
+  <!--
+    The archive is built with CODE_SIGN_STYLE: Automatic (ios/project.yml), so
+    the export re-signs automatically too. On the FIRST run this is what reaches
+    out to Apple and mints the Apple Distribution certificate + App Store
+    provisioning profile, which is why that run needs -allowProvisioningUpdates
+    and why it mutates carl's real developer account. See ios/TESTFLIGHT.md.
+  -->
+  <key>signingStyle</key>
+  <string>automatic</string>
+
+  <!--
+    export, NOT upload. Letting -exportArchive upload directly would fuse the
+    two slowest steps into one unretryable unit: a network hiccup at minute 9
+    would throw away the archive as well. Exporting to a .ipa and uploading it
+    with altool as a separate step means a failed upload can be retried against
+    the SAME .ipa — and, more importantly, against the same CFBundleVersion,
+    which App Store Connect will never accept twice (see below).
+  -->
+  <key>destination</key>
+  <string>export</string>
+
+  <!--
+    THE dangerous default on this list. Xcode's own documented default is YES:
+    "Should Xcode manage the app's build number when uploading to App Store
+    Connect?" — i.e. Xcode feels free to rewrite CFBundleVersion behind our
+    backs. This pipeline derives the build number deterministically from
+    `git rev-list --count HEAD` so that a given commit always produces a given
+    build number; letting Xcode invent its own would make the number
+    unreproducible and could silently reuse one App Store Connect has already
+    permanently burned. NO means the number we computed is the number shipped.
+  -->
+  <key>manageAppVersionAndBuildNumber</key>
+  <false/>
+
+  <!-- dSYMs travel with the build so TestFlight crash reports symbolicate. -->
+  <key>uploadSymbols</key>
+  <true/>
+</dict>
+</plist>

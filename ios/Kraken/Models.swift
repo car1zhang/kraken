@@ -36,6 +36,9 @@ struct WebBoard: Decodable {
     // Absent on servers older than the self-update button (added additively,
     // no contract bump) — nil reads as a plain idle control.
     let update: WebUpdate?
+    // Absent on servers older than the TestFlight ship button (additive too)
+    // — nil reads as a plain idle control, same as `update`.
+    let shipIOS: WebShipIOS?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -45,6 +48,7 @@ struct WebBoard: Decodable {
         case jobs
         case contract, stale
         case update
+        case shipIOS = "ship_ios"
     }
 }
 
@@ -161,6 +165,73 @@ struct UpdateStartResponse: Decodable {
         case ok, phase
         case fromSHA = "from_sha"
     }
+}
+
+// MARK: - ship to TestFlight
+
+// WebShipIOS mirrors api/shipios.go's webShipIOS: the whole state behind the
+// daemon bar's ⇧ control. Served twice from one assembly function
+// (currentShipIOS) — as /api/board's `ship_ios` key and as the entire body of
+// GET /api/ship-ios/status — so the board and the in-flight poller can never
+// disagree about the same run. Nothing here is `omitempty` server-side.
+//
+// Every property is Optional and hand-decoded with `try?` for exactly the
+// blast-radius reason WebUpdate is (see its header): a failure INSIDE this
+// object would otherwise propagate through `decodeIfPresent` and take the
+// ENTIRE /api/board decode down with it, losing every job on the board over a
+// cosmetic control.
+//
+// One thing this model does NOT have, and the difference is worth stating: no
+// gap/restart concept. An update restarts the server answering these polls; a
+// ship replaces nothing on the Mac, so a failed status fetch is a genuine
+// fault rather than the expected middle of a successful run.
+struct WebShipIOS: Decodable {
+    /// idle|preflight|generating|archiving|exporting|uploading|done|failed.
+    /// `idle` when no run has ever happened.
+    let phase: String?
+    /// The CFBundleVersion this run is uploading (git rev-list --count HEAD);
+    /// 0 until the shipper announces it. Worth showing: App Store Connect
+    /// burns a build number permanently, so it's the first thing anyone needs
+    /// after a failure — and the only way to tell which build landed.
+    let build: Int?
+    let error: String?
+    /// unix millis; 0 = never run.
+    let startedAt: Int64?
+    /// unix millis of the last phase transition.
+    let updatedAt: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case phase, build, error
+        case startedAt = "started_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+// Decoding lives in an extension so the memberwise initializer survives —
+// BoardView synthesizes WebShipIOS values locally (the optimistic `preflight`
+// paint, the lost-contact `failed` record), and declaring an init in the
+// struct body would suppress it. Same arrangement as WebUpdate.
+extension WebShipIOS {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // `try?` per field, not `try`: the blast-radius cap described above,
+        // covering type mismatches too, which `decodeIfPresent` would throw on.
+        phase = try? c.decodeIfPresent(String.self, forKey: .phase)
+        build = try? c.decodeIfPresent(Int.self, forKey: .build)
+        error = try? c.decodeIfPresent(String.self, forKey: .error)
+        startedAt = try? c.decodeIfPresent(Int64.self, forKey: .startedAt)
+        updatedAt = try? c.decodeIfPresent(Int64.self, forKey: .updatedAt)
+    }
+}
+
+// ShipIOSStartResponse mirrors api/shipios.go's shipIOSResp — POST
+// /api/ship-ios' 202 body. 202, not 200: the run has been *started* (the claim
+// written, the detached child forked), and it is a long way from finished.
+// `phase` is always "preflight". A refusal never reaches this type — it's a
+// 409 with {"error": …}, which APIClient turns into KrakenError.
+struct ShipIOSStartResponse: Decodable {
+    let ok: Bool
+    let phase: String
 }
 
 struct WebJob: Decodable, Identifiable {

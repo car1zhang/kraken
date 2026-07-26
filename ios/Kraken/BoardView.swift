@@ -14,6 +14,7 @@ final class BoardViewModel {
             self.board = board
             self.errorMessage = nil
             ingestBoardUpdate(board.update)
+            ingestBoardShip(board.shipIOS)
             // Every successful fetch (this foreground poll, and the
             // BGAppRefreshTask in NotificationManager) runs the same
             // blocked-job diff — one notification per newly-blocked job.
@@ -387,6 +388,271 @@ final class BoardViewModel {
         }
         return UpdateButtonState(glyph: "⟳", label: "update", color: KTheme.text2, disabled: false)
     }
+
+    // MARK: - ship to TestFlight
+    //
+    // The daemon bar's ⇧ control, the update control's sibling: one server
+    // record (WebShipIOS, carried both by /api/board's `ship_ios` key and by
+    // GET /api/ship-ios/status) plus the one refusal no record can carry.
+    //
+    // Two things make it a separate state machine rather than a second caller
+    // of the code above:
+    //
+    //  1. There is no restart gap OF ITS OWN. A ship restarts nothing — serve,
+    //     the daemon and the Mac are up throughout — so a status fetch that
+    //     keeps failing is a genuine fault and is reported as one, after a
+    //     single retry to absorb a dropped request. The exception belongs to
+    //     the update control, not this one: its last act is `launchctl
+    //     kickstart -k`, which takes serve down for a couple of seconds, and
+    //     the shipper is given its own session (api/shipios.go's Setsid)
+    //     exactly so it survives that. Reporting "✕ ship failed" over the one
+    //     outage the run is engineered to live through would be backwards, so
+    //     the ceiling stretches while an update is in flight — see
+    //     shipFailureCeilingNow.
+    //  2. `done` does NOT mean this app has been replaced. It means the .ipa
+    //     reached App Store Connect. TestFlight still has to process it, and
+    //     carl still has to install it from the TestFlight app — while looking
+    //     at this very screen, running the OLD build. The control therefore
+    //     says "uploaded", never "shipped", and shipBanner spells out the rest.
+
+    /// jobs.ShipTerminal: no run is in flight, so the control is live.
+    private static let shipTerminalPhases: Set<String> = ["idle", "done", "failed"]
+    /// How long a finished run keeps the control. Twice the update control's
+    /// 60s: that one is sized for a surface that is about to be replaced,
+    /// while this record carries the build number and the "not installed yet"
+    /// note, which is the whole reason to look at it.
+    private static let shipRecentWindow: TimeInterval = 120
+    /// Two failed fetches in a row, not one — a single blip on a tailnet hop
+    /// is not evidence of anything. Deliberately NOT a time ceiling: there is
+    /// no expected outage here to wait out…
+    private static let shipFailureCeiling = 2
+    /// …except the one a concurrent UPDATE causes, which is real, expected, and
+    /// survivable by design. 25 ticks at 1.2s is ~30s: ten times the couple of
+    /// seconds `launchctl kickstart -k` takes, and still short enough to report
+    /// a serve that never came back while anyone is still looking. The update
+    /// control's own 120s gap clock owns that question; this only has to avoid
+    /// lying in the meantime.
+    private static let shipFailureCeilingUpdating = 25
+    private static let shipPollInterval: Duration = .milliseconds(1200)
+
+    /// Last record seen, from either poll.
+    private(set) var ship: WebShipIOS?
+    /// The refusal a 409 carried — the one thing no record remembers, because
+    /// nothing ran. A recorded FAILURE is deliberately not routed through here:
+    /// it lives in the record and `shipBanner` prints it straight from there.
+    private(set) var shipMessage: String? {
+        didSet { shipMessageAt = shipMessage == nil ? nil : Date() }
+    }
+    /// When `shipMessage` was set. It needs its own clock because a refusal has
+    /// no record to age out with, and this text occupies a whole banner strip:
+    /// left unbounded it would sit under the daemon bar for the rest of the
+    /// session, long after the credential it complains about was fixed.
+    private var shipMessageAt: Date?
+    /// A run is live and `runShipPoll` should be (or already is) running. Only
+    /// `runShipPoll` clears it, in a `defer` — see updatePolling for the stuck
+    /// state that discipline exists to prevent.
+    private(set) var shipPolling = false
+    /// Bumped every time a poll is REQUESTED; BoardView's `.task(id:)` keys off
+    /// it for the same frame-collision reason updatePollGeneration explains.
+    private(set) var shipPollGeneration = 0
+    /// Which `runShipPoll` invocation currently owns `shipPolling` — see
+    /// updatePollEpoch for why a plain flag isn't enough across a scene-phase
+    /// restart.
+    private var shipPollEpoch = 0
+    /// The tap has fired but POST /api/ship-ios hasn't answered yet. Set
+    /// synchronously in the button's action so two taps 50ms apart can't both
+    /// reach the handler and leave a "ship already in flight" 409 in the bar.
+    private(set) var shipStarting = false
+
+    /// Folds the 4s board poll's copy of the record in. The 1.2s status poll
+    /// wins outright while it is running — the two race, and applying an older
+    /// board response would rewind the phase on screen.
+    private func ingestBoardShip(_ s: WebShipIOS?) {
+        guard !shipPolling, let s else { return }
+        ship = s
+        if !Self.shipTerminalPhases.contains(s.phase ?? "idle") {
+            // a run someone else started — the CLI, the web board. Follow it
+            // just as closely. This is also how the fast poll recovers after a
+            // lost-contact failure: the board poll comes back first.
+            shipMessage = nil
+            beginShipPolling()
+        }
+    }
+
+    private func beginShipPolling() {
+        shipPolling = true
+        shipPollGeneration &+= 1
+    }
+
+    /// Flips the control off in the tap handler itself — see shipStarting.
+    func markShipStarting() {
+        shipStarting = true
+    }
+
+    /// Fires the run. No confirmation step: the tap IS the decision, same as
+    /// the update control and the web board.
+    func startShipIOS(baseURL: String) async {
+        defer { shipStarting = false }
+        shipMessage = nil
+        do {
+            let resp = try await APIClient.shared.startShipIOS(baseURL: baseURL)
+            // The handler writes the claim (phase preflight) BEFORE it forks
+            // the shipper, so paint that phase now rather than leaving the
+            // control idle until the first poll tick lands.
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            ship = WebShipIOS(
+                phase: resp.phase.isEmpty ? "preflight" : resp.phase,
+                build: 0, error: "", startedAt: now, updatedAt: now
+            )
+            beginShipPolling()
+        } catch {
+            // A 409's text is one specific paragraph about the machine's state
+            // — missing App Store Connect credentials, most often — and it is
+            // the only thing worth putting on screen here.
+            shipMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// How many consecutive failed fetches mean "the server is really gone"
+    /// right now. Reads the UPDATE record because that is the only thing on the
+    /// Mac that legitimately takes serve down mid-ship — see the section
+    /// comment above.
+    private var shipFailureCeilingNow: Int {
+        let updating = updatePolling || !Self.terminalPhases.contains(update?.phase ?? "idle")
+        return updating ? Self.shipFailureCeilingUpdating : Self.shipFailureCeiling
+    }
+
+    /// Whether the last ship record is recent enough to still speak for the
+    /// control. abs(), not a one-sided comparison, for the same reason
+    /// updateRecordFresh uses it: a future `updated_at` from clock skew would
+    /// otherwise be fresh forever and pin the control at "✕ ship failed".
+    private var shipRecordFresh: Bool {
+        let updatedAt = ship?.updatedAt ?? 0
+        return updatedAt > 0
+            && abs(Date().timeIntervalSince1970 - Double(updatedAt) / 1000) < Self.shipRecentWindow
+    }
+
+    /// The entry point BoardView's ship poll task calls — see
+    /// resumeUpdatePoll for why the record, not just the flag, is consulted.
+    func resumeShipPoll(baseURL: String) async {
+        guard shipPolling || !Self.shipTerminalPhases.contains(ship?.phase ?? "idle") else { return }
+        shipPolling = true
+        await runShipPoll(baseURL: baseURL)
+    }
+
+    /// The in-flight poll loop. Same structure as runUpdatePoll minus the gap
+    /// clock: nothing IN a ship takes the server down, so consecutive failures
+    /// are a fault to report rather than a window to ride out — with the one
+    /// borrowed exception shipFailureCeilingNow covers.
+    func runShipPoll(baseURL: String) async {
+        shipPollEpoch &+= 1
+        let epoch = shipPollEpoch
+        defer { if shipPollEpoch == epoch { shipPolling = false } }
+        var consecutiveFailures = 0
+        while !Task.isCancelled && shipPolling && shipPollEpoch == epoch {
+            do {
+                let s = try await APIClient.shared.shipIOSStatus(baseURL: baseURL)
+                ship = s
+                consecutiveFailures = 0
+                if Self.shipTerminalPhases.contains(s.phase ?? "idle") { return }
+            } catch {
+                // Cancellation is not a failure: this view is a TabView child,
+                // so switching tabs mid-run cancels the fetch in flight against
+                // a perfectly healthy server. `Task.isCancelled` is the ONLY
+                // signal that can reach here — APIClient.perform re-wraps every
+                // URLSession failure, cancellation included, as
+                // KrakenError.message, so no cast can match. Don't add one.
+                if Task.isCancelled { return }
+                consecutiveFailures += 1
+                if consecutiveFailures >= shipFailureCeilingNow {
+                    // Say what is and isn't known. The shipper is a detached
+                    // child of a `kraken serve` that may have died under it, so
+                    // the upload could well still be running; the phone simply
+                    // has no way to see it any more.
+                    let now = Int64(Date().timeIntervalSince1970 * 1000)
+                    ship = WebShipIOS(
+                        phase: "failed", build: ship?.build ?? 0,
+                        error: "kraken serve stopped answering mid-ship — the run itself may still be going; see ~/.kraken/ship-ios.log",
+                        startedAt: ship?.startedAt ?? now, updatedAt: now
+                    )
+                    return
+                }
+            }
+            try? await Task.sleep(for: Self.shipPollInterval)
+        }
+    }
+
+    /// What the ⇧ control shows right now, derived here so the view is a pure
+    /// paint. Same precedence as `updateButton` — starting, then running, then
+    /// a fresh terminal record, then the idle default. Deliberately NOT "the
+    /// web board's renderShipIOS() precedence": that one opens with a refusal
+    /// state this control does not have, because a refusal here goes to
+    /// `shipBanner`, which has room for the whole paragraph.
+    var shipButton: ShipButtonState {
+        let phase = ship?.phase ?? "idle"
+        let running = !Self.shipTerminalPhases.contains(phase)
+        let build = ship?.build ?? 0
+        let suffix = build > 0 ? " b\(build)" : ""
+
+        if shipStarting && !running {
+            // the tap landed, the POST hasn't answered — the record still reads
+            // terminal, so without this a second tap would earn a 409
+            return ShipButtonState(glyph: "⇧", label: "starting", color: KTheme.accent, disabled: true)
+        }
+        if running {
+            return ShipButtonState(glyph: "⇧", label: phase, color: KTheme.accent, disabled: true)
+        }
+        if shipRecordFresh, phase == "failed" {
+            // Tapping this re-runs the ship rather than "revealing" the error,
+            // which the update control has to do because its message shares the
+            // daemon bar's one-line slot. A ship has its own banner strip and
+            // `shipBanner` is already printing the error in full underneath
+            // this very button, so a reveal tap would change nothing on screen.
+            return ShipButtonState(glyph: "✕", label: "ship failed", color: KTheme.counter, disabled: false)
+        }
+        if shipRecordFresh, phase == "done" {
+            // "uploaded", never "shipped": the .ipa is at Apple and this app is
+            // still the old build. See shipBanner for the rest of the sentence.
+            return ShipButtonState(
+                glyph: "✓", label: "uploaded" + suffix, color: KTheme.solved, disabled: false
+            )
+        }
+        return ShipButtonState(glyph: "⇧", label: "ship iOS", color: KTheme.text2, disabled: false)
+    }
+
+    /// The one sentence the button has no room for, shown as a strip under the
+    /// daemon bar while a ship is in flight or has just finished. This is where
+    /// the uploaded-vs-installed distinction actually gets made in full — on
+    /// the phone especially, since the app reading it is the thing being
+    /// replaced, and a bare green ✓ would read as "you're on the new build".
+    var shipBanner: (text: String, color: Color)? {
+        // A refusal never became a run, so no record carries it. It belongs
+        // here rather than in the daemon bar's one-line slot: a preflight
+        // refusal is a paragraph naming which credential is missing and where
+        // to set it, and truncating that to one line throws away the answer.
+        if let shipMessage, let at = shipMessageAt,
+           Date().timeIntervalSince(at) < Self.shipRecentWindow {
+            return ("✕ " + shipMessage, KTheme.counter)
+        }
+        let phase = ship?.phase ?? "idle"
+        let build = ship?.build ?? 0
+        if !Self.shipTerminalPhases.contains(phase) {
+            let named = build > 0 ? "build \(build)" : "the iOS app"
+            return ("⇧ \(phase) \(named) — archiving and uploading takes several minutes", KTheme.accent)
+        }
+        guard shipRecordFresh else { return nil }
+        if phase == "failed" {
+            return ("✕ ship failed — \(ship?.error ?? "no error recorded")", KTheme.counter)
+        }
+        if phase == "done" {
+            let named = build > 0 ? "build \(build)" : "the new build"
+            return (
+                "✓ \(named) uploaded to App Store Connect — not installed yet. TestFlight has to process it (a few minutes), then install it from the TestFlight app. This app is still the old build until you do.",
+                KTheme.solved
+            )
+        }
+        return nil
+    }
 }
 
 /// One paint of the daemon bar's ⟳ control — see BoardViewModel.updateButton.
@@ -401,6 +667,32 @@ struct UpdateButtonState {
     /// nil and an Optional `let` to nothing, so this is what lets five of
     /// the six construction sites omit the parameter entirely.
     var revealsError: String?
+}
+
+/// One paint of the daemon bar's ⇧ control — see BoardViewModel.shipButton.
+/// A separate type from UpdateButtonState rather than a shared one: they
+/// happen to carry the same four fields today, and merging them would invite
+/// the next state either one grows (the update control's gap/behind states,
+/// say) onto the other, which is exactly the drift this feature is trying not
+/// to have. Note what it does NOT carry: UpdateButtonState's `revealsError`.
+/// That exists because an update's error has nowhere to go but the bar's
+/// shared one-line slot, so a tap is what puts it there; a ship's error is
+/// already on screen in `shipBanner`, and a tap that changed nothing would be
+/// a dead control wearing a live one's clothes.
+struct ShipButtonState {
+    let glyph: String
+    let label: String
+    let color: Color
+    let disabled: Bool
+}
+
+/// The ship poll's `.task(id:)` key — the update poll's key, for the same two
+/// reasons (a run STARTING bumps the generation; a scene-phase change has to
+/// restart rather than thaw the loop, since a suspended loop's failure streak
+/// would otherwise resume against a radio that hasn't come back up).
+private struct ShipPollKey: Hashable {
+    let generation: Int
+    let phase: ScenePhase
 }
 
 /// The update poll's `.task(id:)` key. Two independent things restart that
@@ -467,6 +759,7 @@ struct BoardView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 daemonBar
+                shipBanner
                 contractBanner
                 overviewStrip
                 TabView(selection: $selectedColumn) {
@@ -516,6 +809,14 @@ struct BoardView: View {
             .task(id: UpdatePollKey(generation: vm.updatePollGeneration, phase: scenePhase)) {
                 guard scenePhase == .active else { return }
                 await vm.resumeUpdatePoll(baseURL: serverURL)
+            }
+            // The ship poll, on its own task for the same reasons: a run can
+            // last ten minutes, and the board poll is both too slow to watch it
+            // and too expensive to speed up. Independent of the update poll —
+            // the two runs are unrelated and can legitimately overlap.
+            .task(id: ShipPollKey(generation: vm.shipPollGeneration, phase: scenePhase)) {
+                guard scenePhase == .active else { return }
+                await vm.resumeShipPoll(baseURL: serverURL)
             }
             .sheet(item: $selectedJob) { job in
                 NavigationStack {
@@ -655,6 +956,7 @@ struct BoardView: View {
                     .font(.data(11))
                     .foregroundStyle(KTheme.text2)
                 Spacer()
+                shipControl
                 updateControl
                 // One error slot, shared — precedence lives in barMessage.
                 // lineLimit is not cosmetic here: a preflight refusal embeds
@@ -723,6 +1025,58 @@ struct BoardView: View {
         .disabled(state.disabled)
         .fixedSize()
         .accessibilityLabel("update kraken — \(state.label)")
+    }
+
+    // The TestFlight ship control (POST /api/ship-ios + the status poll that
+    // follows the run — see BoardViewModel's ship section). Sits left of the
+    // update control, same bar weight, same no-confirmation tap.
+    //
+    // The accessibility label carries the distinction the two-word visible
+    // label can't: "uploaded" is where this run ends, and installing the build
+    // on this phone is a separate manual step in the TestFlight app afterwards.
+    private var shipControl: some View {
+        let state = vm.shipButton
+        return Button {
+            // One action, always: start a ship. A fresh failure re-runs rather
+            // than "revealing" itself — shipBanner is already showing the error
+            // in full right below this control (see BoardViewModel.shipButton).
+            //
+            // Synchronously, in the tap handler — a Task body doesn't start
+            // soon enough to keep a second tap out (see shipStarting).
+            vm.markShipStarting()
+            Task { await vm.startShipIOS(baseURL: serverURL) }
+        } label: {
+            HStack(spacing: 3) {
+                Text(state.glyph)
+                Text(state.label)
+            }
+            .font(.data(10))
+            .foregroundStyle(state.color)
+        }
+        .buttonStyle(.plain)
+        .disabled(state.disabled)
+        .fixedSize()
+        .accessibilityLabel("ship the iOS app to TestFlight — \(state.label). Uploading is not installing: TestFlight processes the build afterwards and you install it from the TestFlight app.")
+    }
+
+    // The ship run's own strip, under the daemon bar. It exists because the
+    // sentence that matters — a finished ship means the build reached App
+    // Store Connect, NOT that this phone has it — does not fit in a control
+    // that has to share a bar with the daemon LED and the cell counter.
+    @ViewBuilder
+    private var shipBanner: some View {
+        if let banner = vm.shipBanner {
+            Text(banner.text)
+                .font(.voice(11))
+                .foregroundStyle(banner.color)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(KTheme.surface)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(KTheme.hairline).frame(height: 1)
+                }
+        }
     }
 
     // Always-visible table-of-contents strip: one compact cell per column so

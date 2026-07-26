@@ -54,4 +54,10 @@ func Register(mux *http.ServeMux) {
 	// read and stays open.
 	mux.HandleFunc("/api/update", mirrorGated(updateHandler))
 	mux.HandleFunc("/api/update/status", updateStatusHandler)
+	// Ship-iOS is gated for the same reason: a mirror board is read-only by
+	// policy, and this one spends ten minutes of the Mac's CPU and pushes a
+	// build to carl's real App Store Connect account under a build number
+	// that can never be reused. Its status GET is a read and stays open.
+	mux.HandleFunc("/api/ship-ios", mirrorGated(shipIOSHandler))
+	mux.HandleFunc("/api/ship-ios/status", shipIOSStatusHandler)
 }

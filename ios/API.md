@@ -2,10 +2,10 @@
 
 Canonical reference for every JSON endpoint the iOS app (`ios/Kraken/`)
 consumes. Source of truth is the Go code — the handlers and wire types in
-`internal/api/` (`board.go`, `peers.go`, `update.go`, …), `web/serve.go`,
-and the model layers they read (`internal/jobs/{daemon,job,status}.go`,
-`internal/core/peer.go`); this doc transcribes it, it does not define it
-independently.
+`internal/api/` (`board.go`, `peers.go`, `update.go`, `shipios.go`, …),
+`web/serve.go`, and the model layers they read
+(`internal/jobs/{daemon,job,status}.go`, `internal/core/peer.go`); this doc
+transcribes it, it does not define it independently.
 
 **Current contract**: `apiContract = 5` (internal/api/board.go — the Go
 constant + `contract_test.go` bump lands in the same commit as this doc, per
@@ -53,13 +53,14 @@ other reasons (nil-vs-empty on the Go side, not the wire's absence).
 
 The rule reads one way only: `omitempty` ⇒ Optional, but Optional does not
 imply `omitempty`. Two kinds of Swift Optional exist without one.
-**Absence on an older server** — `contract`, `stale`, `WebBoard.update`: all
-always present on a current server, missing from builds that predate them,
-where the absence is itself what the app checks for. **Blast-radius
-containment** — every field of `WebUpdate`, all of them always present on
-the wire, made Optional (with a hand-written `init(from:)`) purely so a
-drifted sub-key costs the ⟳ control rather than the entire `/api/board`
-decode; see that struct's header comment in Models.swift.
+**Absence on an older server** — `contract`, `stale`, `WebBoard.update`,
+`WebBoard.shipIOS`: all always present on a current server, missing from
+builds that predate them, where the absence is itself what the app checks
+for. **Blast-radius containment** — every field of `WebUpdate` and
+`WebShipIOS`, all of them always present on the wire, made Optional (with a
+hand-written `init(from:)`) purely so a drifted sub-key costs the ⟳ / ⇧
+control rather than the entire `/api/board` decode; see those structs'
+header comments in Models.swift.
 
 Error responses: any non-2xx status returns `{"error": string}`. Board
 action endpoints (`webAction`-wrapped) additionally return `{"ok": true}`
@@ -83,6 +84,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `contract` | number | always | == `apiContract` |
 | `stale` | bool | always | this `k web` process' self-check |
 | `update` | object (`webUpdate`) | always | the self-update button's state (see `POST /api/update` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebUpdate` (Models.swift), **Optional** on `WebBoard` — always present on any server new enough to have the button, absent on one older than it |
+| `ship_ios` | object (`webShipIOS`) | always | the TestFlight ship button's state (see `POST /api/ship-ios` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebShipIOS` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is |
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's
@@ -100,6 +102,26 @@ present, zeroed when it doesn't apply.
 | `updated_at` | number | always | unix millis of the last phase transition |
 | `build_sha` | string | always | the running binary's ldflags-stamped short sha, `"dev"` unstamped |
 | `checked_at` | number | always | unix millis of the last availability check; `0` = never checked |
+
+`webShipIOS` (api/shipios.go) — assembled by one function (`currentShipIOS`)
+shared with `GET /api/ship-ios/status`, so the board key and the poller's
+endpoint can never disagree. No field is `omitempty`: every key is always
+present, zeroed when it doesn't apply.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `phase` | string | always | `idle`\|`preflight`\|`generating`\|`archiving`\|`exporting`\|`uploading`\|`done`\|`failed`. `idle` when no run has ever happened (missing status file) |
+| `build` | number | always | the `CFBundleVersion` this run is uploading (`git rev-list --count HEAD`); `0` until the shipper's `KRAKEN-BUILD:` line is seen. App Store Connect burns a build number permanently, so this is the first thing needed after a failure |
+| `error` | string | always | the run's error; `""` otherwise |
+| `started_at` | number | always | unix millis; `0` = never run |
+| `updated_at` | number | always | unix millis of the last phase transition |
+
+**`done` means uploaded, not installed.** The phase reaches `done` when the
+`.ipa` has been accepted by App Store Connect. TestFlight then processes it
+(minutes), and the build still has to be installed by hand from the
+TestFlight app. Both clients are worded around this — the control reads
+"uploaded", never "shipped" — because a green ✓ that implied "the phone is on
+the new build" would be false at exactly the moment it is shown.
 
 `daemonStatus` (daemon.go):
 
@@ -802,6 +824,70 @@ its last `done` forever, so an unbounded read would show a stale ✓ on every
 launch.
 Unlike the web board, the app does NOT reload itself when a run finishes —
 its UI ships in the app bundle, not out of the binary being replaced.
+
+### `POST /api/ship-ios` → `shipIOSResp` (api/shipios.go)
+
+Starts a TestFlight ship: `xcodegen generate` → `xcodebuild archive` →
+`-exportArchive` → upload to App Store Connect. The handler itself does none
+of that — it preflights, stakes a claim, and forks a detached
+`kraken ship-ios --detached` child, so a run that takes ten minutes isn't
+tied to an HTTP request. Mirror-gated (403 under `kraken serve --mirror`): a
+mirror board is read-only, and this one pushes a build to a real Apple
+account under a build number that can never be reused. Additive, no contract
+bump. Modeled in the iOS app (`ShipIOSStartResponse` in Models.swift,
+`startShipIOS` in APIClient.swift) — the daemon bar's ⇧ control.
+
+Request: an empty body (`{}` or nothing at all). There are deliberately no
+options — the credentials are environment (`ASC_KEY_ID`/`ASC_ISSUER_ID`,
+never on the wire), and the script's `--allow-provisioning-updates`, which
+MUTATES carl's Apple developer account, is reachable only from a terminal.
+A malformed (non-empty, non-JSON) body is still a 400.
+
+Response (202 Accepted — the run has been *started*, and it is a long way
+from finished):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `ok` | bool | always | |
+| `phase` | string | always | always `"preflight"` — the phase the claim was written at |
+
+There is no `build` here: the build number isn't known until the shipper
+announces it mid-run, so it arrives via the status record instead.
+
+Errors: 405 (non-POST), 400 (malformed JSON — an empty body is not an
+error), 409 (a run is already in flight: `ship already in flight (started
+HH:MM:SS)`; or a preflight refusal — missing App Store Connect credentials,
+no `xcodegen`, no script — whose message is `jobs.PreflightShipIOS`'s own
+text, shared verbatim with the `kraken ship-ios` CLI verb), 500 (the claim
+couldn't be written, or the fork failed — in which case the status record is
+reset to `failed` rather than left pinned at `preflight`).
+
+Single-flight is the status write, not a lock: the handler writes
+`phase: preflight` BEFORE spawning, and a second request reads that
+non-terminal phase and 409s. The detached child takes the real flock
+(`~/.kraken/ship-ios.lock`) and holds it for the whole run.
+
+### `GET /api/ship-ios/status` → `webShipIOS` (api/shipios.go)
+
+The same `webShipIOS` shape `/api/board` carries under `ship_ios`
+(documented above), served on its own so the UI's in-flight poller doesn't
+re-run discovery every tick during a ten-minute archive. GET only (405
+otherwise), never gated in mirror mode — it's a read. Modeled in the iOS app
+(`WebShipIOS` in Models.swift, `shipIOSStatus` in APIClient.swift).
+
+**Fetch failures here are NOT expected**, and that is the one real
+difference from `/api/update/status`. An update ends by restarting the very
+server being polled, so its poller has to treat a dead socket as the normal
+middle of a successful run; a ship restarts nothing — `kraken serve`, the
+daemon and the binary are all up from preflight through upload. Both clients
+therefore report a persistent failure rather than swallowing it, after a
+single retry to absorb one dropped request (web: 2 consecutive failures at
+1s; app: 2 at 1.2s). Neither has any gap clock, and neither reloads when a
+run finishes: nothing they are running was replaced. Like the update
+control, a terminal record only speaks for the button while it is fresh
+(both clients: 120s around `updated_at`, in both directions, since a future
+timestamp from clock skew would otherwise be fresh forever) —
+`~/.kraken/ship-ios.json` keeps its last `done` forever.
 
 ### `GET /api/health` → map literal (webpeers.go `healthHandler`)
 

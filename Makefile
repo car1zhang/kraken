@@ -1,4 +1,4 @@
-.PHONY: build install install-completion install-serve clean
+.PHONY: build install install-completion install-serve ios-testflight clean
 
 PLIST := $(HOME)/Library/LaunchAgents/dev.carl.kraken.plist
 
@@ -160,6 +160,17 @@ install-completion:
 	cp cmd/kraken/_k "$$dest/_k"; \
 	echo "installed zsh completion → $$dest/_k"; \
 	echo "reload with: rm -f ~/.zcompdump* && exec zsh"
+
+# Build the iOS app and upload it to TestFlight. A pass-through, on purpose:
+# ios/ship-testflight.sh is the ONE implementation, and `kraken ship-ios` calls
+# that script directly rather than going through make. This target exists only
+# so the pipeline is discoverable from the Makefile like everything else — do
+# not grow logic here, or a board-triggered ship and a hand-run ship start
+# doing different things. Pass flags through with ARGS, e.g.
+#   make ios-testflight ARGS=--dry-run
+# Setup and credentials: ios/TESTFLIGHT.md
+ios-testflight:
+	@./ios/ship-testflight.sh $(ARGS)
 
 clean:
 	rm -f kraken
