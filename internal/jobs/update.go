@@ -146,7 +146,16 @@ func staleUpdate(st UpdateStatus, alive bool, now int64) UpdateStatus {
 		// it yet. Live inside the grace window, dead past it — a spawn that
 		// failed so hard the handler couldn't even reset the status leaves
 		// exactly this shape behind.
-		if now-st.StartedAt <= updateClaimGraceMS {
+		//
+		// StartedAt <= now closes the other end of that window. Without it a
+		// FUTURE stamp — a clock that jumped backwards, a hand-edited
+		// update.json — satisfies `now - StartedAt <= grace` forever, and
+		// because this branch returns, neither the liveness rule nor
+		// updateMaxRun below ever gets to see the record: every later POST
+		// /api/update 409s and the only remedy is deleting the file. Both
+		// clients already bound their own freshness check with abs(); this is
+		// the server doing the same.
+		if now-st.StartedAt <= updateClaimGraceMS && st.StartedAt <= now {
 			return st
 		}
 		st.Phase = UpdateFailed
@@ -295,6 +304,19 @@ func PreflightUpdate() (UpdatePreflightInfo, error) {
 	}
 	pf.Repo = repo
 
+	// A TestFlight ship is the one other long-running job that drives this
+	// checkout, and the merge below would pull the ground out from under it:
+	// `git merge --ff-only` rewrites the working tree while `xcodebuild
+	// archive` is reading it, yielding an .ipa torn across two commits that
+	// then uploads under the pre-merge build number — which App Store Connect
+	// burns permanently. The ship's own preflight refuses the mirror-image case
+	// (PreflightShipIOS). Both are refusals rather than a shared flock: a lock
+	// would make a 40-second update block silently behind a twenty-minute
+	// upload, and a button that hangs teaches nothing.
+	if s := ReadShipStatus(); !ShipTerminal(s.Phase) {
+		return pf, fmt.Errorf("a TestFlight ship is in flight (%s) — it is archiving from %s, which this update would fast-forward under it; wait for it to finish", s.Phase, repo)
+	}
+
 	branch, err := updateRunGit(context.Background(), repo, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return pf, err
@@ -330,12 +352,17 @@ func PreflightUpdate() (UpdatePreflightInfo, error) {
 	return pf, nil
 }
 
-// updateToolDirs are the fallbacks lookToolchain searches after PATH, in
-// order. The first entry is the whole reason this function exists: go lives
-// in /usr/local/go/bin on this machine and the launchd plist's PATH does not
+// toolDirs are the fallbacks lookToolchain searches after PATH, in order. The
+// first entry is the whole reason this function exists: go lives in
+// /usr/local/go/bin on this machine and the launchd plist's PATH does not
 // include it, so a build kicked off by the daemon failed with "go: command
 // not found" while the identical command worked in a terminal.
-var updateToolDirs = []string{
+//
+// Named for the tool, not the caller: lookToolchain outgrew update.go —
+// PreflightShipIOS resolves xcodegen through it for exactly the same
+// launchd-PATH reason — and `updateToolDirs` read as though a ship borrowing
+// it were reaching into another feature's state.
+var toolDirs = []string{
 	"/usr/local/go/bin",
 	"/opt/homebrew/bin",
 	"/usr/local/bin",
@@ -345,11 +372,14 @@ var updateToolDirs = []string{
 // lookToolchain resolves a build tool to an absolute path: PATH first, then
 // the known install locations above plus ~/go/bin. The error names every
 // place it looked, since "make not found" with no list is unactionable.
+// Shared by both preflights — go/make for the updater, xcodegen for the
+// shipper — which is why it and its two seams are named for the job rather
+// than for update.go.
 func lookToolchain(name string) (string, error) {
-	if p, err := updateLookPath(name); err == nil {
+	if p, err := toolLookPath(name); err == nil {
 		return p, nil
 	}
-	dirs := append(append([]string{}, updateToolDirs...), filepath.Join(util.Home(), "go", "bin"))
+	dirs := append(append([]string{}, toolDirs...), filepath.Join(util.Home(), "go", "bin"))
 	for _, dir := range dirs {
 		cand := filepath.Join(dir, name)
 		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
@@ -517,6 +547,8 @@ var (
 		}
 		return strings.TrimSpace(string(out)), nil
 	}
-	updateLookPath     = exec.LookPath
+	// toolLookPath is lookToolchain's PATH seam — shared with PreflightShipIOS,
+	// hence the neutral name (see toolDirs).
+	toolLookPath       = exec.LookPath
 	updateProcessAlive = ProcessAlive
 )

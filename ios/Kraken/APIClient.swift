@@ -497,6 +497,36 @@ actor APIClient {
         try await get(baseURL: baseURL, path: "/api/update/status")
     }
 
+    // MARK: - ship to TestFlight
+
+    /// Starts a TestFlight ship: xcodegen → archive → export → upload to App
+    /// Connect. Returns as soon as the claim is written and the detached
+    /// shipper is forked (202) — the run itself, which takes minutes, is
+    /// followed via `shipIOSStatus`.
+    ///
+    /// Note what a completed run does and does not mean: the .ipa reaches App
+    /// Store Connect, TestFlight then processes it, and only afterwards can
+    /// this very app be replaced by the new build — from the TestFlight app,
+    /// by hand. Nothing here installs anything.
+    ///
+    /// Refusals are 409s carrying the machine's own sentence ("App Store
+    /// Connect credentials missing: ASC_KEY_ID not set…", "ship already in
+    /// flight"), which `perform` turns into a `KrakenError.message` — worth
+    /// showing verbatim. Additive endpoint, no contract bump.
+    func startShipIOS(baseURL: String) async throws -> ShipIOSStartResponse {
+        try await post(baseURL: baseURL, path: "/api/ship-ios", body: EmptyRequest())
+    }
+
+    /// The same `webShipIOS` shape /api/board carries under `ship_ios`, on its
+    /// own endpoint so a ~1.2s in-flight poll doesn't re-run discovery every
+    /// tick. Unlike `updateStatus`, failures here are NOT expected: a ship
+    /// restarts neither `kraken serve` nor the daemon, so the server should be
+    /// answering for the whole run and the caller reports a persistent failure
+    /// rather than swallowing it.
+    func shipIOSStatus(baseURL: String) async throws -> WebShipIOS {
+        try await get(baseURL: baseURL, path: "/api/ship-ios/status")
+    }
+
     // MARK: - artifacts
 
     /// Fetches a non-html artifact's raw body as text (webArtifact.url is

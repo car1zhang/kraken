@@ -2,5 +2,10 @@
 .DS_Store
 xcuserdata/
 /ios/build/
+# ship-testflight.sh keeps archives and .ipas in a mktemp dir outside the repo,
+# so these only appear when someone runs xcodebuild by hand from ios/. They are
+# hundreds of MB of build output and must never be committed.
+*.xcarchive/
+*.ipa
 /.claude/settings.json
 /.playwright-mcp/

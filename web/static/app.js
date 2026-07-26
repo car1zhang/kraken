@@ -557,6 +557,9 @@ function render(board) {
   // older server, which reads as a plain idle button (see the self-update
   // section at the bottom of this file)
   renderUpdateFromBoard(board.update);
+  // …and its sibling, the ⇧ SHIP iOS control (board.ship_ios, same additive
+  // treatment — see the ship-ios section below the self-update one)
+  renderShipFromBoard(board.ship_ios);
 
   return { byCol, archived };
 }
@@ -3557,14 +3560,25 @@ function renderUpdate() {
     title = `origin/main is ${u.behind} commit(s) ahead${checked}${build}`;
   }
 
-  // Written node by node, and only where something actually changed, instead
-  // of the one innerHTML assignment this used to be. `.upd.busy .gly` spins on
-  // a 1.1s keyframe animation while this function repaints on BOTH the 1s
-  // status poll and the 3s board poll — so replacing the glyph element (which
-  // is what assigning innerHTML does, even for identical markup) restarted the
-  // animation from 0° about once a second and the spinner never once completed
-  // a turn during a build. The label is a text node for the same reason, and
-  // needs no esc(): a text node cannot be markup.
+  paintUpdControl(btn, { cls, glyphCls, glyphChar, label, disabled, title });
+  paintUpdBanner(banner, bannerCls, bannerHTML);
+}
+
+// paintUpdControl writes one .upd button node by node, and only where
+// something actually changed, instead of the one innerHTML assignment this
+// used to be. `.upd.busy .gly` spins on a 1.1s keyframe animation while its
+// caller repaints on BOTH the 1s status poll and the 3s board poll — so
+// replacing the glyph element (which is what assigning innerHTML does, even
+// for identical markup) restarted the animation from 0° about once a second
+// and the spinner never once completed a turn during a build. The label is a
+// text node for the same reason, and needs no esc(): a text node cannot be
+// markup.
+//
+// Shared by renderUpdate and renderShipIOS. The two controls are deliberately
+// one widget with two records behind it: same classes, same glyph/label
+// grammar, same repaint discipline — only the state machine that decides what
+// to paint differs.
+function paintUpdControl(btn, { cls, glyphCls, glyphChar, label, disabled, title }) {
   const btnCls = "upd" + (cls ? " " + cls : "");
   if (btn.className !== btnCls) btn.className = btnCls;
   let gly = btn.firstElementChild;
@@ -3582,6 +3596,13 @@ function renderUpdate() {
   if (lab.nodeValue !== label) lab.nodeValue = label;
   btn.disabled = disabled;
   btn.title = title;
+}
+
+// paintUpdBanner writes one .update-banner strip. innerHTML rather than nodes:
+// unlike the button, a banner repaints only on genuine state changes and
+// carries markup (a spacer, an action button), and nothing inside it is
+// animated.
+function paintUpdBanner(banner, bannerCls, bannerHTML) {
   banner.className = "update-banner" + (bannerCls ? " " + bannerCls : "");
   banner.innerHTML = bannerHTML;
   banner.hidden = !bannerHTML;
@@ -3643,4 +3664,310 @@ document.getElementById("update-banner").addEventListener("click", async (ev) =>
     location.reload();
   }
   if (act === "log") setView("log");
+});
+
+// ---- ship-ios: the ⇧ SHIP iOS control (internal/api/shipios.go) ----
+//
+// Structurally the update button's twin — same .upd classes, the same
+// paintUpdControl/paintUpdBanner painters, the same "one server record plus
+// the one refusal no record can carry" shape — with two deliberate
+// differences that are the reason this is a separate state machine rather
+// than a second caller of renderUpdate():
+//
+//  1. NO restart-gap machinery of its OWN. A ship replaces nothing on this
+//     Mac — serve, the daemon and the binary all stay up from preflight
+//     through upload — so a failed status fetch here is a genuine error and
+//     is reported as one, after a single retry to ride out a dropped request.
+//     The one exception is not the ship's doing: a concurrent UPDATE ends in
+//     `launchctl kickstart -k`, which takes serve down for a couple of
+//     seconds, and the shipper is given its own session (api/shipios.go's
+//     Setsid) precisely so it SURVIVES that. Painting "✕ ship failed" over the
+//     one outage the run is engineered to live through would be exactly
+//     backwards, so the ceiling stretches while an update is in flight — see
+//     shipFailCeiling.
+//  2. NO reload when it finishes. Nothing this page is running was replaced.
+//
+// And the wording, which is the part worth getting right: `done` means the
+// .ipa reached App Store Connect. TestFlight still has to process it, which
+// takes minutes, and someone still has to install it from the TestFlight app
+// afterwards. So the control says UPLOADED, never SHIPPED, and the banner
+// spells out what is left to do — a green ✓ that read as "the phone has it"
+// would simply be a lie.
+
+// jobs.ShipTerminal: no run is in flight, so the button is live again.
+const SHIP_TERMINAL = new Set(["idle", "done", "failed"]);
+// How long a finished run keeps the button. Twice UPD_RECENT_MS: the update
+// button's window is sized for a page that reloads itself the instant the run
+// ends, whereas nothing here interrupts whoever is reading — and the thing
+// they most need to read is the build number and the "not installed yet" note.
+const SHIP_RECENT_MS = 120000;
+const SHIP_POLL_MS = 1000;
+// One dropped request is a hiccup; two in a row means the server really has
+// stopped answering. Deliberately NOT the update button's 120s gap clock —
+// there is no expected outage to ride out here.
+const SHIP_FAIL_MAX = 2;
+// …unless an update is in flight, whose `launchctl kickstart -k` is a real,
+// expected, seconds-long outage that the ship is built to survive. 30 ticks is
+// ~30s: ten times the couple of seconds a kickstart takes, and still short
+// enough that a serve which never comes back is reported while anyone is still
+// watching. The update poller's own 120s gap clock owns the "did serve come
+// back at all" question; this number only has to avoid lying in the meantime.
+const SHIP_FAIL_MAX_UPDATING = 30;
+
+let shipState = null; // last webShipIOS seen, from either poll
+let shipPolling = false; // a run is live and the 1s poll is running
+let shipPollTimer = null;
+let shipFailStreak = 0; // consecutive failed status fetches
+let shipRefusal = ""; // last refusal text
+let shipRefusalAt = 0; // when it was set — a refusal has no record to age out with
+// The POST is in flight but hasn't answered. Set synchronously in the click
+// handler's callee so a board poll landing mid-POST can't repaint the button
+// enabled underneath it — which it did, because paintUpdControl writes
+// btn.disabled on EVERY repaint, so the one assignment requestShipIOS made was
+// undone 3s later at the latest and a second click earned a guaranteed 409.
+let shipStarting = false;
+// what a click means right now, decided by renderShipIOS — a fresh failure
+// turns the button into the door to the log that explains it
+let shipBtnAction = "ship";
+
+// shipFailCeiling is how many consecutive failed status fetches mean "the
+// server is really gone". It reads the UPDATE record because that is the only
+// thing on this Mac that legitimately takes serve down mid-ship; see the
+// section comment above.
+function shipFailCeiling() {
+  const updating = updPolling || (updState && !UPD_TERMINAL.has(updState.phase || "idle"));
+  return updating ? SHIP_FAIL_MAX_UPDATING : SHIP_FAIL_MAX;
+}
+
+// shipIngest takes a fresh record from either poll, and is also where a stale
+// refusal dies. Two ways it can outlive its cause, both of which used to leave
+// SHIP BLOCKED painted over the truth:
+//
+//   - a 409 refused this click because a run started elsewhere was already in
+//     flight. That run IS the answer to "what is happening"; the refusal was
+//     only ever a toast.
+//   - that same run then finishes, and its "uploaded build N" banner is the
+//     one thing worth reading. A refusal older than the record it complained
+//     about has nothing left to say.
+function shipIngest(s) {
+  if (!s) return;
+  const running = !SHIP_TERMINAL.has(s.phase || "idle");
+  if (shipRefusal && (running || (s.updated_at && s.updated_at > shipRefusalAt))) {
+    shipRefusal = "";
+    shipRefusalAt = 0;
+  }
+  shipState = s;
+}
+
+// renderShipFromBoard folds the 3s board poll's copy of the record in. The 1s
+// status poll wins outright while it is running: the two race, and a board
+// response can easily be older than a status response that landed just before
+// it — applying it would rewind the phase on screen.
+function renderShipFromBoard(s) {
+  if (!shipPolling && s) {
+    if (!SHIP_TERMINAL.has(s.phase)) {
+      // a run someone else started — the CLI, another tab, the phone. Follow
+      // it just as closely as one started from here. This is also how the
+      // poll recovers on its own after a lost-contact failure: the board poll
+      // is the first thing to come back, and it restarts the fast one.
+      startShipPoll();
+    }
+    shipIngest(s); // clears a refusal this record has outlived
+  }
+  renderShipIOS();
+}
+
+function startShipPoll() {
+  if (shipPolling) return;
+  shipPolling = true;
+  shipFailStreak = 0;
+  shipPollTimer = setTimeout(shipPollTick, SHIP_POLL_MS);
+}
+
+function stopShipPoll() {
+  shipPolling = false;
+  clearTimeout(shipPollTimer);
+  shipPollTimer = null;
+  shipFailStreak = 0;
+}
+
+async function shipPollTick() {
+  shipPollTimer = null;
+  let s = null;
+  try {
+    const r = await fetch("/api/ship-ios/status", { cache: "no-store" });
+    if (r.ok) s = await r.json();
+  } catch {} // counted below, not swallowed — see SHIP_FAIL_MAX
+  if (s) {
+    shipIngest(s);
+    shipFailStreak = 0;
+  } else {
+    shipFailStreak++;
+  }
+  if (shipFailStreak >= shipFailCeiling()) {
+    // Past the ceiling — which is generous while an update is restarting serve
+    // (see shipFailCeiling) and tight otherwise, because nothing else on this
+    // Mac takes the server down mid-ship. Say what is and isn't known: the
+    // shipper is a detached child of a process that may well have died under
+    // it, so the upload itself could still be running — the log is the only
+    // witness.
+    shipState = {
+      ...(shipState || {}),
+      phase: "failed",
+      error: "kraken serve stopped answering mid-ship — the run itself may still be going; see ~/.kraken/ship-ios.log",
+      updated_at: Date.now(),
+    };
+    stopShipPoll();
+  } else if (s && SHIP_TERMINAL.has(s.phase)) {
+    stopShipPoll();
+  }
+  renderShipIOS();
+  if (shipPolling) shipPollTimer = setTimeout(shipPollTick, SHIP_POLL_MS);
+}
+
+// renderShipIOS paints button + banner from shipState. Pure repaint: the only
+// state it reads that isn't in the record is the refusal, and it changes
+// nothing.
+function renderShipIOS() {
+  const btn = document.getElementById("ship-btn");
+  const banner = document.getElementById("ship-banner");
+  if (!btn || !banner) return;
+
+  const s = shipState || {};
+  const phase = s.phase || "idle";
+  const running = !SHIP_TERMINAL.has(phase);
+  // A terminal record only speaks for the button while it's fresh, bounded on
+  // BOTH sides — an `updated_at` in the future (clock skew, a corrupt
+  // ship-ios.json) is otherwise fresh forever, and a `failed` record that is
+  // fresh forever pins the button at SHIP FAILED, whose click opens the log
+  // instead of starting a run, so the button never ships again.
+  const fresh = !!s.updated_at && Math.abs(Date.now() - s.updated_at) < SHIP_RECENT_MS;
+  const build = s.build ? " b" + s.build : "";
+
+  let cls = "";
+  let glyphCls = "gly";
+  let glyphChar = "⇧";
+  let label = "SHIP iOS";
+  let disabled = false;
+  // The default title carries the honest version of what the button does, so
+  // the distinction is on screen before anyone clicks rather than only after.
+  let title =
+    "build the iOS app and upload it to App Store Connect — TestFlight then " +
+    "takes a few minutes to process it, and the new build still has to be " +
+    "installed from the TestFlight app on the phone";
+  let bannerCls = "";
+  let bannerHTML = "";
+  shipBtnAction = "ship";
+
+  if (shipStarting && !running) {
+    // the click landed, the POST hasn't answered, and the record still reads
+    // terminal — without this the next repaint (a board poll 3s later at the
+    // latest) hands the button back and a second click earns a 409
+    cls = "busy";
+    label = "STARTING…";
+    disabled = true;
+  } else if (shipRefusal && Date.now() - shipRefusalAt < SHIP_RECENT_MS) {
+    // refused before anything was spawned (409 from the POST, already
+    // toasted): nothing ran, so the record behind it is untouched and the
+    // button stays clickable for the retry once the reason is fixed. Bounded
+    // by the same window a finished run gets: a refusal has no record to age
+    // out with, and left unbounded it outranks every branch below forever.
+    cls = "bad";
+    glyphChar = "✕";
+    label = "SHIP BLOCKED";
+    title = shipRefusal;
+  } else if (running) {
+    const secs = s.started_at ? Math.max(0, Math.round((Date.now() - s.started_at) / 1000)) : 0;
+    cls = "busy";
+    label = `${phase.toUpperCase()}… ${secs}s`;
+    disabled = true;
+    title = "ship in flight — archiving and uploading takes several minutes" + build;
+  } else if (phase === "failed" && fresh) {
+    // a failure after the shipper detached can't come back as an HTTP status
+    // — the request returned long ago — so it arrives here, in the record
+    cls = "bad";
+    glyphChar = "✕";
+    label = "SHIP FAILED";
+    title = s.error || "ship failed";
+    shipBtnAction = "log";
+    bannerCls = "bad";
+    bannerHTML =
+      `<span>✕ ship${build ? " of build " + esc(String(s.build)) : ""} failed — ${esc(s.error || "no error recorded")}</span>` +
+      '<span class="spacer"></span><button data-act="ship-log">OPEN LOG</button>';
+  } else if (phase === "done" && fresh) {
+    const secs =
+      s.started_at && s.updated_at ? Math.max(0, Math.round((s.updated_at - s.started_at) / 1000)) : 0;
+    cls = "ok";
+    glyphChar = "✓";
+    // UPLOADED, not SHIPPED: the .ipa is at Apple, the phone is unchanged.
+    // `build` is either "" or already leading-spaced, so there is nothing to
+    // trim (update's version needs it because its space is unconditional).
+    label = "UPLOADED" + build;
+    title = "uploaded to App Store Connect — not yet installed anywhere";
+    bannerHTML =
+      `<span>✓ build ${esc(String(s.build || "?"))} uploaded to App Store Connect` +
+      (secs ? ` in ${secs}s` : "") +
+      " · TestFlight still has to process it (usually a few minutes), then install " +
+      "the new build from the TestFlight app on the phone — nothing on this Mac changed" +
+      "</span>";
+  }
+
+  paintUpdControl(btn, { cls, glyphCls, glyphChar, label, disabled, title });
+  paintUpdBanner(banner, bannerCls, bannerHTML);
+}
+
+// requestShipIOS fires the run. No confirmation step, matching the update
+// button: the click IS the decision. Deliberately not post() — a refusal here
+// is one specific paragraph about the machine ("App Store Connect credentials
+// missing: ASC_KEY_ID not set…"), and post()'s ✕ in the clock corner truncates
+// exactly the part worth reading.
+async function requestShipIOS() {
+  shipRefusal = "";
+  shipRefusalAt = 0;
+  // A flag, not `btn.disabled = true`: paintUpdControl writes btn.disabled on
+  // every repaint, so a direct assignment survives only until the next board
+  // poll — which, mid-POST, is exactly when it must not.
+  shipStarting = true;
+  renderShipIOS();
+  try {
+    const r = await fetch("/api/ship-ios", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || String(r.status));
+    // the handler has already written the claim (phase preflight) before
+    // spawning, so paint it now rather than waiting out the first poll tick
+    shipIngest({
+      ...(shipState || {}),
+      phase: data.phase || "preflight",
+      build: 0,
+      error: "",
+      started_at: Date.now(),
+      updated_at: Date.now(),
+    });
+    startShipPoll();
+  } catch (e) {
+    shipRefusal = e.message || "ship refused";
+    shipRefusalAt = Date.now();
+    showToast("✕ " + shipRefusal);
+  }
+  shipStarting = false;
+  renderShipIOS();
+}
+
+document.getElementById("ship-btn").addEventListener("click", () => {
+  // a fresh failure's button is the way into the log that explains it (see
+  // shipBtnAction); the failure ages out after SHIP_RECENT_MS and the button
+  // is a plain SHIP iOS again from there
+  if (shipBtnAction === "log") setView("log");
+  else requestShipIOS();
+});
+
+// banner actions, delegated: renderShipIOS replaces the banner's innards on
+// every repaint, so nothing inside it can own a listener. No RELOAD NOW twin
+// here — a ship replaces nothing this page is running.
+document.getElementById("ship-banner").addEventListener("click", (ev) => {
+  if (ev.target.closest("button")?.dataset.act === "ship-log") setView("log");
 });

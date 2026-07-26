@@ -41,16 +41,16 @@ func stubGit(t *testing.T, fn func(ctx context.Context, dir string, args ...stri
 
 func stubLookPath(t *testing.T, fn func(string) (string, error)) {
 	t.Helper()
-	prev := updateLookPath
-	updateLookPath = fn
-	t.Cleanup(func() { updateLookPath = prev })
+	prev := toolLookPath
+	toolLookPath = fn
+	t.Cleanup(func() { toolLookPath = prev })
 }
 
 func stubToolDirs(t *testing.T, dirs ...string) {
 	t.Helper()
-	prev := updateToolDirs
-	updateToolDirs = dirs
-	t.Cleanup(func() { updateToolDirs = prev })
+	prev := toolDirs
+	toolDirs = dirs
+	t.Cleanup(func() { toolDirs = prev })
 }
 
 // fakeKrakenRepo makes ResolveRepo("kraken") resolve inside the sandboxed
@@ -191,6 +191,16 @@ func TestStaleUpdate(t *testing.T) {
 		{
 			"pid 0 past grace fails",
 			UpdateStatus{Phase: UpdatePreflight, StartedAt: now - updateClaimGraceMS - 1},
+			false, UpdateFailed, "updater never started",
+		},
+		{
+			// The grace window is bounded on BOTH sides. A StartedAt in the
+			// future satisfies `now - StartedAt <= grace` forever, and this
+			// branch RETURNS — so neither the liveness rule nor updateMaxRun
+			// could ever reach the record, and the UPDATE button would 409 for
+			// good with no remedy short of deleting update.json by hand.
+			"pid 0 with a future StartedAt is not believed",
+			UpdateStatus{Phase: UpdatePreflight, StartedAt: now + 3_600_000},
 			false, UpdateFailed, "updater never started",
 		},
 		{
@@ -516,14 +526,14 @@ func TestLookToolchainAbsentNamesEveryCandidate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
-	// Deliberately NOT stubbing updateToolDirs: the real default list is
+	// Deliberately NOT stubbing toolDirs: the real default list is
 	// what the message must enumerate, and no dir on any machine holds a
 	// binary by this name.
 	_, err := lookToolchain("kraken-no-such-tool")
 	if err == nil {
 		t.Fatal("lookToolchain for a nonexistent tool succeeded")
 	}
-	for _, dir := range append(append([]string{}, updateToolDirs...), filepath.Join(home, "go", "bin")) {
+	for _, dir := range append(append([]string{}, toolDirs...), filepath.Join(home, "go", "bin")) {
 		if !strings.Contains(err.Error(), dir) {
 			t.Errorf("error %q does not name candidate dir %s", err.Error(), dir)
 		}

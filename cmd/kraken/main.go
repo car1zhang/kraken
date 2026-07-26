@@ -55,6 +55,8 @@ func main() {
 		cmdImport(rest)
 	case "update":
 		cmdUpdate(rest)
+	case "ship-ios":
+		cmdShipIOS(rest)
 	case "pr-hook":
 		cmdPrHook(rest)
 	case "questions":
@@ -134,6 +136,18 @@ Commands:
                       --dry-run reports the ahead/behind state and changes
                       nothing, --test runs 'go test ./...' after the build and
                       aborts before installing if it is red.
+  k ship-ios [--dry-run]
+                      build the iOS app and upload it to TestFlight, by running
+                      ios/ship-testflight.sh in the kraken checkout (xcodegen,
+                      xcodebuild archive, export, xcrun altool) — the same
+                      sequence the board's SHIP iOS button fires. Needs
+                      ASC_KEY_ID and ASC_ISSUER_ID in the environment plus the
+                      matching AuthKey_<id>.p8, and refuses without them.
+                      'done' means uploaded, NOT installed: TestFlight still
+                      has to process the build before the phone is offered it.
+                      --dry-run preflights and prints the plan, building and
+                      uploading nothing. See ios/TESTFLIGHT.md — the first run
+                      must be done by hand.
   k questions get|set|add|update|remove <slug> ...
                       cell-side verb zeus uses instead of hand-rolled curl to
                       read/write its own open doc questions, proxied over

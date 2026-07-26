@@ -165,6 +165,7 @@ var webBoardSpec = map[string]fieldSpec{
 	"contract":   {kind: wireNumber, required: true},
 	"stale":      {kind: wireBool, required: true},
 	"update":     {kind: wireObject, required: true},
+	"ship_ios":   {kind: wireObject, required: true},
 }
 
 // webUpdateSpec covers update.go's webUpdate — served both as webBoard's
@@ -201,6 +202,34 @@ var updateStartRespSpec = map[string]fieldSpec{
 	"ok":       {kind: wireBool, required: true},
 	"phase":    {kind: wireString, required: true},
 	"from_sha": {kind: wireString, required: true},
+}
+
+// webShipIOSSpec covers shipios.go's webShipIOS — served both as webBoard's
+// "ship_ios" key and as the whole body of GET /api/ship-ios/status, from one
+// assembly function (currentShipIOS) so the two shapes can't drift. No
+// omitempty anywhere, for the same reason webUpdate has none: the clients
+// read every field unconditionally, and an absent key would be
+// indistinguishable from a zeroed one.
+var webShipIOSSpec = map[string]fieldSpec{
+	"phase":      {kind: wireString, required: true},
+	"build":      {kind: wireNumber, required: true},
+	"error":      {kind: wireString, required: true},
+	"started_at": {kind: wireNumber, required: true},
+	"updated_at": {kind: wireNumber, required: true},
+}
+
+// shipIOSStartRespSpec covers POST /api/ship-ios' 202 body (shipios.go's
+// shipIOSResp). It gets its own spec for the lesson the update button
+// taught: shipios_test.go round-trips the 202 by unmarshaling into
+// `shipIOSResp` itself, so renaming a json tag renames both sides at once
+// and stays green in Go while the phone — whose ShipIOSStartResponse
+// (Models.swift) decodes both keys as non-optionals — throws on every
+// successful start. Pinning the wire names here is the only thing that
+// catches that. There is no request spec: shipIOSReq is deliberately empty
+// (see its comment).
+var shipIOSStartRespSpec = map[string]fieldSpec{
+	"ok":    {kind: wireBool, required: true},
+	"phase": {kind: wireString, required: true},
 }
 
 var webJobSpec = map[string]fieldSpec{

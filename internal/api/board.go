@@ -296,6 +296,10 @@ type webBoard struct {
 	// Additive (see apiContract's bump policy above): clients that don't
 	// know the key ignore it.
 	Update webUpdate `json:"update"`
+	// ShipIOS is the TestFlight button's whole state — the phase of any ship
+	// in flight and the build number it is uploading. Additive, same policy
+	// as Update.
+	ShipIOS webShipIOS `json:"ship_ios"`
 }
 
 // jobArtifacts collects a job's viewable artifacts. A live cell always
@@ -640,7 +644,7 @@ func buildWebBoard() webBoard {
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
 	activeStore := jobs.ActiveStore()
-	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate()}
+	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS()}
 	order := jobs.LoadBoardOrder()
 	byState := map[string][]webJob{}
 	for _, j := range js {
