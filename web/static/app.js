@@ -32,6 +32,21 @@ const STATE_COLOR = {
   archived: "var(--text-2)",
 };
 
+// jobKey is a board entry's unique client-side identity, and `slug` alone is
+// NOT it: the wire's slug is unique only WITHIN a namespace. An archived job
+// rides as its numbered archive name (board.go), which is numbered only
+// against the archive's own contents — so archiving `foo` (no conflict there,
+// archive name stays `foo`) and then creating a new active `foo` puts two
+// entries with slug "foo" on the board, and buildWebBoard appends the
+// archived ones last. Keying anything by bare slug therefore gives the
+// ARCHIVED entry last-writer-wins, which is how a live job stopped being
+// steerable: jobsBySlug[slug] returned an archived entry with live:false, so
+// liveDisplayColumn read null and a click on the live card fell through to
+// the read-only editor instead of the steer/unblock modal.
+const jobKey = (j) => (j.archived ? "archive:" + j.slug : j.slug);
+
+// keyed by jobKey, NOT slug — every read below is for an active job, whose
+// key is its plain slug, so callers still index it with a bare slug
 let jobsBySlug = {};
 let dragging = null; // { slug, from }
 let draggedEl = null; // the dragged card's live DOM node
@@ -406,13 +421,14 @@ function threadsHTML(j) {
 }
 
 // chipsHTML renders a job's artifact chips, collapsing to the first 3 (plus
-// a "+N more" toggle) unless slug is in expandedArtifacts — slug keys the
-// expanded state, label prefixes each chip's data-name (differs from slug
-// for a renamed archived job)
-function chipsHTML(artifacts, slug, label) {
+// a "+N more" toggle) unless key is in expandedArtifacts — key is the job's
+// jobKey (never a bare slug, or an archived job and an active one that reused
+// its freed slug would share one expand/collapse toggle), label prefixes each
+// chip's data-name (differs from slug for a renamed archived job)
+function chipsHTML(artifacts, key, label) {
   const list = artifacts || [];
   if (!list.length) return "";
-  const expanded = expandedArtifacts.has(slug);
+  const expanded = expandedArtifacts.has(key);
   const shown = expanded ? list : list.slice(0, 3);
   const chips = shown
     .map(
@@ -422,7 +438,7 @@ function chipsHTML(artifacts, slug, label) {
     .join("");
   const toggle =
     list.length > 3
-      ? `<button class="chip chip-more" data-slug="${esc(slug)}">${expanded ? "less" : `+${list.length - 3} more`}</button>`
+      ? `<button class="chip chip-more" data-key="${esc(key)}">${expanded ? "less" : `+${list.length - 3} more`}</button>`
       : "";
   return chips + toggle;
 }
@@ -494,7 +510,7 @@ function cardHTML(j, col) {
   // the questions chip rides in the artifact-chip row rather than a row of
   // its own: both answer "what's in this job", and one wrapped flex row
   // costs the card no extra height when there's already a chip line
-  const chips = chipsHTML(j.artifacts, j.slug, j.slug) + docQuestionsChipHTML(j);
+  const chips = chipsHTML(j.artifacts, jobKey(j), j.slug) + docQuestionsChipHTML(j);
   const roster = (j.roster || [])
     .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
@@ -588,7 +604,7 @@ function render(board) {
   const archived = [];
   let flags = 0;
   for (const j of board.jobs || []) {
-    jobsBySlug[j.slug] = j;
+    jobsBySlug[jobKey(j)] = j;
     if (j.archived) {
       archived.push(j);
       continue; // drawer, not a column
@@ -834,8 +850,13 @@ let archiveOpen = localStorage.getItem("kraken-archive-open") === "1";
 function archivedCardHTML(j) {
   const label = j.display_slug || j.slug;
   const renamed = j.display_slug && j.display_slug !== j.slug;
-  const chips = chipsHTML(j.artifacts, j.slug, label);
-  return `<div class="card archived" style="--state:var(--text-2)" data-slug="${esc(j.slug)}">
+  const chips = chipsHTML(j.artifacts, jobKey(j), label);
+  // data-slug is the jobKey here, not the bare archive name: nothing reads an
+  // archived card's data-slug as a server key (unarchive/delete carry their
+  // own, below), but snapshotDocInputs/restoreDocInputs use it as a per-card
+  // scroll key — and a bare slug would make this card and an active job that
+  // reused the freed slug restore each other's feedback-panel scroll position
+  return `<div class="card archived" style="--state:var(--text-2)" data-slug="${esc(jobKey(j))}">
     <div class="card-top">
       <span class="slug">${esc(label)}</span>
       ${renamed ? `<span class="state">as ${esc(j.slug)}</span>` : ""}
@@ -1079,7 +1100,11 @@ async function postReorder(column, slugs) {
 // with what the client already knows, so the caller falls back to the next
 // real poll instead of guessing.
 function predictReorderedJobs(column, slugs) {
-  const bySlug = Object.fromEntries(lastBoardJobs.map((j) => [j.slug, j]));
+  // `slugs` is a column's DOM order — active jobs only — so archived entries
+  // are filtered out before keying: one that shares a reused slug would
+  // otherwise win last-writer-wins and get spliced into the column in the
+  // active job's place until the next poll corrected it
+  const bySlug = Object.fromEntries(lastBoardJobs.filter((j) => !j.archived).map((j) => [j.slug, j]));
   const reordered = slugs.map((s) => bySlug[s]).filter(Boolean);
   if (reordered.length !== slugs.length) return null;
   let i = 0;
@@ -1376,13 +1401,15 @@ document.addEventListener("click", (ev) => {
   // (it needs the same size/padding) but must never open an artifact
   const chipMore = ev.target.closest(".chip-more");
   if (chipMore) {
-    const slug = chipMore.dataset.slug;
-    if (expandedArtifacts.has(slug)) expandedArtifacts.delete(slug);
-    else expandedArtifacts.add(slug);
+    // data-key is a jobKey, not a slug — for an active job the two are the
+    // same string, which is why the steerSlug comparison below still holds
+    const key = chipMore.dataset.key;
+    if (expandedArtifacts.has(key)) expandedArtifacts.delete(key);
+    else expandedArtifacts.add(key);
     localStorage.setItem("kraken-expanded-artifacts", JSON.stringify([...expandedArtifacts]));
     invalidateBoard();
     refresh();
-    if (!steerOverlay.hidden && steerSlug === slug) {
+    if (!steerOverlay.hidden && steerSlug === key) {
       fillSteerContext(jobsBySlug[steerSlug], steerMode);
     }
     return;
@@ -2012,7 +2039,7 @@ function fillSteerContext(j, mode) {
   lastSentEl.textContent = lastSent ? `me→zeus: ${lastSent}` : "";
 
   chipsEl.hidden = !artifacts;
-  chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, j.slug, j.slug) : "";
+  chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, jobKey(j), j.slug) : "";
 
   const dqState = snapshotDocInputs();
   docqEl.hidden = !docq;

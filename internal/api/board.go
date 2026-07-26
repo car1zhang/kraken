@@ -306,9 +306,17 @@ type webJob struct {
 	Health  string `json:"health,omitempty"`
 	ModTime int64  `json:"mtime"`
 	// Archived jobs ride the same list with State "archived". Their Slug is
-	// the numbered archive file base (unique even when an active job reuses
-	// the freed slug — it's what unarchive/delete target); DisplaySlug
-	// carries the original slug for rendering.
+	// the numbered archive file base — what unarchive/delete target, and
+	// unique WITHIN the archive but NOT across this whole array: archiving
+	// `foo` numbers against the archive's own contents only, so the first
+	// archival of any slug keeps the bare name, and a new active job that
+	// takes the freed slug back then rides the SAME slug string as the
+	// archived one. Archived entries are appended last (see the loop at the
+	// bottom of buildWebBoard), so a client that keys anything by bare slug
+	// silently loses the ACTIVE job to the archived one — which is exactly
+	// how a live job stopped being steerable from the board (web/static/
+	// app.js' jobKey). Pair slug with `archived` to get a unique key.
+	// DisplaySlug carries the original slug for rendering.
 	Archived    bool   `json:"archived,omitempty"`
 	DisplaySlug string `json:"display_slug,omitempty"`
 	// CellGone marks a started, non-done job whose tmux session vanished
