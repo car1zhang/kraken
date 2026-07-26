@@ -96,15 +96,34 @@ func ShellCmdString(args []string) string {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
-		if isShellSafe(a) {
-			b.WriteString(a)
-		} else {
-			b.WriteByte('\'')
-			b.WriteString(strings.ReplaceAll(a, "'", `'\''`))
-			b.WriteByte('\'')
-		}
+		b.WriteString(ShellQuote(a))
 	}
 	return b.String()
+}
+
+// ShellQuote renders one argument as a single shell word: verbatim when it
+// needs no quoting, single-quoted otherwise.
+func ShellQuote(s string) string {
+	if isShellSafe(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ShellReadFileArg renders a shell word that expands — in the pane's own
+// shell, at launch — to the entire contents of path: `"$(cat '<path>')"`.
+//
+// tmux refuses any command longer than ~16KB with a bare `command too long`,
+// and the two arguments a cell spawn carries whose length is driven by content
+// rather than by kraken (zeus' system prompt and the job spec) had grown past
+// that ceiling together, wedging every StartCell. Both are written to files
+// and passed through this instead, so the command line stays a few hundred
+// bytes no matter how long either gets. The surrounding double quotes keep the
+// substitution one word through any whitespace in the file; command
+// substitution strips trailing newlines, which is exactly what a
+// file-with-trailing-newline wants.
+func ShellReadFileArg(path string) string {
+	return `"$(cat ` + ShellQuote(path) + `)"`
 }
 
 // isShellSafe allowlists args that need no quoting; everything else gets

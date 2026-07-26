@@ -241,6 +241,51 @@ func cellClaudeArgs(model string) []string {
 	return append(args, core.ModelArgs(model)...)
 }
 
+// zeusBriefPath and spawnPromptPath name the two spawn inputs that are staged
+// as FILES rather than passed on the tmux command line: zeus' system prompt
+// and its initial prompt. Both are kraken-owned and live beside the worktree
+// in the cell dir (never in CellArtifacts — they are plumbing, not
+// deliverables), and both are rewritten on every spawn. See spawnCommand.
+func zeusBriefPath(j *Job) string {
+	return filepath.Join(cellDir(j), "zeus-brief.md")
+}
+
+func spawnPromptPath(j *Job) string {
+	return filepath.Join(cellDir(j), "zeus-prompt.md")
+}
+
+// spawnCommand renders the shell command a cell's tmux session runs. Fixed
+// arguments (the launcher, flags, --name, -r) go through ShellCmdString; the
+// two whose length is driven by content — brief and prompt, either of which
+// may be empty — are written to files under the cell dir and referenced with
+// command substitution instead.
+//
+// Passing them inline is what broke: tmux caps a command at ~16KB and rejects
+// anything longer with a bare `command too long`, so once the brief grew past
+// that ceiling EVERY cell spawn failed, and each failure left its
+// already-created worktree behind — which then masked the real error with a
+// stale "worktree already exists" on every subsequent daemon tick. Staged
+// files keep the command a few hundred bytes regardless of how long a brief or
+// a job spec gets, and leaving them on disk afterwards makes what zeus was
+// actually launched with readable after the fact.
+func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
+	cmd := core.ShellCmdString(argv)
+	// `--` must stay last, so the prompt is appended after the brief flag
+	for _, in := range []struct{ flag, body, path string }{
+		{"--append-system-prompt", brief, zeusBriefPath(j)},
+		{"--", prompt, spawnPromptPath(j)},
+	} {
+		if in.body == "" {
+			continue
+		}
+		if err := os.WriteFile(in.path, []byte(in.body), 0o644); err != nil {
+			return "", fmt.Errorf("write spawn input %s: %v", in.path, err)
+		}
+		cmd += " " + in.flag + " " + core.ShellReadFileArg(in.path)
+	}
+	return cmd, nil
+}
+
 // jobPrompt is the spec portion of the job body — everything up to the
 // kraken-owned "## Mid-run log" section, which is bookkeeping for the file,
 // not part of zeus' initial prompt.
@@ -301,16 +346,16 @@ func StartCell(j *Job, repo string) error {
 	// half-built cell is cleanable by hand
 	installHookSettings(wt, j)
 	installSkills(wt, j)
-	argv := append(cellClaudeArgs(j.Model), "--name", ZeusName(j),
-		"--append-system-prompt", zeusBrief(j))
-	if prompt := jobPrompt(j); prompt != "" {
-		argv = append(argv, "--", prompt)
+	launch, err := spawnCommand(j, append(cellClaudeArgs(j.Model), "--name", ZeusName(j)),
+		zeusBrief(j), jobPrompt(j))
+	if err != nil {
+		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
 	var newSessionStderr bytes.Buffer
 	newSessionCmd := exec.Command("tmux", "new-session", "-d",
 		"-x", strconv.Itoa(core.DetachedSessionCols), "-y", strconv.Itoa(core.DetachedSessionRows),
 		"-s", sess, "-c", wt,
-		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv))
+		"-n", util.Slugify(j.Slug), launch)
 	newSessionCmd.Stderr = &newSessionStderr
 	if err := newSessionCmd.Run(); err != nil {
 		if newSessionStderr.Len() > 0 {
@@ -1251,17 +1296,22 @@ func ReactivateJob(j *Job, session, message string) error {
 		}
 	}
 	prompt, hasPrompt := reactivatePrompt(reorient, message, rebaseNote)
+	if !hasPrompt {
+		prompt = "" // spawnCommand omits an empty prompt entirely
+	}
 	// the job's model rides along on reactivation too (Q2): a resumed zeus
-	// keeps the model its job file specifies at reactivate time
-	argv := append(cellClaudeArgs(j.Model), "--name", ZeusName(j), "-r", session)
-	if hasPrompt {
-		argv = append(argv, "--", prompt)
+	// keeps the model its job file specifies at reactivate time. No brief
+	// here: -r resumes a session that already carries the one it was born
+	// with, so only the steering prompt gets staged.
+	launch, err := spawnCommand(j, append(cellClaudeArgs(j.Model), "--name", ZeusName(j), "-r", session), "", prompt)
+	if err != nil {
+		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
 	var newSessionStderr bytes.Buffer
 	newSessionCmd := exec.Command("tmux", "new-session", "-d",
 		"-x", strconv.Itoa(core.DetachedSessionCols), "-y", strconv.Itoa(core.DetachedSessionRows),
 		"-s", sess, "-c", wt,
-		"-n", util.Slugify(j.Slug), core.ShellCmdString(argv))
+		"-n", util.Slugify(j.Slug), launch)
 	newSessionCmd.Stderr = &newSessionStderr
 	if err := newSessionCmd.Run(); err != nil {
 		if newSessionStderr.Len() > 0 {

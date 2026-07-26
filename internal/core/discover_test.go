@@ -319,6 +319,43 @@ func TestIsShellSafe(t *testing.T) {
 	}
 }
 
+// TestShellReadFileArg pins the escape hatch that keeps content-sized
+// arguments off the tmux command line (tmux rejects anything past ~16KB with
+// `command too long`). The word must survive a path containing spaces or a
+// quote, and must stay ONE word after expansion — a brief with a blank line in
+// it would otherwise word-split into a dozen arguments.
+func TestShellReadFileArg(t *testing.T) {
+	for _, c := range []struct{ path, want string }{
+		{"/tmp/cells/x/zeus-brief.md", `"$(cat /tmp/cells/x/zeus-brief.md)"`},
+		{"/tmp/a b/brief.md", `"$(cat '/tmp/a b/brief.md')"`},
+		{"/tmp/it's/brief.md", `"$(cat '/tmp/it'\''s/brief.md')"`},
+	} {
+		if got := ShellReadFileArg(c.path); got != c.want {
+			t.Errorf("ShellReadFileArg(%q) = %q, want %q", c.path, got, c.want)
+		}
+	}
+	// the substitution must be double-quoted, or the shell splits the file's
+	// contents on whitespace before claude ever sees them
+	got := ShellReadFileArg("/tmp/x.md")
+	if !strings.HasPrefix(got, `"$(cat `) || !strings.HasSuffix(got, `)"`) {
+		t.Errorf("ShellReadFileArg must wrap the substitution in double quotes, got %q", got)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"claude", "claude"},
+		{"--model=opus", "--model=opus"},
+		{"a b", "'a b'"},
+		{"it's", `'it'\''s'`},
+		{"", "''"},
+	} {
+		if got := ShellQuote(c.in); got != c.want {
+			t.Errorf("ShellQuote(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestOrderPeers(t *testing.T) {
 	mate := &Peer{AgentName: "helper", Role: "teammate"}
 	lead := &Peer{Name: "lead", Teammates: []*Peer{mate}}

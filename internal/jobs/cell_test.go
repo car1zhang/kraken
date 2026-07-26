@@ -479,3 +479,95 @@ func TestAllArtifactPathsNoReservedNames(t *testing.T) {
 		}
 	}
 }
+
+// --- spawnCommand ---
+
+// TestSpawnCommandStaysShortRegardlessOfInputSize is the regression test for
+// the outage that motivated staging spawn inputs in files at all.
+//
+// zeus' brief and the job spec used to ride inline on the `tmux new-session`
+// command line. tmux packs a command into a fixed ~16KB buffer and rejects
+// anything larger with a bare `command too long`; once the brief crossed that
+// line, EVERY cell spawn failed, and because the failure landed after `git
+// worktree add`, each attempt left a worktree behind that made the next tick
+// fail with a misleading "worktree already exists" instead. The invariant that
+// prevents a recurrence is not "keep the brief small" — it is that the command
+// length must not depend on the inputs' length at all.
+func TestSpawnCommandStaysShortRegardlessOfInputSize(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	j := &Job{Slug: "spawn-size"}
+	if err := os.MkdirAll(cellDir(j), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brief := strings.Repeat("b", 1<<20)
+	prompt := strings.Repeat("p", 1<<20)
+
+	cmd, err := spawnCommand(j, []string{"claude", "--rc"}, brief, prompt)
+	if err != nil {
+		t.Fatalf("spawnCommand: %v", err)
+	}
+	// tmux's real ceiling is ~16340 bytes for this argv shape; 4096 leaves
+	// room for a long cell path without ever approaching it
+	if len(cmd) > 4096 {
+		t.Errorf("spawn command is %d bytes for 1MB of input — the inputs are being inlined again, "+
+			"which is what tmux rejects with `command too long`; stage them with core.ShellReadFileArg", len(cmd))
+	}
+	for _, want := range []string{"--append-system-prompt", zeusBriefPath(j), spawnPromptPath(j), "$(cat "} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("spawn command %q missing %q", cmd, want)
+		}
+	}
+	// `--` must stay last: everything after it is claude's initial prompt
+	if i, j2 := strings.Index(cmd, " -- "), strings.Index(cmd, "--append-system-prompt"); i < j2 {
+		t.Errorf("spawn command puts -- before --append-system-prompt: %q", cmd)
+	}
+	for _, c := range []struct{ path, want string }{
+		{zeusBriefPath(j), brief},
+		{spawnPromptPath(j), prompt},
+	} {
+		got, err := os.ReadFile(c.path)
+		if err != nil {
+			t.Fatalf("read staged input %s: %v", c.path, err)
+		}
+		if string(got) != c.want {
+			t.Errorf("staged %s is %d bytes, want %d — the input was truncated or mangled", c.path, len(got), len(c.want))
+		}
+	}
+}
+
+// TestSpawnCommandOmitsEmptyInputs covers the reactivate path, which resumes a
+// session that already carries its system prompt (`-r`) and may have no
+// steering message either: an empty input must produce no flag at all, not an
+// empty file and a `$(cat …)` that expands to nothing — `claude --` with a
+// blank prompt is not the same as `claude` with none.
+func TestSpawnCommandOmitsEmptyInputs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	j := &Job{Slug: "spawn-empty"}
+	if err := os.MkdirAll(cellDir(j), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := spawnCommand(j, []string{"claude", "-r", "sess"}, "", "")
+	if err != nil {
+		t.Fatalf("spawnCommand: %v", err)
+	}
+	if cmd != "claude -r sess" {
+		t.Errorf("spawnCommand with no brief or prompt = %q, want %q", cmd, "claude -r sess")
+	}
+	for _, path := range []string{zeusBriefPath(j), spawnPromptPath(j)} {
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("spawnCommand wrote %s for an empty input", path)
+		}
+	}
+}
+
+// TestSpawnCommandReportsWriteFailure pins that a failed stage is an error
+// rather than a silently-launched agent with no system prompt: StartCell turns
+// this into a "worktree left at …" message the same way a tmux failure does.
+func TestSpawnCommandReportsWriteFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	j := &Job{Slug: "spawn-unwritable"}
+	// no MkdirAll: the cell dir does not exist, so the write must fail
+	if _, err := spawnCommand(j, []string{"claude"}, "brief", ""); err == nil {
+		t.Fatal("spawnCommand succeeded with an unwritable cell dir, want an error")
+	}
+}
