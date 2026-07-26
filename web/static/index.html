@@ -56,10 +56,20 @@
       <button class="viewtab" data-view="log">LOG</button>
     </span>
     <span class="spacer"></span>
+    <!-- self-update: fast-forward main, rebuild, reinstall, restart the
+         daemon. Far right of the toolbar, immediately left of the theme
+         toggle — chrome, deliberately not competing with the per-job
+         controls in the columns below. Label/class are rewritten every
+         render by renderUpdate() in app.js. -->
+    <button class="upd" id="update-btn"><span class="gly">⟳</span>UPDATE</button>
     <button class="theme-btn" id="theme-toggle" title="theme: system → light → dark"></button>
     <span class="stat dim" id="tick-stat"></span>
   </header>
   <div class="stale-banner" id="stale-banner" hidden></div>
+  <!-- the update run's own strip: cyan across the restart gap, amber on a
+       finished run, pink on a failure. Same slot as the stale banner, since
+       both report on the binary rather than on any one job. -->
+  <div class="update-banner" id="update-banner" hidden></div>
 
   <main class="board" id="board"></main>
   <main class="dag" id="dag" hidden>

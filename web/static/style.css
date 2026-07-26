@@ -158,6 +158,35 @@ body {
 }
 .theme-btn:hover { color: var(--text); }
 
+/* the self-update control (see the self-update section in app.js): same
+   chrome weight as .theme-btn at rest, taking color only when it has
+   something to say — amber when origin/main is ahead, accent while the run
+   builds, cyan across the restart gap, green when it lands, pink on a
+   refusal or a failure. Every hue is an existing state color, so the button
+   reads the same language as the cards below it. */
+.upd {
+  background: none; border: 1px solid transparent; cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 2px;
+  color: var(--text-2); padding: 3px 9px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.upd:hover:not([disabled]) { color: var(--text); }
+.upd[disabled] { opacity: 0.85; cursor: default; }
+.upd .gly { display: inline-block; font-size: 11px; }
+.upd .dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--revealed); box-shadow: var(--glow-warn);
+}
+.upd.avail { color: var(--revealed); border-color: var(--revealed-soft); }
+.upd.busy { color: var(--accent); border-color: var(--accent-soft); }
+.upd.gap { color: var(--polling); border-color: var(--polling-soft); }
+.upd.ok { color: var(--solved); border-color: var(--solved-soft); text-shadow: var(--glow-ok); }
+.upd.bad { color: var(--counter); border-color: var(--counter-soft); text-shadow: var(--glow-hot); }
+/* the only infinite animation in the sheet — the reduce-motion block at the
+   bottom already kills it along with everything else */
+.upd.busy .gly, .upd.gap .gly { animation: spin 1.1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* header at-a-glance usage widget: current account's session/weekly/model
    segments + a pool summary, opening the drilldown modal on click (see
    #usage-overlay below and the "usage widget" section in app.js) */
@@ -175,7 +204,7 @@ body {
 .u-pool { color: var(--text-2); }
 .u-stale { opacity: 0.55; }
 
-.stale-banner {
+.stale-banner, .update-banner {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 16px;
   background: var(--revealed-soft);
@@ -183,6 +212,20 @@ body {
   color: var(--revealed);
   font: 11px var(--mono);
   letter-spacing: 0.2px;
+}
+/* the update banner borrows the stale banner's shape (both report on the
+   binary, not on a job) and recolors per outcome: cyan while the server is
+   restarting under us, pink when the run failed. Its amber default is the
+   "done, reloading…" line. */
+.update-banner.cyan {
+  background: var(--polling-soft); border-bottom-color: var(--polling); color: var(--polling);
+}
+.update-banner.bad {
+  background: var(--counter-soft); border-bottom-color: var(--counter); color: var(--counter);
+}
+.update-banner button {
+  background: transparent; border: 1px solid currentColor; color: inherit; cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 1.5px; padding: 2px 9px;
 }
 
 /* ---- board ---- */

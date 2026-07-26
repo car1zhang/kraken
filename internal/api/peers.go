@@ -86,7 +86,10 @@ var openPeerFunc = core.OpenPeer
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "host": host, "contract": apiContract, "stale": util.IsSelfStale()})
+	// build is the short commit this binary was linked from (ldflags-stamped,
+	// "dev" unstamped) — additive, and the one way a client can tell whether
+	// a restart actually landed a new binary rather than replaying the old.
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "host": host, "contract": apiContract, "stale": util.IsSelfStale(), "build": util.Build()})
 }
 
 func peersHandler(source peerSource) http.HandlerFunc {

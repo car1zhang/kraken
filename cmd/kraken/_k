@@ -17,6 +17,7 @@ _k() {
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
+        'update:self-update — fast-forward, rebuild, reinstall, restart the launchd job'
         'help:show help'
     )
 
@@ -66,6 +67,15 @@ _k() {
             # there is no cheap store-backed completion source the way
             # 'k _complete' (tmux/ps discovery) or the pool dir listing
             # (account, above) are.
+            ;;
+        update)
+            local -a updflags
+            updflags=(
+                '--force:reinstall + restart even when already up to date'
+                '--dry-run:report the ahead/behind state and change nothing'
+                '--test:run go test ./... after the build, before installing'
+            )
+            _describe -t flags 'flag' updflags
             ;;
         feedback)
             if (( CURRENT == 3 )); then

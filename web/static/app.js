@@ -550,6 +550,11 @@ function render(board) {
     banner.hidden = true;
   }
 
+  // the ⟳ UPDATE control rides the same payload — board.update, absent on an
+  // older server, which reads as a plain idle button (see the self-update
+  // section at the bottom of this file)
+  renderUpdateFromBoard(board.update);
+
   return { byCol, archived };
 }
 
@@ -2717,14 +2722,18 @@ document.addEventListener("keydown", (ev) => {
 
 let view = localStorage.getItem("kraken-view") || "board";
 
+// setView is the tabs' handler, and also how a surface outside the tab strip
+// sends you somewhere — the failed-update banner's OPEN LOG, say.
+function setView(v) {
+  view = v;
+  localStorage.setItem("kraken-view", view);
+  applyView();
+  invalidateBoard(); // switching to dag must render it even though jobs are unchanged
+  refresh();
+}
+
 document.querySelectorAll(".viewtab").forEach((tab) =>
-  tab.addEventListener("click", () => {
-    view = tab.dataset.view;
-    localStorage.setItem("kraken-view", view);
-    applyView();
-    invalidateBoard(); // switching to dag must render it even though jobs are unchanged
-    refresh();
-  }));
+  tab.addEventListener("click", () => setView(tab.dataset.view)));
 
 function applyView() {
   document.querySelectorAll(".viewtab").forEach((t) =>
@@ -3239,7 +3248,13 @@ async function refresh() {
       updateAges(); // a rebuild renders fresh ages itself
     }
   } catch {
-    document.getElementById("daemon-stat").textContent = "kraken web server unreachable";
+    // This path is already quiet — it writes the status bar and toasts
+    // nothing — which is what keeps an update's restart gap from turning
+    // into a wall of notices as this 3s poll and the 1s update poll both
+    // fail through it. All it needs is the right words: mid-update the
+    // server is gone on purpose, and "unreachable" would read as a crash.
+    document.getElementById("daemon-stat").textContent =
+      updIsRestarting() ? "daemon — restarting" : "kraken web server unreachable";
     document.getElementById("daemon-led").className = "led";
   }
 }
@@ -3265,4 +3280,325 @@ themeToggle.textContent = themeLabel();
 themeToggle.addEventListener("click", () => {
   window.krakenTheme.set(THEME_CYCLE[window.krakenTheme.get()]);
   themeToggle.textContent = themeLabel();
+});
+
+// ---- self-update: the ⟳ UPDATE control (internal/api/update.go) ----
+//
+// The button is a view over one server record — board.update, and GET
+// /api/update/status, which are the same webUpdate shape — plus two facts
+// only the browser knows: whether THIS page watched a run start (so only a
+// page that did reloads itself when it ends) and the last refusal, which no
+// server record carries because a refused update never happened.
+//
+// While a run is live the button polls /api/update/status every second
+// rather than riding the 3s board poll, and it polls with a BARE fetch whose
+// failures are swallowed. That is the whole trick: an update's last act is
+// restarting the server that answers these requests, so for a couple of
+// seconds every fetch fails. That gap is the normal middle of a SUCCESSFUL
+// update — post(), which reports any failure, would call it an error and be
+// wrong every single run.
+
+// jobs.UpdateTerminal: no run is in progress, so the button is live again.
+const UPD_TERMINAL = new Set(["idle", "done", "failed", "uptodate"]);
+// how long a finished run keeps the button. ~/.kraken/update.json holds its
+// last record forever, so without a window every page load for the rest of
+// time would reopen a green ✓ UPDATED — or a pink failure — from days ago.
+const UPD_RECENT_MS = 60000;
+// past this a restart that hasn't come back has stopped being a restart
+const UPD_GAP_MAX_MS = 120000;
+const UPD_POLL_MS = 1000;
+const UPD_RELOAD_MS = 1500;
+
+let updState = null; // last webUpdate seen, from either poll
+let updPolling = false; // a run is live and the 1s poll is running
+let updPollTimer = null;
+let updGapSince = 0; // ms of this gap's first failed fetch; 0 = server answering
+let updRefusal = ""; // last refusal text — sticky until the next click
+let updWatching = false; // this page saw a run start, so it owes itself a reload
+let updReloadTimer = null;
+// what a click means right now, decided by renderUpdate — the button is a
+// button most of the time, but a fresh failure turns it into the door to the
+// log that explains it, and only the render knows which state is on screen
+let updBtnAction = "update";
+
+// updIsRestarting: what refresh()'s failed-fetch path asks so a board that
+// went dark mid-update reads as "daemon — restarting" and not as a crash.
+function updIsRestarting() {
+  return updPolling;
+}
+
+// updIngest takes a fresh record from either poll. Reload scheduling lives
+// here rather than in renderUpdate so that repainting the button is never
+// itself an event.
+function updIngest(u) {
+  if (!u) return;
+  updState = u;
+  updGapSince = 0;
+  if (u.phase === "done") scheduleUpdateReload();
+}
+
+// scheduleUpdateReload arms the post-update reload. MANDATORY, not cosmetic:
+// web/static is embedded in the binary (web/embed.go), so the moment the new
+// kraken serve is up this page is running the OLD build's SPA against the NEW
+// server — its markup, its CSS and its idea of every API shape are all one
+// version behind. Only a page that watched the run start reloads: a page
+// opened afterwards reads the same `done` record, and reloading on it would
+// loop forever.
+function scheduleUpdateReload() {
+  if (updReloadTimer || !updWatching) return;
+  updWatching = false;
+  updReloadTimer = setTimeout(async () => {
+    // The reload is mandatory but the tab getting it may not have asked for
+    // anything — renderUpdateFromBoard arms it on any tab that merely watched
+    // a CLI-started run go by — and the spec editor is 600ms of debounce away
+    // from the server at all times. location.reload() drops that debounce on
+    // the floor, so land it first. Not the whole story: whatever is typed
+    // during the restart gap can't be saved either (there is no server to
+    // POST to), but that half is inherent and this half is not.
+    await flushEditorAutosave();
+    location.reload();
+  }, UPD_RELOAD_MS);
+}
+
+// renderUpdateFromBoard folds the 3s board poll's copy of the record in. The
+// 1s status poll wins outright while it is running: the two race, and a board
+// response can easily be older than a status response that landed just before
+// it — applying it would rewind the phase on screen.
+function renderUpdateFromBoard(u) {
+  if (!updPolling && u) {
+    if (!UPD_TERMINAL.has(u.phase)) {
+      // a run someone else started — the CLI, another tab. This page holds
+      // the old build's SPA just the same, so it wants the reload just as
+      // much as the tab that clicked.
+      updWatching = true;
+      updRefusal = ""; // whatever we were refused, something is running now
+      startUpdatePoll();
+    }
+    updIngest(u);
+  }
+  renderUpdate();
+}
+
+function startUpdatePoll() {
+  if (updPolling) return;
+  updPolling = true;
+  updPollTimer = setTimeout(updPollTick, UPD_POLL_MS);
+}
+
+function stopUpdatePoll() {
+  updPolling = false;
+  clearTimeout(updPollTimer);
+  updPollTimer = null;
+  updGapSince = 0;
+}
+
+async function updPollTick() {
+  updPollTimer = null;
+  let u = null;
+  try {
+    const r = await fetch("/api/update/status", { cache: "no-store" });
+    if (r.ok) u = await r.json();
+  } catch {} // expected: the restart gap, where there is no server to answer
+  if (u) {
+    updIngest(u);
+  } else if (!updGapSince) {
+    updGapSince = Date.now();
+  }
+  if (updGapSince && Date.now() - updGapSince > UPD_GAP_MAX_MS) {
+    // Two minutes of silence is no longer a restart. Say so rather than
+    // spinning a cyan button at an empty socket forever — update.log is the
+    // only place that can explain a serve which never bound.
+    updState = {
+      ...(updState || {}),
+      phase: "failed",
+      error: "kraken serve did not come back after the restart — see ~/.kraken/update.log",
+      updated_at: Date.now(),
+    };
+    stopUpdatePoll();
+  } else if (u && UPD_TERMINAL.has(u.phase)) {
+    stopUpdatePoll();
+  }
+  renderUpdate();
+  if (updPolling) updPollTimer = setTimeout(updPollTick, UPD_POLL_MS);
+}
+
+// renderUpdate paints button + banner from updState. Pure repaint: the only
+// state it reads that isn't in the record is the refusal and the pending
+// reload, and it changes neither.
+function renderUpdate() {
+  const btn = document.getElementById("update-btn");
+  const banner = document.getElementById("update-banner");
+  if (!btn || !banner) return;
+
+  const u = updState || {};
+  const phase = u.phase || "idle";
+  const running = !UPD_TERMINAL.has(phase);
+  // a terminal record only speaks for the button while it's fresh
+  const fresh = !!u.updated_at && Date.now() - u.updated_at < UPD_RECENT_MS;
+  const build = u.build_sha ? " · running " + u.build_sha : "";
+
+  let cls = "";
+  // glyph as (class, character) rather than markup: the node itself is
+  // reused across repaints (see the bottom of this function), so there is
+  // nothing to build a string for.
+  let glyphCls = "gly";
+  let glyphChar = "⟳";
+  let label = "UPDATE";
+  let disabled = false;
+  let title = "update kraken — fast-forward main, rebuild, reinstall, restart the daemon" + build;
+  let bannerCls = "";
+  let bannerHTML = "";
+  updBtnAction = "update";
+
+  if (updRefusal) {
+    // refused before anything was spawned (409 from the POST, already
+    // toasted): nothing ran, so the record behind it is untouched and the
+    // button stays clickable for the retry after you've fixed the reason.
+    cls = "bad";
+    glyphChar = "✕";
+    label = "UPDATE BLOCKED";
+    title = updRefusal;
+  } else if (running && (updGapSince || phase === "restarting")) {
+    // either the updater says it's restarting, or the endpoint stopped
+    // answering mid-run — which IS the restart, seen from this side
+    cls = "gap";
+    label = "RESTARTING…";
+    disabled = true;
+    bannerCls = "cyan";
+    bannerHTML =
+      "<span>⟳ kraken serve is restarting on the new binary — board data is stale for a few seconds. Cells are unaffected.</span>";
+  } else if (running) {
+    const secs = u.started_at ? Math.max(0, Math.round((Date.now() - u.started_at) / 1000)) : 0;
+    cls = "busy";
+    label = `${phase.toUpperCase()}… ${secs}s`;
+    disabled = true;
+  } else if (phase === "failed" && fresh) {
+    // a failure after the updater detached can't come back as an HTTP status
+    // — the request returned long ago — so it arrives here, in the record
+    cls = "bad";
+    glyphChar = "✕";
+    label = "UPDATE FAILED";
+    title = u.error || "update failed";
+    updBtnAction = "log";
+    bannerCls = "bad";
+    bannerHTML =
+      `<span>✕ update failed — ${esc(u.error || "no error recorded")}</span>` +
+      '<span class="spacer"></span><button data-act="log">OPEN LOG</button>';
+  } else if (phase === "done" && fresh) {
+    const secs =
+      u.started_at && u.updated_at ? Math.max(0, Math.round((u.updated_at - u.started_at) / 1000)) : 0;
+    cls = "ok";
+    glyphChar = "✓";
+    label = ("UPDATED " + (u.to_sha || "")).trim();
+    // only while this page is on its way out — a page that merely reads a
+    // recent `done` (the one that just reloaded, say) stays usable
+    disabled = !!updReloadTimer;
+    bannerHTML =
+      `<span>✓ updated ${esc(u.from_sha || "?")} → ${esc(u.to_sha || "?")}` +
+      (secs ? ` in ${secs}s` : "") +
+      (updReloadTimer ? " · reloading…" : "") +
+      '</span><span class="spacer"></span><button data-act="reload">RELOAD NOW</button>';
+  } else if (phase === "uptodate" && fresh) {
+    // a run that found nothing to do built and restarted nothing. Without
+    // this the click would flash busy and land back on a bare UPDATE, which
+    // reads as "did that even do anything".
+    cls = "ok";
+    glyphChar = "✓";
+    label = "UP TO DATE";
+  } else if (u.behind > 0) {
+    // the daemon's background check (jobs.refreshUpdateAvail, every 10min)
+    cls = "avail";
+    glyphCls = "dot";
+    glyphChar = "";
+    label = `UPDATE · ${u.behind} BEHIND`;
+    const checked = u.checked_at ? ", checked " + age(Math.floor(u.checked_at / 1000)) + " ago" : "";
+    title = `origin/main is ${u.behind} commit(s) ahead${checked}${build}`;
+  }
+
+  // Written node by node, and only where something actually changed, instead
+  // of the one innerHTML assignment this used to be. `.upd.busy .gly` spins on
+  // a 1.1s keyframe animation while this function repaints on BOTH the 1s
+  // status poll and the 3s board poll — so replacing the glyph element (which
+  // is what assigning innerHTML does, even for identical markup) restarted the
+  // animation from 0° about once a second and the spinner never once completed
+  // a turn during a build. The label is a text node for the same reason, and
+  // needs no esc(): a text node cannot be markup.
+  const btnCls = "upd" + (cls ? " " + cls : "");
+  if (btn.className !== btnCls) btn.className = btnCls;
+  let gly = btn.firstElementChild;
+  if (!gly) {
+    gly = document.createElement("span");
+    btn.prepend(gly);
+  }
+  if (gly.className !== glyphCls) gly.className = glyphCls;
+  if (gly.textContent !== glyphChar) gly.textContent = glyphChar;
+  let lab = btn.lastChild;
+  if (!lab || lab.nodeType !== Node.TEXT_NODE) {
+    lab = document.createTextNode("");
+    btn.appendChild(lab);
+  }
+  if (lab.nodeValue !== label) lab.nodeValue = label;
+  btn.disabled = disabled;
+  btn.title = title;
+  banner.className = "update-banner" + (bannerCls ? " " + bannerCls : "");
+  banner.innerHTML = bannerHTML;
+  banner.hidden = !bannerHTML;
+}
+
+// requestUpdate fires the run. No confirmation step: the click IS the
+// decision (Q5). Deliberately not post() — a refusal here is one specific
+// sentence about the machine's state ("… has uncommitted changes", "… is on
+// carl/foo, not main"), and post()'s ✕ in the clock corner truncates exactly
+// the part worth reading.
+async function requestUpdate() {
+  updRefusal = "";
+  const btn = document.getElementById("update-btn");
+  btn.disabled = true; // no double-fire while the POST is in flight
+  try {
+    const r = await fetch("/api/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || String(r.status));
+    // the handler has already written the claim (phase preflight) before
+    // spawning, so paint it now rather than waiting out the first poll tick
+    updWatching = true;
+    updIngest({
+      ...(updState || {}),
+      phase: data.phase || "preflight",
+      from_sha: data.from_sha || "",
+      to_sha: "",
+      error: "",
+      started_at: Date.now(),
+      updated_at: Date.now(),
+    });
+    startUpdatePoll();
+  } catch (e) {
+    updRefusal = e.message || "update refused";
+    showToast("✕ " + updRefusal);
+  }
+  renderUpdate();
+}
+
+document.getElementById("update-btn").addEventListener("click", () => {
+  // a fresh failure's button is the way into the log that explains it (see
+  // updBtnAction); the failure ages out after UPD_RECENT_MS and the button
+  // is a plain UPDATE again from there
+  if (updBtnAction === "log") setView("log");
+  else requestUpdate();
+});
+
+// banner actions, delegated: renderUpdate replaces the banner's innards on
+// every repaint, so nothing inside it can own a listener
+document.getElementById("update-banner").addEventListener("click", async (ev) => {
+  const act = ev.target.closest("button")?.dataset.act;
+  // same debounce courtesy the scheduled reload pays: RELOAD NOW is one
+  // click away from an editor whose last keystroke is still in flight
+  if (act === "reload") {
+    await flushEditorAutosave();
+    location.reload();
+  }
+  if (act === "log") setView("log");
 });

@@ -164,6 +164,24 @@ var webBoardSpec = map[string]fieldSpec{
 	"jobs":       {kind: wireArray, required: true},
 	"contract":   {kind: wireNumber, required: true},
 	"stale":      {kind: wireBool, required: true},
+	"update":     {kind: wireObject, required: true},
+}
+
+// webUpdateSpec covers update.go's webUpdate — served both as webBoard's
+// "update" key and as the whole body of GET /api/update/status, from one
+// assembly function (currentUpdate) so the two shapes can't drift. No
+// omitempty anywhere: the UI reads every field unconditionally, and an
+// absent key would be indistinguishable from a zeroed one.
+var webUpdateSpec = map[string]fieldSpec{
+	"phase":      {kind: wireString, required: true},
+	"from_sha":   {kind: wireString, required: true},
+	"to_sha":     {kind: wireString, required: true},
+	"behind":     {kind: wireNumber, required: true},
+	"error":      {kind: wireString, required: true},
+	"started_at": {kind: wireNumber, required: true},
+	"updated_at": {kind: wireNumber, required: true},
+	"build_sha":  {kind: wireString, required: true},
+	"checked_at": {kind: wireNumber, required: true},
 }
 
 var webJobSpec = map[string]fieldSpec{
@@ -667,6 +685,8 @@ var healthSpec = map[string]fieldSpec{
 	"host":     {kind: wireString, required: true},
 	"contract": {kind: wireNumber, required: true},
 	"stale":    {kind: wireBool, required: true},
+	// additive: the running binary's ldflags-stamped short sha, "dev" unstamped
+	"build": {kind: wireString, required: true},
 }
 
 func TestHealthWireShape(t *testing.T) {

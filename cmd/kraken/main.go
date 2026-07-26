@@ -53,6 +53,8 @@ func main() {
 		cmdServe(rest)
 	case "import":
 		cmdImport(rest)
+	case "update":
+		cmdUpdate(rest)
 	case "pr-hook":
 		cmdPrHook(rest)
 	case "questions":
@@ -121,6 +123,17 @@ Commands:
                       already-populated/already-imported database without
                       --force/--reimport; --dry-run reports counts without
                       writing anything. Human-run once per machine at cutover.
+  k update [--force] [--dry-run] [--test]
+                      self-update: fast-forward the kraken checkout to
+                      origin/main, rebuild, reinstall, and restart the launchd
+                      job — the same sequence the board's UPDATE button fires
+                      (it just spawns this verb detached). Refuses on a dirty
+                      tree or a non-main branch, and never merges anything but
+                      a fast-forward: it will not pull, stash, or reset.
+                      --force reinstalls even when already up to date,
+                      --dry-run reports the ahead/behind state and changes
+                      nothing, --test runs 'go test ./...' after the build and
+                      aborts before installing if it is red.
   k questions get|set|add|update|remove <slug> ...
                       cell-side verb zeus uses instead of hand-rolled curl to
                       read/write its own open doc questions, proxied over

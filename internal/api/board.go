@@ -291,6 +291,11 @@ type webBoard struct {
 	// Stale is this k web process' own self-check (see selfcheck.go) — the
 	// daemon's equivalent rides Daemon.Stale.
 	Stale bool `json:"stale"`
+	// Update is the self-update button's whole state — the running binary's
+	// build sha, how far behind origin/main it is, and any run in flight.
+	// Additive (see apiContract's bump policy above): clients that don't
+	// know the key ignore it.
+	Update webUpdate `json:"update"`
 }
 
 // jobArtifacts collects a job's viewable artifacts. A live cell always
@@ -635,7 +640,7 @@ func buildWebBoard() webBoard {
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
 	activeStore := jobs.ActiveStore()
-	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale()}
+	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate()}
 	order := jobs.LoadBoardOrder()
 	byState := map[string][]webJob{}
 	for _, j := range js {
