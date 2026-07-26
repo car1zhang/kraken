@@ -4,15 +4,20 @@ One entry point: **`ios/ship-testflight.sh`**. `kraken ship-ios` and the board's
 ship button both shell out to it; `make ios-testflight` is an alias for humans.
 It archives the app, exports a `.ipa`, and uploads that to App Store Connect.
 
-> **The upload leg has never been executed.** Everything up to and including the
-> export was built and verified against Xcode 26.3 on this machine, but no build
-> has ever actually been sent to App Store Connect — there is no API key and no
-> distribution certificate yet. Treat the first real run as a debugging session,
-> not a routine deploy.
+> **Verified end to end on 2026-07-26.** Build **218** went preflight → archive →
+> export → upload and App Store Connect accepted it (`UPLOAD SUCCEEDED`, delivery
+> UUID `5d5f32dc-551f-4762-b713-6b1fb33452fb`), including the one-time
+> `--allow-provisioning-updates` run that created the App Store signing assets.
+> The whole run took about six minutes. What is still unproven is everything
+> *after* the upload: TestFlight processing, tester distribution, and install on
+> a device.
 
-## Three things only you can set up
+## Four things only you can set up
 
-None of these can be automated, and the pipeline is useless until all three exist.
+None of these can be automated, and the pipeline is useless until all four exist.
+The fourth is the easiest to forget and the hardest to diagnose: without it an
+upload succeeds, processes, and then sits in App Store Connect where no phone
+will ever be offered it — which looks exactly like a broken pipeline.
 
 ### 1. An App Store Connect API key
 
@@ -38,15 +43,14 @@ command line, so the key path stays out of the process table and the logs.)
 App Store Connect → **Apps** → **+** → **New App**. The bundle id must match
 exactly. Uploads for an app that does not exist are rejected.
 
-### 3. An Apple Distribution certificate — created on your first run
+### 3. App Store signing assets — created on your first run
 
-**This machine does not have one.** It has only
-`Apple Development: Carl Zhang (J43AYT4Q4V)`, which is enough to build and to
-archive but *not* to export for the App Store.
+The keychain has only `Apple Development: Carl Zhang (J43AYT4Q4V)`, which is
+enough to build and archive but *not* to export for the App Store.
 
-Creating one means letting `xcodebuild` talk to the Apple Developer website and
-**write to your real developer account** — certificates, provisioning profiles,
-and App IDs. Nothing in this repo does that on its own. You opt in, once:
+Fixing that means letting `xcodebuild` talk to the Apple Developer website and
+**write to your real developer account** — provisioning profiles, App IDs, and
+signing certificates. Nothing in this repo does that on its own. You opt in, once:
 
 ```sh
 ios/ship-testflight.sh --allow-provisioning-updates
@@ -54,6 +58,30 @@ ios/ship-testflight.sh --allow-provisioning-updates
 
 After that first run the assets exist and plain `ios/ship-testflight.sh` works.
 The board button never passes this flag.
+
+**What it actually created here** (measured on the first real run, 2026-07-26):
+a new `iOS Team Store Provisioning Profile: dev.carl.Kraken` — the App Store
+profile, distinguishable from the development one by `get-task-allow: false`.
+Notably it did **not** add an `Apple Distribution` identity to the keychain;
+`security find-identity -v -p codesigning` still lists only the development
+cert. Xcode used a **cloud-managed distribution certificate**, whose private key
+stays on Apple's servers. So "no distribution cert in the keychain" is not
+evidence that signing is unset up — check for the Store profile instead.
+
+### 4. An internal testing group with you in it
+
+App Store Connect → your app → **TestFlight** → **Internal Testing** → **+** →
+create a group → add your Apple ID → enable **Automatically distribute builds**
+(otherwise each build still needs a manual "add to group" click).
+
+Internal testers need no review: a build is installable as soon as processing
+finishes. Skip this and the pipeline still reports a clean `done` — the build
+just never reaches a device, which is the most confusing possible failure mode
+because nothing anywhere reports an error.
+
+Also worth doing once, on the phone: TestFlight → the app → enable **automatic
+updates**, so a shipped build installs itself instead of waiting for a tap.
+That is the closest this gets to a true remote reinstall.
 
 ## Environment
 
