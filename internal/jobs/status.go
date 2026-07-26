@@ -29,11 +29,21 @@ import (
 // the caller via teamMembersForLead, "" sessions -> nil); paneQuestion checks
 // whether a pane is showing an AskUserQuestion dialog right now (the caller
 // passes paneShowsQuestion; only consulted for peers whose Status is
-// "running", to keep the tmux capture-pane calls at the call site minimal).
+// "running", to keep the tmux capture-pane calls at the call site minimal);
+// skipPanes is the set of panes that must NOT vote (nil/empty = nobody).
+//
+// skipPanes exists for SIDE THREADS (thread.go). A thread is a forked claude
+// running in its own window of the cell's tmux session — so it matches point 1
+// exactly, and a carl sitting in a thread asking questions would hold the job
+// in "working" and hide the very block he branched to investigate. The panes of
+// live thread rows are passed in here so they abstain from the roll call
+// entirely. They are excluded only from point 1: a thread is never a team
+// member, so point 2's roster can't name one.
 //
 // Active iff either:
 //  1. a pane agent in the cell (TmuxSession == sess, claude or codex) is
-//     "running" or "polling" AND its pane isn't showing an open question —
+//     "running" or "polling", isn't in skipPanes, AND its pane isn't showing an
+//     open question —
 //     a question is waiting-for-carl, i.e. blocked, even though the session
 //     file stays "busy" while the AskUserQuestion tool call is in flight.
 //     "polling" means the agent is mid poll-loop (a pending ScheduleWakeup),
@@ -49,10 +59,13 @@ import (
 //     only liveness signal available, and an absent value must not default
 //     to active. Either way isActive:false (finished without being removed
 //     from the config) is filtered up front.
-func cellActive(sess string, peers []*core.Peer, members []core.TeamMember, paneQuestion func(string) bool) bool {
+func cellActive(sess string, peers []*core.Peer, members []core.TeamMember, paneQuestion func(string) bool, skipPanes map[string]bool) bool {
 	for _, p := range peers {
 		if p.TmuxSession != sess || (p.Status != "running" && p.Status != "polling") {
 			continue
+		}
+		if skipPanes[p.Pane] {
+			continue // a side thread: carl asking questions, not the job working
 		}
 		if p.Agent != "claude" && p.Agent != "codex" {
 			// codex peers rarely carry a "running" status today, so a

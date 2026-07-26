@@ -288,6 +288,11 @@ struct WebJob: Decodable, Identifiable {
     // Per-job feedback entries (open + addressed), served straight from
     // `feedback` rows in kraken.db. Additive key, absent on older servers.
     let feedback: [WebFeedback]?
+    // Side threads branched off zeus' session for this job — live ones run
+    // as a second claude in their own window of the same cell, closed ones
+    // are revivable conversations. Additive key, absent on older servers
+    // (and on any job that never had one), so no contract bump.
+    let threads: [WebThread]?
 
     var id: String { slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
@@ -306,6 +311,7 @@ struct WebJob: Decodable, Identifiable {
         case prs
         case docQuestions = "doc_questions"
         case feedback
+        case threads
     }
 }
 
@@ -356,6 +362,95 @@ struct WebFeedback: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, artifact, note, at, addressed
         case addressedAt = "addressed_at"
+    }
+}
+
+// MARK: - side threads
+
+// WebThread mirrors one entry of a job's `threads` array: a side thread is a
+// fork of zeus' session running as a second claude in its own tmux window of
+// the same cell, so carl can ask questions without disturbing the run. A
+// thread can be killed (the window dies, the conversation survives) and
+// revived later, which is why `pane` comes and goes while `tid` never does.
+// `title`/`pane`/`closed_at` are `omitempty` on the wire → Optional here per
+// the rule atop this file; `tid`/`state`/`created_at` are always present.
+struct WebThread: Decodable, Identifiable {
+    let tid: String
+    let title: String?
+    let state: String
+    let pane: String?
+    let createdAt: Int64
+    let closedAt: Int64?
+
+    var id: String { tid }
+
+    /// "live" means a claude is actually running in the thread's window;
+    /// anything else (closed) is a conversation waiting to be revived —
+    /// same absence-is-the-signal spirit as WebDocQuestion.isAnswered.
+    var isLive: Bool { state == "live" }
+
+    /// What the UI shows for the thread: carl's name for it, falling back to
+    /// the tid for a thread branched without one.
+    var displayTitle: String {
+        if let title, !title.isEmpty { return title }
+        return tid
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case tid, title, state, pane
+        case createdAt = "created_at"
+        case closedAt = "closed_at"
+    }
+}
+
+// The five ops POST /api/threads accepts, spelled once so no call site can
+// mistype one: the wire value is the case name (see APIClient.threadAction,
+// which is the only thing that reads the rawValue).
+enum ThreadOp: String {
+    case branch, kill, revive, rename, send
+}
+
+// ThreadActionRequest mirrors POST /api/threads' single body shape across all
+// five ops — "branch" (title + optional seed text), "kill"/"revive" (tid),
+// "rename" (tid + title), "send" (tid + text). Unused fields stay nil and
+// JSONEncoder omits them entirely, same as SpawnRequest above.
+struct ThreadActionRequest: Encodable {
+    let slug: String
+    let op: String
+    var tid: String? = nil
+    var title: String? = nil
+    var text: String? = nil
+}
+
+// POST /api/threads' success body: the uniform {"ok": true}, plus the new
+// thread's id on a "branch" (absent on every other op).
+struct ThreadActionResponse: Decodable {
+    let ok: Bool
+    let tid: String?
+}
+
+// GET /api/thread/read's body: the thread's conversation (inherited pre-fork
+// history included, see ReadBlock.inherited), plus the liveness/pane the
+// view needs to decide whether a pane capture and a composer make sense.
+// None of `counted`/`live`/`pane`/`fork_uuid`/`source` is omitempty on the
+// Go side — the handler fills the whole envelope before any early return, so
+// they're modeled non-optional per the rule atop this file (a closed thread
+// sends `pane: ""`, not a missing key). `blocks` stays Optional only to
+// mirror ReadResponse below, whose null-vs-[] the same decoder path handles.
+struct ThreadReadResponse: Decodable {
+    let blocks: [ReadBlock]?
+    let counted: Int
+    let live: Bool
+    let pane: String
+    let forkUUID: String
+    // "transcript" when the fork's transcript was readable, "none" when
+    // there's nothing to read yet (freshly branched, never spoken to).
+    let source: String
+
+    enum CodingKeys: String, CodingKey {
+        case blocks, counted, live, pane
+        case forkUUID = "fork_uuid"
+        case source
     }
 }
 
@@ -716,6 +811,12 @@ struct ReadBlock: Decodable {
     // Present on "teammate" blocks — which teammate sent this. Additive key,
     // absent on older servers and on every other block kind.
     let from: String?
+    // Side-thread reads only (GET /api/thread/read): true on the pre-fork
+    // turns a thread inherited from zeus' session, so ThreadDetailView can
+    // dim them and draw the "branched here" divider at the first block
+    // without it. Always absent on /api/peers/read — a plain peer read has
+    // no fork point, and the whole transcript renders undimmed.
+    let inherited: Bool?
 }
 
 struct ReadResponse: Decodable {

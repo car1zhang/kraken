@@ -706,6 +706,23 @@ private struct UpdatePollKey: Hashable {
     let phase: ScenePhase
 }
 
+/// Whether a job sheet's NavigationStack currently has a child view pushed on
+/// top of JobDetailView (today: ThreadDetailView).
+///
+/// The sheet auto-dismisses itself when the presented job's `state` moves on
+/// (see the .onChange handlers below), which is right for the short-lived
+/// forms it was built around but wrong for a pushed view meant to be sat in:
+/// a live job flips working↔blocked every time zeus finishes or starts a
+/// turn, and tearing the whole stack down mid-read would drop the reader back
+/// on the board with no way back but re-navigating. The pushed child sets
+/// this on appear / clears it on disappear, and the auto-dismiss stands down
+/// while it's true — the sheet still shows the (now stale) job header, but a
+/// pushed view reads live data of its own, so there's nothing stale to hide.
+@Observable
+final class SheetNavState {
+    var childPushed = false
+}
+
 struct BoardView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @Environment(\.scenePhase) private var scenePhase
@@ -718,6 +735,9 @@ struct BoardView: View {
     // this is captured explicitly at every assignment site rather than via
     // .onChange(of: selectedJob).
     @State private var presentedJobState: String?
+    // Set by whatever JobDetailView has pushed on the job sheet's stack; see
+    // SheetNavState above.
+    @State private var jobSheetNav = SheetNavState()
     @State private var showingNewJob = false
     @State private var showingOverview = false
     @State private var selectedColumn: BoardColumn = .draft
@@ -824,7 +844,13 @@ struct BoardView: View {
                         Task { await vm.refresh(baseURL: serverURL) }
                     }
                 }
+                .environment(jobSheetNav)
             }
+            // Presenting a different job (or dismissing entirely) starts the
+            // stack over at JobDetailView's root, so the pushed-child flag
+            // resets with it — belt and braces against an unbalanced
+            // appear/disappear pair leaving auto-dismiss suppressed forever.
+            .onChange(of: selectedJob?.slug) { jobSheetNav.childPushed = false }
             // Auto-dismiss the presented job sheet once the board's own
             // polling refresh (vm.refresh, every 4s above) shows that job's
             // `state` has moved on since it was opened — unblocked, killed,
@@ -834,9 +860,14 @@ struct BoardView: View {
             // presented from within JobDetailView) tear down along with
             // their dismissed parent. DraftStore-backed drafts (e.g. a
             // half-typed steer message) are untouched — this only clears
-            // presentation state, never calls draftStore.clear.
+            // presentation state, never calls draftStore.clear. Suppressed
+            // entirely while a child view is pushed on the sheet's stack
+            // (jobSheetNav): a pushed thread view is a place to sit and read,
+            // and a working↔blocked flip underneath it is routine, not a
+            // reason to tear the reader's stack down (see SheetNavState).
             .onChange(of: vm.board?.jobs.first(where: { $0.slug == selectedJob?.slug })?.state) { _, newState in
-                guard selectedJob != nil, let presentedJobState, let newState, newState != presentedJobState else { return }
+                guard selectedJob != nil, !jobSheetNav.childPushed,
+                      let presentedJobState, let newState, newState != presentedJobState else { return }
                 selectedJob = nil
             }
             .sheet(isPresented: $showingNewJob) {
@@ -1523,6 +1554,9 @@ private struct BoardOverviewSheet: View {
     // reads `vm` directly rather than owning its own selectedJob binding at
     // the BoardView level.
     @State private var presentedJobState: String?
+    // Same pushed-child suppression as BoardView's job sheet — see
+    // SheetNavState above.
+    @State private var jobSheetNav = SheetNavState()
 
     var body: some View {
         List {
@@ -1560,12 +1594,16 @@ private struct BoardOverviewSheet: View {
             NavigationStack {
                 JobDetailView(job: job, baseURL: baseURL, onUpdate: onUpdate)
             }
+            .environment(jobSheetNav)
         }
+        .onChange(of: selectedJob?.slug) { jobSheetNav.childPushed = false }
         // Same auto-dismiss-on-staleness as BoardView's own job sheet — this
         // sheet reads `vm` live (see its doc comment above), so the same
-        // polling refresh drives it here too.
+        // polling refresh drives it here too, and it stands down the same way
+        // while a child view is pushed on the stack.
         .onChange(of: vm.board?.jobs.first(where: { $0.slug == selectedJob?.slug })?.state) { _, newState in
-            guard selectedJob != nil, let presentedJobState, let newState, newState != presentedJobState else { return }
+            guard selectedJob != nil, !jobSheetNav.childPushed,
+                  let presentedJobState, let newState, newState != presentedJobState else { return }
             selectedJob = nil
         }
         // JobDetailView's Cell row switches tabs and dismisses itself, but

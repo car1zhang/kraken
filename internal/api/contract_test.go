@@ -34,6 +34,11 @@ import (
 //   - /api/reorder's success/failure shapes are the same {"ok":true} /
 //     {"error": string} convention; only its distinct request shape
 //     (reorderReq) gets its own spec below.
+//   - POST /api/threads' success body: {"ok": true} for four of the five ops
+//     (the shared convention above), plus a `tid` string on a `branch` — the
+//     one wire-visible key here with no assertion, because reaching branch's
+//     success path needs a real cell, a forkable zeus, and a real tmux
+//     window. Its refusal shapes ARE covered (threads_test.go).
 //   - /api/peers/* action endpoints (spawn, send, kill, capture): need real
 //     tmux panes/sessions to reach their success path. /api/peers/open is the
 //     exception — its openPeerFunc test seam makes the success path
@@ -257,6 +262,7 @@ var webJobSpec = map[string]fieldSpec{
 	"prs":           {kind: wireArray, required: false},
 	"doc_questions": {kind: wireArray, required: false},
 	"feedback":      {kind: wireArray, required: false},
+	"threads":       {kind: wireArray, required: false},
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
@@ -338,6 +344,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		LastSent:      "pivot to plan B",
 		DocQuestions:  []webDocQuestion{{ID: "Q1", Text: "which approach?", Importance: "P1", Answer: "A"}},
 		Feedback:      []webFeedback{{ID: 1, Artifact: "00-overview.md", Note: "tighten the intro", At: 1234567890}},
+		Threads:       []webThread{{TID: "t1", Title: "why the retry loop", State: "live", Pane: "%42", CreatedAt: 1234567890}},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -465,6 +472,39 @@ func TestWebFeedbackWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webFeedback (populated)", data, webFeedbackSpec)
+}
+
+// webThreadSpec covers board.go's webThread, the elements of webJob's
+// "threads" array — the board-facing subset of a `threads` row
+// (store.Thread): identity, state, the live pane, and the two timestamps.
+// Provenance (session_id/parent_session/fork_uuid/seed/cwd) and the window
+// target deliberately never ride the board poll; fork_uuid rides
+// /api/thread/read instead.
+var webThreadSpec = map[string]fieldSpec{
+	"tid":        {kind: wireString, required: true},
+	"title":      {kind: wireString, required: false},
+	"state":      {kind: wireString, required: true},
+	"pane":       {kind: wireString, required: false},
+	"created_at": {kind: wireNumber, required: true},
+	"closed_at":  {kind: wireNumber, required: false},
+}
+
+func TestWebThreadWireShape(t *testing.T) {
+	// a closed thread: no title, no pane (CloseThread clears it)
+	data, err := json.Marshal(webThread{TID: "t1", State: "closed", CreatedAt: 1234567890})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webThread (empty optionals)", data, webThreadSpec)
+
+	data, err = json.Marshal(webThread{
+		TID: "t2", Title: "why the retry loop", State: "live", Pane: "%42",
+		CreatedAt: 1234567890, ClosedAt: 1234567899,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webThread (populated)", data, webThreadSpec)
 }
 
 func TestJobPRWireShape(t *testing.T) {
@@ -1051,6 +1091,105 @@ func TestQuestionsGetWireShape(t *testing.T) {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/questions (GET)", rec.Body.Bytes(), questionsGetSpec)
+}
+
+// --- GET /api/threads and GET /api/thread/read (threads.go) — two more
+// custom envelopes, each exercised through its real handler. POST
+// /api/threads resolves to {"ok":true} (plus "tid" on a branch) /
+// {"error":string}; its op dispatch and per-op required fields are covered
+// by threads_test.go instead.
+
+var threadsGetSpec = map[string]fieldSpec{
+	"threads": {kind: wireArray, required: true},
+}
+
+func TestThreadsGetWireShape(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "contract-threads", Repo: "monolith"})
+	if err := st.AddThread(store.Thread{JobID: j.ID, TID: "t1", Title: "why the retry loop", SessionID: "s1", Pane: "%42"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/threads?slug=contract-threads", nil)
+	rec := httptest.NewRecorder()
+	threadsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/threads (GET)", rec.Body.Bytes(), threadsGetSpec)
+
+	// the array's elements are webThreads — same spec the board's own
+	// "threads" array carries, checked here through the live handler
+	var resp struct {
+		Threads []json.RawMessage `json:"threads"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Threads) != 1 {
+		t.Fatalf("threads = %v, want 1 element", resp.Threads)
+	}
+	assertShape(t, "/api/threads (GET) element", resp.Threads[0], webThreadSpec)
+}
+
+// threadReadSpec: every key is always present — a source-"none" read (no
+// transcript yet) still carries an empty blocks array, counted 0, and the
+// row's own live/pane/fork_uuid, so a client never has to branch on absence.
+var threadReadSpec = map[string]fieldSpec{
+	"blocks":    {kind: wireArray, required: true},
+	"counted":   {kind: wireNumber, required: true},
+	"live":      {kind: wireBool, required: true},
+	"pane":      {kind: wireString, required: true},
+	"fork_uuid": {kind: wireString, required: true},
+	"source":    {kind: wireString, required: true},
+}
+
+// threadReadBlockSpec is /api/thread/read's block element: /api/peers/read's
+// block shape (peersReadBlockSpec) plus the side-thread-only "inherited"
+// flag, present only on the pre-fork half.
+var threadReadBlockSpec = map[string]fieldSpec{
+	"kind":      {kind: wireString, required: true},
+	"text":      {kind: wireString, required: true},
+	"from":      {kind: wireString, required: false},
+	"inherited": {kind: wireBool, required: false},
+}
+
+func TestThreadReadWireShape(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "contract-thread-read", Repo: "monolith"})
+	sess := "abcdabcd-1111-2222-3333-444444444444"
+	if err := st.AddThread(store.Thread{
+		JobID: j.ID, TID: "t1", SessionID: sess, ForkUUID: "a1", Pane: "%42", State: "live",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedTranscript(t, sess,
+		`{"type":"user","uuid":"u1","message":{"content":"zeus, do the thing"}}`,
+		`{"type":"assistant","uuid":"a1","message":{"content":[{"type":"text","text":"doing it"}]}}`,
+		`{"type":"user","uuid":"u2","message":{"content":"why the retry?"}}`,
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/thread/read?slug=contract-thread-read&tid=t1&n=20", nil)
+	rec := httptest.NewRecorder()
+	threadReadHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/thread/read", rec.Body.Bytes(), threadReadSpec)
+
+	var resp struct {
+		Blocks []json.RawMessage `json:"blocks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Blocks) != 3 {
+		t.Fatalf("blocks = %v, want 3", resp.Blocks)
+	}
+	assertShape(t, "/api/thread/read block (inherited)", resp.Blocks[0], threadReadBlockSpec)
+	assertShape(t, "/api/thread/read block (own)", resp.Blocks[2], threadReadBlockSpec)
 }
 
 // --- board reorder: POST /api/reorder (actions.go) — a custom request shape

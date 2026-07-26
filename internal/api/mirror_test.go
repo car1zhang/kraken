@@ -22,7 +22,10 @@ var mirrorGatedRoutes = []string{
 	// feedback/questions: gated inline in their own handlers (not
 	// webAction-wrapped, since GET must stay reachable), same "mirror board
 	// is read-only, full stop" policy as every other gated route here.
-	"/api/feedback", "/api/questions",
+	// threads: same inline gate as feedback/questions (GET must stay
+	// reachable — a thread read is a read), and every POST op but rename
+	// opens, kills or types into a real tmux window.
+	"/api/feedback", "/api/questions", "/api/threads",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",

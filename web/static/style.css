@@ -403,6 +403,41 @@ body {
 .pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
 .pr-chip.pr-closed:hover { background: var(--counter-soft); opacity: 1; border-color: var(--counter); }
 
+/* side-thread chips: one per fork of zeus' session, sitting just under the
+   PR chips on the card and inside the steer modal's context block. A live
+   thread takes --polling (cyan — a second conversation is running, the same
+   hue the polling zeus pill and the CLI use); a closed one dims to the
+   hairline and stays as history. Deliberately NOT .chip — that class is
+   claimed by the delegated handler that opens an artifact panel (same reason
+   .queue-cancel keeps its own class). */
+.threads { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; align-items: center; }
+.thread-chip {
+  font: 10px var(--mono);
+  background: transparent; color: var(--polling);
+  border: 1px solid var(--polling-soft);
+  padding: 2px 7px; cursor: pointer;
+  /* no box-shadow here: --polling has no glow token, and these chips lift by
+     filling in rather than glowing (unlike .chip/.pr-chip) */
+  transition: background 80ms var(--ease), border-color 80ms var(--ease);
+}
+.thread-chip:hover { background: var(--polling-soft); border-color: var(--polling); }
+.thread-chip .dot {
+  display: inline-block; width: 5px; height: 5px;
+  background: var(--polling); margin-right: 5px; vertical-align: middle;
+}
+.thread-chip.closed { color: var(--text-2); border-color: var(--hairline-2); opacity: 0.8; }
+.thread-chip.closed:hover { background: var(--raised); opacity: 1; border-color: var(--text-2); color: var(--text); }
+.thread-chip.closed .dot { background: var(--hairline-2); }
+/* dashed, like .chip-more: an affordance rather than a thing that exists */
+.branch-btn {
+  font: 10px var(--mono);
+  background: transparent; color: var(--text-2);
+  border: 1px dashed var(--hairline-2);
+  padding: 2px 7px; cursor: pointer;
+  transition: background 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
+}
+.branch-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
 .meta {
   color: var(--text-2); margin-top: 3px;
   display: flex; gap: 9px; flex-wrap: wrap;
@@ -440,7 +475,7 @@ body {
    title attribute, so hover/assistive tech still reads "zeus", "hephaestus",
    etc. */
 .crew { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-.steer-context .crew { margin-top: 0; }
+.steer-context .crew, .steer-context .threads { margin-top: 0; }
 .crew-pill, .crew-chip {
   font: 10px var(--mono); letter-spacing: 0.3px;
   padding: 2px 7px; border: 1px solid var(--hairline-2);
@@ -652,6 +687,10 @@ body {
 /* the artifact viewer can be opened from inside the steer/unblock modal —
    it must always paint above any other overlay, regardless of DOM order */
 #overlay { z-index: 30; }
+/* the thread overlay sits between them: it too can be opened from inside the
+   steer modal (its context block carries the thread chips), but the artifact
+   viewer still outranks it. Mirrors the Escape chain in app.js. */
+#thread-overlay { z-index: 25; }
 
 /* transient bottom-center notice — currently just a reverted failed
    drag-reorder, see showToast() in app.js. Above every overlay: it reports
@@ -1203,3 +1242,132 @@ body {
   color: var(--text-2); font-size: 10px; text-align: center; margin: 6px 0;
   border-top: 1px dashed var(--raised); padding-top: 4px;
 }
+
+/* ---- side-thread overlay (#thread-overlay — see openThread in app.js) ----
+   Two modes in one panel: the branch dialog (#thread-new) and the thread
+   itself (#thread-view). Every color here is a token, so both palettes work;
+   the thread's own accent is --polling, matching its chips. */
+
+/* head: "⑂ t1" is the .panel-title (mono, with its own ▊), the thread's name
+   sits beside it in the prose voice and doubles as the rename affordance */
+.thread-name-label {
+  font-size: 12px; color: var(--text);
+  cursor: text; padding: 1px 4px;
+  border: 1px solid transparent;
+  max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.thread-name-label:hover { border-color: var(--hairline-2); color: var(--accent); }
+.thread-name-label:empty::before { content: "unnamed"; color: var(--text-2); }
+.thread-name-input {
+  font: 12px var(--sans);
+  background: var(--ground); color: var(--text);
+  border: 1px solid var(--accent);
+  padding: 1px 4px; width: 26ch;
+}
+.thread-name-input:focus { outline: none; box-shadow: var(--glow); }
+.thread-pill {
+  font: 9.5px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  padding: 1px 7px; border: 1px solid currentColor;
+}
+.thread-pill.live { color: var(--solved); }
+.thread-pill.closed { color: var(--text-2); }
+
+/* branch dialog: says plainly what the fork does and doesn't touch */
+.thread-banner {
+  font-size: 11.5px; line-height: 1.5; color: var(--text);
+  border-left: 2px solid var(--accent);
+  background: var(--raised);
+  padding: 9px 11px;
+}
+.thread-banner b { color: var(--accent); }
+.thread-field {
+  display: flex; flex-direction: column; gap: 5px;
+  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  color: var(--text-2);
+}
+.thread-field .dim { opacity: 0.7; text-transform: none; letter-spacing: 0.5px; }
+.thread-field input, .thread-field textarea {
+  font: 12px/1.5 var(--sans); letter-spacing: normal; text-transform: none;
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2);
+  padding: 8px 10px; width: 100%;
+}
+.thread-field textarea { resize: vertical; min-height: 70px; }
+.thread-field input:focus, .thread-field textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: var(--glow);
+}
+.thread-field ::placeholder { color: var(--text-2); opacity: 1; }
+.thread-new { display: flex; flex-direction: column; gap: 12px; }
+.thread-new-actions { display: flex; gap: 8px; }
+
+/* the conversation: inherited history dimmed above the branch divider, the
+   thread's own turns at full strength below it */
+.thread-view { display: flex; flex-direction: column; gap: 12px; }
+#thread-convo { max-height: 48vh; overflow-y: auto; padding-right: 6px; }
+#thread-convo .blk { margin-bottom: 11px; font-size: 12.5px; line-height: 1.55; }
+#thread-convo .blk:last-child { margin-bottom: 0; }
+#thread-convo .who {
+  font: 10px var(--mono); letter-spacing: 0.6px;
+  color: var(--text-2); margin-bottom: 2px;
+}
+#thread-convo .blk.user .who { color: var(--polling); }
+#thread-convo .blk.asst .who { color: var(--accent); }
+#thread-convo .blk.tool { font: 10.5px var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+#thread-convo .blk.think { color: var(--text-2); font-style: italic; }
+#thread-convo .inherited { opacity: 0.55; }
+#thread-convo .blk-body p,
+#thread-convo .blk-body ul,
+#thread-convo .blk-body ol,
+#thread-convo .blk-body pre { margin: 0 0 8px; }
+#thread-convo .blk-body ul, #thread-convo .blk-body ol { padding-left: 20px; }
+#thread-convo .blk-body :last-child { margin-bottom: 0; }
+#thread-convo .blk-body code { background: var(--raised); color: var(--revealed); padding: 1px 4px; font: 11px var(--mono); }
+#thread-convo .blk-body pre { background: var(--ground); border: 1px solid var(--hairline); padding: 8px 10px; white-space: pre-wrap; }
+.thread-divider {
+  display: flex; align-items: center; gap: 9px;
+  margin: 14px 0;
+  color: var(--accent);
+  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+}
+.thread-divider::before, .thread-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--accent-soft);
+}
+
+/* live pane mirror: plain capture-pane text, the only way to watch a live
+   thread from a phone (⧉ tmux raises Ghostty, which a phone can't) */
+/* the head row is the mirror's toggle (▸/▾ in its label), so it's a control:
+   the capture only polls while the reader has the <pre> open */
+#thread-panehead {
+  display: flex; align-items: center; gap: 7px;
+  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  color: var(--text-2); cursor: pointer; user-select: none;
+  transition: color 80ms var(--ease);
+}
+#thread-panehead:hover { color: var(--text); }
+#thread-panehead .live-dot {
+  width: 6px; height: 6px; background: var(--solved); box-shadow: var(--glow-ok);
+}
+.thread-pane {
+  margin: 0;
+  background: var(--ground); border: 1px solid var(--hairline);
+  padding: 9px 11px;
+  font: 10.5px/1.45 var(--mono); color: var(--text-2);
+  white-space: pre; overflow-x: auto; max-height: 30vh; overflow-y: auto;
+}
+
+/* what replaces the pane mirror and the composer once a thread is closed */
+.thread-empty {
+  border: 1px dashed var(--hairline-2);
+  padding: 14px; text-align: center;
+  font: 10.5px var(--mono); color: var(--text-2);
+}
+
+.thread-composer { display: flex; flex-direction: column; gap: 2px; }
+#thread-text {
+  font: 12px/1.5 var(--sans);
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2);
+  padding: 9px 11px; resize: vertical; min-height: 62px; width: 100%;
+}
+#thread-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+#thread-text::placeholder { color: var(--text-2); opacity: 1; }

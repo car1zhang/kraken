@@ -301,6 +301,7 @@ func TestCellActive(t *testing.T) {
 		peers        []*core.Peer
 		members      []core.TeamMember
 		paneQuestion func(string) bool
+		skipPanes    map[string]bool
 		want         bool
 	}{
 		{
@@ -454,6 +455,74 @@ func TestCellActive(t *testing.T) {
 			sess: "cell-x",
 			want: false,
 		},
+		// --- side threads (skipPanes) ---
+		{
+			// THE correctness case: carl branches a thread precisely because
+			// the job is blocked. A running thread alone must never vote the
+			// job into "working" — that would hide the block he branched to
+			// investigate, which is the whole reason skipPanes exists.
+			name: "running thread pane alone -> false",
+			sess: "cell-x",
+			peers: []*core.Peer{
+				{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"},
+				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%9"},
+			},
+			skipPanes: map[string]bool{"%9": true},
+			want:      false,
+		},
+		{
+			// the exclusion is per-pane, not per-session: zeus working while a
+			// thread happens to be running is still a working job.
+			name: "thread pane + running zeus -> true",
+			sess: "cell-x",
+			peers: []*core.Peer{
+				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"},
+				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%9"},
+			},
+			skipPanes: map[string]bool{"%9": true},
+			want:      true,
+		},
+		{
+			// point 2's roster is untouched by skipPanes (a thread is never a
+			// team member): a running teammate still votes the cell active
+			// even when the only other live pane is a thread.
+			name: "thread pane + running tmux teammate -> true",
+			sess: "cell-x",
+			peers: []*core.Peer{
+				{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"},
+				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%9"},
+				{Pane: "%2", Status: "running"},
+			},
+			members: []core.TeamMember{
+				{AgentID: "team-lead@abc", TmuxPaneID: "leader"},
+				{AgentID: "mate@1", BackendType: "tmux", TmuxPaneID: "%2"},
+			},
+			skipPanes: map[string]bool{"%9": true},
+			want:      true,
+		},
+		{
+			// an EMPTY skip set must be byte-for-byte today's behavior: the
+			// same peers that read false above read true with nothing skipped.
+			name: "empty skip set skips nobody -> true",
+			sess: "cell-x",
+			peers: []*core.Peer{
+				{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1"},
+				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%9"},
+			},
+			skipPanes: map[string]bool{},
+			want:      true,
+		},
+		{
+			// a skip set naming some OTHER job's thread pane must not silence
+			// this cell's own running agent.
+			name: "skip set for an unrelated pane -> true",
+			sess: "cell-x",
+			peers: []*core.Peer{
+				{TmuxSession: "cell-x", Agent: "claude", Status: "running", Pane: "%1"},
+			},
+			skipPanes: map[string]bool{"%42": true},
+			want:      true,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -461,8 +530,16 @@ func TestCellActive(t *testing.T) {
 			if pq == nil {
 				pq = noQuestion
 			}
-			if got := cellActive(c.sess, c.peers, c.members, pq); got != c.want {
+			if got := cellActive(c.sess, c.peers, c.members, pq, c.skipPanes); got != c.want {
 				t.Errorf("got %v, want %v", got, c.want)
+			}
+			// every case must also hold with a nil skip set unless it
+			// deliberately depends on one: nil is the no-store/file-mode
+			// default, and it must never change a verdict on its own.
+			if c.skipPanes == nil {
+				if got := cellActive(c.sess, c.peers, c.members, pq, nil); got != c.want {
+					t.Errorf("nil skip set: got %v, want %v", got, c.want)
+				}
 			}
 		})
 	}

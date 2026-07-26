@@ -24,6 +24,14 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v7: drop the threads table entirely (added at v7, absent
+	// through v6). Its unique index goes with it — SQLite drops a table's
+	// indexes along with the table.
+	if target < 7 {
+		if _, err := s.db.Exec(`DROP TABLE threads`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v7, drop threads): %v", target, err)
+		}
+	}
 	// Reverse v6: drop feedback.job_id (added at v6, absent through v5).
 	if target < 6 {
 		if _, err := s.db.Exec(`ALTER TABLE feedback DROP COLUMN job_id`); err != nil {
@@ -606,6 +614,118 @@ func TestSchemaV5ToV6BackfillsFeedbackJobID(t *testing.T) {
 	}
 }
 
+// TestSchemaV6ToV7AddsThreads covers the v7 migration: a real kraken.db can
+// exist at PRAGMA user_version = 6 (no threads table at all) from before
+// side threads shipped. Reopening such a database must create the table —
+// usable immediately, unique index and FK cascade included — while leaving
+// every pre-existing row untouched, since v7 is a pure add with no data to
+// move forward (migrations[7] carries no hook).
+func TestSchemaV6ToV7AddsThreads(t *testing.T) {
+	// Opened directly (not via openTest) so the path is in hand for the real
+	// re-Open below, mirroring the migration tests above.
+	dbPath := filepath.Join(t.TempDir(), "kraken.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	jobID, err := s.CreateJob(&Job{Slug: "v6-shaped", Repo: "kraken"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: jobID, JobSlug: "v6-shaped", Note: "pre-existing", TS: 5}); err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+
+	downgradeFreshDB(t, s, 6)
+
+	// the table really is gone at the v6 shape — otherwise this test would
+	// pass without the migration doing anything.
+	var exists int
+	err = s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='threads'`).Scan(&exists)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("threads table still present at the v6 shape: err=%v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v6: %v", err)
+	}
+
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
+	}
+
+	// the new table exists and is usable end to end.
+	if err := s.AddThread(Thread{JobID: jobID, TID: "t1", Title: "post-migrate", Pane: "%1"}); err != nil {
+		t.Fatalf("AddThread after migration: %v", err)
+	}
+	list, err := s.ListThreads(jobID)
+	if err != nil {
+		t.Fatalf("ListThreads after migration: %v", err)
+	}
+	if len(list) != 1 || list[0].Title != "post-migrate" {
+		t.Fatalf("unexpected threads after migration: %+v", list)
+	}
+	// ...including the unique index the migration's DDL carries.
+	if err := s.AddThread(Thread{JobID: jobID, TID: "t1"}); err == nil {
+		t.Fatal("duplicate tid accepted after migration: threads_job_tid index missing")
+	}
+
+	// pre-existing rows survive untouched.
+	j, err := s.GetJobBySlug("v6-shaped")
+	if err != nil {
+		t.Fatalf("GetJobBySlug after migration: %v", err)
+	}
+	if j.Repo != "kraken" {
+		t.Fatalf("job row mangled by migration: %+v", j)
+	}
+	fb, err := s.ListFeedback(jobID)
+	if err != nil {
+		t.Fatalf("ListFeedback after migration: %v", err)
+	}
+	if len(fb) != 1 || fb[0].Note != "pre-existing" {
+		t.Fatalf("feedback row mangled by migration: %+v", fb)
+	}
+
+	// Fidelity check: the assertions above ran an in-process s.migrate()
+	// call directly — roll the same on-disk file back to v6-shaped again,
+	// close it, and re-Open it for real, mirroring the other migration
+	// tests' second-downgrade check.
+	downgradeFreshDB(t, s, 6)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close before re-Open: %v", err)
+	}
+
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("re-Open a v6-shaped db: %v", err)
+	}
+	defer s2.Close()
+
+	var version2 int
+	if err := s2.db.QueryRow(`PRAGMA user_version`).Scan(&version2); err != nil {
+		t.Fatalf("read user_version after re-Open: %v", err)
+	}
+	if version2 != schemaVersion {
+		t.Fatalf("user_version after re-Open = %d, want %d", version2, schemaVersion)
+	}
+	// The 2nd downgrade dropped the (seeded) threads table, so the re-created
+	// one starts empty — enough to prove the table survives a real Open()
+	// round-trip and numbering restarts cleanly on it.
+	next, err := s2.NextThreadID(jobID)
+	if err != nil {
+		t.Fatalf("NextThreadID after re-Open: %v", err)
+	}
+	if next != "t1" {
+		t.Fatalf("NextThreadID on the re-created table = %q, want t1", next)
+	}
+}
+
 // TestSchemaV5ToV6AmbiguousSlugLeavesJobIDNull is the sibling case
 // TestSchemaV5ToV6BackfillsFeedbackJobID doesn't reach: a pre-v6 row whose
 // job_slug matches an active job's slug AND an archived job's archived_name
@@ -673,5 +793,43 @@ func TestSchemaV5ToV6AmbiguousSlugLeavesJobIDNull(t *testing.T) {
 		if len(scoped) != 0 {
 			t.Fatalf("ambiguous row surfaced on job %d's scoped read: %+v", id, scoped)
 		}
+	}
+}
+
+// TestKeywordColumnsAreQuotedInDDL pins the house pattern F5 restored: a
+// column whose name is a SQLite keyword is quoted in the DDL itself, not
+// only at the Go use sites. Both cases in the schema today —
+// board_order."column" (schemaV1) and threads."window" (schemaV7) — parse
+// unquoted inside a CREATE TABLE, so the bare form looks fine right up until
+// someone copies it into an expression, where it is a syntax error. Quoting
+// it where the next schema author reads it is what stops that copy.
+//
+// The second half is the behavioral half: the quoted names must actually
+// work in a real expression (WHERE / ORDER BY), which is where an unquoted
+// declaration would have stopped being merely stylistic.
+func TestKeywordColumnsAreQuotedInDDL(t *testing.T) {
+	for _, c := range []struct{ ddl, col string }{
+		{schemaV1, "column"},
+		{schemaV7, "window"},
+	} {
+		quoted := `"` + c.col + `"`
+		if !strings.Contains(c.ddl, quoted) {
+			t.Fatalf("DDL declares %s unquoted; SQLite keyword columns must be written %s", c.col, quoted)
+		}
+	}
+
+	s := openTest(t)
+	jobID := seedThreadJob(t, s, "keyword-cols")
+	if err := s.AddThread(Thread{JobID: jobID, TID: "t1", Pane: "%1", Window: "@4"}); err != nil {
+		t.Fatalf("AddThread: %v", err)
+	}
+	var got string
+	if err := s.db.QueryRow(
+		`SELECT "window" FROM threads WHERE job_id = ? AND "window" != '' ORDER BY "window"`, jobID,
+	).Scan(&got); err != nil {
+		t.Fatalf(`querying threads."window" in an expression: %v`, err)
+	}
+	if got != "@4" {
+		t.Fatalf(`threads."window" = %q, want @4`, got)
 	}
 }

@@ -15,6 +15,17 @@ type block struct {
 	Kind string // "user" | "thinking" | "text" | "tool" | "teammate"
 	Text string
 	From string // teammate_id, set only for kind "teammate"
+	// UUID is the "uuid" of the transcript RECORD this block came out of —
+	// several blocks can share one (a single assistant record yields a
+	// thinking + a text + N tool blocks). Carried for exactly one reader:
+	// the side-thread read endpoint (api/threads.go), which splits a forked
+	// thread's transcript into inherited pre-fork history and the thread's
+	// own turns by comparing against the fork anchor LastMessageUUID
+	// recorded at branch time (store.Thread.ForkUUID) — forks preserve
+	// message uuids, so the anchor still names a record inside the fork's
+	// own copy of the history. Blank when the record carried no uuid; every
+	// other caller ignores it.
+	UUID string
 }
 
 // teammateMsgRe matches the harness-wrapped envelope another kraken cell's
@@ -61,10 +72,76 @@ func ReadTranscriptPath(p *Peer) (string, error) {
 	return path, nil
 }
 
+// tailStartWindow is the first (and, for the fixed-window readers, only) tail
+// slice every transcript reader here starts from: big enough that the last
+// turn of a multi-MB transcript is always inside it, small enough to read and
+// JSON-parse on a 2s board tick. A var, not a const, so tests can shrink it
+// and exercise the window-growth path on a small file.
+var tailStartWindow int64 = 256 * 1024
+
+// lastBlocksScanLimit bounds how far back LastBlocks will grow its window,
+// the same hazard (and the same fix) as lastUserScanLimit below. Callers ask
+// for anything from n=5 (`k r`, /api/peers/read) to a thread overlay's whole
+// conversation, and a forked side thread's transcript is the worst case: it
+// opens with zeus' entire history copied in, and a `/do` phase full of
+// sidechain (subagent) records — which parseBlocks skips — can never satisfy
+// a large n at all, so an unbounded scan walks a 40 MB file to byte 0, and
+// re-parses every doubling on the way, on every 3s poll. Past the limit
+// LastBlocks returns what it found rather than reading further: a partial
+// tail is exactly what a tail read is for. A var, not a const, so tests can
+// shrink it.
+var lastBlocksScanLimit int64 = 4 << 20
+
+// tailWindow reads the last window bytes of an already-open file as lines,
+// dropping the leading partial line whenever the window doesn't reach the
+// file's head. The one place the open/seek/ReadAll/split prologue every
+// reader in this file needs is written down.
+func tailWindow(f *os.File, size, window int64) ([]string, error) {
+	start := size - window
+	if start < 0 {
+		start = 0
+	}
+	if _, err := f.Seek(start, 0); err != nil {
+		return nil, fmt.Errorf("seek transcript: %v", err)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("read transcript: %v", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:] // drop partial first line
+	}
+	return lines, nil
+}
+
+// tailLines is tailWindow's never-an-error, one-shot form: a missing file, an
+// unreadable one, or a failed seek all come back as nil lines. LastStall is
+// its caller — best-effort by contract, since it reads a file claude owns —
+// so that degradation lives here rather than as five early returns in it.
+func tailLines(path string, window int64) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	lines, err := tailWindow(f, info.Size(), window)
+	if err != nil {
+		return nil
+	}
+	return lines
+}
+
 // LastBlocks returns the transcript's trailing blocks: the last n
 // user/thinking/text blocks plus any tool one-liners interleaved after the
 // first of them. Reads the file tail backward in growing windows so huge
-// transcripts stay fast.
+// transcripts stay fast, stopping at the file's head or at
+// lastBlocksScanLimit — whichever comes first — and returning whatever it
+// found by then (counted < n is a normal answer, not an error).
 func LastBlocks(path string, n int) ([]block, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -76,21 +153,10 @@ func LastBlocks(path string, n int) ([]block, int, error) {
 		return nil, 0, fmt.Errorf("stat transcript: %v", err)
 	}
 	size := info.Size()
-	for window := int64(256 * 1024); ; window *= 2 {
-		start := size - window
-		if start < 0 {
-			start = 0
-		}
-		if _, err := f.Seek(start, 0); err != nil {
-			return nil, 0, fmt.Errorf("seek transcript: %v", err)
-		}
-		data, err := io.ReadAll(f)
+	for window := tailStartWindow; ; window *= 2 {
+		lines, err := tailWindow(f, size, window)
 		if err != nil {
-			return nil, 0, fmt.Errorf("read transcript: %v", err)
-		}
-		lines := strings.Split(string(data), "\n")
-		if start > 0 && len(lines) > 0 {
-			lines = lines[1:] // drop partial first line
+			return nil, 0, err
 		}
 		blocks := parseBlocks(lines)
 		counted := 0
@@ -104,7 +170,7 @@ func LastBlocks(path string, n int) ([]block, int, error) {
 				}
 			}
 		}
-		if counted >= n || start == 0 {
+		if counted >= n || window >= size || window >= lastBlocksScanLimit {
 			if counted == 0 {
 				return nil, 0, nil
 			}
@@ -135,31 +201,7 @@ var nonTransientAPIErrors = []string{"credit balance", "prompt is too long", "in
 // object, and classifies that single entry. Any open/read error, or a
 // transcript with no such entry, returns a zero Stall — never an error.
 func LastStall(path string) Stall {
-	f, err := os.Open(path)
-	if err != nil {
-		return Stall{}
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return Stall{}
-	}
-	size := info.Size()
-	start := size - 256*1024
-	if start < 0 {
-		start = 0
-	}
-	if _, err := f.Seek(start, 0); err != nil {
-		return Stall{}
-	}
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return Stall{}
-	}
-	lines := strings.Split(string(data), "\n")
-	if start > 0 && len(lines) > 0 {
-		lines = lines[1:] // drop partial first line
-	}
+	lines := tailLines(path, tailStartWindow)
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
@@ -193,6 +235,62 @@ func LastStall(path string) Stall {
 		return classifyStall(t, msg, text)
 	}
 	return Stall{}
+}
+
+// LastMessageUUID returns the uuid of the last transcript record that a
+// READER would still see — the message a fork of that session hangs off, and
+// which kraken stores as a side thread's fork anchor (store.Thread.ForkUUID)
+// so the read endpoint can split the fork's transcript into inherited history
+// and the thread's own turns.
+//
+// The anchor is therefore taken from parseBlocks' OWN output, not from the raw
+// lines: the consumer (api's threadForkSplit) matches it against block.UUID,
+// so an anchor from a record parseBlocks drops is unmatchable by construction
+// and silently disables the divider. That is not a corner case — trailing
+// bookkeeping records DO carry uuids, and a `system` record is the common tail
+// (every cell installs a PostToolUse `kraken pr-hook`, which writes one), as do
+// attachments, sidechain/meta records, and content-less assistant/user records.
+// Walking blocks backward for the last non-blank UUID picks the last record
+// that both survives parseBlocks' type/sidechain/isMeta gate AND produces at
+// least one block, which is exactly what the split can find again.
+//
+// The window grows like LastBlocks' — under the same lastBlocksScanLimit
+// ceiling — rather than staying fixed at one tail slice, because the tail
+// slice of a zeus mid-`/do` is often ENTIRELY subagent (sidechain) records
+// and tool results, which is exactly when carl branches a thread to ask about
+// the block he's staring at. Growing costs nothing on a poll: this runs once
+// per branch, never on a tick.
+//
+// Provenance only, never a resume target, so this is deliberately
+// best-effort: a missing file, an unreadable one, a truncated tail, or a
+// transcript with no readable message inside the ceiling all return "" rather
+// than an error, and no caller may fail a spawn over it.
+func LastMessageUUID(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	size := info.Size()
+	for window := tailStartWindow; ; window *= 2 {
+		lines, err := tailWindow(f, size, window)
+		if err != nil {
+			return ""
+		}
+		blocks := parseBlocks(lines)
+		for i := len(blocks) - 1; i >= 0; i-- {
+			if blocks[i].UUID != "" {
+				return blocks[i].UUID
+			}
+		}
+		if window >= size || window >= lastBlocksScanLimit {
+			return ""
+		}
+	}
 }
 
 // stallText concatenates a message's text content — a plain string, or the
@@ -249,9 +347,10 @@ func classifyStall(entryType string, msg map[string]any, text string) Stall {
 }
 
 // lastUserScanLimit bounds how far back LastUserText will grow its scan
-// window. Unlike LastBlocks/lastAssistantText, which are effectively
-// tail-bounded because assistant blocks are dense at the tail, a job that
-// was never steered has its only real user text — the spawn prompt — sitting
+// window — the same ceiling lastBlocksScanLimit puts on LastBlocks, but a
+// looser one, because the thing it hunts for is genuinely rare rather than
+// merely deep: a job that was never steered has its only real user text —
+// the spawn prompt — sitting
 // at the file HEAD, so an unbounded backward scan would read and JSON-parse
 // the entire transcript (tens of MB for long runs) on every board cache
 // miss, which happens per live job every 2s. A user message buried deeper
@@ -279,21 +378,10 @@ func LastUserText(path string) string {
 		return ""
 	}
 	size := info.Size()
-	for window := int64(256 * 1024); ; window *= 2 {
-		start := size - window
-		if start < 0 {
-			start = 0
-		}
-		if _, err := f.Seek(start, 0); err != nil {
-			return ""
-		}
-		data, err := io.ReadAll(f)
+	for window := tailStartWindow; ; window *= 2 {
+		lines, err := tailWindow(f, size, window)
 		if err != nil {
 			return ""
-		}
-		lines := strings.Split(string(data), "\n")
-		if start > 0 && len(lines) > 0 {
-			lines = lines[1:] // drop partial first line
 		}
 		blocks := parseBlocks(lines)
 		for i := len(blocks) - 1; i >= 0; i-- {
@@ -313,7 +401,7 @@ func LastUserText(path string) string {
 			}
 			return blocks[i].Text
 		}
-		if start == 0 || window >= lastUserScanLimit {
+		if window >= size || window >= lastUserScanLimit {
 			return ""
 		}
 	}
@@ -341,8 +429,14 @@ func parseBlocks(lines []string) []block {
 			continue // harness-injected records (command output, caveats)
 		}
 		msg, _ := rec["message"].(map[string]any)
+		// stamped onto every block this record produces (see block.UUID)
+		uuid, _ := rec["uuid"].(string)
 		if t == "user" {
-			blocks = append(blocks, userBlocks(msg["content"])...)
+			ub := userBlocks(msg["content"])
+			for i := range ub {
+				ub[i].UUID = uuid
+			}
+			blocks = append(blocks, ub...)
 			continue
 		}
 		parts, _ := msg["content"].([]any)
@@ -354,15 +448,15 @@ func parseBlocks(lines []string) []block {
 			switch pm["type"] {
 			case "thinking":
 				if s, _ := pm["thinking"].(string); strings.TrimSpace(s) != "" {
-					blocks = append(blocks, block{Kind: "thinking", Text: s})
+					blocks = append(blocks, block{Kind: "thinking", Text: s, UUID: uuid})
 				}
 			case "text":
 				if s, _ := pm["text"].(string); strings.TrimSpace(s) != "" {
-					blocks = append(blocks, block{Kind: "text", Text: s})
+					blocks = append(blocks, block{Kind: "text", Text: s, UUID: uuid})
 				}
 			case "tool_use":
 				name, _ := pm["name"].(string)
-				blocks = append(blocks, block{Kind: "tool", Text: name + "(" + summarizeInput(pm["input"]) + ")"})
+				blocks = append(blocks, block{Kind: "tool", Text: name + "(" + summarizeInput(pm["input"]) + ")", UUID: uuid})
 			}
 		}
 	}

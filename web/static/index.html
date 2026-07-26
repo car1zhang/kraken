@@ -146,6 +146,11 @@
         <div class="steer-context" id="steer-context" hidden>
           <div class="steer-crew" id="steer-crew" hidden></div>
           <div class="prs" id="steer-prs" hidden></div>
+          <!-- side threads, beside the PR chips: like PRs they're job
+               history, not cell state, so they render in every mode (the
+               ⑂ branch affordance inside only appears while the cell is
+               live — see threadChipsHTML) -->
+          <div class="threads" id="steer-threads" hidden></div>
           <div class="steer-detail" id="steer-detail" hidden></div>
           <div class="last-sent" id="steer-lastsent" hidden></div>
           <div class="chips" id="steer-chips" hidden></div>
@@ -172,6 +177,74 @@
         </div>
         <button class="btn btn-big" id="steer-send">send ⌘⏎</button>
         <div class="answer-note" id="steer-note"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- side thread: a fork of zeus' session running as a second claude in a
+       new tmux window of the same cell — for asking without disturbing zeus.
+       One overlay, two modes (see openThread in app.js): "new" branches a
+       thread off the live cell (required name + optional seed question),
+       "thread" reads one that already exists. A killed thread keeps its row
+       and its conversation and can be revived into a fresh window. Static
+       markup like steer/editor/usage, since only the body is per-open. -->
+  <div class="overlay" id="thread-overlay" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" id="thread-tid"></span>
+        <span class="thread-name-label" id="thread-name-label" hidden role="button" tabindex="0"
+          title="rename this thread"></span>
+        <input class="thread-name-input" id="thread-name-input" hidden spellcheck="false" maxlength="80"
+          aria-label="thread name">
+        <span class="thread-pill" id="thread-pill" hidden></span>
+        <span class="spacer"></span>
+        <!-- open-tmux is what the delegated click handler matches (tmux-open
+             is only the button's styling class) — same pair as the card's,
+             but paintThreadHead puts the THREAD's pane on it, so it raises
+             the thread's own window rather than the card's zeus pane -->
+        <button class="btn tmux-open open-tmux" id="thread-tmux" hidden title="raise this thread's window in Ghostty">⧉ tmux</button>
+        <button class="btn ghost" id="thread-revive" hidden
+          title="resume this thread's session in a fresh window of the cell">⟲ revive</button>
+        <button class="btn ghost danger" id="thread-kill" hidden
+          title="close this thread's tmux window — the conversation stays and can be revived">✕ kill thread</button>
+      </div>
+      <div class="panel-body answer-body">
+        <!-- new mode -->
+        <div class="thread-new" id="thread-new" hidden>
+          <div class="thread-banner">
+            <b>⑂ branch a side thread</b><br>
+            Forks zeus' session as it stands right now into a new window of the same cell, in the same
+            worktree. Zeus is not interrupted and this conversation is unaffected. Threads are for
+            asking, not for doing.
+          </div>
+          <label class="thread-field">what is this thread for?
+            <input id="thread-new-name" placeholder="short name — e.g. short-clip WER" spellcheck="false" maxlength="80">
+          </label>
+          <label class="thread-field">seed question <span class="dim">— optional</span>
+            <textarea id="thread-seed" rows="4"
+              placeholder="optional: the first thing to ask — leave empty to open the thread at its prompt with zeus' context loaded"></textarea>
+          </label>
+          <div class="thread-new-actions">
+            <button class="btn" id="thread-branch">⑂ branch thread ⌘⏎</button>
+            <button class="btn ghost" id="thread-cancel">cancel</button>
+          </div>
+        </div>
+        <!-- existing mode -->
+        <div class="thread-view" id="thread-view" hidden>
+          <div class="convo" id="thread-convo"></div>
+          <!-- the panehead is the mirror's toggle: capture-pane runs on every
+               3s tick while it's open, so it's opt-in and sticky (see
+               toggleThreadMirror), the way iOS gates its Terminal tab -->
+          <div class="panehead" id="thread-panehead" hidden role="button" tabindex="0"
+            title="mirror this thread's tmux pane — polls while open"><span class="live-dot"></span><span id="thread-panelabel"></span></div>
+          <pre class="thread-pane" id="thread-pane" hidden></pre>
+          <div class="thread-empty" id="thread-closed-note" hidden></div>
+          <div class="thread-composer" id="thread-composer" hidden>
+            <textarea id="thread-text" rows="3" placeholder="ask this thread — routed straight to its pane"></textarea>
+            <button class="btn btn-big" id="thread-send">send ⌘⏎</button>
+          </div>
+        </div>
+        <div class="answer-note" id="thread-note"></div>
       </div>
     </div>
   </div>
