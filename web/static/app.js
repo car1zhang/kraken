@@ -212,7 +212,9 @@ function docQuestionRowHTML(j, q, prefill) {
 // answered_at (if present) rides in a title attr rather than cluttering the
 // row itself. Clickable (see the document click delegate) to reopen it as
 // an editable row via reansweringDocQ — answers are editable forever (Q13),
-// live or done.
+// live or done. Only the modal copies of the panel ever render this row
+// (docQuestionsHTML's showAnswered), so re-answering is a modal affordance
+// now, one click into the job rather than on the card.
 function docQuestionAnsweredHTML(j, q) {
   const imp = (q.importance || "P2").toLowerCase();
   const title = q.answered_at ? `answered ${String(q.answered_at)} — click to re-answer` : "click to re-answer";
@@ -229,8 +231,19 @@ function docQuestionAnsweredHTML(j, q) {
 // field) and jobs with no questions look exactly as before. Questions are
 // rows in kraken.db now (file mode retired outright, Q11) — there is no
 // more malformed-file state to render.
-function docQuestionsHTML(j) {
-  const list = j.doc_questions || [];
+//
+// showAnswered gates the already-resolved rows. The BOARD passes false: a
+// resolved question is a decision, not a standing ask, and a card that keeps
+// listing every answer it ever gave crowds out the jobs' live state — same
+// argument settledJob already makes for a done job's whole panel. The modal
+// copies (steer, job editor) pass true (the default), so answered rows —
+// and with them the click-to-re-answer affordance — are always exactly one
+// click into the job (Q13: answers are editable forever). A card therefore
+// renders only open questions, and disappears entirely once the last one is
+// answered.
+function docQuestionsHTML(j, { showAnswered = true } = {}) {
+  let list = j.doc_questions || [];
+  if (!showAnswered) list = list.filter((q) => !q.answer);
   if (!list.length) return "";
   const sorted = sortDocQuestions(list);
   const rows = sorted
@@ -456,7 +469,7 @@ function cardHTML(j, col) {
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
-    ${settledJob(j) ? "" : docQuestionsHTML(j)}
+    ${settledJob(j) ? "" : docQuestionsHTML(j, { showAnswered: false })}
     ${feedbackHTML(j)}
     ${(col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
   </div>`;
@@ -620,9 +633,12 @@ function docInputKey(el) {
 // modal but never sent would be destroyed here before it ever reaches the
 // card. So before wiping, carry any non-empty modal draft into the card's
 // own copy of the same question — but never clobber a non-empty card draft;
-// that one's the user's most recent typing and wins. A settled job's card
-// has no copy to carry into (see settledJob), so that draft is simply
-// dropped — same as any other unsent text in a modal that's closing.
+// that one's the user's most recent typing and wins. Some drafts have no
+// card copy to carry into at all — a settled job's card renders no panel
+// (settledJob), and no card ever renders an answered row, so a re-answer
+// draft only exists in the modal (docQuestionsHTML's showAnswered). Those
+// are simply dropped, same as any other unsent text in a modal that's
+// closing.
 function clearModalDocq(elID) {
   const docqEl = document.getElementById(elID);
   if (!docqEl) return;
@@ -1214,8 +1230,9 @@ function openArtifact(url, name) {
 // rebuilds the whole context block) or the job editor (fillEditorDocq). The
 // #board rebuild every action triggers never touches modal DOM, so without
 // this a row inside an open modal keeps advertising state the board has
-// already moved past — and for a done job the modal is the only surface
-// showing the question at all (settledJob).
+// already moved past — and for an answered question (docQuestionsHTML's
+// showAnswered), or any question on a done job (settledJob), the modal is
+// the only surface showing it at all.
 function refreshModalDocq(slug) {
   if (steerOverlay && !steerOverlay.hidden && steerSlug === slug) {
     fillSteerContext(jobsBySlug[slug], steerMode);
