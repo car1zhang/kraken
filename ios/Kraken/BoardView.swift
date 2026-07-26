@@ -763,13 +763,15 @@ struct BoardView: View {
     // Columns whose reorder POST is still in flight — their overlay is
     // neither settled nor abandoned, so clearSettledReorders leaves it be.
     @State private var inFlightReorderColumns: Set<BoardColumn> = []
-    // The slug/column of the card currently mid-drag, shared across both the
-    // in-column and overview-strip drop targets.
-    @State private var draggingSlug: String?
-    @State private var draggingSourceColumn: BoardColumn?
-    // Which overview-strip cell is currently hovered by a legal drop, for
-    // highlighting.
-    @State private var hoveredDropColumn: BoardColumn?
+    // Everything about the card currently mid-drag — its slug, the column it
+    // started in, the strip cell under the finger — shared across both the
+    // in-column and overview-strip drop targets. One value rather than three
+    // loose vars so that every exit resets all of it together: SwiftUI gives
+    // a `.onDrag` source no drag-end callback, so a drag released over
+    // anything that isn't a drop target used to leave these set forever, and
+    // the board went on rendering a gesture that was over. See
+    // BoardDragState.swift.
+    @State private var drag = BoardDragState()
     // Sheets presented for cross-column drops that need user input rather
     // than a bare API call (blocked→working, done→working).
     @State private var dragSteerJob: WebJob?
@@ -813,6 +815,20 @@ struct BoardView: View {
                     await vm.refresh(baseURL: serverURL)
                     clearSettledReorders()
                 }
+            }
+            // Backstop for the drag-end signal: a gesture interrupted by a
+            // real backgrounding may never see its item provider released
+            // while the board is on screen to observe it, and coming back to
+            // a board still dressed for a drag that ended minutes ago is the
+            // exact symptom this change exists to remove. `.background`
+            // specifically, matching KrakenApp's own scene handling — the
+            // transient `.inactive` that a call banner or a control-centre
+            // pull produces does NOT end the drag session, and resetting on
+            // it would tear the board's drag state down with the user's
+            // finger still on the card.
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .background, drag.isActive else { return }
+                endActiveDrag(committedReorderIn: nil)
             }
             // The in-flight update poll, kept separate from the 4s board poll
             // above: it runs ~3x faster, hits a much narrower endpoint, and
@@ -1140,8 +1156,8 @@ struct BoardView: View {
         let count = vm.jobs(in: column).count
         let flagged = vm.hasFlag(in: column)
         let isCurrent = selectedColumn == column
-        let isLegalTarget = draggingSourceColumn.map { isLegalCrossColumnDrop(from: $0, to: column) } ?? false
-        let isHovered = hoveredDropColumn == column
+        let isLegalTarget = drag.sourceColumn.map { isLegalCrossColumnDrop(from: $0, to: column) } ?? false
+        let isHovered = drag.hoveredColumn == column
         return Button {
             selectedColumn = column
         } label: {
@@ -1178,11 +1194,10 @@ struct BoardView: View {
         .buttonStyle(.plain)
         .onDrop(of: [.text], delegate: OverviewDropDelegate(
             target: column,
-            draggingSlug: $draggingSlug,
-            draggingSourceColumn: $draggingSourceColumn,
-            hoveredColumn: $hoveredDropColumn,
+            drag: $drag,
             isLegal: isLegalCrossColumnDrop,
-            onDrop: performCrossColumnDrop
+            onDrop: performCrossColumnDrop,
+            onDragFinished: endActiveDrag
         ))
     }
 
@@ -1224,20 +1239,35 @@ struct BoardView: View {
                                     .onTapGesture { presentJob(job) }
                             } else {
                                 JobCardView(job: job)
-                                    .opacity(draggingSlug == job.slug ? 0.4 : 1.0)
+                                    .opacity(drag.slug == job.slug ? 0.4 : 1.0)
                                     .onTapGesture { presentJob(job) }
+                                    // The item provider is the drag session's
+                                    // lifetime: UIKit releases it when the
+                                    // session ends however it ends, and that
+                                    // release is the only drag-end signal a
+                                    // SwiftUI drag source gets. `dragEnding`
+                                    // carries it in a registration rather
+                                    // than in an NSItemProvider subclass's
+                                    // deinit, for reasons worth reading
+                                    // before changing (BoardDragState.swift).
+                                    // The token captured here is what makes a
+                                    // late signal — one arriving after this
+                                    // drag already dropped, possibly after
+                                    // another has begun — a no-op instead of
+                                    // a gesture-killer.
                                     .onDrag {
-                                        draggingSlug = job.slug
-                                        draggingSourceColumn = column
-                                        return NSItemProvider(object: job.slug as NSString)
+                                        let generation = drag.begin(slug: job.slug, column: column)
+                                        return .dragEnding(slug: job.slug) {
+                                            endDrag(generation: generation)
+                                        }
                                     }
                                     .onDrop(of: [.text], delegate: ReorderDropDelegate(
                                         item: job.slug,
                                         column: column,
                                         slugs: slugsBinding(for: column),
-                                        draggingSlug: $draggingSlug,
-                                        draggingSourceColumn: $draggingSourceColumn,
-                                        onCommit: commitReorder
+                                        drag: $drag,
+                                        onCommit: commitReorder,
+                                        onDragFinished: endActiveDrag
                                     ))
                             }
                         }
@@ -1289,17 +1319,65 @@ struct BoardView: View {
     /// it), and for any column whose overlay was orphaned by a drag that
     /// never dropped (cancelled/loose-ended drags get no callback, so their
     /// live-swapped order would otherwise shadow the server's forever). A
-    /// column mid-drag right now — `draggingSourceColumn` — is left alone.
+    /// column mid-drag right now — `drag.sourceColumn` — is left alone.
+    /// This is now a second line of defence rather than the only cleanup: a
+    /// drag that ends without dropping resets its own overlay immediately
+    /// (see the two drag-end helpers below), instead of stranding one here
+    /// forever.
     private func clearSettledReorders() {
         guard !localOrder.isEmpty else { return }
         for column in localOrder.keys {
             if pendingReorderColumns.contains(column) {
                 localOrder[column] = nil
                 pendingReorderColumns.remove(column)
-            } else if !inFlightReorderColumns.contains(column) && column != draggingSourceColumn {
+            } else if !inFlightReorderColumns.contains(column) && column != drag.sourceColumn {
                 localOrder[column] = nil
             }
         }
+    }
+
+    /// Ends whatever drag is live without needing its generation — the exit
+    /// for callers that are by definition handling the current drag: both
+    /// delegates' `performDrop`, and the scene-phase backstop.
+    ///
+    /// `committedColumn` is the column whose order the caller is about to
+    /// persist, or nil for an end that commits no order at all: any OTHER
+    /// column's overlay is a live-swap that never became real, so it is
+    /// dropped here and the list snaps back to the server's order rather than
+    /// showing an order nobody committed until the next poll. Named as a
+    /// column rather than a bool because the committing delegate belongs to
+    /// the column it dropped ON, which is not necessarily the one the drag
+    /// started in.
+    private func endActiveDrag(committedReorderIn committedColumn: BoardColumn?) {
+        let column = drag.sourceColumn
+        drag.endActive()
+        guard let column, column != committedColumn else { return }
+        dropUncommittedOverlay(in: column)
+    }
+
+    /// Ends the drag identified by `generation`, if it is still the live one
+    /// — the guarded twin of `endActiveDrag`, and the mirror of
+    /// `BoardDragState`'s own `end(generation:)` / `endActive()` pair.
+    ///
+    /// Its only caller is the item provider's release callback (see
+    /// `NSItemProvider.dragEnding`), which is the path with no drop behind
+    /// it, so there is never a commit to preserve. A stale token means the
+    /// drag already ended — by a drop, or by the scene-phase backstop — and
+    /// possibly that a *new* drag is in flight, so nothing is touched.
+    private func endDrag(generation: Int) {
+        let column = drag.sourceColumn
+        guard drag.end(generation: generation), let column else { return }
+        dropUncommittedOverlay(in: column)
+    }
+
+    /// Drops `column`'s optimistic overlay unless it belongs to a commit
+    /// that is still settling — in flight, or waiting for the poll that
+    /// confirms it. Those overlays are the server's order-to-be, not a
+    /// half-finished gesture's.
+    private func dropUncommittedOverlay(in column: BoardColumn) {
+        guard !inFlightReorderColumns.contains(column),
+              !pendingReorderColumns.contains(column) else { return }
+        localOrder[column] = nil
     }
 
     /// Persists a within-column reorder. A no-op drop (order unchanged)
@@ -1359,17 +1437,29 @@ struct BoardView: View {
             runBoardAction { try await APIClient.shared.startJob(baseURL: serverURL, slug: slug) }
         case (.working, .blocked):
             runBoardAction { try await APIClient.shared.stopJob(baseURL: serverURL, slug: slug) }
+        // The two sheet-presenting drops are the only ones that need the
+        // WebJob itself rather than just its slug, and the only ones that
+        // would otherwise fail in silence: a job archived or killed from
+        // another client mid-drag is gone from vm.board by the time the
+        // finger comes up, and no sheet appearing is indistinguishable from
+        // an action that ran and was reverted. Every other case fires an API
+        // call that surfaces its own error.
         case (.blocked, .working):
-            if let job { dragSteerJob = job }
+            if let job { dragSteerJob = job } else { vm.errorMessage = missingJobMessage(slug) }
         case (.done, .blocked):
             runBoardAction { try await APIClient.shared.reactivateJob(baseURL: serverURL, slug: slug, text: "") }
+        // (the second of the two sheet-presenting drops — see above)
         case (.done, .working):
-            if let job { dragReactivateJob = job }
+            if let job { dragReactivateJob = job } else { vm.errorMessage = missingJobMessage(slug) }
         case (.done, .archived):
             runBoardAction { try await APIClient.shared.archiveJob(baseURL: serverURL, slug: slug) }
         default:
             break
         }
+    }
+
+    private func missingJobMessage(_ slug: String) -> String {
+        "\(slug) is no longer on the board"
     }
 
     private func runBoardAction(_ action: @escaping () async throws -> Void) {
@@ -1392,12 +1482,12 @@ private struct ReorderDropDelegate: DropDelegate {
     let item: String
     let column: BoardColumn
     let slugs: Binding<[String]>
-    let draggingSlug: Binding<String?>
-    let draggingSourceColumn: Binding<BoardColumn?>
+    let drag: Binding<BoardDragState>
     let onCommit: (BoardColumn, [String]) -> Void
+    let onDragFinished: (_ committedReorderIn: BoardColumn?) -> Void
 
     func dropEntered(info: DropInfo) {
-        guard let dragging = draggingSlug.wrappedValue, dragging != item,
+        guard let dragging = drag.wrappedValue.slug, dragging != item,
               let from = slugs.wrappedValue.firstIndex(of: dragging),
               let to = slugs.wrappedValue.firstIndex(of: item) else { return }
         if slugs.wrappedValue[to] != dragging {
@@ -1409,10 +1499,13 @@ private struct ReorderDropDelegate: DropDelegate {
         DropProposal(operation: .move)
     }
 
+    // Naming the column is what protects the write: onCommit is about to
+    // put this column's order into localOrder, and onDragFinished leaves
+    // exactly that column's overlay alone. Ending before committing keeps
+    // the reset from ever seeing the committed value at all.
     func performDrop(info: DropInfo) -> Bool {
         let finalOrder = slugs.wrappedValue
-        draggingSlug.wrappedValue = nil
-        draggingSourceColumn.wrappedValue = nil
+        onDragFinished(column)
         onCommit(column, finalOrder)
         return true
     }
@@ -1424,36 +1517,43 @@ private struct ReorderDropDelegate: DropDelegate {
 /// card visually snaps back).
 private struct OverviewDropDelegate: DropDelegate {
     let target: BoardColumn
-    let draggingSlug: Binding<String?>
-    let draggingSourceColumn: Binding<BoardColumn?>
-    let hoveredColumn: Binding<BoardColumn?>
+    let drag: Binding<BoardDragState>
     let isLegal: (BoardColumn, BoardColumn) -> Bool
     let onDrop: (BoardColumn, BoardColumn, String) -> Void
+    let onDragFinished: (_ committedReorderIn: BoardColumn?) -> Void
 
     func dropEntered(info: DropInfo) {
-        guard let source = draggingSourceColumn.wrappedValue, isLegal(source, target) else { return }
-        hoveredColumn.wrappedValue = target
+        guard let source = drag.wrappedValue.sourceColumn, isLegal(source, target) else { return }
+        drag.wrappedValue.hover(target)
     }
 
     func dropExited(info: DropInfo) {
-        if hoveredColumn.wrappedValue == target { hoveredColumn.wrappedValue = nil }
+        if drag.wrappedValue.hoveredColumn == target { drag.wrappedValue.hover(nil) }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard let source = draggingSourceColumn.wrappedValue, isLegal(source, target) else {
+        guard let source = drag.wrappedValue.sourceColumn, isLegal(source, target) else {
             return DropProposal(operation: .forbidden)
         }
         return DropProposal(operation: .move)
     }
 
+    // The drag ends on every path this method has, legal or not — it used to
+    // return through the guard below without clearing anything, leaving the
+    // source card dim and the whole strip outlined with no drag in flight.
+    // In practice UIKit does not deliver performDrop at all once dropUpdated
+    // has answered `.forbidden`, so an illegal drop is really reset by the
+    // item provider's release a runloop hop later; the unconditional reset
+    // here is defence for the case where it IS delivered, not the mechanism
+    // the illegal path depends on.
     func performDrop(info: DropInfo) -> Bool {
-        defer { hoveredColumn.wrappedValue = nil }
-        guard let source = draggingSourceColumn.wrappedValue, let slug = draggingSlug.wrappedValue,
-              isLegal(source, target) else {
-            return false
-        }
-        draggingSlug.wrappedValue = nil
-        draggingSourceColumn.wrappedValue = nil
+        let source = drag.wrappedValue.sourceColumn
+        let slug = drag.wrappedValue.slug
+        // nil: a cross-column drop commits no column's order, so any
+        // live-swapping the card did on its way to the strip is rolled back
+        // with the rest of the drag.
+        onDragFinished(nil)
+        guard let source, let slug, isLegal(source, target) else { return false }
         onDrop(source, target, slug)
         return true
     }
