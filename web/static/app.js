@@ -129,13 +129,13 @@ function questionHTML(j) {
 // ---- doc questions (questions.yaml, distinct from AskUserQuestion above) --
 //
 // settledJob: a done or archived job. Its questions are history, not a
-// standing ask — nobody is waiting on an answer to keep working — so they
-// stay off the board entirely (no panel on the card, no flag) and live one
-// click into the job instead: the editor modal for a done job
-// (fillEditorDocq), the steer modal in reactivate mode, the artifact-side
-// surfaces. Answering there still works exactly as before (Q13: answers are
-// editable forever, live or done); it just no longer competes for board
-// space with the jobs that are actually running. Archived jobs never carry
+// standing ask — nobody is waiting on an answer to keep working — so it
+// gets no board presence at all: no count chip (docQuestionsChipHTML), no
+// flag. They live one click into the job instead, like every job's
+// questions now do: the editor modal for a done job (fillEditorDocq), the
+// steer modal in reactivate mode, the artifact-side surfaces. Answering
+// there still works exactly as before (Q13: answers are editable forever,
+// live or done). Archived jobs never carry
 // doc_questions on the wire at all (board.go), so this only ever fires for
 // done ones — it's stated here anyway so the rule reads the same on both
 // sides of the wire.
@@ -212,9 +212,9 @@ function docQuestionRowHTML(j, q, prefill) {
 // answered_at (if present) rides in a title attr rather than cluttering the
 // row itself. Clickable (see the document click delegate) to reopen it as
 // an editable row via reansweringDocQ — answers are editable forever (Q13),
-// live or done. Only the modal copies of the panel ever render this row
-// (docQuestionsHTML's showAnswered), so re-answering is a modal affordance
-// now, one click into the job rather than on the card.
+// live or done. Only the modals render the panel at all now, so this row —
+// like every other question row — is a drilldown affordance, one click into
+// the job rather than on the card.
 function docQuestionAnsweredHTML(j, q) {
   const imp = (q.importance || "P2").toLowerCase();
   const title = q.answered_at ? `answered ${String(q.answered_at)} — click to re-answer` : "click to re-answer";
@@ -232,18 +232,13 @@ function docQuestionAnsweredHTML(j, q) {
 // rows in kraken.db now (file mode retired outright, Q11) — there is no
 // more malformed-file state to render.
 //
-// showAnswered gates the already-resolved rows. The BOARD passes false: a
-// resolved question is a decision, not a standing ask, and a card that keeps
-// listing every answer it ever gave crowds out the jobs' live state — same
-// argument settledJob already makes for a done job's whole panel. The modal
-// copies (steer, job editor) pass true (the default), so answered rows —
-// and with them the click-to-re-answer affordance — are always exactly one
-// click into the job (Q13: answers are editable forever). A card therefore
-// renders only open questions, and disappears entirely once the last one is
-// answered.
-function docQuestionsHTML(j, { showAnswered = true } = {}) {
-  let list = j.doc_questions || [];
-  if (!showAnswered) list = list.filter((q) => !q.answer);
+// This panel is a DRILLDOWN surface only: the steer modal (fillSteerContext)
+// and the job editor (fillEditorDocq). The board card renders no questions
+// at all — just docQuestionsChipHTML's count chip — so both callers want the
+// same full list, answered rows included (Q13: answers are editable
+// forever), and there is no showAnswered switch any more.
+function docQuestionsHTML(j) {
+  const list = j.doc_questions || [];
   if (!list.length) return "";
   const sorted = sortDocQuestions(list);
   const rows = sorted
@@ -258,6 +253,31 @@ function docQuestionsHTML(j, { showAnswered = true } = {}) {
     ${rows}
     ${hasOpen ? `<div class="dq-hint">answers are read by the agent next time it works</div>` : ""}
   </div>`;
+}
+
+// docQuestionsChipHTML renders the BOARD's entire question surface: one chip
+// carrying the open count, nothing else. The card used to render the whole
+// answerable panel inline, which made a job with a handful of open questions
+// taller than everything around it and buried the state the board exists to
+// show — where each job is, and which ones need a human. A count is all the
+// board has to say; the questions themselves (and every answer affordance)
+// live one click into the job, in the steer modal or the job editor, which
+// is where the card's own click already goes. No new click target: the chip
+// is a plain span, so it falls through to the card-open fallback.
+//
+// Open questions only, matching docQuestionsOpenP0's rule and the panel's
+// old board behavior: an answered question is a decision, not a standing
+// ask, so the chip disappears entirely once the last one is answered. A
+// settled job (done/archived) shows no chip at all — nobody is waiting on
+// its answers — same rule settledJob already applies to the flag counter.
+function docQuestionsChipHTML(j) {
+  if (settledJob(j)) return "";
+  const open = (j.doc_questions || []).filter((q) => !q.answer);
+  if (!open.length) return "";
+  const p0 = open.filter((q) => q.importance === "P0").length;
+  const label = `${open.length} question${open.length === 1 ? "" : "s"}`;
+  const title = `${label} open${p0 ? ` (${p0} P0)` : ""} — click the card to read and answer`;
+  return `<span class="dq-chip${p0 ? " p0" : ""}" title="${esc(title)}">⚑ ${esc(label)}</span>`;
 }
 
 // ---- job feedback (`feedback` rows in kraken.db, captured from the
@@ -437,7 +457,10 @@ function cardHTML(j, col) {
       return `<span class="${cls}">${esc(p.job)}${mark}</span>`;
     })
     .join(" ");
-  const chips = chipsHTML(j.artifacts, j.slug, j.slug);
+  // the questions chip rides in the artifact-chip row rather than a row of
+  // its own: both answer "what's in this job", and one wrapped flex row
+  // costs the card no extra height when there's already a chip line
+  const chips = chipsHTML(j.artifacts, j.slug, j.slug) + docQuestionsChipHTML(j);
   const roster = (j.roster || [])
     .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
@@ -469,7 +492,6 @@ function cardHTML(j, col) {
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
-    ${settledJob(j) ? "" : docQuestionsHTML(j, { showAnswered: false })}
     ${feedbackHTML(j)}
     ${(col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
   </div>`;
@@ -576,86 +598,93 @@ function render(board) {
 
 // snapshotDocInputs/restoreDocInputs preserve in-progress free-text inputs
 // (value + focus + selection) across an innerHTML rebuild of any surface
-// that renders .dq-input: #board (renderBoardDOM's wholesale replace on
-// every changed poll), #steer-docq (fillSteerContext re-rendering the steer
-// modal's own copy of the panel on open/chip-more/post-answer), and
-// #editor-docq (fillEditorDocq doing the same for the job editor, which is
-// where a done job's questions live now — see settledJob). All are
-// wholesale replaces with no diffing, so anything typed into a
-// .dq-input is gone the instant one rebuilds unless snapshotted first —
-// every other composer lives in a modal textarea, whose draft is
-// server-synced instead (see flushSteerDraft), which is why only .dq-input
-// (and, since H6, the feedback panel's own .fb-edit-input — #board only, it
-// has no modal copy) needs this. Keyed on slug+id (both already ride
-// as data attrs on every covered element) rather than DOM position, since
-// sortDocQuestions can reorder rows between polls, and rather than which
-// surface rendered it, since the same question can appear in both the card
-// and an open modal at once — a draft typed in one is meant to
-// survive a rebuild of the other. A .dq-input id ("Q<digits>") and an
+// that renders one: #board (renderBoardDOM's wholesale replace on every
+// changed poll, for the feedback panel's .fb-edit-input — the board renders
+// no .dq-input at all now, only docQuestionsChipHTML's count chip),
+// #steer-docq (fillSteerContext re-rendering the steer modal's copy of the
+// questions panel on open/chip-more/post-answer), and #editor-docq
+// (fillEditorDocq doing the same for the job editor). All are wholesale
+// replaces with no diffing, so anything typed into one is gone the instant
+// it rebuilds unless snapshotted first — every other composer lives in a
+// modal textarea, whose draft is server-synced instead (see
+// flushSteerDraft). Keyed on slug+id (both already ride as data attrs on
+// every covered element) rather than DOM position, since sortDocQuestions
+// can reorder rows between polls. A .dq-input id ("Q<digits>") and an
 // .fb-edit-input id (a bare feedback row number) never collide as strings,
 // so both element kinds safely share one values map.
 //
 // A modal copy is only ever a snapshot AUTHORITY while that modal is
 // actually visible: snapshotDocInputs skips anything inside a hidden
 // #steer-overlay/#editor-overlay, so a closed-but-not-yet-cleared modal
-// can't outrank the card's own (visible) copy in document order.
+// can't outrank a visible surface in document order.
 // clearSteerDocq()/clearEditorDocq() (below) additionally empty the panel on
 // every close path, so in practice a hidden modal never holds a .dq-input at
 // all — the closest() check here is defense in depth for the instant between
-// the two. Values are recorded
-// even when empty, so a deliberately cleared draft on one surface actually
-// propagates as "cleared" instead of being overwritten by the other
-// surface's stale non-empty copy.
+// the two. Values are recorded even when empty, so a deliberately cleared
+// draft actually propagates as "cleared" instead of being overwritten by a
+// stale non-empty copy.
 const DQ_INPUT_SELECTOR =
-  "#board .dq-input, #board .fb-edit-input, #steer-docq .dq-input, #editor-docq .dq-input";
+  "#board .fb-edit-input, #steer-docq .dq-input, #editor-docq .dq-input";
 
 // the modal surfaces DQ_INPUT_SELECTOR reaches into — snapshot/restore skip
 // an input inside whichever of these is currently hidden, so a
-// closed-but-not-yet-cleared modal can never outrank the visible card copy
-// in document order.
+// closed-but-not-yet-cleared modal can never outrank a visible surface in
+// document order.
 const HIDDEN_DOCQ_SURFACE = "#steer-overlay, #editor-overlay";
 
 // SCROLL_PANEL_SELECTORS: card-embedded panels whose own scroll position
 // (see style.css's per-card max-height caps) must survive a #board rebuild
 // the same way input values do — see snapshotDocInputs/restoreDocInputs.
-const SCROLL_PANEL_SELECTORS = [".doc-questions", ".job-feedback"];
+// .doc-questions dropped out of this list when the panel left the card: the
+// only scroll-capped panel a card still renders is its feedback list.
+const SCROLL_PANEL_SELECTORS = [".job-feedback"];
+
+const dqDraftKey = (slug, id) => JSON.stringify([slug, id]);
 
 function docInputKey(el) {
-  return JSON.stringify([el.dataset.slug, el.dataset.id]);
+  return dqDraftKey(el.dataset.slug, el.dataset.id);
 }
+
+// dqDrafts holds unsent doc-question answers across a modal close/reopen,
+// keyed the same slug+id string docInputKey builds. The questions panel is
+// modal-only now, so a closing modal has nowhere on the board to hand its
+// draft to — and the closes that matter most aren't the user's: checkStaleModals
+// force-closes the modal the moment the job changes state, which is exactly
+// when someone is mid-answer. Module-level, like reansweringDocQ, so it
+// survives every rebuild; an entry is dropped when its answer posts (see
+// sendDocQuestionAnswer) or when the modal closes with that input empty.
+const dqDrafts = new Map();
 
 // clearModalDocq empties a modal's rendered doc-questions panel (#steer-docq
 // or #editor-docq). Called from every path that hides that overlay so a
 // closed modal can never hold a zombie .dq-input that would otherwise
-// outrank the visible card copy in snapshotDocInputs/restoreDocInputs. Each
+// outrank a visible surface in snapshotDocInputs/restoreDocInputs. Each
 // modal repopulates its panel on the next open (fillSteerContext /
-// fillEditorDocq).
+// fillEditorDocq), seeding whatever this stashed.
 //
-// Some close paths (checkStaleModals' auto-close) fire between polls, ahead
-// of the next renderBoardDOM snapshot — without help, a draft typed in the
-// modal but never sent would be destroyed here before it ever reaches the
-// card. So before wiping, carry any non-empty modal draft into the card's
-// own copy of the same question — but never clobber a non-empty card draft;
-// that one's the user's most recent typing and wins. Some drafts have no
-// card copy to carry into at all — a settled job's card renders no panel
-// (settledJob), and no card ever renders an answered row, so a re-answer
-// draft only exists in the modal (docQuestionsHTML's showAnswered). Those
-// are simply dropped, same as any other unsent text in a modal that's
-// closing.
+// Empty inputs DELETE their draft rather than being skipped: a deliberately
+// cleared answer must not come back on the next open from a stale stash.
 function clearModalDocq(elID) {
   const docqEl = document.getElementById(elID);
   if (!docqEl) return;
-  const modalValues = {};
   docqEl.querySelectorAll(".dq-input").forEach((el) => {
-    if (el.value) modalValues[docInputKey(el)] = el.value;
+    const key = docInputKey(el);
+    if (el.value) dqDrafts.set(key, el.value);
+    else dqDrafts.delete(key);
   });
-  if (Object.keys(modalValues).length) {
-    document.querySelectorAll("#board .dq-input").forEach((el) => {
-      const key = docInputKey(el);
-      if (!el.value && key in modalValues) el.value = modalValues[key];
-    });
-  }
   docqEl.innerHTML = "";
+}
+
+// seedDocqDrafts refills a freshly-rendered modal panel from dqDrafts. Runs
+// after the innerHTML replace and before restoreDocInputs, so anything the
+// live snapshot carries (a rebuild while the modal is open and typed into)
+// still wins over the older stash.
+function seedDocqDrafts(el) {
+  if (!el || !dqDrafts.size) return;
+  el.querySelectorAll(".dq-input").forEach((input) => {
+    const draft = dqDrafts.get(docInputKey(input));
+    if (draft && !input.value) input.value = draft;
+  });
 }
 
 const clearSteerDocq = () => clearModalDocq("steer-docq");
@@ -698,10 +727,11 @@ function restoreDocInputs({ values, focused, scroll }) {
       }
     }
   }
-  // E5: .card .doc-questions (and, since H6, .job-feedback) gained a scroll
-  // cap (style.css) — renderBoardDOM replaces #board wholesale, which
-  // destroys the scroller and its scrollTop on every poll, so restore it
-  // per-card+panel the same way input values are restored above.
+  // .job-feedback carries a scroll cap (style.css) — renderBoardDOM replaces
+  // #board wholesale, which destroys the scroller and its scrollTop on every
+  // poll, so restore it per-card+panel the same way input values are restored
+  // above. (.card .doc-questions was the other capped panel until questions
+  // moved off the card entirely — see SCROLL_PANEL_SELECTORS.)
   if (scroll && Object.keys(scroll).length) {
     document.querySelectorAll(".card[data-slug]").forEach((card) => {
       SCROLL_PANEL_SELECTORS.forEach((sel) => {
@@ -847,12 +877,15 @@ function flipMove(cardsEl, cardEl, anchor) {
 }
 
 document.addEventListener("dragstart", (ev) => {
-  // drag-selecting text inside the in-card doc-question input/button row
-  // must not also start a card drag — some browsers treat a press-and-drag
-  // gesture starting on/over a form control inside a draggable ancestor as
-  // dragging the ancestor rather than selecting text, which would turn
-  // "select my typed answer to fix a word" into "post a real column move".
-  if (ev.target.closest(".doc-questions")) {
+  // drag-selecting text inside an in-card panel's input/button row must not
+  // also start a card drag — some browsers treat a press-and-drag gesture
+  // starting on/over a form control inside a draggable ancestor as dragging
+  // the ancestor rather than selecting text, which would turn "select my
+  // typed note to fix a word" into "post a real column move". The questions
+  // panel is modal-only now (never inside a draggable card), but it keeps
+  // its guard: a modal drag has nothing to do either way, and the rule is
+  // "panels with text inputs never start a drag", not "cards only".
+  if (ev.target.closest(".doc-questions") || ev.target.closest(".job-feedback")) {
     ev.preventDefault();
     ev.stopPropagation();
     return;
@@ -1233,9 +1266,8 @@ function openArtifact(url, name) {
 // rebuilds the whole context block) or the job editor (fillEditorDocq). The
 // #board rebuild every action triggers never touches modal DOM, so without
 // this a row inside an open modal keeps advertising state the board has
-// already moved past — and for an answered question (docQuestionsHTML's
-// showAnswered), or any question on a done job (settledJob), the modal is
-// the only surface showing it at all.
+// already moved past — and since the card shows only a count chip, the
+// modal is the only surface showing the question at all.
 function refreshModalDocq(slug) {
   if (steerOverlay && !steerOverlay.hidden && steerSlug === slug) {
     fillSteerContext(jobsBySlug[slug], steerMode);
@@ -1264,6 +1296,9 @@ function sendDocQuestionAnswer(row, slug, id, text) {
       // stale set, so force one more pass to reflect the cleared state now
       // rather than waiting out the rest of the 3s poll interval.
       reansweringDocQ.delete(dqReanswerKey(slug, id));
+      // the answer landed — drop any stashed draft for it, so reopening the
+      // modal doesn't re-seed text that's already been sent
+      dqDrafts.delete(dqDraftKey(slug, id));
       invalidateBoard();
       refresh();
     }
@@ -1402,12 +1437,12 @@ document.addEventListener("click", (ev) => {
     return;
   }
   // must come before the card-open fallback below (same reason as
-  // .queue-cancel above): a click into the in-card free-text answer field
-  // (doc-question or feedback edit) should focus/type into it, not fall
-  // through to opening the steer/editor modal on top of it and stealing
-  // focus. See sendDocQuestionAnswer for the Enter-to-send keydown path on
-  // the doc-question input.
-  if (ev.target.closest(".dq-input") || ev.target.closest(".fb-edit-input")) return;
+  // .queue-cancel above): a click into the in-card free-text feedback edit
+  // field should focus/type into it, not fall through to opening the
+  // steer/editor modal on top of it and stealing focus. The doc-question
+  // input needs no such guard any more — it only exists inside a modal now,
+  // which the card fallback never reaches.
+  if (ev.target.closest(".fb-edit-input")) return;
   const retry = ev.target.closest(".retry");
   if (retry) {
     retry.disabled = true;
@@ -1535,9 +1570,9 @@ document.addEventListener("click", (ev) => {
   }
 });
 
-// Enter-to-send for the in-card free-text doc-question answer — .dq-input
-// had no keyboard submit path at all (only the .dq-send click above), and
-// it's the one text input on the board that isn't inside a form. Guard IME
+// Enter-to-send for the free-text doc-question answer in a modal's panel —
+// .dq-input had no keyboard submit path at all (only the .dq-send click
+// above), and it isn't inside a form. Guard IME
 // composition (a CJK candidate's commit Enter also fires key:"Enter") and
 // modifier combos before preventDefault — this is prose, and even though a
 // posted answer is editable forever (Q13, via reansweringDocQ), swallowing a
@@ -1876,20 +1911,14 @@ function fillSteerContext(j, mode) {
   const detail = j && j.detail;
   const lastSent = j && j.last_sent;
   const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
-  // doc questions are job history (questions.yaml), not cell state — shown
-  // in every mode including reactivate, same as prs above; a torn-down
-  // job's questions are still readable, answering just errors via toast.
-  // This rebuild (below) is wholesale, same hazard as renderBoardDOM's —
-  // snapshot/restore around it so a draft survives. openSteer flips
-  // steerOverlay.hidden = false before calling this, so on a fresh open the
-  // snapshot below sees the (now-visible) card's draft as the authority and
-  // the restore step seeds it straight into the freshly-rendered #steer-docq
-  // input — a card-side draft populates a just-opened modal. On a state flip
-  // that force-closes the modal, checkStaleModals does touch steer-docq's
-  // DOM (via clearSteerDocq), but that function now carries any non-empty
-  // modal draft into the card's own copy first, so the close itself doesn't
-  // lose it either — this snapshot/restore pair and clearSteerDocq's
-  // carry-forward now cover both directions between the two draft copies.
+  // doc questions are job history, not cell state — shown in every mode
+  // including reactivate, same as prs above; a torn-down job's questions are
+  // still readable, answering just errors via toast. This modal (and the job
+  // editor) is the ONLY place they render: the card carries a count chip and
+  // nothing else, so this panel is the drilldown the chip advertises.
+  // The rebuild below is wholesale, same hazard as renderBoardDOM's —
+  // seedDocqDrafts refills it from whatever a previous close stashed, then
+  // snapshot/restore lets a live in-modal draft win over that stash.
   const docq = j ? docQuestionsHTML(j) : "";
 
   crewEl.hidden = !crew;
@@ -1911,6 +1940,7 @@ function fillSteerContext(j, mode) {
   const dqState = snapshotDocInputs();
   docqEl.hidden = !docq;
   docqEl.innerHTML = docq;
+  seedDocqDrafts(docqEl);
   restoreDocInputs(dqState);
 
   container.hidden = !crew && !prs && !detail && !lastSent && !artifacts && !docq;
@@ -2427,6 +2457,7 @@ function fillEditorDocq(j) {
   const dqState = snapshotDocInputs();
   el.hidden = !docq;
   el.innerHTML = docq ? `<div class="editor-docq-head">questions</div>${docq}` : "";
+  seedDocqDrafts(el);
   restoreDocInputs(dqState);
   if (scrollTop) {
     const next = el.querySelector(".doc-questions");
