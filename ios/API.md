@@ -64,6 +64,24 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `jobs` | array (`webJob`) | always (`[]` not `null`) | within a display state, jobs render in the manual reorder's order (see `POST /api/reorder` below) — no separate order field, the array position IS the display order |
 | `contract` | number | always | == `apiContract` |
 | `stale` | bool | always | this `k web` process' self-check |
+| `update` | object (`webUpdate`) | always | the self-update button's state (see `POST /api/update` under Misc). Added additively, no contract bump — the iOS app doesn't model it and `Decodable`'s explicit `CodingKeys` ignore it |
+
+`webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
+shared with `GET /api/update/status`, so the board key and the poller's
+endpoint can never disagree. No field is `omitempty`: every key is always
+present, zeroed when it doesn't apply.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `phase` | string | always | `idle`\|`preflight`\|`fetching`\|`merging`\|`building`\|`installing`\|`restarting`\|`done`\|`failed`\|`uptodate`. `idle` when no run has ever happened (missing status file) |
+| `from_sha` | string | always | the commit the in-flight/last run started from |
+| `to_sha` | string | always | the commit it moved to; `""` until the merge lands |
+| `behind` | number | always | commits `HEAD..origin/main`, from the daemon's 10-minute availability check |
+| `error` | string | always | the RUN's error only — a failed availability check is never surfaced here |
+| `started_at` | number | always | unix millis; `0` = never run |
+| `updated_at` | number | always | unix millis of the last phase transition |
+| `build_sha` | string | always | the running binary's ldflags-stamped short sha, `"dev"` unstamped |
+| `checked_at` | number | always | unix millis of the last availability check; `0` = never checked |
 
 `daemonStatus` (daemon.go):
 
@@ -703,6 +721,52 @@ write failure).
 concurrent calls to either endpoint (or the CLI's `k account` commands) are
 last-writer-wins on the mode field.
 
+### `POST /api/update` → `updateResp` (api/update.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+
+Starts a self-update: fetch → merge → `make install` → `launchctl kickstart
+-k`. The handler itself does none of that — it preflights, stakes a claim,
+and forks a detached `kraken update --detached` child, because the last step
+of an update kills the very `kraken serve` process that served the request.
+Mirror-gated (403 under `kraken serve --mirror`): a mirror board is
+read-only, and this is the most destructive action on the surface.
+Additive, no contract bump.
+
+Request (`updateReq`, an empty body is valid and means "just update"):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `force` | bool | omitempty | install even when already up to date |
+| `test` | bool | omitempty | run `go test ./...` after the build, before the install |
+
+Response (202 Accepted — the run has been *started*, not finished):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `ok` | bool | always | |
+| `phase` | string | always | always `"preflight"` — the phase the claim was written at |
+| `from_sha` | string | always | the commit the run starts from |
+
+Errors: 405 (non-POST), 400 (malformed JSON — an empty body is not an
+error), 409 (a run is already in flight: `update already in flight (started
+HH:MM:SS)`; or a preflight refusal — not on `main`, uncommitted changes, no
+`go`/`make` — whose message is `jobs.PreflightUpdate`'s own text, shared
+verbatim with the `kraken update` CLI verb), 500 (the claim couldn't be
+written, or the fork failed — in which case the status record is reset to
+`failed` rather than left pinned at `preflight`).
+
+Single-flight is the status write, not a lock: the handler writes
+`phase: preflight` BEFORE spawning, and a second request reads that
+non-terminal phase and 409s. The detached child takes the real flock
+(`~/.kraken/update.lock`) and holds it for the whole run.
+
+### `GET /api/update/status` → `webUpdate` (api/update.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+
+The same `webUpdate` shape `/api/board` carries under `update` (documented
+above), served on its own so the UI's in-flight poller doesn't re-run
+discovery every tick. GET only (405 otherwise), never gated in mirror mode —
+it's a read. Note that fetch failures against this endpoint are EXPECTED
+while `phase` is `restarting`: the server is being replaced mid-poll.
+
 ### `GET /api/health` → map literal (webpeers.go `healthHandler`)
 
 | key | type | optionality | notes |
@@ -711,6 +775,7 @@ last-writer-wins on the mode field.
 | `host` | string | always | |
 | `contract` | number | always | == `apiContract` |
 | `stale` | bool | always | |
+| `build` | string | always | the running binary's ldflags-stamped short commit, `"dev"` for an unstamped build. Additive, no contract bump — it's how a client tells whether a restart actually landed a new binary |
 
 ### `GET /api/artifact/<slug>/<cell\|pluto\|archive>/<name>`
 

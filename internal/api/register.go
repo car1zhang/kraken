@@ -47,4 +47,11 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs", webLogRead)
 	mux.HandleFunc("/api/pr-attach", prAttachHandler)
 	mux.HandleFunc("/api/logevent", logEventHandler)
+	// The update POST is mirror-gated for the same reason every tmux-driving
+	// route is, only more so: a mirror board is read-only by policy, and
+	// rebuilding + reinstalling + restarting the LIVE deployment's binary is
+	// the most destructive action on this whole surface. Its status GET is a
+	// read and stays open.
+	mux.HandleFunc("/api/update", mirrorGated(updateHandler))
+	mux.HandleFunc("/api/update/status", updateStatusHandler)
 }

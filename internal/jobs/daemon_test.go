@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1268,4 +1269,246 @@ func TestFailingConclusions(t *testing.T) {
 			t.Errorf("%s: want NOT counted as failing, got counted", c)
 		}
 	}
+}
+
+// --- upstream availability poll (kickUpdateAvail) ---
+
+// availStub replaces the checkUpdateAvail seam — nothing here fetches, and
+// nothing here shells out. It records every call, signals each one on fired
+// (buffered, so the stub never blocks on a test that isn't listening yet),
+// and stamps CheckedAt into the store exactly the way the real
+// refreshUpdateAvail does, since that stamp IS the throttle kickUpdateAvail
+// reads back.
+type availStub struct {
+	calls atomic.Int32
+	fired chan struct{}
+	block chan struct{} // when non-nil, the stub waits on it before returning
+	out   UpdateAvail
+}
+
+func stubAvailCheck(t *testing.T, out UpdateAvail) *availStub {
+	t.Helper()
+	// A tick test that ran earlier may still have the REAL check in flight —
+	// it fails instantly under a sandboxed $HOME, but "instantly" isn't
+	// "synchronously", and ActiveStore is process-global, so its trailing
+	// write would land in this test's brand-new store and move the CheckedAt
+	// this test is about to reason over. Wait it out, then reset the row to
+	// never-checked; a test that wants a different starting point seeds it
+	// after this returns.
+	waitAvailIdle(t)
+	if err := writeUpdateAvail(UpdateAvail{}); err != nil {
+		t.Fatal(err)
+	}
+	// The stored stamp's in-memory twin has to be reset with it, or the
+	// backstop would (correctly) throttle every test after the first one in
+	// this process.
+	lastUpdateAvailCheck.Store(0)
+	t.Cleanup(func() { lastUpdateAvailCheck.Store(0) })
+	s := &availStub{fired: make(chan struct{}, 8), out: out}
+	prev := checkUpdateAvail
+	checkUpdateAvail = func() UpdateAvail {
+		s.calls.Add(1)
+		s.fired <- struct{}{}
+		if s.block != nil {
+			<-s.block
+		}
+		a := s.out
+		a.CheckedAt = time.Now().UnixMilli()
+		_ = writeUpdateAvail(a)
+		return a
+	}
+	t.Cleanup(func() {
+		waitAvailIdle(t)
+		checkUpdateAvail = prev
+	})
+	return s
+}
+
+// waitFired blocks until the fire-and-forget goroutine has actually called
+// the seam — the alternative, sleeping, is what makes this kind of test flaky.
+func (s *availStub) waitFired(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("availability check never fired")
+	}
+}
+
+// waitAvailIdle waits out the single-flight flag so a test can assert on a
+// finished goroutine (and so the next test starts from a clean one).
+func waitAvailIdle(t *testing.T) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if !updateAvailRunning.Load() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("availability check goroutine never finished")
+}
+
+// stubNoUsagePass keeps tick()'s first-tick-eager usage poll off the network:
+// it is unrelated to what these tests assert, and a real pass would fetch
+// every account's usage.
+func stubNoUsagePass(t *testing.T) {
+	t.Helper()
+	prev := runUsagePass
+	runUsagePass = func() error { return nil }
+	t.Cleanup(func() { runUsagePass = prev })
+}
+
+// A store that has never been checked reads CheckedAt 0 — always due — so the
+// first kick after startup fires one.
+func TestKickUpdateAvailFiresWhenNeverChecked(t *testing.T) {
+	useTestStore(t)
+	s := stubAvailCheck(t, UpdateAvail{Behind: 2})
+
+	kickUpdateAvail(time.Now())
+	s.waitFired(t)
+	waitAvailIdle(t)
+
+	if got := ReadUpdateAvail(); got.Behind != 2 || got.CheckedAt == 0 {
+		t.Fatalf("stored avail = %+v, want the check's result with a fresh CheckedAt", got)
+	}
+}
+
+// Inside the interval the kick is a no-op — the whole point of the throttle,
+// since every check is a real git fetch.
+func TestKickUpdateAvailSkipsInsideInterval(t *testing.T) {
+	useTestStore(t)
+	s := stubAvailCheck(t, UpdateAvail{Behind: 9})
+	now := time.Now()
+	if err := writeUpdateAvail(UpdateAvail{Behind: 2, CheckedAt: now.Add(-time.Minute).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+
+	kickUpdateAvail(now)
+
+	if n := s.calls.Load(); n != 0 {
+		t.Fatalf("check fired %d times one minute after the last one, want 0 (interval %s)", n, updateAvailInterval)
+	}
+}
+
+func TestKickUpdateAvailFiresAfterInterval(t *testing.T) {
+	useTestStore(t)
+	s := stubAvailCheck(t, UpdateAvail{Behind: 9})
+	now := time.Now()
+	if err := writeUpdateAvail(UpdateAvail{Behind: 2, CheckedAt: now.Add(-updateAvailInterval - time.Second).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+
+	kickUpdateAvail(now)
+	s.waitFired(t)
+	waitAvailIdle(t)
+
+	if got := ReadUpdateAvail(); got.Behind != 9 {
+		t.Fatalf("stored avail = %+v, want the fresh check's Behind 9", got)
+	}
+}
+
+// A store that never records anything — no store wired, a failing kv write —
+// makes ReadUpdateAvail read zero (always due) forever, which without the
+// in-memory backstop would turn the ten-minute poll into a `git fetch` on
+// every 15s tick.
+func TestKickUpdateAvailBackstopsAStoreThatNeverRecords(t *testing.T) {
+	useTestStore(t)
+	s := stubAvailCheck(t, UpdateAvail{Behind: 2})
+	// Swap the seam again, this time for one that records NOTHING — the
+	// shape of a store miss, seen from the throttle's side.
+	prev := checkUpdateAvail
+	checkUpdateAvail = func() UpdateAvail {
+		s.calls.Add(1)
+		s.fired <- struct{}{}
+		return UpdateAvail{Behind: 2}
+	}
+	t.Cleanup(func() { checkUpdateAvail = prev })
+
+	now := time.Now()
+	kickUpdateAvail(now)
+	s.waitFired(t)
+	waitAvailIdle(t)
+	kickUpdateAvail(now.Add(time.Minute))
+	kickUpdateAvail(now.Add(2 * time.Minute))
+
+	if n := s.calls.Load(); n != 1 {
+		t.Fatalf("check fired %d times with an unrecorded CheckedAt, want 1 — the in-memory stamp is the only throttle left", n)
+	}
+}
+
+// Two due kicks with the first still in flight must produce ONE fetch: the
+// stored CheckedAt hasn't moved yet, so the interval gate lets the second one
+// through and updateAvailRunning is what has to stop it.
+func TestKickUpdateAvailSingleFlightsConcurrentCalls(t *testing.T) {
+	useTestStore(t)
+	s := stubAvailCheck(t, UpdateAvail{Behind: 2})
+	s.block = make(chan struct{})
+
+	now := time.Now()
+	kickUpdateAvail(now)
+	s.waitFired(t) // the first check is now inside the stub, holding the flag
+	kickUpdateAvail(now)
+	close(s.block)
+	waitAvailIdle(t)
+
+	if n := s.calls.Load(); n != 1 {
+		t.Fatalf("check fired %d times with one already in flight, want exactly 1", n)
+	}
+}
+
+// The tick's own wiring: a normal (non-mirror) tick fires the check.
+func TestTickFiresUpdateAvailCheck(t *testing.T) {
+	useTestStore(t)
+	stubNoUsagePass(t)
+	s := stubAvailCheck(t, UpdateAvail{Behind: 3})
+
+	d := newDaemon()
+	if _, err := d.tick(false); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	s.waitFired(t)
+	waitAvailIdle(t)
+
+	if got := ReadUpdateAvail(); got.Behind != 3 {
+		t.Fatalf("stored avail = %+v, want the tick's check result", got)
+	}
+}
+
+// A mirror tick must never run it: the check fetches in the REAL kraken
+// checkout and writes shared state, both off-limits to a read-only scheduler
+// variant.
+func TestTickMirrorSkipsUpdateAvailCheck(t *testing.T) {
+	useTestStore(t)
+	s := stubAvailCheck(t, UpdateAvail{Behind: 3})
+
+	d := newDaemon()
+	if _, err := d.tick(true); err != nil {
+		t.Fatalf("mirror tick: %v", err)
+	}
+
+	if n := s.calls.Load(); n != 0 {
+		t.Fatalf("availability check fired %d times under --mirror, want 0", n)
+	}
+	if got := ReadUpdateAvail(); got != (UpdateAvail{}) {
+		t.Fatalf("stored avail = %+v after a mirror tick, want it untouched", got)
+	}
+}
+
+// A failed check is a debug log line and nothing else: never a tick error,
+// never a board error.
+func TestTickIgnoresFailedUpdateAvailCheck(t *testing.T) {
+	useTestStore(t)
+	stubNoUsagePass(t)
+	s := stubAvailCheck(t, UpdateAvail{Error: "network is down"})
+
+	d := newDaemon()
+	cells, err := d.tick(false)
+	if err != nil {
+		t.Fatalf("tick returned %v, want nil — a failed availability check must never error the tick", err)
+	}
+	if cells != 0 {
+		t.Fatalf("cells = %d, want 0", cells)
+	}
+	s.waitFired(t)
+	waitAvailIdle(t)
 }

@@ -333,6 +333,69 @@ func (d *daemonState) pruneArtifactSyncState(jobs []*Job) {
 // up to ~10s and must never overlap itself or stretch the scheduler loop.
 var usagePassRunning atomic.Bool
 
+// updateAvailRunning single-flights the upstream availability check across
+// ticks, for exactly the reason usagePassRunning exists above:
+// refreshUpdateAvail runs a real `git fetch`, so it must never overlap itself
+// (two fetches racing in the same checkout) nor stretch the scheduler loop
+// behind however long an unreachable origin takes to give up. In-memory
+// process state, so like usagePassRunning it collapses same-process races
+// only — which is all there is here, since only serve's tick calls it.
+var updateAvailRunning atomic.Bool
+
+// lastUpdateAvailCheck is the in-memory backstop for the throttle below: the
+// millis at which this process last STARTED a check, regardless of whether
+// the result ever reached the store. Necessary because ReadUpdateAvail
+// degrades every failure — no store wired, a failed kv read, a write that
+// silently didn't land — to the zero value, and a zero CheckedAt is always
+// due. Without this a broken store would quietly turn a ten-minute poll into
+// a real `git fetch` on every 15s tick. Deliberately the SECOND gate, not the
+// first: it is lost on restart, while the stored stamp survives one, so the
+// store stays the source of truth and this only catches what the store can't
+// tell us.
+var lastUpdateAvailCheck atomic.Int64
+
+// checkUpdateAvail is the seam kickUpdateAvail calls through, so tests can
+// drive the tick's cadence without a subprocess or a network.
+var checkUpdateAvail = refreshUpdateAvail
+
+// kickUpdateAvail refreshes the "N commits behind origin/main" count the
+// update button renders, at most once per updateAvailInterval, in a
+// fire-and-forget goroutine behind updateAvailRunning.
+//
+// "When was it last checked?" is UpdateAvail.CheckedAt in the store rather
+// than a package-level timestamp alone: refreshUpdateAvail stamps it on every
+// outcome, success and failure alike, so there is one source of truth — the
+// same value the board renders, meaning "checked 3m ago" in the UI and "not
+// due yet" here can never disagree — and it survives a restart, so
+// reinstalling the daemon a few times in a row can't turn a 10-minute cadence
+// into a fetch per start. A store that has never been checked reads CheckedAt
+// 0, which is always due, so the first tick after startup fires one.
+func kickUpdateAvail(now time.Time) {
+	ms := now.UnixMilli()
+	if ms-ReadUpdateAvail().CheckedAt < updateAvailInterval.Milliseconds() {
+		return
+	}
+	if last := lastUpdateAvailCheck.Load(); last != 0 && ms-last < updateAvailInterval.Milliseconds() {
+		return
+	}
+	// The seam is captured into a local before the goroutine starts, same
+	// reason KickUsagePass captures runUsagePass: a test that swaps it back
+	// the moment this returns must not race the goroutine's own read of it.
+	if check := checkUpdateAvail; updateAvailRunning.CompareAndSwap(false, true) {
+		lastUpdateAvailCheck.Store(ms)
+		go func() {
+			defer updateAvailRunning.Store(false)
+			if a := check(); a.Error != "" {
+				// Debug level and otherwise ignored: an unreachable origin is
+				// a normal state for a laptop, the check already recorded the
+				// error itself, and a stale decoration on a button is not
+				// worth erroring a tick over.
+				dlog("update availability check failed: %s", a.Error)
+			}
+		}()
+	}
+}
+
 // ServeOpts configures RunServeTicks' per-tick behavior. The zero value is
 // the normal kraken serve scheduler; Mirror selects the local
 // mirror-testing mode (`kraken serve --mirror`, cmd_serve.go): a read-only
@@ -729,6 +792,17 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// ONLY state derivation + block-event artifact sync, nothing else.
 	if !mirror && (d.tickN == 1 || d.tickN%usageEvery == 0) {
 		KickUsagePass()
+	}
+
+	// upstream availability poll: refreshes the update button's "N behind"
+	// badge. Throttled by the stored CheckedAt rather than a tick count (see
+	// kickUpdateAvail) and single-flighted into its own goroutine, since it
+	// shells out to `git fetch`. Skipped under mirror for both of the usual
+	// reasons at once — it would fetch in the REAL kraken checkout, and it
+	// writes shared state a read-only scheduler variant has no business
+	// touching.
+	if !mirror {
+		kickUpdateAvail(now)
 	}
 
 	// auto-archive: done jobs left untouched for a day sweep themselves into

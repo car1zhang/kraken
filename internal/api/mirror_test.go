@@ -28,6 +28,16 @@ var mirrorGatedRoutes = []string{
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",
 }
 
+// mirrorGatedGlobalRoutes are gated exactly like the routes above but must
+// NOT ride the shared table: TestMirrorModeOffLeavesGatedRoutesLive sweeps
+// that table with mirror mode OFF, and letting POST /api/update reach its
+// real handler there would shell out to git against the real checkout and,
+// on a clean tree, actually fork a detached updater that rebuilds and
+// reinstalls this machine's binary. Its mirror-off liveness is covered in
+// update_test.go instead, where every seam is stubbed and HOME is a temp
+// dir.
+var mirrorGatedGlobalRoutes = []string{"/api/update"}
+
 // mirrorPlutoRoutes mirror mirrorPlutoActions: gated under mirror mode only
 // while PlutoDir is NOT sandboxed (their sole real-world side effect is
 // preserved-artifact file moves under PlutoDir).
@@ -58,7 +68,7 @@ func TestMirrorModeGatesTmuxDrivingRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux)
 
-	for _, path := range mirrorGatedRoutes {
+	for _, path := range append(append([]string{}, mirrorGatedRoutes...), mirrorGatedGlobalRoutes...) {
 		t.Run(path, func(t *testing.T) {
 			rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
 			if rec.Code != http.StatusForbidden {
