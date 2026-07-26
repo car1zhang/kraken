@@ -138,7 +138,7 @@ the new build" would be false at exactly the moment it is shown.
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `slug` | string | always | archived jobs: numbered archive file base |
+| `slug` | string | always | archived jobs: numbered archive file base. **Not unique across `jobs`** — the archive numbers a name against its own contents only, so a slug freed by archiving and then reused by a new active job appears TWICE (archived entries come last). Key by `(slug, archived)`, never bare `slug` |
 | `repo` | string | always | |
 | `state` | string | always | draft/queued/working/blocked/done/archived |
 | `err` | string | omitempty | |
