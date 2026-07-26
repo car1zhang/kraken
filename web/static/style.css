@@ -478,13 +478,13 @@ body {
   border-left: 2px solid var(--hairline-2);
   font-size: 11px; line-height: 1.45;
 }
-/* cap card-embedded panels only (many/long questions shouldn't make a card
-   taller than the viewport and bury every other card in its column — see
-   athena-edge-de.md #8); the steer modal's copy is left uncapped, matching
-   how .steer-spec-body/.steer-detail scope their own caps only within the
-   modal — the modal doesn't need one here since .panel-body already scrolls
-   the whole composer (max-height: 86vh, overflow-y: auto, style.css:654) */
-.card .doc-questions { max-height: 340px; overflow-y: auto; }
+/* no `.card .doc-questions` cap any more: the panel is modal-only, and the
+   card carries just .dq-chip's count (docQuestionsChipHTML). The cap existed
+   because a long question list made a card taller than the viewport and
+   buried its whole column — a problem the chip removes rather than bounds.
+   The modal copies stay uncapped for the same reason as before: .panel-body
+   already scrolls the whole composer (max-height: 86vh, overflow-y: auto),
+   and .editor-docq .doc-questions sets its own 40vh cap. */
 .dq-row { margin-top: 7px; }
 .dq-row:first-child { margin-top: 0; }
 .dq-head { display: flex; align-items: baseline; gap: 5px; }
@@ -593,6 +593,28 @@ body {
 .chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
 .chip-more { color: var(--text-2); border: 1px dashed var(--hairline-2); }
 .chip-more:hover { background: var(--raised); box-shadow: none; border-color: var(--text-2); color: var(--text); }
+
+/* the board's whole question surface: an open-count chip in the artifact-chip
+   row, the questions themselves one click into the job (docQuestionsChipHTML).
+   Deliberately NOT class .chip — that class is the artifact-overlay click
+   target — so a click falls through to the card's own open-the-drilldown
+   handler. Sized/spaced like a chip, colored like the doc-question panel's
+   importance badges: muted by default, counter-hot the moment a P0 is open,
+   which is the same signal the header's ⚑ counter uses. */
+.dq-chip {
+  font: 10px var(--mono);
+  color: var(--text-2); border: 1px solid var(--hairline-2);
+  padding: 2px 7px; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
+}
+/* :not(.p0) on the hover rule is load-bearing, not tidiness: `.card:hover
+   .dq-chip` (0,2,1) outranks `.dq-chip.p0` (0,2,0), so an unscoped hover
+   would repaint a P0 chip plain-text the moment the pointer touched the card
+   — killing exactly the signal the chip exists to carry, and only while
+   you're looking at it. */
+.card:hover .dq-chip:not(.p0) { color: var(--text); border-color: var(--text-2); }
+.dq-chip.p0 { color: var(--counter); border-color: var(--counter-soft); }
+.card:hover .dq-chip.p0 { border-color: var(--counter); box-shadow: var(--glow-hot); }
 
 .prereq span { font: 10px var(--mono); }
 .prereq .ok { color: var(--solved); }
@@ -1030,14 +1052,13 @@ body {
   border: 1px solid var(--hairline-2); padding: 8px 10px; resize: vertical;
 }
 .f-label { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
-/* the editor's copy of the doc-questions panel — the click-into surface for a
-   done job's questions, which the board card no longer renders (settledJob in
-   app.js). Labeled (the card and steer copies aren't) because the editor is
-   otherwise all spec-authoring: an unlabeled panel of questions here would
-   read as part of the form. Capped like the card copy rather than left
-   uncapped like the steer one — the editor's own body scrolls, but the spec
-   textarea below it is the thing you came for, and a long question list
-   shouldn't push it off-screen. */
+/* the editor's copy of the doc-questions panel — one of the two drilldown
+   surfaces the board's .dq-chip points at (the steer modal is the other; the
+   card itself renders no questions). Labeled (the steer copy isn't) because
+   the editor is otherwise all spec-authoring: an unlabeled panel of questions
+   here would read as part of the form. Capped, unlike the steer copy — the
+   editor's own body scrolls, but the spec textarea below it is the thing you
+   came for, and a long question list shouldn't push it off-screen. */
 .editor-docq { flex: none; display: flex; flex-direction: column; gap: 4px; }
 .editor-docq-head { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
 .editor-docq .doc-questions { margin-top: 0; max-height: 40vh; overflow-y: auto; }
