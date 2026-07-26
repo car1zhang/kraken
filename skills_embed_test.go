@@ -94,6 +94,11 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"hermes-contract.md", "lint_svg.py", "diagram-card.html",
 			"{{CARD_TITLE}}", "{{CAPTION}}", "<!-- DIAGRAM: {{DIAGRAM_ID}} -->",
 			"str.replace", "re.sub", "--marker-id", "model: opus",
+			// every rendering agent is a NAMED teammate: the name is what
+			// buys it a pane nestTeams can hang under the cell and keeps it
+			// addressable for the fix round instead of respawned from scratch
+			"hermes-<diagram-id>", "an Agent-tool call that passes a **`name`**",
+			"`SendMessage` the line-numbered violations as a fix-round brief",
 			"box → kind", "kind → shape table", "never dictate coordinates, markup, or a shape class",
 			// the questions WRITE verbs (the brief keeps only the read verb
 			// and the silent-update rule)
@@ -111,12 +116,29 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"No open questions. Ever.", "never gets a `/do`", "never opens a PR",
 			"Never run `kraken questions` write verbs",
 			"kraken feedback addressed",
+			// the fix round is /info's own copy of the rule — anchor the
+			// sentence, not just the naming, or deleting the whole bullet
+			// leaves the spawn rule matching and the rule itself gone from
+			// the explanation path (which never reads /aim)
+			"never spawn a fresh",
+			"lints CLEAN",
+			// /info's diagram section is a summary of /aim's, but it must
+			// carry the same teammate naming — on the explanation path it
+			// is read INSTEAD of /aim's, so a drop here drops it entirely
+			"designed AND rendered by a TEAMMATE", "hermes-<diagram-id>",
 		}},
 		{"do", []string{
 			"90-build-report.md", "Discrepancies vs. the plan", "Complications",
 			"Deferred", "Verification",
 			// the cell section: the crew, the gate, the handoff to /pr
 			"Inside A Kraken Cell", "hephaestus", "athena-logic", "athena-edge", "athena-style",
+			// the crew are TEAMMATES, but the skill must POINT at the brief
+			// for the contract rather than copy it — pinning the copy here
+			// is what would freeze a duplicate the brief later drifts from
+			"The crew is the brief's crew, and the crew are TEAMMATES",
+			"read it there rather than re-deriving it here",
+			"stop each still-running teammate with `TaskStop`", "There is no team-delete step",
+			"read-only exploration only",
 			"manual test ready:", "`.claude/skills/pr/SKILL.md`", "do NOT invoke `/pr` by name",
 			"JOB SPEC is the contract", "Never declare the job done",
 		}},

@@ -90,9 +90,13 @@ Diagrams follow /aim's mechanics exactly — read `.claude/skills/aim/SKILL.md` 
 the worktree root, your cwd in a cell, not this skill's base directory) for the full rules. The
 short form, with /info's overrides:
 
-- Each diagram is designed AND rendered by a subagent on **`model: opus`** (Claude Opus 5 — sonnet
+- Each diagram is designed AND rendered by a TEAMMATE on **`model: opus`** (Claude Opus 5 — sonnet
   misplaces elements), writing one complete `<svg>` fragment to the set's fragments dir
-  (`<cellDir>/doc/fragments/<id>.svg` in a cell). You never read or write SVG bodies.
+  (`<cellDir>/doc/fragments/<id>.svg` in a cell). You never read or write SVG bodies. A teammate is
+  an Agent-tool call that passes a **`name`** — use `hermes-<diagram-id>` (unique set-wide, since
+  diagram ids are; keep ids lowercase `[a-z0-9-]` and ≤ 40 chars, since the id rides inside a
+  schema-validated agent name) — which buys it its own pane and keeps it addressable for a later
+  round; an unnamed in-process subagent is for read-only exploration, never for rendering.
 - Every brief carries the **full contents of `.claude/skills/aim/assets/hermes-contract.md`
   verbatim**, the diagram's exact content, a card-unique `arrow-<id>` marker id and path-id prefix,
   the fragment output path, and the anti-artifact rules: no overlapping elements, text measured
@@ -100,11 +104,13 @@ short form, with /info's overrides:
   to box borders and routed around (never through) other boxes, every coordinate inside the viewBox,
   generous whitespace between groups.
 - Boxes are `box → kind` pairs using the sanctioned kind list in the contract's Shape Kit section;
-  the subagent derives the silhouette from the kind — never dictate a shape class.
+  the teammate derives the silhouette from the kind — never dictate a shape class.
 - Lint before wrapping: `python3 .claude/skills/aim/assets/lint_svg.py <fragment> --marker-id
-  arrow-<id> --prefix <prefix>`. Feed line-numbered violations back as a fresh fix-round brief to a
-  new subagent (max 2 rounds, then debug the fragment source directly). Only lint-clean fragments
-  get wrapped.
+  arrow-<id> --prefix <prefix>`. `SendMessage` line-numbered violations back to that same
+  `hermes-<diagram-id>` teammate — it still holds its fragment's context, so never spawn a fresh
+  agent for a fix round (max 2 rounds, then debug the fragment source directly). A hermes is done
+  when its fragment lints CLEAN, not when it reports the fragment written — stop it (TaskStop, bare
+  name) only then. Only lint-clean fragments get wrapped.
 - Wrap per /aim's "Wrap, don't flatten" rule: copy `.claude/skills/aim/assets/diagram-card.html`
   to `<set-root>/10-<id>.html` (next free number in `10-49`, assigned sequentially; never 3-digit
   prefixes) and substitute all three placeholders with a python one-liner using `str.replace`
@@ -166,4 +172,5 @@ the cell's brief wins wherever it is more specific:
   inline. Never declare the job done; accepting is carl's move.
 - An /info job never gets a `/do`, has no phase 2, and never opens a PR — carl accepts the
   artifacts straight from the board instead.
-- `solo: true` on the job means no subagents at all: prose only — no diagram cards in any round.
+- `solo: true` on the job means no teammates and no subagents at all: prose only — no diagram cards
+  in any round.

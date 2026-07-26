@@ -8,21 +8,35 @@ import (
 	"kraken/internal/util"
 )
 
-// crew.go — zeus' brief. A cell runs exactly one pane-backed agent, zeus;
+// crew.go — zeus' brief. A cell is created around exactly one agent, zeus;
 // hephaestus (implementation), athena (review), and — for the doc pipeline —
-// a diagram-rendering subagent named hermes all exist only as zeus'
-// subagents. Every agent, including those subagents, gets its own unique
-// system prompt; there is no shared generic brief.
+// the diagram renderers all exist as zeus' TEAMMATES: Agent-tool spawns that
+// pass a `name`, not anonymous in-process subagents. Every one of them gets
+// its own unique system prompt; there is no shared generic brief.
+//
+// The teammate/subagent distinction is load-bearing in kraken specifically,
+// which is why the brief spends words on it rather than leaving it to taste. A
+// named agent is backed by a real tmux pane and a row in the session's team
+// config, which is exactly what core.nestTeams reads — so a teammate appears
+// nested under this cell in `k ls` and `k v`, and carl can attach to its pane
+// and watch it work; an unnamed subagent runs inside zeus' own process, shows
+// up nowhere, and is unreachable the moment it is dispatched. Named also means
+// addressable: SendMessage resumes a teammate by its name with its context
+// intact, which is what turns athena's fix round into a continuation — the same
+// hephaestus that wrote the slice fixes it, and only the flagging variant
+// re-reads it — instead of a fresh brief re-deriving everything each round.
+// Anonymous subagents keep exactly one job: read-only exploration that writes
+// nothing and returns no verdict anyone acts on.
 //
 // The brief names hephaestus and athena because delegation shape is cell
-// policy; it does NOT describe the doc pipeline hermes belongs to, which is
+// policy; it does NOT describe the doc pipeline's rendering teammates, which is
 // the aim skill's job (see zeusBrief's comment for why the split exists and
 // where the line falls).
 
 func ZeusName(j *Job) string { return "zeus-" + util.Slugify(j.Slug) }
 
 // docFragmentsDir holds one rendered <svg> fragment per diagram placeholder,
-// each written by a dedicated hermes subagent — staged here until a
+// each written by a dedicated hermes teammate — staged here until a
 // lint-clean fragment gets wrapped into its own standalone diagram card
 // under CellArtifacts.
 func docFragmentsDir(j *Job) string {
@@ -64,8 +78,8 @@ func LintSvgPath() string {
 
 // zeusBrief builds zeus' system prompt. It carries ONLY what no skill can
 // know: who zeus is, where its cell is on disk, how it talks to carl, which
-// model everything runs on, the crew it delegates to, and which skill governs
-// each phase. Every procedure — the artifact set's shape, the diagram
+// model everything runs on, the crew of teammates it delegates to, and which
+// skill governs each phase. Every procedure — the artifact set's shape, the diagram
 // pipeline, the questions verbs, the build report, the PR conventions — lives
 // in the repo-owned skills that installSkills materializes into the worktree
 // (.claude/skills/{info,aim,do,pr}), and the brief points at them by path
@@ -79,6 +93,22 @@ func LintSvgPath() string {
 // duplicated procedure gets edited in one copy, and the copy zeus obeys is
 // whichever it happens to read first.
 //
+// The crew paragraph's insistence on teammates is kraken's own, for the reasons
+// in the file header; what it adds here is the counterweight. Told only that
+// real work goes to teammates, zeus briefs one for a two-file edit and spends
+// more context describing the work than doing it would have cost — so the same
+// paragraph gates delegation on work that actually splits, and exempts the
+// review pass, which parallelizes by construction whoever wrote the code. The
+// teardown clause fires on ACCEPTANCE rather than on an agent reporting done,
+// because the fix round has to reach the same teammate: stopping at "done"
+// kills it one step before the gate that judges it.
+//
+// The brief can promise panes and addressability because installHookSettings
+// writes the agent-teams switches into the cell's own .claude/settings.json
+// (mergeTeammateSettings, cell.go) — the requirement is enforced where it is
+// stated, not inherited from whatever the user's personal settings happen to
+// say that week.
+//
 // Phase gating stays here because it is cell policy, not skill content: there
 // is no job-level type any more (Q14), so whether Phase 1 runs at all — and
 // which of its two paths it takes, the /aim SPEC path or the lighter /info
@@ -89,10 +119,10 @@ func zeusBrief(j *Job) string {
 	fmt.Fprintf(&b, "You are zeus, the sole agent for kraken job %q.\n", j.Slug)
 	fmt.Fprintf(&b, "You run in an isolated cell: a git worktree on branch %s (your cwd). Never touch the repo's primary checkout; all work happens in this worktree.\n", CellBranch(j))
 	b.WriteString("Your worktree's `.claude/skills/` directory is kraken-owned and canonical for this cell — if a personal skill with the same name shadows one of them, follow the worktree copy (Read `.claude/skills/<name>/SKILL.md` directly); never commit `.claude/` changes to the repo, unless changing kraken's skills is itself this job's spec. Ignore any personal `doc`, `send`, or `info` skills that might try to auto-trigger — when a doc phase runs it uses the worktree's own `/aim` or `/info` and the `/do` gate, never those personal skills.\n")
-	b.WriteString("carl's messages arrive directly in your pane. There is no intermediary and no escalation file: whatever you write as your FINAL message before going idle is what carl sees on the job board as this cell's status detail — so end every working session by stating plainly what is ready, what you need, or what you decided. Kraken derives working/blocked from your activity automatically; never write status anywhere.\n")
-	b.WriteString("For a decision that genuinely blocks you and cannot be defaulted, you may use AskUserQuestion — kraken surfaces the options to carl's board as buttons. Otherwise prefer documenting the open question with a recommended default and continuing, rather than blocking for an answer.\n")
+	b.WriteString("carl's messages arrive directly in your pane, but he does not watch it: there is no intermediary and no escalation file, and the ONE thing that reaches him is whatever you write as your FINAL message before going idle, which the job board shows as this cell's status detail — so end every working session by stating plainly what is ready, what you need, or what you decided. Kraken derives working/blocked from your activity automatically; never write status anywhere.\n")
+	b.WriteString("It follows that you must NOT ask carl questions through an interactive terminal prompt: unseen, it just stalls the cell. When a decision is unclear, pick the most defensible default, say in that final message which way you went and what would change it, and keep working. AskUserQuestion is the one prompt kraken does lift out of your transcript for the board to render as buttons — a last resort for a decision that makes the work useless if guessed wrong, never a convenience. A teammate or subagent must never ask carl anything at all: only your own transcript is read, so a question from a spawned agent is both unseen and a hang. Brief every agent you spawn to decide and report, never to prompt.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path yourself if it somehow wasn't ingested).\n")
-	b.WriteString("EVERY agent in this cell runs on Claude Opus 5 — you, and every subagent you ever spawn, with no exceptions: always pass `model: opus` on the Agent tool (it takes tier aliases, not model ids — `opus` IS Claude Opus 5), never sonnet, haiku, or fable, and never leave the model unset.\n")
+	b.WriteString("EVERY agent in this cell runs on Claude Opus 5 — you, and every teammate or subagent you ever spawn, with no exceptions: always pass `model: opus` on the Agent tool (it takes tier aliases, not model ids — `opus` IS Claude Opus 5), never sonnet, haiku, or fable, and never leave the model unset.\n")
 	// The one block of facts a skill genuinely cannot derive. Every skill
 	// below writes "<cellDir>/artifacts" and "<cellDir>/doc/fragments" in the
 	// abstract; this is where those resolve, stated once instead of ~15 times.
@@ -106,10 +136,12 @@ func zeusBrief(j *Job) string {
 	fmt.Fprintf(&b, "Open questions and carl's per-artifact feedback are rows in kraken.db, not files, and both arrive as SILENT row updates — never a pane message — so re-read `kraken questions get %s` and `kraken feedback get %s` on EVERY resume. Address every open feedback entry as part of that working session and record how with `kraken feedback addressed %s <id> <text>`; kraken owns feedback entry creation and edits, and owns `answer`/`answered-at` on questions — you never write those. The question write verbs, and the rule for when a job may open questions at all, are in `.claude/skills/aim/SKILL.md`.\n",
 		j.Slug, j.Slug, j.Slug)
 	if j.Solo {
-		b.WriteString("Work entirely alone: no subagents at all — no implementation crew and no diagram subagents; when Phase 1 applies, write every artifact by hand, prose only, with no diagram cards.\n")
+		b.WriteString("Work entirely alone: no teammates and no subagents at all — not even a read-only exploration subagent, no implementation crew and no diagram agents; when Phase 1 applies, write every artifact by hand, prose only, with no diagram cards.\n")
 	} else {
-		b.WriteString("Delegate implementation slices to subagents you name hephaestus, run on the opus model — each slice gets a focused, unique brief with exact scope and file targets. Before accepting a slice, review it with three subagents you name athena-logic, athena-edge, and athena-style, also on the opus model, dispatched in parallel (one message, three Agent calls) — each gets its own single-dimension reviewer brief (never hephaestus' brief): athena-logic checks correctness, bugs, and scalability; athena-edge checks edge cases and boundary conditions; athena-style checks stylistic standards, best practices, and CLAUDE.md compliance. If any variant flags a blocking finding, send hephaestus a fix brief citing the exact finding, then re-review with only the flagging variant(s) — not all three — before accepting.\n")
-		b.WriteString("Subagent hygiene: the moment a subagent or teammate finishes its task, stop it (TaskStop) and free its slot/pane — always; never leave done agents resident.\n")
+		b.WriteString("When you do delegate real work, it goes to TEAMMATES, never to in-process subagents. A teammate is an Agent-tool call that passes a `name` (with `model: opus`): this cell's own `.claude/settings.json` turns agent teams on, so a named agent gets its own tmux pane, is addressable by that name via SendMessage for follow-up rounds, and shows up nested under this cell in `k ls`/`k v` where carl can watch it. Every agent that produces or judges output — the crew below, and any rendering agents a skill sends you to spawn — must be spawned that way, named. The ONE exception is read-only exploration: an unnamed subagent that searches the codebase and answers a question about it, writing nothing. Research answers are exactly what that carve-out is for — a verdict means an accept/reject judgment on work product, not a finding. If an agent will write a file or judge someone's output, it is a teammate.\n")
+		b.WriteString("Delegation is for work that actually parallelizes, not a ritual. When a change is small enough to hold in your own head — a few files, one coherent edit, nothing that splits into independent slices — just make the edit yourself; briefing a teammate to do it costs more than doing it. Reach for hephaestus when the work genuinely divides into slices that can run at once, or is large enough that its bulk would crowd out your own context. The athena review below is the opposite case: reviews are independent by construction, so run them in parallel every time, on your own edits exactly as on a teammate's.\n")
+		b.WriteString("Delegate parallelizable implementation slices to teammates you name hephaestus, run on the opus model — each slice gets a focused, unique brief with exact scope and file targets. Before accepting a slice, review it with three teammates you name athena-logic, athena-edge, and athena-style, also on the opus model, dispatched in parallel (one message, three Agent calls) — each gets its own single-dimension reviewer brief (never hephaestus' brief): athena-logic checks correctness, bugs, and scalability; athena-edge checks edge cases and boundary conditions; athena-style checks stylistic standards, best practices, and CLAUDE.md compliance. If any variant flags a blocking finding, send hephaestus a fix brief citing the exact finding (SendMessage to its name resumes it with its context intact), then re-review with only the flagging variant(s) — not all three — before accepting.\n")
+		b.WriteString("Crew hygiene: stop an agent (TaskStop — a teammate stops by its bare name) the moment its work is ACCEPTED, not the moment it reports done. An agent is done when the gate that judges its output has passed it: a slice once your review round clears it, a rendering agent once its output passes whatever check the skill runs. Keeping it alive until then is what lets a fix round go back to the same teammate with its context intact instead of re-briefing a fresh one. Once accepted, stop it immediately and free its pane — never leave accepted agents resident.\n")
 	}
 	b.WriteString("Never declare the job done — accepting or merging is carl's (or kraken's) move, never yours.\n")
 	b.WriteString("Never invoke destructive kraken commands or endpoints (the board's Done action, `k k`, /api/done, /api/kill — including test builds of them) against your OWN job's slug: your cell IS that job, and a confirmed teardown decapitates you mid-run. Test destructive flows only against a scratch job fixture, and 'skipping' a destructive call means not executing it — an echo claiming it was skipped does not count.\n")

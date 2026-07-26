@@ -40,10 +40,10 @@ Take the artifact set produced by [[aim]] earlier in this conversation — `00-o
 
 ### 4. Plan The Implementation
 
-- Build a TaskCreate plan grouped by `50-components.md`'s component table. One task per component is a good default.
+- Build a TaskCreate plan grouped by `50-components.md`'s component table. One task per component is a good default — that is the planning unit, not automatically a delegation unit (see the fan-out rule below).
 - Honor the set's scope/non-goals/constraints section doc(s) strictly — do not expand scope.
 - Use `51-code-map.md` (where things live, review guide) as the file-targeting guide. Verify those paths still exist before relying on them.
-- For complex implementations (4+ files or multi-service), spawn a TeamCreate per the user's global preference rather than serial work in the main thread.
+- Fan components out to teammates — `Agent` calls that each pass a `name`, so each gets its own pane and stays addressable by name — when the work genuinely runs in parallel: components that touch disjoint files and don't depend on each other's output. A change that is one coherent edit, however many files it spans, is faster done directly than briefed out; file count is not the test, independence is. Unnamed in-process subagents are for read-only exploration only — never for an agent that writes a file or judges another agent's output.
 - **Every teammate runs on Opus** (`model: opus` — Claude Opus 5): the mechanical component tasks the set already pins down as much as the judgment-heavy ones (ambiguous integration points, cross-cutting refactors, design gaps the set left open). Never drop a teammate to sonnet or haiku to save tokens, and never leave the model unset. The lead agent is on Opus too — it plans, reviews teammate output, and integrates.
 
 ### 5. Implement
@@ -89,10 +89,10 @@ like the plan was perfect is a report that isn't worth writing.
 
 ### 9. Clean Up Agents
 
-Once verification passes and the report is written, tear down everything spawned during implementation — do not leave agents idling after the task is done:
+Stop each agent as soon as its output is ACCEPTED — a slice once its review round clears it, not the moment it reports done, since a blocking finding has to go back to that same teammate. By the time verification passes and the report is written, tear down anything still resident:
 
-- **Teammates (TeamCreate)**: send each still-running teammate a shutdown request via `SendMessage` (`type: "shutdown_request"`), wait for them to exit, then clean up the team (e.g. `TeamDelete`) once all members have shut down.
-- **Background subagents / tasks (Agent, Workflow)**: check for still-running background tasks (`TaskList` / task notifications) and stop any that are no longer needed with `TaskStop`.
+- **Teammates (named `Agent` spawns)**: stop each still-running teammate with `TaskStop`, addressing it by its bare name (or `name@team` if the name is ambiguous across teams). That releases its tmux pane. There is no team-delete step — a team with no live members is already gone.
+- **Unnamed background subagents / tasks (Agent, Workflow)**: check for still-running background tasks (`TaskList` / task notifications) and stop any that are no longer needed with `TaskStop`, addressing them by task id.
 - Do this even when implementation failed or was cut short — a partial run must not leave orphaned agents behind.
 - Exception: if a teammate is mid-way through work the user explicitly asked to keep running (e.g. a long verification job), say so in the report instead of killing it.
 
@@ -101,7 +101,7 @@ Once verification passes and the report is written, tear down everything spawned
 When a kraken job brief sends you here, these deltas apply — the brief wins wherever it is more specific, and it is the only place the cell's real paths appear:
 
 - **There may be no artifact set at all.** Skipping the doc phase is a kraken job's default: when Phase 1 never ran, the JOB SPEC is the contract and it is what you implement, exactly as written. The Preconditions refusal above applies to standalone `/do`, not here — a cell with no set root is the normal case, not an error.
-- **The crew is the brief's crew.** Implementation slices go to subagents named hephaestus and each is reviewed by athena-logic / athena-edge / athena-style in parallel, all on `model: opus` — the brief spells out the exact contract, including the solo case (no subagents at all). Use it instead of TeamCreate here.
+- **The crew is the brief's crew, and the crew are TEAMMATES.** Implementation slices go to teammates named hephaestus, each reviewed by athena-logic / athena-edge / athena-style in parallel. The brief owns that contract end to end — what makes an agent a teammate, when delegating is worth it at all, when an agent is torn down, and the solo case — so read it there rather than re-deriving it here; this bullet exists only to say that /do's generic fan-out guidance above is superseded by it inside a cell.
 - **Write `90-build-report.md` into the brief's SET ROOT** (`<cellDir>/artifacts/`), per Write The Build Report above. It is written on EVERY phase 2, including a job that never had an artifact set — a job spec is still a plan reality can diverge from.
 - **Stop at the manual-test gate.** After the tests and linters pass and the report is written, say:
 
