@@ -1,11 +1,13 @@
 # kraken web API — iOS wire contract
 
 Canonical reference for every JSON endpoint the iOS app (`ios/Kraken/`)
-consumes. Source of truth is the Go code (`web.go`, `webpeers.go`,
-`daemon.go`, `job.go`, `status.go`); this doc transcribes it, it does not
-define it independently.
+consumes. Source of truth is the Go code — the handlers and wire types in
+`internal/api/` (`board.go`, `peers.go`, `update.go`, …), `web/serve.go`,
+and the model layers they read (`internal/jobs/{daemon,job,status}.go`,
+`internal/core/peer.go`); this doc transcribes it, it does not define it
+independently.
 
-**Current contract**: `apiContract = 5` (web.go / internal/api — the Go
+**Current contract**: `apiContract = 5` (internal/api/board.go — the Go
 constant + `contract_test.go` bump lands in the same commit as this doc, per
 CLAUDE.md's API-contract rule), mirrored by `APIClient.expectedContract`
 (APIClient.swift). `/api/health` and
@@ -28,10 +30,16 @@ already ignore fields they don't recognize, and `Decodable` optionals
 absorb a key's absence.
 
 **Change rule**: any change to a JSON shape served to or accepted from the
-app/web UI lands in the same commit as: the Go change (web.go/webpeers.go/
-daemon.go/job.go), this doc, `ios/Kraken/Models.swift`, and
-`contract_test.go`. See also the "API contract" note in the root
-`CLAUDE.md`.
+app/web UI lands in the same commit as: the Go change (`internal/api/*.go`,
+`web/serve.go`, `internal/jobs/{daemon,job}.go`), this doc,
+`ios/Kraken/Models.swift`, and `internal/api/contract_test.go`. A Swift
+model should not be the only thing pinning a shape: give every response the
+app decodes a spec in `contract_test.go`. The carve-out is the handful of
+endpoints whose success path needs real tmux panes to reach —
+`/api/peers/{spawn,send,kill,capture}`, listed in `contract_test.go`'s own
+exclusion comment — so `SpawnResponse` and `CaptureResponse` (APIClient.swift)
+are pinned by this doc and their Go structs alone. See also the "API
+contract" note in the root `CLAUDE.md`.
 
 **omitempty → Optional rule** (from Models.swift's header comment): a Go
 struct field tagged `,omitempty` becomes a Swift `Optional` (the key may be
@@ -42,6 +50,16 @@ the wire and modeled as non-optional in Swift. Map-literal responses (the
 job-editor endpoints, built as `map[string]any` rather than a tagged
 struct) always emit every key — even ones a Swift model marks Optional for
 other reasons (nil-vs-empty on the Go side, not the wire's absence).
+
+The rule reads one way only: `omitempty` ⇒ Optional, but Optional does not
+imply `omitempty`. Two kinds of Swift Optional exist without one.
+**Absence on an older server** — `contract`, `stale`, `WebBoard.update`: all
+always present on a current server, missing from builds that predate them,
+where the absence is itself what the app checks for. **Blast-radius
+containment** — every field of `WebUpdate`, all of them always present on
+the wire, made Optional (with a hand-written `init(from:)`) purely so a
+drifted sub-key costs the ⟳ control rather than the entire `/api/board`
+decode; see that struct's header comment in Models.swift.
 
 Error responses: any non-2xx status returns `{"error": string}`. Board
 action endpoints (`webAction`-wrapped) additionally return `{"ok": true}`
@@ -64,7 +82,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `jobs` | array (`webJob`) | always (`[]` not `null`) | within a display state, jobs render in the manual reorder's order (see `POST /api/reorder` below) — no separate order field, the array position IS the display order |
 | `contract` | number | always | == `apiContract` |
 | `stale` | bool | always | this `k web` process' self-check |
-| `update` | object (`webUpdate`) | always | the self-update button's state (see `POST /api/update` under Misc). Added additively, no contract bump — the iOS app doesn't model it and `Decodable`'s explicit `CodingKeys` ignore it |
+| `update` | object (`webUpdate`) | always | the self-update button's state (see `POST /api/update` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebUpdate` (Models.swift), **Optional** on `WebBoard` — always present on any server new enough to have the button, absent on one older than it |
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's
@@ -721,7 +739,7 @@ write failure).
 concurrent calls to either endpoint (or the CLI's `k account` commands) are
 last-writer-wins on the mode field.
 
-### `POST /api/update` → `updateResp` (api/update.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+### `POST /api/update` → `updateResp` (api/update.go)
 
 Starts a self-update: fetch → merge → `make install` → `launchctl kickstart
 -k`. The handler itself does none of that — it preflights, stakes a claim,
@@ -729,14 +747,16 @@ and forks a detached `kraken update --detached` child, because the last step
 of an update kills the very `kraken serve` process that served the request.
 Mirror-gated (403 under `kraken serve --mirror`): a mirror board is
 read-only, and this is the most destructive action on the surface.
-Additive, no contract bump.
+Additive, no contract bump. Modeled in the iOS app (`UpdateStartResponse` in
+Models.swift, `startUpdate` in APIClient.swift) — the daemon bar's ⟳
+control.
 
 Request (`updateReq`, an empty body is valid and means "just update"):
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `force` | bool | omitempty | install even when already up to date |
-| `test` | bool | omitempty | run `go test ./...` after the build, before the install |
+| `force` | bool | optional to send | no `omitempty` tag — absence just decodes as `false`. Install even when already up to date |
+| `test` | bool | optional to send | no `omitempty` tag — absence just decodes as `false`. Run `go test ./...` after the build, before the install |
 
 Response (202 Accepted — the run has been *started*, not finished):
 
@@ -759,13 +779,29 @@ Single-flight is the status write, not a lock: the handler writes
 non-terminal phase and 409s. The detached child takes the real flock
 (`~/.kraken/update.lock`) and holds it for the whole run.
 
-### `GET /api/update/status` → `webUpdate` (api/update.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+### `GET /api/update/status` → `webUpdate` (api/update.go)
 
 The same `webUpdate` shape `/api/board` carries under `update` (documented
 above), served on its own so the UI's in-flight poller doesn't re-run
 discovery every tick. GET only (405 otherwise), never gated in mirror mode —
 it's a read. Note that fetch failures against this endpoint are EXPECTED
 while `phase` is `restarting`: the server is being replaced mid-poll.
+Modeled in the iOS app (`WebUpdate` in Models.swift, `updateStatus` in
+APIClient.swift): while a run is non-terminal the board screen polls this
+every ~1.2s and swallows failures for up to 5 minutes — its own, more
+generous version of the web board's 120s restart-gap ceiling, since the
+phone reaches the Mac over the tailnet and may be re-establishing that link
+while the server is down. Past the ceiling it synthesizes a `failed` record
+rather than waiting forever — but only on two consecutive failed fetches,
+and the gap clock restarts with each poll loop, because that clock is
+wall-clock while the loop is frozen whenever the app is suspended or the
+Board tab is off screen. Like the web board, it honors a terminal record
+only within 60s of `updated_at` (both directions — a future timestamp from
+clock skew would otherwise be fresh forever): `~/.kraken/update.json` keeps
+its last `done` forever, so an unbounded read would show a stale ✓ on every
+launch.
+Unlike the web board, the app does NOT reload itself when a run finishes —
+its UI ships in the app bundle, not out of the binary being replaced.
 
 ### `GET /api/health` → map literal (webpeers.go `healthHandler`)
 

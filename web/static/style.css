@@ -142,6 +142,11 @@ body {
 .stat.hot { color: var(--counter); text-shadow: var(--glow-hot); }
 .stat.hot:empty { display: none; }
 .stat.dim { opacity: 0.55; }
+/* running build's commit — quiet by default, but it's the one thing that
+   visibly changes when a self-update lands, so it gets the accent on hover */
+.stat.build { opacity: 0.5; letter-spacing: 0.5px; cursor: default; }
+.stat.build:hover { opacity: 1; color: var(--accent); }
+.stat.build:empty { display: none; }
 .spacer { flex: 1; }
 .viewtabs { display: flex; gap: 2px; margin-left: 8px; }
 .viewtab {

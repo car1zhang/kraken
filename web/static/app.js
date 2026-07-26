@@ -546,6 +546,9 @@ function render(board) {
   }
   document.getElementById("cells-stat").textContent = `cells ${board.live_cells}/${board.cell_cap}`;
   document.getElementById("flag-stat").textContent = flags ? `⚑ ${flags}` : "";
+  // build-stat is NOT written here: it comes off the same record the ⟳
+  // control does, so renderUpdate() owns it (one reader, one repaint path,
+  // and it tracks the 1s status poll too instead of only this 3s one)
   document.getElementById("tick-stat").textContent = new Date().toLocaleTimeString();
 
   // stale-binary self-check (see selfcheck.go): both fields are absent on an
@@ -3278,7 +3281,16 @@ async function refresh() {
 // returning to the tab refreshes immediately instead of waiting out the rest
 // of the current 3s tick
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refresh();
+  if (document.hidden) return;
+  // The update poll's gap clock is wall-clock, but the ticks that read it are
+  // not: Chrome freezes hidden tabs, so hiding the board through a restart
+  // gap would let the first tick back measure the whole hidden stretch and
+  // synthesize "kraken serve did not come back" for a run that finished
+  // while nobody was looking. Time spent hidden doesn't count — the same
+  // reset the iOS poll gets by restarting its loop on scene-phase resume.
+  updGapSince = 0;
+  updFailStreak = 0;
+  refresh();
 });
 applyView();
 refresh();
@@ -3330,6 +3342,7 @@ let updState = null; // last webUpdate seen, from either poll
 let updPolling = false; // a run is live and the 1s poll is running
 let updPollTimer = null;
 let updGapSince = 0; // ms of this gap's first failed fetch; 0 = server answering
+let updFailStreak = 0; // consecutive failed status fetches — see updPollTick
 let updRefusal = ""; // last refusal text — sticky until the next click
 let updWatching = false; // this page saw a run start, so it owes itself a reload
 let updReloadTimer = null;
@@ -3399,6 +3412,12 @@ function renderUpdateFromBoard(u) {
 function startUpdatePoll() {
   if (updPolling) return;
   updPolling = true;
+  // The gap clock belongs to THIS poll run. It measures wall-clock time, but
+  // the ticks that read it stop firing whenever the tab is hidden (Chrome
+  // freezes background tabs after ~5min), so a gap inherited from an earlier
+  // run counts minutes nobody was watching.
+  updGapSince = 0;
+  updFailStreak = 0;
   updPollTimer = setTimeout(updPollTick, UPD_POLL_MS);
 }
 
@@ -3407,6 +3426,7 @@ function stopUpdatePoll() {
   clearTimeout(updPollTimer);
   updPollTimer = null;
   updGapSince = 0;
+  updFailStreak = 0;
 }
 
 async function updPollTick() {
@@ -3418,10 +3438,17 @@ async function updPollTick() {
   } catch {} // expected: the restart gap, where there is no server to answer
   if (u) {
     updIngest(u);
-  } else if (!updGapSince) {
-    updGapSince = Date.now();
+    updFailStreak = 0;
+  } else {
+    updFailStreak++;
+    if (!updGapSince) updGapSince = Date.now();
   }
-  if (updGapSince && Date.now() - updGapSince > UPD_GAP_MAX_MS) {
+  // The two resets (poll start, tab becoming visible) aren't enough on their
+  // own, because a freeze can also land between them and the next tick. So
+  // the ceiling additionally needs two failures BACK TO BACK: at 1s a real
+  // two-minute outage racks up a hundred of them, while a single blip on
+  // unfreeze is followed 1s later by a success that clears the gap.
+  if (updFailStreak >= 2 && updGapSince && Date.now() - updGapSince > UPD_GAP_MAX_MS) {
     // Two minutes of silence is no longer a restart. Say so rather than
     // spinning a cyan button at an empty socket forever — update.log is the
     // only place that can explain a serve which never bound.
@@ -3450,9 +3477,24 @@ function renderUpdate() {
   const u = updState || {};
   const phase = u.phase || "idle";
   const running = !UPD_TERMINAL.has(phase);
-  // a terminal record only speaks for the button while it's fresh
-  const fresh = !!u.updated_at && Date.now() - u.updated_at < UPD_RECENT_MS;
+  // A terminal record only speaks for the button while it's fresh — bounded
+  // on BOTH sides. An `updated_at` in the future (clock skew, a corrupt
+  // update.json) is otherwise fresh forever, and a `failed` record that is
+  // fresh forever pins the button at UPDATE FAILED, whose click opens the
+  // log instead of starting a run — so the button never updates again.
+  const fresh = !!u.updated_at && Math.abs(Date.now() - u.updated_at) < UPD_RECENT_MS;
   const build = u.build_sha ? " · running " + u.build_sha : "";
+
+  // the header's @sha chip rides the same record — written here rather than
+  // in the board render so there's one reader of build_sha and it repaints
+  // on the 1s status poll too, not only the 3s board poll. "dev" means the
+  // binary was built without the Makefile's -X stamp; show nothing rather
+  // than a sha-shaped word that isn't one.
+  const buildStat = document.getElementById("build-stat");
+  if (buildStat) {
+    const chip = u.build_sha && u.build_sha !== "dev" ? "@" + u.build_sha : "";
+    if (buildStat.textContent !== chip) buildStat.textContent = chip;
+  }
 
   let cls = "";
   // glyph as (class, character) rather than markup: the node itself is

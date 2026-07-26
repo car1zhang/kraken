@@ -184,6 +184,25 @@ var webUpdateSpec = map[string]fieldSpec{
 	"checked_at": {kind: wireNumber, required: true},
 }
 
+// updateReqSpec / updateStartRespSpec cover POST /api/update's request body
+// and its 202 response (update.go's updateReq / updateResp). The response
+// needs its own spec even though update_test.go already round-trips the 202:
+// that round-trip unmarshals into `updateResp` itself, so renaming a json tag
+// renames both sides at once and stays green here while the phone — whose
+// UpdateStartResponse (Models.swift) decodes all three keys as
+// non-optionals — throws a decode error on every successful start. Pinning
+// the wire names in a spec is the only thing that can catch that.
+var updateReqSpec = map[string]fieldSpec{
+	"force": {kind: wireBool, required: true},
+	"test":  {kind: wireBool, required: true},
+}
+
+var updateStartRespSpec = map[string]fieldSpec{
+	"ok":       {kind: wireBool, required: true},
+	"phase":    {kind: wireString, required: true},
+	"from_sha": {kind: wireString, required: true},
+}
+
 var webJobSpec = map[string]fieldSpec{
 	"slug":          {kind: wireString, required: true},
 	"repo":          {kind: wireString, required: true},

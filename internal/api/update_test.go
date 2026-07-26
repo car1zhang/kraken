@@ -188,6 +188,7 @@ func TestUpdateHappyPath(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202, body %s", rec.Code, rec.Body.String())
 	}
+	assertShape(t, "POST /api/update", rec.Body.Bytes(), updateStartRespSpec)
 	var resp updateResp
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
@@ -238,6 +239,15 @@ func TestUpdateForwardsFlags(t *testing.T) {
 	if !spawns.force || !spawns.test {
 		t.Errorf("force/test = %v/%v, want true/true", spawns.force, spawns.test)
 	}
+	// the literal above proves the handler READS this shape; marshaling the
+	// struct pins the key names it WRITES, so a renamed json tag can't
+	// silently drift from what the web board and app post — the same shape
+	// check accountSwitchReq gets in contract_test.go
+	reqData, err := json.Marshal(updateReq{Force: true, Test: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "updateReq", reqData, updateReqSpec)
 }
 
 // TestUpdateSpawnFailureResetsStatus covers the one path where the handler
