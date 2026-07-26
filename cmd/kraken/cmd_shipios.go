@@ -275,7 +275,13 @@ func runShipIOS(opts shipIOSOpts, out io.Writer) error {
 	// to PATH. Same gap it closes for the updater's bare `go`: this process may
 	// have been forked by launchd, whose PATH does not reach the homebrew
 	// prefix xcodegen lives in, and the script invokes it by bare name.
-	if err := shipExec(pf.Script, pf.Repo, toolchainEnv(pf.XcodegenPath), scriptArgs, scan); err != nil {
+	// jobs.ASCEnviron() adds the App Store Connect ids from ~/.kraken/asc.env
+	// for any the current process is missing. A ship started from the board is
+	// forked by the launchd daemon, which cannot be given these through
+	// launchctl at all (see jobs.ASCEnvPath) — without this the button refuses
+	// preflight forever while the identical terminal run works.
+	shipEnv := append(toolchainEnv(pf.XcodegenPath), jobs.ASCEnviron()...)
+	if err := shipExec(pf.Script, pf.Repo, shipEnv, scriptArgs, scan); err != nil {
 		scan.flush()
 		// Name the phase it died in. "ship failed" alone sends someone into a
 		// fifteen-minute log with no idea which of four Apple tools to look
