@@ -83,12 +83,29 @@ Also worth doing once, on the phone: TestFlight → the app → enable **automat
 updates**, so a shipped build installs itself instead of waiting for a tap.
 That is the closest this gets to a true remote reinstall.
 
-## Environment
+## Credentials: `~/.kraken/asc.env`
 
 ```sh
-export ASC_KEY_ID=<Key ID>
-export ASC_ISSUER_ID=<Issuer ID>
+umask 077 && cat > ~/.kraken/asc.env <<'EOF'
+ASC_KEY_ID=<Key ID>
+ASC_ISSUER_ID=<Issuer ID>
+EOF
 ```
+
+Both the board button and hand-runs read this file, so the two can never
+disagree about which key is in use. An explicit `export` in your shell
+overrides it, so a new key can be tested without editing anything.
+
+**Do not try to use `launchctl setenv` instead.** It looks like the right
+answer and it does not work — measured here: the variables land in the `gui/`
+domain (`launchctl getenv` returns them) and never reach the job, because the
+plist declares its own `EnvironmentVariables` dict. Neither `kickstart -k` nor
+a full `bootout`+`bootstrap` changes that, and `setenv` is lost on reboot
+anyway. The failure is nasty because it is asymmetric: terminal runs keep
+working while the button refuses preflight forever.
+
+Only `ASC_KEY_ID` and `ASC_ISSUER_ID` are read from the file, and it is parsed
+rather than sourced — a credential store should not also be a code path.
 
 Both come from the same App Store Connect page as the key. They are read from
 the environment only — never committed, never echoed into

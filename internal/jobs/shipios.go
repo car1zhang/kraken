@@ -465,16 +465,91 @@ func PreflightShipIOS() (ShipPreflightInfo, error) {
 // status file — only their names, and only to say one is missing.
 var ascEnvKeys = []string{"ASC_KEY_ID", "ASC_ISSUER_ID"}
 
-// missingASCEnv returns the names of the credential variables that are unset
-// or blank. Whitespace counts as unset: an `export ASC_KEY_ID=` typo produces
-// a set-but-empty variable that would otherwise sail through preflight and
-// fail minutes later at altool.
-func missingASCEnv() []string {
-	var missing []string
+// ASCEnvPath is the credential file a board-triggered ship reads its App Store
+// Connect ids from: ~/.kraken/asc.env, KEY=VALUE per line.
+//
+// It exists because there is no working way to hand these to the daemon
+// through launchd. `launchctl setenv` is the obvious answer and it does not
+// work: measured on this machine, the variables land in the gui/ domain
+// (launchctl getenv returns them) and never reach the job, because the plist
+// declares its own EnvironmentVariables dict. Neither `kickstart -k` nor a
+// full bootout+bootstrap changes that. And even if it did, setenv is lost on
+// reboot, which would break the button in a way that leaves terminal runs
+// working — the worst shape a bug can have.
+//
+// A file solves both: it survives reboots and it is read by the process that
+// actually needs it. The .p8 itself is NOT here; altool still finds that by
+// its own convention under ~/.appstoreconnect/private_keys/.
+func ASCEnvPath() string { return filepath.Join(util.Home(), ".kraken", "asc.env") }
+
+// loadASCEnv parses ASCEnvPath into a map. Defensive by the house rule: a
+// missing, unreadable, or malformed file yields an empty map and never an
+// error — a ship with no credentials must refuse with the actionable preflight
+// message below, not with a parse error nobody can act on.
+//
+// Only ascEnvKeys are honored. This file is a credential channel, not a
+// general environment: letting it set PATH or DYLD_* would turn "someone can
+// write one file in ~/.kraken" into arbitrary code execution in every ship.
+func loadASCEnv() map[string]string {
+	out := map[string]string{}
+	data, err := os.ReadFile(ASCEnvPath())
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(strings.Trim(strings.TrimSpace(v), `"'`))
+		for _, allowed := range ascEnvKeys {
+			if k == allowed && v != "" {
+				out[k] = v
+			}
+		}
+	}
+	return out
+}
+
+// ASCEnviron returns the KEY=VALUE pairs a ship child needs that the current
+// process does not already carry, so the caller can append them to the child's
+// environment. The process environment wins: an explicit `export` in a
+// terminal must override the file, or there is no way to test a new key
+// without editing the file first.
+func ASCEnviron() []string {
+	file := loadASCEnv()
+	var out []string
 	for _, k := range ascEnvKeys {
 		if strings.TrimSpace(os.Getenv(k)) == "" {
-			missing = append(missing, k)
+			if v, ok := file[k]; ok {
+				out = append(out, k+"="+v)
+			}
 		}
+	}
+	return out
+}
+
+// missingASCEnv returns the names of the credential variables that are unset
+// or blank in BOTH the environment and ASCEnvPath. Whitespace counts as unset:
+// an `export ASC_KEY_ID=` typo produces a set-but-empty variable that would
+// otherwise sail through preflight and fail minutes later at altool.
+func missingASCEnv() []string {
+	file := loadASCEnv()
+	var missing []string
+	for _, k := range ascEnvKeys {
+		if strings.TrimSpace(os.Getenv(k)) != "" {
+			continue
+		}
+		if strings.TrimSpace(file[k]) != "" {
+			continue
+		}
+		missing = append(missing, k)
 	}
 	return missing
 }

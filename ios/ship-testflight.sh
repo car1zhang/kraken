@@ -98,6 +98,23 @@ fi
 # Credentials come from the environment and the key file NEVER enters the repo.
 # Neither value is echoed anywhere below: the key id is half of a credential
 # pair and this script's output is written to ~/.kraken/ship-ios.log.
+#
+# Fall back to ~/.kraken/asc.env for anything the environment does not carry.
+# kraken ship-ios already injects these (jobs.ASCEnviron), so this branch is
+# for a hand-run in a shell that has not sourced them — and it is deliberately
+# the same file, so the button and the terminal can never disagree about which
+# key is in use. Read with grep+cut rather than sourcing it: sourcing would
+# execute whatever is in the file, and a credential store should not also be a
+# code path.
+for _k in ASC_KEY_ID ASC_ISSUER_ID; do
+  if [ -z "$(eval "printf '%s' \"\${$_k:-}\"")" ] && [ -r "$HOME/.kraken/asc.env" ]; then
+    _v="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$_k=" "$HOME/.kraken/asc.env" 2>/dev/null |
+          tail -1 | cut -d= -f2- | tr -d '"'\''' | xargs)"
+    [ -n "$_v" ] && eval "export $_k=\"\$_v\""
+  fi
+done
+unset _k _v
+
 if [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_ISSUER_ID:-}" ]; then
   die "App Store Connect credentials missing.
 

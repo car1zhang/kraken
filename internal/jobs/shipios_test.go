@@ -842,3 +842,78 @@ func TestShipCredentialsNeverLeak(t *testing.T) {
 		}
 	}
 }
+
+// TestASCEnvFile covers the credential file that exists because launchctl
+// setenv provably cannot reach the daemon (see ASCEnvPath's comment). The
+// board button's entire ability to ship rests on these three functions.
+func TestASCEnvFile(t *testing.T) {
+	write := func(t *testing.T, body string) {
+		t.Helper()
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("ASC_KEY_ID", "")
+		t.Setenv("ASC_ISSUER_ID", "")
+		if body != "" {
+			if err := os.MkdirAll(filepath.Join(home, ".kraken"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".kraken", "asc.env"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("no file means both missing", func(t *testing.T) {
+		write(t, "")
+		if got := missingASCEnv(); len(got) != 2 {
+			t.Fatalf("want both missing, got %v", got)
+		}
+	})
+
+	t.Run("file satisfies preflight", func(t *testing.T) {
+		write(t, "ASC_KEY_ID=ABC123\nASC_ISSUER_ID=iss-1\n")
+		if got := missingASCEnv(); len(got) != 0 {
+			t.Fatalf("want none missing, got %v", got)
+		}
+	})
+
+	t.Run("tolerates export, quotes, comments, blanks", func(t *testing.T) {
+		write(t, "# comment\n\nexport ASC_KEY_ID=\"ABC123\"\n  ASC_ISSUER_ID = 'iss-1' \n")
+		if got := missingASCEnv(); len(got) != 0 {
+			t.Fatalf("want none missing, got %v", got)
+		}
+	})
+
+	t.Run("malformed file is not an error", func(t *testing.T) {
+		write(t, "\x00\xff not=a=valid line\nASC_KEY_ID\n")
+		if got := missingASCEnv(); len(got) != 2 {
+			t.Fatalf("want both missing, got %v", got)
+		}
+	})
+
+	// Only the two credential keys are honored: this file must not be a way to
+	// set PATH or DYLD_* for every ship the daemon ever runs.
+	t.Run("ignores keys outside the allowlist", func(t *testing.T) {
+		write(t, "PATH=/evil\nDYLD_INSERT_LIBRARIES=/evil.dylib\nASC_KEY_ID=ABC123\nASC_ISSUER_ID=iss-1\n")
+		for _, kv := range ASCEnviron() {
+			if strings.HasPrefix(kv, "PATH=") || strings.HasPrefix(kv, "DYLD_") {
+				t.Fatalf("allowlist leaked: %q", kv)
+			}
+		}
+	})
+
+	// An explicit export must win, or a new key cannot be tested without
+	// editing the file first.
+	t.Run("process env overrides the file", func(t *testing.T) {
+		write(t, "ASC_KEY_ID=FROMFILE\nASC_ISSUER_ID=iss-1\n")
+		t.Setenv("ASC_KEY_ID", "FROMENV")
+		for _, kv := range ASCEnviron() {
+			if strings.HasPrefix(kv, "ASC_KEY_ID=") {
+				t.Fatalf("ASCEnviron should not re-supply a key already in the env: %q", kv)
+			}
+		}
+		if got := missingASCEnv(); len(got) != 0 {
+			t.Fatalf("want none missing, got %v", got)
+		}
+	})
+}
