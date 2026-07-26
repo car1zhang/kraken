@@ -25,6 +25,11 @@ private struct ReorderRequest: Encodable {
     let slugs: [String]
 }
 
+/// `{}` — the body POST /api/update wants. The handler decodes leniently
+/// (an absent body is a valid "just update"), but `post` always sends one,
+/// and an empty object is the honest spelling of "no force, no test".
+private struct EmptyRequest: Encodable {}
+
 /// One networking client for the whole app: plain async/await URLSession,
 /// generic get/post plumbing, and a typed convenience method per endpoint.
 /// An actor so it's safe to share a single instance (and its URLSession)
@@ -465,6 +470,31 @@ actor APIClient {
     /// Additive endpoint, no contract bump.
     func fetchUsage(baseURL: String) async throws -> UsageResponse {
         try await get(baseURL: baseURL, path: "/api/usage")
+    }
+
+    // MARK: - self-update
+
+    /// Starts a self-update: fetch → merge → `make install` → restart the
+    /// daemon. Returns as soon as the claim is written and the detached
+    /// updater is forked (202) — the run itself is followed via
+    /// `updateStatus`, never by this call returning.
+    ///
+    /// Refusals are 409s carrying the machine's own sentence ("… has
+    /// uncommitted changes", "… is on carl/foo, not main", "update already
+    /// in flight"), which `perform` turns into a `KrakenError.message` — so
+    /// a refusal is a thrown error whose text is worth showing verbatim,
+    /// not a generic failure. Additive endpoint, no contract bump.
+    func startUpdate(baseURL: String) async throws -> UpdateStartResponse {
+        try await post(baseURL: baseURL, path: "/api/update", body: EmptyRequest())
+    }
+
+    /// The same `webUpdate` shape /api/board carries under `update`, on its
+    /// own endpoint so a ~1s in-flight poll doesn't re-run discovery every
+    /// tick. Failures here are EXPECTED for a few seconds around the end of
+    /// a run — the update's last act restarts the server answering this —
+    /// so the caller swallows them rather than reporting them.
+    func updateStatus(baseURL: String) async throws -> WebUpdate {
+        try await get(baseURL: baseURL, path: "/api/update/status")
     }
 
     // MARK: - artifacts

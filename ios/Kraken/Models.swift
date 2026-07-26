@@ -1,5 +1,8 @@
-// Codable models mirroring kraken's `k web` JSON API (see web.go, peer.go,
-// daemon.go, job.go in the repo root — this file has no logic, just shapes).
+// Codable models mirroring kraken's `kraken serve` JSON API (see the wire
+// types in internal/api/, web/serve.go, and the model layers behind them —
+// internal/jobs/{daemon,job}.go, internal/core/peer.go. This file has no
+// logic, just shapes; ios/API.md documents them and
+// internal/api/contract_test.go pins them).
 //
 // Rule of thumb applied throughout: a Go struct field tagged `,omitempty`
 // becomes an Optional in Swift (the key may be entirely absent, and for
@@ -7,10 +10,16 @@
 // Swift's synthesized Decodable treats a missing key and an explicit null
 // the same way for Optional properties, so this is safe either way). Fields
 // with no `omitempty` tag are always present and modeled as non-optional.
-// Exception: keys like `contract`/`stale` are always present on new servers
-// but absent on older ones (added after this app's server-version handshake
-// shipped) — those are modeled Optional too, even without omitempty, since
-// the absence itself is what the app checks for.
+//
+// The implication runs one way only — Optional here does NOT imply
+// omitempty there — and two exceptions rely on that. (1) Absence on an
+// older server: keys like `contract`/`stale`/`update` are always present on
+// new servers but absent on ones predating them, and the absence itself is
+// what the app checks for. (2) Blast-radius containment: every field of
+// `WebUpdate` is always present on the wire and Optional anyway, so that a
+// drifted sub-key costs the ⟳ control instead of the whole /api/board
+// decode — see that struct's own comment, which is where the reasoning
+// lives.
 
 // MARK: - board
 
@@ -24,6 +33,9 @@ struct WebBoard: Decodable {
     // itself the signal the app uses to warn about a stale server.
     let contract: Int?
     let stale: Bool?
+    // Absent on servers older than the self-update button (added additively,
+    // no contract bump) — nil reads as a plain idle control.
+    let update: WebUpdate?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -32,6 +44,7 @@ struct WebBoard: Decodable {
         case liveCells = "live_cells"
         case jobs
         case contract, stale
+        case update
     }
 }
 
@@ -52,6 +65,101 @@ struct DaemonStatus: Decodable {
         case lastError = "last_error"
         case cells
         case stale
+    }
+}
+
+// MARK: - self-update
+
+// WebUpdate mirrors api/update.go's webUpdate: the whole state behind the
+// daemon bar's ⟳ control. Served twice from one assembly function
+// (currentUpdate) — as /api/board's `update` key and as the entire body of
+// GET /api/update/status — so the board and the in-flight poller can never
+// disagree about the same run. Nothing here is `omitempty` server-side:
+// every key is always present, zeroed when it doesn't apply.
+//
+// Every property is nonetheless Optional, decoded field-by-field with `try?`
+// below, and that is a blast-radius decision rather than a claim about the
+// server. `WebBoard.update` is decoded with `decodeIfPresent`, which only
+// nils on an ABSENT or null `update` KEY — a failure INSIDE the object (a
+// sub-key missing, null, or the wrong type) propagates and takes the ENTIRE
+// /api/board decode down with it, so every job on the board would be lost
+// over a cosmetic ⟳ control. That is the wrong trade at any probability.
+// Optional alone isn't enough for it, either: synthesized decoding of an
+// Optional property calls `decodeIfPresent`, which returns nil for
+// absent/null but still THROWS on a type mismatch — hence the hand-written
+// init. The worst a drifted sub-key can now do is paint the button idle.
+// This is the same reasoning that already makes every other tolerated-drift
+// field on WebBoard Optional.
+//
+// `error` is the RUN's error only — a failed availability check is
+// deliberately never surfaced here — while `behind`/`checked_at` come from
+// the daemon's 10-minute availability check and describe "is there anything
+// to update to" whether or not a run has ever happened.
+struct WebUpdate: Decodable {
+    /// idle|preflight|fetching|merging|building|installing|restarting|done|
+    /// failed|uptodate. `idle` when no run has ever happened.
+    let phase: String?
+    let fromSHA: String?
+    /// "" until the merge lands.
+    let toSHA: String?
+    let behind: Int?
+    let error: String?
+    /// unix millis; 0 = never run.
+    let startedAt: Int64?
+    /// unix millis of the last phase transition.
+    let updatedAt: Int64?
+    /// the running binary's ldflags-stamped short sha, "dev" unstamped.
+    let buildSHA: String?
+    /// unix millis of the last availability check; 0 = never checked.
+    let checkedAt: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case phase
+        case fromSHA = "from_sha"
+        case toSHA = "to_sha"
+        case behind, error
+        case startedAt = "started_at"
+        case updatedAt = "updated_at"
+        case buildSHA = "build_sha"
+        case checkedAt = "checked_at"
+    }
+}
+
+// Decoding lives in an extension purely so the memberwise initializer
+// survives — BoardView synthesizes WebUpdate values locally (the optimistic
+// `preflight` paint, the gap-ceiling `failed` record) and declaring an init
+// in the struct body would suppress it.
+extension WebUpdate {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // `try?` per field, not `try`: this is the blast-radius cap described
+        // above, and it has to cover type mismatches too, which
+        // `decodeIfPresent` alone would still throw on.
+        phase = try? c.decodeIfPresent(String.self, forKey: .phase)
+        fromSHA = try? c.decodeIfPresent(String.self, forKey: .fromSHA)
+        toSHA = try? c.decodeIfPresent(String.self, forKey: .toSHA)
+        behind = try? c.decodeIfPresent(Int.self, forKey: .behind)
+        error = try? c.decodeIfPresent(String.self, forKey: .error)
+        startedAt = try? c.decodeIfPresent(Int64.self, forKey: .startedAt)
+        updatedAt = try? c.decodeIfPresent(Int64.self, forKey: .updatedAt)
+        buildSHA = try? c.decodeIfPresent(String.self, forKey: .buildSHA)
+        checkedAt = try? c.decodeIfPresent(Int64.self, forKey: .checkedAt)
+    }
+}
+
+// UpdateStartResponse mirrors api/update.go's updateResp — POST /api/update's
+// 202 body. 202, not 200: the run has been *started* (the claim is written,
+// the detached child forked), not finished. `phase` is always "preflight",
+// the phase that claim was written at. A refusal never reaches this type —
+// it's a 409 with {"error": …}, which APIClient turns into KrakenError.
+struct UpdateStartResponse: Decodable {
+    let ok: Bool
+    let phase: String
+    let fromSHA: String
+
+    enum CodingKeys: String, CodingKey {
+        case ok, phase
+        case fromSHA = "from_sha"
     }
 }
 

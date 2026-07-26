@@ -13,12 +13,19 @@ final class BoardViewModel {
             let board = try await APIClient.shared.fetchBoard(baseURL: baseURL)
             self.board = board
             self.errorMessage = nil
+            ingestBoardUpdate(board.update)
             // Every successful fetch (this foreground poll, and the
             // BGAppRefreshTask in NotificationManager) runs the same
             // blocked-job diff — one notification per newly-blocked job.
             NotificationManager.shared.processBoard(board)
         } catch {
-            self.errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            // An update's last act restarts the server this poll talks to,
+            // so mid-run the board goes dark for a few seconds. Say what is
+            // actually happening rather than flashing URLSession's "Could
+            // not connect to the server." for the whole window.
+            self.errorMessage = updatePolling
+                ? "daemon — restarting"
+                : ((error as? KrakenError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
@@ -55,6 +62,356 @@ final class BoardViewModel {
             job.question != nil || !(job.health ?? "").isEmpty
         }
     }
+
+    // MARK: - self-update
+    //
+    // The daemon bar's ⟳ control is a view over one server record (WebUpdate
+    // — carried both by /api/board's `update` key and by GET
+    // /api/update/status) plus two facts no server record can hold: the last
+    // refusal, because a refused update never became a run, and how long the
+    // server has been unreachable mid-run.
+    //
+    // While a run is live the status endpoint is polled on its own ~1.2s
+    // cadence and its failures are SWALLOWED. That is the whole trick: an
+    // update's last act is `launchctl kickstart -k` on the very server
+    // answering these requests, so for a few seconds every fetch fails. That
+    // gap is the normal middle of a SUCCESSFUL update — treating it as an
+    // error would be wrong on every single run.
+
+    /// jobs.UpdateTerminal: no run is in progress, so the control is live.
+    private static let terminalPhases: Set<String> = ["idle", "done", "failed", "uptodate"]
+    /// How long a finished run keeps the control. ~/.kraken/update.json holds
+    /// its last record forever, so without a window every launch for the rest
+    /// of time would reopen a green ✓ — or a pink failure — from days ago.
+    private static let updateRecentWindow: TimeInterval = 60
+    /// Past this, a restart that hasn't come back has stopped being a
+    /// restart. The web board allows 120s, which is sized for a browser on
+    /// the same machine; the phone reaches the Mac over the tailnet and may
+    /// itself be re-establishing that link (Wi-Fi hop, radio wake) while the
+    /// server is down, so this side is deliberately far more generous.
+    private static let updateGapCeiling: TimeInterval = 300
+    private static let updatePollInterval: Duration = .milliseconds(1200)
+
+    /// Last record seen, from either poll.
+    private(set) var update: WebUpdate?
+    /// The one sentence the control has to say that no record carries: a
+    /// refusal (nothing ran), or a recorded failure carl tapped to read.
+    /// Sticky until the next tap — unlike `errorMessage`, which the very next
+    /// successful board poll clears 4s later, far too fast to read.
+    private(set) var updateMessage: String?
+    /// True while `updateMessage` holds something carl asked to see, rather
+    /// than something that merely happened to him — see `barMessage`.
+    private(set) var updateMessageRevealed = false
+    /// A run is live and `runUpdatePoll` should be (or already is) running.
+    /// Only `runUpdatePoll` ever clears it, in a `defer`, so there is no exit
+    /// from that loop — terminal phase, cancellation, gap ceiling — that can
+    /// leave the flag set with nothing polling. That state used to be
+    /// unrecoverable: the control paints itself disabled off this flag, and
+    /// `ingestBoardUpdate`'s `guard !updatePolling` would then drop every
+    /// later board record on the floor.
+    private(set) var updatePolling = false
+    /// Bumped every time a poll is REQUESTED. BoardView's `.task(id:)` keys
+    /// off this rather than off `updatePolling`, because `.task(id:)` only
+    /// restarts when the id differs between two body evaluations: a flag that
+    /// goes false (poll finished) and true again (a stale board record from
+    /// /api/board's 2s cache, still carrying the non-terminal phase) inside
+    /// one render frame reads as `true` both times, and no task starts. A
+    /// counter that only ever increases cannot collide with itself.
+    private(set) var updatePollGeneration = 0
+    /// Which `runUpdatePoll` invocation currently owns `updatePolling`. The
+    /// poll task restarts on a scene-phase change as well as a generation
+    /// bump (see UpdatePollKey), and SwiftUI does not wait for the cancelled
+    /// loop to unwind before running the new task body — so two invocations
+    /// briefly overlap, and the OLD one's `defer` would otherwise clear the
+    /// flag out from under the new one. That leaves the flag false with a
+    /// live run, the mirror image of the stuck state the defer exists to
+    /// prevent. Each invocation stamps itself here and only writes shared
+    /// state while it is still the stamp holder.
+    private var updatePollEpoch = 0
+    /// The tap has fired but POST /api/update hasn't answered yet. Set
+    /// SYNCHRONOUSLY in the button's action, before the request is even
+    /// awaited, because `state.disabled` is derived from the record and the
+    /// record can't move until the response lands: without this, two taps
+    /// 50ms apart both reach the handler and the second earns a 409 whose
+    /// "update already in flight" then sits in the bar for the whole run.
+    private(set) var updateStarting = false
+    /// When this gap's first failed fetch happened; nil = the server answers.
+    private var updateGapSince: Date?
+
+    /// Folds the 4s board poll's copy of the record in. The 1.2s status poll
+    /// wins outright while it is running: the two race, and a board response
+    /// can easily be older than a status response that landed just before it
+    /// — applying it would rewind the phase on screen.
+    private func ingestBoardUpdate(_ u: WebUpdate?) {
+        guard !updatePolling, let u else { return }
+        update = u
+        updateGapSince = nil
+        if !Self.terminalPhases.contains(u.phase ?? "idle") {
+            // a run someone else started — the CLI, the web board, another
+            // phone. Follow it just as closely as one started from here.
+            updateMessage = nil
+            updateMessageRevealed = false
+            beginUpdatePolling()
+        }
+    }
+
+    /// Asks BoardView's `.task(id: updatePollGeneration)` for a fresh poll
+    /// loop. The generation bump is the whole point — see its declaration.
+    private func beginUpdatePolling() {
+        updatePolling = true
+        updatePollGeneration &+= 1
+    }
+
+    /// Flips the control off in the tap handler itself — see updateStarting.
+    /// Separate from `startUpdate` because a `Task { await … }` body does not
+    /// begin running synchronously with the tap that creates it, so anything
+    /// inside `startUpdate` is already too late to stop a second tap.
+    func markUpdateStarting() {
+        updateStarting = true
+    }
+
+    /// Fires the run. No confirmation step: the tap IS the decision, same as
+    /// the web board's button.
+    func startUpdate(baseURL: String) async {
+        defer { updateStarting = false }
+        updateMessage = nil
+        updateMessageRevealed = false
+        do {
+            let resp = try await APIClient.shared.startUpdate(baseURL: baseURL)
+            // The handler writes the claim (phase preflight) BEFORE it forks
+            // the updater, so paint that phase now rather than leaving the
+            // control idle until the first poll tick lands.
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            update = WebUpdate(
+                phase: resp.phase.isEmpty ? "preflight" : resp.phase,
+                fromSHA: resp.fromSHA, toSHA: "",
+                behind: update?.behind ?? 0, error: "",
+                startedAt: now, updatedAt: now,
+                buildSHA: update?.buildSHA ?? "", checkedAt: update?.checkedAt ?? 0
+            )
+            updateGapSince = nil
+            beginUpdatePolling()
+        } catch {
+            // A 409's text is one specific sentence about the machine's state
+            // — the only thing worth putting on screen here.
+            updateMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Surfaces a recorded failure carl tapped. A failure after the updater
+    /// detached can't come back as an HTTP status — the request returned long
+    /// ago — so it arrives in the record instead.
+    func revealUpdateError(_ message: String) {
+        updateMessage = message.isEmpty ? "update failed — see ~/.kraken/update.log" : message
+        updateMessageRevealed = true
+    }
+
+    /// Whether the last record is recent enough to still speak for the
+    /// control. Shared by `updateButton` and `barMessage` so a revealed
+    /// failure and the ✕ that revealed it always age out together.
+    ///
+    /// abs(), not a one-sided comparison: an `updated_at` in the FUTURE
+    /// (clock skew between phone and Mac, a corrupt update.json) is
+    /// otherwise fresh forever, and a `failed` record that is fresh forever
+    /// pins the control at "✕ update failed" — which is not a button that
+    /// can start a run, so the control never works again.
+    private var updateRecordFresh: Bool {
+        let updatedAt = update?.updatedAt ?? 0
+        return updatedAt > 0
+            && abs(Date().timeIntervalSince1970 - Double(updatedAt) / 1000) < Self.updateRecentWindow
+    }
+
+    /// The single line the daemon bar's error slot shows.
+    ///
+    /// `errorMessage` normally wins: it means the board on screen is stale
+    /// RIGHT NOW, which outranks a refusal that is sticky precisely because
+    /// it may be minutes old by the time it's read. The exception is a
+    /// failure carl just TAPPED to reveal. The commonest way to have one is
+    /// "kraken serve never came back", and in exactly that case the next
+    /// board poll fails too and fills `errorMessage` with URLSession's
+    /// "Could not connect to the server." — which would shadow the one
+    /// sentence the tap existed to show, so the tap would produce no visible
+    /// change at all. A user-initiated reveal outranks the connectivity
+    /// error; a merely-sticky refusal still does not.
+    ///
+    /// That precedence is bounded by the revealed record's own freshness. A
+    /// reveal is cleared only by the next run, so an outranking sentence
+    /// would otherwise outlive its cause indefinitely: once the record ages
+    /// out the control has already reverted to a plain "update", yet the
+    /// failure text would still be sitting in the bar — and still hiding
+    /// every genuine connectivity error behind it — until carl launched a
+    /// real update just to dismiss it.
+    var barMessage: String? {
+        if updateMessageRevealed {
+            if updateRecordFresh, let updateMessage { return updateMessage }
+            return errorMessage
+        }
+        return errorMessage ?? updateMessage
+    }
+
+    /// The entry point BoardView's poll task calls. `updatePolling` alone is
+    /// not a sound gate here: on a scene-phase restart the previous loop is
+    /// cancelled and may have already cleared the flag in its `defer`, so
+    /// gating on it would silently abandon a run that is still going. Fall
+    /// back to the record — a non-terminal phase means the run outlived the
+    /// suspension and deserves a fresh loop (and a fresh gap clock).
+    func resumeUpdatePoll(baseURL: String) async {
+        guard updatePolling || !Self.terminalPhases.contains(update?.phase ?? "idle") else { return }
+        updatePolling = true
+        await runUpdatePoll(baseURL: baseURL)
+    }
+
+    /// The in-flight poll loop, driven by BoardView's `.task(id:)` so it
+    /// inherits the view's actor and cancellation. Polls the narrow status
+    /// endpoint rather than the board (a 1.2s board poll would re-run
+    /// discovery every tick) and swallows failures — see the section header.
+    func runUpdatePoll(baseURL: String) async {
+        updatePollEpoch &+= 1
+        let epoch = updatePollEpoch
+        // The flag is this loop's to hold and this loop's to drop, on EVERY
+        // exit — terminal phase, cancellation, gap ceiling, the guard at the
+        // top going false. Anything else can leave `updatePolling` true with
+        // no poller behind it, which disables the control and makes
+        // ingestBoardUpdate ignore every subsequent board record. Dropped
+        // only if this invocation still owns the flag: a scene-phase restart
+        // has a successor loop already running by the time this one unwinds
+        // (see updatePollEpoch).
+        defer { if updatePollEpoch == epoch { updatePolling = false } }
+        // The gap clock belongs to THIS loop. It measures wall-clock time,
+        // but the loop is frozen whenever the app is suspended or the Board
+        // tab is off screen — so a gap inherited from an earlier loop counts
+        // minutes nobody was watching. Lock the phone during a perfectly
+        // normal restart gap, unlock ten minutes later, and the first fetch
+        // on resume (against a radio/tailnet that hasn't come up yet) would
+        // read 600s > 300s and synthesize a failure for an update that
+        // succeeded. Keying the task on scenePhase is what makes this reset
+        // actually fire on resume — the loop restarts rather than thawing.
+        updateGapSince = nil
+        // …and the reset alone isn't enough, because a suspend can also
+        // happen between a task restart and the next tick. So the ceiling
+        // additionally needs two failures BACK TO BACK: at 1.2s a real
+        // five-minute outage racks up hundreds of them, while a single blip
+        // on resume is followed 1.2s later by a success that clears the gap.
+        var consecutiveFailures = 0
+        while !Task.isCancelled && updatePolling && updatePollEpoch == epoch {
+            do {
+                let u = try await APIClient.shared.updateStatus(baseURL: baseURL)
+                update = u
+                updateGapSince = nil
+                consecutiveFailures = 0
+                if Self.terminalPhases.contains(u.phase ?? "idle") { return }
+            } catch {
+                // Cancellation is not a gap. This view is a TabView child, so
+                // switching to Settings or Sessions mid-run cancels the fetch
+                // in flight against a server that is perfectly healthy —
+                // recording that as the start of a gap would start the 300s
+                // clock running while carl is on another tab, and paint
+                // "restarting" at him on the way back.
+                //
+                // `Task.isCancelled` is the ONLY signal that can reach here:
+                // APIClient.perform re-wraps every URLSession failure —
+                // cancellation included — as KrakenError.message, so neither
+                // `error is CancellationError` nor a URLError with
+                // `.cancelled` can ever match. Don't add those casts back.
+                if Task.isCancelled { return }
+                consecutiveFailures += 1
+                let since = updateGapSince ?? Date()
+                updateGapSince = since
+                if consecutiveFailures >= 2, Date().timeIntervalSince(since) > Self.updateGapCeiling {
+                    // Five minutes of silence is no longer a restart. Say so
+                    // rather than spinning a cyan control at a dead socket
+                    // forever — update.log on the Mac is the only thing that
+                    // can explain a serve which never bound.
+                    let now = Int64(Date().timeIntervalSince1970 * 1000)
+                    update = WebUpdate(
+                        phase: "failed",
+                        fromSHA: update?.fromSHA ?? "", toSHA: update?.toSHA ?? "",
+                        behind: update?.behind ?? 0,
+                        error: "kraken serve did not come back after the restart — see ~/.kraken/update.log",
+                        startedAt: update?.startedAt ?? now, updatedAt: now,
+                        buildSHA: update?.buildSHA ?? "", checkedAt: update?.checkedAt ?? 0
+                    )
+                    updateGapSince = nil
+                    return
+                }
+            }
+            try? await Task.sleep(for: Self.updatePollInterval)
+        }
+    }
+
+    /// What the control shows right now, derived here so the view is a pure
+    /// paint. Precedence mirrors the web board's renderUpdate(): the gap and
+    /// the live run outrank any record, and a terminal record only speaks for
+    /// the control while it is fresh.
+    var updateButton: UpdateButtonState {
+        let phase = update?.phase ?? "idle"
+        let running = !Self.terminalPhases.contains(phase)
+        let fresh = updateRecordFresh
+
+        if updateStarting && !running {
+            // the tap landed, the POST hasn't answered — the record still
+            // reads terminal, so without this the control would stay live
+            // and a second tap would earn a 409 (see updateStarting)
+            return UpdateButtonState(glyph: "⟳", label: "starting", color: KTheme.accent, disabled: true)
+        }
+        if running && (updateGapSince != nil || phase == "restarting") {
+            // either the updater says it's restarting, or the endpoint
+            // stopped answering mid-run — which IS the restart, from here
+            return UpdateButtonState(glyph: "⟳", label: "restarting", color: KTheme.polling, disabled: true)
+        }
+        if running {
+            return UpdateButtonState(glyph: "⟳", label: phase, color: KTheme.accent, disabled: true)
+        }
+        if fresh, phase == "failed" {
+            return UpdateButtonState(
+                glyph: "✕", label: "update failed", color: KTheme.counter,
+                disabled: false, revealsError: update?.error ?? ""
+            )
+        }
+        if fresh, phase == "done" {
+            let sha = update?.toSHA ?? ""
+            return UpdateButtonState(
+                glyph: "✓", label: sha.isEmpty ? "updated" : "updated \(sha)",
+                color: KTheme.solved, disabled: false
+            )
+        }
+        if fresh, phase == "uptodate" {
+            // a run that found nothing to do built and restarted nothing.
+            // Without this the tap would flash busy and land back on a bare
+            // "update", which reads as "did that even do anything".
+            return UpdateButtonState(glyph: "✓", label: "up to date", color: KTheme.solved, disabled: false)
+        }
+        if let behind = update?.behind, behind > 0 {
+            // the daemon's background availability check, every 10min
+            return UpdateButtonState(glyph: "⟳", label: "\(behind) behind", color: KTheme.revealed, disabled: false)
+        }
+        return UpdateButtonState(glyph: "⟳", label: "update", color: KTheme.text2, disabled: false)
+    }
+}
+
+/// One paint of the daemon bar's ⟳ control — see BoardViewModel.updateButton.
+struct UpdateButtonState {
+    let glyph: String
+    let label: String
+    let color: Color
+    let disabled: Bool
+    /// Non-nil when the control is a recorded failure: tapping surfaces this
+    /// in the bar instead of starting another run. `var` among four `let`s
+    /// on purpose — Swift's memberwise init defaults an Optional *var* to
+    /// nil and an Optional `let` to nothing, so this is what lets five of
+    /// the six construction sites omit the parameter entirely.
+    var revealsError: String?
+}
+
+/// The update poll's `.task(id:)` key. Two independent things restart that
+/// loop, and it must restart for either. The generation covers a run
+/// STARTING (see updatePollGeneration); the scene phase covers the app
+/// coming back from suspension, where the point is not to start polling but
+/// to throw away a gap clock that has been counting wall-clock minutes while
+/// the loop itself was frozen — see runUpdatePoll.
+private struct UpdatePollKey: Hashable {
+    let generation: Int
+    let phase: ScenePhase
 }
 
 struct BoardView: View {
@@ -143,6 +500,22 @@ struct BoardView: View {
                     await vm.refresh(baseURL: serverURL)
                     clearSettledReorders()
                 }
+            }
+            // The in-flight update poll, kept separate from the 4s board poll
+            // above: it runs ~3x faster, hits a much narrower endpoint, and
+            // has to survive the window where the board poll can't reach the
+            // server at all. Keyed on the poll GENERATION, not on
+            // `updatePolling`: a run started anywhere — here, the CLI, the
+            // web board — bumps the generation, which always differs from
+            // the last one this body saw, so the loop always restarts (see
+            // updatePollGeneration for the frame-collision this avoids).
+            // Keyed on `scenePhase` as well, matching the board poll above:
+            // a suspended loop's gap clock keeps counting wall-clock time it
+            // was not awake for, so resuming has to restart the loop rather
+            // than thaw it (see UpdatePollKey and runUpdatePoll).
+            .task(id: UpdatePollKey(generation: vm.updatePollGeneration, phase: scenePhase)) {
+                guard scenePhase == .active else { return }
+                await vm.resumeUpdatePoll(baseURL: serverURL)
             }
             .sheet(item: $selectedJob) { job in
                 NavigationStack {
@@ -282,8 +655,26 @@ struct BoardView: View {
                     .font(.data(11))
                     .foregroundStyle(KTheme.text2)
                 Spacer()
-                if let err = vm.errorMessage {
-                    Text(err).font(.data(10)).foregroundStyle(KTheme.counter)
+                updateControl
+                // One error slot, shared — precedence lives in barMessage.
+                // lineLimit is not cosmetic here: a preflight refusal embeds
+                // an absolute path and `update.error` can carry git's whole
+                // CombinedOutput, newlines and all, which would grow the
+                // daemon bar into a paragraph.
+                //
+                // .middle, not .tail: update.go formats a git failure as
+                // "git <argv>: <exit status>: <CombinedOutput>", so the
+                // informative half is at the END. With ~30 characters of
+                // room .tail shows "git merge --ff-only origin/ma…" and
+                // nothing else — and unlike the web board there is no OPEN
+                // LOG affordance here, so the reveal would surface none of
+                // its diagnostic content at all.
+                if let err = vm.barMessage {
+                    Text(err)
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.counter)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 Text("cells \(board.liveCells)/\(board.cellCap)")
                     .font(.data(11))
@@ -300,6 +691,38 @@ struct BoardView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(KTheme.hairline).frame(height: 1)
         }
+    }
+
+    // The self-update control (POST /api/update + the status poll that
+    // follows the run through the server restart — see BoardViewModel's
+    // self-update section). Deliberately bar-weight mono rather than a
+    // prominent button: it belongs to the server-health row, not the action
+    // toolbar. No confirmation step — the tap IS the decision, matching the
+    // web board. Fixed-size so a long error next to it can't squeeze it away.
+    private var updateControl: some View {
+        let state = vm.updateButton
+        return Button {
+            if let err = state.revealsError {
+                vm.revealUpdateError(err)
+            } else {
+                // Synchronously, in the tap handler — a Task body doesn't
+                // start soon enough to keep a second tap out (see
+                // BoardViewModel.updateStarting).
+                vm.markUpdateStarting()
+                Task { await vm.startUpdate(baseURL: serverURL) }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(state.glyph)
+                Text(state.label)
+            }
+            .font(.data(10))
+            .foregroundStyle(state.color)
+        }
+        .buttonStyle(.plain)
+        .disabled(state.disabled)
+        .fixedSize()
+        .accessibilityLabel("update kraken — \(state.label)")
     }
 
     // Always-visible table-of-contents strip: one compact cell per column so

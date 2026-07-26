@@ -49,6 +49,11 @@
     <span class="stat" id="daemon-stat">connecting…</span>
     <span class="stat" id="cells-stat"></span>
     <span class="stat hot" id="flag-stat"></span>
+    <!-- commit the running binary was built from (util.Build(), stamped by the
+         Makefile's -ldflags). Visible so a self-update proves itself: the sha
+         changes the moment the new binary is actually serving. Empty on an
+         unstamped `go build`, which :empty hides rather than showing "dev". -->
+    <span class="stat build" id="build-stat" title="commit this kraken was built from"></span>
     <span class="usage-stat" id="usage-stat" hidden role="button" tabindex="0" title="usage — claude code pool"></span>
     <span class="viewtabs">
       <button class="viewtab active" data-view="board">BOARD</button>
