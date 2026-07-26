@@ -3609,7 +3609,7 @@ function renderUpdate() {
   }
 
   paintUpdControl(btn, { cls, glyphCls, glyphChar, label, disabled, title });
-  paintUpdBanner(banner, bannerCls, bannerHTML);
+  paintUpdBanner(banner, bannerCls, bannerHTML, "upd", u.updated_at);
 }
 
 // paintUpdControl writes one .upd button node by node, and only where
@@ -3646,13 +3646,53 @@ function paintUpdControl(btn, { cls, glyphCls, glyphChar, label, disabled, title
   btn.title = title;
 }
 
+// ---- banner dismissal ----
+//
+// The update/ship banners self-clear once their record ages past the freshness
+// window (60s / 120s), but that is a long time to stare at a strip you have
+// already read, and reloading inside the window legitimately brings it back —
+// which reads as "it will not go away".
+//
+// Dismissal is therefore keyed to the RUN, not to the page, and persisted:
+// remembering it in memory alone would be undone by the very reload the update
+// button performs on itself. The key is the record's updated_at, so the next
+// run — which necessarily has a newer stamp — still gets to speak.
+//
+// localStorage can throw (blocked cookies, sandboxed context); a dead store
+// must degrade to "nothing dismissed", never to a broken banner. Same
+// defensive shape as the theme stamp in index.html.
+function bannerDismissed(kind, stamp) {
+  if (!stamp) return false;
+  try {
+    return localStorage.getItem("kraken-dismissed-" + kind) === String(stamp);
+  } catch {
+    return false;
+  }
+}
+
+function dismissBanner(kind, stamp) {
+  if (!stamp) return;
+  try {
+    localStorage.setItem("kraken-dismissed-" + kind, String(stamp));
+  } catch {
+    /* a store that cannot remember just means the banner ages out normally */
+  }
+}
+
+// Every banner gets the same trailing ✕. Appended centrally rather than in
+// each branch so a new banner state cannot forget to be dismissable.
+const BANNER_DISMISS = '<button data-act="dismiss" title="dismiss">✕</button>';
+
 // paintUpdBanner writes one .update-banner strip. innerHTML rather than nodes:
 // unlike the button, a banner repaints only on genuine state changes and
 // carries markup (a spacer, an action button), and nothing inside it is
 // animated.
-function paintUpdBanner(banner, bannerCls, bannerHTML) {
+function paintUpdBanner(banner, bannerCls, bannerHTML, kind, stamp) {
+  // A dismissed run is suppressed here, at the one place every branch funnels
+  // through, so no caller has to remember the rule.
+  if (bannerHTML && kind && bannerDismissed(kind, stamp)) bannerHTML = "";
   banner.className = "update-banner" + (bannerCls ? " " + bannerCls : "");
-  banner.innerHTML = bannerHTML;
+  banner.innerHTML = bannerHTML ? bannerHTML + BANNER_DISMISS : "";
   banner.hidden = !bannerHTML;
 }
 
@@ -3712,6 +3752,13 @@ document.getElementById("update-banner").addEventListener("click", async (ev) =>
     location.reload();
   }
   if (act === "log") setView("log");
+  // Dismiss remembers THIS run (updState?.updated_at), so the banner stays
+  // gone across the reload the update button performs on itself, while the
+  // next run still gets to speak.
+  if (act === "dismiss") {
+    dismissBanner("upd", updState?.updated_at);
+    renderUpdate();
+  }
 });
 
 // ---- ship-ios: the ⇧ SHIP iOS control (internal/api/shipios.go) ----
@@ -3961,7 +4008,7 @@ function renderShipIOS() {
   }
 
   paintUpdControl(btn, { cls, glyphCls, glyphChar, label, disabled, title });
-  paintUpdBanner(banner, bannerCls, bannerHTML);
+  paintUpdBanner(banner, bannerCls, bannerHTML, "ship", s.updated_at);
 }
 
 // requestShipIOS fires the run. No confirmation step, matching the update
@@ -4017,5 +4064,10 @@ document.getElementById("ship-btn").addEventListener("click", () => {
 // every repaint, so nothing inside it can own a listener. No RELOAD NOW twin
 // here — a ship replaces nothing this page is running.
 document.getElementById("ship-banner").addEventListener("click", (ev) => {
-  if (ev.target.closest("button")?.dataset.act === "ship-log") setView("log");
+  const act = ev.target.closest("button")?.dataset.act;
+  if (act === "ship-log") setView("log");
+  if (act === "dismiss") {
+    dismissBanner("ship", shipState?.updated_at);
+    renderShipIOS();
+  }
 });

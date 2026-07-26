@@ -241,6 +241,16 @@ body {
   background: transparent; border: 1px solid currentColor; color: inherit; cursor: pointer;
   font: 10px var(--mono); letter-spacing: 1.5px; padding: 2px 9px;
 }
+/* the dismiss ✕ is punctuation, not an action: borderless and dimmed so it
+   never competes with RELOAD NOW / OPEN LOG sitting beside it. It is appended
+   to every banner centrally (BANNER_DISMISS in app.js), and when it is the
+   only button the spacer still pushes it to the right edge. */
+.update-banner button[data-act="dismiss"] {
+  border: none; opacity: 0.55; padding: 2px 4px;
+  font-size: 12px; letter-spacing: 0;
+  margin-left: auto; /* right-aligned even in banners with no .spacer */
+}
+.update-banner button[data-act="dismiss"]:hover { opacity: 1; }
 
 /* ---- board ---- */
 .board {
