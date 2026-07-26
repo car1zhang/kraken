@@ -68,13 +68,30 @@ func CheckSpawnDir(dir string) error {
 
 // NewWindowIn is NewWindow's error-returning core, targeted at an explicit
 // tmux session rather than the caller's own — the piece the HTTP spawn
-// endpoint needs (no $TMUX, no util.Die()).
+// endpoint needs (no $TMUX, no util.Die()). The window keeps tmux's default
+// name (the running command); callers that want to label it use
+// NewWindowNamed.
 func NewWindowIn(session, dir string, argv []string) (string, error) {
+	return NewWindowNamed(session, dir, "", argv)
+}
+
+// NewWindowNamed is NewWindowIn with an explicit tmux window name (-n), the
+// one thing a side thread's window needs that a plain spawn doesn't: its
+// window sits beside zeus' in the cell session, so it has to announce which
+// thread it is in the status bar rather than reading as a second anonymous
+// claude. An empty name omits -n entirely, which is exactly NewWindowIn's
+// original behavior — the two share this one exec so a change to the tmux
+// invocation (the -P format string the pane id is parsed back out of, above
+// all) can never apply to only one of them.
+func NewWindowNamed(session, dir, name string, argv []string) (string, error) {
 	// tmux silently falls back to $HOME on a bad -c dir; a typo should fail
 	if err := CheckSpawnDir(dir); err != nil {
 		return "", err
 	}
 	tmuxArgs := []string{"new-window", "-P", "-F", "#{session_name}:#{window_index} (#{pane_id})", "-t", session + ":", "-c", dir}
+	if name != "" {
+		tmuxArgs = append(tmuxArgs, "-n", name)
+	}
 	tmuxArgs = append(tmuxArgs, argv...)
 	out, err := exec.Command("tmux", tmuxArgs...).Output()
 	if err != nil {

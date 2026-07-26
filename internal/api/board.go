@@ -212,6 +212,60 @@ func jobFeedback(st *store.Store, jobID int64) []webFeedback {
 	return webFeedbackFrom(fs)
 }
 
+// webThread mirrors one `threads` row (store.Thread) for the wire — the
+// board-facing subset only: the chip's identity (tid/title), its state, and
+// the two timestamps the clients render. Provenance (session_id,
+// parent_session, fork_uuid, seed, cwd) and the window target stay off the
+// board poll entirely — nothing on a card renders them, and fork_uuid rides
+// GET /api/thread/read instead, where the split it anchors is actually used.
+// Additive, no apiContract bump.
+type webThread struct {
+	TID   string `json:"tid"`
+	Title string `json:"title,omitempty"`
+	State string `json:"state"`
+	// Pane is a live thread's tmux pane; CloseThread clears it on the row, so
+	// it is naturally absent for a closed thread rather than a stale id.
+	Pane      string `json:"pane,omitempty"`
+	CreatedAt int64  `json:"created_at"` // unix millis
+	ClosedAt  int64  `json:"closed_at,omitempty"`
+}
+
+// webThreadsFrom converts store.Thread rows into the wire DTO — same
+// nil/empty-to-nil convention as webDocQuestionsFrom/webFeedbackFrom, so
+// buildWebBoard leaves webJob.Threads unset (omitempty) rather than serving
+// an empty-but-present array.
+func webThreadsFrom(ts []store.Thread) []webThread {
+	if len(ts) == 0 {
+		return nil
+	}
+	out := make([]webThread, len(ts))
+	for i, t := range ts {
+		out[i] = webThread{
+			TID: t.TID, Title: t.Title, State: t.State, Pane: t.Pane,
+			CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
+		}
+	}
+	return out
+}
+
+// jobThreads resolves j's side threads straight from kraken.db — live or
+// dead job alike, since a closed thread's row outlives its cell (the
+// transcript it points at is still readable). nil (never an error) when no
+// store is wired or the job predates a store row, and log-and-return-nil on
+// a query failure, exactly like jobQuestions: one job's threads must never
+// fail the whole board poll.
+func jobThreads(st *store.Store, j *jobs.Job) []webThread {
+	if st == nil || j.ID == 0 {
+		return nil
+	}
+	ts, err := st.ListThreads(j.ID)
+	if err != nil {
+		util.LogEvent("web", "error", "board", fmt.Sprintf("list threads for %s: %v", j.Slug, err))
+		return nil
+	}
+	return webThreadsFrom(ts)
+}
+
 type webJob struct {
 	Slug      string        `json:"slug"`
 	Repo      string        `json:"repo"`
@@ -279,6 +333,9 @@ type webJob struct {
 	// straight from `feedback` rows in kraken.db (see jobFeedback) — works
 	// for live, done, and archived jobs alike (Q2).
 	Feedback []webFeedback `json:"feedback,omitempty"`
+	// Threads mirrors this job's side threads — every fork of zeus' session,
+	// live or closed (see jobThreads). The clients render one chip each.
+	Threads []webThread `json:"threads,omitempty"`
 }
 
 type webBoard struct {
@@ -665,6 +722,10 @@ func buildWebBoard() webBoard {
 			// which ride a separate loop below.
 			DocQuestions: jobQuestions(activeStore, j),
 			Feedback:     jobFeedback(activeStore, j.ID),
+			// Threads: same store-only path, and deliberately outside the
+			// live[] branch below — a closed thread outlives its cell and
+			// stays readable, so its chip must survive teardown too.
+			Threads: jobThreads(activeStore, j),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true

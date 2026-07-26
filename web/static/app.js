@@ -371,6 +371,40 @@ function prChipHTML(pr) {
   return `<a class="pr-chip ${cls}" href="${esc(pr.url)}" target="_blank" rel="noreferrer">${esc(label)}</a>`;
 }
 
+// ---- side threads: one chip per fork of zeus' session (see openThread) ----
+//
+// threadChipsHTML renders the chips alone so the same markup can fill both
+// the card's own .threads row (threadsHTML wraps it) and the steer modal's
+// static #steer-threads container — exactly the split prChipHTML/.prs
+// already uses. Live threads take the cyan --polling tone (a second
+// conversation is actually running); closed ones dim and stay as history.
+// The dashed ⑂ branch affordance renders on any live cell, whatever state
+// it's in. Renders nothing at all for a job with no threads on a dead cell
+// (and for an older server payload with no threads array), so those cards
+// look exactly as they did before this row existed.
+function threadChipsHTML(j) {
+  const list = j.threads || [];
+  const chips = list
+    .map((t) => {
+      const closed = t.state !== "live";
+      const label = `⑂ ${t.tid}${t.title ? " · " + t.title : ""}`;
+      const title = closed
+        ? `${t.tid} — closed thread; open it to revive`
+        : `${t.tid} — live thread`;
+      return `<button class="thread-chip${closed ? " closed" : ""}" data-slug="${esc(j.slug)}" data-tid="${esc(t.tid)}" title="${esc(title)}"><span class="dot"></span>${esc(label)}</button>`;
+    })
+    .join("");
+  const branch = j.live
+    ? `<button class="branch-btn" data-slug="${esc(j.slug)}" title="branch a side thread off zeus' session — zeus is not interrupted">⑂ branch</button>`
+    : "";
+  return chips + branch;
+}
+
+function threadsHTML(j) {
+  const inner = threadChipsHTML(j);
+  return inner ? `<div class="threads">${inner}</div>` : "";
+}
+
 // chipsHTML renders a job's artifact chips, collapsing to the first 3 (plus
 // a "+N more" toggle) unless slug is in expandedArtifacts — slug keys the
 // expanded state, label prefixes each chip's data-name (differs from slug
@@ -474,6 +508,7 @@ function cardHTML(j, col) {
     </div>
     ${wakeupChipHTML(j)}
     ${prs ? `<div class="prs">${prs}</div>` : ""}
+    ${threadsHTML(j)}
     <div class="meta">
       <span>${esc(j.repo)}</span>
       ${j.live ? `<span>${esc(j.cell)}</span>` : ""}
@@ -530,6 +565,16 @@ function checkStaleModals() {
     // freshest jobsBySlug just landed — e.g. a just-created job finally
     // showing up, or an err clearing — re-derive arming from it
     if (!editorOverlay.hidden) updateEditorQueue();
+  }
+  // the thread overlay is scoped to a job but NOT to its state (a thread
+  // outlives working→blocked→done, and a closed one outlives the cell), so
+  // unlike the two above it only force-closes when the job itself leaves the
+  // board entirely — archived, deleted, renamed out from under it. While it
+  // stays, the freshest board payload is what the head reads its title/live
+  // state from.
+  if (threadOverlay && !threadOverlay.hidden && threadSlug) {
+    if (!jobsBySlug[threadSlug]) closeThread();
+    else syncThreadFromBoard();
   }
 }
 
@@ -1311,6 +1356,22 @@ function sendDocQuestionAnswer(row, slug, id, text) {
 }
 
 document.addEventListener("click", (ev) => {
+  // side threads come FIRST: both affordances sit inside the card's own
+  // clickable area (and inside the steer modal's context block), so they
+  // must return before the generic .chip branch below — which would open an
+  // artifact — and before the card-open fallback at the bottom, which would
+  // drop the steer/editor modal on top of the thread overlay. Same hazard
+  // the .chip-more comment below documents, one layer earlier.
+  const threadChip = ev.target.closest(".thread-chip");
+  if (threadChip) {
+    openThread(threadChip.dataset.slug, threadChip.dataset.tid);
+    return;
+  }
+  const branchBtn = ev.target.closest(".branch-btn");
+  if (branchBtn) {
+    openThread(branchBtn.dataset.slug, null);
+    return;
+  }
   // must come before the .chip branch below — chip-more also matches .chip
   // (it needs the same size/padding) but must never open an artifact
   const chipMore = ev.target.closest(".chip-more");
@@ -1505,7 +1566,11 @@ document.addEventListener("click", (ev) => {
   }
   const tmuxOpen = ev.target.closest(".open-tmux");
   if (tmuxOpen) {
-    post("/api/peers/open", { slug: tmuxOpen.dataset.slug }).then((data) => {
+    // a pane on the button wins over a slug: the thread head's button targets
+    // the THREAD's own tmux window, while the card's button carries only a
+    // slug — which the server resolves to zeus' pane, a different window
+    const pane = tmuxOpen.dataset.pane;
+    post("/api/peers/open", pane ? { pane } : { slug: tmuxOpen.dataset.slug }).then((data) => {
       if (data && data.focus_error) showToast(`couldn't focus the window: ${data.focus_error}`);
     });
     return;
@@ -1902,6 +1967,7 @@ function fillSteerContext(j, mode) {
   const container = document.getElementById("steer-context");
   const crewEl = document.getElementById("steer-crew");
   const prsEl = document.getElementById("steer-prs");
+  const threadsEl = document.getElementById("steer-threads");
   const detailEl = document.getElementById("steer-detail");
   const lastSentEl = document.getElementById("steer-lastsent");
   const chipsEl = document.getElementById("steer-chips");
@@ -1911,6 +1977,11 @@ function fillSteerContext(j, mode) {
   // PRs are job history, not cell state — shown in every mode, including
   // reactivate ("what already shipped" is exactly the reactivation context)
   const prs = j && j.prs && j.prs.length ? j.prs : null;
+  // side threads are job history too (a closed thread outlives its cell), so
+  // like PRs they render in every mode — threadChipsHTML itself drops the
+  // ⑂ branch button once the cell isn't live, which is the only part of the
+  // row a reactivate-mode open couldn't act on
+  const threads = j ? threadChipsHTML(j) : "";
   const detail = j && j.detail;
   const lastSent = j && j.last_sent;
   const artifacts = mode !== "reactivate" && j && j.artifacts && j.artifacts.length ? j.artifacts : null;
@@ -1930,6 +2001,9 @@ function fillSteerContext(j, mode) {
   prsEl.hidden = !prs;
   prsEl.innerHTML = prs ? prs.map(prChipHTML).join("") : "";
 
+  threadsEl.hidden = !threads;
+  threadsEl.innerHTML = threads;
+
   detailEl.hidden = !detail;
   // renderMD escapes before transforming, so agent-authored text is inert
   detailEl.innerHTML = detail ? renderMD(detail) : "";
@@ -1946,7 +2020,7 @@ function fillSteerContext(j, mode) {
   seedDocqDrafts(docqEl);
   restoreDocInputs(dqState);
 
-  container.hidden = !crew && !prs && !detail && !lastSent && !artifacts && !docq;
+  container.hidden = !crew && !prs && !threads && !detail && !lastSent && !artifacts && !docq;
 }
 
 // liveDisplayColumn mirrors render()'s column bucketing for a single job:
@@ -2185,6 +2259,558 @@ document.getElementById("steer-spec-toggle").addEventListener("click", () => {
   const opening = body.hidden;
   body.hidden = !opening;
   document.querySelector("#steer-spec-toggle .tri").textContent = opening ? "▾" : "▸";
+});
+
+// ---- side threads (a fifth overlay, beside artifact/steer/usage/editor) ----
+//
+// A thread is a fork of zeus' session running as a second claude in its own
+// tmux window of the same cell: somewhere to ask without disturbing zeus.
+// One overlay serves two modes — "new" (branch: required name + optional
+// seed question) and "thread" (read/steer/kill/revive one that exists) —
+// because they share a head, a body column and a close path; openThread's
+// tid argument picks between them.
+//
+// Every op goes through post("/api/threads"), so a server refusal ("no live
+// cell to branch", "3 live threads already", "t2 can't be revived: …") lands
+// in the status bar in the server's own words — this file never invents
+// error copy for a failed op, it only points at the status bar.
+
+const threadOverlay = document.getElementById("thread-overlay");
+let threadSlug = null;
+let threadTid = null; // null = "new" mode (branching), else the thread's id
+// last known truth about the open thread, merged from two sources: the board
+// payload (checkStaleModals → syncThreadFromBoard, every 3s) and the read
+// endpoint's own live/pane fields (fresher — it just looked at tmux).
+let threadTitle = "";
+let threadLive = false;
+let threadPane = "";
+let threadPoll = null;
+// bumped by every open/close/mode switch — an in-flight read/capture that
+// resolves after the overlay moved on must not paint into it
+let threadGen = 0;
+// true while the head's title is swapped for its rename input: the 3s board
+// sync must not overwrite what's being typed
+let threadRenaming = false;
+// last conversation HTML painted — re-rendering identical markup every 3s
+// would reset the scroll position mid-read for no reason
+let threadConvoHTML = "";
+// set when a read fails, cleared when one succeeds — so a recovered read
+// clears its OWN note without also wiping a "send failed"/"message is empty"
+// message the user just triggered (the 3s poll would otherwise eat it)
+let threadReadFailed = false;
+// blocks the last read said are kept on the job — quoted by the closed note,
+// which paintThreadHead now owns (it can be repainted without a fresh read)
+let threadKept = 0;
+// the live-pane mirror is opt-in and sticky, the same gating iOS does with
+// its Terminal tab: a capture nobody opened is a second tmux round-trip every
+// 3s for a pane nobody is looking at. One click, remembered from then on.
+let threadMirror = localStorage.getItem("kraken-thread-mirror") === "1";
+
+function threadRecord(slug, tid) {
+  const j = jobsBySlug[slug];
+  if (!j || !tid) return null;
+  return (j.threads || []).find((t) => t.tid === tid) || null;
+}
+
+// created_at/closed_at aren't pinned to a unit by the wire contract and
+// age() takes seconds — normalize a millisecond stamp rather than rendering
+// a 56-year-old thread. Same defensive read as every other foreign field.
+function threadSeconds(ts) {
+  const n = Number(ts) || 0;
+  return n > 1e12 ? Math.floor(n / 1000) : n;
+}
+
+function threadNote(msg) {
+  document.getElementById("thread-note").textContent = msg || "";
+}
+
+// paintThreadHead renders the WHOLE live/closed presentation from the module
+// state above — head buttons, pill, composer, closed note and the mirror —
+// so the read endpoint and the board poll can both just update state and
+// repaint. One owner is load-bearing: the two callers run on out-of-phase
+// timers, and a head that says "closed · ⟲ revive" over a still-visible
+// composer earns the user a 409 for a message they were invited to type.
+function paintThreadHead() {
+  const tidEl = document.getElementById("thread-tid");
+  const nameEl = document.getElementById("thread-name-label");
+  const pill = document.getElementById("thread-pill");
+  const tmuxBtn = document.getElementById("thread-tmux");
+  const reviveBtn = document.getElementById("thread-revive");
+  const killBtn = document.getElementById("thread-kill");
+  if (!threadTid) {
+    tidEl.textContent = "⑂ branch — " + (threadSlug || "");
+    nameEl.hidden = true;
+    nameEl.textContent = "";
+    document.getElementById("thread-name-input").hidden = true;
+    pill.hidden = true;
+    tmuxBtn.hidden = true;
+    reviveBtn.hidden = true;
+    killBtn.hidden = true;
+    return;
+  }
+  tidEl.textContent = "⑂ " + threadTid;
+  // hidden only while the rename input has taken its place
+  if (!threadRenaming) {
+    nameEl.hidden = false;
+    nameEl.textContent = threadTitle;
+  }
+  pill.hidden = false;
+  pill.className = "thread-pill " + (threadLive ? "live" : "closed");
+  pill.textContent = threadLive ? "live" : "closed";
+  // tmux raises THIS THREAD's window in Ghostty, by pane — pointless once the
+  // window is gone, and impossible from a phone either way. Hidden without a
+  // pane too: a slug-only post would raise zeus' window instead, which is the
+  // one window a side thread exists in order not to disturb.
+  tmuxBtn.hidden = !threadLive || !threadPane;
+  tmuxBtn.dataset.pane = threadPane || "";
+  reviveBtn.hidden = threadLive;
+  killBtn.hidden = !threadLive;
+
+  // body: composer for a live thread, the closed note for a dead one
+  document.getElementById("thread-composer").hidden = !threadLive;
+  const closedNote = document.getElementById("thread-closed-note");
+  closedNote.hidden = threadLive;
+  if (!threadLive) {
+    const rec = threadRecord(threadSlug, threadTid);
+    const killedAt = rec && rec.closed_at ? threadSeconds(rec.closed_at) : 0;
+    closedNote.textContent =
+      "tmux window closed" +
+      // 0 means "no read has landed yet", not "nothing was kept" — say
+      // nothing rather than undercount the conversation sitting right above
+      (threadKept ? ` · ${threadKept} blocks kept on the job` : "") +
+      (killedAt ? ` · killed ${age(killedAt)} ago` : "") +
+      " · revive to continue";
+  }
+  paintThreadMirror();
+}
+
+// syncThreadFromBoard pulls the open thread's row out of the freshest board
+// payload. It fills what the board alone knows — the title — and refreshes
+// live/pane from the board's own view of the cell; the read endpoint writes
+// the same two fields on its own tick, so whichever landed last wins. That's
+// safe only because paintThreadHead repaints head AND body together: the two
+// out-of-phase timers can disagree about the age of the truth, never about
+// what's on screen.
+function syncThreadFromBoard() {
+  const rec = threadRecord(threadSlug, threadTid);
+  if (!rec) return;
+  if (!threadRenaming) threadTitle = rec.title || "";
+  threadLive = rec.state === "live";
+  if (rec.pane) threadPane = rec.pane;
+  paintThreadHead();
+}
+
+function stopThreadPoll() {
+  clearInterval(threadPoll);
+  threadPoll = null;
+}
+
+function startThreadPoll() {
+  stopThreadPoll();
+  // the board's own cadence; pollThread no-ops while the tab is hidden
+  threadPoll = setInterval(pollThread, 3000);
+}
+
+function pollThread() {
+  if (document.hidden || threadOverlay.hidden || !threadSlug || !threadTid) return;
+  loadThread();
+}
+
+function closeThread() {
+  stopThreadPoll();
+  cancelThreadRename();
+  threadOverlay.hidden = true;
+  threadGen++; // orphan any in-flight read/capture
+  threadSlug = null;
+  threadTid = null;
+  threadTitle = "";
+  threadLive = false;
+  threadPane = "";
+  threadConvoHTML = "";
+  threadKept = 0;
+}
+
+// openThread(slug, tid) — tid null/undefined opens the branch dialog.
+function openThread(slug, tid) {
+  threadGen++;
+  cancelThreadRename();
+  threadSlug = slug;
+  threadTid = tid || null;
+  threadConvoHTML = "";
+  threadKept = 0; // the previous thread's count must not leak into this one
+  threadReadFailed = false;
+  threadNote("");
+  threadOverlay.hidden = false;
+
+  const newBox = document.getElementById("thread-new");
+  const viewBox = document.getElementById("thread-view");
+  if (!threadTid) {
+    stopThreadPoll(); // nothing to read yet — and never leave a prior thread's tick running
+    threadTitle = "";
+    threadLive = false;
+    threadPane = "";
+    newBox.hidden = false;
+    viewBox.hidden = true;
+    document.getElementById("thread-new-name").value = "";
+    document.getElementById("thread-seed").value = "";
+    document.getElementById("thread-branch").disabled = false;
+    paintThreadHead();
+    document.getElementById("thread-new-name").focus();
+    return;
+  }
+  newBox.hidden = true;
+  viewBox.hidden = false;
+  document.getElementById("thread-text").value = "";
+  document.getElementById("thread-convo").innerHTML = '<div class="thread-empty">loading…</div>';
+  // seed the head from the board payload so it's filled in before the first
+  // read lands, then let the read correct live/pane. paintThreadHead resets
+  // the body with it — composer, closed note and mirror all follow this
+  // thread's state, never the state of the one that was open a click ago.
+  const rec = threadRecord(slug, threadTid);
+  threadTitle = rec ? rec.title || "" : "";
+  threadLive = rec ? rec.state === "live" : false;
+  threadPane = rec && rec.pane ? rec.pane : "";
+  paintThreadHead();
+  loadThread();
+  startThreadPoll();
+}
+
+// switchToThread flips a just-branched "new" overlay onto the thread it
+// created, without closing and reopening (which would lose the overlay).
+// The slug is a parameter, not a re-read of the global: by the time a branch
+// resolves the overlay may have been dismissed, and openThread(null, tid)
+// would resurrect it around a thread it can never read.
+function switchToThread(slug, tid, title) {
+  openThread(slug, tid);
+  if (title && !threadTitle) {
+    threadTitle = title; // the board hasn't caught the new row yet
+    paintThreadHead();
+  }
+}
+
+const THREAD_BLOCK_KINDS = {
+  user: { cls: "user", icon: "❯", who: "carl" },
+  text: { cls: "asst", icon: "↯", who: "" },
+  thinking: { cls: "think", icon: "✳", who: "thinking" },
+  tool: { cls: "tool", icon: "→", who: "" },
+  teammate: { cls: "asst", icon: "✉", who: "teammate" },
+};
+
+function threadBlockHTML(b, inherited) {
+  // hasOwnProperty, not a truthiness check: a kind of "constructor" or
+  // "toString" would otherwise resolve to an Object.prototype member
+  const known = Object.prototype.hasOwnProperty.call(THREAD_BLOCK_KINDS, b.kind);
+  const kind = known ? b.kind : "text";
+  const spec = THREAD_BLOCK_KINDS[kind];
+  const cls = `blk ${spec.cls}${inherited ? " inherited" : ""}`;
+  const text = b.text || "";
+  if (kind === "tool") {
+    // tool lines are already terse and mono — no speaker row, no markdown
+    return `<div class="${cls}">${spec.icon} ${esc(text)}</div>`;
+  }
+  const who = b.from || spec.who || (kind === "text" ? "thread " + (threadTid || "") : kind);
+  // renderMD escapes before transforming, so agent-authored text is inert
+  return `<div class="${cls}"><div class="who">${spec.icon} ${esc(who)}</div><div class="blk-body">${renderMD(text)}</div></div>`;
+}
+
+// threadSplitIndex locates the first block the thread itself produced —
+// everything before it is history inherited from zeus and renders dimmed
+// above the "⑂ branched here" divider.
+//
+// The server tags each block with an `inherited` boolean (internal/api
+// threads.go, ios/API.md) and that is the only shape there is, so the split
+// is simply one past the last inherited block: 0 when the thread has said
+// everything itself, blocks.length when it has said nothing yet.
+function threadSplitIndex(data) {
+  const blocks = data.blocks || [];
+  let last = -1;
+  blocks.forEach((b, i) => { if (b.inherited) last = i; });
+  return last + 1;
+}
+
+function threadConvoRender(data) {
+  const blocks = data.blocks || [];
+  if (!blocks.length) {
+    return '<div class="thread-empty">no messages yet</div>';
+  }
+  const split = threadSplitIndex(data);
+  const forkLabel = data.fork_uuid ? " · " + data.fork_uuid : "";
+  const out = [];
+  blocks.forEach((b, i) => {
+    if (i === split) out.push(`<div class="thread-divider">⑂ branched here${esc(forkLabel)}</div>`);
+    out.push(threadBlockHTML(b, i < split));
+  });
+  // a thread whose every block is inherited (branched, nothing asked yet)
+  // still gets its divider — at the very end, which is exactly where it is
+  if (split >= blocks.length) {
+    out.push(`<div class="thread-divider">⑂ branched here${esc(forkLabel)}</div>`);
+  }
+  return out.join("");
+}
+
+async function loadThread() {
+  const gen = threadGen;
+  const slug = threadSlug;
+  const tid = threadTid;
+  if (!slug || !tid) return;
+  let data;
+  try {
+    // no n: the server's own default is the right size, and this runs every
+    // 3s for as long as the overlay is open. LastBlocks counts NON-tool
+    // blocks, so a big number means re-reading and re-parsing multi-megabyte
+    // transcript tails on every tick to redraw a column nobody scrolled.
+    const r = await fetch(
+      `/api/thread/read?slug=${encodeURIComponent(slug)}&tid=${encodeURIComponent(tid)}`,
+    );
+    data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.status);
+  } catch (e) {
+    if (gen !== threadGen) return;
+    threadReadFailed = true;
+    threadNote("couldn't read this thread: " + e.message);
+    return;
+  }
+  // the overlay moved on (closed, or opened another thread) mid-fetch
+  if (gen !== threadGen) return;
+  if (threadReadFailed) {
+    threadReadFailed = false;
+    threadNote("");
+  }
+  threadLive = !!data.live;
+  if (data.pane) threadPane = data.pane;
+  threadKept = typeof data.counted === "number" ? data.counted : (data.blocks || []).length;
+  paintThreadHead(); // head AND body — composer/closed note/mirror included
+
+  const convo = document.getElementById("thread-convo");
+  const html = threadConvoRender(data);
+  if (html !== threadConvoHTML) {
+    // keep a mid-read scroll position; stay pinned to the bottom if that's
+    // where the reader already was (the live-tail case)
+    const atBottom = convo.scrollHeight - convo.scrollTop - convo.clientHeight < 24;
+    const prevTop = convo.scrollTop;
+    threadConvoHTML = html;
+    convo.innerHTML = html;
+    convo.scrollTop = atBottom ? convo.scrollHeight : prevTop;
+  }
+
+  refreshThreadPane();
+}
+
+// paintThreadMirror places the live-pane mirror from state alone — no
+// request. The header row is the toggle, so it shows whenever there IS a
+// pane to mirror; the <pre> below it only when the reader has opened it.
+function paintThreadMirror() {
+  const paneEl = document.getElementById("thread-pane");
+  const headEl = document.getElementById("thread-panehead");
+  const has = threadLive && !!threadPane;
+  headEl.hidden = !has;
+  paneEl.hidden = !has || !threadMirror;
+  if (!has) {
+    paneEl.textContent = "";
+    return;
+  }
+  const j = jobsBySlug[threadSlug];
+  document.getElementById("thread-panelabel").textContent =
+    (threadMirror ? "▾ live pane · " : "▸ live pane · ") +
+    (j && j.cell ? j.cell + " · " : "") + threadPane;
+}
+
+// refreshThreadPane mirrors the thread's tmux pane verbatim — the same
+// capture-pane readout k v shows, and the only way to watch a live thread
+// from a phone, where ⧉ tmux (Ghostty, on the Mac) can do nothing. It's a
+// second tmux round-trip on every 3s tick, so it only runs while the mirror
+// is actually open — the same gating iOS does with its Terminal tab.
+async function refreshThreadPane() {
+  const gen = threadGen;
+  const paneEl = document.getElementById("thread-pane");
+  const headEl = document.getElementById("thread-panehead");
+  paintThreadMirror();
+  if (!threadLive || !threadPane || !threadMirror) return;
+  const pane = threadPane;
+  try {
+    const r = await fetch("/api/peers/capture?pane=" + encodeURIComponent(pane));
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.status);
+    if (gen !== threadGen || threadPane !== pane || !threadLive || !threadMirror) return;
+    paneEl.textContent = data.content || "";
+  } catch {
+    // a pane that just died is the common case here, and the next poll
+    // re-reads live/pane from the read endpoint — stay quiet, hide the mirror
+    if (gen !== threadGen || threadPane !== pane) return;
+    paneEl.hidden = true;
+    headEl.hidden = true;
+  }
+}
+
+// the header row doubles as the mirror's open/close control — clicking it
+// starts (or stops) the capture requests, and the choice sticks
+function toggleThreadMirror() {
+  threadMirror = !threadMirror;
+  localStorage.setItem("kraken-thread-mirror", threadMirror ? "1" : "0");
+  refreshThreadPane();
+}
+
+// ---- thread ops ----
+
+async function branchThread() {
+  const gen = threadGen;
+  const slug = threadSlug;
+  const nameEl = document.getElementById("thread-new-name");
+  const title = nameEl.value.trim();
+  if (!slug) return;
+  if (!title) {
+    threadNote("name this thread — one line on what it's for");
+    nameEl.focus();
+    return;
+  }
+  const btn = document.getElementById("thread-branch");
+  btn.disabled = true;
+  const res = await post("/api/threads", {
+    slug,
+    op: "branch",
+    title,
+    text: document.getElementById("thread-seed").value.trim(),
+  });
+  btn.disabled = false;
+  // branching spawns a claude in a new tmux window — seconds, during which
+  // Escape/backdrop/checkStaleModals can all close the overlay. A cancelled
+  // branch stays cancelled: the thread exists either way and its chip is on
+  // the card, so there's nothing to reopen an overlay for.
+  if (gen !== threadGen) return;
+  // post() already put the server's own sentence in the status bar
+  if (!res) {
+    threadNote("branch failed — see status bar");
+    return;
+  }
+  if (res.tid) switchToThread(slug, res.tid, title);
+  else closeThread(); // branched, but no id came back — the card carries it
+}
+
+async function threadOp(op, extra) {
+  const slug = threadSlug;
+  const tid = threadTid;
+  if (!slug || !tid) return null;
+  const res = await post("/api/threads", { slug, op, tid, ...(extra || {}) });
+  // an op can outlive the overlay it was fired from
+  if (threadSlug !== slug || threadTid !== tid) return res;
+  if (!res) threadNote(op + " failed — see status bar");
+  else {
+    threadNote("");
+    loadThread();
+  }
+  return res;
+}
+
+document.getElementById("thread-branch").addEventListener("click", branchThread);
+document.getElementById("thread-cancel").addEventListener("click", closeThread);
+document.getElementById("thread-kill").addEventListener("click", async () => {
+  // no confirm: killing a thread only closes its tmux window — the row and
+  // the conversation stay on the job and ⟲ revive brings it back
+  const btn = document.getElementById("thread-kill");
+  btn.disabled = true;
+  await threadOp("kill");
+  btn.disabled = false;
+});
+document.getElementById("thread-revive").addEventListener("click", async () => {
+  const btn = document.getElementById("thread-revive");
+  btn.disabled = true;
+  await threadOp("revive");
+  btn.disabled = false;
+});
+document.getElementById("thread-send").addEventListener("click", async () => {
+  const text = document.getElementById("thread-text").value.trim();
+  if (!text) {
+    threadNote("message is empty");
+    return;
+  }
+  const btn = document.getElementById("thread-send");
+  btn.disabled = true;
+  const res = await threadOp("send", { text });
+  btn.disabled = false;
+  if (res) document.getElementById("thread-text").value = "";
+});
+document.getElementById("thread-text").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+    ev.preventDefault();
+    document.getElementById("thread-send").click();
+  }
+});
+for (const id of ["thread-new-name", "thread-seed"]) {
+  document.getElementById(id).addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+      ev.preventDefault();
+      document.getElementById("thread-branch").click();
+    }
+  });
+}
+
+// ---- rename: the head's title IS the input, swapped in place ----
+
+function cancelThreadRename() {
+  threadRenaming = false;
+  const input = document.getElementById("thread-name-input");
+  if (input) input.hidden = true;
+  const label = document.getElementById("thread-name-label");
+  if (label && threadTid) {
+    label.hidden = false;
+    label.textContent = threadTitle;
+  }
+}
+
+document.getElementById("thread-name-label").addEventListener("click", () => {
+  if (!threadTid) return;
+  threadRenaming = true;
+  const label = document.getElementById("thread-name-label");
+  const input = document.getElementById("thread-name-input");
+  label.hidden = true;
+  input.hidden = false;
+  input.value = threadTitle;
+  input.focus();
+  input.select();
+});
+// role="button" promises keyboard operability — honor Enter/Space. Renaming
+// is the ONLY thing this label does, so without it the rename is mouse-only.
+document.getElementById("thread-name-label").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" || ev.key === " ") {
+    ev.preventDefault();
+    document.getElementById("thread-name-label").click();
+  }
+});
+document.getElementById("thread-name-input").addEventListener("keydown", async (ev) => {
+  // Escape here means "stop renaming", not "close the overlay" — the
+  // document-level Escape chain must not also fire
+  if (ev.key === "Escape") {
+    ev.stopPropagation();
+    cancelThreadRename();
+    return;
+  }
+  if (ev.key !== "Enter" || ev.isComposing || ev.keyCode === 229) return;
+  ev.preventDefault();
+  const input = document.getElementById("thread-name-input");
+  const title = input.value.trim();
+  if (!title || title === threadTitle) {
+    cancelThreadRename();
+    return;
+  }
+  input.disabled = true;
+  const res = await threadOp("rename", { title });
+  input.disabled = false;
+  if (res) threadTitle = title;
+  cancelThreadRename();
+  paintThreadHead();
+});
+document.getElementById("thread-name-input").addEventListener("blur", () => cancelThreadRename());
+
+threadOverlay.addEventListener("click", (ev) => {
+  if (ev.target === threadOverlay) closeThread();
+});
+document.getElementById("thread-panehead").addEventListener("click", toggleThreadMirror);
+// role="button" promises keyboard operability — honor Enter/Space
+document.getElementById("thread-panehead").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" || ev.key === " ") {
+    ev.preventDefault();
+    toggleThreadMirror();
+  }
 });
 
 // ---- job editor (draft + spec in the browser) ----
@@ -2762,11 +3388,14 @@ document.getElementById("feedback-send").addEventListener("click", async () => {
 });
 overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });
 // one Escape closes one layer: the artifact viewer if it's on top (it can be
-// opened from inside the steer/unblock modal), else whichever of editor/steer
-// is open underneath.
+// opened from inside the steer/unblock modal), else the thread overlay (which
+// can itself be opened from inside the steer modal's context block), else
+// whichever of editor/steer is open underneath. Matches the z-index order in
+// style.css — #overlay 30, #thread-overlay 25, the rest 20.
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if (!overlay.hidden) { overlay.hidden = true; return; }
+  if (!threadOverlay.hidden) { closeThread(); return; }
   if (!steerOverlay.hidden) { flushSteerDraft(); clearSteerChips(); clearSteerDocq(); steerOverlay.hidden = true; return; }
   if (!editorOverlay.hidden) { flushEditorAutosave(); clearEditorDocq(); editorOverlay.hidden = true; return; }
   if (!usageOverlay.hidden) { usageOverlay.hidden = true; return; }
@@ -3313,7 +3942,8 @@ async function refresh() {
   }
 }
 // returning to the tab refreshes immediately instead of waiting out the rest
-// of the current 3s tick
+// of the current 3s tick — the board, and any thread overlay open over it
+// (its own tick is paused while hidden too; see pollThread)
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   // The update poll's gap clock is wall-clock, but the ticks that read it are
@@ -3325,6 +3955,7 @@ document.addEventListener("visibilitychange", () => {
   updGapSince = 0;
   updFailStreak = 0;
   refresh();
+  pollThread();
 });
 applyView();
 refresh();

@@ -254,11 +254,17 @@ func spawnPromptPath(j *Job) string {
 	return filepath.Join(cellDir(j), "zeus-prompt.md")
 }
 
-// spawnCommand renders the shell command a cell's tmux session runs. Fixed
-// arguments (the launcher, flags, --name, -r) go through ShellCmdString; the
-// two whose length is driven by content — brief and prompt, either of which
-// may be empty — are written to files under the cell dir and referenced with
-// command substitution instead.
+// spawnInput is one content-driven argument of a spawn command: the flag it
+// rides on, its body, and the file the body is staged into. An empty body
+// means "omit this argument entirely" — see stagedCommand.
+type spawnInput struct{ flag, body, path string }
+
+// stagedCommand renders the shell command a kraken-spawned claude pane runs.
+// Fixed arguments (the launcher, flags, --name, --session-id, -r) go through
+// ShellCmdString; the inputs whose length is driven by content rather than by
+// kraken — a system prompt, an initial prompt — are written to their files and
+// referenced with command substitution instead. Inputs are appended in the
+// order given, so the caller keeps `--` last.
 //
 // Passing them inline is what broke: tmux caps a command at ~16KB and rejects
 // anything longer with a bare `command too long`, so once the brief grew past
@@ -266,15 +272,16 @@ func spawnPromptPath(j *Job) string {
 // already-created worktree behind — which then masked the real error with a
 // stale "worktree already exists" on every subsequent daemon tick. Staged
 // files keep the command a few hundred bytes regardless of how long a brief or
-// a job spec gets, and leaving them on disk afterwards makes what zeus was
+// a job spec gets, and leaving them on disk afterwards makes what the agent was
 // actually launched with readable after the fact.
-func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
+//
+// Both spawn families share this one implementation: zeus (spawnCommand, just
+// below) and a side thread (threadSpawnCommand, thread.go). They differ only in
+// which files they stage into — the ~16KB ceiling and the empty-input rule are
+// identical for both, and a fix to either belongs in one place.
+func stagedCommand(argv []string, inputs ...spawnInput) (string, error) {
 	cmd := core.ShellCmdString(argv)
-	// `--` must stay last, so the prompt is appended after the brief flag
-	for _, in := range []struct{ flag, body, path string }{
-		{"--append-system-prompt", brief, zeusBriefPath(j)},
-		{"--", prompt, spawnPromptPath(j)},
-	} {
+	for _, in := range inputs {
 		if in.body == "" {
 			continue
 		}
@@ -284,6 +291,15 @@ func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
 		cmd += " " + in.flag + " " + core.ShellReadFileArg(in.path)
 	}
 	return cmd, nil
+}
+
+// spawnCommand is stagedCommand for zeus: its brief and its initial prompt,
+// staged into the cell dir's two well-known paths. `--` must stay last, so the
+// prompt is appended after the brief flag.
+func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
+	return stagedCommand(argv,
+		spawnInput{"--append-system-prompt", brief, zeusBriefPath(j)},
+		spawnInput{"--", prompt, spawnPromptPath(j)})
 }
 
 // jobPrompt is the spec portion of the job body — everything up to the
@@ -684,6 +700,15 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	// now is the last chance to mirror it into the store before it's gone —
 	// no-op when no store is wired.
 	syncArtifactsNow(j, "teardown")
+	// the cell's side threads died with the session above (their windows were
+	// part of it), so their rows must stop claiming live panes — tmux recycles
+	// those ids. Rows survive, pointing at their transcripts; nothing is
+	// snapshotted. Never fatal: the cell is already gone, and a stale row is a
+	// far smaller problem than a teardown that reports failure after
+	// succeeding.
+	if err := CloseThreadsForTeardown(j); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: closing %s's thread rows failed: %v\n", j.Slug, err)
+	}
 	// the cell dir (doc source, artifacts) goes too: artifacts were
 	// preserved into pluto before teardown, and the mid-run log in the job
 	// file is the durable trail
@@ -733,12 +758,33 @@ func acceptTrustPrompts(sess string) {
 // once became "zeus process is gone".
 func CellZeus(j *Job, all []*core.Peer) *core.Peer {
 	sess := CellSession(j)
+	threadPrefix := ThreadNamePrefix(j)
+	// side threads (thread.go) are claudes at depth 0 in this very session, so
+	// the positional fallback below would happily elect one as zeus during the
+	// window where zeus' own session file isn't written yet — stampSession
+	// would then write a THREAD's session id into the job file as zeus'
+	// (refused only because it's guessed), CellHealth would report a healthy
+	// cell while zeus is dead, and /api/steer would type carl's message into
+	// the thread's pane.
+	//
+	// Both keys are needed, and the pane one carries the dangerous case: the
+	// name is EXACTLY what a still-starting thread hasn't got yet, which is the
+	// same race the fallback itself exists for. The recorded panes come from
+	// the store (empty set on no store, or between a branch's reservation and
+	// its window opening), so the name filter stays as the belt to that brace.
+	threadPanes := liveThreadPanesFor(j)
 	var inSess []*core.Peer
 	for _, p := range all {
-		if p.Name == ZeusName(j) && p.Depth == 0 && p.TmuxSession == sess {
+		if p.TmuxSession != sess {
+			continue
+		}
+		if strings.HasPrefix(p.Name, threadPrefix) || threadPanes[p.Pane] {
+			continue
+		}
+		if p.Name == ZeusName(j) && p.Depth == 0 {
 			return p
 		}
-		if p.TmuxSession == sess && p.Agent == "claude" && p.Depth == 0 {
+		if p.Agent == "claude" && p.Depth == 0 {
 			inSess = append(inSess, p)
 		}
 	}

@@ -17,9 +17,15 @@ import (
 // Best-effort across panes: one refused send doesn't stop the rest, and the
 // caller only hears about it if every send failed. Writes no job state — the
 // daemon's own roll-call derives blocked from the idled cell on its next tick.
+//
+// Side threads are excluded (carl's ruling: Stop is zeus only). A thread's
+// window lives in the same tmux session and would otherwise be swept up by the
+// enumeration below — but Stop means "stop the job", and interrupting the
+// thread carl is mid-conversation with is never what he asked for.
 func InterruptCell(j *Job, all []*core.Peer) error {
 	sess := CellSession(j)
 	zeus := CellZeus(j, all)
+	threads := liveThreadPanesFor(j)
 
 	targets := map[string]*core.Peer{} // pane -> foreground peer to send the key through
 	for _, p := range all {
@@ -29,14 +35,17 @@ func InterruptCell(j *Job, all []*core.Peer) error {
 		if p.Agent != "claude" && p.Agent != "codex" {
 			continue
 		}
+		if threads[p.Pane] {
+			continue
+		}
 		targets[p.Pane] = p
 	}
 	if zeus != nil {
-		if zeus.Pane != "" {
+		if zeus.Pane != "" && !threads[zeus.Pane] {
 			targets[zeus.Pane] = zeus
 		}
 		for _, m := range zeus.Teammates {
-			if m.Pane == "" {
+			if m.Pane == "" || threads[m.Pane] {
 				continue // in-process teammate: no pane to interrupt
 			}
 			targets[m.Pane] = m

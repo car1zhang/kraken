@@ -31,8 +31,9 @@ type Store struct {
 }
 
 // execer is the subset of *sql.DB / *sql.Tx this package's per-table
-// helpers (updateJobFieldsTx, replacePrereqsTx, upsertPRTx, removePRTx —
-// jobs.go/prereqs.go/prs.go) run against. Writing them against this
+// helpers (updateJobFieldsTx, replacePrereqsTx, upsertPRTx, removePRTx,
+// insertThreadTx, nextThreadIDTx —
+// jobs.go/prereqs.go/prs.go/threads.go) run against. Writing them against this
 // interface instead of *Store directly lets each one run either
 // standalone (its own implicit transaction, via s.db) or composed inside a
 // caller-owned transaction (SaveJobEdit, L10) — the exact same SQL either

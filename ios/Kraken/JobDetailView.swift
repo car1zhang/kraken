@@ -607,6 +607,12 @@ struct JobDetailView: View {
     // reset on every fresh presentation since a new sheet gets a new View
     // instance (and thus fresh @State).
     @State private var docQuestionOverlay: [String: String] = [:]
+    @State private var showingBranchThread = false
+    // Threads branched from this sheet since it opened. Same frozen-snapshot
+    // problem docQuestionOverlay solves: `job` never refreshes while the
+    // sheet is up, so a freshly branched thread would otherwise have no chip
+    // to tap until the sheet is reopened.
+    @State private var branchedThreads: [WebThread] = []
 
     private var column: BoardColumn { BoardTheme.column(for: job) }
     private var isUnhealthy: Bool { !(job.health ?? "").isEmpty }
@@ -664,6 +670,18 @@ struct JobDetailView: View {
     // whose zeus session id was recorded.
     private var canReactivate: Bool {
         !isArchived && column == .done && job.reactivatable == true
+    }
+    // A side thread forks zeus' session into a second claude in the cell's
+    // own tmux window, so branching only makes sense while that cell is up.
+    // Existing threads stay readable either way — a closed thread's
+    // conversation outlives its window, and the board keeps serving it.
+    private var canBranchThread: Bool { job.live }
+    // The server's thread list plus any branched from this sheet, deduped by
+    // tid with the server's copy winning (it has the real pane/state).
+    private var allThreads: [WebThread] {
+        let served = job.threads ?? []
+        let known = Set(served.map(\.tid))
+        return served + branchedThreads.filter { !known.contains($0.tid) }
     }
     private var hasAnyAction: Bool {
         canQueue || canDequeue || canRetry || canMarkDone || canSteer || isEditable || canKill
@@ -756,6 +774,37 @@ struct JobDetailView: View {
                                     .foregroundStyle(KTheme.text2)
                             }
                             .font(.data(12))
+                        }
+                    }
+                }
+                if !allThreads.isEmpty || canBranchThread {
+                    kSection("Threads") {
+                        if !allThreads.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(allThreads) { thread in
+                                        NavigationLink {
+                                            ThreadDetailView(
+                                                thread: thread, slug: job.slug,
+                                                baseURL: baseURL, onChanged: onUpdate
+                                            )
+                                        } label: {
+                                            ThreadChip(thread: thread)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                        if canBranchThread {
+                            Button {
+                                showingBranchThread = true
+                            } label: {
+                                Label("Branch a thread", systemImage: "arrow.triangle.branch")
+                            }
+                            .buttonStyle(.plain)
+                            .font(.data(12))
+                            .foregroundStyle(KTheme.accent)
                         }
                     }
                 }
@@ -901,6 +950,18 @@ struct JobDetailView: View {
                     showingEdit = false
                     onUpdate()
                     dismiss()
+                }
+            }
+        }
+        .sheet(isPresented: $showingBranchThread) {
+            NavigationStack {
+                BranchThreadView(job: job, baseURL: baseURL) { thread in
+                    showingBranchThread = false
+                    // nil = the server accepted the branch but didn't return a
+                    // tid; the chip shows up on the next board refresh instead
+                    // of being faked with an id nothing can address.
+                    if let thread { branchedThreads.append(thread) }
+                    onUpdate()
                 }
             }
         }
@@ -1148,6 +1209,132 @@ struct JobDetailView: View {
     private func answerDocQuestion(id: String, text: String) {
         runAction(dismissOnSuccess: false, onSuccess: { docQuestionOverlay[id] = text }) {
             try await APIClient.shared.answerDocQuestion(baseURL: baseURL, slug: job.slug, id: id, text: text)
+        }
+    }
+}
+
+/// One side-thread chip — "⑂ <title>", green while the thread's window is
+/// live, muted once it's closed. Same outlined-stroke treatment as PRChip
+/// above, so a job's chips all read as one family.
+private struct ThreadChip: View {
+    let thread: WebThread
+
+    var body: some View {
+        let color = thread.isLive ? KTheme.solved : KTheme.text2
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.data(9, weight: .semibold))
+            // Capped, not just single-line: the chips live in a horizontal
+            // scroller, so an unbounded title would stretch one chip off the
+            // screen and hide every thread behind it.
+            Text(thread.displayTitle)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 140, alignment: .leading)
+        }
+        .font(.data(10, weight: .semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .overlay(Rectangle().stroke(color, lineWidth: 1))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("thread \(thread.displayTitle) — \(thread.isLive ? "live" : "closed")")
+    }
+}
+
+/// Branching a new side thread: a name (required — it's how the thread is
+/// identified everywhere afterward) and an optional first message. Forks
+/// zeus' session into a second claude in its own window of the same cell, so
+/// it only appears while the cell is live (see canBranchThread). No draft
+/// persistence here on purpose: unlike a steer, this composer is a one-shot
+/// naming step, not a message that's worth surviving an app kill.
+private struct BranchThreadView: View {
+    let job: WebJob
+    let baseURL: String
+    /// Carries the optimistic thread back to JobDetailView (nil when the
+    /// server returned no tid), which also dismisses this sheet.
+    var onBranched: (WebThread?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var seedFocused: Bool
+    @State private var title = ""
+    @State private var seed = ""
+    @State private var isBusy = false
+    @State private var errorMessage: String?
+
+    private var trimmedTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        Form {
+            kSection {
+                Text("Forks zeus' session into a second claude in its own window of the cell — ask questions without disturbing the run. Closing the thread later keeps the conversation.")
+                    .font(.voice(12))
+                    .foregroundStyle(KTheme.text2)
+            }
+            kSection("Name") {
+                TextField("what this thread is for", text: $title)
+                    .kField()
+            }
+            kSection("First message (optional)") {
+                TextField("what to ask", text: $seed, axis: .vertical)
+                    .focused($seedFocused)
+                    .kField(focused: seedFocused, minHeight: 100)
+            }
+            if let errorMessage {
+                kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
+            }
+        }
+        .kListStyle()
+        .navigationTitle("Branch thread")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                SheetCloseButton(label: "Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    branch()
+                } label: {
+                    Label("Branch", systemImage: "arrow.triangle.branch")
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Branch")
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy || trimmedTitle.isEmpty)
+            }
+        }
+        .disabled(isBusy)
+    }
+
+    private func branch() {
+        let name = trimmedTitle
+        guard !name.isEmpty else { return }
+        let text = seed.trimmingCharacters(in: .whitespacesAndNewlines)
+        isBusy = true
+        errorMessage = nil
+        Task {
+            do {
+                let resp = try await APIClient.shared.threadAction(
+                    baseURL: baseURL, slug: job.slug, op: .branch,
+                    title: name, text: text.isEmpty ? nil : text
+                )
+                isBusy = false
+                if let tid = resp.tid, !tid.isEmpty {
+                    onBranched(WebThread(
+                        tid: tid, title: name, state: "live", pane: nil,
+                        createdAt: Int64(Date().timeIntervalSince1970 * 1000),
+                        closedAt: nil
+                    ))
+                } else {
+                    onBranched(nil)
+                }
+            } catch {
+                isBusy = false
+                errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 }

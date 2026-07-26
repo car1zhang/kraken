@@ -531,6 +531,25 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	times := liveSessionTimes()
 	now := time.Now()
 	cells := 0
+	// side-thread panes, ONE unscoped query for the whole tick rather than a
+	// ListThreads per job: the roll call below (cellActive) must not count a
+	// thread as the job working — carl branches one precisely to ask about a
+	// block, and a voting thread would hide it. Fails open (nil set = today's
+	// behavior) so a store hiccup degrades to a possibly-optimistic state
+	// rather than a tick that dies.
+	//
+	// Read once, ahead of the per-job ReconcileThreads passes below, so a row
+	// closed during THIS tick still abstains for the rest of it: one tick of
+	// lag, self-correcting on the next, and the alternative (re-querying per
+	// job) costs a query per job to buy nothing.
+	var threadPanes map[string]bool
+	if st := ActiveStore(); st != nil {
+		var err error
+		if threadPanes, err = st.LiveThreadPanes(); err != nil {
+			dlogErr("live thread panes: %v", err)
+			threadPanes = nil
+		}
+	}
 	// connectivity probe: at most one dial per tick, invoked lazily from
 	// inside gateRetry — only when a retryable poke is actually due or the
 	// daemon is already flagged offline. A tick with no stalled cells never
@@ -604,6 +623,27 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				}
 				dlogEvent("error", "cell-gone", "%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
 				d.Notified[key] = now.Unix()
+			}
+		}
+
+		// close out any side thread whose window died since the last tick,
+		// off THIS tick's snapshot — no extra tmux/ps call, one query per
+		// started job. mirror never writes.
+		//
+		// Deliberately OUTSIDE the isLive branch above, covering dead cells
+		// too: a live row's pane goes into the roll call's skip set globally
+		// (LiveThreadPanes is unscoped), so a row still claiming the pane of a
+		// vanished cell would silence whichever job's agent tmux next hands
+		// that recycled pane id to — pinning a genuinely working job at
+		// "blocked". A dead session has no peers, so every one of its threads
+		// reconciles closed here on the first tick after it goes.
+		//
+		// `live` rides along as the cross-check: this is the one consumer of
+		// the tick's snapshot that WRITES off it, so an empty snapshot from a
+		// failed tmux call must not read as "every thread is gone".
+		if !mirror {
+			if err := ReconcileThreads(j, all, live); err != nil {
+				dlogErr("thread reconcile %s failed: %v", j.Slug, err)
 			}
 		}
 
@@ -690,7 +730,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				if zeus != nil && zeus.SessionID != "" && !zeus.SessionIDGuessed {
 					sessionID = zeus.SessionID
 				}
-				active = cellActive(CellSession(j), all, core.TeamMembersForLead(sessionID), core.PaneShowsQuestion)
+				active = cellActive(CellSession(j), all, core.TeamMembersForLead(sessionID), core.PaneShowsQuestion, threadPanes)
 			}
 		}
 		st := deriveState(j, isLive, active)

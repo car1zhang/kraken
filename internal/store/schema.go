@@ -25,8 +25,10 @@ import (
 // immutable id, since the mutable job_slug string alone can't disambiguate
 // which rows are "mine" once a freed slug is reused by another job (see
 // store.ArchiveJob's doc comment) — job_slug itself is untouched as every
-// read path's lookup key.
-const schemaVersion = 6
+// read path's lookup key. Version 7 adds the threads table: side threads,
+// forked claude sessions branched off a job's zeus and living in a second
+// tmux window of the same cell (threads.go).
+const schemaVersion = 7
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -255,6 +257,43 @@ const schemaV6 = `
 ALTER TABLE feedback ADD COLUMN job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL;
 `
 
+// schemaV7 adds the threads table: one row per side thread — a forked
+// claude session branched off a job's zeus, living in a second tmux window
+// of the same cell. The row is a POINTER, not a transcript: session_id
+// locates the real conversation under ~/.claude/projects later, so there is
+// deliberately no snapshot blob here (and no cap on threads per job).
+// pane/window are the live tmux coordinates and are cleared on close, so a
+// 'closed' row keeps only its identity and provenance. Appended rather than
+// folded into schemaV1 for the reason schemaV2's doc comment spells out:
+// real kraken.db files already exist at earlier versions.
+//
+// The unique index on (job_id, tid) is what makes NextThreadID's
+// MAX(suffix)+1 safe to insert against — a duplicate tid is refused by the
+// database, not just by the Go-side check (threads.go's AddThread).
+const schemaV7 = `
+CREATE TABLE threads (
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	job_id         INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+	tid            TEXT NOT NULL DEFAULT '',
+	title          TEXT NOT NULL DEFAULT '',
+	session_id     TEXT NOT NULL DEFAULT '',
+	parent_session TEXT NOT NULL DEFAULT '',
+	fork_uuid      TEXT NOT NULL DEFAULT '',
+	cwd            TEXT NOT NULL DEFAULT '',
+	pane           TEXT NOT NULL DEFAULT '',
+	-- "window" is quoted because WINDOW is a SQLite keyword (window
+	-- functions); an unquoted column of that name parses in a CREATE TABLE
+	-- but breaks in expressions. Same treatment as board_order."column" in
+	-- schemaV1 — quote it in the DDL so every use site copies the quoting.
+	"window"       TEXT NOT NULL DEFAULT '',
+	state          TEXT NOT NULL DEFAULT 'live' CHECK(state IN ('live','closed')),
+	seed           TEXT NOT NULL DEFAULT '',
+	created_at     INTEGER NOT NULL DEFAULT 0, -- unix millis
+	closed_at      INTEGER NOT NULL DEFAULT 0  -- unix millis; 0 means still live
+);
+CREATE UNIQUE INDEX threads_job_tid ON threads(job_id, tid);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -275,9 +314,11 @@ type migrationStep struct {
 // jobs.skip_doc, extends feedback, and restructures questions into
 // relational rows (migrateV5Questions below); migrations[6] adds
 // feedback.job_id and backfills it for existing rows (migrateV6FeedbackJobID
-// below). Future schema changes append migrations[7], migrations[8], ...
-// rather than editing an existing schemaV<N> string (or hook) in place, so a
-// database created under an older binary still migrates forward correctly.
+// below); migrations[7] adds the threads table (no hook — a brand-new table
+// has nothing to migrate forward). Future schema changes append
+// migrations[8], migrations[9], ... rather than editing an existing
+// schemaV<N> string (or hook) in place, so a database created under an older
+// binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
 	1: {sql: schemaV1},
 	2: {sql: schemaV2},
@@ -285,6 +326,7 @@ var migrations = map[int]migrationStep{
 	4: {sql: schemaV4},
 	5: {sql: schemaV5, hook: migrateV5Questions},
 	6: {sql: schemaV6, hook: migrateV6FeedbackJobID},
+	7: {sql: schemaV7},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

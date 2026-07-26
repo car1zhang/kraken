@@ -162,6 +162,7 @@ the new build" would be false at exactly the moment it is shown.
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
 | `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not), served straight from `questions` rows in `kraken.db` — no file, no parse step, so there is no more cell-gone-read-only or malformed-file case; never set for archived jobs. Additive, no contract bump |
 | `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
+| `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
 
@@ -211,6 +212,24 @@ field set, same json tags as the old `questions.yaml` record it replaces):
 | `at` | number | always | unix millis the feedback was submitted (`ts` column) |
 | `addressed` | string | omitempty | zeus' own free-text account of how it addressed the note; absent means still open (this is prose, not a boolean) |
 | `addressed_at` | string | omitempty | RFC3339 timestamp, server-stamped alongside `addressed` |
+
+`webThread` (one `threads` row, `store.Thread`'s board-facing subset — a side
+thread is a fork of zeus' session running as a second claude in its own tmux
+window of the same cell):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `tid` | string | always | `t<digits>` counting from `t1`, unique per job and never recycled; the target every op below takes |
+| `title` | string | omitempty | carl's name for the thread; absent for one branched without a title — clients fall back to the tid |
+| `state` | string | always | `live` \| `closed`. `closed` = the tmux window is gone; the row (and the transcript it points at) survives, and `revive` resumes the same claude session |
+| `pane` | string | omitempty | the live thread's tmux pane, e.g. `%42` — usable with `GET /api/peers/capture`. Cleared on close (tmux recycles pane ids), so it is absent for a closed thread rather than stale |
+| `created_at` | number | always | unix millis the thread was branched |
+| `closed_at` | number | omitempty | unix millis the thread was closed; absent (0) while live |
+
+The provenance columns — `session_id`, `parent_session`, `fork_uuid`, `seed`,
+`cwd` — and the tmux window target deliberately never ride the board poll;
+`fork_uuid` is served by `GET /api/thread/read` instead, where the split it
+anchors is actually used.
 
 ### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
@@ -362,6 +381,110 @@ the cell verbs surface it on stderr with a non-zero exit. An oversize request
 body (either endpoint) is a 413, not a 400.
 
 Response: `{"ok": true}` on success, `{"error": string}` otherwise.
+
+### `GET /api/threads?slug=`
+
+One job's side threads, the same array the board's per-job `threads` key
+carries. **Additive, no contract bump.**
+
+Response: `{"threads": [webThread]}` — always an array, never `null`; a job
+with no threads yet serves `[]`. Ordered oldest-first (`t1`, `t2`, … `t10` —
+creation order, which is numeric tid order since tids only count upward).
+
+Errors: 400 `missing slug`, 404 for an unknown slug, 500 `no store wired`
+(side threads live ONLY in `kraken.db` — a file-mode process says so rather
+than serving an empty list that would read as "this job has no threads").
+A GET is a read, so it stays reachable under `--mirror`.
+
+### `POST /api/threads`
+
+Every side-thread mutation, one body shape across all five ops
+(`ThreadActionRequest` in Models.swift). **Additive, no contract bump.**
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `slug` | string | required | the job the thread hangs off |
+| `op` | string | required | `branch` \| `kill` \| `revive` \| `rename` \| `send` |
+| `tid` | string | required for `kill`/`revive`/`rename`/`send` | |
+| `title` | string | required for `branch`/`rename` | |
+| `text` | string | required for `send`; optional for `branch` | |
+
+- **`branch`** — `{slug, op:"branch", title, text?}`: forks zeus' session into
+  a new claude in a fresh window of the same cell, in the same worktree, under
+  a brand-new session id. `text` is the seed prompt and is OPTIONAL — branching
+  with nothing to say yet is legitimate, and the thread comes up idle. This is
+  the only op whose success body carries the new `tid`.
+- **`kill`** — `{slug, op:"kill", tid}`: kills the thread's window and marks
+  the row closed. The ROW SURVIVES: its session id still locates the
+  transcript, so the conversation stays readable and revivable.
+- **`revive`** — `{slug, op:"revive", tid}`: resumes the SAME claude session
+  in a fresh window (no re-fork). Refused if the thread is already live, or
+  if the job's cell is gone — reactivate the job first.
+- **`rename`** — `{slug, op:"rename", tid, title}`: retitles the row; never
+  touches the pane, so it works on closed threads too.
+- **`send`** — `{slug, op:"send", tid, text}`: types a message into the live
+  thread's pane, through the same verify-before-acting guard `k s` uses.
+
+Response: `{"ok": true}`, plus `"tid"` on a `branch`. Errors: 400 for a
+missing required field or an unrecognized `op` (the message names every valid
+form), 404 for an unknown slug or an unknown `tid`, 409 for a refusal about
+live state (no live cell to branch, a zeus that can't be forked, a pane that
+no longer holds the thread, a tid already taken) — the `error` string is jobs'
+own message verbatim, and it already names the recovery, so a 409 always means
+"change something and retry". 413 for an oversize body, 500 `no store wired`
+or a database failure — that one is the server's fault, not the request's, and
+is retryable as-is. Every op but `rename` drives a real tmux window, and
+`rename` rides along under the same "a mirror board is read-only, full stop"
+policy, so the whole POST is refused with 403 `disabled in mirror mode` under
+`--mirror`.
+
+### `GET /api/thread/read?slug=&tid=&n=`
+
+One thread's conversation, read from its OWN forked transcript. `n` is the
+block count (default 50, clamped to 1…150; the web board omits it and takes
+the default). Both bounds sit near what the transcript reader's first tail
+window serves — a fork's transcript opens with zeus' whole history copied in,
+so a larger `n` buys latency, not blocks, and a tail shorter than `n` is a
+normal answer rather than an error. **Additive, no contract bump.**
+
+Response:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `blocks` | array | always | the tail blocks, oldest-first; `[]`, never `null` |
+| `counted` | number | always | non-tool blocks counted toward `n` (same meaning as `/api/peers/read`) |
+| `live` | bool | always | the row is `live` AND still has a pane — i.e. there is somewhere to send to; gate the composer on this |
+| `pane` | string | always | the live thread's pane (`""` when closed) — feed it to `/api/peers/capture` to mirror the window |
+| `fork_uuid` | string | always | the transcript uuid the fork hangs off (`""` when none was recorded) |
+| `source` | string | always | `transcript` when the fork's transcript was readable, `none` when there is nothing to read yet |
+
+Each block is `/api/peers/read`'s shape — `kind` (string, always:
+`user`\|`text`\|`thinking`\|`tool`\|`teammate`), `text` (string, always),
+`from` (string, omitempty — teammate blocks only) — plus:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `inherited` | bool | omitempty | `true` on the pre-fork turns this thread inherited from zeus' session |
+
+A fork's transcript opens with zeus' whole history copied in, and forks
+preserve message uuids — so every block whose source record is at or before
+`fork_uuid` is inherited history, and the first block WITHOUT `inherited` is
+where the thread's own conversation begins. The anchor kraken records at
+branch time is the last message a READER would see, never a bookkeeping
+record (`system`, `attachment`, subagent/sidechain traffic, a content-less
+turn), so whenever it falls inside the window read it names one of the blocks
+in this very response. That is where clients draw the
+"⑂ branched here" divider, dimming everything above it. When `fork_uuid` is
+empty or isn't in the window read (an anchor older than `n` blocks, or one
+never recorded), NOTHING is marked inherited and no divider is drawn — the
+graceful path both clients already handle.
+
+A missing session id, a missing transcript, or an unreadable one is NOT an
+error: it answers 200 with `source: "none"`, `blocks: []` and `counted: 0`
+(the repo rule for files another program owns — a freshly branched thread
+that hasn't taken a turn has nothing to read). Real errors are 400 for a
+missing `slug`/`tid`, 404 for an unknown slug or `tid`, 500 `no store wired`.
+A read stays reachable under `--mirror`.
 
 ### `POST /api/steer`
 

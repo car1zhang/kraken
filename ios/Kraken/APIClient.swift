@@ -322,6 +322,36 @@ actor APIClient {
         let _: OkResponse = try await post(baseURL: baseURL, path: "/api/stop", body: SlugRequest(slug: slug))
     }
 
+    // MARK: - side threads
+
+    /// One side-thread mutation, all five ops through the one endpoint the
+    /// server exposes: "branch" (needs `title`, optional seed `text`, and is
+    /// the only op whose response carries a `tid`), "kill"/"revive" (`tid`),
+    /// "rename" (`tid` + `title`), "send" (`tid` + `text`). Unused arguments
+    /// stay nil and never ride on the wire. Errors — a dead cell, an unknown
+    /// tid, a send to a closed thread — surface as KrakenError verbatim like
+    /// every other action here.
+    @discardableResult
+    func threadAction(
+        baseURL: String, slug: String, op: ThreadOp,
+        tid: String? = nil, title: String? = nil, text: String? = nil
+    ) async throws -> ThreadActionResponse {
+        try await post(
+            baseURL: baseURL, path: "/api/threads",
+            body: ThreadActionRequest(slug: slug, op: op.rawValue, tid: tid, title: title, text: text)
+        )
+    }
+
+    /// One thread's last `n` conversation blocks (inherited pre-fork history
+    /// included), plus its liveness and pane. Readable whether or not the
+    /// thread is live — a closed thread still has its transcript.
+    func readThread(baseURL: String, slug: String, tid: String, n: Int) async throws -> ThreadReadResponse {
+        try await get(
+            baseURL: baseURL, path: "/api/thread/read",
+            query: [("slug", slug), ("tid", tid), ("n", String(n))]
+        )
+    }
+
     // MARK: - drafts
 
     /// A job-scoped composer draft (empty `text` means none stored).
