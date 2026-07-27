@@ -67,8 +67,17 @@ with the artifact it was left on and a URL for the **snapshot** — the artifact
 Read the snapshot when the note is about something visual or structural: "edges run through boxes" is
 unresolvable against an artifact that has since been fixed, or whose cell is long gone.
 
-Never write `kraken feedback addressed` here. Those belong to the job's own zeus; a dream pass reads
-feedback, it does not administer it.
+**Mark a note addressed only when you shipped a change for it**, and name the PR when you do. A note
+you merely READ stays open — it belongs to its own job's zeus, and closing it would tell carl it was
+handled when nobody handled it.
+
+But the reverse is worse and is the case this rule exists for. A note you acted on will otherwise sit
+open **forever**: the job that owns it is usually done, blocked, or torn down by the time you read it,
+so its zeus may never run again, and carl is left looking at a note whose fix has already merged. He
+has no way to tell that from a note nobody touched.
+
+So the test is authorship of the FIX, not of the note: if this pass shipped something because of it,
+close it and say which PR. Otherwise leave it alone.
 
 ## Evidence 2 — transcripts
 
@@ -164,8 +173,9 @@ specific, and it is the only place the cell's real paths appear:
   directory is the only board-visible one, and the report is the deliverable; it is also what the
   board's `DREAM` view renders, so a pass that ships changes but writes no report is invisible.
 - **Read and write watchlist rows with `kraken watchlist get|add|update|remove`**; sweep feedback with
-  `kraken feedback sweep --since <ts>`. Never run `kraken feedback addressed` — that verb belongs to
-  the job whose artifact the note was left on.
+  `kraken feedback sweep --since <ts>`. Run `kraken feedback addressed <slug> <id> <text>` **only for
+  a note you shipped a change for**, naming the PR in the text — see Evidence 1. Note the slug is the
+  OTHER job's, not this dream job's.
 - **Scouts are unnamed subagents**, never teammates: they read and report, and change nothing in the
   repo — they still write their own findings to the scratch path you give them. The crew rules in
   the brief govern any agent that changes the repo.
