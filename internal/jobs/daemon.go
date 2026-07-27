@@ -872,6 +872,21 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		}
 	}
 
+	// dream loop: at most one corroboration pass per local calendar day (see
+	// kickDream — the first wall-clock cadence in this binary). Gated on
+	// !mirror because creating a real job row is exactly the class of side
+	// effect a read-only scheduler variant must never have, and it sits
+	// between auto-archive and the queue pass so the job it creates is
+	// startable on THIS tick: the queue loop below iterates `jobs`, captured
+	// at the top of the tick, so a freshly created job has to be folded into
+	// that slice by hand to avoid waiting out a whole DaemonInterval.
+	if !mirror {
+		if created := kickDream(now); created != nil {
+			jobs = append(jobs, created)
+			bySlug[created.Slug] = created
+		}
+	}
+
 	// queue: start startable jobs under the cap. StartCell writes "working"
 	// itself once the cell is up. Skipped entirely under mirror — mirror is
 	// a read-only scheduler variant, never a second real scheduler racing
