@@ -236,7 +236,10 @@ func ImportAll(st *store.Store, opts ImportOptions) (ImportReport, error) {
 	archivedRep, archivedIDByName, archivedParseErrs := importArchivedJobs(st, archivedFiles, opts.DryRun)
 	report.Archived = archivedRep
 
-	boardRep, err := importBoardOrder(st, opts.OrderPath, opts.DryRun)
+	// After importActiveJobs, never before: board_order keys on jobs.id since
+	// schema v11, so the columns cannot be replayed until the jobs they name
+	// have rows to point at.
+	boardRep, err := importBoardOrder(st, opts.OrderPath, activeIDBySlug, opts.DryRun)
 	if err != nil {
 		return report, err
 	}
@@ -638,14 +641,21 @@ func upsertArchivedJobRow(st *store.Store, j *Job, archivedAtMillis int64) (int6
 // which hardcodes the real path with no override) and replays each column
 // through SetBoardColumn, which is already an idempotent replace.
 //
-// SetBoardColumn enforces "a slug lives in exactly one column" by deleting
+// SetBoardColumn enforces "a job lives in exactly one column" by deleting
 // it from every OTHER column as a side effect of placing it into the one
 // being written — so a slug listed in two columns of order.json silently
 // keeps only its alphabetically-last column once every column has been
 // replayed (columns are processed in sorted order, mirrored below). Found
 // counts slugs, not columns (a column is just a grouping, not a unit of
 // work), and every such drop gets a Skipped note instead of vanishing.
-func importBoardOrder(st *store.Store, path string, dryRun bool) (StoreReport, error) {
+//
+// idBySlug is importActiveJobs' output, and it is what turns order.json's
+// slugs into the job ids board_order has keyed on since schema v11. A slug
+// with no imported active job is SKIPPED with a note rather than dropped
+// quietly: order.json is carl's own hand-arranged board and losing a piece of
+// it invisibly is worse than losing it. It is also not the same failure as the
+// cross-column drop below, so the two notes read differently.
+func importBoardOrder(st *store.Store, path string, idBySlug map[string]int64, dryRun bool) (StoreReport, error) {
 	rep := StoreReport{}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -676,15 +686,30 @@ func importBoardOrder(st *store.Store, path string, dryRun bool) (StoreReport, e
 		slugs := parsed.Columns[col]
 		rep.Found += len(slugs)
 
+		// Resolve to ids first, keeping the column's order, so the store
+		// write below is exactly the entries that actually name a job.
+		var ids []int64
+		var placeable []string
+		for _, slug := range slugs {
+			id, ok := idBySlug[slug]
+			if !ok {
+				rep.Skipped = append(rep.Skipped, fmt.Sprintf(
+					"slug %s: dropped from column %s (no active job with that slug was imported)", slug, col))
+				continue
+			}
+			ids = append(ids, id)
+			placeable = append(placeable, slug)
+		}
+
 		if !dryRun {
-			if err := st.SetBoardColumn(col, slugs); err != nil {
+			if err := st.SetBoardColumn(col, ids); err != nil {
 				rep.Skipped = append(rep.Skipped, fmt.Sprintf("column %s: %v", col, err))
 				continue
 			}
 		}
 
 		seen := map[string]bool{}
-		for _, slug := range slugs {
+		for _, slug := range placeable {
 			if seen[slug] {
 				continue
 			}

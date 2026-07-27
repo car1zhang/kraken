@@ -258,6 +258,41 @@ var probeOnline = func() bool {
 	return true
 }
 
+// publishedStartErrors is the queue pass' StartErrors map, published for the
+// web handler to read (slug → the reason that job's last start attempt
+// failed). The daemon writes, the handler reads — the same division the
+// account-usage snapshot and inProcessDaemonStatus already draw.
+//
+// A FRESH map is stored every tick and the stored one is never mutated in
+// place. That is the L5 lesson from DaemonStatus directly above: a reader
+// that Loads the pointer and holds it was otherwise racing the next tick's
+// writes to the very map its pointer pointed at.
+var publishedStartErrors atomic.Pointer[map[string]string]
+
+// StartErrorFor reports why the daemon's last attempt to start this job's
+// cell failed, empty when the last attempt succeeded, none has been made, or
+// no daemon has ticked in this process.
+//
+// Keyed by slug because only ACTIVE jobs are ever started and jobs_active_slug
+// makes those unique — the same reason the wire can keep addressing jobs by
+// slug at all.
+func StartErrorFor(slug string) string {
+	m := publishedStartErrors.Load()
+	if m == nil {
+		return ""
+	}
+	return (*m)[slug]
+}
+
+// publishStartErrors stores a copy of the queue pass' errors for the handler.
+func publishStartErrors(src map[string]string) {
+	cp := make(map[string]string, len(src))
+	for k, v := range src {
+		cp[k] = v
+	}
+	publishedStartErrors.Store(&cp)
+}
+
 // daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
 // one; tick runs a single scheduler pass.
 type daemonState struct {
@@ -269,6 +304,22 @@ type daemonState struct {
 	// DESIGN: the repair criterion never drops a create-vouched or
 	// family-branch record, so repeating it finds nothing new to drop.
 	Repaired map[string]bool
+	// StartErrors is the reason each job's last StartCell attempt failed,
+	// keyed by job slug (active slugs are unique, and only active jobs are
+	// ever started). Cleared the moment a start succeeds.
+	//
+	// This exists because a queued job that cannot start was, until now,
+	// COMPLETELY silent on the board. The failure was written to
+	// ~/.kraken/logs and to DaemonStatus.LastError — which is one global
+	// string for the whole tick, not per job, and which web/static/app.js
+	// has never rendered at all. A real job sat queued through 24 identical
+	// failed start attempts over nine minutes with nothing on screen, and
+	// the eventual fix was to rename the job. The board now carries this on
+	// the job's own card (webJob.StartError).
+	//
+	// In-memory only, like Notified/Poked above: a restarted daemon simply
+	// re-attempts the start and re-learns the error on its next tick.
+	StartErrors map[string]string
 	// PRHeads memoizes viewPRHead's successful URL → headRefName lookups.
 	// Heads are immutable once a PR exists, so this is a positive cache with
 	// no invalidation, consulted before every gh pr view call and shared
@@ -304,6 +355,7 @@ type daemonState struct {
 func newDaemon() *daemonState {
 	return &daemonState{
 		Notified:          map[string]int64{},
+		StartErrors:       map[string]string{},
 		Poked:             map[string]int64{},
 		Repaired:          map[string]bool{},
 		PRHeads:           map[string]string{},
@@ -931,16 +983,26 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			}
 			if err := StartCell(j, repo); err != nil {
 				dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
+				// Per job, not just firstErr: two jobs failing in one tick
+				// each keep their own reason, and the board shows each on
+				// its own card. firstErr stays as it was — it feeds the
+				// daemon's single global status line, which is a different
+				// (and much weaker) signal.
+				d.StartErrors[j.Slug] = err.Error()
 				if firstErr == nil {
 					firstErr = err
 				}
 				continue
 			}
+			delete(d.StartErrors, j.Slug)
 			cells++
 			dlogEvent("info", "cell-start", "started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
 			notify("kraken ▶ "+j.Slug, "cell started")
 		}
 	}
+	// Published even under mirror (where the loop above never runs), so a
+	// mirror board shows an empty set rather than a stale one.
+	publishStartErrors(d.StartErrors)
 	return cells, firstErr
 }
 

@@ -198,14 +198,16 @@ func TestWebWakeupFromMirrorsFields(t *testing.T) {
 // --- webTokens: the board's read of a job_tokens row (this layer computes
 // nothing; the daemon's tokensPass is the only writer) ---
 
-func TestWebTokensForAbsentSlugIsNil(t *testing.T) {
+func TestWebTokensForAbsentJobIsNil(t *testing.T) {
 	// the "never measured" case — the whole reason webJob.Tokens is a pointer
 	// with omitempty. A zero object here would claim the job cost nothing.
-	index := map[string]store.JobTokens{"other": {Slug: "other", Out: 5}}
-	if got := webTokensFor(index, "x"); got != nil {
+	// Keyed by job id since schema v11: two generations of one reused slug
+	// used to share a single row, so both cards showed the sum of both.
+	index := map[int64]store.JobTokens{7: {JobID: 7, Out: 5}}
+	if got := webTokensFor(index, 9); got != nil {
 		t.Fatalf("webTokensFor(missing) = %+v, want nil", got)
 	}
-	if got := webTokensFor(nil, "x"); got != nil {
+	if got := webTokensFor(nil, 9); got != nil {
 		t.Fatalf("webTokensFor(nil index) = %+v, want nil", got)
 	}
 }
@@ -213,8 +215,8 @@ func TestWebTokensForAbsentSlugIsNil(t *testing.T) {
 func TestWebTokensForMeasuredZeroIsNotNil(t *testing.T) {
 	// a real row of zeros is NOT absence: it must serialize as a tokens
 	// object with every counter present.
-	index := map[string]store.JobTokens{"x": {Slug: "x", UpdatedAt: 7}}
-	got := webTokensFor(index, "x")
+	index := map[int64]store.JobTokens{7: {JobID: 7, UpdatedAt: 7}}
+	got := webTokensFor(index, 7)
 	if got == nil {
 		t.Fatal("webTokensFor(measured zero) = nil, want a non-nil object")
 	}
@@ -232,12 +234,12 @@ func TestWebTokensForMeasuredZeroIsNotNil(t *testing.T) {
 }
 
 func TestWebTokensForMirrorsFields(t *testing.T) {
-	index := map[string]store.JobTokens{"x": {
-		Slug: "x", In: 149754, Out: 15756009, CacheWrite: 87776983,
+	index := map[int64]store.JobTokens{7: {
+		JobID: 7, In: 149754, Out: 15756009, CacheWrite: 87776983,
 		CacheRead: 2555432608, Sessions: 154, UpdatedAt: 1785124027359,
 		ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 	}}
-	got := webTokensFor(index, "x")
+	got := webTokensFor(index, 7)
 	want := &webTokens{
 		In: 149754, Out: 15756009, CacheWrite: 87776983, CacheRead: 2555432608,
 		Sessions: 154, UpdatedAt: 1785124027359,
@@ -577,22 +579,25 @@ func TestArchivedArtifactServing(t *testing.T) {
 	if err := os.MkdirAll(jobs.ArchiveDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(jobs.ArchiveDir(), name+".report.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), name)
 	if a == nil {
 		t.Fatal("archived job not found")
+	}
+	// Archived copies keep the <slug>-<id>. prefix they had while live —
+	// ArchiveJob moves them without renaming, since the id already keeps two
+	// generations of one slug apart. ArchivedName still identifies the ROW.
+	if err := os.WriteFile(filepath.Join(jobs.ArchiveDir(), jobs.PlutoArtifactPrefix(a)+"report.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	arts := archivedWebArtifacts(a)
 	if len(arts) != 1 || arts[0].Name != "report.md" || arts[0].URL != "/api/artifact/"+name+"/archive/report.md" {
 		t.Fatalf("unexpected artifacts: %+v", arts)
 	}
-	if p, ok := ArtifactPath(a, "archive", "report.md"); !ok || p != filepath.Join(jobs.ArchiveDir(), name+".report.md") {
+	if p, ok := ArtifactPath(a, "archive", "report.md"); !ok || p != filepath.Join(jobs.ArchiveDir(), jobs.PlutoArtifactPrefix(a)+"report.md") {
 		t.Fatalf("artifactPath archive: %q %v", p, ok)
 	}
 	// traversal and job files are refused
-	if _, ok := ArtifactPath(a, "archive", "../"+name+".report.md"); ok {
+	if _, ok := ArtifactPath(a, "archive", "../"+jobs.PlutoArtifactPrefix(a)+"report.md"); ok {
 		t.Fatal("traversal allowed")
 	}
 	if _, ok := ArtifactPath(a, "archive", "job.md"); ok {

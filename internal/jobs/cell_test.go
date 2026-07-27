@@ -524,9 +524,9 @@ func TestAllArtifactPathsNoReservedNames(t *testing.T) {
 	plutoDir := t.TempDir()
 	t.Setenv("KRAKEN_PLUTO_DIR", plutoDir)
 
-	j := &Job{Slug: "artifact-paths-job"}
-	realArtifact := filepath.Join(plutoDir, "artifact-paths-job.figures-a.svg")
-	namedLikeQuestions := filepath.Join(plutoDir, "artifact-paths-job.questions.yaml")
+	j := &Job{Slug: "artifact-paths-job", ID: 8}
+	realArtifact := filepath.Join(plutoDir, "artifact-paths-job-8.figures-a.svg")
+	namedLikeQuestions := filepath.Join(plutoDir, "artifact-paths-job-8.questions.yaml")
 	if err := os.WriteFile(realArtifact, []byte("svg"), 0o644); err != nil {
 		t.Fatal(err)
 	}

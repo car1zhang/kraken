@@ -507,6 +507,26 @@ body {
   font: 10px var(--mono);
 }
 .err { color: var(--counter); font-size: 11px; margin-top: 5px; }
+
+/* A queued job's start failure. Louder than .err on purpose: this is the
+   message that was invisible for nine minutes while a job silently refused
+   to start, and the monospace body is a real git/tmux error worth reading
+   verbatim rather than a summary. */
+.start-error {
+  margin-top: 6px; padding: 6px 8px;
+  border-left: 2px solid var(--revealed);
+  background: var(--revealed-soft);
+  border-radius: 0 5px 5px 0;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.start-error-label {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--revealed); font-weight: 600;
+}
+.start-error-msg {
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.45;
+  color: var(--text); word-break: break-word;
+}
 .outcome { color: var(--solved); font-size: 11px; margin-top: 5px; }
 
 /* the cell's last words: a live zeus' most recent assistant text block —

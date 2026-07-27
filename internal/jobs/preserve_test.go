@@ -306,18 +306,25 @@ func TestPreserveArtifactsSkipsSymlinkInArtifacts(t *testing.T) {
 	}
 }
 
-// TestPreserveArtifactsNestedAndNeverOverwrites exercises the full
+// TestPreserveArtifactsNestedAndRefreshes exercises the full
 // preserveArtifacts sweep: nested cell artifacts flatten into the pluto dir
-// under <slug>.<name>, and a second pass never overwrites an existing copy.
+// under <slug>-<id>.<name>, and a second pass REFRESHES an existing copy.
 // Questions are rows in kraken.db now, not a file, so an artifact literally
 // named "questions.yaml" preserves like any other file — no reserved name,
 // no dedupe-aside.
-func TestPreserveArtifactsNestedAndNeverOverwrites(t *testing.T) {
+//
+// The refresh replaced a never-overwrite rule. While the prefix was the bare
+// slug, a collision usually meant a DIFFERENT job of the same name already
+// owned the path, and skipping silently lost the new job's file — teardown
+// deletes the source right after. With the id in the prefix a collision can
+// only be this same job's own earlier copy, i.e. a re-teardown, so taking the
+// newer bytes is the correct resolution.
+func TestPreserveArtifactsNestedAndRefreshes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	plutoDir := t.TempDir()
 	t.Setenv("KRAKEN_PLUTO_DIR", plutoDir)
 
-	j := &Job{Slug: "preserve-me"}
+	j := &Job{Slug: "preserve-me", ID: 4}
 	artDir := CellArtifacts(j)
 	if err := os.MkdirAll(filepath.Join(artDir, "figures"), 0o755); err != nil {
 		t.Fatal(err)
@@ -337,8 +344,8 @@ func TestPreserveArtifactsNestedAndNeverOverwrites(t *testing.T) {
 		t.Fatalf("want 2 files copied, got %+v", copied)
 	}
 
-	figDst := filepath.Join(plutoDir, "preserve-me.figures-a.svg")
-	qDst := filepath.Join(plutoDir, "preserve-me.questions.yaml")
+	figDst := filepath.Join(plutoDir, "preserve-me-4.figures-a.svg")
+	qDst := filepath.Join(plutoDir, "preserve-me-4.questions.yaml")
 	if data, err := os.ReadFile(figDst); err != nil || string(data) != "svg" {
 		t.Fatalf("figures-a.svg not preserved: data=%q err=%v", data, err)
 	}
@@ -346,8 +353,8 @@ func TestPreserveArtifactsNestedAndNeverOverwrites(t *testing.T) {
 		t.Fatalf("questions.yaml artifact not preserved: data=%q err=%v", data, err)
 	}
 
-	// change both sources, run again: never-overwrite means the pluto
-	// copies must stay exactly as they were the first time.
+	// change both sources, run again: the pluto copies must pick up the
+	// newer bytes rather than being silently skipped.
 	if err := os.WriteFile(filepath.Join(artDir, "figures", "a.svg"), []byte("svg-v2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -357,10 +364,10 @@ func TestPreserveArtifactsNestedAndNeverOverwrites(t *testing.T) {
 	if _, err := preserveArtifacts(j, "/unused-repo-for-build-jobs"); err != nil {
 		t.Fatalf("preserveArtifacts (second pass): %v", err)
 	}
-	if data, _ := os.ReadFile(figDst); string(data) != "svg" {
-		t.Fatalf("figures-a.svg was overwritten: %q", data)
+	if data, _ := os.ReadFile(figDst); string(data) != "svg-v2" {
+		t.Fatalf("figures-a.svg not refreshed: %q", data)
 	}
-	if data, _ := os.ReadFile(qDst); string(data) != "- q: one\n" {
-		t.Fatalf("questions.yaml was overwritten: %q", data)
+	if data, _ := os.ReadFile(qDst); string(data) != "- q: two\n" {
+		t.Fatalf("questions.yaml not refreshed: %q", data)
 	}
 }

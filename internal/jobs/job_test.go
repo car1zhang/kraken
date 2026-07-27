@@ -623,14 +623,16 @@ func TestStateRankOrdering(t *testing.T) {
 }
 
 func TestCellNaming(t *testing.T) {
-	j := &Job{Slug: "Weird Slug!"}
-	if got := CellSession(j); got != "cell-weird-slug" {
+	// Every runtime name is <slugified slug>-<id>: the slug keeps it readable
+	// for a human, the id keeps two jobs of the same name apart.
+	j := &Job{Slug: "Weird Slug!", ID: 12}
+	if got := CellSession(j); got != "cell-weird-slug-12" {
 		t.Fatalf("CellSession: %q", got)
 	}
-	if got := CellBranch(j); got != "carl/weird-slug" {
+	if got := CellBranch(j); got != "carl/weird-slug-12" {
 		t.Fatalf("CellBranch: %q", got)
 	}
-	if got := CellWorktree(j, "/Users/car1zhang/Developer/monolith"); !strings.HasSuffix(got, "/weird-slug/wt-monolith") {
+	if got := CellWorktree(j, "/Users/car1zhang/Developer/monolith"); !strings.HasSuffix(got, "/weird-slug-12/wt-monolith") {
 		t.Fatalf("CellWorktree: %q", got)
 	}
 }

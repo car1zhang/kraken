@@ -19,6 +19,7 @@ _k() {
         'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
+        'cutover:one-shot rename of preserved artifacts onto <slug>-<id> (human-run once per machine)'
         'update:self-update — fast-forward, rebuild, reinstall, restart the launchd job'
         'ship-ios:build the iOS app and upload it to TestFlight (needs ASC_KEY_ID/ASC_ISSUER_ID)'
         'help:show help'

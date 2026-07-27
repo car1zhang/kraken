@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"kraken/internal/util"
@@ -22,15 +23,30 @@ func uploadsRoot() string {
 	return filepath.Join(util.Home(), ".kraken", "uploads")
 }
 
-// UploadsDir is where a job's uploaded images live. An empty post-slugify
-// slug returns "" so destructive callers (RemoveAll) can never resolve to
-// the shared uploads root itself.
-func UploadsDir(slug string) string {
+// UploadsDir is where a job's uploaded images live: <slug>-<id>, the same
+// naming cellName gives the cell dir and for the same reason.
+//
+// It takes the id explicitly rather than a *Job because its callers hold
+// different things — a store row inside saveUploadToStore, a *Job in
+// ArchiveJob, only a URL path segment in the api layer (which resolves the
+// slug to an active job first). One function, so a writer and a reader cannot
+// disagree about where the bytes live.
+//
+// The id is not cosmetic here. ArchiveJob does os.RemoveAll on this path, and
+// while it was keyed on the bare slug that call would delete a same-slug
+// ACTIVE job's materialized uploads — leaving that job's uploads rows in the
+// database pointing at bytes no longer on disk. The old job silently
+// damaging the new one, the mirror image of the collisions this change
+// exists to fix.
+//
+// An empty post-slugify slug or a non-positive id returns "" so destructive
+// callers (RemoveAll) can never resolve to the shared uploads root itself.
+func UploadsDir(slug string, id int64) string {
 	s := util.Slugify(slug)
-	if s == "" {
+	if s == "" || id < 1 {
 		return ""
 	}
-	return filepath.Join(uploadsRoot(), s)
+	return filepath.Join(uploadsRoot(), s+"-"+strconv.FormatInt(id, 10))
 }
 
 // SaveUpload writes data as the next sequential image for slug, returning
@@ -52,12 +68,18 @@ func SaveUpload(slug, ext string, data []byte) (name, path string, err error) {
 // missing dir is not an error, and an empty-slugifying slug is a no-op
 // rather than a RemoveAll on the shared uploads root.
 func RemoveUploads(slug string) error {
-	if sr, err := ActiveStore().GetJobBySlug(slug); err == nil {
-		if err := ActiveStore().DeleteUploadsForJob(sr.ID); err != nil {
-			return err
-		}
-	} // no active job under that slug: nothing in the DB to remove, but the materialized dir below may still exist
-	dir := UploadsDir(slug)
+	sr, err := ActiveStore().GetJobBySlug(slug)
+	if err != nil {
+		// No active job under that slug. The uploads dir is named
+		// <slug>-<id>, so without an id there is no directory this function
+		// may safely remove — and guessing one would risk another
+		// generation's files. Nothing in the DB to remove either.
+		return nil
+	}
+	if err := ActiveStore().DeleteUploadsForJob(sr.ID); err != nil {
+		return err
+	}
+	dir := UploadsDir(slug, sr.ID)
 	if dir == "" {
 		return nil
 	}

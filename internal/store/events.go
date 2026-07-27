@@ -10,11 +10,21 @@ import (
 // suspenders alongside the NOT NULL DEFAULT columns in schema.go, so a NULL
 // that sneaks in degrades to a blank field rather than erroring ListEvents.
 const eventColumns = `id, COALESCE(ts,0), COALESCE(src,''), COALESCE(level,''),
-	COALESCE(event,''), COALESCE(msg,''), COALESCE(job_slug,'')`
+	COALESCE(event,''), COALESCE(msg,''), COALESCE(job_slug,''), COALESCE(job_id,0)`
 
 // Event is one logged occurrence — the events table's replacement for
 // kraken's JSONL log lines. JobSlug is optional (empty means not tied to a
 // job, e.g. a daemon-start line).
+//
+// This is the ONE table that carries both a job id and a job slug, and it
+// keeps both on purpose. Everywhere else in the store, schema v11 replaced the
+// mutable slug with the immutable id because a freed-and-reused slug made two
+// jobs indistinguishable. An events row is different in kind: it is a FOSSIL
+// that deliberately outlives its job's hard delete (DeleteJob's contract, the
+// same reason feedback.job_id is ON DELETE SET NULL rather than CASCADE), so
+// once the job row is gone JobID resolves to nothing while JobSlug still says
+// what the line was about. JobID is the identity, JobSlug is the epitaph;
+// zero/empty respectively mean "not tied to a job".
 type Event struct {
 	ID      int64
 	TS      int64
@@ -23,6 +33,7 @@ type Event struct {
 	Event   string
 	Msg     string
 	JobSlug string
+	JobID   int64
 }
 
 // maxEvents caps the events table at its newest N rows (jobs/store.go's
@@ -43,16 +54,20 @@ var pruneCheckEvery int64 = 1000
 // it zero, and returns the assigned id. job_slug is NOT NULL DEFAULT
 // (empty string) in the schema, so an unset JobSlug is stored as an empty
 // string rather than NULL — same meaning ("not tied to a job"), no
-// sentinel NULL required on the way in. Amortized pruning (see
-// pruneCheckEvery) keeps the table bounded at maxEvents rows without
-// costing every single insert a second statement.
+// sentinel NULL required on the way in. An unset JobID is written as 0 for
+// the same reason, even though job_id is a nullable column (v11 added it to a
+// table that already had rows, so it had to be): 0 and NULL both read back as
+// 0 through eventColumns' COALESCE, and writing the zero keeps this insert
+// from needing a sql.NullInt64 to say the one thing an absent id can mean.
+// Amortized pruning (see pruneCheckEvery) keeps the table bounded at maxEvents
+// rows without costing every single insert a second statement.
 func (s *Store) AppendEvent(e Event) (int64, error) {
 	if e.TS == 0 {
 		e.TS = time.Now().UnixMilli()
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO events (ts, src, level, event, msg, job_slug) VALUES (?, ?, ?, ?, ?, ?)`,
-		e.TS, e.Src, e.Level, e.Event, e.Msg, e.JobSlug,
+		`INSERT INTO events (ts, src, level, event, msg, job_slug, job_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		e.TS, e.Src, e.Level, e.Event, e.Msg, e.JobSlug, e.JobID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("append event: %w", err)
@@ -113,7 +128,7 @@ func (s *Store) ListEvents(limit int, beforeID int64) ([]Event, error) {
 	var out []Event
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.ID, &e.TS, &e.Src, &e.Level, &e.Event, &e.Msg, &e.JobSlug); err != nil {
+		if err := rows.Scan(&e.ID, &e.TS, &e.Src, &e.Level, &e.Event, &e.Msg, &e.JobSlug, &e.JobID); err != nil {
 			return nil, fmt.Errorf("list events: %w", err)
 		}
 		out = append(out, e)

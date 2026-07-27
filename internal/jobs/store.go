@@ -343,13 +343,23 @@ func removeJobPRsFromStore(st *store.Store, j *Job, drop map[string]bool) (remov
 // trace in the store, matching the file-mode SaveUpload's own
 // check-before-write ordering (uploads.go).
 func saveUploadToStore(st *store.Store, slug, ext string, data []byte) (name, path string, err error) {
-	dir := UploadsDir(slug)
-	if dir == "" {
+	// E13's slug check stays FIRST and keeps its own error: a slug that
+	// slugifies to nothing can never name an uploads dir, and saying so is
+	// more use than the "no active job" a lookup would report for the same
+	// input. Only then resolve the job, which UploadsDir now needs for the
+	// id half of <slug>-<id>. Either way the dir is settled before any store
+	// WRITE, which is the invariant E13 actually exists for — a slug with
+	// nowhere to materialize must leave zero trace in the uploads table.
+	if util.Slugify(slug) == "" {
 		return "", "", fmt.Errorf("slug %q slugifies to nothing", slug)
 	}
 	sr, err := st.GetJobBySlug(slug)
 	if err != nil {
 		return "", "", fmt.Errorf("save upload: no active job %q: %w", slug, err)
+	}
+	dir := UploadsDir(slug, sr.ID)
+	if dir == "" {
+		return "", "", fmt.Errorf("slug %q slugifies to nothing", slug)
 	}
 	mimeType := mime.TypeByExtension("." + ext)
 	u, err := st.SaveUpload(sr.ID, ext, mimeType, data)

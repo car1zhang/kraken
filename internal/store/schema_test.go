@@ -24,6 +24,61 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v12: put board_order and the two token tables back on the slug,
+	// drop events.job_id, and restore the drafts table. The token tables are
+	// dropped and recreated rather than converted, because v12 deletes every
+	// row regardless — there is nothing a downgrade could carry back.
+	//
+	// The recreated job_tokens carries the four zeus columns: downgrading from
+	// v12 lands on v11, not v10, and v11 is where those columns live. Leaving
+	// them out here would make a "downgrade to 11" produce a v10 shape and
+	// quietly break the v11 step that runs next.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 12 {
+		for _, stmt := range []string{
+			`DROP TABLE board_order`,
+			`CREATE TABLE board_order (
+				"column"  TEXT NOT NULL,
+				position  INTEGER NOT NULL,
+				slug      TEXT NOT NULL,
+				PRIMARY KEY ("column", position)
+			)`,
+			`ALTER TABLE events DROP COLUMN job_id`,
+			`DROP TABLE job_tokens`,
+			`DROP TABLE job_token_files`,
+			`CREATE TABLE job_tokens (
+				job_slug         TEXT PRIMARY KEY NOT NULL,
+				in_tokens        INTEGER NOT NULL DEFAULT 0,
+				out_tokens       INTEGER NOT NULL DEFAULT 0,
+				cache_write      INTEGER NOT NULL DEFAULT 0,
+				cache_read       INTEGER NOT NULL DEFAULT 0,
+				sessions         INTEGER NOT NULL DEFAULT 0,
+				updated_at       INTEGER NOT NULL DEFAULT 0,
+				zeus_in          INTEGER NOT NULL DEFAULT 0,
+				zeus_out         INTEGER NOT NULL DEFAULT 0,
+				zeus_cache_write INTEGER NOT NULL DEFAULT 0,
+				zeus_cache_read  INTEGER NOT NULL DEFAULT 0
+			)`,
+			`CREATE TABLE job_token_files (
+				job_slug    TEXT NOT NULL,
+				path        TEXT NOT NULL,
+				byte_offset INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (job_slug, path)
+			)`,
+			`CREATE TABLE drafts (
+				job_slug   TEXT PRIMARY KEY NOT NULL,
+				text       TEXT NOT NULL DEFAULT '',
+				updated_at INTEGER NOT NULL DEFAULT 0
+			)`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d: %v", target, err)
+			}
+		}
+	}
+
 	// Reverse v11: drop job_tokens' four zeus columns (added at v11, absent
 	// through v10). The v11 migration's OTHER half — emptying both token
 	// tables — is deliberately not reversed: it destroys rows rather than
@@ -984,13 +1039,13 @@ func TestSchemaV10ToV11SplitsAndWipesTokens(t *testing.T) {
 	}
 
 	// ...and the re-sum a daemon pass would then do lands with the split.
-	if err := s.BumpJobTokens("v10-shaped", JobTokens{
+	if err := s.BumpJobTokens(7, JobTokens{
 		In: 111, Out: 222, CacheWrite: 333, CacheRead: 444, Sessions: 9,
 		ZeusIn: 40, ZeusOut: 80, ZeusCacheWrite: 100, ZeusCacheRead: 200,
 	}); err != nil {
 		t.Fatalf("BumpJobTokens after migration: %v", err)
 	}
-	got, err := s.GetJobTokens("v10-shaped")
+	got, err := s.GetJobTokens(7)
 	if err != nil {
 		t.Fatalf("GetJobTokens after migration: %v", err)
 	}
@@ -1282,5 +1337,307 @@ func TestSchemaV7ToV8AddsColor(t *testing.T) {
 	}
 	if got.Color != "" {
 		t.Fatalf("scanned color = %q, want empty", got.Color)
+	}
+}
+
+// --- v10 -> v11: the job's identity becomes its id ---
+
+// seedV10 opens a store, creates the given jobs, then walks the database back
+// to the v10 shape so a test can insert rows the way the pre-cutover binary
+// wrote them. Returns the store and the ids, in the order the slugs were
+// given.
+//
+// The jobs are created BEFORE the downgrade because CreateJob/ArchiveJob are
+// v11-shaped accessors; the jobs table itself is untouched by v11, so the rows
+// they write are exactly what a v10 database would have held.
+func seedV10(t *testing.T, slugs ...string) (*Store, []int64) {
+	t.Helper()
+	s := openTest(t)
+	ids := make([]int64, 0, len(slugs))
+	for _, slug := range slugs {
+		id, err := s.CreateJob(&Job{Slug: slug})
+		if err != nil {
+			t.Fatalf("CreateJob %q: %v", slug, err)
+		}
+		ids = append(ids, id)
+	}
+	downgradeFreshDB(t, s, 10)
+	return s, ids
+}
+
+// TestMigrateV11RekeysBoardOrderAndEvents walks all four branches of
+// resolveV11Slug's precedence in one fixture: an ACTIVE job wins outright, a
+// single ARCHIVED job matches on its archived_name, the NEWEST archived job
+// breaks a slug tie, and an unmappable slug drops its board_order row (with an
+// event logged) while its events rows SURVIVE with a NULL job_id.
+func TestMigrateV11RekeysBoardOrderAndEvents(t *testing.T) {
+	s := openTest(t)
+
+	// active: holds the slug "live" right now
+	activeID, err := s.CreateJob(&Job{Slug: "live"})
+	if err != nil {
+		t.Fatalf("CreateJob active: %v", err)
+	}
+	// archived under its own name: "renamed" archives to "renamed"
+	namedID, err := s.CreateJob(&Job{Slug: "renamed"})
+	if err != nil {
+		t.Fatalf("CreateJob named: %v", err)
+	}
+	archivedName, err := s.ArchiveJob(namedID)
+	if err != nil {
+		t.Fatalf("ArchiveJob named: %v", err)
+	}
+	// Three archived generations of the slug "twice", then the first one
+	// hard-deleted. ArchiveJob's numbered de-dup means only the FIRST took the
+	// bare archived_name "twice", so deleting it leaves no archived_name match
+	// at all — which is what forces the third rule (newest archived job with
+	// that SLUG) to be the one that fires, rather than the archived_name rule
+	// above it silently answering first.
+	var twice []int64
+	for i := 0; i < 3; i++ {
+		id, err := s.CreateJob(&Job{Slug: "twice"})
+		if err != nil {
+			t.Fatalf("CreateJob twice#%d: %v", i, err)
+		}
+		if _, err := s.ArchiveJob(id); err != nil {
+			t.Fatalf("ArchiveJob twice#%d: %v", i, err)
+		}
+		twice = append(twice, id)
+	}
+	if err := s.DeleteJob(twice[0]); err != nil {
+		t.Fatalf("DeleteJob twice#0 (frees the bare archived_name): %v", err)
+	}
+	oldID, newID := twice[1], twice[2]
+
+	downgradeFreshDB(t, s, 10)
+
+	for i, slug := range []string{"live", archivedName, "twice", "vanished"} {
+		if _, err := s.db.Exec(
+			`INSERT INTO board_order ("column", position, slug) VALUES (?, ?, ?)`,
+			"queued", i, slug,
+		); err != nil {
+			t.Fatalf("seed board_order %q: %v", slug, err)
+		}
+	}
+	for _, slug := range []string{"live", "vanished"} {
+		if _, err := s.db.Exec(
+			`INSERT INTO events (ts, src, level, event, msg, job_slug) VALUES (?, ?, ?, ?, ?, ?)`,
+			100, "daemon", "info", "seed", "hello "+slug, slug,
+		); err != nil {
+			t.Fatalf("seed events %q: %v", slug, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v10: %v", err)
+	}
+
+	order, err := s.GetBoardOrder()
+	if err != nil {
+		t.Fatalf("GetBoardOrder: %v", err)
+	}
+	want := []int64{activeID, namedID, newID}
+	if len(order["queued"]) != len(want) {
+		t.Fatalf("queued = %v, want %v (the unmappable slug dropped)", order["queued"], want)
+	}
+	for i, id := range want {
+		if order["queued"][i] != id {
+			t.Fatalf("queued[%d] = %d, want %d (order preserved, positions repacked)", i, order["queued"][i], id)
+		}
+	}
+	if order["queued"][2] == oldID {
+		t.Fatal("the OLDER archived generation won the slug tie; newest must win")
+	}
+
+	// the dropped board_order row left a note behind, in the same transaction
+	events, err := s.ListEvents(500, 0)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	var logged bool
+	byMsg := map[string]Event{}
+	for _, e := range events {
+		byMsg[e.Msg] = e
+		if e.Event == "board-order-migration-drop" && e.JobSlug == "vanished" {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatal("an unmappable board_order row must be dropped WITH an events row saying so")
+	}
+
+	// events: backfilled where mappable, kept-with-NULL where not
+	if got := byMsg["hello live"]; got.JobID != activeID {
+		t.Fatalf("events job_id for the live job = %d, want %d", got.JobID, activeID)
+	}
+	got, ok := byMsg["hello vanished"]
+	if !ok {
+		t.Fatal("an events row whose slug maps to nothing must SURVIVE — it is a fossil by design")
+	}
+	if got.JobID != 0 {
+		t.Fatalf("unmappable events row job_id = %d, want 0/NULL", got.JobID)
+	}
+	if got.JobSlug != "vanished" {
+		t.Fatalf("job_slug = %q, want it kept as the display fossil", got.JobSlug)
+	}
+}
+
+// TestMigrateV11ClearsTokenTables pins Q4: the counters are REGENERATED by the
+// daemon, never migrated. There is no honest mapping — on the live database
+// five archived jobs share the slug `asdf`, so their single row measures all
+// five together — and re-summing ~110 cell dirs inside the migration
+// transaction is exactly the synchronous work the incremental watermark design
+// exists to avoid.
+func TestMigrateV11ClearsTokenTables(t *testing.T) {
+	s, ids := seedV10(t, "measured")
+
+	if _, err := s.db.Exec(
+		`INSERT INTO job_tokens (job_slug, in_tokens, out_tokens, sessions, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		"measured", 1, 2, 3, 4,
+	); err != nil {
+		t.Fatalf("seed job_tokens: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO job_token_files (job_slug, path, byte_offset) VALUES (?, ?, ?)`,
+		"measured", "/p/a.jsonl", 99,
+	); err != nil {
+		t.Fatalf("seed job_token_files: %v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v10: %v", err)
+	}
+
+	rows, err := s.ListJobTokens()
+	if err != nil {
+		t.Fatalf("ListJobTokens: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("job_tokens = %+v, want empty — nothing is mapped forward", rows)
+	}
+	all, err := s.AllJobTokenOffsets()
+	if err != nil {
+		t.Fatalf("AllJobTokenOffsets: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("job_token_files = %v, want empty", all)
+	}
+	// and specifically NOT re-keyed onto the job that happened to hold the slug
+	if _, err := s.GetJobTokens(ids[0]); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetJobTokens(%d) = %v, want ErrNotFound — the row was cleared, not moved", ids[0], err)
+	}
+}
+
+// TestMigrateV11DropsDraftsTable: the table had zero non-test callers and zero
+// rows (the real draft store is api/draft.go's in-memory map), so it goes.
+func TestMigrateV11DropsDraftsTable(t *testing.T) {
+	s, _ := seedV10(t, "drafted")
+
+	// it really is there at the v10 shape, or this test would pass vacuously
+	var exists int
+	if err := s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='drafts'`).Scan(&exists); err != nil {
+		t.Fatalf("drafts table missing at the v10 shape: %v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v10: %v", err)
+	}
+
+	err := s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='drafts'`).Scan(&exists)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("drafts table still present after v11: err=%v", err)
+	}
+	// board_order_slug is the migration's own scaffolding and must be gone too
+	err = s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_order_slug'`).Scan(&exists)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("board_order_slug scaffolding table survived the migration: err=%v", err)
+	}
+}
+
+// TestMigrateV11AgainstRealDuplicateShapes runs the migration against the
+// duplicate-slug shapes actually present on carl's machine — 5x `asdf`, 2x
+// `helper-catalog`, 2x `sadfsa` — because those are the rows that make the
+// mapping ambiguous at all, and a migration that only ever saw unique slugs
+// would prove nothing about them.
+func TestMigrateV11AgainstRealDuplicateShapes(t *testing.T) {
+	s := openTest(t)
+
+	// five generations of `asdf`, all archived — the worst case
+	var asdf []int64
+	for i := 0; i < 5; i++ {
+		id, err := s.CreateJob(&Job{Slug: "asdf"})
+		if err != nil {
+			t.Fatalf("CreateJob asdf#%d: %v", i, err)
+		}
+		if _, err := s.ArchiveJob(id); err != nil {
+			t.Fatalf("ArchiveJob asdf#%d: %v", i, err)
+		}
+		asdf = append(asdf, id)
+	}
+	// helper-catalog: one archived, one ACTIVE — the shape that broke a start
+	hcOld, err := s.CreateJob(&Job{Slug: "helper-catalog"})
+	if err != nil {
+		t.Fatalf("CreateJob helper-catalog#1: %v", err)
+	}
+	if _, err := s.ArchiveJob(hcOld); err != nil {
+		t.Fatalf("ArchiveJob helper-catalog#1: %v", err)
+	}
+	hcLive, err := s.CreateJob(&Job{Slug: "helper-catalog"})
+	if err != nil {
+		t.Fatalf("CreateJob helper-catalog#2: %v", err)
+	}
+	// sadfsa: two archived
+	saOld, err := s.CreateJob(&Job{Slug: "sadfsa"})
+	if err != nil {
+		t.Fatalf("CreateJob sadfsa#1: %v", err)
+	}
+	if _, err := s.ArchiveJob(saOld); err != nil {
+		t.Fatalf("ArchiveJob sadfsa#1: %v", err)
+	}
+	saNew, err := s.CreateJob(&Job{Slug: "sadfsa"})
+	if err != nil {
+		t.Fatalf("CreateJob sadfsa#2: %v", err)
+	}
+	if _, err := s.ArchiveJob(saNew); err != nil {
+		t.Fatalf("ArchiveJob sadfsa#2: %v", err)
+	}
+
+	downgradeFreshDB(t, s, 10)
+
+	// The live table carries a stale `helper-catalog` row in the queued column
+	// belonging to no ACTIVE job at the time it was written — reproduced here.
+	for i, slug := range []string{"asdf", "helper-catalog", "sadfsa"} {
+		if _, err := s.db.Exec(
+			`INSERT INTO board_order ("column", position, slug) VALUES (?, ?, ?)`,
+			"queued", i, slug,
+		); err != nil {
+			t.Fatalf("seed board_order %q: %v", slug, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate against the real duplicate shapes: %v", err)
+	}
+
+	order, err := s.GetBoardOrder()
+	if err != nil {
+		t.Fatalf("GetBoardOrder: %v", err)
+	}
+	if len(order["queued"]) != 3 {
+		t.Fatalf("queued = %v, want all three mappable rows kept", order["queued"])
+	}
+	// asdf: no active job, no archived_name match ("asdf" archives to "asdf"
+	// for the FIRST one only), so the rule that fires depends on which — but
+	// whichever it is, it must be ONE of the five and it must be deterministic.
+	if order["queued"][0] != asdf[0] {
+		t.Errorf("asdf resolved to %d, want %d — the single archived_name match", order["queued"][0], asdf[0])
+	}
+	// helper-catalog: the ACTIVE job wins over the archived one, always
+	if order["queued"][1] != hcLive {
+		t.Errorf("helper-catalog resolved to %d, want the ACTIVE job %d", order["queued"][1], hcLive)
+	}
+	// sadfsa: no active job; the first archived took the bare name
+	if order["queued"][2] != saOld {
+		t.Errorf("sadfsa resolved to %d, want %d", order["queued"][2], saOld)
 	}
 }

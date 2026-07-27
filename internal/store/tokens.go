@@ -7,19 +7,28 @@ import (
 	"time"
 )
 
-// tokens.go — schema v10's job_tokens and job_token_files tables
-// (schema.go): the per-job token spend, and the per-transcript-file byte
-// watermarks that make computing it incremental.
+// tokens.go — the job_tokens and job_token_files tables (schema.go): the
+// per-job token spend, and the per-transcript-file byte watermarks that make
+// computing it incremental.
 //
 // "tokens", never "usage". `usage` in this binary means ACCOUNT QUOTA
 // (/api/usage, ~/.kraken/usage.json, core/usage.go) and the two must stay
 // greppably distinct.
 //
-// Both tables are keyed on the job SLUG, with no job_id, no FK and no
-// cascade — see schemaV10's doc comment for why (in short: the transcripts
-// being measured live in a directory derived from the slug, and an archived
-// or hard-deleted job's number must survive, since retrospective cost is the
-// whole point).
+// Both tables are keyed on the job ID since schema v11, with no FK and no
+// cascade. The two halves of that are separate decisions and only one of them
+// changed:
+//
+//   - ID rather than SLUG (new in v11): what is measured is the transcripts
+//     under a job's cell dir, and a cell dir is `<slugified slug>-<id>`
+//     (jobs/cell.go's cellName). Keyed on the slug alone, the five archived
+//     jobs slugged `asdf` on this machine shared ONE row that honestly measured
+//     all five together. See schemaV10's doc comment, which still carries the
+//     old argument and the note on why it stopped being true.
+//   - No FK, no cascade (unchanged from v10): an archived or hard-deleted job's
+//     number must survive, because retrospective cost is the entire point of
+//     storing it. teardownCell removes the cell dir; Claude Code keeps the
+//     transcripts indefinitely.
 //
 // Ownership is simple and total: every column of both tables is written by
 // the daemon's refresh pass and by nothing else. There is no carl-owned
@@ -34,7 +43,7 @@ import (
 // at wildly different rates, and a stored "cost" number would bake a price
 // ratio into the database and go stale the moment pricing moves.
 type JobTokens struct {
-	Slug       string
+	JobID      int64
 	In         int64 // input_tokens — uncached input
 	Out        int64 // output_tokens — generated
 	CacheWrite int64 // cache_creation_input_tokens
@@ -67,14 +76,14 @@ type JobTokens struct {
 // already declares all of these NOT NULL with a same-typed default, but a
 // NULL that sneaks in anyway (schema drift, a hand-edited row) must degrade
 // to a zero field rather than error the whole query.
-const jobTokensColumns = `job_slug, COALESCE(in_tokens,0), COALESCE(out_tokens,0),
+const jobTokensColumns = `job_id, COALESCE(in_tokens,0), COALESCE(out_tokens,0),
 	COALESCE(cache_write,0), COALESCE(cache_read,0), COALESCE(sessions,0),
 	COALESCE(updated_at,0), COALESCE(zeus_in,0), COALESCE(zeus_out,0),
 	COALESCE(zeus_cache_write,0), COALESCE(zeus_cache_read,0)`
 
 func scanJobTokens(row interface{ Scan(...any) error }) (*JobTokens, error) {
 	var t JobTokens
-	if err := row.Scan(&t.Slug, &t.In, &t.Out, &t.CacheWrite, &t.CacheRead,
+	if err := row.Scan(&t.JobID, &t.In, &t.Out, &t.CacheWrite, &t.CacheRead,
 		&t.Sessions, &t.UpdatedAt, &t.ZeusIn, &t.ZeusOut,
 		&t.ZeusCacheWrite, &t.ZeusCacheRead); err != nil {
 		return nil, err
@@ -89,26 +98,26 @@ func scanJobTokens(row interface{ Scan(...any) error }) (*JobTokens, error) {
 // ErrNotFound is a MEANINGFUL answer here rather than merely an absence: it
 // is what distinguishes "no transcripts yet" from a genuine zero, and it is
 // what lets the wire shape omit the key entirely for such a job.
-func (s *Store) GetJobTokens(slug string) (*JobTokens, error) {
-	row := s.db.QueryRow(`SELECT `+jobTokensColumns+` FROM job_tokens WHERE job_slug = ?`, slug)
+func (s *Store) GetJobTokens(jobID int64) (*JobTokens, error) {
+	row := s.db.QueryRow(`SELECT `+jobTokensColumns+` FROM job_tokens WHERE job_id = ?`, jobID)
 	t, err := scanJobTokens(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get job tokens %q: %w", slug, err)
+		return nil, fmt.Errorf("get job tokens %d: %w", jobID, err)
 	}
 	return t, nil
 }
 
-// ListJobTokens returns every measured job's row, slug-ordered.
+// ListJobTokens returns every measured job's row, id-ordered.
 //
 // It exists so a caller assembling many jobs at once — the board payload
 // carries ~74 of them and rebuilds roughly every two seconds — makes ONE
-// query rather than one per job. Ordering is by slug purely so the result is
+// query rather than one per job. Ordering is by id purely so the result is
 // deterministic; nothing renders in this order.
 func (s *Store) ListJobTokens() ([]JobTokens, error) {
-	rows, err := s.db.Query(`SELECT ` + jobTokensColumns + ` FROM job_tokens ORDER BY job_slug`)
+	rows, err := s.db.Query(`SELECT ` + jobTokensColumns + ` FROM job_tokens ORDER BY job_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list job tokens: %w", err)
 	}
@@ -162,18 +171,18 @@ func (s *Store) ListJobTokens() ([]JobTokens, error) {
 // deliberately left out of it: they are a SUBSET of those four, so they can
 // never make the sum non-zero on their own, and adding them would only make
 // the condition longer to read for no change in behaviour.
-func (s *Store) BumpJobTokens(slug string, delta JobTokens) error {
-	if slug == "" {
-		return fmt.Errorf("bump job tokens: empty slug")
+func (s *Store) BumpJobTokens(jobID int64, delta JobTokens) error {
+	if jobID <= 0 {
+		return fmt.Errorf("bump job tokens: job id %d is not a persisted job", jobID)
 	}
 	if delta.UpdatedAt == 0 {
 		delta.UpdatedAt = time.Now().UnixMilli()
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO job_tokens (job_slug, in_tokens, out_tokens, cache_write, cache_read, sessions, updated_at,
+		`INSERT INTO job_tokens (job_id, in_tokens, out_tokens, cache_write, cache_read, sessions, updated_at,
 				zeus_in, zeus_out, zeus_cache_write, zeus_cache_read)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(job_slug) DO UPDATE SET
+			ON CONFLICT(job_id) DO UPDATE SET
 				in_tokens        = in_tokens + excluded.in_tokens,
 				out_tokens       = out_tokens + excluded.out_tokens,
 				cache_write      = cache_write + excluded.cache_write,
@@ -186,12 +195,12 @@ func (s *Store) BumpJobTokens(slug string, delta JobTokens) error {
 				updated_at       = CASE WHEN excluded.in_tokens + excluded.out_tokens
 					+ excluded.cache_write + excluded.cache_read > 0
 					THEN excluded.updated_at ELSE updated_at END`,
-		slug, delta.In, delta.Out, delta.CacheWrite, delta.CacheRead,
+		jobID, delta.In, delta.Out, delta.CacheWrite, delta.CacheRead,
 		delta.Sessions, delta.UpdatedAt,
 		delta.ZeusIn, delta.ZeusOut, delta.ZeusCacheWrite, delta.ZeusCacheRead,
 	)
 	if err != nil {
-		return fmt.Errorf("bump job tokens %q: %w", slug, err)
+		return fmt.Errorf("bump job tokens %d: %w", jobID, err)
 	}
 	return nil
 }
@@ -201,10 +210,10 @@ func (s *Store) BumpJobTokens(slug string, delta JobTokens) error {
 // core.SumTokensDelta takes. A job with no watermarks yet yields an empty
 // (non-nil) map, never an error: "never measured" is a normal state and the
 // empty map makes the next pass read every file whole, which is correct.
-func (s *Store) JobTokenOffsets(slug string) (map[string]int64, error) {
-	rows, err := s.db.Query(`SELECT path, COALESCE(byte_offset,0) FROM job_token_files WHERE job_slug = ?`, slug)
+func (s *Store) JobTokenOffsets(jobID int64) (map[string]int64, error) {
+	rows, err := s.db.Query(`SELECT path, COALESCE(byte_offset,0) FROM job_token_files WHERE job_id = ?`, jobID)
 	if err != nil {
-		return nil, fmt.Errorf("job token offsets %q: %w", slug, err)
+		return nil, fmt.Errorf("job token offsets %d: %w", jobID, err)
 	}
 	defer rows.Close()
 	out := map[string]int64{}
@@ -212,7 +221,7 @@ func (s *Store) JobTokenOffsets(slug string) (map[string]int64, error) {
 		var path string
 		var off int64
 		if err := rows.Scan(&path, &off); err != nil {
-			return nil, fmt.Errorf("job token offsets %q: %w", slug, err)
+			return nil, fmt.Errorf("job token offsets %d: %w", jobID, err)
 		}
 		out[path] = off
 	}
@@ -220,29 +229,29 @@ func (s *Store) JobTokenOffsets(slug string) (map[string]int64, error) {
 }
 
 // AllJobTokenOffsets returns every job's watermarks in one query, keyed
-// slug -> path -> bytes.
+// job id -> path -> bytes.
 //
 // This is the form the daemon's refresh pass uses, and the reason it exists
 // is the same as ListJobTokens': the pass considers every job on every tick,
-// and one query beats ~74. A slug absent from the outer map has no
-// watermarks, which the pass treats identically to an empty inner map.
-func (s *Store) AllJobTokenOffsets() (map[string]map[string]int64, error) {
-	rows, err := s.db.Query(`SELECT job_slug, path, COALESCE(byte_offset,0) FROM job_token_files`)
+// and one query beats ~74. A job absent from the outer map has no watermarks,
+// which the pass treats identically to an empty inner map.
+func (s *Store) AllJobTokenOffsets() (map[int64]map[string]int64, error) {
+	rows, err := s.db.Query(`SELECT job_id, path, COALESCE(byte_offset,0) FROM job_token_files`)
 	if err != nil {
 		return nil, fmt.Errorf("all job token offsets: %w", err)
 	}
 	defer rows.Close()
-	out := map[string]map[string]int64{}
+	out := map[int64]map[string]int64{}
 	for rows.Next() {
-		var slug, path string
-		var off int64
-		if err := rows.Scan(&slug, &path, &off); err != nil {
+		var jobID, off int64
+		var path string
+		if err := rows.Scan(&jobID, &path, &off); err != nil {
 			return nil, fmt.Errorf("all job token offsets: %w", err)
 		}
-		if out[slug] == nil {
-			out[slug] = map[string]int64{}
+		if out[jobID] == nil {
+			out[jobID] = map[string]int64{}
 		}
-		out[slug][path] = off
+		out[jobID][path] = off
 	}
 	return out, rows.Err()
 }
@@ -259,25 +268,26 @@ func (s *Store) AllJobTokenOffsets() (map[string]map[string]int64, error) {
 // the files whose watermarks were lost and double-count them into the
 // accumulating counters.
 //
-// An empty map is legal and clears the job's watermarks.
-func (s *Store) SetJobTokenOffsets(slug string, offsets map[string]int64) error {
-	if slug == "" {
-		return fmt.Errorf("set job token offsets: empty slug")
+// An empty map is legal and clears the job's watermarks. A zero job id is
+// refused, for BumpJobTokens' reason.
+func (s *Store) SetJobTokenOffsets(jobID int64, offsets map[string]int64) error {
+	if jobID <= 0 {
+		return fmt.Errorf("set job token offsets: job id %d is not a persisted job", jobID)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("set job token offsets %q: %w", slug, err)
+		return fmt.Errorf("set job token offsets %d: %w", jobID, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM job_token_files WHERE job_slug = ?`, slug); err != nil {
-		return fmt.Errorf("set job token offsets %q: %w", slug, err)
+	if _, err := tx.Exec(`DELETE FROM job_token_files WHERE job_id = ?`, jobID); err != nil {
+		return fmt.Errorf("set job token offsets %d: %w", jobID, err)
 	}
 	for path, off := range offsets {
 		if _, err := tx.Exec(
-			`INSERT INTO job_token_files (job_slug, path, byte_offset) VALUES (?, ?, ?)`,
-			slug, path, off,
+			`INSERT INTO job_token_files (job_id, path, byte_offset) VALUES (?, ?, ?)`,
+			jobID, path, off,
 		); err != nil {
-			return fmt.Errorf("set job token offsets %q: %w", slug, err)
+			return fmt.Errorf("set job token offsets %d: %w", jobID, err)
 		}
 	}
 	return tx.Commit()

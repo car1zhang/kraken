@@ -12,20 +12,20 @@ import (
 func TestUploadsDir(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("KRAKEN_UPLOADS_DIR", root)
-	got := UploadsDir("My Job!")
-	if want := filepath.Join(root, "my-job"); got != want {
+	got := UploadsDir("My Job!", 4)
+	if want := filepath.Join(root, "my-job-4"); got != want {
 		t.Fatalf("UploadsDir(%q) = %q, want %q", "My Job!", got, want)
 	}
 	// an empty-slugifying slug must never resolve to the shared root
-	if got := UploadsDir("---"); got != "" {
+	if got := UploadsDir("---", 4); got != "" {
 		t.Fatalf("UploadsDir(---) = %q, want empty", got)
 	}
 }
 
 func TestUploadsDirHomeRelative(t *testing.T) {
 	t.Setenv("KRAKEN_UPLOADS_DIR", "")
-	got := UploadsDir("foo")
-	want := filepath.Join(util.Home(), ".kraken", "uploads", "foo")
+	got := UploadsDir("foo", 4)
+	want := filepath.Join(util.Home(), ".kraken", "uploads", "foo-4")
 	if got != want {
 		t.Fatalf("UploadsDir default root = %q, want %q", got, want)
 	}
@@ -90,12 +90,12 @@ func TestSaveUploadExtAndSlugGuards(t *testing.T) {
 
 func TestRemoveUploadsIdempotent(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "job-c"})
+	j := mustCreateJob(t, st, store.Job{Slug: "job-c"})
 
 	if _, _, err := SaveUpload("job-c", "png", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	dir := UploadsDir("job-c")
+	dir := UploadsDir("job-c", j.ID)
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("expected uploads dir to exist: %v", err)
 	}

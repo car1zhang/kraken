@@ -53,6 +53,8 @@ func main() {
 		cmdServe(rest)
 	case "import":
 		cmdImport(rest)
+	case "cutover":
+		cmdCutover(rest)
 	case "update":
 		cmdUpdate(rest)
 	case "ship-ios":
@@ -129,6 +131,15 @@ Commands:
                       already-populated/already-imported database without
                       --force/--reimport; --dry-run reports counts without
                       writing anything. Human-run once per machine at cutover.
+  k cutover [--commit]
+                      one-shot id-scoped renaming: moves the flat preserved
+                      artifact copies in ~/Documents/pluto (and archive/) onto
+                      the <slug>-<id>. prefix, so a name reused by a later job
+                      can no longer claim an earlier job's files. Dry run by
+                      default — prints every intended rename and changes
+                      nothing; --commit performs them. Deliberately narrow: it
+                      never touches cell directories or the token tables. Run
+                      with no active jobs. Human-run once per machine.
   k update [--force] [--dry-run] [--test]
                       self-update: fast-forward the kraken checkout to
                       origin/main, rebuild, reinstall, and restart the launchd

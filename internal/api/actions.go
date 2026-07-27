@@ -201,7 +201,7 @@ func webDone(req webReq) error {
 	if _, err := jobs.DoneJob(j, "accepted"); err != nil {
 		return err
 	}
-	clearDraft(j.Slug)
+	clearDraft(j.ID)
 	return nil
 }
 
@@ -343,7 +343,7 @@ func webSteer(req webReq) error {
 	if err := jobs.WriteJobState(j, "working"); err != nil {
 		return err
 	}
-	clearDraft(j.Slug)
+	clearDraft(j.ID)
 	return nil
 }
 
@@ -373,7 +373,7 @@ func webArchive(req webReq) error {
 	if _, err := jobs.ArchiveJob(j, jobs.LiveSessions()); err != nil {
 		return err
 	}
-	clearDraft(j.Slug)
+	clearDraft(j.ID)
 	return nil
 }
 
@@ -398,7 +398,11 @@ func webDelete(req webReq) error {
 	if err := jobs.DeleteArchivedJob(a); err != nil {
 		return err
 	}
-	clearDraft(req.Slug)
+	// a.ID, not req.Slug: req.Slug here is the ARCHIVE NAME, which was never a
+	// draft key even under the old slug-keyed store — and if that name happened
+	// to equal an ACTIVE job's slug (`foo` archived as `foo`, a new `foo`
+	// started since), this line wiped the live job's composer instead.
+	clearDraft(a.ID)
 	return nil
 }
 
@@ -412,7 +416,7 @@ func webReactivate(req webReq) error {
 	if err := jobs.ReactivateJob(j, "", jobs.OneLine(req.Text)); err != nil {
 		return err
 	}
-	clearDraft(j.Slug)
+	clearDraft(j.ID)
 	return nil
 }
 

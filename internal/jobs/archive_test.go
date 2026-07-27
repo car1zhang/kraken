@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,8 +40,10 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x", Ready: true, State: "done", Outcome: "PR merged"})
-	if err := os.WriteFile(filepath.Join(PlutoDir(), "foo.report.md"), []byte("hi"), 0o644); err != nil {
+	r1 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x", Ready: true, State: "done", Outcome: "PR merged"})
+	// artifact copies are prefixed <slug>-<id>., the same name they carried
+	// while the job was live — archiving moves them without renaming
+	if err := os.WriteFile(filepath.Join(PlutoDir(), fmt.Sprintf("foo-%d.report.md", r1.ID)), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	j := LoadJobBySlug("foo")
@@ -54,7 +57,7 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if LoadJobBySlug("foo") != nil {
 		t.Fatal("job still active after archive")
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo.report.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(ArchiveDir(), fmt.Sprintf("foo-%d.report.md", r1.ID))); err != nil {
 		t.Fatal("artifact didn't move to archive")
 	}
 
@@ -87,7 +90,7 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if restored == nil || restored.State != "done" || restored.Outcome != "PR merged" {
 		t.Fatalf("unarchive didn't preserve state/outcome: %+v", restored)
 	}
-	if _, err := os.Stat(filepath.Join(PlutoDir(), "foo.report.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(PlutoDir(), fmt.Sprintf("foo-%d.report.md", r1.ID))); err != nil {
 		t.Fatal("artifact didn't move back")
 	}
 
@@ -103,15 +106,20 @@ func TestDeleteArchivedJob(t *testing.T) {
 	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
-	if err := os.WriteFile(filepath.Join(PlutoDir(), "foo.report.md"), []byte("x"), 0o644); err != nil {
+	// Two generations of the slug "foo". Their artifact files are kept apart
+	// by the job ID in the prefix, not by the archive's -2 numbering — which
+	// is why deleting one can no longer touch the other's files.
+	r1 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
+	f1 := fmt.Sprintf("foo-%d.report.md", r1.ID)
+	if err := os.WriteFile(filepath.Join(PlutoDir(), f1), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ArchiveJob(LoadJobBySlug("foo"), map[string]bool{}); err != nil {
 		t.Fatal(err)
 	}
-	mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
-	if err := os.WriteFile(filepath.Join(PlutoDir(), "foo.doc.html"), []byte("x"), 0o644); err != nil {
+	r2 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
+	f2 := fmt.Sprintf("foo-%d.doc.html", r2.ID)
+	if err := os.WriteFile(filepath.Join(PlutoDir(), f2), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ArchiveJob(LoadJobBySlug("foo"), map[string]bool{}); err != nil {
@@ -125,14 +133,14 @@ func TestDeleteArchivedJob(t *testing.T) {
 	if ArchivedJobByName(LoadArchivedJobs(), "foo") != nil {
 		t.Fatal("job row survived delete")
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo.report.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(ArchiveDir(), f1)); !os.IsNotExist(err) {
 		t.Fatal("artifact survived delete")
 	}
 	// foo-2 (a different archived job that shares the slug) must be untouched
 	if ArchivedJobByName(LoadArchivedJobs(), "foo-2") == nil {
 		t.Fatal("delete of foo took foo-2 with it")
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), "foo-2.doc.html")); err != nil {
+	if _, err := os.Stat(filepath.Join(ArchiveDir(), f2)); err != nil {
 		t.Fatal("delete of foo took foo-2's artifact with it")
 	}
 }
@@ -179,16 +187,16 @@ func TestBranchForRun(t *testing.T) {
 		run  int
 		want string
 	}{
-		{0, "carl/my-job"},
-		{1, "carl/my-job"},
-		{2, "carl/my-job-r2"},
-		{7, "carl/my-job-r7"},
+		{0, "carl/my-job-3"},
+		{1, "carl/my-job-3"},
+		{2, "carl/my-job-3-r2"},
+		{7, "carl/my-job-3-r7"},
 	}
 	for _, c := range cases {
-		if got := branchForRun("My Job", c.run); got != c.want {
+		if got := branchForRun(&Job{Slug: "My Job", ID: 3}, c.run); got != c.want {
 			t.Errorf("run %d: got %q, want %q", c.run, got, c.want)
 		}
-		if got := CellBranch(&Job{Slug: "My Job", Run: c.run}); got != c.want {
+		if got := CellBranch(&Job{Slug: "My Job", ID: 3, Run: c.run}); got != c.want {
 			t.Errorf("CellBranch run %d: got %q, want %q", c.run, got, c.want)
 		}
 	}

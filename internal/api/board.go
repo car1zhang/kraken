@@ -336,7 +336,7 @@ type webTokens struct {
 // is exactly why store.ListJobTokens exists at all. nil (never an error) when
 // no store is wired, and log-and-return-nil on a query failure, the same
 // never-fail-the-whole-poll-for-one-field contract as jobQuestions/jobThreads.
-func jobTokensIndex(st *store.Store) map[string]store.JobTokens {
+func jobTokensIndex(st *store.Store) map[int64]store.JobTokens {
 	if st == nil {
 		return nil
 	}
@@ -345,20 +345,25 @@ func jobTokensIndex(st *store.Store) map[string]store.JobTokens {
 		util.LogEvent("web", "error", "board", fmt.Sprintf("list job tokens: %v", err))
 		return nil
 	}
-	index := make(map[string]store.JobTokens, len(rows))
+	index := make(map[int64]store.JobTokens, len(rows))
 	for _, r := range rows {
-		index[r.Slug] = r
+		index[r.JobID] = r
 	}
 	return index
 }
 
 // webTokensFor looks one job's row out of jobTokensIndex' map and shapes it
-// for the wire. A slug with no row — the store's ErrNotFound case, and every
-// job whose transcripts have not been summed yet — returns nil, so webJob's
-// omitempty drops the key rather than synthesising a zero row that would
-// claim the job cost nothing.
-func webTokensFor(index map[string]store.JobTokens, slug string) *webTokens {
-	t, ok := index[slug]
+// for the wire. Keyed on the job's immutable id: the rows moved off the slug
+// in schema v11 precisely because two generations of one reused name shared a
+// single row, and both cards then showed the sum of both jobs' spend.
+//
+// A job with no row — the store's ErrNotFound case, and every job whose
+// transcripts have not been summed yet — returns nil, so webJob's omitempty
+// drops the key rather than synthesising a zero row that would claim the job
+// cost nothing. After the v11 migration that is EVERY job for a few minutes,
+// since the counters are cleared and re-summed by the daemon's throttled pass.
+func webTokensFor(index map[int64]store.JobTokens, jobID int64) *webTokens {
+	t, ok := index[jobID]
 	if !ok {
 		return nil
 	}
@@ -380,11 +385,23 @@ type webJob struct {
 	// omitted entirely when unset — a client that sees no key renders the
 	// card exactly as it did before colours existed. Additive, so
 	// apiContract stays put.
-	Color     string        `json:"color,omitempty"`
-	Cell      string        `json:"cell,omitempty"`
-	Live      bool          `json:"live"`
-	Prereqs   []webPrereq   `json:"prereqs,omitempty"`
-	Artifacts []webArtifact `json:"artifacts,omitempty"`
+	Color string `json:"color,omitempty"`
+	// StartError is why the daemon's last attempt to start this job's cell
+	// failed, empty when the last attempt succeeded or none was made. Set
+	// only for a job in the queued display state — a job that is working has
+	// nothing to explain, and a stale reason on a running card would read as
+	// a current fault.
+	//
+	// It exists because this failure used to be invisible. The reason went to
+	// ~/.kraken/logs and to DaemonStatus.LastError, which is ONE string for
+	// the whole tick rather than per job, and which app.js has never
+	// rendered. A job sat queued through 24 identical failed starts over nine
+	// minutes showing nothing at all. Additive, so apiContract stays put.
+	StartError string        `json:"start_error,omitempty"`
+	Cell       string        `json:"cell,omitempty"`
+	Live       bool          `json:"live"`
+	Prereqs    []webPrereq   `json:"prereqs,omitempty"`
+	Artifacts  []webArtifact `json:"artifacts,omitempty"`
 	// Detail is the cell's last words: for a live started cell, the full
 	// text of the last assistant text block of zeus' transcript, capped at
 	// 4000 chars.
@@ -568,12 +585,32 @@ func sortedArtifacts(out []webArtifact) []webArtifact {
 	return out
 }
 
-// plutoFlatArtifacts scans PlutoDir for j's <slug>.<name> flat copies —
-// preserveArtifacts' legacy preservation format (cell.go). Pulled out of
+// queuedStartError returns the daemon's last start failure for j, but only
+// while j is actually queued.
+//
+// The state gate is the whole subtlety. The daemon clears a job's entry the
+// moment a start succeeds, but a job can also leave the queued state without
+// any start attempt at all — carl dequeues it, or edits it back to draft — and
+// the stale reason would then sit on a card that is no longer trying to start
+// anything, reading as a current fault. Scoping the read to the displayed
+// state means the message is on screen exactly while it is true.
+func queuedStartError(j *jobs.Job, displayState string) string {
+	if displayState != "queued" {
+		return ""
+	}
+	return jobs.StartErrorFor(j.Slug)
+}
+
+// plutoFlatArtifacts scans PlutoDir for j's <slug>-<id>.<name> flat copies —
+// preserveArtifacts' preservation format (cell.go). Pulled out of
 // jobArtifacts so both the file-mode branch and the store-mode union
 // (L4+E6) share one implementation.
+//
+// The prefix comes from jobs.PlutoArtifactPrefix rather than being spelled
+// out here: this reader and preserveArtifacts' writer disagreeing about the
+// string is a job whose preserved artifacts silently vanish from its card.
 func plutoFlatArtifacts(j *jobs.Job) []webArtifact {
-	prefix := util.Slugify(j.Slug) + "."
+	prefix := jobs.PlutoArtifactPrefix(j)
 	entries, err := os.ReadDir(jobs.PlutoDir())
 	if err != nil {
 		return nil
@@ -634,19 +671,24 @@ func ArtifactPath(j *jobs.Job, home, name string) (string, bool) {
 		root = jobs.CellArtifacts(j)
 		p = filepath.Join(root, name)
 	case "pluto":
-		// pluto copies are flat (<slug>.<name>), never nested
+		// pluto copies are flat (<slug>-<id>.<name>), never nested
 		if strings.Contains(name, "/") {
 			return "", false
 		}
 		root = jobs.PlutoDir()
-		p = filepath.Join(root, util.Slugify(j.Slug)+"."+name)
+		p = filepath.Join(root, jobs.PlutoArtifactPrefix(j)+name)
 	case "archive":
-		// archived copies are flat under the numbered archive prefix
+		// Archived copies carry the SAME <slug>-<id>. prefix as live ones:
+		// ArchiveJob moves them across without renaming, because the id
+		// already disambiguates two generations of a name — which is what
+		// the archive's numbered -2/-3 prefix used to be for. ArchivedName
+		// remains the archived job's identity in the jobs table; it just no
+		// longer names files.
 		if j.ArchivedName == "" || strings.Contains(name, "/") {
 			return "", false
 		}
 		root = jobs.ArchiveDir()
-		p = filepath.Join(root, j.ArchivedName+"."+name)
+		p = filepath.Join(root, jobs.PlutoArtifactPrefix(j)+name)
 	default:
 		return "", false
 	}
@@ -871,11 +913,15 @@ func buildWebBoard() webBoard {
 			dep := bySlug[p.Job]
 			prereqs = append(prereqs, webPrereq{Job: p.Job, Gated: p.Gated, Done: dep != nil && dep.State == "done"})
 		}
+		// Computed once: this loop runs for every job on a payload rebuilt
+		// roughly every two seconds, and StartError needs the same answer.
+		displayState := jobs.DisplayState(j, bySlug)
 		wj := webJob{
 			Slug: j.Slug, Repo: j.Repo,
-			State: jobs.DisplayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
-			Color:   jobs.EffectiveColor(j),
-			Prereqs: prereqs, Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
+			State: displayState, Err: j.Err, Outcome: j.Outcome,
+			Color:      jobs.EffectiveColor(j),
+			StartError: queuedStartError(j, displayState),
+			Prereqs:    prereqs, Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
 			ModTime: j.ModTime.Unix(),
 			PRs:     j.PRs,
 			// DocQuestions/Feedback: one uniform path straight off the store,
@@ -888,10 +934,11 @@ func buildWebBoard() webBoard {
 			// live[] branch below — a closed thread outlives its cell and
 			// stays readable, so its chip must survive teardown too.
 			Threads: jobThreads(activeStore, j),
-			// Tokens: keyed on the job's SLUG, which is what jobs/tokens.go
-			// writes the row under (the measured project dir is derived from
-			// the slug alone), not on j.ID like Feedback above.
-			Tokens: webTokensFor(tokens, j.Slug),
+			// Tokens: keyed on j.ID, like Feedback above. The rows moved off
+			// the slug in schema v11 — the measured cell dir is <slug>-<id>
+			// now, so two generations of one reused name no longer share a
+			// directory OR a row.
+			Tokens: webTokensFor(tokens, j.ID),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -971,14 +1018,18 @@ func buildWebBoard() webBoard {
 			Feedback: jobFeedback(activeStore, a.ID),
 			// Tokens IS set for an archived job — keeping the number after
 			// the cell is gone is the whole reason the row has no FK and no
-			// cascade. It is looked up under a.Slug (the ORIGINAL slug the
-			// daemon summed under), never a.ArchivedName, which is the
-			// archive file base and was never a cell dir name. Consequence
-			// of that slug keying, and it is the store's shape rather than
-			// this layer's to fix: a new active job that takes the freed slug
-			// back reuses the same cell path, so its transcripts land in the
-			// same project dir and both cards then show the one shared row.
-			Tokens: webTokensFor(tokens, a.Slug),
+			// cascade. Looked up under a.ID, which also CLOSES the cross-wire
+			// this comment used to describe: while the rows were slug-keyed,
+			// a new active job taking the freed slug back reused the same
+			// cell path, so both jobs' transcripts landed in one project dir
+			// and both cards showed the one shared row. Distinct ids, distinct
+			// cell dirs, distinct rows.
+			//
+			// The one residue is historical: transcripts written before the
+			// cutover are still physically one directory for two same-slug
+			// jobs, and no keying can separate them after the fact (see
+			// JobProjectDirs' legacy base).
+			Tokens: webTokensFor(tokens, a.ID),
 		})
 	}
 	return board
