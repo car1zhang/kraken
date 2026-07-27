@@ -316,12 +316,18 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// is the compile. The duplicate work is free — go's build cache makes
 	// install's own build step a no-op a second later.
 	// Every build tool runs under this environment, never the inherited one:
-	// the Makefile calls a BARE `go`, and the PATH this process inherits from
-	// launchd does not lead to one. util.PrependToolDir carries the whole
-	// reasoning, including why widening the plist's PATH is not enough; a cell
-	// spawn shares it for the identical reason (internal/jobs/cell.go's
-	// cellSpawnEnv).
+	// the Makefile calls a BARE `go` and, since the board became a React app,
+	// a BARE `npm` too, and the PATH this process inherits from launchd leads
+	// to neither. util.PrependToolDir carries the whole reasoning, including
+	// why widening the plist's PATH is not enough; a cell spawn shares it for
+	// the identical reason (internal/jobs/cell.go's cellSpawnEnv).
+	//
+	// Applied twice rather than made variadic: ToolchainEnv is shared with the
+	// cell spawner, and PrependToolDir already no-ops when a dir is empty or
+	// already leads PATH — so go and npm sharing one homebrew prefix prepends
+	// it once, not twice.
 	env := util.ToolchainEnv(os.Environ(), pf.GoPath)
+	env = util.ToolchainEnv(env, pf.NpmPath)
 
 	setPhase(jobs.UpdateBuilding)
 	util.LogEvent("update", "info", "update-build", "building in "+pf.Repo)

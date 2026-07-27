@@ -290,6 +290,14 @@ type UpdatePreflightInfo struct {
 	HeadSHA  string // short
 	GoPath   string
 	MakePath string
+	// NpmPath is resolved for the same reason GoPath is: `make build` now
+	// depends on a web-assets target that shells out to a BARE `npm` to build
+	// the React board into web/_ui/dist, and web/embed.go cannot embed an
+	// empty directory — so a missing npm does not degrade the update, it
+	// fails it at the build step. Resolving it here turns that into a refusal
+	// before anything mutates, and hands cmd_update.go an absolute path to
+	// prepend rather than a trust in launchd's PATH.
+	NpmPath string
 }
 
 // PreflightUpdate runs every cheap local check before anything mutates. It is
@@ -347,6 +355,14 @@ func PreflightUpdate() (UpdatePreflightInfo, error) {
 		return pf, err
 	}
 	if pf.MakePath, err = lookToolchain("make"); err != nil {
+		return pf, err
+	}
+	// npm joined this list when the board became a React app built by vite:
+	// `make build` runs `npm ci && npm run build` before `go build`, so npm is
+	// now as load-bearing as go is. toolDirs already lists /opt/homebrew/bin,
+	// where node installs on this machine, so the fallback resolves it even
+	// when launchd hands the daemon a PATH that does not.
+	if pf.NpmPath, err = lookToolchain("npm"); err != nil {
 		return pf, err
 	}
 	return pf, nil

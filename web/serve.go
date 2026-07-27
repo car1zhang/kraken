@@ -84,18 +84,32 @@ func Serve(opts Options) error {
 			return fmt.Errorf("listen %s: %v", addr, err)
 		}
 	}
-	static, err := fs.Sub(webAssets, "static")
+	static, err := fs.Sub(webAssets, "_ui/dist")
 	if err != nil {
 		return fmt.Errorf("embedded assets: %v", err)
 	}
 	mux := http.NewServeMux()
-	// no-cache: embed.FS files carry a zero mod time, so FileServer sends no
-	// Last-Modified/ETag validators — browsers fall back to heuristic caching
-	// and keep serving a stale SPA across binary upgrades. Force revalidation
-	// (a full refetch, given no validators); the assets are tiny and local.
+	// Two cache policies, split by whether the filename carries a content
+	// hash, because the two kinds of asset have opposite requirements.
+	//
+	// Everything vite fingerprints (/assets/index-<hash>.js|css) is immutable
+	// by construction: a changed file gets a changed name, so it can be
+	// cached hard and forever, and a binary upgrade costs one index.html
+	// fetch instead of a full redownload.
+	//
+	// index.html itself keeps no-cache, and that is the part with the sharp
+	// edge: embed.FS files carry a zero mod time, so FileServer sends no
+	// Last-Modified/ETag validators at all. Without forcing revalidation
+	// browsers fall back to heuristic caching and keep serving a stale
+	// index.html across binary upgrades — which, now that it is the file
+	// naming the hashed bundle, would pin the whole SPA to the old build.
 	staticFiles := http.FileServer(http.FS(static))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		staticFiles.ServeHTTP(w, r)
 	}))
 	api.Register(mux)

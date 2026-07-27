@@ -1,19 +1,29 @@
 package web
 
 import (
-	"io/fs"
+	"os"
 	"strings"
 	"testing"
 )
 
-// readIndexHTML returns the embedded index.html — the embedded copy, for the
-// same reason readAppJS reads the embedded app.js: that is what a built
-// binary actually serves.
+// readIndexHTML returns the legacy vanilla index.html from disk.
+//
+// It read the EMBEDDED copy until the board moved to React: web/embed.go now
+// embeds _ui/dist, so static/index.html is not in the embed at all and this
+// died with "file does not exist" — a failure that says nothing about the
+// invariant it guards. Same holding position, and the same reasoning, as
+// readAppJS in boardsurface_test.go: web/static/ is still on disk and still
+// the board being served until the React port reaches parity, and this guard
+// pins a mechanism whose loss is silent (see this file's header). It comes out
+// with the rest of web/static/, once the React pager's own tests cover both
+// halves.
 func readIndexHTML(t *testing.T) string {
 	t.Helper()
-	data, err := fs.ReadFile(webAssets, "static/index.html")
+	data, err := os.ReadFile("static/index.html")
 	if err != nil {
-		t.Fatalf("read embedded static/index.html: %v", err)
+		t.Fatalf("read static/index.html from disk: %v "+
+			"(if web/static/ is gone, the React port finished — delete this file "+
+			"once its RTL replacements are green)", err)
 	}
 	return string(data)
 }

@@ -1,7 +1,7 @@
 package web
 
 import (
-	"io/fs"
+	"os"
 	"strings"
 	"testing"
 )
@@ -18,13 +18,30 @@ import (
 // assertions are deliberately narrow: they pin which function the CARD
 // calls, not how any of them are written.
 
-// readAppJS returns the embedded app.js — the embedded copy, since that is
-// what a built binary actually serves.
+// readAppJS returns the legacy vanilla app.js from disk.
+//
+// It used to read the EMBEDDED copy, on the reasoning that the embedded bytes
+// are what a built binary actually serves. That stopped being true when the
+// board moved to React: web/embed.go now embeds _ui/dist, so app.js is no
+// longer in the embed at all and every guard here died with "file does not
+// exist" — a failure that says nothing about the invariants they exist to
+// pin.
+//
+// Reading from disk is deliberately a HOLDING position, not the end state.
+// web/static/ is still on disk and still the board being served until the
+// React port reaches parity; these two files pin two real regressions that
+// both shipped once (a question panel that buried a column, and a bare-slug
+// map key that made a live job unsteerable), so deleting them the moment the
+// embed changed would have quietly un-pinned both. They come out in the same
+// commit that deletes web/static/app.js — and only once the React Testing
+// Library equivalents named in artifacts/52-testing-plan.md are green.
 func readAppJS(t *testing.T) string {
 	t.Helper()
-	data, err := fs.ReadFile(webAssets, "static/app.js")
+	data, err := os.ReadFile("static/app.js")
 	if err != nil {
-		t.Fatalf("read embedded static/app.js: %v", err)
+		t.Fatalf("read static/app.js from disk: %v "+
+			"(if web/static/ is gone, the React port finished — delete this file and "+
+			"jobkey_test.go, but only once their RTL replacements are green)", err)
 	}
 	return string(data)
 }

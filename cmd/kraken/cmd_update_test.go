@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 // cmd_update_test.go — the whole update sequence driven through cmd_update.go's
@@ -352,6 +353,51 @@ func TestRunUpdatePutsGoOnThePathOfEveryBuildTool(t *testing.T) {
 // the identical fix for the identical launchd reason. What stays here is the
 // assertion above, that runUpdate actually hands the build tools that
 // environment.
+
+// TestUpdateEnvCarriesGoAndNpm covers the npm half of the build. `make build`
+// depends on a web-assets target that runs a BARE `npm` to produce
+// web/_ui/dist, which web/embed.go embeds — so npm has exactly the same
+// launchd-PATH exposure go has, and both directories have to land on PATH.
+//
+// It exercises util.ToolchainEnv APPLIED TWICE, which is how runUpdate builds
+// the environment: ToolchainEnv is shared with the cell spawner and takes one
+// tool, so the updater chains it rather than widening a signature two callers
+// depend on. (util's own tests cover PrependToolDir's rules; what is pinned
+// here is that the updater actually ends up with BOTH tools on PATH.)
+func TestUpdateEnvCarriesGoAndNpm(t *testing.T) {
+	pathOf := func(env []string) string {
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "PATH=") {
+				return strings.TrimPrefix(kv, "PATH=")
+			}
+		}
+		return ""
+	}
+	chain := func(goPath, npmPath string) string {
+		env := util.ToolchainEnv([]string{"PATH=/usr/bin:/bin"}, goPath)
+		return pathOf(util.ToolchainEnv(env, npmPath))
+	}
+
+	// Both tool dirs land ahead of the inherited PATH.
+	if got, want := chain("/usr/local/go/bin/go", "/opt/homebrew/bin/npm"),
+		"/opt/homebrew/bin:/usr/local/go/bin:/usr/bin:/bin"; got != want {
+		t.Errorf("PATH = %q, want both tool dirs prepended: %q", got, want)
+	}
+
+	// go and npm can legitimately share a directory (one homebrew prefix).
+	// Prepending it twice is noise in a PATH that ends up in logs and error
+	// messages, so PrependToolDir collapses it.
+	if got, want := chain("/opt/homebrew/bin/go", "/opt/homebrew/bin/npm"),
+		"/opt/homebrew/bin:/usr/bin:/bin"; got != want {
+		t.Errorf("PATH = %q, want the shared dir prepended once, not duplicated", got)
+	}
+
+	// An unresolved tool among resolved ones is skipped, never turned into ".".
+	if got, want := chain("/usr/local/go/bin/go", "npm"),
+		"/usr/local/go/bin:/usr/bin:/bin"; got != want {
+		t.Errorf("PATH = %q, want the bare npm skipped rather than prepending \".\"", got)
+	}
+}
 
 // --- refusals that happen before anything is owned ---
 
