@@ -2,7 +2,9 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -635,5 +637,64 @@ func TestSpawnCommandReportsWriteFailure(t *testing.T) {
 	// no MkdirAll: the cell dir does not exist, so the write must fail
 	if _, err := spawnCommand(j, []string{"claude"}, "brief", ""); err == nil {
 		t.Fatal("spawnCommand succeeded with an unwritable cell dir, want an error")
+	}
+}
+
+// --- cellSpawnEnv ---
+
+// TestCellSpawnEnvPutsTheToolchainOnPath is the regression test for the
+// papercut the dream loop surfaced: agents inside a cell ran a bare `go test` /
+// `gofmt`, got "command not found", and each independently rediscovered the
+// same `export PATH=$PATH:/usr/local/go/bin` workaround — one of them closed a
+// style review as "tooling-unverified" because it never recovered.
+//
+// A pane's PATH is the PATH of the process that issued its tmux command, which
+// is why this is the environment of `tmux new-session` rather than a
+// `new-session -e PATH=…` (set in the session environment, then overridden —
+// it silently does nothing) or a prefix on the launch command (which would
+// reach zeus and none of its crew).
+func TestCellSpawnEnvPutsTheToolchainOnPath(t *testing.T) {
+	stubLookPath(t, func(name string) (string, error) {
+		if name != "go" {
+			return "", errors.New("a cell spawn resolves only go")
+		}
+		return "/usr/local/go/bin/go", nil
+	})
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("KRAKEN_TEST_MARKER", "kept")
+
+	var path string
+	marker := false
+	for _, kv := range cellSpawnEnv() {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = strings.TrimPrefix(kv, "PATH=")
+		}
+		if kv == "KRAKEN_TEST_MARKER=kept" {
+			marker = true
+		}
+	}
+	if path != "/usr/local/go/bin:/usr/bin:/bin" {
+		t.Errorf("cell spawn PATH = %q, want the go dir prepended to the inherited one", path)
+	}
+	if !marker {
+		// A cell spawn inherits everything else: HOME, LANG, and whatever the
+		// daemon was given, all of which claude itself reads.
+		t.Error("cellSpawnEnv dropped the rest of the environment")
+	}
+}
+
+// TestCellSpawnEnvIsBestEffort: a toolchain that cannot be found anywhere must
+// not take the cell down with it. nil is exec.Cmd's "inherit", so the spawn is
+// exactly what it was before this existed — a cell that refused to start
+// because a PATH probe failed would be far worse than the papercut above.
+func TestCellSpawnEnvIsBestEffort(t *testing.T) {
+	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	t.Setenv("HOME", t.TempDir()) // so the ~/go/bin fallback finds nothing either
+	prev := toolDirs
+	toolDirs = []string{filepath.Join(t.TempDir(), "nowhere")}
+	t.Cleanup(func() { toolDirs = prev })
+
+	if got := cellSpawnEnv(); got != nil {
+		t.Fatalf("cellSpawnEnv() = %v with no resolvable go, want nil so the spawn is unchanged", got)
 	}
 }

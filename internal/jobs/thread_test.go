@@ -3,6 +3,8 @@ package jobs
 import (
 	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -541,7 +543,7 @@ func reviveFixture(t *testing.T, st *store.Store, slug string) (*Job, store.Thre
 // nothing at all.
 func countingOpener(out string, err error) (windowOpener, *int) {
 	n := 0
-	return func(string, string, string, []string) (string, error) {
+	return func(string, string, string, []string, []string) (string, error) {
 		n++
 		return out, err
 	}, &n
@@ -1111,5 +1113,67 @@ func TestThreadBriefStatesTheContract(t *testing.T) {
 		if strings.Contains(lower, strings.ToLower(banned)) {
 			t.Errorf("thread brief mentions %q — that is zeus' contract, not a thread's:\n%s", banned, brief)
 		}
+	}
+}
+
+// TestReviveOpensTheWindowWithTheToolchainOnPath closes the third daemon-issued
+// spawn site. StartCell and ReactivateJob hand their `tmux new-session` the
+// cellSpawnEnv PATH; a thread's window is opened by kraken itself rather than by
+// zeus, so it inherits none of that transitively and has to be told directly.
+// Without it a thread — reading the same worktree, running the same `go test` —
+// gets launchd's PATH and hits the exact papercut cellSpawnEnv exists to remove.
+func TestReviveOpensTheWindowWithTheToolchainOnPath(t *testing.T) {
+	st := useTestStore(t)
+	j, row := reviveFixture(t, st, "revive-path")
+	stubLookPath(t, func(name string) (string, error) {
+		if name != "go" {
+			return "", errors.New("a thread window resolves only go")
+		}
+		return "/usr/local/go/bin/go", nil
+	})
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	var gotEnv []string
+	open := func(_, _, _ string, env, argv []string) (string, error) {
+		gotEnv = env
+		return "cell-x:3 (%17)", nil
+	}
+	if _, err := reviveClaimed(st, j, row, CellSession(j), t.TempDir(), open); err != nil {
+		t.Fatalf("reviveClaimed: %v", err)
+	}
+
+	path := ""
+	for _, kv := range gotEnv {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+	if path != "/usr/local/go/bin:/usr/bin:/bin" {
+		t.Errorf("thread window PATH = %q, want the go dir prepended to the inherited one", path)
+	}
+}
+
+// The best-effort contract holds here too: an unresolvable toolchain must open
+// the window with a nil env (exec's "inherit"), never fail a revive carl asked
+// for. A thread spawn that refused because a PATH probe failed would be strictly
+// worse than the papercut.
+func TestReviveOpensTheWindowEvenWithNoToolchain(t *testing.T) {
+	st := useTestStore(t)
+	j, row := reviveFixture(t, st, "revive-nopath")
+	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	prev := toolDirs
+	toolDirs = []string{filepath.Join(t.TempDir(), "nowhere")}
+	t.Cleanup(func() { toolDirs = prev })
+
+	sawEnv := true
+	open := func(_, _, _ string, env, argv []string) (string, error) {
+		sawEnv = env != nil
+		return "cell-x:4 (%18)", nil
+	}
+	if _, err := reviveClaimed(st, j, row, CellSession(j), t.TempDir(), open); err != nil {
+		t.Fatalf("reviveClaimed refused because the toolchain was missing: %v", err)
+	}
+	if sawEnv {
+		t.Error("thread window got a non-nil env with no resolvable go, want nil so the spawn is unchanged")
 	}
 }

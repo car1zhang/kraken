@@ -347,33 +347,11 @@ func TestRunUpdatePutsGoOnThePathOfEveryBuildTool(t *testing.T) {
 	}
 }
 
-func TestToolchainEnv(t *testing.T) {
-	t.Setenv("PATH", "/usr/bin:/bin")
-	t.Setenv("KRAKEN_TEST_MARKER", "kept")
-
-	env := toolchainEnv("/opt/go/bin/go")
-	var path string
-	marker := false
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") {
-			path = strings.TrimPrefix(kv, "PATH=")
-		}
-		if kv == "KRAKEN_TEST_MARKER=kept" {
-			marker = true
-		}
-	}
-	if path != "/opt/go/bin:/usr/bin:/bin" {
-		t.Errorf("PATH = %q, want the go dir prepended to the inherited one", path)
-	}
-	if !marker {
-		// HOME, LANG and the rest all have to survive: `make install` shells
-		// out to git, security, codesign and launchctl.
-		t.Error("toolchainEnv dropped the rest of the environment")
-	}
-	if len(toolchainEnv("go")) != len(os.Environ()) {
-		t.Error("a bare (unresolved) go path must leave the environment alone rather than prepend \".\"")
-	}
-}
+// The PATH-prepending itself now lives in internal/util (PrependToolDir /
+// ToolchainEnv) and is tested there — shared with the cell spawn, which needs
+// the identical fix for the identical launchd reason. What stays here is the
+// assertion above, that runUpdate actually hands the build tools that
+// environment.
 
 // --- refusals that happen before anything is owned ---
 

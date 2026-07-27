@@ -446,7 +446,7 @@ func PreflightShipIOS() (ShipPreflightInfo, error) {
 	}
 
 	// xcodegen resolved to an absolute path here, for exactly the reason
-	// documented on toolchainEnv (cmd/kraken/cmd_update.go): a ship started
+	// documented on util.PrependToolDir (internal/util/toolpath.go): a ship started
 	// from the board is forked by a launchd job, and launchd's PATH is
 	// /usr/bin:/bin:/usr/sbin:/sbin — which does not include the homebrew
 	// prefix xcodegen installs into. The script would then die in its own

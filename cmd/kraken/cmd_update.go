@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -316,10 +315,13 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// anything is installed) and gives the UI's BUILDING… a phase that really
 	// is the compile. The duplicate work is free — go's build cache makes
 	// install's own build step a no-op a second later.
-	// Every build tool runs under this environment, never the inherited one
-	// (see toolchainEnv): the Makefile calls a BARE `go`, and the PATH this
-	// process inherits from launchd does not lead to one.
-	env := toolchainEnv(pf.GoPath)
+	// Every build tool runs under this environment, never the inherited one:
+	// the Makefile calls a BARE `go`, and the PATH this process inherits from
+	// launchd does not lead to one. util.PrependToolDir carries the whole
+	// reasoning, including why widening the plist's PATH is not enough; a cell
+	// spawn shares it for the identical reason (internal/jobs/cell.go's
+	// cellSpawnEnv).
+	env := util.ToolchainEnv(os.Environ(), pf.GoPath)
 
 	setPhase(jobs.UpdateBuilding)
 	util.LogEvent("update", "info", "update-build", "building in "+pf.Repo)
@@ -385,42 +387,6 @@ type gitExitError struct {
 
 func (e *gitExitError) Error() string { return e.msg }
 
-// toolchainEnv is this process' environment with the directory holding the
-// resolved `go` prepended to PATH, and it is why a board-click update builds
-// at all.
-//
-// The updater is normally forked by `kraken serve`, a launchd agent, and
-// launchd hands its jobs their own PATH — one that on this machine does not
-// include /usr/local/go/bin, where the only go lives. `make build` invokes a
-// BARE `go`, so an update started from the button died at the build with
-// `go: command not found` while the identical command typed in a terminal
-// (login-shell PATH) worked, which makes the bug look like it isn't real.
-//
-// Widening the plist's PATH is NOT sufficient on its own: `launchctl
-// kickstart -k` — how every install restarts the daemon — relaunches from
-// launchd's cached in-memory job definition and never re-reads the plist, so
-// a PATH edit there only lands after a bootout/bootstrap or a logout. Since
-// PreflightUpdate has already resolved go to an absolute path (refusing the
-// whole run if it couldn't), exporting its directory here makes the build
-// correct no matter what launchd is holding.
-func toolchainEnv(goPath string) []string {
-	env := os.Environ() // a fresh slice per call, so writing into it is safe
-	dir := filepath.Dir(goPath)
-	if dir == "" || dir == "." || dir == string(filepath.Separator) {
-		return env
-	}
-	for i, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") {
-			// Prepended, not replaced: make itself, and everything the
-			// Makefile shells out to (git, security, codesign, launchctl),
-			// still has to be findable.
-			env[i] = "PATH=" + dir + ":" + strings.TrimPrefix(kv, "PATH=")
-			return env
-		}
-	}
-	return append(env, "PATH="+dir)
-}
-
 // --- swappable seams: every subprocess, the lock, and the clock, so the
 // tests below drive the whole sequence without shelling out, touching a real
 // repo, or restarting anything. Same package-var pattern jobs/update.go and
@@ -447,7 +413,7 @@ var (
 	// updateExec runs a build tool (make, go) in dir under env. name is always
 	// an absolute path resolved by jobs.PreflightUpdate — never a bare command
 	// name — because this process may have been spawned by launchd, whose
-	// PATH is not a login shell's; env (toolchainEnv) closes the same gap for
+	// PATH is not a login shell's; env (util.ToolchainEnv) closes the same gap for
 	// the bare `go` the Makefile itself invokes.
 	updateExec = func(dir string, env []string, name string, args ...string) error {
 		cmd := exec.Command(name, args...)
