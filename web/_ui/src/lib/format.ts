@@ -1,0 +1,205 @@
+// Pure formatting/derivation helpers, ported one-for-one from web/static/app.js.
+//
+// Everything here is a function of its arguments alone — no DOM, no fetch, no
+// module-level mutable state — which is what lets vitest cover the rules the
+// board's paint depends on (state color, age, the settled-job rule, the P0
+// flag count) without rendering anything.
+
+import type { WebJob } from "../api/types.ts";
+import { COLUMNS, type Column } from "./columns.ts";
+
+// ---------------------------------------------------------------- state color
+
+// STATE_COLOR is the whole state-color mechanism: the value lands on the card
+// root as the `--state` inline custom property and style.css reads it back
+// with var(--state) for the rail, the dot and the hover glow. Ported verbatim
+// from app.js:26 — a card that loses the inline property loses its color
+// entirely, silently, since var(--state) simply resolves to nothing.
+const STATE_COLOR: Record<string, string> = {
+  working: "var(--solved)",
+  blocked: "var(--counter)",
+  queued: "var(--accent)",
+  done: "var(--text-2)",
+  draft: "var(--text-2)",
+  archived: "var(--text-2)",
+};
+
+export function stateColor(state: string): string {
+  return STATE_COLOR[state] ?? "var(--text-2)";
+}
+
+// ---------------------------------------------------------------- clocks
+
+/**
+ * age formats a unix timestamp in SECONDS as a compact "3m"/"2h"/"5d".
+ *
+ * Seconds, not millis: both call sites on the board (`j.mtime` and
+ * `daemon.last_tick`) are second-resolution, and app.js:94 divides Date.now()
+ * by 1000 before subtracting. An empty/zero stamp renders as "" rather than
+ * as a nonsense age since the epoch.
+ */
+export function age(unix: number | undefined | null): string {
+  if (!unix) return "";
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - unix));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h";
+  return Math.floor(s / 86400) + "d";
+}
+
+/**
+ * logTime formats an event-log stamp as `MM/DD HH:MM:SS` in the reader's local
+ * zone (app.js:3841).
+ *
+ * `ts` is unix MILLIS (internal/util/eventlog.go: `TS int64 \`json:"ts"\``),
+ * which is what `new Date(ts)` wants directly — no ×1000 anywhere. Contrast
+ * `age` directly above, whose input is SECONDS.
+ *
+ * A missing stamp renders blank rather than as a date. Vanilla's
+ * `new Date(undefined)` gave `NaN/NaN NaN:NaN:NaN`, which at least looked
+ * broken; the obvious port (`ts ?? 0`) would print a perfectly plausible
+ * 1969/1970 timestamp instead, and a log line whose time is quietly wrong is
+ * worse than one that admits it has none.
+ */
+export function logTime(ts: number | undefined | null): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** countdown formats a whole number of seconds as "Xm Ys", floored at 0. */
+export function countdown(seconds: number): string {
+  const clamped = Math.max(0, seconds);
+  const m = Math.floor(clamped / 60);
+  const s = clamped % 60;
+  return `${m}m ${s}s`;
+}
+
+/**
+ * wakeupLabel is the wakeup chip's countdown text. `firesAt` is unix MILLIS
+ * (WebWakeup.fires_at). Once it is past — kraken hasn't caught the next
+ * discovery pass yet — it reads "due" rather than a negative countdown.
+ */
+export function wakeupLabel(firesAt: number): string {
+  const remainingS = Math.floor((firesAt - Date.now()) / 1000);
+  return remainingS <= 0 ? "due" : countdown(remainingS);
+}
+
+// ---------------------------------------------------------------- questions
+
+/**
+ * settledJob: a done or archived job. Its questions are history, not a
+ * standing ask — nobody is waiting on an answer to keep working — so it gets
+ * no board presence at all: no count chip, no flag. They live one click into
+ * the job instead (the editor modal for a done job, the steer modal in
+ * reactivate mode, the artifact-side surfaces), where answering still works
+ * exactly as before: answers are editable forever, live or done.
+ *
+ * Archived jobs never carry doc_questions on the wire at all (board.go), so
+ * this only ever fires for done ones — it is stated anyway so the rule reads
+ * the same on both sides of the wire.
+ */
+export function settledJob(j: Pick<WebJob, "archived" | "state"> | null | undefined): boolean {
+  return !!j && (!!j.archived || j.state === "done");
+}
+
+/**
+ * docQuestionsOpenP0 counts open (unanswered) P0 doc questions for a job —
+ * folded into the card-level "flagged" state and the header's ⚑ counter
+ * alongside j.question/j.health. A settled job contributes 0: its questions
+ * aren't visible on the board, so flagging the board for them would point at
+ * something nothing on that surface shows.
+ */
+export function docQuestionsOpenP0(j: WebJob): number {
+  if (settledJob(j)) return 0;
+  return (j.doc_questions ?? []).filter((q) => q.importance === "P0" && !q.answer).length;
+}
+
+// ---------------------------------------------------------------- usage
+
+/**
+ * usageColorClass thresholds a percent into the same ok/warn/danger palette
+ * used everywhere else in the board (solved/revealed/counter). Lives here
+ * rather than beside the usage overlay because the header widget and the
+ * drilldown — two different slices — must not drift apart on it.
+ */
+export function usageColorClass(percent: number): "u-ok" | "u-warn" | "u-danger" {
+  if (percent >= 80) return "u-danger";
+  if (percent >= 50) return "u-warn";
+  return "u-ok";
+}
+
+/**
+ * usageCountdown formats a resets_at (unix MILLIS) as a compact countdown —
+ * "3h12m", "4d", "8m", "now" — mirroring wakeupLabel's feel at day/hour/minute
+ * granularity instead of minutes/seconds.
+ */
+export function usageCountdown(millis: number): string {
+  const remainingS = Math.floor((millis - Date.now()) / 1000);
+  if (remainingS <= 0) return "now";
+  const d = Math.floor(remainingS / 86400);
+  if (d >= 1) return `${d}d`;
+  const h = Math.floor(remainingS / 3600);
+  const m = Math.floor((remainingS % 3600) / 60);
+  return h >= 1 ? `${h}h${m}m` : `${m}m`;
+}
+
+// ---------------------------------------------------------------- bucketing
+
+/** columnFor maps a job state to its board column, defaulting to draft. */
+export function columnFor(state: string): Column {
+  return (COLUMNS as readonly string[]).includes(state) ? (state as Column) : "draft";
+}
+
+export interface BoardBuckets {
+  byColumn: Record<Column, WebJob[]>;
+  archived: WebJob[];
+}
+
+/**
+ * The header's ⚑ counter: pending questions + unhealthy cells + open P0s,
+ * over the ACTIVE jobs (app.js:606-618).
+ *
+ * Split out of bucketJobs rather than returned beside the buckets, because its
+ * one consumer is the header and bucketJobs' one consumer is useBoard — folding
+ * them together meant the chrome ran the whole bucketing a second time, on the
+ * same array, to read a single integer off it.
+ */
+export function flagCount(jobs: readonly WebJob[]): number {
+  let flags = 0;
+  for (const j of jobs) {
+    if (j.archived) continue; // drawer, not a column — and never flagged
+    if (j.question) flags++;
+    if (j.health) flags++;
+    flags += docQuestionsOpenP0(j);
+  }
+  return flags;
+}
+
+/**
+ * bucketJobs reproduces render() (app.js:601) exactly, and is THE bucketing —
+ * useBoard.byColumn is built from it, so the render layer and the drag layer
+ * cannot disagree about which column a card is in. (They once did: this
+ * comment used to say byColumn "deliberately does not carry" the rule below,
+ * and that divergence was a bug — see useBoard.ts.) The rule: **an unhealthy
+ * cell is blocked regardless of its file state** — it needs a retry, and the daemon is
+ * not going to fix it. Bucketing from the flat server-ordered `jobs` array
+ * rather than re-sorting useBoard's buckets keeps the relocated card in the
+ * same relative position vanilla put it in.
+ */
+export function bucketJobs(jobs: readonly WebJob[]): BoardBuckets {
+  const byColumn = Object.fromEntries(COLUMNS.map((c) => [c, [] as WebJob[]])) as Record<
+    Column,
+    WebJob[]
+  >;
+  const archived: WebJob[] = [];
+  for (const j of jobs) {
+    if (j.archived) {
+      archived.push(j); // drawer, not a column
+      continue;
+    }
+    byColumn[j.health ? "blocked" : columnFor(j.state)].push(j);
+  }
+  return { byColumn, archived };
+}

@@ -1,0 +1,1373 @@
+/* kraken web — socrat cyber-dark. Sans is the voice, mono is the data accent.
+   One calm dark surface; neon only where something is hot or interactive. */
+
+:root {
+  --ground: #0A0E14; --surface: #10151E; --raised: #151C28;
+  --hairline: #1E2836; --hairline-2: #2A3A50;
+  --text: #D7E2EC; --text-2: #6B7A8C;
+  --accent: #9E7BFF; --accent-ink: #0A0E14; --accent-soft: #221844;
+  --counter: #FF4D9D; --counter-soft: #3D1428;
+  --solved: #4ADE80; --solved-soft: #0F2E1D;
+  --revealed: #F5B84D; --revealed-soft: #33260E;
+  /* "polling" status (a claude mid poll-loop on a pending ScheduleWakeup) —
+     cyan, mirroring ios/Kraken/Theme.swift KTheme.polling and util/ansi.go's
+     StatusColor("polling") = Cyan on the CLI side. */
+  --polling: #22D3EE; --polling-soft: #0E2E33;
+  --glow: 0 0 12px rgba(158, 123, 255, 0.30), 0 0 2px rgba(158, 123, 255, 0.7);
+  --glow-hot: 0 0 10px rgba(255, 77, 157, 0.28), 0 0 2px rgba(255, 77, 157, 0.7);
+  --scanline-ink: rgba(255, 255, 255, 0.011);
+  --scrim: rgba(10, 14, 20, 0.82);
+  --drop-tint: rgba(158, 123, 255, 0.03);
+  --drop-tint-hover: rgba(158, 123, 255, 0.07);
+  --glow-ok: 0 0 8px rgba(74, 222, 128, 0.45);
+  --glow-warn: 0 0 10px rgba(245, 184, 77, 0.3);
+  --zebra: rgba(255, 255, 255, 0.02);
+  --text-glow: 0 0 1px var(--accent), 0 0 9px var(--accent);
+  /* skill palette: one color per pipeline command (/info /aim /do /pr),
+     used by the command-highlight backdrop and chips (see app.js's
+     cmdHighlightHTML/attachCmdChips) — each gets a glow pair mirroring
+     --glow/--text-glow above. */
+  --skill-info: #5EA8FF; --skill-info-soft: #102A45;
+  --skill-aim: #FF6B6B; --skill-aim-soft: #3A1414;
+  --skill-do: #F5D34D; --skill-do-soft: #332B0E;
+  --skill-pr: #4ADE80; --skill-pr-soft: #0F2E1D;
+  --glow-skill-info: 0 0 12px rgba(94, 168, 255, 0.30), 0 0 2px rgba(94, 168, 255, 0.7);
+  --text-glow-skill-info: 0 0 1px var(--skill-info), 0 0 9px var(--skill-info);
+  --glow-skill-aim: 0 0 12px rgba(255, 107, 107, 0.30), 0 0 2px rgba(255, 107, 107, 0.7);
+  --text-glow-skill-aim: 0 0 1px var(--skill-aim), 0 0 9px var(--skill-aim);
+  --glow-skill-do: 0 0 12px rgba(245, 211, 77, 0.30), 0 0 2px rgba(245, 211, 77, 0.7);
+  --text-glow-skill-do: 0 0 1px var(--skill-do), 0 0 9px var(--skill-do);
+  --glow-skill-pr: 0 0 12px rgba(74, 222, 128, 0.30), 0 0 2px rgba(74, 222, 128, 0.7);
+  --text-glow-skill-pr: 0 0 1px var(--skill-pr), 0 0 9px var(--skill-pr);
+  --sans: "Avenir Next", "Helvetica Neue", -apple-system, sans-serif;
+  --mono: "SF Mono", "Menlo", monospace;
+  --ease: cubic-bezier(0.9, 0, 0.1, 1);
+  color-scheme: dark;
+}
+
+/* light palette — :root above stays the dark default so any failure mode
+   (missing data-theme, JS error before the pre-paint stamp runs, unset var)
+   lands on dark rather than an unreadable mixed state */
+:root[data-theme="light"] {
+  --ground: #EEF2F7; --surface: #FFFFFF; --raised: #E3E9F1;
+  --hairline: #D8E0EA; --hairline-2: #B9C6D6;
+  --text: #1C2733; --text-2: #5D6C7E;
+  --accent: #6B3FE0; --accent-ink: #FFFFFF; --accent-soft: #E7DFFB;
+  --counter: #C0105F; --counter-soft: #FBDFEC;
+  --solved: #178A44; --solved-soft: #DCF3E4;
+  --revealed: #8A5106; --revealed-soft: #F7ECD4;
+  --polling: #0E7490; --polling-soft: #D9F2F7;
+  --glow: 0 1px 6px rgba(107, 63, 224, 0.25);
+  --glow-hot: 0 1px 6px rgba(192, 16, 95, 0.22);
+  --glow-ok: 0 1px 4px rgba(23, 138, 68, 0.3);
+  --glow-warn: 0 1px 5px rgba(138, 81, 6, 0.25);
+  --scanline-ink: rgba(0, 0, 0, 0.012);
+  --scrim: rgba(28, 39, 51, 0.45);
+  --drop-tint: rgba(107, 63, 224, 0.04);
+  --drop-tint-hover: rgba(107, 63, 224, 0.08);
+  --zebra: rgba(0, 0, 0, 0.025);
+  --text-glow: none;
+  /* skill palette, light siblings — same darkened-for-white-contrast pattern
+     as the rest of this block; text-glows follow --text-glow: none above,
+     since light mode never glows text. info/do/pr are darkened past the
+     naive "same pattern" hex to clear 4.5:1 against both --raised (#E3E9F1)
+     and their own -soft fill (WCAG AA, verified with a script — info
+     4.60/4.60, do 4.64/4.96, pr 4.61/4.82); aim's initial pick already
+     cleared both (4.61/4.52) so it's untouched. pr's contrast-driven hex no
+     longer matches --solved's light value, so it stays its own literal
+     rather than aliasing --solved. */
+  --skill-info: #1866C4; --skill-info-soft: #DCEAFB;
+  --skill-aim: #C42B2B; --skill-aim-soft: #FBE0E0;
+  --skill-do: #7B6505; --skill-do-soft: #F7F0D4;
+  --skill-pr: #14773B; --skill-pr-soft: #DCF3E4;
+  --glow-skill-info: 0 1px 6px rgba(24, 102, 196, 0.25);
+  --text-glow-skill-info: none;
+  --glow-skill-aim: 0 1px 6px rgba(196, 43, 43, 0.25);
+  --text-glow-skill-aim: none;
+  --glow-skill-do: 0 1px 6px rgba(123, 101, 5, 0.25);
+  --text-glow-skill-do: none;
+  --glow-skill-pr: 0 1px 6px rgba(20, 119, 59, 0.25);
+  --text-glow-skill-pr: none;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* author display values beat the hidden attribute's UA rule — restate it
+   once, globally, so no future display:grid/flex element repeats the bug */
+[hidden] { display: none !important; }
+
+/* scrollbars: thin, trackless, hairline thumb — default OS bars read as a
+   white gash on a dark UI */
+* { scrollbar-width: thin; scrollbar-color: var(--hairline-2) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--hairline-2); border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+body {
+  background: var(--ground);
+  color: var(--text);
+  font: 12px/1.5 var(--sans);
+  min-height: 100vh;
+}
+
+/* static CRT texture — deliberately not animated: a moving full-viewport
+   layer forces per-vsync compositing and caused system-wide lag on external
+   monitors */
+.scan {
+  position: fixed; inset: 0; pointer-events: none; z-index: 9;
+  background: repeating-linear-gradient(to bottom,
+    transparent 0, transparent 2px, var(--scanline-ink) 3px);
+}
+
+/* ---- chrome ---- */
+.chrome {
+  display: flex; align-items: center; gap: 14px;
+  padding: 7px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+  position: sticky; top: 0; z-index: 5;
+  font-family: var(--mono); font-size: 11px;
+}
+.mark { font-weight: 700; letter-spacing: 3px; font-size: 12px; }
+.mark i {
+  font-style: normal; color: var(--accent);
+  text-shadow: var(--text-glow);
+}
+.led { width: 7px; height: 7px; background: var(--counter); box-shadow: var(--glow-hot); }
+.led.ok { background: var(--solved); box-shadow: var(--glow-ok); }
+.stat { color: var(--text-2); }
+.stat.hot { color: var(--counter); text-shadow: var(--glow-hot); }
+.stat.hot:empty { display: none; }
+.stat.dim { opacity: 0.55; }
+/* running build's commit — quiet by default, but it's the one thing that
+   visibly changes when a self-update lands, so it gets the accent on hover */
+.stat.build { opacity: 0.5; letter-spacing: 0.5px; cursor: default; }
+.stat.build:hover { opacity: 1; color: var(--accent); }
+.stat.build:empty { display: none; }
+.spacer { flex: 1; }
+.viewtabs { display: flex; gap: 2px; margin-left: 8px; }
+.viewtab {
+  background: none; border: 1px solid transparent; cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 2px;
+  color: var(--text-2); padding: 3px 10px;
+}
+.viewtab.active { color: var(--accent); border-color: var(--accent-soft); text-shadow: var(--glow); }
+.viewtab:hover:not(.active) { color: var(--text); }
+.theme-btn {
+  background: none; border: none; cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 2px;
+  color: var(--text-2); padding: 3px 8px;
+}
+.theme-btn:hover { color: var(--text); }
+
+/* the self-update control (see the self-update section in app.js): same
+   chrome weight as .theme-btn at rest, taking color only when it has
+   something to say — amber when origin/main is ahead, accent while the run
+   builds, cyan across the restart gap, green when it lands, pink on a
+   refusal or a failure. Every hue is an existing state color, so the button
+   reads the same language as the cards below it.
+
+   Worn by BOTH long-running-job controls in the header — ⟳ UPDATE and its
+   sibling ⇧ SHIP iOS (the ship-ios section in app.js). They share these
+   classes and a single pair of painters on purpose: two buttons that mean
+   "kick off a slow thing and watch it" should not look like two different
+   kinds of thing. .gap is the update button's alone — a ship never restarts
+   the server, so it has no gap state to paint. */
+.upd {
+  background: none; border: 1px solid transparent; cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 2px;
+  color: var(--text-2); padding: 3px 9px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.upd:hover:not([disabled]) { color: var(--text); }
+.upd[disabled] { opacity: 0.85; cursor: default; }
+.upd .gly { display: inline-block; font-size: 11px; }
+.upd .dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--revealed); box-shadow: var(--glow-warn);
+}
+.upd.avail { color: var(--revealed); border-color: var(--revealed-soft); }
+.upd.busy { color: var(--accent); border-color: var(--accent-soft); }
+.upd.gap { color: var(--polling); border-color: var(--polling-soft); }
+.upd.ok { color: var(--solved); border-color: var(--solved-soft); text-shadow: var(--glow-ok); }
+.upd.bad { color: var(--counter); border-color: var(--counter-soft); text-shadow: var(--glow-hot); }
+/* the only infinite animation in the sheet — the reduce-motion block at the
+   bottom already kills it along with everything else */
+.upd.busy .gly, .upd.gap .gly { animation: spin 1.1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* header at-a-glance usage widget: current account's session/weekly/model
+   segments + a pool summary, opening the drilldown modal on click (see
+   #usage-overlay below and the "usage widget" section in app.js) */
+.usage-stat {
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer; color: var(--text-2);
+  padding: 2px 5px; margin-left: 2px;
+}
+.usage-stat:hover { color: var(--text); }
+.u-seg { white-space: nowrap; }
+.u-ok { color: var(--solved); }
+.u-warn { color: var(--revealed); }
+.u-danger { color: var(--counter); }
+.u-sep { opacity: 0.4; }
+.u-pool { color: var(--text-2); }
+.u-stale { opacity: 0.55; }
+
+.stale-banner, .update-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px;
+  background: var(--revealed-soft);
+  border-bottom: 1px solid var(--revealed);
+  color: var(--revealed);
+  font: 11px var(--mono);
+  letter-spacing: 0.2px;
+}
+/* the update banner borrows the stale banner's shape (both report on the
+   binary, not on a job) and recolors per outcome: cyan while the server is
+   restarting under us, pink when the run failed. Its amber default is the
+   "done, reloading…" line. #ship-banner wears the same class for its own
+   run — the amber default there is the "uploaded, but TestFlight still has
+   to process it" line. */
+.update-banner.cyan {
+  background: var(--polling-soft); border-bottom-color: var(--polling); color: var(--polling);
+}
+.update-banner.bad {
+  background: var(--counter-soft); border-bottom-color: var(--counter); color: var(--counter);
+}
+.update-banner button {
+  background: transparent; border: 1px solid currentColor; color: inherit; cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 1.5px; padding: 2px 9px;
+}
+/* the dismiss ✕ is punctuation, not an action: borderless and dimmed so it
+   never competes with RELOAD NOW / OPEN LOG sitting beside it. It is appended
+   to every banner centrally (BANNER_DISMISS in app.js), and when it is the
+   only button the spacer still pushes it to the right edge. */
+.update-banner button[data-act="dismiss"] {
+  border: none; opacity: 0.55; padding: 2px 4px;
+  font-size: 12px; letter-spacing: 0;
+  margin-left: auto; /* right-aligned even in banners with no .spacer */
+}
+.update-banner button[data-act="dismiss"]:hover { opacity: 1; }
+
+/* ---- board ---- */
+.board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  gap: 14px;
+  padding: 18px 16px 12px;
+  align-items: start;
+  overflow-x: auto;
+}
+
+/* ---- archived drawer: collapsible, tucked under the DONE column ---- */
+.archive-drawer { margin-top: 18px; }
+.archive-head {
+  display: flex; align-items: baseline; gap: 7px;
+  width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: none;
+  border-bottom: 1px solid var(--hairline);
+  padding: 0 2px 6px;
+  color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 2.5px;
+}
+.archive-head:hover { color: var(--text); }
+/* pointer-events none: disabled form controls swallow drag events in
+   Blink/WebKit, and with zero archived jobs the header IS the drawer's whole
+   done→archived drop area — pass hit-testing through to .archive-drawer.
+   Also neutralizes :hover/cursor, which a disabled header shouldn't have. */
+.archive-head:disabled { pointer-events: none; }
+.archive-head .tri { font-size: 9px; letter-spacing: 0; }
+.archive-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
+
+/* drop affordances for the archive drawer (done→archived drag) — mirrors
+   .col.droptarget/.drophover below */
+.archive-drawer.droptarget {
+  outline: 1px dashed var(--accent);
+  outline-offset: 4px;
+  background: var(--drop-tint);
+}
+.archive-drawer.drophover { background: var(--drop-tint-hover); }
+.archive-cards {
+  display: flex; flex-direction: column; gap: 10px;
+  padding-top: 10px;
+}
+.card.archived { opacity: 0.75; }
+.card.archived:hover { opacity: 1; }
+.btn.unarchive {
+  background: transparent; color: var(--accent);
+  border: 1px solid var(--accent-soft);
+}
+.btn.unarchive:hover { background: var(--accent-soft); border-color: var(--accent); box-shadow: var(--glow); }
+.btn.delete {
+  background: transparent; color: var(--counter);
+  border: 1px solid var(--counter-soft);
+}
+.btn.delete:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
+.btn.reactivate {
+  margin-top: 8px;
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed-soft);
+}
+.btn.reactivate:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.col { min-height: 120px; }
+.col-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 10px;
+}
+.col-head b {
+  color: var(--text-2); font-weight: 600;
+  font-size: 10px; letter-spacing: 2.5px;
+}
+.col-head .n { font: 10px var(--mono); color: var(--text-2); }
+.col.has-cards .col-head .n { color: var(--accent); }
+.col-cards { display: flex; flex-direction: column; gap: 10px; min-height: 60px; }
+
+/* drop affordances: only legal targets light up */
+.col.droptarget .col-cards {
+  outline: 1px dashed var(--accent);
+  outline-offset: 4px;
+  background: var(--drop-tint);
+}
+.col.drophover .col-cards { background: var(--drop-tint-hover); }
+
+/* ---- cards ---- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-left: 2px solid var(--state, var(--hairline));
+  padding: 8px 10px 9px;
+  transition: border-color 140ms var(--ease);
+}
+.card[draggable="true"] { cursor: grab; }
+/* the in-column original while its card live-shifts around the pointer
+   (see flipMove in app.js) — reads as a lifted placeholder sitting in its
+   current slot; the native drag ghost carries the "real" card under the
+   cursor */
+.card.dragging { opacity: 0.35; cursor: grabbing; }
+.card:hover { border-color: var(--hairline-2); border-left-color: var(--state, var(--hairline-2)); }
+.card.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
+.card-top { display: flex; align-items: baseline; gap: 8px; }
+.slug { font: 700 11.5px var(--mono); color: var(--text); word-break: break-all; }
+.state {
+  margin-left: auto; white-space: nowrap;
+  font: 9.5px var(--mono); letter-spacing: 0.5px;
+  color: var(--state, var(--text-2));
+}
+/* the cell's poll-timer chip: a pending ScheduleWakeup counting down to its
+   next tick. Accent-tinted like .chip, but with a subtle filled background
+   (rather than .chip's transparent one) since it's a status readout, not a
+   clickable action. */
+.wakeup-row { margin-top: 4px; }
+.chip-wakeup {
+  display: inline-block;
+  font: 9.5px var(--mono); letter-spacing: 0.3px;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-soft);
+  padding: 2px 7px;
+}
+
+/* the poll loop's own stated reason for waiting — a muted secondary line
+   under .detail, same treatment as .last-sent */
+.wakeup-reason {
+  font: 10px var(--mono); color: var(--text-2); opacity: 0.7;
+  margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* dequeue affordance on a queued-but-not-yet-started card — deliberately not
+   .chip (that class is claimed by the delegated click handler that opens an
+   artifact panel) */
+.queue-cancel {
+  font: 10px var(--mono); line-height: 1;
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--hairline-2);
+  padding: 2px 6px; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.queue-cancel:hover { background: var(--counter-soft); border-color: var(--counter); color: var(--counter); box-shadow: var(--glow-hot); }
+/* PR chips: one linked badge per open/merged/closed PR on the job, styled
+   like .chip but color-coded by PR state instead of the uniform accent */
+.prs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.pr-chip {
+  font: 10px var(--mono); text-decoration: none;
+  padding: 2px 7px; border: 1px solid;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.pr-chip.pr-merged { color: var(--accent); border-color: var(--accent-soft); }
+.pr-chip.pr-merged:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
+.pr-chip.pr-open { color: var(--solved); border-color: var(--solved-soft); }
+.pr-chip.pr-open:hover { background: var(--solved-soft); box-shadow: var(--glow-ok); border-color: var(--solved); }
+.pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
+.pr-chip.pr-closed:hover { background: var(--counter-soft); opacity: 1; border-color: var(--counter); }
+
+/* side-thread chips: one per fork of zeus' session, sitting just under the
+   PR chips on the card and inside the steer modal's context block. A live
+   thread takes --polling (cyan — a second conversation is running, the same
+   hue the polling zeus pill and the CLI use); a closed one dims to the
+   hairline and stays as history. Deliberately NOT .chip — that class is
+   claimed by the delegated handler that opens an artifact panel (same reason
+   .queue-cancel keeps its own class). */
+.threads { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; align-items: center; }
+.thread-chip {
+  font: 10px var(--mono);
+  background: transparent; color: var(--polling);
+  border: 1px solid var(--polling-soft);
+  padding: 2px 7px; cursor: pointer;
+  /* no box-shadow here: --polling has no glow token, and these chips lift by
+     filling in rather than glowing (unlike .chip/.pr-chip) */
+  transition: background 80ms var(--ease), border-color 80ms var(--ease);
+}
+.thread-chip:hover { background: var(--polling-soft); border-color: var(--polling); }
+.thread-chip .dot {
+  display: inline-block; width: 5px; height: 5px;
+  background: var(--polling); margin-right: 5px; vertical-align: middle;
+}
+.thread-chip.closed { color: var(--text-2); border-color: var(--hairline-2); opacity: 0.8; }
+.thread-chip.closed:hover { background: var(--raised); opacity: 1; border-color: var(--text-2); color: var(--text); }
+.thread-chip.closed .dot { background: var(--hairline-2); }
+/* dashed, like .chip-more: an affordance rather than a thing that exists */
+.branch-btn {
+  font: 10px var(--mono);
+  background: transparent; color: var(--text-2);
+  border: 1px dashed var(--hairline-2);
+  padding: 2px 7px; cursor: pointer;
+  transition: background 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
+}
+.branch-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+.meta {
+  color: var(--text-2); margin-top: 3px;
+  display: flex; gap: 9px; flex-wrap: wrap;
+  font: 10px var(--mono);
+}
+.err { color: var(--counter); font-size: 11px; margin-top: 5px; }
+.outcome { color: var(--solved); font-size: 11px; margin-top: 5px; }
+
+/* the cell's last words: a live zeus' most recent assistant text block —
+   clamped to 2 lines; click opens the steer modal, which renders the full
+   text (see #steer-detail) */
+.detail {
+  color: var(--text-2); font-size: 11px; line-height: 1.4; margin-top: 6px;
+  white-space: pre-wrap;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* carl's own last message to the cell, above .detail */
+.last-sent {
+  font: 10px var(--mono); color: var(--text-2); opacity: 0.7;
+  margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.roster { margin-top: 5px; display: flex; flex-direction: column; gap: 1px; }
+.roster-row { font: 10px var(--mono); color: var(--text-2); }
+.roster-row .dim { opacity: 0.6; }
+.roster-dot { margin-right: 2px; }
+.roster-dot.on { color: var(--solved); }
+
+/* crew line: zeus's god icon (color IS its status) + one god-icon working/
+   total chip per subagent role. Shown on both working and blocked live cards
+   (see zeusPillHTML/crewHTML) — muted by default, colored only when
+   something on the row is actually active. The god's name lives only in the
+   title attribute, so hover/assistive tech still reads "zeus", "hephaestus",
+   etc. */
+.crew { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.steer-context .crew, .steer-context .threads { margin-top: 0; }
+.crew-pill, .crew-chip {
+  font: 10px var(--mono); letter-spacing: 0.3px;
+  padding: 2px 7px; border: 1px solid var(--hairline-2);
+  color: var(--text-2);
+}
+/* the zeus pill collapses to a single glyph — its own 7px/side padding
+   already gives a lone glyph the same breathing room a chip's glyph+text
+   gets, so no extra min-width is needed; just bump the font size a touch
+   since there's no working/total text to carry the row's height. The god
+   glyphs inside crew chips (.crew-ico spans) get the same bump so icons
+   read at one size everywhere while counts stay at the chip's 10px. */
+.crew-pill, .crew-ico { font-size: 13px; }
+.crew-pill.run { color: var(--solved); border-color: var(--solved-soft); }
+/* question/polling colors match the zeus status hues everywhere else
+   (--revealed = amber question state, --polling = cyan, see
+   ios/Kraken/Theme.swift KTheme and internal/util/ansi.go's StatusColor) rather than
+   the pink/purple UI accents, which mean something else in this UI. */
+.crew-pill.question { color: var(--revealed); border-color: var(--revealed-soft); }
+.crew-pill.polling { color: var(--polling); border-color: var(--polling-soft); }
+.crew-chip.active { color: var(--solved); border-color: var(--solved-soft); }
+
+/* a pending AskUserQuestion: header + option buttons, answered by a click.
+   Scoped to its two actual render parents (card body, steer-actions modal —
+   see questionHTML's call sites in app.js) rather than a bare .question
+   class: the zeus status pill also carries a "question" status class, and a
+   bare .question rule here would tie the `.crew-pill, .crew-chip` base rule
+   (equal 0,1,0 specificity, earlier in source) and win, wrecking that
+   pill's padding/border/font. */
+.card > .question, .steer-actions > .question {
+  margin-top: 7px; padding: 6px 8px;
+  background: var(--counter-soft);
+  border-left: 2px solid var(--counter);
+  font-size: 11px; line-height: 1.45;
+}
+.q-header { font-weight: 600; color: var(--text); }
+.q-text { color: var(--text-2); margin-top: 2px; }
+.q-opts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.q-opt {
+  font: 10px var(--mono);
+  background: transparent; color: var(--counter);
+  border: 1px solid var(--counter-soft);
+  padding: 3px 8px; cursor: pointer;
+}
+.q-opt:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
+.q-opt:disabled { opacity: 0.4; cursor: default; }
+
+/* doc-review questions (questions.yaml) — deliberately a neutral/accent
+   panel, not the counter-colored .question block above, so "an
+   AskUserQuestion is blocking the pane" and "zeus has an open doc question"
+   read as two different kinds of thing at a glance. */
+.doc-questions {
+  margin-top: 7px; padding: 6px 8px;
+  background: var(--raised);
+  border-left: 2px solid var(--hairline-2);
+  font-size: 11px; line-height: 1.45;
+}
+/* no `.card .doc-questions` cap any more: the panel is modal-only, and the
+   card carries just .dq-chip's count (docQuestionsChipHTML). The cap existed
+   because a long question list made a card taller than the viewport and
+   buried its whole column — a problem the chip removes rather than bounds.
+   The modal copies stay uncapped for the same reason as before: .panel-body
+   already scrolls the whole composer (max-height: 86vh, overflow-y: auto),
+   and .editor-docq .doc-questions sets its own 40vh cap. */
+.dq-row { margin-top: 7px; }
+.dq-row:first-child { margin-top: 0; }
+.dq-head { display: flex; align-items: baseline; gap: 5px; }
+.dq-imp {
+  flex: none;
+  font: 9px var(--mono); letter-spacing: 0.5px;
+  border: 1px solid var(--hairline-2); color: var(--text-2);
+  padding: 1px 4px;
+}
+.dq-imp.p0 { color: var(--counter); border-color: var(--counter-soft); }
+.dq-imp.p1 { color: var(--revealed); border-color: var(--revealed-soft); }
+.dq-imp.p2 { color: var(--text-2); }
+.dq-q {
+  color: var(--text); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dq-ctx {
+  color: var(--text-2); font-size: 10px; margin-top: 2px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dq-rec {
+  color: var(--text-2); font-size: 10.5px; font-style: italic; margin-top: 3px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dq-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
+.dq-accept, .dq-send, .dq-reanswer-cancel {
+  font: 10px var(--mono);
+  background: transparent; color: var(--accent);
+  border: 1px solid var(--accent-soft);
+  padding: 3px 8px; cursor: pointer;
+}
+.dq-accept:hover, .dq-send:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
+.dq-accept:disabled, .dq-send:disabled, .dq-input:disabled, .dq-reanswer-cancel:disabled { opacity: 0.4; cursor: default; }
+.dq-input {
+  flex: 1 1 120px; min-width: 80px;
+  font: 10px var(--mono); color: var(--text);
+  background: var(--surface); border: 1px solid var(--hairline-2);
+  padding: 3px 6px;
+}
+.dq-input:focus { outline: none; border-color: var(--accent); }
+/* answered rows are dimmed AND clickable — Q13: editable forever — so they
+   get a hover affordance distinct from the plain read-only look */
+.dq-row.dq-answered { color: var(--text-2); opacity: 0.65; font-size: 10.5px; cursor: pointer; }
+.dq-row.dq-answered:hover { opacity: 0.9; }
+.dq-answered-text { margin-top: 2px; overflow-wrap: anywhere; }
+/* a reopened answered row renders as a plain .dq-row (docQuestionRowHTML,
+   same markup as a genuinely open question) plus a "cancel" affordance back
+   to the read-only view */
+.dq-reanswer-cancel { color: var(--text-2); border-color: var(--hairline-2); }
+.dq-reanswer-cancel:hover { background: var(--raised); border-color: var(--text-2); color: var(--text); }
+.dq-hint { color: var(--text-2); opacity: 0.55; font-size: 9px; margin-top: 7px; }
+
+/* job feedback panel — same family as .doc-questions/.dq-row, its own
+   neutral panel so it reads as a distinct kind of thing from both artifact
+   chips and doc questions. Works for done/archived jobs too (Q2). */
+.job-feedback {
+  margin-top: 7px; padding: 6px 8px;
+  background: var(--raised);
+  border-left: 2px solid var(--hairline-2);
+  font-size: 11px; line-height: 1.45;
+}
+.card .job-feedback { max-height: 340px; overflow-y: auto; }
+.fb-row { margin-top: 7px; }
+.fb-row:first-child { margin-top: 0; }
+.fb-head { display: flex; align-items: baseline; gap: 6px; }
+.fb-artifact {
+  flex: 1 1 auto; min-width: 0;
+  color: var(--text); font: 10px var(--mono); overflow-wrap: anywhere;
+}
+.fb-actions { display: flex; gap: 5px; flex: none; }
+.fb-edit, .fb-delete, .fb-cancel, .fb-save {
+  font: 9px var(--mono);
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--hairline-2);
+  padding: 2px 6px; cursor: pointer;
+}
+.fb-edit:hover, .fb-save:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.fb-delete:hover { background: var(--counter-soft); border-color: var(--counter); color: var(--counter); }
+.fb-cancel:hover { background: var(--raised); border-color: var(--text-2); color: var(--text); }
+.fb-edit:disabled, .fb-delete:disabled, .fb-save:disabled, .fb-cancel:disabled { opacity: 0.4; cursor: default; }
+.fb-note {
+  color: var(--text-2); margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.fb-addressed-text { color: var(--solved); margin-top: 3px; overflow-wrap: anywhere; }
+.fb-addressed .fb-note { opacity: 0.75; }
+.fb-edit-input {
+  display: block; width: 100%; box-sizing: border-box;
+  margin-top: 4px;
+  font: 10.5px/1.5 var(--sans); color: var(--text);
+  background: var(--surface); border: 1px solid var(--hairline-2);
+  padding: 6px 8px; resize: vertical; min-height: 44px;
+}
+.fb-edit-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.fb-edit-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; margin-top: 5px; }
+.fb-edit-note { font: 10px var(--mono); color: var(--counter); margin-right: auto; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.chip {
+  font: 10px var(--mono);
+  background: transparent; color: var(--accent);
+  border: 1px solid var(--accent-soft);
+  padding: 2px 7px; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
+.chip-more { color: var(--text-2); border: 1px dashed var(--hairline-2); }
+.chip-more:hover { background: var(--raised); box-shadow: none; border-color: var(--text-2); color: var(--text); }
+
+/* the board's whole question surface: an open-count chip in the artifact-chip
+   row, the questions themselves one click into the job (docQuestionsChipHTML).
+   Deliberately NOT class .chip — that class is the artifact-overlay click
+   target — so a click falls through to the card's own open-the-drilldown
+   handler. Sized/spaced like a chip, colored like the doc-question panel's
+   importance badges: muted by default, counter-hot the moment a P0 is open,
+   which is the same signal the header's ⚑ counter uses. */
+.dq-chip {
+  font: 10px var(--mono);
+  color: var(--text-2); border: 1px solid var(--hairline-2);
+  padding: 2px 7px; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
+}
+/* :not(.p0) on the hover rule is load-bearing, not tidiness: `.card:hover
+   .dq-chip` (0,2,1) outranks `.dq-chip.p0` (0,2,0), so an unscoped hover
+   would repaint a P0 chip plain-text the moment the pointer touched the card
+   — killing exactly the signal the chip exists to carry, and only while
+   you're looking at it. */
+.card:hover .dq-chip:not(.p0) { color: var(--text); border-color: var(--text-2); }
+.dq-chip.p0 { color: var(--counter); border-color: var(--counter-soft); }
+.card:hover .dq-chip.p0 { border-color: var(--counter); box-shadow: var(--glow-hot); }
+
+.prereq span { font: 10px var(--mono); }
+.prereq .ok { color: var(--solved); }
+.prereq .pend { color: var(--revealed); }
+.prereq .gate { color: var(--counter); }
+
+.empty { color: var(--text-2); opacity: 0.35; text-align: center; padding: 14px 0; font-size: 11px; }
+
+/* ---- overlays ---- */
+.overlay {
+  position: fixed; inset: 0; z-index: 20;
+  background: var(--scrim);
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: 6vh 4vw;
+}
+/* the artifact viewer can be opened from inside the steer/unblock modal —
+   it must always paint above any other overlay, regardless of DOM order */
+#overlay { z-index: 30; }
+/* the thread overlay sits between them: it too can be opened from inside the
+   steer modal (its context block carries the thread chips), but the artifact
+   viewer still outranks it. Mirrors the Escape chain in app.js. */
+#thread-overlay { z-index: 25; }
+
+/* transient bottom-center notice — currently just a reverted failed
+   drag-reorder, see showToast() in app.js. Above every overlay: it reports
+   on an action the user just took, which may have been inside one. */
+.toast {
+  position: fixed; left: 50%; bottom: 24px; z-index: 40;
+  transform: translate(-50%, 12px);
+  background: var(--counter-soft); color: var(--counter);
+  border: 1px solid var(--counter);
+  box-shadow: var(--glow-hot);
+  font: 11px var(--mono); letter-spacing: 0.3px;
+  padding: 8px 16px;
+  max-width: min(720px, calc(100vw - 32px));
+  white-space: pre-wrap; word-break: break-word;
+  opacity: 0; pointer-events: none;
+  transition: opacity 160ms var(--ease), transform 160ms var(--ease);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* unblock/steer context: cell's last message, carl's last sent message, and
+   artifact chips, shown above the composer so unblocking has the info needed */
+.steer-context {
+  display: flex; flex-direction: column; gap: 8px;
+  padding-bottom: 12px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--hairline);
+}
+.steer-detail {
+  color: var(--text-2); font-size: 11.5px; line-height: 1.5;
+  max-height: 40vh; overflow-y: auto;
+  padding: 9px 11px; background: var(--raised); border: 1px solid var(--hairline-2);
+}
+/* rendered markdown, not preformatted text — normalize the block rhythm.
+   .steer-spec-body shares these rules so the spec preview reads the same as
+   every other rendered-markdown surface in the modal. list padding matches
+   .md's — without it, markers hug the left edge with no indent. */
+.steer-detail p, .steer-detail ul, .steer-detail ol, .steer-detail pre,
+.steer-spec-body p, .steer-spec-body ul, .steer-spec-body ol, .steer-spec-body pre { margin: 0 0 8px; }
+.steer-detail ul, .steer-detail ol, .steer-spec-body ul, .steer-spec-body ol { padding-left: 20px; }
+.steer-detail li, .steer-spec-body li { margin: 0.15em 0; }
+.steer-detail :last-child, .steer-spec-body :last-child { margin-bottom: 0; }
+.steer-detail h1, .steer-detail h2, .steer-detail h3,
+.steer-spec-body h1, .steer-spec-body h2, .steer-spec-body h3 { font-size: 12.5px; margin: 10px 0 6px; color: var(--text); }
+.steer-detail code, .steer-spec-body code { background: var(--surface); padding: 1px 4px; }
+.steer-detail pre, .steer-spec-body pre { white-space: pre-wrap; }
+/* in the modal the last-sent line is decision context, not a card ornament —
+   let it wrap instead of inheriting the card's one-line ellipsis */
+.steer-context .last-sent { white-space: pre-wrap; overflow: visible; text-overflow: clip; }
+
+/* action-complete row: retry/question buttons the card itself would show for
+   this job — tmux and mark-done live in the panel head instead (see
+   index.html/openSteer) since they apply regardless of health/blocked state.
+   kill spacing between the already-gapped children and each button's own
+   card-context margin-top */
+.steer-actions {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-bottom: 2px;
+}
+.steer-actions > .btn.retry,
+.steer-actions > .question { margin-top: 0; }
+
+/* spec preview: collapsed by default, expandable to a read-only render of
+   the job's initial prompt plus its meta (repo/base/solo/etc, see
+   specMetaHTML in app.js) — always display-only, never an editable surface
+   like the job editor's spec textarea. */
+.steer-spec {
+  margin-bottom: 2px;
+  background: var(--raised);
+  border: 1px solid var(--hairline-2);
+}
+.steer-spec-head {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: none;
+  padding: 8px 11px;
+  color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.steer-spec-head:hover { color: var(--text); }
+.steer-spec-head .tri { font-size: 9px; letter-spacing: 0; }
+.steer-spec-body {
+  padding: 0 11px 11px;
+  max-height: 40vh; overflow-y: auto;
+  color: var(--text-2); font-size: 11.5px; line-height: 1.5;
+}
+.spec-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px 28px;
+  margin-bottom: 10px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline);
+  font: 11px var(--mono);
+}
+.spec-meta-row { display: flex; gap: 8px; }
+.spec-meta-row.wide { grid-column: 1 / -1; }
+.spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
+.spec-meta-row .v { color: var(--text); }
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--hairline-2);
+  box-shadow: var(--glow);
+  width: min(880px, 100%);
+  max-height: 86vh;
+  display: flex; flex-direction: column;
+  animation: panel-in 140ms steps(3, end);
+}
+@keyframes panel-in { from { opacity: 0; transform: translateY(6px); } }
+.panel-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.panel-title { font: 700 11.5px var(--mono); letter-spacing: 1px; }
+.panel-title::after { content: "▊"; color: var(--accent); margin-left: 4px; }
+/* empty on an older server (rotation_mode undefined — see
+   rotationModeChipHTML in app.js): collapse out of the panel-head's flex
+   gap entirely so the row looks pixel-identical to before this chip existed */
+#usage-mode-chip:empty { display: none; }
+/* button system: solid buttons (base .btn — accent fill) just glow on
+   hover; outline buttons (ghost/unarchive/delete/reactivate/retry/
+   steer-done) rest with a faint -soft border and no background, and on
+   hover fill with the -soft tint, solidify the border, and glow. The one
+   exception is tmux, whose border is solid yellow at all times. */
+.btn {
+  font: 11px var(--mono);
+  background: var(--accent); color: var(--accent-ink);
+  border: none; padding: 4px 11px; cursor: pointer;
+}
+.btn:hover { box-shadow: var(--glow); }
+.btn:active { animation: glitch 120ms steps(2, end); }
+@keyframes glitch {
+  0% { translate: -1px 1px; }
+  50% { translate: 1px -1px; }
+  100% { translate: 0 0; }
+}
+.btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
+.btn.ghost:hover { background: var(--raised); border-color: var(--text-2); box-shadow: none; }
+.btn.ghost.danger { color: var(--counter); border-color: var(--counter-soft); }
+.btn.ghost.danger:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
+/* primary composer action — standard .btn size, tucked under the input's
+   right edge (the .answer-body flex column makes align-self work) */
+.btn-big {
+  align-self: flex-end;
+  padding: 4px 14px; margin-top: 2px;
+  letter-spacing: 0.5px;
+}
+.btn.retry {
+  display: block; width: 100%; margin-top: 8px;
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed-soft);
+  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
+}
+.btn.retry:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+/* panel-head only — sits beside the yellow-outlined tmux button */
+.btn.steer-done {
+  background: transparent; color: var(--solved);
+  border: 1px solid var(--solved-soft);
+  font-size: 10px; letter-spacing: 1px;
+}
+.btn.steer-done:hover { background: var(--solved-soft); border-color: var(--solved); box-shadow: var(--glow-ok); }
+/* ---- command highlight: mirrored backdrop behind the steer/editor
+   textareas, so /info /aim /do /pr each read highlighted inline in their own
+   skill color + glow (info blue, aim red, do yellow, pr green) — a
+   <textarea> can't style substrings of its own value. The
+   wrapper is position:relative and otherwise unstyled; the textarea stays
+   normal-flow (so it alone drives the wrapper's height — dragging its
+   resize handle "just works", no ResizeObserver needed) while the backdrop
+   is position:absolute; inset:0 underneath it. Font/padding/border-width
+   are declared ONCE per pair via a selector union with the textarea's own
+   rule below, so the two surfaces can never drift out of alignment
+   (mismatched box models are exactly what causes glyph ghosting). See
+   refreshCmdHighlight in app.js. */
+.cmd-hl-wrap { position: relative; }
+.cmd-hl-backdrop {
+  position: absolute; inset: 0;
+  overflow: hidden;
+  white-space: pre-wrap; word-break: normal; overflow-wrap: break-word;
+  color: var(--text);
+  pointer-events: none;
+  /* The backdrop must match the TEXTAREA's UA-reset typography, not the
+     ancestor cascade: browsers reset letter-spacing/word-spacing/
+     text-transform/text-indent/text-align on form controls, but this is a
+     plain <div> that inherits them from wherever it sits in the DOM (e.g.
+     .editor-form label's letter-spacing: 1px) — left alone that drifted the
+     backdrop ~1px/char from the textarea's real glyphs (40px at column 40).
+     text-shadow:none is safe here too: the generic .cmd-hl rule and the
+     per-skill .cmd-hl-<name> rules below both set their own text-shadow,
+     overriding this base rule for every command span. */
+  letter-spacing: normal; word-spacing: normal; text-transform: none;
+  text-indent: 0; text-align: start; text-shadow: none;
+}
+/* cmdHighlightHTML always emits the generic .cmd-hl class plus a
+   .cmd-hl-<name> class derived from CMD_CHIPS. .cmd-hl-on (the JS-failure
+   gate) and the shared textarea/backdrop metrics key off the *wrapper* and
+   #steer-text/#editor-text ids respectively, not off .cmd-hl — .cmd-hl's
+   only job is this generic fallback color, so a command that ever ships
+   without a hand-listed .cmd-hl-<name> rule below still renders instead of
+   inheriting plain body text. */
+.cmd-hl-backdrop .cmd-hl { color: var(--accent); text-shadow: var(--text-glow); }
+/* per-skill color: each .cmd-hl-<name> aliases the shared custom props
+   consumed by the one rule below it, so a fifth skill is one alias line
+   plus a CMD_CHIPS entry in app.js, not a new color rule. */
+.cmd-hl-backdrop .cmd-hl-info { --skill: var(--skill-info); --skill-glow: var(--text-glow-skill-info); }
+.cmd-hl-backdrop .cmd-hl-aim  { --skill: var(--skill-aim);  --skill-glow: var(--text-glow-skill-aim); }
+.cmd-hl-backdrop .cmd-hl-do   { --skill: var(--skill-do);   --skill-glow: var(--text-glow-skill-do); }
+.cmd-hl-backdrop .cmd-hl-pr   { --skill: var(--skill-pr);   --skill-glow: var(--text-glow-skill-pr); }
+.cmd-hl-backdrop .cmd-hl-info,
+.cmd-hl-backdrop .cmd-hl-aim,
+.cmd-hl-backdrop .cmd-hl-do,
+.cmd-hl-backdrop .cmd-hl-pr {
+  color: var(--skill); text-shadow: var(--skill-glow);
+}
+#steer-text-wrap { background: var(--raised); }
+#steer-text, #steer-text-backdrop {
+  font: 12px/1.5 var(--sans);
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  /* kills the ~6px inline-block descender strip a bare <textarea> reserves
+     below its content box — left as inline-block the backdrop and textarea
+     clientHeights disagree by that amount, which can clamp scrollTop sync
+     short by the same 6px */
+  display: block;
+}
+#steer-text {
+  background: transparent;
+  border-color: var(--hairline-2);
+  resize: vertical; min-height: 70px; width: 100%;
+}
+#steer-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+#steer-text::placeholder { color: var(--text-2); opacity: 1; }
+/* color:transparent (+ caret-color) only apply once JS has actually wired
+   the mirrored backdrop (attachCmdHighlight stamps .cmd-hl-on on the
+   wrapper) — unconditional transparent text would render invisible for
+   both composers if an earlier script exception ever left the mirror
+   unrendered. */
+.cmd-hl-wrap.cmd-hl-on #steer-text,
+.cmd-hl-wrap.cmd-hl-on #editor-text {
+  color: transparent; caret-color: var(--text);
+}
+.btn:disabled { opacity: 0.4; cursor: default; }
+/* artifact-overlay feedback capture — a compact composer that drops into
+   the panel head, same family as #steer-text. */
+.feedback-form {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--raised);
+}
+#feedback-text {
+  font: 12px/1.5 var(--sans);
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--hairline-2);
+  padding: 8px 10px; resize: vertical; min-height: 54px;
+}
+#feedback-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.feedback-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.feedback-note { font: 11px var(--mono); color: var(--text-2); margin-right: auto; }
+.panel-body { overflow-y: auto; padding: 16px 20px; font-size: 12.5px; line-height: 1.6; }
+.panel-body.raw { white-space: pre-wrap; font: 11px/1.6 var(--mono); color: var(--text-2); }
+.panel-body.page { padding: 0; overflow: hidden; }
+.panel-body.page iframe { display: block; width: 100%; height: 78vh; border: none; background: #fff; }
+
+/* rendered markdown: prose voice, mono for code only */
+.md h1, .md h2, .md h3, .md h4 { margin: 1.1em 0 0.4em; font-weight: 600; }
+.md h1 { font-size: 16px; color: var(--accent); }
+.md h2 { font-size: 13.5px; border-bottom: 1px solid var(--hairline); padding-bottom: 3px; }
+.md h3 { font-size: 12.5px; }
+.md p, .md ul, .md ol { margin: 0.55em 0; }
+.md ul, .md ol { padding-left: 20px; }
+.md li { margin: 0.15em 0; }
+.md code { font: 11px var(--mono); background: var(--raised); color: var(--revealed); padding: 1px 4px; }
+.md pre { background: var(--ground); border: 1px solid var(--hairline); padding: 10px 12px; overflow-x: auto; margin: 0.7em 0; }
+.md pre code { background: none; padding: 0; color: var(--text); }
+.md a { color: var(--accent); }
+.md strong { color: var(--text); font-weight: 600; }
+.md blockquote { border-left: 2px solid var(--hairline-2); padding-left: 10px; color: var(--text-2); margin: 0.55em 0; }
+.md .md-table { overflow-x: auto; margin: 0.7em 0; }
+.md table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.md th, .md td { border: 1px solid var(--hairline); padding: 5px 9px; }
+.md th { background: var(--raised); color: var(--text); font-weight: 600; text-align: left; }
+.md td { color: var(--text); }
+.md tbody tr:nth-child(even) td, .md tr:nth-child(even) td { background: var(--zebra); }
+
+/* ---- steer/editor note styling, shared by the message-zeus and job-editor
+   overlays ---- */
+.answer-body { display: flex; flex-direction: column; gap: 12px; }
+.answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
+
+/* command chips: one-tap /info /aim /do /pr insertion above a composer
+   textarea, colored per skill (info blue, aim red, do yellow, pr green) —
+   inactive rests in its -soft border, hover/active (command present in the
+   textarea, see attachCmdChips) fills with the -soft tint and glows. The
+   base rule's own color/border-color is the generic accent fallback for a
+   command lacking a hand-listed .cmd-chip-<name> rule below (rest color
+   only — hover/active feedback still needs the per-skill rule, unlike
+   .cmd-hl-backdrop .cmd-hl's complete fallback). Deliberately not .chip/.chips
+   — that class is claimed by the delegated document click handler that
+   opens an artifact panel. */
+.cmd-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.cmd-chip {
+  font: 10px var(--mono);
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid;
+  border-color: var(--accent-soft);
+  padding: 2px 7px; cursor: pointer;
+  transition: background 80ms var(--ease), box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+/* each .cmd-chip-<name> aliases the shared custom props consumed by the one
+   rule set below it — a fifth skill is one alias line plus a CMD_CHIPS
+   entry in app.js, not a new color/hover/active rule. */
+.cmd-chip-info { --skill: var(--skill-info); --skill-soft: var(--skill-info-soft); --skill-glow: var(--glow-skill-info); }
+.cmd-chip-aim  { --skill: var(--skill-aim);  --skill-soft: var(--skill-aim-soft);  --skill-glow: var(--glow-skill-aim); }
+.cmd-chip-do   { --skill: var(--skill-do);   --skill-soft: var(--skill-do-soft);   --skill-glow: var(--glow-skill-do); }
+.cmd-chip-pr   { --skill: var(--skill-pr);   --skill-soft: var(--skill-pr-soft);   --skill-glow: var(--glow-skill-pr); }
+.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr {
+  color: var(--skill); border-color: var(--skill-soft);
+}
+.cmd-chip-info:hover, .cmd-chip-info.active,
+.cmd-chip-aim:hover, .cmd-chip-aim.active,
+.cmd-chip-do:hover, .cmd-chip-do.active,
+.cmd-chip-pr:hover, .cmd-chip-pr.active {
+  background: var(--skill-soft); border-color: var(--skill); box-shadow: var(--skill-glow);
+}
+
+/* attachment chips: paste/drop/pick images into the steer and editor
+   composers. Deliberately not .chip/.chips (that class opens an artifact
+   panel via the delegated document click handler) — these are pending
+   uploads, removable client-side, not artifacts. */
+.att-zone { display: flex; flex-direction: column; gap: 6px; }
+.att-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.att-chip {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--raised); border: 1px solid var(--hairline-2);
+  padding: 3px 6px 3px 3px;
+}
+.att-chip img { width: 22px; height: 22px; object-fit: cover; display: block; }
+.att-name { font: 10px var(--mono); color: var(--text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-rm {
+  background: none; border: none; cursor: pointer;
+  font: 10px var(--mono); color: var(--text-2); padding: 0 2px;
+}
+.att-rm:hover { color: var(--counter); }
+.att-bar { display: flex; align-items: center; gap: 8px; }
+.att-btn { font-size: 10px; letter-spacing: 0.5px; padding: 3px 9px; }
+.att-hint { font: 10px var(--mono); color: var(--text-2); opacity: 0.65; }
+
+/* ---- usage drilldown: one block per account, bar rows per window ---- */
+.u-account { padding: 11px 0; border-bottom: 1px solid var(--hairline); }
+.u-account:first-child { padding-top: 0; }
+.u-account:last-child { border-bottom: none; padding-bottom: 0; }
+.u-account-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.u-slug { font: 700 12px var(--mono); color: var(--text); }
+.u-rows { margin-top: 9px; display: flex; flex-direction: column; gap: 7px; }
+.u-row { display: grid; grid-template-columns: minmax(56px, auto) 1fr 92px; align-items: center; gap: 9px; }
+.u-row-label { font: 10px var(--mono); color: var(--text-2); }
+.u-bar { height: 7px; background: var(--raised); border: 1px solid var(--hairline-2); border-radius: 4px; overflow: hidden; }
+.u-bar-fill { display: block; height: 100%; border-radius: 3px 0 0 3px; }
+.u-bar-fill.u-ok { background: var(--solved); }
+.u-bar-fill.u-warn { background: var(--revealed); }
+.u-bar-fill.u-danger { background: var(--counter); }
+.u-row-val { font: 10px var(--mono); color: var(--text-2); text-align: right; white-space: nowrap; }
+.u-row-val [data-resets] { color: var(--text-2); }
+.u-chip {
+  font: 9.5px var(--mono); letter-spacing: 0.3px;
+  padding: 2px 6px; border: 1px solid var(--hairline-2); color: var(--text-2);
+}
+.u-chip-current { color: var(--accent); border-color: var(--accent-soft); }
+.u-chip-ok { color: var(--solved); border-color: var(--solved-soft); }
+.u-chip-warn { color: var(--revealed); border-color: var(--revealed-soft); }
+.u-chip-danger { color: var(--counter); border-color: var(--counter-soft); cursor: help; }
+.u-chip-dim { opacity: 0.6; }
+/* rotation manual-pin banner: top of the usage drilldown body, only when
+   rotation_mode is "manual" (see manualBannerHTML in app.js) */
+.u-manual-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+  padding: 7px 11px; margin-bottom: 12px;
+  background: var(--revealed-soft);
+  border: 1px solid var(--revealed);
+  color: var(--revealed);
+  font: 11px var(--mono);
+  letter-spacing: 0.2px;
+}
+.u-manual-banner .btn { flex: none; }
+/* bare .dim spans inside the usage widget/modal (email, "usage —",
+   fetched-ago) — .stat.dim/.roster-row .dim don't reach them */
+.usage-stat .dim,
+#usage-overlay .dim { opacity: 0.55; }
+.btn.mini { font-size: 9.5px; letter-spacing: 0.3px; padding: 2px 7px; }
+
+/* ---- job editor: frontmatter as a form, spec as prose ---- */
+.editor-body { display: flex; flex-direction: column; gap: 12px; }
+.editor-newrow { display: flex; gap: 8px; }
+#editor-slug {
+  flex: 1; font: 12px var(--mono);
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2); padding: 6px 10px;
+}
+#editor-slug:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.editor-form { display: flex; flex-direction: column; gap: 12px; }
+.editor-form label { display: flex; flex-direction: column; gap: 4px; font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
+.f-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.f-row select, .f-row input:not([type="checkbox"]) {
+  font: 12px var(--mono); background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2); padding: 5px 8px; min-width: 120px;
+}
+.f-row select:focus, .f-row input:focus, .f-block textarea:focus, #f-prereqs input:focus {
+  outline: none; border-color: var(--accent); box-shadow: var(--glow);
+}
+.f-toggles { display: flex; gap: 14px; align-items: center; padding-bottom: 6px; }
+.editor-form label.check {
+  flex-direction: row; align-items: center; gap: 5px;
+  font: 11px var(--mono); color: var(--text); cursor: pointer;
+}
+.check input { accent-color: var(--accent); }
+.f-block { display: flex; flex-direction: column; gap: 4px; }
+.f-block textarea {
+  font: 12px/1.5 var(--sans); background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2); padding: 8px 10px; resize: vertical;
+}
+.f-label { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+/* the editor's copy of the doc-questions panel — one of the two drilldown
+   surfaces the board's .dq-chip points at (the steer modal is the other; the
+   card itself renders no questions). Labeled (the steer copy isn't) because
+   the editor is otherwise all spec-authoring: an unlabeled panel of questions
+   here would read as part of the form. Capped, unlike the steer copy — the
+   editor's own body scrolls, but the spec textarea below it is the thing you
+   came for, and a long question list shouldn't push it off-screen. */
+.editor-docq { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.editor-docq-head { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
+.editor-docq .doc-questions { margin-top: 0; max-height: 40vh; overflow-y: auto; }
+.mini-add {
+  background: none; border: 1px solid var(--hairline-2); cursor: pointer;
+  font: 10px var(--mono); color: var(--text-2); padding: 1px 7px;
+}
+.mini-add:hover { color: var(--accent); border-color: var(--accent); }
+#f-prereqs { display: flex; flex-direction: column; gap: 6px; }
+.prereq-row { display: flex; gap: 8px; align-items: center; }
+.prereq-row input[type="text"] {
+  flex: 1; font: 12px var(--mono); background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2); padding: 5px 8px;
+}
+.prereq-row .rm {
+  background: none; border: none; cursor: pointer;
+  font: 11px var(--mono); color: var(--text-2); padding: 0 4px;
+}
+.prereq-row .rm:hover { color: var(--counter); }
+#editor-text-wrap { background: var(--ground); }
+/* metric properties (font/padding/border-width) are declared ONCE for the
+   textarea/backdrop pair via this selector union, same reasoning as the
+   #steer-text union above — splitting them into separate rules is exactly
+   what lets the two surfaces' box models drift apart and ghosts the
+   glyphs. */
+#editor-text, #editor-text-backdrop {
+  font: 12.5px/1.6 var(--sans);
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  tab-size: 2;
+  display: block;
+}
+#editor-text {
+  background: transparent;
+  border-color: var(--hairline-2);
+  resize: vertical; min-height: 32vh; width: 100%;
+}
+#editor-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+
+.btn-new {
+  width: 100%; padding: 13px 0;
+  background: transparent; color: var(--accent);
+  border: 1px dashed var(--accent);
+  cursor: pointer;
+  font: 700 11px var(--mono); letter-spacing: 3px;
+  transition: box-shadow 80ms var(--ease), background 80ms var(--ease);
+}
+.btn-new:hover { background: var(--accent-soft); box-shadow: var(--glow); }
+.btn-new:active { animation: glitch 120ms steps(2, end); }
+.card.editable { cursor: pointer; }
+.card.editable:hover { border-color: var(--accent-soft); border-left-color: var(--state); }
+
+/* ---- dag view ---- */
+.dag { padding: 18px 16px 40px; overflow: auto; }
+.dag-canvas { position: relative; min-height: 300px; }
+#dag-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#dag-edges path { fill: none; stroke: var(--hairline-2); stroke-width: 1.3; }
+#dag-edges path.done { stroke: var(--solved); opacity: 0.7; }
+#dag-edges path.gated { stroke: var(--counter); stroke-dasharray: 5 4; }
+#dag-edges text { font: 10px var(--mono); fill: var(--counter); }
+#dag-nodes { position: relative; }
+.dag-node {
+  position: absolute; width: 190px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-left: 2px solid var(--state, var(--hairline));
+  padding: 7px 10px;
+  cursor: default;
+}
+.dag-node.editable { cursor: pointer; }
+.dag-node.editable:hover { border-color: var(--hairline-2); border-left-color: var(--state); }
+.dag-node.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
+.dag-node .slug { font: 700 11px var(--mono); display: block; word-break: break-all; }
+.dag-node .nstate { font: 9.5px var(--mono); color: var(--state, var(--text-2)); }
+.dag-node .nrepo { font: 9.5px var(--mono); color: var(--text-2); margin-left: 8px; }
+.dag-empty { color: var(--text-2); opacity: 0.5; font-size: 11px; padding: 30px; text-align: center; }
+
+@media (max-width: 1200px) { .board { grid-template-columns: repeat(3, minmax(200px, 1fr)); } }
+@media (max-width: 700px) { .board { grid-template-columns: 1fr; } }
+
+/* image artifacts render natively, contained */
+.panel-body.page img {
+  display: block; max-width: 100%; margin: 0 auto;
+  background: #fff;
+}
+
+/* open the cell's tmux pane in Ghostty — review-row name predates the
+   removal of the nvim/code review buttons it used to sit alongside.
+   wireframe like every other outline button, in yellow. */
+.btn.tmux-open {
+  background: transparent; color: var(--revealed);
+  border: 1px solid var(--revealed-soft);
+  font-size: 10px; letter-spacing: 1px;
+}
+.btn.tmux-open:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.review-row { display: flex; gap: 8px; margin-top: 8px; }
+.review-row .btn.tmux-open { flex: 1; padding: 5px 0; }
+
+/* honor the OS-level motion preference — kills the remaining finite
+   animations/transitions (panel-in, glitch, hover fades) outright */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* ---- unified event log view ---- */
+
+.logview { height: calc(100vh - 64px); display: flex; padding: 12px 16px 16px; }
+.log-scroll {
+  flex: 1; overflow-y: auto; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px; line-height: 1.55; background: var(--surface);
+  border: 1px solid var(--line, var(--raised)); border-radius: 6px; padding: 8px 10px;
+}
+.log-more, .log-empty { color: var(--text-2); text-align: center; padding: 6px 0; font-size: 11px; }
+.log-row { display: flex; gap: 10px; align-items: baseline; white-space: pre-wrap; word-break: break-word; }
+.log-row + .log-row { margin-top: 1px; }
+.log-ts { color: var(--text-2); flex: none; }
+.log-src { color: var(--accent); flex: none; min-width: 52px; }
+.log-event { color: var(--text-2); flex: none; min-width: 92px; }
+.log-msg { color: var(--text); }
+.log-row.lvl-error .log-msg { color: var(--counter); }
+.log-row.lvl-error .log-event { color: var(--counter); }
+.log-file-divider {
+  color: var(--text-2); font-size: 10px; text-align: center; margin: 6px 0;
+  border-top: 1px dashed var(--raised); padding-top: 4px;
+}
+
+/* ---- side-thread overlay (#thread-overlay — see openThread in app.js) ----
+   Two modes in one panel: the branch dialog (#thread-new) and the thread
+   itself (#thread-view). Every color here is a token, so both palettes work;
+   the thread's own accent is --polling, matching its chips. */
+
+/* head: "⑂ t1" is the .panel-title (mono, with its own ▊), the thread's name
+   sits beside it in the prose voice and doubles as the rename affordance */
+.thread-name-label {
+  font-size: 12px; color: var(--text);
+  cursor: text; padding: 1px 4px;
+  border: 1px solid transparent;
+  max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.thread-name-label:hover { border-color: var(--hairline-2); color: var(--accent); }
+.thread-name-label:empty::before { content: "unnamed"; color: var(--text-2); }
+.thread-name-input {
+  font: 12px var(--sans);
+  background: var(--ground); color: var(--text);
+  border: 1px solid var(--accent);
+  padding: 1px 4px; width: 26ch;
+}
+.thread-name-input:focus { outline: none; box-shadow: var(--glow); }
+.thread-pill {
+  font: 9.5px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  padding: 1px 7px; border: 1px solid currentColor;
+}
+.thread-pill.live { color: var(--solved); }
+.thread-pill.closed { color: var(--text-2); }
+
+/* branch dialog: says plainly what the fork does and doesn't touch */
+.thread-banner {
+  font-size: 11.5px; line-height: 1.5; color: var(--text);
+  border-left: 2px solid var(--accent);
+  background: var(--raised);
+  padding: 9px 11px;
+}
+.thread-banner b { color: var(--accent); }
+.thread-field {
+  display: flex; flex-direction: column; gap: 5px;
+  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  color: var(--text-2);
+}
+.thread-field .dim { opacity: 0.7; text-transform: none; letter-spacing: 0.5px; }
+.thread-field input, .thread-field textarea {
+  font: 12px/1.5 var(--sans); letter-spacing: normal; text-transform: none;
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2);
+  padding: 8px 10px; width: 100%;
+}
+.thread-field textarea { resize: vertical; min-height: 70px; }
+.thread-field input:focus, .thread-field textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: var(--glow);
+}
+.thread-field ::placeholder { color: var(--text-2); opacity: 1; }
+.thread-new { display: flex; flex-direction: column; gap: 12px; }
+.thread-new-actions { display: flex; gap: 8px; }
+
+/* the conversation: inherited history dimmed above the branch divider, the
+   thread's own turns at full strength below it */
+.thread-view { display: flex; flex-direction: column; gap: 12px; }
+#thread-convo { max-height: 48vh; overflow-y: auto; padding-right: 6px; }
+#thread-convo .blk { margin-bottom: 11px; font-size: 12.5px; line-height: 1.55; }
+#thread-convo .blk:last-child { margin-bottom: 0; }
+#thread-convo .who {
+  font: 10px var(--mono); letter-spacing: 0.6px;
+  color: var(--text-2); margin-bottom: 2px;
+}
+#thread-convo .blk.user .who { color: var(--polling); }
+#thread-convo .blk.asst .who { color: var(--accent); }
+#thread-convo .blk.tool { font: 10.5px var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+#thread-convo .blk.think { color: var(--text-2); font-style: italic; }
+#thread-convo .inherited { opacity: 0.55; }
+#thread-convo .blk-body p,
+#thread-convo .blk-body ul,
+#thread-convo .blk-body ol,
+#thread-convo .blk-body pre { margin: 0 0 8px; }
+#thread-convo .blk-body ul, #thread-convo .blk-body ol { padding-left: 20px; }
+#thread-convo .blk-body :last-child { margin-bottom: 0; }
+#thread-convo .blk-body code { background: var(--raised); color: var(--revealed); padding: 1px 4px; font: 11px var(--mono); }
+#thread-convo .blk-body pre { background: var(--ground); border: 1px solid var(--hairline); padding: 8px 10px; white-space: pre-wrap; }
+.thread-divider {
+  display: flex; align-items: center; gap: 9px;
+  margin: 14px 0;
+  color: var(--accent);
+  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+}
+.thread-divider::before, .thread-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--accent-soft);
+}
+
+/* live pane mirror: plain capture-pane text, the only way to watch a live
+   thread from a phone (⧉ tmux raises Ghostty, which a phone can't) */
+/* the head row is the mirror's toggle (▸/▾ in its label), so it's a control:
+   the capture only polls while the reader has the <pre> open */
+#thread-panehead {
+  display: flex; align-items: center; gap: 7px;
+  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  color: var(--text-2); cursor: pointer; user-select: none;
+  transition: color 80ms var(--ease);
+}
+#thread-panehead:hover { color: var(--text); }
+#thread-panehead .live-dot {
+  width: 6px; height: 6px; background: var(--solved); box-shadow: var(--glow-ok);
+}
+.thread-pane {
+  margin: 0;
+  background: var(--ground); border: 1px solid var(--hairline);
+  padding: 9px 11px;
+  font: 10.5px/1.45 var(--mono); color: var(--text-2);
+  white-space: pre; overflow-x: auto; max-height: 30vh; overflow-y: auto;
+}
+
+/* what replaces the pane mirror and the composer once a thread is closed */
+.thread-empty {
+  border: 1px dashed var(--hairline-2);
+  padding: 14px; text-align: center;
+  font: 10.5px var(--mono); color: var(--text-2);
+}
+
+.thread-composer { display: flex; flex-direction: column; gap: 2px; }
+#thread-text {
+  font: 12px/1.5 var(--sans);
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--hairline-2);
+  padding: 9px 11px; resize: vertical; min-height: 62px; width: 100%;
+}
+#thread-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+#thread-text::placeholder { color: var(--text-2); opacity: 1; }

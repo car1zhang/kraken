@@ -1,4 +1,4 @@
-.PHONY: build install install-completion install-serve ios-testflight clean
+.PHONY: build web-assets install install-completion install-serve ios-testflight clean
 
 PLIST := $(HOME)/Library/LaunchAgents/dev.carl.kraken.plist
 
@@ -7,9 +7,28 @@ PLIST := $(HOME)/Library/LaunchAgents/dev.carl.kraken.plist
 # updater can tell "already up to date" from "a restart is pending".
 SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
+# web-assets builds the React board into web/_ui/dist, which web/embed.go
+# pulls into the binary with `//go:embed all:_ui/dist`.
+#
+# This is a PREREQUISITE of build, and that edge is the only thing making the
+# ordering correct: go:embed reads the directory from disk at compile time
+# with no dependency tracking of its own, so a bare `go build` would happily
+# embed whatever stale bundle happened to be sitting there — or fail outright,
+# since go:embed cannot embed an empty directory and dist/ is gitignored. On a
+# clean clone `make build` is therefore the only entrypoint that works; a bare
+# `go build` (or `go test ./...`) works only after this target has run once.
+#
+# `npm ci` rather than `npm install`: it installs exactly the lockfile, fails
+# instead of silently resolving a new version, and is what makes a board-click
+# self-update reproducible. It needs node on PATH — see cmd/kraken/cmd_update.go's
+# toolchainEnv and jobs.PreflightUpdate, which resolve npm to an absolute path
+# for exactly the launchd-PATH reason they already do it for go.
+web-assets:
+	cd web/_ui && npm ci --no-audit --no-fund && npm run build
+
 # the -X path is the FULL package path (module `kraken` + package dir): a
 # wrong one is silently ignored by the linker, leaving Build() == "dev".
-build:
+build: web-assets
 	CGO_ENABLED=1 go build -ldflags "-X kraken/internal/util.BuildSHA=$(SHA)" -o kraken ./cmd/kraken
 
 # kraken runs on exactly one personal machine, so install always deploys
@@ -172,5 +191,11 @@ install-completion:
 ios-testflight:
 	@./ios/ship-testflight.sh $(ARGS)
 
+# node_modules is deliberately NOT removed: it is expensive to rebuild and
+# `npm ci` already replaces it wholesale. dist IS removed — it is the embed
+# target, so a stale one is the thing most worth being able to clear. Note
+# that after a clean, a bare `go build` fails until `make build` (or
+# `make web-assets`) regenerates dist: go:embed cannot embed an empty dir.
 clean:
 	rm -f kraken
+	rm -rf web/_ui/dist

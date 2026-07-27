@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kraken</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <script>
+    // pre-paint theme stamp: preference (localStorage kraken-theme: "light" |
+    // "dark", absent = follow system) resolves against prefers-color-scheme
+    // and lands on <html data-theme>; failure modes fall through to the dark
+    // :root defaults. window.krakenTheme is the toggle's tiny API (app.js).
+    (function () {
+      // storage can throw (blocked cookies, sandboxed context) — a dead
+      // store must still leave the theme working for this page load
+      var pref;
+      try { pref = localStorage.getItem("kraken-theme"); } catch (e) {}
+      if (pref !== "light" && pref !== "dark") pref = "system";
+      var mq = window.matchMedia("(prefers-color-scheme: light)");
+      function stamp() {
+        document.documentElement.dataset.theme =
+          pref === "system" ? (mq.matches ? "light" : "dark") : pref;
+      }
+      stamp();
+      window.krakenTheme = {
+        get: function () { return pref; },
+        set: function (p) {
+          pref = p === "light" || p === "dark" ? p : "system";
+          stamp();
+          try {
+            if (pref === "system") localStorage.removeItem("kraken-theme");
+            else localStorage.setItem("kraken-theme", pref);
+          } catch (e) {}
+        },
+      };
+      mq.addEventListener("change", function () { if (pref === "system") stamp(); });
+    })();
+  </script>
+</head>
+<body>
+  <div class="scan" aria-hidden="true"></div>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
