@@ -83,11 +83,22 @@ close it and say which PR. Otherwise leave it alone.
 
 Two passes, and the first is what makes the second affordable.
 
-**The mechanical pass** reads every transcript in the window and counts what is countable: tool
-calls, `is_error` clusters by tool, interrupts (carl pressing escape), `<synthetic>` API failures,
-turn durations, and literally repeated calls. It also emits a **reduced view** of each session —
-user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
+**The mechanical pass** is `kraken mine digest --since <ts>`. It reads every transcript in the
+window and counts what is countable: tool calls, `is_error` clusters by tool, interrupts (carl
+pressing escape), `<synthetic>` API failures, turn durations, literally repeated calls, and the four
+**token counters** (`In`, `Out`, `CacheWrite`, `CacheRead`) per session plus a roll-up across the
+whole sweep. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
+— user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
 which is about an eighth of the bytes.
+
+**Rank by spend, not by tool-call count.** The token roll-up is the cheapest correct answer to
+"where did last night actually go", and it does not agree with the tool-call counts: a session that
+polls a pane four hundred times looks busy and costs little, while one that re-renders the same
+figure three times looks quiet and costs a lot. Sort the digests by cost, and read the top of that
+list first — the expensive sessions are where the waste is, and the correlation is usually blunt
+enough to name the cell before a scout has read a line. Note `Truncated`: a partial scan makes every
+count, tokens included, a FLOOR rather than a total. Per-job totals are also on the board (each
+job's `tokens`), which is the same number aggregated the other way — by job rather than by night.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are

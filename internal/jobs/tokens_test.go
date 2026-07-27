@@ -1,0 +1,613 @@
+package jobs
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"kraken/internal/core"
+	"kraken/internal/store"
+	"kraken/internal/util"
+)
+
+// --- fixture helpers ---
+
+// tokTranscript writes a transcript full of assistant records carrying a
+// usage object, into the ~/.claude/projects dir Claude Code would name for
+// the given cwd. rel is the path inside that dir, so a caller can write a
+// root transcript ("sess.jsonl") or a subagent sidecar
+// ("sess/subagents/agent-1.jsonl").
+func tokTranscript(t *testing.T, cwd, rel string, out int64, n int) string {
+	t.Helper()
+	dir := filepath.Join(util.Home(), ".claude", "projects", core.ProjectDirName(cwd))
+	path := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		line, err := json.Marshal(map[string]any{
+			"type":      "assistant",
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"message": map[string]any{
+				"model": "claude-opus-5",
+				"usage": map[string]any{
+					"input_tokens": 1, "output_tokens": out,
+					"cache_creation_input_tokens": 2, "cache_read_input_tokens": 3,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	return path
+}
+
+// --- tests ---
+
+// TestJobProjectDirsDerivesFromTheWorktreeString pins the rule that makes
+// this feature retrospective at all: the project dir comes from
+// CellWorktree's STRING, so it still resolves after teardownCell has removed
+// the cell dir and ExistingWorktree returns "". The legacy bare-"wt" name is
+// covered too, since cells predating the wt-<repo> naming munge differently.
+func TestJobProjectDirsDerivesFromTheWorktreeString(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	j := &Job{Slug: "demo"}
+	repo := filepath.Join(util.Home(), "Developer", "monolith")
+
+	// Nothing on disk at all — ExistingWorktree would give up here.
+	if got := ExistingWorktree(j, repo); got != "" {
+		t.Fatalf("fixture is wrong: ExistingWorktree = %q, want empty", got)
+	}
+	dirs, err := JobProjectDirs(j, repo)
+	if err != nil {
+		t.Fatalf("JobProjectDirs: %v", err)
+	}
+	if len(dirs) != 2 {
+		t.Fatalf("dirs = %v, want the wt-<repo> dir plus the legacy bare-wt one", dirs)
+	}
+	wantMain := filepath.Join(util.Home(), ".claude", "projects",
+		core.ProjectDirName(CellWorktree(j, repo)))
+	if dirs[0] != wantMain {
+		t.Errorf("dirs[0] = %q, want %q", dirs[0], wantMain)
+	}
+	if !strings.HasSuffix(dirs[0], "-wt-monolith") {
+		t.Errorf("dirs[0] = %q, want the repo basename in the munged name — a job may target any repo", dirs[0])
+	}
+	if !strings.HasSuffix(dirs[1], "-wt") {
+		t.Errorf("dirs[1] = %q, want the legacy bare-wt name", dirs[1])
+	}
+	if got, _ := JobProjectDirs(j, ""); got != nil {
+		t.Errorf("JobProjectDirs with no resolved repo = %v, want nil", got)
+	}
+	if got, _ := JobProjectDirs(nil, repo); got != nil {
+		t.Errorf("JobProjectDirs(nil, …) = %v, want nil", got)
+	}
+}
+
+// TestRefreshJobTokensSumsThenSettles is the pass' whole steady-state
+// contract in one test: the first refresh writes, a second refresh over
+// unchanged transcripts writes NOTHING (which is what makes a settled job
+// cost one stat per file and no SQL), and an append is picked up as a delta
+// rather than a re-sum.
+func TestRefreshJobTokensSumsThenSettles(t *testing.T) {
+	st := useTestStore(t)
+	j := &Job{Slug: "demo", Repo: "kraken", State: "working"}
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	wt := CellWorktree(j, repo)
+	tokTranscript(t, wt, "sess.jsonl", 100, 2)
+	tokTranscript(t, wt, filepath.Join("sess", "subagents", "agent-1.jsonl"), 10, 1)
+
+	wrote, err := refreshJobTokens(st, j, repo, nil)
+	if err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	if !wrote {
+		t.Fatal("first refresh must write")
+	}
+	row, err := st.GetJobTokens("demo")
+	if err != nil {
+		t.Fatalf("GetJobTokens: %v", err)
+	}
+	if row.Out != 210 {
+		t.Errorf("Out = %d, want 210 (2x100 root + 1x10 sidecar — sidecars count)", row.Out)
+	}
+	if row.In != 3 || row.CacheWrite != 6 || row.CacheRead != 9 {
+		t.Errorf("counters = %d/%d/%d, want 3/6/9 across the 3 records", row.In, row.CacheWrite, row.CacheRead)
+	}
+	if row.Sessions != 2 {
+		t.Errorf("Sessions = %d, want 2 transcript files", row.Sessions)
+	}
+
+	offs, err := st.JobTokenOffsets("demo")
+	if err != nil {
+		t.Fatalf("JobTokenOffsets: %v", err)
+	}
+	wrote, err = refreshJobTokens(st, j, repo, offs)
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if wrote {
+		t.Fatal("a settled job must write nothing at all")
+	}
+
+	// append one more record: only the delta lands
+	tokTranscript(t, wt, "sess2.jsonl", 7, 1)
+	offs, _ = st.JobTokenOffsets("demo")
+	if wrote, err = refreshJobTokens(st, j, repo, offs); err != nil || !wrote {
+		t.Fatalf("third refresh: wrote=%v err=%v", wrote, err)
+	}
+	row, _ = st.GetJobTokens("demo")
+	if row.Out != 217 {
+		t.Errorf("Out = %d, want 217 — the new file added as a DELTA, not a re-sum", row.Out)
+	}
+	if row.Sessions != 3 {
+		t.Errorf("Sessions = %d, want 3", row.Sessions)
+	}
+}
+
+// TestRefreshJobTokensNoTranscriptsWritesNothing pins that a job whose cell
+// never came up leaves NO row: that absence is what the wire shape turns into
+// "no key at all", which a reader can tell apart from a real zero.
+func TestRefreshJobTokensNoTranscriptsWritesNothing(t *testing.T) {
+	st := useTestStore(t)
+	j := &Job{Slug: "ghost", Repo: "kraken", State: "working"}
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	wrote, err := refreshJobTokens(st, j, repo, nil)
+	if err != nil {
+		t.Fatalf("refreshJobTokens: %v", err)
+	}
+	if wrote {
+		t.Fatal("a job with no transcripts must not write a row")
+	}
+	if _, err := st.GetJobTokens("ghost"); err == nil {
+		t.Fatal("want no row at all for an unmeasured job")
+	}
+}
+
+// TestSameOffsets covers the predicate the no-op path turns on.
+func TestSameOffsets(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b map[string]int64
+		want bool
+	}{
+		{"both empty", nil, map[string]int64{}, true},
+		{"identical", map[string]int64{"/a": 1}, map[string]int64{"/a": 1}, true},
+		{"grew", map[string]int64{"/a": 1}, map[string]int64{"/a": 2}, false},
+		{"file appeared", map[string]int64{"/a": 1}, map[string]int64{"/a": 1, "/b": 0}, false},
+		{"file vanished", map[string]int64{"/a": 1, "/b": 2}, map[string]int64{"/a": 1}, false},
+	}
+	for _, c := range cases {
+		if got := sameOffsets(c.a, c.b); got != c.want {
+			t.Errorf("%s: sameOffsets = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestTokensPassThrottlesIdleJobsAndPrunes covers the pacing: a job with a
+// live cell is summed on every tick, a job without one is summed once and
+// then throttled for tokensIdleInterval, and a slug that leaves the board
+// loses its throttle stamp (so a later job reusing the name doesn't wait out
+// an interval it never earned).
+func TestTokensPassThrottlesIdleJobsAndPrunes(t *testing.T) {
+	st := useTestStore(t)
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir fake repo: %v", err)
+	}
+
+	idle := &Job{Slug: "idle", Repo: "kraken", State: "done"}
+	tokTranscript(t, CellWorktree(idle, repo), "sess.jsonl", 5, 1)
+
+	d := newDaemon()
+	now := time.Now()
+	d.tokensPass([]*Job{idle}, map[string]bool{}, now)
+	row, err := st.GetJobTokens("idle")
+	if err != nil {
+		t.Fatalf("first pass wrote no row: %v", err)
+	}
+	if row.Out != 5 {
+		t.Fatalf("Out = %d, want 5", row.Out)
+	}
+	if d.TokenScan["idle"] == 0 {
+		t.Fatal("the pass must stamp its throttle clock")
+	}
+
+	// more spend arrives, but the next tick is inside the idle interval
+	tokTranscript(t, CellWorktree(idle, repo), "sess2.jsonl", 500, 1)
+	d.tokensPass([]*Job{idle}, map[string]bool{}, now.Add(time.Minute))
+	row, _ = st.GetJobTokens("idle")
+	if row.Out != 5 {
+		t.Fatalf("Out = %d, want the idle job to still be throttled", row.Out)
+	}
+
+	// a live cell is never throttled
+	d.tokensPass([]*Job{idle}, map[string]bool{CellSession(idle): true}, now.Add(time.Minute))
+	row, _ = st.GetJobTokens("idle")
+	if row.Out != 505 {
+		t.Fatalf("Out = %d, want 505 — a live cell is summed every tick", row.Out)
+	}
+
+	// past the interval, an idle job is due again
+	tokTranscript(t, CellWorktree(idle, repo), "sess3.jsonl", 1, 1)
+	d.tokensPass([]*Job{idle}, map[string]bool{}, now.Add(tokensIdleInterval+time.Minute))
+	row, _ = st.GetJobTokens("idle")
+	if row.Out != 506 {
+		t.Fatalf("Out = %d, want 506 once the idle interval has elapsed", row.Out)
+	}
+
+	// the slug leaves the board: its throttle stamp goes with it
+	d.tokensPass(nil, map[string]bool{}, now.Add(2*tokensIdleInterval))
+	if _, ok := d.TokenScan["idle"]; ok {
+		t.Fatal("a slug that left the board must lose its throttle stamp")
+	}
+}
+
+// TestTokensPassSkipsUnstartedJobs: a draft or queued job has never had a
+// worktree, so no transcripts can exist under its name and opening a project
+// dir for it is pure waste on every tick.
+func TestTokensPassSkipsUnstartedJobs(t *testing.T) {
+	st := useTestStore(t)
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir fake repo: %v", err)
+	}
+
+	draft := &Job{Slug: "draft", Repo: "kraken"} // State "" — never started
+	tokTranscript(t, CellWorktree(draft, repo), "sess.jsonl", 5, 1)
+
+	d := newDaemon()
+	d.tokensPass([]*Job{draft}, map[string]bool{}, time.Now())
+	if _, err := st.GetJobTokens("draft"); err == nil {
+		t.Fatal("an unstarted job must not be summed")
+	}
+	if _, ok := d.TokenScan["draft"]; ok {
+		t.Fatal("an unstarted job must not even claim a throttle slot")
+	}
+}
+
+// TestTokensPassWithoutAStoreIsANoOp: every entrypoint except kraken serve
+// runs with no store wired, and the pass has nowhere to put a number there.
+func TestTokensPassWithoutAStoreIsANoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	UseStore(nil)
+	d := newDaemon()
+	d.tokensPass([]*Job{{Slug: "x", Repo: "kraken", State: "working"}}, map[string]bool{}, time.Now())
+	if len(d.TokenScan) != 0 {
+		t.Fatalf("TokenScan = %v, want the pass to have done nothing", d.TokenScan)
+	}
+}
+
+// TestTokensPassCapsTheIdleBatch pins the burst bound: a daemon restart makes
+// every job due at once, and that is exactly the tick that can least afford
+// to sum all of them.
+func TestTokensPassCapsTheIdleBatch(t *testing.T) {
+	st := useTestStore(t)
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir fake repo: %v", err)
+	}
+
+	var jobs []*Job
+	for i := 0; i < tokensIdleBatch+3; i++ {
+		j := &Job{Slug: "job" + string(rune('a'+i)), Repo: "kraken", State: "done"}
+		tokTranscript(t, CellWorktree(j, repo), "sess.jsonl", 1, 1)
+		jobs = append(jobs, j)
+	}
+	d := newDaemon()
+	d.tokensPass(jobs, map[string]bool{}, time.Now())
+
+	rows, err := st.ListJobTokens()
+	if err != nil {
+		t.Fatalf("ListJobTokens: %v", err)
+	}
+	if len(rows) != tokensIdleBatch {
+		t.Fatalf("summed %d idle jobs in one tick, want the cap of %d", len(rows), tokensIdleBatch)
+	}
+}
+
+// TestRefreshJobTokensReportsAPartialScan is the floor rule crossing the
+// layer boundary: core.SumTokensDelta's partial-scan error must reach the
+// caller AND the counters it did find must still be written, because a
+// reported floor is worth more than a silent zero.
+func TestRefreshJobTokensReportsAPartialScan(t *testing.T) {
+	st := useTestStore(t)
+	j := &Job{Slug: "big", Repo: "kraken", State: "working"}
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	path := tokTranscript(t, CellWorktree(j, repo), "sess.jsonl", 100, 1)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// a single line past core's 16 MB scanner ceiling ends the scan
+	if _, err := f.WriteString(`{"type":"assistant","message":{"content":"` +
+		strings.Repeat("x", (16<<20)+1) + `"}}` + "\n"); err != nil {
+		t.Fatalf("append monster line: %v", err)
+	}
+	f.Close()
+
+	wrote, err := refreshJobTokens(st, j, repo, nil)
+	if err == nil {
+		t.Fatal("a partial scan must be reported — presenting a floor as a total is the bug")
+	}
+	if !wrote {
+		t.Fatal("the counters it did reach must still be written")
+	}
+	row, gerr := st.GetJobTokens("big")
+	if gerr != nil {
+		t.Fatalf("GetJobTokens: %v", gerr)
+	}
+	if row.Out != 100 {
+		t.Fatalf("Out = %d, want the 100 it read before the scan stopped", row.Out)
+	}
+}
+
+// --- fix round 1 ---
+
+// TestJobProjectDirsIncludesDeeperCwds pins the coverage fix: Claude Code
+// buckets a transcript by the agent's STARTUP CWD, not the worktree root, so
+// a teammate spawned in a subpackage writes into a sibling project dir that
+// extends the worktree's munged name. Missing those cost 5.0% of all cell
+// spend on this machine and 26.2% for one job — a per-job-varying under-count,
+// which is worse than a flat one because it makes jobs incomparable.
+func TestJobProjectDirsIncludesDeeperCwds(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	j := &Job{Slug: "demo", Repo: "monolith"}
+	repo := filepath.Join(util.Home(), "Developer", "monolith")
+	root := filepath.Join(util.Home(), ".claude", "projects")
+	base := core.ProjectDirName(CellWorktree(j, repo))
+
+	// A DIFFERENT job whose slug merely shares a prefix — the shape archive
+	// numbering produces — must not be absorbed.
+	sibling := core.ProjectDirName(CellWorktree(&Job{Slug: "demo-2", Repo: "monolith"}, repo))
+	for _, name := range []string{
+		base,                         // the worktree root itself
+		base + "-internal-dashboard", // an agent started in a subpackage
+		base + "-ml-asr-pipeline",    // another
+		sibling,                      // slug demo-2, NOT this job
+		"-Users-somebody-else",       // unrelated
+	} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+
+	got := map[string]bool{}
+	dirs, err := JobProjectDirs(j, repo)
+	if err != nil {
+		t.Fatalf("JobProjectDirs: %v", err)
+	}
+	for _, d := range dirs {
+		got[filepath.Base(d)] = true
+	}
+	for _, want := range []string{base, base + "-internal-dashboard", base + "-ml-asr-pipeline"} {
+		if !got[want] {
+			t.Errorf("missing %q from %v", want, got)
+		}
+	}
+	if got[sibling] {
+		t.Errorf("slug demo-2's dir %q was absorbed into slug demo — prefix matching must stay inside the job", sibling)
+	}
+	if got["-Users-somebody-else"] {
+		t.Error("an unrelated project dir must not be absorbed")
+	}
+}
+
+// TestRefreshJobTokensCarriesWatermarksThroughAnIncompleteScan is the
+// watermark-loss double count. An unlistable subtree leaves its files out of
+// the returned offsets, and SetJobTokenOffsets REPLACES the set — so without
+// the carry-forward those watermarks are deleted and the files are re-summed
+// from zero next pass into counters that only ever accumulate.
+func TestRefreshJobTokensCarriesWatermarksThroughAnIncompleteScan(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test needs")
+	}
+	st := useTestStore(t)
+	j := &Job{Slug: "demo", Repo: "kraken", State: "working"}
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	wt := CellWorktree(j, repo)
+	tokTranscript(t, wt, "sess.jsonl", 100, 1)
+	tokTranscript(t, wt, filepath.Join("sess", "subagents", "agent-1.jsonl"), 500, 1)
+
+	if _, err := refreshJobTokens(st, j, repo, nil); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	before, _ := st.GetJobTokens("demo")
+	offs, _ := st.JobTokenOffsets("demo")
+	if len(offs) != 2 {
+		t.Fatalf("want 2 watermarks, got %v", offs)
+	}
+
+	sub := filepath.Join(util.Home(), ".claude", "projects",
+		core.ProjectDirName(wt), "sess", "subagents")
+	if err := os.Chmod(sub, 0o000); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(sub, 0o755) })
+
+	if _, err := refreshJobTokens(st, j, repo, offs); err == nil {
+		t.Fatal("an incomplete scan must report itself")
+	}
+	kept, _ := st.JobTokenOffsets("demo")
+	if len(kept) != 2 {
+		t.Fatalf("watermarks after an incomplete scan = %v, want both kept", kept)
+	}
+
+	// readable again: the sidecar must NOT be re-added on top of itself
+	os.Chmod(sub, 0o755)
+	if _, err := refreshJobTokens(st, j, repo, kept); err != nil {
+		t.Fatalf("recovery refresh: %v", err)
+	}
+	after, _ := st.GetJobTokens("demo")
+	if after.Out != before.Out {
+		t.Fatalf("Out %d -> %d: the sidecar was counted twice across the outage", before.Out, after.Out)
+	}
+}
+
+// TestTokensPassUnresolvableRepoDoesNotStarveTheIdleBatch: a job whose repo no
+// longer resolves used to consume an idle slot and bail WITHOUT stamping its
+// throttle clock, so it was due again on the very next tick forever — with
+// tokensIdleBatch such jobs on the board, no other idle job was ever refreshed
+// again, and silently, since a repo bail logs nothing.
+func TestTokensPassUnresolvableRepoDoesNotStarveTheIdleBatch(t *testing.T) {
+	st := useTestStore(t)
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir fake repo: %v", err)
+	}
+
+	var jobs []*Job
+	for i := 0; i < tokensIdleBatch+2; i++ {
+		jobs = append(jobs, &Job{Slug: "dead" + string(rune('a'+i)), Repo: "no-such-repo-xyz", State: "done"})
+	}
+	real := &Job{Slug: "real", Repo: "kraken", State: "done"}
+	tokTranscript(t, CellWorktree(real, repo), "sess.jsonl", 42, 1)
+	jobs = append(jobs, real)
+
+	d := newDaemon()
+	now := time.Now()
+	for tick := 0; tick < 5; tick++ {
+		d.tokensPass(jobs, map[string]bool{}, now.Add(time.Duration(tick)*15*time.Second))
+	}
+	if _, err := st.GetJobTokens("real"); err != nil {
+		t.Fatalf("the resolvable job was starved out of every tick: %v", err)
+	}
+}
+
+// TestBumpJobTokensDoesNotCreepUpdatedAtWithoutSpend: a new transcript file
+// appearing bumps `sessions` with a zero delta, which on a live cell happens
+// constantly (a session's first record is a user turn). Moving the timestamp
+// then makes both drilldowns render "measured 3s ago" on a job that has been
+// idle for hours.
+func TestBumpJobTokensDoesNotCreepUpdatedAtWithoutSpend(t *testing.T) {
+	st := useTestStore(t)
+	if err := st.BumpJobTokens("demo", store.JobTokens{Out: 7, Sessions: 1, UpdatedAt: 1000}); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	// a pass that found a new file but no spend
+	if err := st.BumpJobTokens("demo", store.JobTokens{Sessions: 2, UpdatedAt: 9999}); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	row, err := st.GetJobTokens("demo")
+	if err != nil {
+		t.Fatalf("GetJobTokens: %v", err)
+	}
+	if row.UpdatedAt != 1000 {
+		t.Errorf("UpdatedAt = %d, want it to stay at the last pass that found spend", row.UpdatedAt)
+	}
+	if row.Sessions != 2 {
+		t.Errorf("Sessions = %d, want the file count to update regardless", row.Sessions)
+	}
+	// real spend moves it again
+	if err := st.BumpJobTokens("demo", store.JobTokens{Out: 1, Sessions: 2, UpdatedAt: 12345}); err != nil {
+		t.Fatalf("third: %v", err)
+	}
+	row, _ = st.GetJobTokens("demo")
+	if row.UpdatedAt != 12345 {
+		t.Errorf("UpdatedAt = %d, want 12345 once spend was found", row.UpdatedAt)
+	}
+}
+
+// TestJobProjectDirsReportsAShortList is round 2's blocking finding. A
+// projects root that cannot be listed drops every DEEPER dir from the answer,
+// and a short list is indistinguishable from "those dirs went away" — so the
+// caller's replace-all write deletes their watermarks and re-sums those files
+// from zero into counters that only accumulate. An ABSENT root is different
+// and must stay silent: that is a machine with no transcripts at all.
+func TestJobProjectDirsReportsAShortList(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test needs")
+	}
+	t.Setenv("HOME", t.TempDir())
+	j := &Job{Slug: "demo", Repo: "kraken"}
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	root := filepath.Join(util.Home(), ".claude", "projects")
+
+	// no projects dir at all — not a degradation
+	if got, err := JobProjectDirs(j, repo); err != nil {
+		t.Fatalf("an absent projects dir must not be an error: %v (dirs %v)", err, got)
+	}
+
+	base := core.ProjectDirName(CellWorktree(j, repo))
+	for _, n := range []string{base, base + "-ios"} {
+		if err := os.MkdirAll(filepath.Join(root, n), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	full, err := JobProjectDirs(j, repo)
+	if err != nil || len(full) != 3 {
+		t.Fatalf("dirs = %v (err %v), want the two bases plus the deeper one", full, err)
+	}
+
+	// 0111: traversable but NOT listable — the EMFILE / permission-blip shape
+	if err := os.Chmod(root, 0o111); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+
+	short, err := JobProjectDirs(j, repo)
+	if err == nil {
+		t.Fatal("an unlistable projects root must be reported — a silently short list deletes watermarks")
+	}
+	if len(short) != 2 {
+		t.Errorf("dirs = %v, want the two bases still returned alongside the error", short)
+	}
+}
+
+// TestRefreshJobTokensSurvivesAnUnlistableProjectsRoot is the same defect end
+// to end, and the number is the point: before the fix a single failed ReadDir
+// turned a true 600 into a permanent 1100, with nothing logged, nothing on the
+// wire, and no reset path.
+func TestRefreshJobTokensSurvivesAnUnlistableProjectsRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test needs")
+	}
+	st := useTestStore(t)
+	j := &Job{Slug: "demo", Repo: "kraken", State: "working"}
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	wt := CellWorktree(j, repo)
+	tokTranscript(t, wt, "sess.jsonl", 100, 1)        // the base dir
+	tokTranscript(t, wt+"/ios", "sess.jsonl", 500, 1) // a DEEPER dir
+	root := filepath.Join(util.Home(), ".claude", "projects")
+
+	if _, err := refreshJobTokens(st, j, repo, nil); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	row, _ := st.GetJobTokens("demo")
+	offs, _ := st.JobTokenOffsets("demo")
+	if row.Out != 600 || len(offs) != 2 {
+		t.Fatalf("setup: Out=%d watermarks=%d, want 600 and 2", row.Out, len(offs))
+	}
+
+	if err := os.Chmod(root, 0o111); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+	if _, err := refreshJobTokens(st, j, repo, offs); err == nil {
+		t.Fatal("an unlistable projects root must be reported")
+	}
+	kept, _ := st.JobTokenOffsets("demo")
+	if len(kept) != 2 {
+		t.Fatalf("watermarks = %d, want both carried forward through the outage", len(kept))
+	}
+
+	os.Chmod(root, 0o755)
+	if _, err := refreshJobTokens(st, j, repo, kept); err != nil {
+		t.Fatalf("recovery refresh: %v", err)
+	}
+	row, _ = st.GetJobTokens("demo")
+	if row.Out != 600 {
+		t.Fatalf("Out = %d, want 600 — the deeper dir was re-summed on top of itself", row.Out)
+	}
+}

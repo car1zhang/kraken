@@ -858,6 +858,27 @@ body {
 }
 .spec-meta-row { display: flex; gap: 8px; }
 .spec-meta-row.wide { grid-column: 1 / -1; }
+
+/* per-job token spend, in the steer modal's context block (tokensHTML).
+   Deliberately three tiers of loudness rather than four equal numbers:
+   the headline is the only thing readable at a glance, the four-way
+   breakdown is a size and a shade quieter, and the provenance line is
+   quieter still. No neon: this is a fact about the past, never something
+   that's hot or interactive. */
+.tok {
+  padding: 8px 11px; background: var(--surface); border: 1px solid var(--hairline);
+}
+.tok-head { display: flex; align-items: baseline; gap: 5px; }
+.tok-big { font: 600 17px var(--mono); color: var(--text); letter-spacing: 0.5px; }
+.tok-mid { font: 600 13px var(--mono); color: var(--text-2); }
+.tok-unit { font: 9px var(--mono); color: var(--text-2); text-transform: uppercase; letter-spacing: 1.2px; }
+.tok-dot { color: var(--hairline-2); margin: 0 2px; }
+.tok-break {
+  display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 6px;
+  font: 10px var(--mono); color: var(--text-2);
+}
+.tok-cell i { font-style: normal; opacity: 0.6; margin-right: 5px; }
+.tok-note { margin-top: 5px; font: 9px var(--mono); color: var(--text-2); opacity: 0.6; }
 .spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
 .spec-meta-row .v { color: var(--text); }
 .panel {

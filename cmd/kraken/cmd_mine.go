@@ -74,17 +74,27 @@ func runMineDigest(args []string, stdout, stderr *os.File) error {
 
 	// Marshal to the wire shape rather than the struct: MineResult's field
 	// names are Go's, and this output is read by an agent and by jq.
+	//
+	// The Tokens roll-up rides at the TOP level as well as inside each digest,
+	// because it is the number a nightly pass wants first — "what did last
+	// night cost, and which session dominated it" — and reconstructing it by
+	// summing 155 digests in jq is exactly the friction that keeps a reader
+	// from looking. Naming the fields explicitly here is also why it has to be
+	// added by hand: an unnamed field added to MineResult is silently dropped
+	// by this struct, which is what happened to this one.
 	out := struct {
 		Since     int64                `json:"since"`
 		Scanned   int                  `json:"scanned"`
 		Skipped   int                  `json:"skipped"`
 		Truncated int                  `json:"truncated"`
+		Tokens    core.Tokens          `json:"tokens"`
 		Digests   []core.SessionDigest `json:"digests"`
 	}{
 		Since:     res.Since,
 		Scanned:   res.Scanned,
 		Skipped:   res.Skipped,
 		Truncated: res.Truncated,
+		Tokens:    res.Tokens,
 		Digests:   res.Digests,
 	}
 	enc := json.NewEncoder(stdout)
@@ -96,8 +106,9 @@ func runMineDigest(args []string, stdout, stderr *os.File) error {
 	// Truncated is the number that separates a quiet night from a half-read
 	// one, so it is stated on stderr even though it is already in the JSON —
 	// a caller that eyeballs the tail of a 157-entry array will not see it.
-	fmt.Fprintf(stderr, "mined %d transcripts since %s (%d skipped, %d truncated)\n",
-		res.Scanned, time.UnixMilli(since).Format(time.RFC3339), res.Skipped, res.Truncated)
+	fmt.Fprintf(stderr, "mined %d transcripts since %s (%d skipped, %d truncated) — %d out, %d cache-write, %d cache-read tokens\n",
+		res.Scanned, time.UnixMilli(since).Format(time.RFC3339), res.Skipped, res.Truncated,
+		res.Tokens.Out, res.Tokens.CacheWrite, res.Tokens.CacheRead)
 	return nil
 }
 

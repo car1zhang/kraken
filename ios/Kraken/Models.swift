@@ -293,6 +293,12 @@ struct WebJob: Decodable, Identifiable {
     // are revivable conversations. Additive key, absent on older servers
     // (and on any job that never had one), so no contract bump.
     let threads: [WebThread]?
+    // This job's summed token spend, straight from its `job_tokens` row.
+    // Optional for a reason that is NOT just "older servers": absent means
+    // the job has never been measured, which is a different answer from a
+    // measured zero (that arrives as an object of zeros). Never render nil
+    // as 0 — see WebTokens. Additive key, no contract bump.
+    let tokens: WebTokens?
     // The job's optional color — one of red/blue/green/yellow/purple/orange/
     // pink/cyan (the names Claude Code's `/color` accepts), absent or "" when
     // the job has none. Additive key, absent on older servers, so no contract
@@ -318,7 +324,59 @@ struct WebJob: Decodable, Identifiable {
         case docQuestions = "doc_questions"
         case feedback
         case threads
+        case tokens
         case color
+    }
+}
+
+// WebTokens mirrors one `job_tokens` row (board.go's webTokens /
+// store.JobTokens): what a job actually cost, summed from its own Claude Code
+// transcripts by kraken's daemon.
+//
+// "tokens", never "usage" — `usage` in this app already means ACCOUNT QUOTA
+// (UsageView, UsageResponse, /api/usage) and the two are unrelated numbers.
+//
+// The four counters arrive RAW with no weighted total, deliberately: they are
+// billed at wildly different rates, and a server-side "cost" would bake a
+// price ratio into the wire and go stale the moment pricing moves. Any
+// single-number rendering weights them here and owns that choice.
+//
+// Every field is non-optional even though the rest of this file makes
+// omitempty keys Optional: none of these carries `omitempty` on the wire,
+// because a measured zero is a real answer that must still ride. Absence is
+// expressed one level up, by `WebJob.tokens` being nil — so nil must never
+// render as 0.
+//
+// A row can be a FLOOR rather than an exact total (a transcript scanned only
+// part way still contributes what was read), and nothing on the wire says
+// which — so this is spend-so-far, never "exact".
+// The wire names are `in`/`out`; the Swift properties are `input`/`output`
+// because `in` is a Swift keyword and a backticked `tokens.\`in\`` at every
+// call site is a footgun, not a contract. The CodingKeys below are the whole
+// of the difference.
+struct WebTokens: Decodable {
+    /// `input_tokens` — uncached input (wire key `in`).
+    let input: Int64
+    /// `output_tokens` — generated (wire key `out`).
+    let output: Int64
+    /// `cache_creation_input_tokens`.
+    let cacheWrite: Int64
+    /// `cache_read_input_tokens`.
+    let cacheRead: Int64
+    /// How many transcript FILES were summed (root transcripts + subagent
+    /// sidecars). It is what tells "this job was cheap" apart from a row of
+    /// zeros that means something else.
+    let sessions: Int64
+    /// Unix millis: when a refresh last found new spend.
+    let updatedAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case input = "in"
+        case output = "out"
+        case sessions
+        case cacheWrite = "cache_write"
+        case cacheRead = "cache_read"
+        case updatedAt = "updated_at"
     }
 }
 

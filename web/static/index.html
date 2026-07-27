@@ -185,6 +185,11 @@
                chip (feedbackChipHTML) — the panel itself lives here and in
                the job editor, the same two places a question is answerable. -->
           <div class="steer-feedback" id="steer-feedback" hidden></div>
+          <!-- per-job token spend (webJob.tokens), last because it's
+               ambient: nothing here is actionable, and a job that was
+               never measured leaves this container hidden entirely
+               rather than showing a zero — see tokensHTML. -->
+          <div class="steer-tokens" id="steer-tokens" hidden></div>
         </div>
         <div class="steer-actions" id="steer-actions" hidden></div>
         <div class="steer-spec" id="steer-spec" hidden>

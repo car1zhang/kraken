@@ -100,7 +100,11 @@ func TestRunMineDigestWritesJSONToStdout(t *testing.T) {
 		Since     int64 `json:"since"`
 		Scanned   int   `json:"scanned"`
 		Truncated int   `json:"truncated"`
-		Digests   []struct {
+		Tokens    struct {
+			In, Out, CacheWrite, CacheRead int64
+			Sessions                       int
+		} `json:"tokens"`
+		Digests []struct {
 			SessionID  string         `json:"SessionID"`
 			ToolCounts map[string]int `json:"ToolCounts"`
 		} `json:"digests"`
@@ -116,6 +120,19 @@ func TestRunMineDigestWritesJSONToStdout(t *testing.T) {
 	}
 	if got.Digests[0].ToolCounts["Bash"] != 1 {
 		t.Fatalf("ToolCounts = %v, want the one Bash call counted", got.Digests[0].ToolCounts)
+	}
+	// The top-level roll-up is what a nightly pass reads first. It is listed by
+	// hand in runMineDigest's anonymous output struct, so a new MineResult field
+	// is dropped silently unless someone adds it there — which already happened
+	// to this one. This assertion is the thing that would have caught it.
+	if got.Tokens.Out != 22 || got.Tokens.CacheWrite != 33 || got.Tokens.CacheRead != 44 || got.Tokens.In != 11 {
+		t.Fatalf("top-level tokens = %+v, want the record's usage rolled up", got.Tokens)
+	}
+	if got.Tokens.Sessions != 1 {
+		t.Fatalf("tokens.Sessions = %d, want 1 (the one transcript)", got.Tokens.Sessions)
+	}
+	if !strings.Contains(stderr, "22 out") {
+		t.Fatalf("stderr = %q, want the token totals named", stderr)
 	}
 	if !strings.Contains(stderr, "mined 1 transcripts") {
 		t.Fatalf("stderr = %q, want the totals line", stderr)
@@ -195,7 +212,8 @@ func writeTestTranscript(t *testing.T, home, project, session string, ts int64) 
 	stamp := time.UnixMilli(ts).UTC().Format(time.RFC3339Nano)
 	lines := []string{
 		`{"type":"user","timestamp":"` + stamp + `","message":{"content":"hello there"}}`,
-		`{"type":"assistant","timestamp":"` + stamp + `","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hi"}}]}}`,
+		`{"type":"assistant","timestamp":"` + stamp + `","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hi"}}],` +
+			`"usage":{"input_tokens":11,"output_tokens":22,"cache_creation_input_tokens":33,"cache_read_input_tokens":44}}}`,
 	}
 	path := filepath.Join(dir, session+".jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {

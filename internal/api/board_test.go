@@ -106,7 +106,7 @@ func TestWebJobJSONShapeEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(data)
-	for _, absent := range []string{"escalations", "type", "detail", "question", "wakeup", "roster", "zeus_status", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts"} {
+	for _, absent := range []string{"escalations", "type", "detail", "question", "wakeup", "roster", "zeus_status", "health", "cell", "err", "outcome", "success", "prereqs", "artifacts", "tokens"} {
 		if strings.Contains(s, `"`+absent+`"`) {
 			t.Errorf("empty webJob JSON unexpectedly has %q: %s", absent, s)
 		}
@@ -192,6 +192,61 @@ func TestWebWakeupFromMirrorsFields(t *testing.T) {
 	got := webWakeupFrom(w)
 	if got == nil || got.Reason != "poll PR checks" || got.FiresAt != 1234567890 {
 		t.Fatalf("webWakeupFrom mismatch: %+v", got)
+	}
+}
+
+// --- webTokens: the board's read of a job_tokens row (this layer computes
+// nothing; the daemon's tokensPass is the only writer) ---
+
+func TestWebTokensForAbsentSlugIsNil(t *testing.T) {
+	// the "never measured" case — the whole reason webJob.Tokens is a pointer
+	// with omitempty. A zero object here would claim the job cost nothing.
+	index := map[string]store.JobTokens{"other": {Slug: "other", Out: 5}}
+	if got := webTokensFor(index, "x"); got != nil {
+		t.Fatalf("webTokensFor(missing) = %+v, want nil", got)
+	}
+	if got := webTokensFor(nil, "x"); got != nil {
+		t.Fatalf("webTokensFor(nil index) = %+v, want nil", got)
+	}
+}
+
+func TestWebTokensForMeasuredZeroIsNotNil(t *testing.T) {
+	// a real row of zeros is NOT absence: it must serialize as a tokens
+	// object with every counter present.
+	index := map[string]store.JobTokens{"x": {Slug: "x", UpdatedAt: 7}}
+	got := webTokensFor(index, "x")
+	if got == nil {
+		t.Fatal("webTokensFor(measured zero) = nil, want a non-nil object")
+	}
+	data, err := json.Marshal(webJob{Slug: "x", Repo: "monolith", State: "done", Tokens: got})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `"tokens":{"in":0,"out":0,"cache_write":0,"cache_read":0,"sessions":0,"updated_at":7}`; !strings.Contains(string(data), want) {
+		t.Errorf("webJob JSON missing %q: %s", want, data)
+	}
+}
+
+func TestWebTokensForMirrorsFields(t *testing.T) {
+	index := map[string]store.JobTokens{"x": {
+		Slug: "x", In: 149754, Out: 15756009, CacheWrite: 87776983,
+		CacheRead: 2555432608, Sessions: 154, UpdatedAt: 1785124027359,
+	}}
+	got := webTokensFor(index, "x")
+	want := &webTokens{
+		In: 149754, Out: 15756009, CacheWrite: 87776983, CacheRead: 2555432608,
+		Sessions: 154, UpdatedAt: 1785124027359,
+	}
+	if got == nil || *got != *want {
+		t.Fatalf("webTokensFor = %+v, want %+v", got, want)
+	}
+}
+
+func TestJobTokensIndexNoStoreIsNil(t *testing.T) {
+	// no store wired (a file-mode entrypoint, or a test) is not an error:
+	// the board simply serves no tokens key on any job.
+	if got := jobTokensIndex(nil); got != nil {
+		t.Fatalf("jobTokensIndex(nil) = %+v, want nil", got)
 	}
 }
 

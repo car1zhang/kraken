@@ -30,8 +30,9 @@ import (
 // tmux window of the same cell (threads.go). Version 8 adds jobs.color.
 // Version 9 adds the dream loop's watchlist table plus a feedback(ts) index
 // for its unscoped time-window sweep (watchlist.go, feedback.go's
-// FeedbackSince).
-const schemaVersion = 9
+// FeedbackSince). Version 10 adds the per-job token counters and their
+// per-file byte watermarks (tokens.go).
+const schemaVersion = 10
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -379,6 +380,64 @@ CREATE INDEX watchlist_state_last_seen ON watchlist(state, last_seen);
 CREATE INDEX watchlist_observation_key ON watchlist(LOWER(TRIM(observation, char(32,9,10,13))));
 `
 
+// schemaV10 adds the per-job TOKEN counters — the four numbers Claude Code
+// stamps on every assistant record, summed across all of a job's own
+// transcripts (core/tokens.go) — plus the per-file byte watermarks that make
+// summing them incremental. Appended rather than folded into an earlier
+// schemaV<N> for the reason schemaV2's doc comment spells out.
+//
+// "tokens", never "usage": `usage` in this binary already means ACCOUNT
+// QUOTA end to end (/api/usage, ~/.kraken/usage.json, core/usage.go,
+// core/usagepool.go), and colliding on it would make two unrelated numbers
+// indistinguishable in every future grep.
+//
+// TWO TABLES rather than one, and the split is by READER. job_tokens is what
+// the board reads — one row per job, ~74 of them, on a payload that rebuilds
+// roughly every two seconds. job_token_files is the daemon's own bookkeeping
+// and holds one row per TRANSCRIPT FILE, an order of magnitude more rows
+// (a cell's project dir routinely holds 30+ once subagent sidecars are
+// counted). Folding the watermarks into the same table the board sweeps
+// would put that multiplier in front of the hottest read in the process for
+// no benefit; the daemon is the only thing that ever needs a watermark.
+//
+// NEITHER table has a job_id, an FK, or a cascade, and that is deliberate in
+// the way watchlist's absence of one is (schemaV9). The key is the job SLUG
+// because the slug is what the measured thing is actually keyed on: a job's
+// transcripts live in ~/.claude/projects/<munged ~/.kraken/cells/<slug>/wt-*>,
+// a path derived from the slug alone. Two jobs that share a slug share that
+// directory and their transcripts are physically inseparable, so a row here
+// means "everything burned in this slug's cell dir" — which is also why an
+// archived job's row must not cascade away: teardown deletes the cell dir
+// (jobs/cell.go's teardownCell) but Claude Code keeps the transcripts
+// indefinitely, and retrospective cost is the entire point of storing this.
+//
+// updated_at is stamped only when a refresh actually FOUND something, so a
+// settled job's row keeps the timestamp of its last real spend rather than
+// creeping forward on every no-op pass.
+const schemaV10 = `
+CREATE TABLE job_tokens (
+	job_slug    TEXT PRIMARY KEY NOT NULL,
+	in_tokens   INTEGER NOT NULL DEFAULT 0, -- input_tokens
+	out_tokens  INTEGER NOT NULL DEFAULT 0, -- output_tokens
+	cache_write INTEGER NOT NULL DEFAULT 0, -- cache_creation_input_tokens
+	cache_read  INTEGER NOT NULL DEFAULT 0, -- cache_read_input_tokens
+	sessions    INTEGER NOT NULL DEFAULT 0, -- transcript FILES summed (root + sidecars)
+	updated_at  INTEGER NOT NULL DEFAULT 0  -- unix millis
+);
+
+-- One row per transcript file: how many of its bytes have already been
+-- summed into the job_tokens row above. Transcripts are append-only, so the
+-- next pass reads only past this and a settled job costs one stat per file.
+-- byte_offset rather than the obvious name because OFFSET is a SQLite
+-- keyword and would need quoting at every use site.
+CREATE TABLE job_token_files (
+	job_slug    TEXT NOT NULL,
+	path        TEXT NOT NULL, -- absolute transcript path
+	byte_offset INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (job_slug, path)
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -402,21 +461,25 @@ type migrationStep struct {
 // below); migrations[7] adds the threads table (no hook — a brand-new table
 // has nothing to migrate forward); migrations[8] adds jobs.color (no hook —
 // the column's empty-string DEFAULT is the whole backfill); migrations[9] adds
-// the watchlist table and the feedback(ts) index (no hook, same reason).
+// the watchlist table and the feedback(ts) index (no hook, same reason);
+// migrations[10] adds the job_tokens/job_token_files tables (no hook — two
+// brand-new tables, and an absent row correctly means "not measured yet",
+// which is exactly what a job that predates the feature is).
 // Future schema changes append
-// migrations[10], migrations[11], ... rather than editing an existing
+// migrations[11], migrations[12], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
-	1: {sql: schemaV1},
-	2: {sql: schemaV2},
-	3: {sql: schemaV3},
-	4: {sql: schemaV4},
-	5: {sql: schemaV5, hook: migrateV5Questions},
-	6: {sql: schemaV6, hook: migrateV6FeedbackJobID},
-	7: {sql: schemaV7},
-	8: {sql: schemaV8},
-	9: {sql: schemaV9},
+	1:  {sql: schemaV1},
+	2:  {sql: schemaV2},
+	3:  {sql: schemaV3},
+	4:  {sql: schemaV4},
+	5:  {sql: schemaV5, hook: migrateV5Questions},
+	6:  {sql: schemaV6, hook: migrateV6FeedbackJobID},
+	7:  {sql: schemaV7},
+	8:  {sql: schemaV8},
+	9:  {sql: schemaV9},
+	10: {sql: schemaV10},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

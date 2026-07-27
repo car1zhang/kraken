@@ -164,6 +164,7 @@ the new build" would be false at exactly the moment it is shown.
 | `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
 | `color` | string | omitempty | the job's color, one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan` (the names Claude Code's `/color` accepts, in that order); absent or `""` means the job has NO color and must render exactly as an uncolored job always has — no swatch, no reserved space. Clients degrade an unrecognized name to "no color" rather than failing. Additive, no contract bump |
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
+| `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
 
@@ -231,6 +232,33 @@ The provenance columns — `session_id`, `parent_session`, `fork_uuid`, `seed`,
 `cwd` — and the tmux window target deliberately never ride the board poll;
 `fork_uuid` is served by `GET /api/thread/read` instead, where the split it
 anchors is actually used.
+
+`webTokens` (one `job_tokens` row — the job's token spend, summed from its own
+Claude Code transcripts by the daemon and only READ by the API):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `in` | number | always | `input_tokens` — uncached input |
+| `out` | number | always | `output_tokens` — generated |
+| `cache_write` | number | always | `cache_creation_input_tokens` |
+| `cache_read` | number | always | `cache_read_input_tokens` |
+| `sessions` | number | always | how many transcript FILES were summed (root transcripts + subagent sidecars) — what tells "this job was cheap" apart from a row of zeros meaning something else |
+| `updated_at` | number | always | unix millis, when a refresh last found new spend |
+
+Three rules for any client rendering this:
+
+- **The four counters ride RAW, with no weighted total, and none is ever
+  added.** They are billed at wildly different rates and no server-side "cost"
+  number exists on purpose — one would bake a price ratio into the wire and go
+  stale the moment pricing moves. A client that wants a single number weights
+  them itself and owns that choice.
+- **No key inside the object is `omitempty`** — a measured zero is a real
+  answer and still rides the wire. Absence is expressed one level up: `tokens`
+  itself is missing from the job. Never render an absent `tokens` as `0`.
+- **A row may be a FLOOR rather than an exact total.** A transcript that could
+  only be scanned part way still contributes what was read (a failed read is
+  not a zero), and nothing on the wire marks which rows those are — so present
+  the number as spend-so-far, never as exact.
 
 ### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
