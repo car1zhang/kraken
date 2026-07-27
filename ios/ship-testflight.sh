@@ -149,6 +149,42 @@ if [ ! -s "$P8" ] || [ ! -r "$P8" ]; then
   Full setup: ios/TESTFLIGHT.md"
 fi
 
+# The SAME key, handed to xcodebuild for the EXPORT (and only the export — see
+# the archive and export steps below for why it goes on exactly one of them).
+#
+# altool is not the only Apple CLI here that has to prove who it is. The App Store
+# distribution certificate is CLOUD-MANAGED: Apple issues it to each export rather
+# than leaving one installed in the keychain, so App Store signing depends on a
+# live credential rather than on a file. By default xcodebuild presents whatever
+# Apple ID is signed into Xcode's Accounts pane — which is the wrong dependency
+# for this pipeline, since a board-triggered ship is a launchd job with no login
+# session and nobody to answer a sign-in prompt. Measured 2026-07-27, when that
+# account session stopped working after eight consecutive green ships:
+#
+#   error: exportArchive No Accounts
+#   error: exportArchive No signing certificate "iOS Distribution" found
+#
+# Nothing had been deleted, and --allow-provisioning-updates did not help; the
+# export simply had nobody to authenticate as. The incident, and why the second
+# line names the wrong culprit, are written up in ios/TESTFLIGHT.md.
+#
+# Unlike altool, xcodebuild does NOT find the .p8 by convention: the path has to
+# be named, and it embeds the key id. That is the one place this pipeline puts a
+# credential in an argv, and it is confined to the export on purpose — `xcodebuild
+# archive` echoes its own full command line as its first output block, which
+# shipScanner tees verbatim into ~/.kraken/ship-ios.log (append-only, never
+# rotated, 0644), and `xcodebuild -exportArchive` does not. Measured across the
+# log's 12 recorded invocations: 12 archive echoes, 0 export echoes. So these
+# flags reach the process table and nothing else — no echo, no log, no status
+# file — which is what CLAUDE.md requires of ASC_KEY_ID and ASC_ISSUER_ID.
+#
+# Always six elements, so unlike PROV_FLAG above this needs no empty-array guard.
+ASC_AUTH=(
+  -authenticationKeyPath "$P8"
+  -authenticationKeyID "$ASC_KEY_ID"
+  -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+)
+
 # Build number: the number of commits on HEAD. Monotonic (commits only
 # accumulate), deterministic (no state file to drift or be lost with the
 # worktree), and rebuilding the same commit yields the same number — which is
@@ -199,6 +235,7 @@ DRY RUN — preflight passed, nothing below was executed.
   archive         $ARCHIVE_PATH
   export options  $EXPORT_OPTIONS
   credentials     ASC_KEY_ID and ASC_ISSUER_ID set; key file present
+                  (authenticates xcodebuild's signing as well as the upload)
   provisioning    $PROV_LABEL
 
 Would run:
@@ -207,7 +244,10 @@ Would run:
        -destination 'generic/platform=iOS' -configuration Release \\
        -archivePath $ARCHIVE_PATH CURRENT_PROJECT_VERSION=$BUILD_NUMBER
   3. xcodebuild -exportArchive -archivePath $ARCHIVE_PATH \\
-       -exportPath $EXPORT_DIR -exportOptionsPlist $EXPORT_OPTIONS
+       -exportPath $EXPORT_DIR -exportOptionsPlist $EXPORT_OPTIONS \\
+       -authenticationKeyPath <\$ASC_KEY_ID key file> \\
+       -authenticationKeyID <\$ASC_KEY_ID> \\
+       -authenticationKeyIssuerID <\$ASC_ISSUER_ID>
   4. xcrun altool --upload-app -f $EXPORT_DIR/Kraken.ipa -t ios \\
        --apiKey <\$ASC_KEY_ID> --apiIssuer <\$ASC_ISSUER_ID>
 
@@ -241,6 +281,29 @@ phase archiving
 # it signs with the existing "Apple Development" identity and the team
 # provisioning profile. The App Store signing requirement is not enforced here
 # but at export (below), so do not read a green archive as "signing is set up".
+#
+# Deliberately NOT given $ASC_AUTH. It needs no App Store credential (that is the
+# point of the paragraph above), and it is the one xcodebuild action that echoes
+# its own argv into a log that keeps it forever — so passing the key here would
+# buy nothing and leak the key id. Verified 2026-07-27 that the export succeeds
+# with the credential on the export alone. TestShipScriptKeepsCredentialOffArchive
+# pins this, because the leak it prevents is silent and permanent.
+#
+# One consequence, and the only case where that split bites: -allowProvisioningUpdates
+# IS still passed here, so a --allow-provisioning-updates run gives the archive
+# permission to talk to the portal without an identity to do it as. Measured
+# 2026-07-27, that run archives fine — it signs with the already-installed
+# development identity and never asks Apple. But a genuine first run, or one after
+# the annual Apple Development certificate lapses, may need to create something
+# here and would then fail with `No Accounts` at THIS phase. If that ever happens:
+# add "${ASC_AUTH[@]}" to this one command by hand for that one interactive run,
+# then strip the echoed command line from ~/.kraken/ship-ios.log afterwards (strip,
+# not truncate — OpenShipLog appends precisely because a failed run's output is
+# unreproducible without re-running ten minutes of work). The test named above goes
+# red while the flags are there; that is the point, so revert once the run is
+# through. It is deliberately not wired in
+# permanently — every automated ship would pay a credential in the log for a case
+# that arises at most once a year, with a human watching when it does.
 xcodebuild archive \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
@@ -253,19 +316,29 @@ xcodebuild archive \
 # -------------------------------------------------------------------- export
 
 phase exporting
-# THIS is where a machine without App Store signing assets stops. Measured on a
-# machine with only an "Apple Development" identity, the exact failure is:
+# THIS is the step that needs App Store signing, and the only one — see the
+# archive comment above for why a green archive proves nothing about it.
+#
+# It re-signs with an "iOS Distribution" certificate, and $ASC_AUTH is what
+# obtains it: the certificate comes from Apple per export rather than out of the
+# local keychain, so this does not depend on a distribution identity being
+# installed here — and `security find-identity` is therefore no use as a check,
+# since it shows only the development cert whether signing works or not.
+#
+# Measured on a machine with only an "Apple Development" identity and no App
+# Store assets yet, the first-run failure is:
 #
 #   error: exportArchive No profiles for 'dev.carl.Kraken' were found
 #   ** EXPORT FAILED **
 #
-# That is the expected FIRST-RUN outcome, not a bug. Re-run once with
-# --allow-provisioning-updates to let Xcode create the Apple Distribution
-# certificate and App Store provisioning profile; afterwards plain runs work.
+# That is the expected FIRST-RUN outcome, not a bug: re-run once with
+# --allow-provisioning-updates to let Xcode create the App ID and App Store
+# provisioning profile. Afterwards plain runs work.
 xcodebuild -exportArchive \
   -archivePath "$ARCHIVE_PATH" \
   -exportPath "$EXPORT_DIR" \
   -exportOptionsPlist "$EXPORT_OPTIONS" \
+  "${ASC_AUTH[@]}" \
   ${PROV_FLAG[@]+"${PROV_FLAG[@]}"}
 
 IPA="$(/usr/bin/find "$EXPORT_DIR" -maxdepth 1 -name '*.ipa' -print -quit)"
@@ -278,8 +351,9 @@ phase uploading
 # 26.3 (altool 26.10.1); notarytool is for Developer ID notarization and cannot
 # do this. --apiKey/--apiIssuer and --api-key/--api-issuer are both accepted;
 # the key file itself is never named on the command line — altool finds
-# AuthKey_<key id>.p8 by convention, which keeps the credential path out of
-# both the process table and this script's log.
+# AuthKey_<key id>.p8 by convention. Stated once, for the whole pipeline: the key
+# PATH is in an argv only at the export above; the two ids are on THIS command
+# line and always have been. Neither ever reaches this script's log.
 xcrun altool --upload-app \
   -f "$IPA" \
   -t ios \

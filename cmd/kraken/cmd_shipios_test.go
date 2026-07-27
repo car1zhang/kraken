@@ -805,3 +805,72 @@ func TestRunShipIOSNeverLeaksCredentials(t *testing.T) {
 		t.Error("the script's environment lost the credentials it needs")
 	}
 }
+
+// TestShipScriptKeepsCredentialOffArchive pins WHERE the App Store Connect
+// credential may appear in ios/ship-testflight.sh, which is the only thing
+// keeping it out of ~/.kraken/ship-ios.log.
+//
+// `xcodebuild archive` prints its own full argv as its first line of output and
+// `-exportArchive` does not (measured over this machine's log: 12 archive
+// echoes, 0 export echoes). shipScanner tees that output verbatim into a
+// world-readable, append-only, never-rotated log, so the same flags that are
+// harmless on the export write the key id — which is embedded in the .p8's
+// filename — permanently into the log when they ride on the archive.
+//
+// The first draft of the fix passed them to both commands, which is how easily
+// this goes wrong; a later edit that "symmetrizes" the two calls would restore
+// the leak with every other test still green, and nothing would report it.
+func TestShipScriptKeepsCredentialOffArchive(t *testing.T) {
+	// A checkout without ios/ skips; anything else is a hard failure. A test whose
+	// whole value is failing loudly must not go quiet because it could not read
+	// its own subject — same split as TestJobPaletteMatchesSwift.
+	src, err := os.ReadFile("../../ios/ship-testflight.sh")
+	if os.IsNotExist(err) {
+		t.Skip("no ios/ship-testflight.sh in this checkout")
+	}
+	if err != nil {
+		t.Fatalf("read ios/ship-testflight.sh: %v", err)
+	}
+	archive := xcodebuildCommand(t, string(src), "xcodebuild archive")
+	export := xcodebuildCommand(t, string(src), "xcodebuild -exportArchive")
+
+	for _, banned := range []string{"ASC_AUTH", "-authenticationKey"} {
+		if strings.Contains(archive, banned) {
+			t.Errorf("`xcodebuild archive` carries %s — it echoes its argv into "+
+				"~/.kraken/ship-ios.log, so the credential must stay on the export:\n%s",
+				banned, archive)
+		}
+	}
+	// And the export must still HAVE it, or the export cannot authenticate and
+	// the whole pipeline is back to `exportArchive No Accounts`. Either spelling
+	// counts: expanding the flags inline instead of via the array preserves the
+	// invariant exactly, and the archive ban above keeps the leak closed either way.
+	if !strings.Contains(export, "ASC_AUTH") && !strings.Contains(export, "-authenticationKey") {
+		t.Errorf("`xcodebuild -exportArchive` lost its App Store Connect credential:\n%s", export)
+	}
+}
+
+// xcodebuildCommand returns the one shell command in src that starts with
+// prefix: that line plus every continuation line, stopping at the first line
+// that is not continued. Comments above the command are excluded on purpose —
+// they discuss the flags without passing them.
+func xcodebuildCommand(t *testing.T, src, prefix string) string {
+	t.Helper()
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			continue
+		}
+		cmd := []string{line}
+		for j := i; strings.HasSuffix(strings.TrimSpace(lines[j]), `\`); {
+			j++
+			if j >= len(lines) {
+				break
+			}
+			cmd = append(cmd, lines[j])
+		}
+		return strings.Join(cmd, "\n")
+	}
+	t.Fatalf("ios/ship-testflight.sh has no %q command", prefix)
+	return ""
+}

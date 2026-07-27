@@ -495,8 +495,14 @@ var (
 	//
 	// The environment is inherited whole (util.ToolchainEnv is os.Environ() plus a
 	// PATH edit) because that is how ASC_KEY_ID and ASC_ISSUER_ID reach the
-	// script. They are never named on a command line — altool finds the .p8 by
-	// convention — so they stay out of the process table as well as the log.
+	// script. altool never names the .p8 on a command line (it finds the key by
+	// convention), so the upload keeps the key FILE out of the process table. It
+	// does pass the two ids, as --apiKey/--apiIssuer, and always has.
+	// The export is where the key PATH reaches an argv too: xcodebuild has no
+	// convention lookup and is given -authenticationKey* flags.
+	// They still never reach this LOG — `xcodebuild archive` echoes its own argv
+	// and `-exportArchive` does not, which is why ship-testflight.sh passes them
+	// to the export alone.
 	shipExec = func(script, dir string, env, args []string, out io.Writer) error {
 		cmd := exec.Command(script, args...)
 		cmd.Dir = dir

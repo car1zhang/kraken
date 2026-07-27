@@ -35,8 +35,10 @@ Put the file where `altool` looks for it by convention:
 ```
 
 (`altool` searches `./private_keys`, `~/private_keys`, `~/.private_keys`, and
-`~/.appstoreconnect/private_keys`. The script never names the file on the
-command line, so the key path stays out of the process table and the logs.)
+`~/.appstoreconnect/private_keys`, so the script never has to name the file when
+it uploads. `xcodebuild` has no such convention and must be given the path — see
+the `No Accounts` corollary in prerequisite 3 for why it is given it on exactly
+one step, and what that does and does not expose.)
 
 ### 2. An app record for `dev.carl.Kraken`
 
@@ -67,6 +69,44 @@ Notably it did **not** add an `Apple Distribution` identity to the keychain;
 cert. Xcode used a **cloud-managed distribution certificate**, whose private key
 stays on Apple's servers. So "no distribution cert in the keychain" is not
 evidence that signing is unset up — check for the Store profile instead.
+
+**The corollary, learned the hard way on 2026-07-27.** A cloud-managed
+certificate is not installed once and kept; it is issued to the export *on every
+run*, and that request has to be authenticated. So App Store signing here depends
+on a live credential, not on a file sitting in the keychain — and when that
+credential goes away, eight consecutive green ships turn into:
+
+```
+error: exportArchive No Accounts
+error: exportArchive No signing certificate "iOS Distribution" found
+```
+
+The second line is the misleading one: nothing was deleted, and re-running with
+`--allow-provisioning-updates` does not help, because the problem is that
+`xcodebuild` has nobody to authenticate *as*. By default it authenticates as
+whatever Apple ID is signed into Xcode's Accounts pane — which is a terrible
+dependency for this pipeline, since a board-triggered ship is a launchd job with
+no login session and no way to answer a sign-in prompt.
+
+The script therefore passes the App Store Connect API key to `xcodebuild` itself
+(`-authenticationKeyPath` / `-authenticationKeyID` / `-authenticationKeyIssuerID`),
+not just to `altool`. The same `~/.kraken/asc.env` credentials that upload the
+build now also authorize the signing, so the pipeline no longer depends on an
+Xcode account existing at all. If you ever see `No Accounts`, the key — not the
+keychain — is what to check.
+
+It goes on the **export step only**, and that placement is load-bearing rather
+than tidy. `-authenticationKeyPath` names a file whose name embeds the key id, so
+those flags are the one place this pipeline puts the key PATH into an argv. (The
+two ids are on altool's own command line at the upload, and always have been.) The
+archive step does not need them — it signs with the local development identity —
+and it is the one `xcodebuild` action that echoes its own full command line as its
+first line of output, which `shipScanner` tees verbatim into
+`~/.kraken/ship-ios.log`, a world-readable append-only file that is never rotated.
+Measured across that log's twelve recorded invocations: twelve archive echoes,
+zero export echoes. Keeping the flags on the export alone therefore satisfies
+`No Accounts` while leaving the key id out of every log — verified 2026-07-27 by
+running an archive with no credentials and an export with them, which succeeded.
 
 ### 4. An internal testing group with you in it
 
