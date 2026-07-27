@@ -612,12 +612,11 @@ function cardHTML(j, col) {
     .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  // an uncoloured job emits no --job-color declaration at all, so the card's
-  // accent bar falls through to --state and the markup is byte-identical to
-  // a board that never had colours (see .card in style.css for the
-  // flagged > job colour > state precedence the bar carries)
+  // an uncoloured job emits no --job-color declaration at all and its accent
+  // bar falls through to grey. --state is still emitted: it no longer feeds
+  // the bar, but the `● working` chip reads it.
   const jc = jobColorVar(j);
-  return `<div class="card editable ${j.question || j.health || docQuestionsOpenP0(j) ? "flagged" : ""}" style="--state:${color}${jc ? `;--job-color:${jc}` : ""}"
+  return `<div class="card editable" style="--state:${color}${jc ? `;--job-color:${jc}` : ""}"
       draggable="true" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
     <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
@@ -3704,10 +3703,9 @@ function renderDag(board) {
       const p = pos[j.slug];
       const editable = !j.live && ["draft", "queued", "done"].includes(columnFor(j.state));
       // same accent-bar channel as the kanban card, so a job reads as the
-      // same colour in both views (see .card in style.css for the
-      // flagged > job colour > state precedence)
+      // same colour in both views
       const jc = jobColorVar(j);
-      return `<div class="dag-node editable ${j.question || j.health ? "flagged" : ""}"
+      return `<div class="dag-node editable"
         style="left:${p.x}px;top:${p.y}px;--state:${stateColor(j.state)}${jc ? `;--job-color:${jc}` : ""}"
         data-slug="${esc(j.slug)}" data-editable="${editable}">
         <span class="slug">${esc(j.slug)}</span>

@@ -378,14 +378,14 @@ enum SessionTheme {
 /// leading bar that is the job's COLOR channel and nothing else — mirrors
 /// .card / .card.flagged in style.css, including its precedence.
 ///
-/// Precedence is flagged > job color > grey. The bar deliberately no longer
-/// carries state: an uncolored job is grey whether it is draft, queued,
+/// The bar is the job's color and NOTHING else — no state, and no longer any
+/// flagged override. An uncolored job is grey whether it is draft, queued,
 /// working, blocked or done, so the bar answers "which job is this", never
-/// "how is it going". State stays fully readable from the card's column and
-/// its `● working` chip, which still use BoardTheme.color(forState:).
-/// Flagged (a pending question, or unhealthy) stays on top and keeps its soft
-/// pink glow: it is an alert, not a status, and losing it would cost the one
-/// signal meaning "this needs you now".
+/// "how is it going" or "does this need me". State stays fully readable from
+/// the card's column and its `● working` chip, which still use
+/// BoardTheme.color(forState:); a pending question still shows its own
+/// flag icon in the card's title row and its own square on the column
+/// header, so dropping the card-wide pink glow cost no signal.
 ///
 /// The parameter is `barColor` rather than `jobColor` or `stateColor`
 /// because two different callers fill it: a board card passes the job's
@@ -394,12 +394,8 @@ enum SessionTheme {
 /// grey either way.
 struct CardBackground: ViewModifier {
     var barColor: Color?
-    var flagged: Bool = false
 
-    private var resolvedBar: Color {
-        if flagged { return KTheme.counter }
-        return barColor ?? KTheme.text2
-    }
+    private var resolvedBar: Color { barColor ?? KTheme.text2 }
 
     func body(content: Content) -> some View {
         content
@@ -410,13 +406,12 @@ struct CardBackground: ViewModifier {
                     .fill(resolvedBar)
                     .frame(width: 2)
             }
-            .shadow(color: flagged ? KTheme.counter.opacity(0.28) : .clear, radius: flagged ? 5 : 0)
     }
 }
 
 extension View {
-    func cardBackground(barColor: Color? = nil, flagged: Bool = false) -> some View {
-        modifier(CardBackground(barColor: barColor, flagged: flagged))
+    func cardBackground(barColor: Color? = nil) -> some View {
+        modifier(CardBackground(barColor: barColor))
     }
 }
 
