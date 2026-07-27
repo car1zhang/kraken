@@ -739,6 +739,24 @@ struct JobDetailView: View {
                     }
                 }
 
+                // Outside every editability gate on purpose. The spec editor
+                // (and the color picker inside it) is only reachable through
+                // the Edit Spec button below, which requires `isEditable` —
+                // i.e. a cell that is DOWN — while recoloring is most useful
+                // on a job that is running, and is exactly what the web board
+                // already allows for a working/blocked job whose cell died.
+                // POST /api/job/color has no editable-job gate to respect, so
+                // neither does this. Archived jobs are the one exclusion:
+                // their file has left the active namespace.
+                if !isArchived {
+                    kSection("Color") {
+                        JobColorStrip(baseURL: baseURL, slug: job.slug, serverColor: job.color) { _ in
+                            // Refresh the board so the card's swatch and this
+                            // sheet's `job` snapshot pick the new color up.
+                            onUpdate()
+                        }
+                    }
+                }
                 if let err = job.err, !err.isEmpty {
                     kSection("Error") { Text(err).font(.voice(13)).foregroundStyle(KTheme.counter) }
                 }

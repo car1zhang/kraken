@@ -87,6 +87,71 @@ function stateColor(state) {
   return STATE_COLOR[state] || "var(--text-2)";
 }
 
+// the eight colours a job may carry — Claude Code's own /color names, in
+// /color's order, which is the order the editor's swatch strip renders and
+// the order style.css declares --job-*. Absent/empty means genuinely no
+// colour, not a default: an uncoloured job renders exactly as it always did.
+const JOB_COLORS = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
+
+// jobColorVar resolves a job's colour to the CSS var holding it, or "" when
+// the job has none. The whitelist check is what makes the result safe to
+// interpolate into a style attribute unescaped — an unrecognised value from
+// the wire drops to "" rather than reaching the stylesheet.
+function jobColorVar(j) {
+  const c = j && j.color;
+  return JOB_COLORS.includes(c) ? `var(--job-${c})` : "";
+}
+
+// swatchStripHTML builds a colour strip's nine radios from JOB_COLORS. Both
+// strips — the job editor's and the steer modal's — are generated from this
+// one function rather than hand-written twice in index.html, so they cannot
+// drift in palette, order or markup. `name` must differ per strip: both live
+// in the DOM at once, and radios sharing a name are ONE group, so a reused
+// name would make picking a colour in one strip silently unpick the other.
+function swatchStripHTML(name) {
+  const sw = (val, style) =>
+    `<label class="f-sw${val ? "" : " none"}" title="${esc(val || "no color")}">` +
+    `<input type="radio" name="${esc(name)}" value="${esc(val)}"${val ? "" : " checked"}>` +
+    `<span class="f-sw-fill"${style}></span></label>`;
+  // the "none" swatch first, then /color's own eight in /color's own order
+  return sw("", "") + JOB_COLORS.map((c) => sw(c, ` style="--sw:var(--job-${c})"`)).join("");
+}
+
+// setSwatchStrip reflects a job's colour into one strip. "No colour" is a
+// real radio (value "") rather than an absence, so an unrecognised colour
+// from the wire falls back to it instead of leaving the strip with nothing
+// checked and no way to click back to neutral.
+function setSwatchStrip(el, v) {
+  const want = JOB_COLORS.includes(v) ? v : "";
+  el.querySelectorAll('input[type="radio"]').forEach((r) => (r.checked = r.value === want));
+}
+
+// initSwatchStrip fills a strip and wires its one behaviour: POST the pick to
+// /api/job/color immediately. Deliberately NOT the debounced form autosave
+// that every other editor control rides — saveform refuses any job whose cell
+// is live (which is exactly when recolouring is useful), a full-replace save
+// from an older client could wipe the colour by omitting the key, and a
+// discrete one-click choice has nothing to debounce. Both events are stopped
+// so an editor pick never also reaches #editor-form's delegated autosave and
+// saves every other field for nothing. post() surfaces a non-200 in the tick
+// line and re-renders the board, so the card's swatch catches up without
+// waiting for the next poll; on failure the strip is put back to whatever the
+// freshly-refreshed board says, so it can never show a colour the server
+// rejected. getSlug is a thunk because the target job changes per open.
+function initSwatchStrip(id, name, getSlug) {
+  const el = document.getElementById(id);
+  el.innerHTML = swatchStripHTML(name);
+  el.addEventListener("input", (ev) => ev.stopPropagation());
+  el.addEventListener("change", async (ev) => {
+    ev.stopPropagation();
+    const slug = getSlug();
+    if (!slug) return;
+    const ok = await post("/api/job/color", { slug, color: ev.target.value });
+    if (!ok) setSwatchStrip(el, (jobsBySlug[slug] || {}).color);
+  });
+  return el;
+}
+
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -515,9 +580,13 @@ function cardHTML(j, col) {
     .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  return `<div class="card editable ${j.question || j.health || docQuestionsOpenP0(j) ? "flagged" : ""}" style="--state:${color}"
+  // an uncoloured job emits neither the --job-color declaration nor the
+  // swatch element — no empty span, no gap in .card-top's 8px flex gap, so
+  // the markup is byte-identical to a board that never had colours
+  const jc = jobColorVar(j);
+  return `<div class="card editable ${j.question || j.health || docQuestionsOpenP0(j) ? "flagged" : ""}" style="--state:${color}${jc ? `;--job-color:${jc}` : ""}"
       draggable="true" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
-    <div class="card-top">
+    <div class="card-top">${jc ? `<span class="card-swatch"></span>` : ""}
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
       ${col === "queued" && !j.live ? `<button class="queue-cancel" data-slug="${esc(j.slug)}" title="cancel — return to draft (spec is kept)">✕</button>` : ""}
@@ -856,8 +925,13 @@ function archivedCardHTML(j) {
   // own, below), but snapshotDocInputs/restoreDocInputs use it as a per-card
   // scroll key — and a bare slug would make this card and an active job that
   // reused the freed slug restore each other's feedback-panel scroll position
-  return `<div class="card archived" style="--state:var(--text-2)" data-slug="${esc(jobKey(j))}">
-    <div class="card-top">
+
+  // the swatch survives archiving — the card is dimmed as a whole by
+  // .card.archived's opacity, so the colour reads as muted without needing a
+  // treatment of its own. Same all-or-nothing emission as the live card.
+  const jc = jobColorVar(j);
+  return `<div class="card archived" style="--state:var(--text-2)${jc ? `;--job-color:${jc}` : ""}" data-slug="${esc(jobKey(j))}">
+    <div class="card-top">${jc ? `<span class="card-swatch"></span>` : ""}
       <span class="slug">${esc(label)}</span>
       ${renamed ? `<span class="state">as ${esc(j.slug)}</span>` : ""}
       <span class="state">● archived</span>
@@ -2151,6 +2225,11 @@ function openSteer(slug, mode = "steer", opts = {}) {
   tmuxBtn.hidden = !showTmux;
   tmuxBtn.dataset.slug = slug;
 
+  // the colour strip is per-job state like the head's buttons, so it's set
+  // on every open. It rides no mode check: recolouring is valid in steer,
+  // unblock and reactivate alike, and it never touches the cell.
+  setSwatchStrip(document.getElementById("steer-swatches"), (jobsBySlug[slug] || {}).color);
+
   const doneBtn = document.getElementById("steer-markdone");
   const showDone = mode !== "reactivate" && liveCol === "blocked";
   doneBtn.hidden = !showDone;
@@ -2972,6 +3051,7 @@ function fillForm(d) {
   repoSel.value = d.repo || "";
   document.getElementById("f-base").value = d.base || "";
   document.getElementById("f-model").value = d.model || "";
+  setFormColor(d.color);
   editorReady = !!d.ready;
   document.getElementById("f-solo").checked = !!d.solo;
   document.getElementById("f-prereqs").innerHTML = (d.prereqs || []).map(prereqRowHTML).join("");
@@ -2979,6 +3059,13 @@ function fillForm(d) {
   refreshCmdHighlight("editor-text");
   refreshCmdChips("editor-text");
   document.getElementById("job-list").innerHTML = (d.slugs || []).map((x) => `<option value="${esc(x)}">`).join("");
+}
+
+// the editor's copy of the colour strip. Reading it into the form is the
+// only direction the form owns — the strip writes itself back through
+// initSwatchStrip's own POST, never through readForm.
+function setFormColor(v) {
+  setSwatchStrip(document.getElementById("f-swatches"), v);
 }
 
 function readForm() {
@@ -3010,6 +3097,11 @@ function setFormReadOnly(readOnly) {
   document.getElementById("f-base").disabled = readOnly;
   document.getElementById("f-model").disabled = readOnly;
   document.getElementById("f-solo").disabled = readOnly;
+  // the colour strip is deliberately NOT in this list. Everything else here
+  // is job-file state that the crew owns while a cell is in flight, so the
+  // server refuses it; a colour is carl's own label on the card and rides
+  // its own ungated endpoint (/api/job/color). Recolouring a *running* job
+  // is the main thing the feature is for — disabling these would kill it.
   document.getElementById("f-add-prereq").disabled = readOnly;
   document.querySelectorAll("#f-prereqs .prereq-row input, #f-prereqs .prereq-row button")
     .forEach((el) => (el.disabled = readOnly));
@@ -3289,6 +3381,15 @@ async function doEditorSave() {
 
 document.getElementById("editor-form").addEventListener("input", onEditorFormChange);
 document.getElementById("editor-form").addEventListener("change", onEditorFormChange);
+
+// the two colour strips. Two, not one, because the board routes a card click
+// by liveness: a live working/blocked job opens the STEER modal and never the
+// editor (see the .card handler above), so an editor-only picker would be
+// reachable exactly when /api/job/color's ungated-ness is pointless and
+// missing exactly when it matters. Same markup, same handler, different
+// radio-group name and different slug thunk.
+initSwatchStrip("f-swatches", "f-color", () => editorSlug);
+initSwatchStrip("steer-swatches", "steer-color", () => steerSlug);
 
 document.getElementById("editor-att-btn").addEventListener("click", () => {
   document.getElementById("editor-att-input").click();

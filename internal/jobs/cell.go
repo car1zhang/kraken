@@ -192,6 +192,27 @@ func jobColor(slug string) int {
 	return cellPalette[h.Sum32()%uint32(len(cellPalette))]
 }
 
+// cellWindowColor is the tmux colour for a job's cell window: the job's
+// chosen colour when it has one, else the existing slug hash. Unset stays
+// on jobColor rather than falling back to some palette default, so a job
+// that never picked a colour looks exactly as it always did.
+func cellWindowColor(j *Job) int {
+	if c, ok := ColorByName(EffectiveColor(j)); ok {
+		return c.Term256
+	}
+	return jobColor(util.Slugify(j.Slug))
+}
+
+// setCellWindowColor paints the cell's zeus window (window 0) with
+// cellWindowColor. Best-effort like every other cosmetic tmux option here —
+// a dead session just means nothing to paint. Called at both spawn paths
+// AND from syncCellColor, so a live recolour moves the window label and the
+// prompt bar together instead of leaving them disagreeing for the run.
+func setCellWindowColor(j *Job) {
+	_ = exec.Command("tmux", "set-window-option", "-t", CellSession(j)+":0",
+		"window-status-style", fmt.Sprintf("fg=colour%d", cellWindowColor(j))).Run()
+}
+
 // liveSessionTimes snapshots current tmux session names along with each
 // one's creation time (tmux's session_created, unix seconds); no tmux server
 // reads as no sessions. One tmux call covers both liveness and freshness —
@@ -381,8 +402,7 @@ func StartCell(j *Job, repo string) error {
 	}
 	// cell identity marker: reap verifies it before any teardown
 	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", util.Slugify(j.Slug)).Run()
-	_ = exec.Command("tmux", "set-window-option", "-t", sess+":0",
-		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(util.Slugify(j.Slug)))).Run()
+	setCellWindowColor(j)
 	// fresh worktree paths trigger claude's folder-trust dialog, which blocks
 	// startup until answered
 	acceptTrustPrompts(sess)
@@ -713,6 +733,13 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	// preserved into pluto before teardown, and the mid-run log in the job
 	// file is the durable trail
 	os.RemoveAll(cellDir(j))
+	// the colour watermark lived in that dir, and its in-memory half
+	// (colorFallback, written only when the file couldn't be) did NOT — drop
+	// it here so both halves of one record expire together. Miss this and a
+	// job whose watermark write once failed never gets a /color again: the
+	// next cell's brand-new zeus reads want == have off stale package memory
+	// and stays uncoloured while the board shows the job coloured.
+	forgetColorDelivery(j)
 	return nil
 }
 
@@ -1402,8 +1429,7 @@ func ReactivateJob(j *Job, session, message string) error {
 		return fmt.Errorf("tmux new-session: %v (worktree left at %s)", err, wt)
 	}
 	_ = exec.Command("tmux", "set-option", "-t", sess, "@kraken-job", util.Slugify(j.Slug)).Run()
-	_ = exec.Command("tmux", "set-window-option", "-t", sess+":0",
-		"window-status-style", fmt.Sprintf("fg=colour%d", jobColor(util.Slugify(j.Slug)))).Run()
+	setCellWindowColor(j)
 	// the worktree path is the same as the previous run's, so claude's
 	// folder trust normally persists — but a fresh machine or cleared
 	// config would block startup on the dialog just like a first start

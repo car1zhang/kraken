@@ -87,6 +87,7 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 		Ready:    sr.Ready,
 		Solo:     sr.Solo,
 		Model:    sr.Model,
+		Color:    sr.Color,
 		Body:     sr.Body,
 		State:    sr.State,
 		Outcome:  sr.Outcome,
@@ -214,6 +215,8 @@ func writeJobFieldsToStore(st *store.Store, j *Job, keyvals ...string) error {
 			j.Session = keyvals[i+1]
 		case "teardown":
 			j.Teardown = keyvals[i+1]
+		case "color":
+			j.Color = keyvals[i+1]
 		case "run":
 			if n, err := strconv.Atoi(keyvals[i+1]); err == nil {
 				j.Run = n

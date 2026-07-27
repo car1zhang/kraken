@@ -1567,6 +1567,15 @@ private struct JobCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
+                // The job's own color channel — deliberately separate from
+                // the card's leading state/flag rectangle, and rendered ONLY
+                // when the job has a color: an uncolored job's card must look
+                // exactly as it did before, with no reserved gap.
+                if let jobColor = BoardTheme.jobColor(job.color) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(jobColor)
+                        .frame(width: 8, height: 8)
+                }
                 Text(job.title)
                     .font(.data(13, weight: .bold))
                     .foregroundStyle(KTheme.text)

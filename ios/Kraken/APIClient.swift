@@ -383,6 +383,16 @@ actor APIClient {
         try await post(baseURL: baseURL, path: "/api/job/saveform", body: form)
     }
 
+    /// Sets (or, with an empty string, clears) a job's color. Its own
+    /// endpoint rather than a saveform field — see JobColorRequest — so it
+    /// never full-replaces the rest of the job file and works on a live cell.
+    func setJobColor(baseURL: String, slug: String, color: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/job/color",
+            body: JobColorRequest(slug: slug, color: color)
+        )
+    }
+
     // MARK: - sessions
 
     // MARK: - unified event log

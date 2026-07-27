@@ -61,7 +61,7 @@ func composeRawJobContent(j *jobs.Job) string {
 	spec, logSection := splitBodyLog(j.Body)
 	fields := jobFormFields{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-		Ready: j.Ready, Solo: j.Solo, Model: j.Model,
+		Ready: j.Ready, Solo: j.Solo, Model: j.Model, Color: j.Color,
 		Prereqs: j.Prereqs, Spec: strings.TrimSpace(spec),
 	}
 	return serializeJobFile(fields, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
@@ -74,7 +74,7 @@ func composeRawJobContent(j *jobs.Job) string {
 func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	return map[string]any{
 		"slug": p.Slug, "repo": p.Repo, "base": p.Base,
-		"ready": p.Ready, "solo": p.Solo, "model": p.Model,
+		"ready": p.Ready, "solo": p.Solo, "model": p.Model, "color": p.Color,
 		"body": p.Body, "state": p.State, "outcome": p.Outcome,
 		"session": p.Session, "teardown": p.Teardown, "run": int64(p.Run),
 		// L6: p.Err is "" on a clean parse, which is exactly the value that
@@ -211,7 +211,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		if _, err := st.CreateJob(&store.Job{
 			Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
 			Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model,
-			Body: parsed.Body,
+			Color: parsed.Color, Body: parsed.Body,
 		}); err != nil {
 			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -357,12 +357,18 @@ func splitBodyLog(body string) (spec, log string) {
 }
 
 type jobFormFields struct {
-	Slug    string        `json:"slug"`
-	Repo    string        `json:"repo"`
-	Base    string        `json:"base"`
-	Ready   bool          `json:"ready"`
-	Solo    bool          `json:"solo"`
-	Model   string        `json:"model"`
+	Slug  string `json:"slug"`
+	Repo  string `json:"repo"`
+	Base  string `json:"base"`
+	Ready bool   `json:"ready"`
+	Solo  bool   `json:"solo"`
+	Model string `json:"model"`
+	// Color is RENDER-ONLY on the save path: serializeJobFile emits the
+	// color: line from it so the raw view keeps showing the field, but
+	// webJobSaveForm overwrites it from the stored job before serializing —
+	// POST /api/job/color is the only writer (webJobColor says why). It is
+	// still served on the form GET so a client can show the current pick.
+	Color   string        `json:"color"`
 	Prereqs []jobs.Prereq `json:"prereqs"`
 	Spec    string        `json:"spec"`
 	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
@@ -397,6 +403,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 		"slug": j.Slug, "repo": j.Repo, "base": j.Base,
 		"ready": j.Ready, "solo": j.Solo,
 		"model":   j.Model,
+		"color":   j.Color,
 		"prereqs": prereqs,
 		"spec":    strings.TrimSpace(spec),
 		"mtime":   jobEditMTime(j), "editable": editableJob(j),
@@ -433,6 +440,9 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 	// jobs keep their files free of the new keys
 	if f.Model != "" {
 		fmt.Fprintf(&b, "model: %s\n", jobs.OneLine(f.Model))
+	}
+	if f.Color != "" {
+		fmt.Fprintf(&b, "color: %s\n", jobs.OneLine(f.Color))
 	}
 	if state != "" {
 		fmt.Fprintf(&b, "state: %s\n", state)
@@ -501,6 +511,14 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Slug = j.Slug // slug is immutable here (the filename in file mode, the row identity in store mode)
+	// Colour is NOT a form field: POST /api/job/color owns it (webJobColor
+	// explains why). The form still RENDERS it — serializeJobFile below
+	// emits the color: line so the raw view keeps showing it — so it is
+	// overwritten from the stored job rather than trusted from the request.
+	// This is also what makes the save safe for a client that predates the
+	// field: a full-replace body with no "color" key decodes to "" and would
+	// otherwise silently wipe the colour with nothing to restore it from.
+	req.Color = j.Color
 	if st := jobs.ActiveStore(); st != nil {
 		_, logSection := splitBodyLog(j.Body)
 		body := strings.TrimSpace(req.Spec)

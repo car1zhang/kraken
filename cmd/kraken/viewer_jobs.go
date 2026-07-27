@@ -105,6 +105,18 @@ func crewCell(sum jobs.CrewSummary, color bool) string {
 	return strings.Join(parts, " ")
 }
 
+// slugColor is the ANSI code the JOB cell paints a job's slug with: the
+// job's own chosen colour when it has one, else the plain Cyan every job
+// used before colours existed. Identity only — the STATE cell keeps
+// jobs.JobStateColor, so state and identity stay separate channels and a
+// coloured job's state chip still reads as its state.
+func slugColor(j *jobs.Job) string {
+	if c, ok := jobs.ColorByName(jobs.EffectiveColor(j)); ok {
+		return util.Color256(c.Term256)
+	}
+	return util.Cyan
+}
+
 // buildJobLines renders the jobs view; viewLine.row indexes m.jrows.
 func (m *viewerModel) buildJobLines() []viewLine {
 	if !m.loaded {
@@ -173,7 +185,7 @@ func (m *viewerModel) buildJobLines() []viewLine {
 		table = append(table, []string{
 			marker + util.Paint(color, util.Dim, fmt.Sprintf("%2d", idx+1)),
 			util.Paint(color, jobs.JobStateColor(state), "● "+state) + stateMark,
-			util.Paint(color, util.Cyan, j.Slug),
+			util.Paint(color, slugColor(j), j.Slug),
 			repo,
 			jobs.PrereqCell(j, bySlug, color),
 			crew,

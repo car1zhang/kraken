@@ -162,6 +162,7 @@ the new build" would be false at exactly the moment it is shown.
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
 | `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not), served straight from `questions` rows in `kraken.db` — no file, no parse step, so there is no more cell-gone-read-only or malformed-file case; never set for archived jobs. Additive, no contract bump |
 | `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
+| `color` | string | omitempty | the job's color, one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan` (the names Claude Code's `/color` accepts, in that order); absent or `""` means the job has NO color and must render exactly as an uncolored job always has — no swatch, no reserved space. Clients degrade an unrecognized name to "no color" rather than failing. Additive, no contract bump |
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
@@ -611,6 +612,7 @@ for a doc/spec/explanation in words) — never a stored flag on the job.
 | `ready` | bool | always | |
 | `solo` | bool | always | |
 | `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default (`claude-opus-5`); applied once at cell start |
+| `color` | string | always | the job's color — one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan`, or `""` for no color. Read-only here: it is written by `POST /api/job/color`, never by `saveform` |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
@@ -625,9 +627,42 @@ for a doc/spec/explanation in words) — never a stored flag on the job.
 
 Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default, `claude-opus-5`), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) — see the form-GET note above.
 
+**`color` is NOT part of this request and must never be added to it.** This
+endpoint is a FULL REPLACE: a field a client omits is written as its zero
+value, so any build that predates a field silently wipes it. The job color
+therefore has its own endpoint, `POST /api/job/color`, which is also
+free of the not-editable 409 this one raises while a cell is in flight —
+recoloring a running job is exactly when the picker is useful.
+
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
 Errors: 404 (no such job), 409 (not editable, or mtime conflict), 500.
+
+### `POST /api/job/color` → map literal (api/jobcolor.go `webJobColor`)
+
+Sets one job's color. Its own one-field route rather than a `saveform` field
+for two reasons, both downstream of color being purely cosmetic: it is
+deliberately usable while a cell is LIVE (there is no `editableJob` gate, so
+no "cell in flight" 409 — recoloring a running job is exactly when a picker
+is useful), and it is not a full replace, so a client that never sends it
+cannot clear it.
+
+Request: `{"slug": string, "color": string}` — `color` is one of `red` |
+`blue` | `green` | `yellow` | `purple` | `orange` | `pink` | `cyan`, or `""`
+to clear. Anything else is a 400: the value becomes the argument of a
+`/color` typed into a live claude, so the allowlist is enforced server-side.
+
+Response: `{"ok": true}`. The new color rides back on the next `/api/board`
+poll (`webJob.color`) — the board stays the single source of truth for job
+state, so there is nothing else to echo here.
+Errors: 400 (bad json, or a color not on the palette), 404 (no such job), 500.
+
+Side effect: when the job has a live cell in `working`/`blocked`, kraken
+types `/color <name>` (or `/color default` for the cleared case) into that
+cell's zeus pane, so the claude's prompt bar matches the board. Delivery is
+watermarked per cell and never reasserted, so a `/color` typed by hand in
+the pane survives; it targets zeus only, never side threads or teammate
+panes (Claude Code refuses `/color` inside a teammate session outright).
 
 ---
 

@@ -267,11 +267,16 @@ func jobThreads(st *store.Store, j *jobs.Job) []webThread {
 }
 
 type webJob struct {
-	Slug      string        `json:"slug"`
-	Repo      string        `json:"repo"`
-	State     string        `json:"state"`
-	Err       string        `json:"err,omitempty"`
-	Outcome   string        `json:"outcome,omitempty"`
+	Slug    string `json:"slug"`
+	Repo    string `json:"repo"`
+	State   string `json:"state"`
+	Err     string `json:"err,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+	// Color is the job's chosen colour: one of jobs.Palette's eight names,
+	// omitted entirely when unset — a client that sees no key renders the
+	// card exactly as it did before colours existed. Additive, so
+	// apiContract stays put.
+	Color     string        `json:"color,omitempty"`
 	Cell      string        `json:"cell,omitempty"`
 	Live      bool          `json:"live"`
 	Prereqs   []webPrereq   `json:"prereqs,omitempty"`
@@ -721,6 +726,7 @@ func buildWebBoard() webBoard {
 		wj := webJob{
 			Slug: j.Slug, Repo: j.Repo,
 			State: jobs.DisplayState(j, bySlug), Err: j.Err, Outcome: j.Outcome,
+			Color:   jobs.EffectiveColor(j),
 			Prereqs: prereqs, Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
 			ModTime: j.ModTime.Unix(),
 			PRs:     j.PRs,
@@ -803,7 +809,7 @@ func buildWebBoard() webBoard {
 		board.Jobs = append(board.Jobs, webJob{
 			Slug: a.ArchivedName, Repo: a.Repo,
 			State: "archived", Archived: true, DisplaySlug: a.Slug,
-			Err: a.Err, Outcome: a.Outcome,
+			Err: a.Err, Outcome: a.Outcome, Color: jobs.EffectiveColor(a),
 			Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
 			// Feedback (Q2: works for archived jobs too) is keyed on the
 			// job's own immutable id — same as the active loop above — not

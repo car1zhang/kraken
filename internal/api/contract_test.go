@@ -243,6 +243,7 @@ var webJobSpec = map[string]fieldSpec{
 	"state":         {kind: wireString, required: true},
 	"err":           {kind: wireString, required: false},
 	"outcome":       {kind: wireString, required: false},
+	"color":         {kind: wireString, required: false},
 	"cell":          {kind: wireString, required: false},
 	"live":          {kind: wireBool, required: true},
 	"prereqs":       {kind: wireArray, required: false},
@@ -320,7 +321,7 @@ func TestWebJobWireShapeEmpty(t *testing.T) {
 func TestWebJobWireShapePopulated(t *testing.T) {
 	wj := webJob{
 		Slug: "x", Repo: "monolith", State: "blocked", Live: true,
-		Err: "e", Outcome: "o", Cell: "cell-x",
+		Err: "e", Outcome: "o", Color: "purple", Cell: "cell-x",
 		Prereqs:   []webPrereq{{Job: "y", Gated: true, Done: false}},
 		Artifacts: []webArtifact{{Name: "a", URL: "/api/artifact/x/cell/a"}},
 		Detail:    "zeus said something",
@@ -976,6 +977,7 @@ var jobFormSpec = map[string]fieldSpec{
 	"ready":    {kind: wireBool, required: true},
 	"solo":     {kind: wireBool, required: true},
 	"model":    {kind: wireString, required: true},
+	"color":    {kind: wireString, required: true},
 	"prereqs":  {kind: wireArray, required: true},
 	"spec":     {kind: wireString, required: true},
 	"mtime":    {kind: wireNumber, required: true},
@@ -983,6 +985,13 @@ var jobFormSpec = map[string]fieldSpec{
 	"err":      {kind: wireString, required: true},
 	"slugs":    {kind: wireArray, required: true, nullable: true},
 	"repos":    {kind: wireArray, required: true, nullable: true},
+}
+
+// jobColorSpec is POST /api/job/color's response: a bare ack. The colour
+// itself rides back to clients on the next /api/board poll, which is
+// already the board's single source of truth for job state.
+var jobColorSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
 }
 
 var jobSaveFormSpec = map[string]fieldSpec{
@@ -1015,6 +1024,30 @@ func TestJobFormWireShape(t *testing.T) {
 		t.Fatalf("webJobForm: status %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/job/form", rec.Body.Bytes(), jobFormSpec)
+}
+
+func TestJobColorWireShape(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	writeTestJob(t, "contract-color", "")
+
+	body := mustJSON(t, map[string]any{"slug": "contract-color", "color": "purple"})
+	req := httptest.NewRequest(http.MethodPost, "/api/job/color", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	webJobColor(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webJobColor: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/job/color", rec.Body.Bytes(), jobColorSpec)
+
+	// clearing is a legitimate value on the same shape
+	body = mustJSON(t, map[string]any{"slug": "contract-color", "color": ""})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/color", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	webJobColor(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webJobColor (clear): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/job/color (clear)", rec.Body.Bytes(), jobColorSpec)
 }
 
 func TestJobSaveFormWireShape(t *testing.T) {
