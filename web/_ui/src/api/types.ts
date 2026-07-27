@@ -112,6 +112,32 @@ export interface JobPR {
   state: PRState;
 }
 
+/**
+ * Per-job token spend, mirroring api.webTokens (internal/api/board.go:299).
+ *
+ * Counters are RAW and unweighted — no blended cost, deliberately: cache reads
+ * bill far below input, and weighting here would bake today's price ratio into
+ * the UI (the same reason the wire carries no total).
+ *
+ * Absence is meaningful and is NOT a measured zero: the key is emitted only
+ * when a store row exists, so `tokens === undefined` means never measured
+ * (no transcripts yet, or the daemon has not reached this job) while a row of
+ * zeros means measured-and-cheap. Rendering a zero for the former would claim
+ * the job was free.
+ */
+export interface WebTokens {
+  /** input_tokens — uncached input */
+  in: number;
+  /** output_tokens — generated */
+  out: number;
+  cache_write: number;
+  cache_read: number;
+  /** transcript FILES summed, root plus subagent sidecars */
+  sessions: number;
+  /** unix MILLIS, matching WebJob.mtime's convention */
+  updated_at: number;
+}
+
 export type JobState =
   | "draft"
   | "queued"
@@ -159,6 +185,8 @@ export interface WebJob {
   doc_questions?: WebDocQuestion[];
   feedback?: WebFeedback[];
   threads?: WebThread[];
+  /** Absent means NEVER MEASURED, which is not a measured zero — see WebTokens. */
+  tokens?: WebTokens;
 }
 
 /** Mirrors jobs.DaemonStatus (internal/jobs/daemon.go:50). */

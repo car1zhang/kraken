@@ -22,6 +22,7 @@ import { esc, renderMD } from "../../lib/markdown.ts";
 import type { SteerMode } from "../../lib/moves.ts";
 import { CmdComposer } from "./CmdComposer.tsx";
 import { DocQuestions } from "./DocQuestions.tsx";
+import { TokensPanel } from "./TokensPanel.tsx";
 import {
   AttChips,
   Overlay,
@@ -383,6 +384,18 @@ function SteerBody({
   const detail = job?.detail;
   const lastSent = job?.last_sent;
   const hasDocq = !!job?.doc_questions?.length;
+  // Token spend is job history in the strongest sense — summed from
+  // transcripts that outlive the cell dir — so like PRs it shows in EVERY
+  // mode, reactivate included: "what did this already cost" is exactly the
+  // question a reactivation asks. Absent means never measured, which is not a
+  // measured zero (see TokensPanel), and keeps the container hidden.
+  const tok = job?.tokens;
+  const hasTokens =
+    !!tok &&
+    !!(
+      (tok.in || 0) + (tok.out || 0) + (tok.cache_write || 0) + (tok.cache_read || 0) ||
+      tok.sessions
+    );
   const showContext =
     showCrew ||
     !!prChips ||
@@ -390,7 +403,8 @@ function SteerBody({
     !!detail ||
     !!lastSent ||
     showArtifacts ||
-    hasDocq;
+    hasDocq ||
+    hasTokens;
 
   return (
     <>
@@ -456,6 +470,12 @@ function SteerBody({
           </div>
           <div className="steer-docq" id="steer-docq" hidden={!hasDocq}>
             {job && hasDocq ? <DocQuestions job={job} mutate={mutate} /> : null}
+          </div>
+          {/* last because it is ambient: nothing here is actionable, and a
+              job that was never measured leaves this hidden entirely rather
+              than showing a zero — see TokensPanel. */}
+          <div className="steer-tokens" id="steer-tokens" hidden={!hasTokens}>
+            <TokensPanel job={job} />
           </div>
         </div>
 

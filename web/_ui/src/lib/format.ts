@@ -86,6 +86,41 @@ export function wakeupLabel(firesAt: number): string {
   return remainingS <= 0 ? "due" : countdown(remainingS);
 }
 
+/**
+ * fmtTokens renders one raw counter at a glance: 15756009 -> "15.8M".
+ * Ported verbatim from app.js:483.
+ *
+ * Precision shrinks as magnitude grows (2dp under 10, 1dp under 100, none
+ * above) so every value lands in four characters plus a unit. Nothing here is
+ * exact enough to earn more digits: a transcript caught mid-write is resumed
+ * next pass, so these are a floor rather than a settled total.
+ */
+export function fmtTokens(n: number | undefined | null): string {
+  const v = Math.max(0, Number(n) || 0);
+  const units: Array<[number, string]> = [
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "K"],
+  ];
+  for (let i = 0; i < units.length; i++) {
+    const unit = units[i];
+    if (!unit) continue;
+    const [div, suffix] = unit;
+    if (v < div) continue;
+    const scaled = v / div;
+    let out = scaled.toFixed(scaled < 10 ? 2 : scaled < 100 ? 1 : 0);
+    // Rounding can carry a value into the next unit up — 999_999 formats as
+    // "1000K", which is both wrong-looking and wider than the unit exists to
+    // keep it. Promote instead.
+    if (parseFloat(out) >= 1000 && i > 0) return "1" + (units[i - 1]?.[1] ?? suffix);
+    // Trim only INSIDE a decimal part — a blanket /0+$/ would turn "100"
+    // into "1".
+    if (out.includes(".")) out = out.replace(/0+$/, "").replace(/\.$/, "");
+    return out + suffix;
+  }
+  return String(Math.round(v));
+}
+
 // ---------------------------------------------------------------- questions
 
 /**
