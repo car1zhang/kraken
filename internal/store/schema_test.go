@@ -24,12 +24,29 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
-	// Reverse v10: drop the two token tables (added at v10, absent through
-	// v9). Both are brand-new tables with no indexes of their own, so
-	// dropping them is the whole reversal.
+	// Reverse v11: drop job_tokens' four zeus columns (added at v11, absent
+	// through v10). The v11 migration's OTHER half — emptying both token
+	// tables — is deliberately not reversed: it destroys rows rather than
+	// shape, and a downgrade helper's job is to reproduce an older SHAPE. A
+	// test that wants pre-migration rows seeds them after this call.
 	//
 	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
 	// migrate() applies them.
+	if target < 11 {
+		for _, stmt := range []string{
+			`ALTER TABLE job_tokens DROP COLUMN zeus_in`,
+			`ALTER TABLE job_tokens DROP COLUMN zeus_out`,
+			`ALTER TABLE job_tokens DROP COLUMN zeus_cache_write`,
+			`ALTER TABLE job_tokens DROP COLUMN zeus_cache_read`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v11) %q: %v", target, stmt, err)
+			}
+		}
+	}
+	// Reverse v10: drop the two token tables (added at v10, absent through
+	// v9). Both are brand-new tables with no indexes of their own, so
+	// dropping them is the whole reversal.
 	if target < 10 {
 		for _, stmt := range []string{
 			`DROP TABLE job_token_files`,
@@ -885,6 +902,147 @@ func TestSchemaV8ToV9AddsWatchlistAndFeedbackTSIndex(t *testing.T) {
 	}
 }
 
+// TestSchemaV10ToV11SplitsAndWipesTokens covers the v11 migration, whose two
+// halves are checked separately because only one of them is the usual kind.
+//
+// The ordinary half: job_tokens gains four zeus columns, usable immediately.
+//
+// The half that is the whole point: BOTH token tables are EMPTIED. The
+// counters accumulate forward from job_token_files' byte watermarks and
+// nothing ever re-reads what is behind one, so a surviving pre-split row would
+// hold a job's entire history with the four new columns at zero and report
+// that job as 100% subagent forever, with no pass anywhere able to fix it.
+// Wiping is what makes the daemon re-sum from byte zero with the split in
+// place. A test that only asserted the columns exist would pass against
+// exactly the bug this migration exists to avoid.
+func TestSchemaV10ToV11SplitsAndWipesTokens(t *testing.T) {
+	// Opened directly (not via openTest) so the path is in hand for the real
+	// re-Open below, mirroring the migration tests above.
+	dbPath := filepath.Join(t.TempDir(), "kraken.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	jobID, err := s.CreateJob(&Job{Slug: "v10-shaped", Repo: "kraken"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	downgradeFreshDB(t, s, 10)
+
+	// The pre-split rows a real v10 database carries: an all-time total with
+	// no split, plus the watermarks that would stop it ever being re-summed.
+	// Seeded AFTER the downgrade and with raw SQL, because BumpJobTokens now
+	// writes columns the v10 shape does not have.
+	if _, err := s.db.Exec(
+		`INSERT INTO job_tokens (job_slug, in_tokens, out_tokens, cache_write, cache_read, sessions, updated_at)
+			VALUES ('v10-shaped', 111, 222, 333, 444, 9, 1700000000000)`); err != nil {
+		t.Fatalf("seed a v10-shaped token row: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO job_token_files (job_slug, path, byte_offset) VALUES ('v10-shaped', '/p/a.jsonl', 4096)`); err != nil {
+		t.Fatalf("seed a v10-shaped watermark: %v", err)
+	}
+
+	// the columns really are gone at the v10 shape — otherwise this test would
+	// pass without the migration doing anything.
+	var exists int
+	err = s.db.QueryRow(`SELECT 1 FROM pragma_table_info('job_tokens') WHERE name = 'zeus_in'`).Scan(&exists)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("zeus_in still present at the v10 shape: err=%v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v10: %v", err)
+	}
+
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
+	}
+
+	// BOTH tables are empty: the row AND the watermark that would have stopped
+	// the re-sum.
+	rows, err := s.ListJobTokens()
+	if err != nil {
+		t.Fatalf("ListJobTokens after migration: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("job_tokens = %+v, want it EMPTIED — an un-backfillable row is worse than no row", rows)
+	}
+	offs, err := s.AllJobTokenOffsets()
+	if err != nil {
+		t.Fatalf("AllJobTokenOffsets after migration: %v", err)
+	}
+	if len(offs) != 0 {
+		t.Fatalf("job_token_files = %v, want it EMPTIED — a surviving watermark makes the re-sum a no-op", offs)
+	}
+
+	// ...and the re-sum a daemon pass would then do lands with the split.
+	if err := s.BumpJobTokens("v10-shaped", JobTokens{
+		In: 111, Out: 222, CacheWrite: 333, CacheRead: 444, Sessions: 9,
+		ZeusIn: 40, ZeusOut: 80, ZeusCacheWrite: 100, ZeusCacheRead: 200,
+	}); err != nil {
+		t.Fatalf("BumpJobTokens after migration: %v", err)
+	}
+	got, err := s.GetJobTokens("v10-shaped")
+	if err != nil {
+		t.Fatalf("GetJobTokens after migration: %v", err)
+	}
+	if got.In != 111 || got.ZeusIn != 40 || got.ZeusOut != 80 ||
+		got.ZeusCacheWrite != 100 || got.ZeusCacheRead != 200 {
+		t.Fatalf("row after the re-sum = %+v, want the totals back with the zeus half filled in", got)
+	}
+
+	// Rows OUTSIDE the two token tables are untouched: this migration wipes
+	// derived state only.
+	j, err := s.GetJobBySlug("v10-shaped")
+	if err != nil {
+		t.Fatalf("GetJobBySlug after migration: %v", err)
+	}
+	if j.ID != jobID || j.Repo != "kraken" {
+		t.Fatalf("job row mangled by migration: %+v", j)
+	}
+
+	// Fidelity check: the assertions above ran an in-process s.migrate() call
+	// directly — roll the same on-disk file back to v10-shaped again, close
+	// it, and re-Open it for real, mirroring the other migration tests'
+	// second-downgrade check.
+	downgradeFreshDB(t, s, 10)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close before re-Open: %v", err)
+	}
+
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("re-Open a v10-shaped db: %v", err)
+	}
+	defer s2.Close()
+
+	var version2 int
+	if err := s2.db.QueryRow(`PRAGMA user_version`).Scan(&version2); err != nil {
+		t.Fatalf("read user_version after re-Open: %v", err)
+	}
+	if version2 != schemaVersion {
+		t.Fatalf("user_version after re-Open = %d, want %d", version2, schemaVersion)
+	}
+	// The 2nd downgrade left the (re-summed) row behind with its columns
+	// dropped, and the real Open() wiped it again — which is the point: the
+	// wipe is part of the migration, not of the test's setup.
+	rows2, err := s2.ListJobTokens()
+	if err != nil {
+		t.Fatalf("ListJobTokens after re-Open: %v", err)
+	}
+	if len(rows2) != 0 {
+		t.Fatalf("job_tokens after re-Open = %+v, want the wipe to have run through Open() too", rows2)
+	}
+}
+
 // schemaDump returns every table/index/trigger definition in the database,
 // sorted by name — the whole shape, not just the one table a given test
 // happens to care about. Comparing two dumps is what makes "migrated forward"
@@ -929,7 +1087,7 @@ func TestMigratedSchemaMatchesFreshSchema(t *testing.T) {
 	fresh := openTest(t)
 	want := schemaDump(t, fresh)
 
-	for _, from := range []int{1, 2, 3, 4, 5, 6, 7} {
+	for _, from := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10} {
 		dbPath := filepath.Join(t.TempDir(), "kraken.db")
 		s, err := Open(dbPath)
 		if err != nil {

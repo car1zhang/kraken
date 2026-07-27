@@ -66,12 +66,54 @@ func tokAppend(t *testing.T, path string, lines ...string) {
 	}
 }
 
+// tokWant checks the four TOTALS and the file count. It deliberately says
+// nothing about the zeus half: the split is a partition of these same four, so
+// asserting it here would make every one of the tests below — none of which is
+// about the split — restate it, and the ones whose fixtures are all lead
+// transcripts would just be repeating their own arguments. tokWantZeus is
+// where the split is actually pinned.
 func tokWant(t *testing.T, got Tokens, in, out, cw, cr int64, sessions int) {
 	t.Helper()
 	want := Tokens{In: in, Out: out, CacheWrite: cw, CacheRead: cr, Sessions: sessions}
+	got.ZeusIn, got.ZeusOut, got.ZeusCacheWrite, got.ZeusCacheRead = 0, 0, 0, 0
 	if got != want {
-		t.Fatalf("tokens = %+v, want %+v", got, want)
+		t.Fatalf("tokens = %+v, want %+v (zeus half checked separately)", got, want)
 	}
+}
+
+// tokWantZeus checks the LEAD's half of the four, and — since the split is a
+// partition and not a second measurement — that it never exceeds the total it
+// is a subset of. A consumer derives subagent spend by subtracting, so a zeus
+// counter above its total is a negative rendered on somebody's screen.
+func tokWantZeus(t *testing.T, got Tokens, in, out, cw, cr int64) {
+	t.Helper()
+	if got.ZeusIn != in || got.ZeusOut != out || got.ZeusCacheWrite != cw || got.ZeusCacheRead != cr {
+		t.Fatalf("zeus half = %d/%d/%d/%d, want %d/%d/%d/%d",
+			got.ZeusIn, got.ZeusOut, got.ZeusCacheWrite, got.ZeusCacheRead, in, out, cw, cr)
+	}
+	if got.ZeusIn > got.In || got.ZeusOut > got.Out ||
+		got.ZeusCacheWrite > got.CacheWrite || got.ZeusCacheRead > got.CacheRead {
+		t.Fatalf("zeus half exceeds the total it is a subset of: %+v", got)
+	}
+}
+
+// tokAgentSetting is the record Claude Code writes when an Agent-tool spawn
+// carried a `subagent_type` — one of the two signals isAgentTranscript probes
+// for, and the WEAKER one: a teammate spawned with a name and a prompt alone
+// never gets it. Verbatim in shape from a real teammate transcript.
+func tokAgentSetting(t *testing.T, sessID string) string {
+	t.Helper()
+	return mineJSON(t, map[string]any{
+		"type": "agent-setting", "agentSetting": "general-purpose", "sessionId": sessID,
+	})
+}
+
+// tokAgentName is the `agent-name` record — the signal that actually carries
+// the classification, present on 1,581 of the 1,588 root transcripts on this
+// machine. Verbatim in shape from a real one.
+func tokAgentName(t *testing.T, name string) string {
+	t.Helper()
+	return mineJSON(t, map[string]any{"type": "agent-name", "agentName": name, "sessionId": "s"})
 }
 
 // --- tests ---
@@ -752,4 +794,401 @@ func TestSidecarOwnershipUsesTheParentSession(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- the zeus / subagent split ---
+
+// TestSumTokensDeltaSplitsZeusFromSubagents is the split's base case, with all
+// three shapes of file a real cell project dir holds in one directory: the
+// lead's own transcript, a TEAMMATE's root transcript (its own claude under
+// teammateMode: tmux, marked by the `agent-setting` record), and an in-process
+// subagent's sidecar. The four TOTALS must be exactly what they were before
+// the split existed — it partitions a sum, it does not change one — and the
+// zeus half must carry the lead's contribution and nothing else.
+func TestSumTokensDeltaSplitsZeusFromSubagents(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	// zeus: a root transcript naming itself with the lead prefix
+	mineWrite(t, projects, "-proj", "zeus.jsonl",
+		tokAgentName(t, "zeus-demo"),
+		mineUser(t, now, "go"),
+		tokAssistantFull(t, now, tokUsage{in: 10, out: 100, cw: 1000, cr: 10000}, "msg_Z", "zeus"),
+	)
+	// a teammate: its own root transcript, carrying both signals
+	mineWrite(t, projects, "-proj", "hephaestus.jsonl",
+		tokAgentSetting(t, "hephaestus"),
+		tokAgentName(t, "hephaestus-demo"),
+		tokAssistantFull(t, now, tokUsage{in: 3, out: 30, cw: 300, cr: 3000}, "msg_H", "hephaestus"),
+	)
+	// an in-process subagent: a sidecar, recognised by its path alone
+	mineWrite(t, projects, "-proj", filepath.Join("zeus", "subagents", "agent-1.jsonl"),
+		tokAssistantFull(t, now, tokUsage{in: 5, out: 50, cw: 500, cr: 5000}, "msg_S", ""),
+	)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 18, 180, 1800, 18000, 3)
+	tokWantZeus(t, got, 10, 100, 1000, 10000)
+}
+
+// TestSumTokensDeltaCountsASideThreadAsZeus pins the one classification that
+// is a judgement call rather than a fact about the file: a side thread is
+// `claude --fork-session` of zeus in the same worktree — carl branching off to
+// ask about the work — so it speaks in zeus' place and is not delegated work.
+//
+// A thread DOES carry an `agentName` (`thread-<slug>-<tid>`, minted by
+// jobs.ThreadAgentName), which is why ThreadAgentNamePrefix has to be one of
+// the lead prefixes: on the name alone a thread looks exactly like a teammate,
+// and two real thread transcripts on this machine would otherwise be booked to
+// the subagent half in flat contradiction of the rule above.
+//
+// Only its OWN turns land in the zeus half; the parent records replayed into
+// its file are already dropped by tokenRecordOwned.
+func TestSumTokensDeltaCountsASideThreadAsZeus(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	parent := tokUsage{out: 1000, cr: 90000}
+
+	mineWrite(t, projects, "-proj", "zeus.jsonl",
+		tokAgentName(t, "zeus-demo"),
+		tokAssistantFull(t, now, parent, "msg_P", "zeus"),
+	)
+	mineWrite(t, projects, "-proj", "thread-t1.jsonl",
+		tokAgentName(t, "thread-demo-t1"),
+		tokAssistantFull(t, now, parent, "msg_P", "zeus"), // replayed in by the fork
+		tokAssistantFull(t, now, tokUsage{out: 7, cr: 11}, "msg_T", "thread-t1"),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 1007, 0, 90011, 2)
+	tokWantZeus(t, got, 0, 1007, 0, 90011)
+}
+
+// TestSumTokensDeltaCountsAnUnmarkedTeammateAsSubagent is the regression test
+// for the rule's original defect, and it fails against the two-arm version.
+//
+// `agent-setting` records the spawn's `subagent_type`, NOT the fact of being an
+// Agent-tool spawn — a teammate given a `name` and a prompt but no
+// `subagent_type` gets no such record. That is exactly what zeus' crew is, so
+// the marker alone missed 222 of 1,461 teammate transcripts (15.2%) across 20
+// cell dirs on this machine, some written the day before this was fixed, and it
+// rendered one real job's lead share 38% too high. The `agentName` arm is what
+// catches them: it is present on 1,581 of 1,588 root transcripts, and a name
+// that is neither `zeus-…` nor `thread-…` was spawned by the Agent tool.
+func TestSumTokensDeltaCountsAnUnmarkedTeammateAsSubagent(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	mineWrite(t, projects, "-proj", "zeus.jsonl",
+		tokAgentName(t, "zeus-demo"),
+		tokAssistantFull(t, now, tokUsage{out: 100, cr: 1000}, "msg_Z", "zeus"),
+	)
+	// A hermes teammate as Claude Code actually writes one today: a name, a
+	// mode, a permission-mode — and no agent-setting record anywhere.
+	mineWrite(t, projects, "-proj", "hermes.jsonl",
+		`{"type":"custom-title","customTitle":"hermes-demo"}`,
+		tokAgentName(t, "hermes-demo"),
+		`{"type":"mode","mode":"normal"}`,
+		`{"type":"permission-mode","permissionMode":"bypassPermissions"}`,
+		tokAssistantFull(t, now, tokUsage{out: 40, cr: 400}, "msg_H", "hermes"),
+	)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 140, 0, 1400, 2)
+	tokWantZeus(t, got, 0, 100, 0, 1000)
+}
+
+// TestSumTokensDeltaFindsAnAgentNameOnAFatBriefRecord is the OTHER half of the
+// same defect, and the one that survived the first fix.
+//
+// Only 120 of the 1,588 root transcripts on this machine carry a dedicated
+// `agent-name` record. On the other 1,467 the `agentName` rides the session's
+// FIRST USER RECORD — the teammate-message brief the lead sent — which is one
+// JSONL line with a whole prompt inside it. The field sits near the front of
+// that line (byte 431 at the latest) but the LINE ends as far in as 57,148
+// bytes, and a decode needs all of it. A head window sized to where the signal
+// STARTS therefore truncates the line, fails to decode, finds nothing, and
+// books the teammate's entire spend to the lead: measured, that cost 6 hermes
+// transcripts totalling 8.5M tokens in one cell dir alone.
+func TestSumTokensDeltaFindsAnAgentNameOnAFatBriefRecord(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	mineWrite(t, projects, "-proj", "zeus.jsonl",
+		tokAgentName(t, "zeus-demo"),
+		tokAssistantFull(t, now, tokUsage{out: 100, cr: 1000}, "msg_Z", "zeus"),
+	)
+	// The real shape: agentName early in the record, a 40 KB brief after it.
+	brief := mineJSON(t, map[string]any{
+		"parentUuid": nil, "isSidechain": false, "teamName": "session-a92a488f",
+		"agentName": "hermes-demo", "type": "user",
+		"message": map[string]any{"role": "user",
+			"content": "<teammate-message>" + strings.Repeat("brief ", 7000) + "</teammate-message>"},
+	})
+	if len(brief) < 32<<10 {
+		t.Fatalf("fixture is wrong: brief record is only %d bytes, too small to test the bound", len(brief))
+	}
+	mineWrite(t, projects, "-proj", "hermes.jsonl",
+		`{"type":"mode","mode":"normal"}`,
+		`{"type":"permission-mode","permissionMode":"bypassPermissions"}`,
+		brief,
+		tokAssistantFull(t, now, tokUsage{out: 40, cr: 400}, "msg_H", "hermes"),
+	)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 140, 0, 1400, 2)
+	tokWantZeus(t, got, 0, 100, 0, 1000)
+}
+
+// TestSumTokensDeltaFindsTheMarkerPastLineOne: neither signal is reliably the
+// first record. Measured over the 1,588 root transcripts on this machine,
+// `agent-setting` reaches line 2 and `agentName` reaches LINE 5, so a probe
+// that only ever read the first record would mis-bin both. agentMarkerLines is
+// ~3x that depth precisely because the position is Claude Code's to change.
+func TestSumTokensDeltaFindsTheMarkerPastLineOne(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	mineWrite(t, projects, "-proj", "teammate.jsonl",
+		`{"type":"custom-title","customTitle":"athena-logic"}`,
+		`{"type":"mode","mode":"normal"}`,
+		`{"type":"permission-mode","permissionMode":"bypassPermissions"}`,
+		`{"type":"pr-link","prNumber":66}`,
+		tokAgentName(t, "athena-logic-demo"), // line 5, the deepest ever measured
+		tokAssistantFull(t, now, tokUsage{out: 60, cr: 600}, "msg_A", "teammate"),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 60, 0, 600, 1)
+	tokWantZeus(t, got, 0, 0, 0, 0)
+}
+
+// TestSumTokensDeltaSplitSurvivesTheResumeBoundary is the split against the
+// property the whole file is built on. The classification is recomputed on
+// every pass that opens a file and never persisted, so an incremental delta
+// must land in the same half its file's first pass did — a marker read once
+// and forgotten would send a teammate's later turns to zeus.
+func TestSumTokensDeltaSplitSurvivesTheResumeBoundary(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	zeus := mineWrite(t, projects, "-proj", "zeus.jsonl",
+		tokAgentName(t, "zeus-demo"),
+		tokAssistantFull(t, now, tokUsage{out: 100, cr: 1000}, "msg_Z1", "zeus"),
+	)
+	// Marked by name ONLY, which is the common shape and the one the two-arm
+	// rule missed — so this test also covers the fix at the resume boundary.
+	agent := mineWrite(t, projects, "-proj", "hephaestus.jsonl",
+		tokAgentName(t, "hephaestus-demo"),
+		tokAssistantFull(t, now, tokUsage{out: 40, cr: 400}, "msg_H1", "hephaestus"),
+	)
+
+	first, offs, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	tokWant(t, first, 0, 140, 0, 1400, 2)
+	tokWantZeus(t, first, 0, 100, 0, 1000)
+
+	tokAppend(t, zeus, tokAssistantFull(t, now, tokUsage{out: 5, cr: 50}, "msg_Z2", "zeus"))
+	tokAppend(t, agent, tokAssistantFull(t, now, tokUsage{out: 9, cr: 90}, "msg_H2", "hephaestus"))
+
+	second, _, err := SumTokensDelta(dir, offs)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	tokWant(t, second, 0, 14, 0, 140, 2) // the DELTA of both files
+	tokWantZeus(t, second, 0, 5, 0, 50)  // ...split exactly as the first pass was
+}
+
+// TestSumTokensDeltaSplitOnAPartialScan pins that a floor is still split. A
+// transcript that could only be scanned part way contributes what was read
+// (a failed read is not a zero), and dropping the split from that path would
+// make the two halves stop adding up to the total for precisely the rows that
+// are already inexact — a second, silent error on top of a reported one.
+func TestSumTokensDeltaSplitOnAPartialScan(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	good := tokAssistantFull(t, now, tokUsage{out: 100, cr: 1000}, "msg_Z", "zeus")
+	monster := `{"type":"assistant","message":{"content":"` + strings.Repeat("x", mineScanBufMax+1) + `"}}`
+	mineWrite(t, projects, "-proj", "zeus.jsonl", tokAgentName(t, "zeus-demo"), good, monster)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err == nil {
+		t.Fatal("a truncated scan must report itself")
+	}
+	tokWant(t, got, 0, 100, 0, 1000, 1)
+	tokWantZeus(t, got, 0, 100, 0, 1000)
+}
+
+// TestIsAgentTranscriptEdges covers the probe's own boundaries directly, since
+// the ones that matter are cheap to state and awkward to reach through a whole
+// SumTokensDelta: a marker beyond the line bound, a marker beyond the byte
+// bound, and the substring trap — a record whose PROSE contains the marker
+// text, which a grep-shaped probe would mis-bin as a whole agent transcript.
+func TestIsAgentTranscriptEdges(t *testing.T) {
+	dir := t.TempDir()
+	filler := `{"type":"user","message":{"content":"x"}}`
+
+	write := func(t *testing.T, name string, lines ...string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return p
+	}
+	probe := func(t *testing.T, path string) bool {
+		t.Helper()
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer f.Close()
+		return isAgentTranscript(f, path)
+	}
+
+	t.Run("marker on the last line within the bound", func(t *testing.T) {
+		lines := make([]string, 0, agentMarkerLines)
+		for i := 0; i < agentMarkerLines-1; i++ {
+			lines = append(lines, filler)
+		}
+		lines = append(lines, tokAgentSetting(t, "s"))
+		if !probe(t, write(t, "within.jsonl", lines...)) {
+			t.Fatal("a marker on the last line inside the bound must be found")
+		}
+	})
+
+	t.Run("marker past the line bound reads as the lead", func(t *testing.T) {
+		lines := make([]string, 0, agentMarkerLines+2)
+		for i := 0; i < agentMarkerLines+1; i++ {
+			lines = append(lines, filler)
+		}
+		lines = append(lines, tokAgentSetting(t, "s"))
+		if probe(t, write(t, "deep.jsonl", lines...)) {
+			t.Fatal("the line bound must actually bound the probe")
+		}
+	})
+
+	t.Run("marker past the byte bound reads as the lead", func(t *testing.T) {
+		fat := `{"type":"user","message":{"content":"` + strings.Repeat("x", agentMarkerBytes) + `"}}`
+		if probe(t, write(t, "fat.jsonl", fat, tokAgentSetting(t, "s"))) {
+			t.Fatal("the byte bound must actually bound the probe")
+		}
+	})
+
+	t.Run("the marker text inside prose is not a marker", func(t *testing.T) {
+		prose := `{"type":"user","message":{"content":"grep for \"type\":\"agent-setting\" in the head"}}`
+		if probe(t, write(t, "prose.jsonl", prose, filler)) {
+			t.Fatal("the probe decodes JSON precisely so prose cannot mis-bin a transcript")
+		}
+		named := `{"type":"user","message":{"content":"the record is \"agentName\":\"hephaestus-x\" today"}}`
+		if probe(t, write(t, "prose-name.jsonl", named, filler)) {
+			t.Fatal("an agentName quoted in prose must not classify the file either")
+		}
+	})
+
+	// --- the agentName arm: the one that actually does the work ---
+
+	t.Run("agentName classifies with no agent-setting at all", func(t *testing.T) {
+		for _, name := range []string{"hephaestus-demo", "athena-logic-demo", "hermes-fig-1", "explore"} {
+			if !probe(t, write(t, "n-"+name+".jsonl", tokAgentName(t, name), filler)) {
+				t.Errorf("agentName %q must read as a delegated agent", name)
+			}
+		}
+	})
+
+	t.Run("the two lead prefixes read as the lead", func(t *testing.T) {
+		// Both are names kraken itself mints — jobs.ZeusName and
+		// jobs.ThreadAgentName — and a test on the jobs side pins that they
+		// still begin with these constants.
+		for _, name := range []string{
+			ZeusAgentNamePrefix + "demo",
+			ZeusAgentNamePrefix + "token-count-restyling",
+			ThreadAgentNamePrefix + "demo-t1",
+			ThreadAgentNamePrefix + "asr-architecture-diffs-t12",
+		} {
+			if probe(t, write(t, "lead-"+name+".jsonl", tokAgentName(t, name), filler)) {
+				t.Errorf("agentName %q is a LEAD's and must not read as delegated", name)
+			}
+		}
+	})
+
+	t.Run("a name merely CONTAINING a lead prefix is delegated", func(t *testing.T) {
+		// The test is a PREFIX test, not a substring one: a teammate could
+		// legitimately be named after the thing it works on.
+		for _, name := range []string{"hephaestus-zeus-refactor", "athena-thread-audit"} {
+			if !probe(t, write(t, "sub-"+name+".jsonl", tokAgentName(t, name), filler)) {
+				t.Errorf("agentName %q only CONTAINS a lead prefix and must read as delegated", name)
+			}
+		}
+	})
+
+	t.Run("no agentName at all reads as the lead", func(t *testing.T) {
+		// 7 root transcripts on this machine look like this — manual claudes
+		// carl started in a cell worktree — and the lead is correct for all 7.
+		if probe(t, write(t, "manual.jsonl", `{"type":"mode","mode":"normal"}`, filler)) {
+			t.Fatal("a transcript with neither signal must read as the lead")
+		}
+		if probe(t, write(t, "blankname.jsonl", `{"type":"agent-name","agentName":""}`, filler)) {
+			t.Fatal("an EMPTY agentName is an absent one, not a non-zeus one")
+		}
+	})
+
+	t.Run("the first answering record wins", func(t *testing.T) {
+		// The scan stops at the first record that answers, which is a real
+		// trade and worth pinning in both directions rather than leaving to a
+		// reader's assumption. It is safe because the order it depends on is
+		// measured: across the 1,245 transcripts carrying both signals,
+		// `agent-setting` precedes the first `agentName` in EVERY one, so the
+		// second case below does not occur on real data — it documents what
+		// would happen if Claude Code ever inverted them.
+		if !probe(t, write(t, "both-setting-first.jsonl",
+			tokAgentSetting(t, "s"), tokAgentName(t, "hephaestus-demo"))) {
+			t.Error("agent-setting first must answer: delegated")
+		}
+		if probe(t, write(t, "both-name-first.jsonl",
+			tokAgentName(t, ZeusAgentNamePrefix+"demo"), tokAgentSetting(t, "s"))) {
+			t.Error("a lead agentName reached first answers, and the scan stops there")
+		}
+	})
+
+	t.Run("a single unterminated line still probes", func(t *testing.T) {
+		p := filepath.Join(dir, "midwrite.jsonl")
+		if err := os.WriteFile(p, []byte(tokAgentSetting(t, "s")), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if !probe(t, p) {
+			t.Fatal("a transcript caught before its first newline must still classify")
+		}
+	})
+
+	t.Run("an empty file reads as the lead", func(t *testing.T) {
+		p := filepath.Join(dir, "empty.jsonl")
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if probe(t, p) {
+			t.Fatal("a head with nothing in it degrades to the lead, the conservative bucket")
+		}
+	})
 }

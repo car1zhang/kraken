@@ -192,6 +192,14 @@ func refreshJobTokens(st *store.Store, j *Job, repo string, prior map[string]int
 		delta.Out += tk.Out
 		delta.CacheWrite += tk.CacheWrite
 		delta.CacheRead += tk.CacheRead
+		// The zeus half of the same delta — what the cell's lead agent spent,
+		// as opposed to what it delegated. core.SumTokensDelta has already
+		// partitioned it per transcript file, so there is no decision to make
+		// here, only the same fold.
+		delta.ZeusIn += tk.ZeusIn
+		delta.ZeusOut += tk.ZeusOut
+		delta.ZeusCacheWrite += tk.ZeusCacheWrite
+		delta.ZeusCacheRead += tk.ZeusCacheRead
 		delta.Sessions += int64(tk.Sessions)
 		for path, off := range next {
 			offsets[path] = off
@@ -219,6 +227,10 @@ func refreshJobTokens(st *store.Store, j *Job, repo string, prior map[string]int
 		}
 	}
 
+	// The four ZEUS counters are deliberately absent from this condition. Each
+	// is a SUBSET of the total above it, so a non-zero zeus delta with all four
+	// totals at zero is unreachable — testing for it would be dead code, not a
+	// missing guard.
 	if sameOffsets(prior, offsets) && delta.In == 0 && delta.Out == 0 &&
 		delta.CacheWrite == 0 && delta.CacheRead == 0 {
 		return false, scanErr
