@@ -352,8 +352,15 @@ func TestZeusBriefTeammatesNotSubagents(t *testing.T) {
 		{"SendMessage", "a named teammate is resumable for the fix round"},
 		// (c) the single carve-out for unnamed subagents
 		{"The ONE exception is read-only exploration", "the only sanctioned unnamed use"},
-		{"writing nothing", "an exploration subagent produces no artifact"},
-		{"If an agent will write a file or judge someone's output, it is a teammate", "the decision rule"},
+		// "read-only" is scoped to the REPO, not the filesystem: an exploration
+		// subagent still writes its own report to a scratch path. The brief said
+		// "writing nothing" until a dream pass found the cost — several
+		// hundred-line findings documents stranded as chat replies, because the
+		// teammate->lead channel truncates — so the carve-out has to say which
+		// kind of writing it forbids, or it reads as a ban on the report itself.
+		{"changing no file in the repo", "an exploration subagent leaves the repo alone"},
+		{"it still writes its own report to the scratch path you give it", "…but its findings are not a chat reply"},
+		{"If an agent will change a file in the repo or judge someone's output, it is a teammate", "the decision rule"},
 		{"a verdict means an accept/reject judgment on work product, not a finding", "the carve-out stays decidable at the margin"},
 	} {
 		if !strings.Contains(brief, want.token) {
