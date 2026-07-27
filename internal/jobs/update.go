@@ -372,9 +372,9 @@ var toolDirs = []string{
 // lookToolchain resolves a build tool to an absolute path: PATH first, then
 // the known install locations above plus ~/go/bin. The error names every
 // place it looked, since "make not found" with no list is unactionable.
-// Shared by both preflights — go/make for the updater, xcodegen for the
-// shipper — which is why it and its two seams are named for the job rather
-// than for update.go.
+// Shared by both preflights and by ghauth.go — go/make for the updater,
+// xcodegen for the shipper, gh for the account switch — which is why it and
+// its two seams are named for the job rather than for update.go.
 func lookToolchain(name string) (string, error) {
 	if p, err := toolLookPath(name); err == nil {
 		return p, nil
