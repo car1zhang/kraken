@@ -755,7 +755,19 @@ struct JobDetailView: View {
                 // (no transcripts, or the daemon hasn't reached this job),
                 // which is a different answer from a measured zero, and a
                 // rendered 0 would state the false one.
-                if let tokens = job.tokens {
+                //
+                // The second half of the gate matches web's `tokensHTML`
+                // (`if (!total && !sessions) return ""`): a row that is
+                // all-zero AND counted no transcript files says nothing a
+                // reader can use, and rendering it prints four counters, an
+                // origin split and a "measured across 0 transcripts" line
+                // that together read as a measurement rather than as its
+                // absence. It is reachable — a first measurement whose files
+                // all vanish between the walk and the next pass — and the two
+                // surfaces are meant to render this block identically.
+                if let tokens = job.tokens,
+                   tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead > 0
+                       || tokens.sessions > 0 {
                     kSection("Tokens") { tokensRows(tokens) }
                 }
 
@@ -1245,16 +1257,32 @@ struct JobDetailView: View {
 
     /// The job's token spend: the four raw counters the daemon sums out of
     /// this job's own Claude Code transcripts (`job_tokens`, served as
-    /// `WebJob.tokens`).
+    /// `WebJob.tokens`). Mirrors the web board's `tokensHTML` row for row —
+    /// the two surfaces render the same block and are meant to stay
+    /// recognisably the same block.
     ///
-    /// Three tiers of loudness rather than four equal numbers. The sum
-    /// answers "how big was this job" and output answers "how much work came
-    /// out of it" — the two questions a drilldown actually gets asked — so
-    /// they lead; the per-counter split is a size and a shade quieter, and
-    /// the provenance line quieter still. The counters stay RAW with no
-    /// blended cost: cache reads bill far below input, and weighting them
-    /// here would bake today's price ratio into the app (the same reason the
-    /// wire carries no total).
+    /// Everything is FADED. Four tiers — headline, counters, origin,
+    /// provenance — separated by size and opacity rather than by brightness,
+    /// with even the headline sitting in `text2`: this is a fact about the
+    /// past, and nothing about it is hot or interactive enough to earn full
+    /// `text`.
+    ///
+    /// The headline carries the SUM alone. It used to repeat `out` beside it,
+    /// which printed the same number twice in a block whose very next row
+    /// already lists all four counters.
+    ///
+    /// The origin row is the only derived thing here: the daemon stores
+    /// zeus' counters as a SUBSET of the totals (`WebTokens.zeusTotal`), so
+    /// the delegated half is the REMAINDER. Storing both halves would let
+    /// them drift out of agreement with the total; subtracting cannot. "zeus"
+    /// is the cell's lead agent and its side threads, "subagents" is every
+    /// teammate and in-process subagent it delegated to. A server predating
+    /// those keys sends none of them — `zeusTotal` is nil — and the row is
+    /// dropped rather than rendering a 100%-subagent lie.
+    ///
+    /// The counters stay RAW with no blended cost: cache reads bill far below
+    /// input, and weighting them here would bake today's price ratio into the
+    /// app (the same reason the wire carries no total).
     ///
     /// The wording never claims exactness. A transcript caught mid-write is
     /// resumed on the next pass rather than skipped, so a freshly scanned
@@ -1262,31 +1290,57 @@ struct JobDetailView: View {
     @ViewBuilder
     private func tokensRows(_ t: WebTokens) -> some View {
         let total = t.input + t.output + t.cacheWrite + t.cacheRead
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(fmtTokens(total)).font(.data(17, weight: .semibold)).foregroundStyle(KTheme.text)
-                Text("TOKENS").font(.data(9)).foregroundStyle(KTheme.text2)
-                Text("·").font(.data(11)).foregroundStyle(KTheme.hairline)
-                Text(fmtTokens(t.output)).font(.data(13, weight: .semibold)).foregroundStyle(KTheme.text2)
-                Text("OUT").font(.data(9)).foregroundStyle(KTheme.text2)
+                Text(fmtTokens(total)).font(.data(15, weight: .semibold)).foregroundStyle(KTheme.text2)
+                Text("TOKENS").font(.data(9)).foregroundStyle(KTheme.text2).opacity(0.65)
                 Spacer()
             }
-            HStack(spacing: 14) {
-                tokenCell("in", t.input)
-                tokenCell("out", t.output)
-                tokenCell("cache w", t.cacheWrite)
-                tokenCell("cache r", t.cacheRead)
-                Spacer()
+            // the counters row and the origin row are two cuts of the SAME
+            // headline, so they sit closer to each other than to the tiers
+            // around them and read as one stack rather than two panels —
+            // web's `.tok-origin { margin-top: 2px }` is the same two points
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 14) {
+                    tokenCell("in", t.input)
+                    tokenCell("out", t.output)
+                    tokenCell("cache w", t.cacheWrite)
+                    tokenCell("cache r", t.cacheRead)
+                    Spacer()
+                }
+                // the subagent half comes from WebTokens' own computed
+                // accessor rather than being subtracted here: the derivation
+                // is the one thing about this row that could be got wrong,
+                // and it belongs in one audited place. The zeus clamp is
+                // local because it is purely defensive — zeus is a subset by
+                // construction, so it can only exceed the total against a
+                // row read mid-rescan
+                if let zeus = t.zeusTotal, let subagents = t.subagentTotal {
+                    HStack(spacing: 14) {
+                        tokenCell("zeus", min(zeus, total))
+                        tokenCell("subagents", subagents)
+                        Spacer()
+                    }
+                }
             }
-            Text(tokensNote(t)).font(.data(9)).foregroundStyle(KTheme.text2).opacity(0.6)
+            Text(tokensNote(t)).font(.data(9)).foregroundStyle(KTheme.text2).opacity(0.55)
         }
         .padding(.vertical, 2)
     }
 
+    /// One `label value` pair. Both halves are `fixedSize` because the four
+    /// counters sit in one HStack that is genuinely tight at phone width:
+    /// without it SwiftUI resolves the overflow by WRAPPING a label, and
+    /// `cache w` breaks across two lines mid-row, which is both ugly and
+    /// misreads as a fifth counter. Refusing to wrap lets the row run to the
+    /// trailing Spacer instead — the labels are two words at most, so the
+    /// widest possible row still fits.
     private func tokenCell(_ label: String, _ value: Int64) -> some View {
         HStack(spacing: 5) {
             Text(label).font(.data(10)).foregroundStyle(KTheme.text2).opacity(0.6)
-            Text(fmtTokens(value)).font(.data(10)).foregroundStyle(KTheme.text2)
+                .lineLimit(1).fixedSize()
+            Text(fmtTokens(value)).font(.data(10)).foregroundStyle(KTheme.text2).opacity(0.85)
+                .lineLimit(1).fixedSize()
         }
     }
 

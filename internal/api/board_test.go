@@ -222,7 +222,11 @@ func TestWebTokensForMeasuredZeroIsNotNil(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `"tokens":{"in":0,"out":0,"cache_write":0,"cache_read":0,"sessions":0,"updated_at":7}`; !strings.Contains(string(data), want) {
+	// ...including the four zeus keys: they carry no omitempty either, so a
+	// lead that spent nothing still rides as an explicit zero rather than
+	// leaving a client unable to tell "no split reported" from "no lead spend".
+	if want := `"tokens":{"in":0,"out":0,"cache_write":0,"cache_read":0,"sessions":0,"updated_at":7,` +
+		`"zeus_in":0,"zeus_out":0,"zeus_cache_write":0,"zeus_cache_read":0}`; !strings.Contains(string(data), want) {
 		t.Errorf("webJob JSON missing %q: %s", want, data)
 	}
 }
@@ -231,11 +235,13 @@ func TestWebTokensForMirrorsFields(t *testing.T) {
 	index := map[string]store.JobTokens{"x": {
 		Slug: "x", In: 149754, Out: 15756009, CacheWrite: 87776983,
 		CacheRead: 2555432608, Sessions: 154, UpdatedAt: 1785124027359,
+		ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 	}}
 	got := webTokensFor(index, "x")
 	want := &webTokens{
 		In: 149754, Out: 15756009, CacheWrite: 87776983, CacheRead: 2555432608,
 		Sessions: 154, UpdatedAt: 1785124027359,
+		ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 	}
 	if got == nil || *got != *want {
 		t.Fatalf("webTokensFor = %+v, want %+v", got, want)

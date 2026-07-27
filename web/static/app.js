@@ -515,13 +515,31 @@ function fmtTokens(n) {
 //   - measured — render it. The api emits the key only when a store row
 //     exists, so presence is the whole test.
 //
-// Layout is one headline plus a quiet breakdown, not four equal numbers:
-// the sum answers "how big was this job" and output answers "how much work
-// came out of it", which are the two questions a drilldown gets asked; the
-// per-counter split is there for whoever wants it and is deliberately
-// smaller and dimmer. The counters stay RAW, with no blended cost — cache
-// reads bill far below input, and weighting them here would bake today's
-// price ratio into the UI (the same reason the wire carries no total).
+// Layout is one headline over three quieter rows, all of them in the same
+// dim ink: the sum answers "how big was this job", the per-counter row is
+// there for whoever wants it, the origin row says who burned it, and the
+// provenance line dates it. Nothing here is hot or interactive — it is a
+// fact about the past — so the whole block sits in --text-2 and separates
+// its tiers by size and opacity rather than by brightness, and the box
+// itself is the same raised/border-left panel .doc-questions and
+// .job-feedback use two containers up.
+//
+// The headline carries the SUM alone. It used to repeat `out` beside it,
+// which put the same number twice in a block whose next row already lists
+// all four counters — a duplicate reads as two different facts at a glance.
+//
+// The origin row is the one thing here that is not on the wire directly:
+// the daemon stores zeus' four counters as a SUBSET of the four totals
+// (webTokens.zeus_*), so the delegated half is the REMAINDER and is
+// computed here. Storing both halves would let them drift out of agreement
+// with the total; subtracting cannot. "zeus" is the cell's lead agent and
+// its side threads; "subagents" is every teammate and in-process subagent
+// it delegated to. A server that predates those keys sends none of them,
+// which drops the row rather than rendering a 100%-subagent lie.
+//
+// The counters stay RAW, with no blended cost — cache reads bill far below
+// input, and weighting them here would bake today's price ratio into the UI
+// (the same reason the wire carries no total).
 //
 // Wording avoids claiming exactness on purpose: a transcript caught
 // mid-write is resumed on the next pass, so a freshly-scanned job's numbers
@@ -535,6 +553,20 @@ function tokensHTML(j) {
   const total = inTok + out + cacheWrite + cacheRead;
   if (!total && !sessions) return "";
   const rows = [["in", inTok], ["out", out], ["cache w", cacheWrite], ["cache r", cacheRead]];
+  // Presence of the zeus keys is the whole test, and it is checked on ONE
+  // key rather than on their sum: the four ride together or not at all, and
+  // a job whose lead genuinely burned nothing (every token spent by a
+  // teammate) is a real state that a sum-based test would hide.
+  const hasOrigin = t.zeus_in !== undefined;
+  const zeus = hasOrigin
+    ? (t.zeus_in || 0) + (t.zeus_out || 0) + (t.zeus_cache_write || 0) + (t.zeus_cache_read || 0)
+    : 0;
+  // clamped for the same reason every derived number here is: zeus is a
+  // subset so this cannot go negative, but a stale row paired with a fresh
+  // total during a re-scan is exactly the window where it could look like it
+  const origin = hasOrigin
+    ? [["zeus", Math.min(zeus, total)], ["subagents", Math.max(0, total - zeus)]]
+    : null;
   // updated_at is unix MILLIS (webJob.mtime's convention); age() takes
   // seconds. A missing/zero stamp drops the clause rather than rendering
   // "0s ago" — same treatment the update banner gives its own timestamp.
@@ -545,17 +577,17 @@ function tokensHTML(j) {
   ].filter(Boolean).join(" · ");
   const title =
     "token spend summed from this job's own Claude Code transcripts, subagent sidecars included. " +
+    "zeus is the cell's lead agent and its side threads; subagents is every teammate and in-process subagent it delegated to. " +
     "Counters are raw and unweighted; a transcript still being written is resumed next pass, so treat these as a floor.";
+  const cells = (list) =>
+    list.map(([k, v]) => `<span class="tok-cell"><i>${esc(k)}</i>${esc(fmtTokens(v))}</span>`).join("");
   return (
     `<div class="tok" title="${esc(title)}">` +
     `<div class="tok-head">` +
     `<span class="tok-big">${esc(fmtTokens(total))}</span><span class="tok-unit">tokens</span>` +
-    `<span class="tok-dot">·</span>` +
-    `<span class="tok-mid">${esc(fmtTokens(out))}</span><span class="tok-unit">out</span>` +
     `</div>` +
-    `<div class="tok-break">` +
-    rows.map(([k, v]) => `<span class="tok-cell"><i>${esc(k)}</i>${esc(fmtTokens(v))}</span>`).join("") +
-    `</div>` +
+    `<div class="tok-break">${cells(rows)}</div>` +
+    (origin ? `<div class="tok-break tok-origin">${cells(origin)}</div>` : "") +
     `<div class="tok-note">${esc(note)}</div>` +
     `</div>`
   );

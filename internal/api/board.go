@@ -284,7 +284,21 @@ func jobThreads(st *store.Store, j *jobs.Job) []webThread {
 // bake a price ratio into the API and go stale the moment pricing moves.
 // Consumers weight them themselves.
 //
-// No omitempty on any field, for webUpdate's reason: a client reads all six
+// THE ZEUS SPLIT. Four of the keys — `zeus_in`, `zeus_out`,
+// `zeus_cache_write`, `zeus_cache_read` — are the part of the four totals that
+// the cell's LEAD agent spent, as opposed to everything it delegated to
+// (teammates and in-process subagents alike). Two things a client will
+// otherwise get wrong, both of them structural rather than stylistic:
+//
+//   - Each zeus key is a SUBSET of the total it shadows, never a sibling of
+//     it. `in` already INCLUDES `zeus_in`; adding them would double the lead's
+//     spend.
+//   - Subagent spend has NO key of its own and never will. It is
+//     `in - zeus_in` and so on, derived by the client. Two halves on the wire
+//     could arrive disagreeing with the total they are supposed to add up to;
+//     a derived half cannot.
+//
+// No omitempty on any field, for webUpdate's reason: a client reads all ten
 // unconditionally, and an absent key would be indistinguishable from a
 // measured zero. Absence is expressed one level up instead — webJob.Tokens is
 // a POINTER with omitempty, so a job with no row emits no `tokens` key at
@@ -306,6 +320,13 @@ type webTokens struct {
 	// from a row of zeros that means something else entirely.
 	Sessions  int64 `json:"sessions"`
 	UpdatedAt int64 `json:"updated_at"` // unix millis, matching webJob.mtime's convention
+	// The zeus half of the four above — see this type's doc comment. Additive
+	// keys, so apiContract does NOT bump: a client that predates them reads
+	// the same six it always did.
+	ZeusIn         int64 `json:"zeus_in"`
+	ZeusOut        int64 `json:"zeus_out"`
+	ZeusCacheWrite int64 `json:"zeus_cache_write"`
+	ZeusCacheRead  int64 `json:"zeus_cache_read"`
 }
 
 // jobTokensIndex reads EVERY measured job's token row in one query and keys
@@ -343,6 +364,8 @@ func webTokensFor(index map[string]store.JobTokens, slug string) *webTokens {
 	return &webTokens{
 		In: t.In, Out: t.Out, CacheWrite: t.CacheWrite, CacheRead: t.CacheRead,
 		Sessions: t.Sessions, UpdatedAt: t.UpdatedAt,
+		ZeusIn: t.ZeusIn, ZeusOut: t.ZeusOut,
+		ZeusCacheWrite: t.ZeusCacheWrite, ZeusCacheRead: t.ZeusCacheRead,
 	}
 }
 

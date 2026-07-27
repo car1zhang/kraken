@@ -45,6 +45,21 @@ type JobTokens struct {
 	// yet", which a row of four zeros alone cannot say.
 	Sessions  int64
 	UpdatedAt int64 // unix millis — when a refresh last found new spend
+
+	// The ZEUS half of the four counters above: what the cell's LEAD agent
+	// spent, as opposed to everything it delegated to (teammates and
+	// in-process subagents alike). Each is a SUBSET of the counter it shadows,
+	// so the subagent half is In-ZeusIn and so on.
+	//
+	// Only this half is stored. The other one is derived, deliberately: two
+	// stored halves can drift out of agreement with the total they are
+	// supposed to add up to, and a derived one cannot.
+	//
+	// These accumulate exactly like the four totals do — see BumpJobTokens.
+	ZeusIn         int64
+	ZeusOut        int64
+	ZeusCacheWrite int64
+	ZeusCacheRead  int64
 }
 
 // jobTokensColumns COALESCEs every scanned column defensively, same
@@ -54,12 +69,14 @@ type JobTokens struct {
 // to a zero field rather than error the whole query.
 const jobTokensColumns = `job_slug, COALESCE(in_tokens,0), COALESCE(out_tokens,0),
 	COALESCE(cache_write,0), COALESCE(cache_read,0), COALESCE(sessions,0),
-	COALESCE(updated_at,0)`
+	COALESCE(updated_at,0), COALESCE(zeus_in,0), COALESCE(zeus_out,0),
+	COALESCE(zeus_cache_write,0), COALESCE(zeus_cache_read,0)`
 
 func scanJobTokens(row interface{ Scan(...any) error }) (*JobTokens, error) {
 	var t JobTokens
 	if err := row.Scan(&t.Slug, &t.In, &t.Out, &t.CacheWrite, &t.CacheRead,
-		&t.Sessions, &t.UpdatedAt); err != nil {
+		&t.Sessions, &t.UpdatedAt, &t.ZeusIn, &t.ZeusOut,
+		&t.ZeusCacheWrite, &t.ZeusCacheRead); err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -123,6 +140,12 @@ func (s *Store) ListJobTokens() ([]JobTokens, error) {
 //     accumulated it would report a job with 12 transcripts as having several
 //     thousand. core.SumTokensDelta returns it as a total for exactly this
 //     reason and says so.
+//   - The four ZEUS counters ACCUMULATE (+=) with the totals and for the
+//     identical reason: they are the same delta, partitioned. Their addition
+//     is in SQL too, so a concurrent pair of passes cannot lose one half of a
+//     row while keeping the other — which would be worse than losing both,
+//     since it would put the split permanently out of agreement with the total
+//     it is a subset of.
 //
 // UpdatedAt is stamped to now when zero, and — on an UPDATE — is written
 // ONLY when the delta actually carries spend. A pass can legitimately have
@@ -134,6 +157,11 @@ func (s *Store) ListJobTokens() ([]JobTokens, error) {
 // ago", which on an idle job reads as spend just now. The CASE keeps that
 // honest in one statement rather than making callers pre-read the row.
 // The INSERT still stamps unconditionally: a row's first appearance IS news.
+//
+// That CASE keys off the four TOTAL counters only, and the zeus ones are
+// deliberately left out of it: they are a SUBSET of those four, so they can
+// never make the sum non-zero on their own, and adding them would only make
+// the condition longer to read for no change in behaviour.
 func (s *Store) BumpJobTokens(slug string, delta JobTokens) error {
 	if slug == "" {
 		return fmt.Errorf("bump job tokens: empty slug")
@@ -142,19 +170,25 @@ func (s *Store) BumpJobTokens(slug string, delta JobTokens) error {
 		delta.UpdatedAt = time.Now().UnixMilli()
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO job_tokens (job_slug, in_tokens, out_tokens, cache_write, cache_read, sessions, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO job_tokens (job_slug, in_tokens, out_tokens, cache_write, cache_read, sessions, updated_at,
+				zeus_in, zeus_out, zeus_cache_write, zeus_cache_read)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(job_slug) DO UPDATE SET
-				in_tokens   = in_tokens + excluded.in_tokens,
-				out_tokens  = out_tokens + excluded.out_tokens,
-				cache_write = cache_write + excluded.cache_write,
-				cache_read  = cache_read + excluded.cache_read,
-				sessions    = excluded.sessions,
-				updated_at  = CASE WHEN excluded.in_tokens + excluded.out_tokens
+				in_tokens        = in_tokens + excluded.in_tokens,
+				out_tokens       = out_tokens + excluded.out_tokens,
+				cache_write      = cache_write + excluded.cache_write,
+				cache_read       = cache_read + excluded.cache_read,
+				zeus_in          = zeus_in + excluded.zeus_in,
+				zeus_out         = zeus_out + excluded.zeus_out,
+				zeus_cache_write = zeus_cache_write + excluded.zeus_cache_write,
+				zeus_cache_read  = zeus_cache_read + excluded.zeus_cache_read,
+				sessions         = excluded.sessions,
+				updated_at       = CASE WHEN excluded.in_tokens + excluded.out_tokens
 					+ excluded.cache_write + excluded.cache_read > 0
 					THEN excluded.updated_at ELSE updated_at END`,
 		slug, delta.In, delta.Out, delta.CacheWrite, delta.CacheRead,
 		delta.Sessions, delta.UpdatedAt,
+		delta.ZeusIn, delta.ZeusOut, delta.ZeusCacheWrite, delta.ZeusCacheRead,
 	)
 	if err != nil {
 		return fmt.Errorf("bump job tokens %q: %w", slug, err)

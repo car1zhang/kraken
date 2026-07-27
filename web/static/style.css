@@ -903,25 +903,43 @@ body {
 .spec-meta-row.wide { grid-column: 1 / -1; }
 
 /* per-job token spend, in the steer modal's context block (tokensHTML).
-   Deliberately three tiers of loudness rather than four equal numbers:
-   the headline is the only thing readable at a glance, the four-way
-   breakdown is a size and a shade quieter, and the provenance line is
-   quieter still. No neon: this is a fact about the past, never something
-   that's hot or interactive. */
+
+   The box is the same raised / border-left panel .doc-questions and
+   .job-feedback use — those three are the modal context's neutral
+   drilldown panels and reading as one family is the point; a full 1px
+   border on --surface made this one look like a different kind of thing
+   sitting among them.
+
+   Everything is FADED: the whole block inherits --text-2, including the
+   headline, and separates its four tiers (headline / counters / origin /
+   provenance) by size and opacity rather than by brightness. Nothing here
+   is hot or interactive — it is a fact about the past — so nothing here
+   earns full --text, let alone neon. */
 .tok {
-  padding: 8px 11px; background: var(--surface); border: 1px solid var(--hairline);
+  margin-top: 7px; padding: 6px 8px;
+  background: var(--raised);
+  border-left: 2px solid var(--hairline-2);
+  font: 11px var(--mono); line-height: 1.45;
+  color: var(--text-2);
 }
 .tok-head { display: flex; align-items: baseline; gap: 5px; }
-.tok-big { font: 600 17px var(--mono); color: var(--text); letter-spacing: 0.5px; }
-.tok-mid { font: 600 13px var(--mono); color: var(--text-2); }
-.tok-unit { font: 9px var(--mono); color: var(--text-2); text-transform: uppercase; letter-spacing: 1.2px; }
-.tok-dot { color: var(--hairline-2); margin: 0 2px; }
+.tok-big { font: 600 15px var(--mono); letter-spacing: 0.5px; }
+.tok-unit { font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; opacity: 0.65; }
 .tok-break {
-  display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 6px;
-  font: 10px var(--mono); color: var(--text-2);
+  display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 5px;
+  font-size: 10px; opacity: 0.85;
 }
-.tok-cell i { font-style: normal; opacity: 0.6; margin-right: 5px; }
-.tok-note { margin-top: 5px; font: 9px var(--mono); color: var(--text-2); opacity: 0.6; }
+/* the origin row (zeus vs subagents) is a second .tok-break, tightened up
+   against the first: the two rows are both per-counter breakdowns of the
+   same headline, cut two different ways, so they read as one stack rather
+   than as two panels */
+.tok-origin { margin-top: 2px; }
+/* 0.7 NESTED inside .tok-break's 0.85 is 0.6 effective — the flat 0.6 the
+   iOS copy applies to the same labels (JobDetailView's tokenCell). The two
+   surfaces render this block row for row and the label tier is the one
+   place a nested opacity could quietly desynchronise them. */
+.tok-cell i { font-style: normal; opacity: 0.7; margin-right: 5px; }
+.tok-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
 .spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
 .spec-meta-row .v { color: var(--text); }
 .panel {

@@ -31,8 +31,10 @@ import (
 // Version 9 adds the dream loop's watchlist table plus a feedback(ts) index
 // for its unscoped time-window sweep (watchlist.go, feedback.go's
 // FeedbackSince). Version 10 adds the per-job token counters and their
-// per-file byte watermarks (tokens.go).
-const schemaVersion = 10
+// per-file byte watermarks (tokens.go). Version 11 splits those counters into
+// a zeus half and a subagent half, and WIPES both token tables so the daemon
+// re-sums every job with the split in place (see schemaV11).
+const schemaVersion = 11
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -438,6 +440,56 @@ CREATE TABLE job_token_files (
 );
 `
 
+// schemaV11 splits the per-job token spend into the part the cell's LEAD
+// agent burned and the part everything it delegated to did: four zeus columns
+// shadowing the four totals schemaV10 created. Only the zeus half is stored —
+// the subagent half is total-minus-zeus, derived by whoever renders it,
+// because two stored halves can drift out of agreement with the total they
+// are supposed to add up to and a derived one cannot.
+//
+// AND IT WIPES BOTH TOKEN TABLES, which is the load-bearing half of this
+// migration rather than a convenience. The counters only ever accumulate
+// FORWARD from the per-file byte watermarks in job_token_files: a pass adds
+// what it finds past each offset and nothing ever re-reads what is behind one.
+// So a row that already holds a job's entire history with the four new columns
+// defaulted to zero would report that job as 100% subagent FOREVER — there is
+// no pass anywhere that could backfill it, because the bytes those totals came
+// from are all behind the watermarks. Emptying both tables makes the next
+// daemon pass re-sum every job from byte zero with the classification in
+// place, which is the only way the number is ever right.
+//
+// What that costs, said out loud rather than discovered later: a few minutes
+// of paced background work (jobs with a live cell are re-summed every tick,
+// everything else 8 jobs per 10 minutes — jobs/tokens.go), and every job's
+// `updated_at` is re-stamped as its re-scan lands, so the board's "measured Nh
+// ago" line resets once for every job. Both tables are pure derived state, so
+// the re-scan restores them in full for any job whose transcripts are still on
+// disk — which is every job today, the oldest cell dir here being well inside
+// Claude Code's own `cleanupPeriodDays` (30 by default, unset on this machine).
+// That qualifier is the whole truth and it matters: ~/.claude/projects is not
+// kraken's to keep, so a job whose transcripts have since been pruned would
+// come back from a wipe at zero rather than at its old number. Anyone reading
+// this as precedent for a future wipe should read that sentence, not the
+// shorter one.
+//
+// A clean one-time cutover with no dual-mode guard, per this repo's standing
+// ruling: one machine, one database, one move.
+//
+// Appended rather than folded into schemaV10 for the reason schemaV2's doc
+// comment spells out — real kraken.db files already exist at v10.
+const schemaV11 = `
+ALTER TABLE job_tokens ADD COLUMN zeus_in          INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE job_tokens ADD COLUMN zeus_out         INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE job_tokens ADD COLUMN zeus_cache_write INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE job_tokens ADD COLUMN zeus_cache_read  INTEGER NOT NULL DEFAULT 0;
+
+-- Not a cleanup: see the doc comment. Accumulate-forward counters cannot be
+-- backfilled, so the pre-split rows have to go along with the watermarks that
+-- would otherwise stop the re-sum from happening.
+DELETE FROM job_tokens;
+DELETE FROM job_token_files;
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -464,9 +516,13 @@ type migrationStep struct {
 // the watchlist table and the feedback(ts) index (no hook, same reason);
 // migrations[10] adds the job_tokens/job_token_files tables (no hook — two
 // brand-new tables, and an absent row correctly means "not measured yet",
-// which is exactly what a job that predates the feature is).
+// which is exactly what a job that predates the feature is);
+// migrations[11] adds the four zeus columns and WIPES both token tables (no
+// hook — the wipe IS the migration's data half, and it is expressible in SQL:
+// accumulate-forward counters cannot be backfilled, so re-summing from byte
+// zero is the only way the split is ever right).
 // Future schema changes append
-// migrations[11], migrations[12], ... rather than editing an existing
+// migrations[12], migrations[13], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -480,6 +536,7 @@ var migrations = map[int]migrationStep{
 	8:  {sql: schemaV8},
 	9:  {sql: schemaV9},
 	10: {sql: schemaV10},
+	11: {sql: schemaV11},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

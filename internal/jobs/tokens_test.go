@@ -52,6 +52,32 @@ func tokTranscript(t *testing.T, cwd, rel string, out int64, n int) string {
 	return path
 }
 
+// tokNamedTranscript is tokTranscript with an `agent-name` head record
+// prepended — the signal core.isAgentTranscript actually classifies on, and
+// the shape Claude Code writes for every agent in a cell today.
+//
+// Deliberately NOT the `agent-setting` record: that one only appears when a
+// spawn carried a `subagent_type`, which zeus' crew does not, so a fixture
+// built on it would test a shape 15% of real teammate transcripts do not have.
+// A teammate name here (`hephaestus-…`) makes the file delegated; a lead name
+// (`zeus-…`, `thread-…-t1`) makes it the lead's.
+func tokNamedTranscript(t *testing.T, cwd, rel, agentName string, out int64, n int) string {
+	t.Helper()
+	path := tokTranscript(t, cwd, rel, out, n)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back transcript: %v", err)
+	}
+	head, err := json.Marshal(map[string]any{"type": "agent-name", "agentName": agentName})
+	if err != nil {
+		t.Fatalf("marshal agent-name record: %v", err)
+	}
+	if err := os.WriteFile(path, append(append(head, '\n'), body...), 0o644); err != nil {
+		t.Fatalf("write named transcript: %v", err)
+	}
+	return path
+}
+
 // --- tests ---
 
 // TestJobProjectDirsDerivesFromTheWorktreeString pins the rule that makes
@@ -152,6 +178,103 @@ func TestRefreshJobTokensSumsThenSettles(t *testing.T) {
 	}
 	if row.Sessions != 3 {
 		t.Errorf("Sessions = %d, want 3", row.Sessions)
+	}
+}
+
+// TestZeusAndThreadNamesMatchCoreLeadPrefixes is the anti-drift pin for the
+// one piece of this feature that spans a package boundary it cannot express.
+//
+// core decides whether a transcript is the LEAD's or a delegated agent's from
+// the `agentName` in its head, and the two names that mean "lead" are minted
+// HERE — ZeusName and ThreadAgentName. core cannot import jobs (the dependency
+// runs util ← store ← core ← jobs), so it carries the prefixes as literals;
+// this test is the only thing that keeps the literals and the minters in step.
+//
+// What breaks without it is silent and unrecoverable: rename zeus' agent and
+// every cell's LEAD spend starts landing in the subagent column, on
+// accumulate-forward counters that cannot be corrected without another full
+// wipe. A failing test here means core's constants need the same edit — not
+// that this test needs relaxing.
+func TestZeusAndThreadNamesMatchCoreLeadPrefixes(t *testing.T) {
+	for _, slug := range []string{"demo", "token-count-restyling", "asr-architecture-diffs"} {
+		j := &Job{Slug: slug}
+
+		zeus := ZeusName(j)
+		if !strings.HasPrefix(zeus, core.ZeusAgentNamePrefix) {
+			t.Errorf("ZeusName(%q) = %q, want it to start with core.ZeusAgentNamePrefix (%q)",
+				slug, zeus, core.ZeusAgentNamePrefix)
+		}
+		if !core.IsLeadAgentName(zeus) {
+			t.Errorf("core.IsLeadAgentName(%q) = false — zeus' own spend would be booked to subagents", zeus)
+		}
+
+		thread := ThreadAgentName(j, "t1")
+		if !strings.HasPrefix(thread, core.ThreadAgentNamePrefix) {
+			t.Errorf("ThreadAgentName(%q, t1) = %q, want it to start with core.ThreadAgentNamePrefix (%q)",
+				slug, thread, core.ThreadAgentNamePrefix)
+		}
+		if !core.IsLeadAgentName(thread) {
+			t.Errorf("core.IsLeadAgentName(%q) = false — a side thread counts as the lead", thread)
+		}
+
+		// ...and the other direction: a teammate name must NOT read as a lead,
+		// or the whole subagent half collapses to zero.
+		for _, crew := range []string{"hephaestus-" + slug, "athena-logic-" + slug, "hermes-" + slug} {
+			if core.IsLeadAgentName(crew) {
+				t.Errorf("core.IsLeadAgentName(%q) = true, want false — that is a teammate", crew)
+			}
+		}
+	}
+}
+
+// TestRefreshJobTokensStoresTheZeusHalf carries the split all the way to the
+// stored row, over all four shapes a real cell dir holds: zeus' transcript, a
+// SIDE THREAD's (which counts as the lead), a teammate's, and an in-process
+// subagent's sidecar. The totals must be what they always were — the split
+// partitions a sum, it does not change one — and the zeus columns must hold
+// the two lead files' share alone.
+//
+// The two lead files are named through ZeusName/ThreadAgentName rather than
+// with literals on purpose: this is the same coupling
+// TestZeusAndThreadNamesMatchCoreLeadPrefixes pins, exercised end to end.
+// The subagent half is deliberately absent from the row and derived here by
+// subtraction, which is the only form it ever takes.
+func TestRefreshJobTokensStoresTheZeusHalf(t *testing.T) {
+	st := useTestStore(t)
+	j := &Job{Slug: "demo", Repo: "kraken", State: "working"}
+	repo := filepath.Join(util.Home(), "Developer", "kraken")
+	wt := CellWorktree(j, repo)
+	tokNamedTranscript(t, wt, "zeus.jsonl", ZeusName(j), 100, 2)                     // the lead
+	tokNamedTranscript(t, wt, "thread.jsonl", ThreadAgentName(j, "t1"), 20, 1)       // a side thread: also the lead
+	tokNamedTranscript(t, wt, "hephaestus.jsonl", "hephaestus-demo", 30, 1)          // a teammate
+	tokTranscript(t, wt, filepath.Join("zeus", "subagents", "agent-1.jsonl"), 10, 1) // a sidecar
+
+	if wrote, err := refreshJobTokens(st, j, repo, nil); err != nil || !wrote {
+		t.Fatalf("refreshJobTokens: wrote=%v err=%v", wrote, err)
+	}
+	row, err := st.GetJobTokens("demo")
+	if err != nil {
+		t.Fatalf("GetJobTokens: %v", err)
+	}
+	if row.Out != 260 {
+		t.Fatalf("Out = %d, want 260 (2x100 zeus + 20 thread + 30 teammate + 10 sidecar) — the split must not change the total", row.Out)
+	}
+	if row.ZeusOut != 220 {
+		t.Errorf("ZeusOut = %d, want 220 — zeus' 200 plus the side thread's 20, and nothing else", row.ZeusOut)
+	}
+	if got := row.Out - row.ZeusOut; got != 40 {
+		t.Errorf("derived subagent Out = %d, want 40 (teammate + sidecar)", got)
+	}
+	// the other three counters split the same way: 1 in / 2 cache-write / 3
+	// cache-read per record, 3 of the 5 records being a lead's.
+	if row.ZeusIn != 3 || row.ZeusCacheWrite != 6 || row.ZeusCacheRead != 9 {
+		t.Errorf("zeus in/cw/cr = %d/%d/%d, want 3/6/9", row.ZeusIn, row.ZeusCacheWrite, row.ZeusCacheRead)
+	}
+	if row.In != 5 || row.Sessions != 4 {
+		t.Errorf("In = %d, Sessions = %d, want 5 records across 4 transcript files", row.In, row.Sessions)
+	}
+	if row.ZeusIn > row.In || row.ZeusCacheWrite > row.CacheWrite || row.ZeusCacheRead > row.CacheRead {
+		t.Errorf("zeus half exceeds the total it is a subset of: %+v", row)
 	}
 }
 

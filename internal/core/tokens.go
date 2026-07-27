@@ -53,6 +53,36 @@ type Tokens struct {
 	// is why it is the one field of a SumTokensDelta result that is a TOTAL
 	// rather than a delta — see that function's doc comment.
 	Sessions int
+
+	// The ZEUS half of the same four counters: the part of In/Out/CacheWrite/
+	// CacheRead above that a cell's LEAD agent spent, as opposed to everything
+	// it delegated to (teammates and in-process subagents alike). Each is a
+	// SUBSET of the counter it shadows, never a sibling of it, so the subagent
+	// half is In-ZeusIn and so on.
+	//
+	// Only the zeus half is ever carried, and that is deliberate: two stored
+	// halves can drift out of agreement with the total they are supposed to
+	// add up to, a derived one cannot. Whoever renders the split subtracts.
+	//
+	// Flat named fields rather than a nested Tokens, because every struct in
+	// this pipeline — core.Tokens, store.JobTokens, api.webTokens — spells its
+	// counters out flat, and a nested one here would be the only place a
+	// reader has to remember which of the two shapes they are holding.
+	//
+	// Which transcript is whose is decided per FILE, by isAgentTranscript, and
+	// never persisted — see SumTokensDelta.
+	//
+	// json:"-" on all four for one reason: core.Tokens is marshaled in exactly
+	// one place, `k mine digest`'s top-level roll-up (cmd/kraken/cmd_mine.go),
+	// which sums a NIGHT across every session on the machine rather than one
+	// job's cell. That roll-up has no lead agent to attribute to and mine.go
+	// never populates these, so shipping them there would put four permanent
+	// zeros in front of a reader who would reasonably read them as "zeus spent
+	// nothing".
+	ZeusIn         int64 `json:"-"`
+	ZeusOut        int64 `json:"-"`
+	ZeusCacheWrite int64 `json:"-"`
+	ZeusCacheRead  int64 `json:"-"`
 }
 
 // tokenUsage is the `usage` object on an assistant record's message. It is
@@ -156,6 +186,227 @@ func fileSessionID(path, name string) string {
 	return strings.TrimSuffix(name, ".jsonl")
 }
 
+// ZeusAgentNamePrefix and ThreadAgentNamePrefix are the two `agentName`
+// prefixes that mean a transcript is the cell LEAD's rather than a delegated
+// agent's — see isAgentTranscript, which is their only consumer.
+//
+// They are literals HERE, in core, rather than read from the code that mints
+// them, because the minting lives in internal/jobs (ZeusName, crew.go;
+// ThreadNamePrefix, thread.go) and the dependency runs util ← store ← core ←
+// jobs. core cannot import jobs, and threading a job's name down through
+// SumTokensDelta would put a job-shaped parameter on a function whose whole
+// contract is "sum this directory".
+//
+// So the coupling is made explicit instead of hidden: these are exported
+// precisely so a test on the JOBS side — TestZeusAndThreadNamesMatchCoreLeadPrefixes
+// in internal/jobs, which may import core — can assert that what ZeusName and
+// ThreadAgentName actually produce still begins with them. Without that test
+// the two halves of this rule drift apart in silence, and the symptom is not a
+// crash but a lead's spend quietly appearing in the subagent column.
+const (
+	ZeusAgentNamePrefix   = "zeus-"
+	ThreadAgentNamePrefix = "thread-"
+)
+
+// IsLeadAgentName reports whether an `agentName` from a transcript head names
+// a cell LEAD — zeus itself or one of its side threads — as opposed to a
+// delegated agent.
+//
+// An empty name is NOT a lead by this function; the caller decides what an
+// absent name means, because "no agentName record at all" (a manual claude, a
+// session predating the record) is a different state from "a name that is not
+// zeus'".
+func IsLeadAgentName(name string) bool {
+	return strings.HasPrefix(name, ZeusAgentNamePrefix) ||
+		strings.HasPrefix(name, ThreadAgentNamePrefix)
+}
+
+// agentMarkerLines and agentMarkerBytes bound the head probe that tells a
+// DELEGATED agent's root transcript from the lead's (isAgentTranscript). Two
+// bounds rather than one because either alone is unsafe: a record count says
+// nothing about how much is read when a single transcript line can be 8.3 MB
+// (mineScanBufMax's own reason), and a byte ceiling alone would keep decoding
+// json out of a file that had already answered the question.
+//
+// Both are set above what the data needs, re-measured rather than inherited.
+// THE CORPUS, stated once so every number below is unambiguous: every file
+// under every ~/.claude/projects/-Users-<user>--kraken-cells-* dir on this
+// machine — 1,750 in all, of which 1,588 are ROOT transcripts and 162 are
+// subagent sidecars. The sidecars never reach this probe (the path arm
+// classifies them first), so both bounds are measured over the 1,588 roots:
+//
+//   - `agentName` — the load-bearing signal — appears on a head record of
+//     1,581 of them, at worst on LINE 5.
+//   - `agent-setting` appears on 1,239, at worst on line 2.
+//   - 7 roots carry neither and are read as the lead. All seven are manual
+//     claudes carl started in a cell worktree by hand ("hello bro", "hi", "are
+//     you able to open zip files?") or sessions with no user turn at all, so
+//     the lead is the correct answer for every one of them.
+//
+// THE BYTE BOUND IS NOT ABOUT WHERE THE SIGNAL STARTS, and reading it that way
+// is a bug this probe has already had once. `agentName` sits on a DEDICATED
+// `agent-name` record on only 120 of those 1,588 files; on the other 1,467 it
+// rides the session's first USER record — the teammate-message brief the lead
+// sent — which is a single line with a whole prompt in it. The record starts at
+// byte 431 at the latest, but the line it is on ENDS as far in as 57,148 bytes
+// (median 4,114; p99 23,362). A window that admits only the start decodes a
+// truncated line, fails, finds no signal, and books a teammate's whole spend to
+// the lead — which is exactly what an 8 KB window did to 6 hermes transcripts
+// (8.5M tokens) in one cell dir. So the bound must cover the whole RECORD:
+// 256 KB is 4.6x the largest ever seen.
+//
+// That ceiling is not what is normally read, and agentMarkerInit is what makes
+// that true rather than merely hoped for. bufio.Scanner.Buffer ALLOCATES its
+// initial buffer immediately — `s.buf = buf[0:cap(buf)]`, before the first
+// Scan — and only ever doubles from there, so the initial capacity is a real
+// per-probe cost while the maximum is only a ceiling. Seeding it with
+// mineScanBufInit (64 KB, sized for the main transcript scan) spent 64 KB on
+// every probe of every grown file to read a median 4 KB of head; 4 KB seeds it
+// at the median instead and doubles the handful of times a fat brief needs.
+const (
+	agentMarkerLines = 16
+	agentMarkerBytes = 256 << 10
+	agentMarkerInit  = 4 << 10
+)
+
+// isAgentTranscript reports whether a transcript is a DELEGATED agent's — the
+// subagent half of the split — as opposed to the cell lead's own.
+//
+// Three shapes of file live in one cell's project dir and the rule sorts all
+// three:
+//
+//   - The lead's own root transcript — zeus. Not an agent.
+//   - A SIDE THREAD's root transcript — also not an agent, deliberately. A
+//     thread is `claude --fork-session` of zeus in the same worktree (carl
+//     branching off to ask about the work), so it speaks in zeus' place rather
+//     than being work zeus handed out. Only its own turns land here anyway:
+//     the parent records replayed into it are already dropped by
+//     tokenRecordOwned.
+//   - A delegated agent's transcript — an agent, in both of its forms. A
+//     TEAMMATE (hephaestus, athena-*, hermes-*: an Agent-tool call carrying a
+//     name) runs as its own claude under teammateMode: tmux and so gets its
+//     own ROOT transcript in the very same project dir; an in-process subagent
+//     gets a sidecar at <project>/<session-id>/subagents/agent-*.jsonl.
+//
+// THREE ARMS, in the order they are decided:
+//
+//  1. PATH. A file under a `subagents/` dir is an in-process subagent's
+//     sidecar — the same shape fileSessionID already uses to recognise one,
+//     because a sidecar's location identifies it and no file content is
+//     needed to see it.
+//  2. `agent-setting` in the head. Claude Code writes that record only for an
+//     Agent-tool spawn, so it never lies. It is kept even though arm 3
+//     currently subsumes it entirely (measured: of 1,239 roots carrying
+//     `agent-setting`, ZERO lack an `agentName`) because it costs one field of
+//     one decode and it is the arm that still holds if `agentName` ever stops
+//     being written.
+//  3. `agentName` in the head, judged by IsLeadAgentName. This is the arm that
+//     actually does the work, and it exists because arm 2 ALONE IS WRONG: the
+//     `agent-setting` record's payload is the spawn's `subagent_type`
+//     (`agentSetting: "general-purpose"`), so it records a spawn OPTION rather
+//     than the fact of being a spawn. A teammate given a `name` and a prompt
+//     but no `subagent_type` — which is exactly what zeus' crew is — gets no
+//     such record at all. Measured on this machine: 222 of 1,461 teammate
+//     transcripts (15.2%) carry no `agent-setting`, spread across 20 cell dirs
+//     and dated as recently as the day before this was written, and on one
+//     real job that alone booked 10.6M tokens of teammate spend to the lead —
+//     rendering its zeus share 38% too high.
+//
+// Arm 3 is a prefix test rather than a name lookup because kraken MINTS both
+// lead names: `zeus-<slug>` (jobs.ZeusName) and `thread-<slug>-<tid>`
+// (jobs.ThreadAgentName). Everything else with an `agentName` was spawned by
+// the Agent tool. Getting the thread prefix in here is not cosmetic — 2 side
+// thread transcripts on this machine carry `agentName: "thread-…"`, and
+// without it they would land in the subagent half in flat contradiction of the
+// rule stated above.
+//
+// Both content arms decode JSON per line rather than substring-matching, on
+// purpose: `"type":"agent-setting"` or an `agentName` appearing inside some
+// record's prose would otherwise mis-bin a whole transcript. That is also what
+// makes the byte bound load-bearing rather than cosmetic — a decode needs the
+// WHOLE line, and the line carrying `agentName` is usually a whole brief.
+//
+// The scan stops at the first record that answers. Reading on would cost the
+// rest of a head window whose fattest records sit right there, and it can
+// change nothing: measured across the 1,245 transcripts carrying both signals,
+// `agent-setting` precedes the first `agentName` in every single one, so no
+// early return can hide it.
+//
+// A probe that cannot READ, and a head window with no signal in it, both
+// degrade to NOT-agent, i.e. to the lead. The lead is the conservative bucket
+// in the only sense that matters here: the job's total is identical either way
+// (the split is a partition of a number already summed), so the failure mode
+// is a visibly-too-large lead half rather than a total that is silently wrong.
+func isAgentTranscript(f *os.File, path string) bool {
+	if filepath.Base(filepath.Dir(path)) == "subagents" {
+		return true
+	}
+	// A SectionReader rather than a Seek + Read, so this stays a pread like
+	// every other probe here and cannot disturb the caller's file offset.
+	// The scanner's buffer GROWS from agentMarkerInit only as a line demands
+	// it, so the agentMarkerBytes ceiling is a bound and not an allocation.
+	// The seed is this probe's OWN constant rather than mineScanBufInit — see
+	// agentMarkerInit: Buffer allocates its initial capacity up front, so
+	// borrowing the main scan's 64 KB seed spent 64 KB to read a median 4 KB.
+	sc := bufio.NewScanner(io.NewSectionReader(f, 0, agentMarkerBytes))
+	sc.Buffer(make([]byte, 0, agentMarkerInit), agentMarkerBytes)
+	for i := 0; i < agentMarkerLines && sc.Scan(); i++ {
+		rec := headMarkers(sc.Bytes())
+		if rec.Type == "agent-setting" {
+			return true // arm 2: never lies, so it answers immediately
+		}
+		if rec.AgentName != "" {
+			return !IsLeadAgentName(rec.AgentName) // arm 3
+		}
+	}
+	// No signal in the window. That is the lead ANSWER without being a lead
+	// NAME: a manual claude in a cell worktree carries no agentName, and so
+	// does a transcript whose head could not be read — a scan error, or a line
+	// past the ceiling, both of which end the loop here rather than guessing.
+	return false
+}
+
+// headMarker is the two fields isAgentTranscript reads out of a head record.
+// Narrow on purpose, like tokenRecord: these lines are decoded for every
+// transcript that grew since the last pass, and the line they are decoded from
+// is routinely a whole teammate brief, so a shape with a Content field would
+// copy that brief for nothing.
+type headMarker struct {
+	Type      string `json:"type"`
+	AgentName string `json:"agentName"`
+}
+
+// headMarkers decodes one head line into the two markers. Malformed lines cost
+// only themselves, matching this package's contract for data another program
+// owns; a line that IS valid JSON with one wrongly-typed field keeps whatever
+// decoded, exactly as addTokenLine treats one.
+func headMarkers(line []byte) headMarker {
+	var rec headMarker
+	if err := json.Unmarshal(line, &rec); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return headMarker{}
+		}
+	}
+	return rec
+}
+
+// withZeusHalf fills in a per-file result's zeus counters: everything a LEAD
+// transcript contributed is zeus spend, and everything a delegated agent's
+// contributed is not.
+//
+// A copy of the four rather than a second pass over the records, because the
+// classification is a property of the FILE and not of any record in it — which
+// is also why the caller applies this once per file rather than per line.
+func withZeusHalf(tk Tokens, lead bool) Tokens {
+	if !lead {
+		return tk
+	}
+	tk.ZeusIn, tk.ZeusOut = tk.In, tk.Out
+	tk.ZeusCacheWrite, tk.ZeusCacheRead = tk.CacheWrite, tk.CacheRead
+	return tk
+}
+
 // ProjectDirName encodes a cwd the way Claude Code names its transcript dirs
 // under ~/.claude/projects. It is the exported face of projectDirName
 // (discover.go) — the same implementation, never a second copy of the
@@ -203,6 +454,40 @@ func ProjectDirName(cwd string) string { return projectDirName(cwd) }
 //   - A record replayed into a forked session's file is not that file's
 //     spend — see tokenRecordOwned. Measured inflation without this: a
 //     further 1.43x on a cell that used side threads.
+//
+// THE ZEUS SPLIT. Alongside the four counters, the result carries the ZEUS
+// half of each: the part spent by the cell's lead agent rather than by
+// anything it delegated to. It is a partition of the SAME sum — nothing is
+// counted, skipped or dropped differently because of it — decided per FILE by
+// isAgentTranscript and copied in by withZeusHalf, which is why the subagent
+// half is In-ZeusIn and is never carried in its own right.
+//
+// The classification is recomputed on every pass that opens a file and is
+// never persisted. A transcript's KIND is fixed at birth and the probe is a
+// bounded read of bytes that can always be re-read, so a stored flag would be
+// state with nothing to justify it — and one more thing to migrate. The
+// steady state is untouched: a file whose offset already equals its size is
+// never opened at all, contributes a zero delta, and so needs no
+// classification.
+//
+// The probe's ANSWER is a slightly weaker claim than the file's kind, and the
+// difference is worth naming because the columns accumulate: a pass whose
+// answer differed from an earlier pass' would split ONE file's spend across
+// both halves permanently. Two states could do it — a transient read failure,
+// and a head window holding no complete line yet. Neither is reachable WITH A
+// NON-ZERO DELTA, because both marker records precede a session's first
+// ASSISTANT record by construction (`agentName` rides the first user turn, and
+// an assistant record can only follow one), so a pass that summed any usage at
+// all had already read a complete marker line.
+//
+// Its one honest limit, measured rather than assumed: 7 of the 1,588 root
+// transcripts on this machine carry neither marker, and every one of those is
+// genuinely the lead — a claude carl started in a cell worktree by hand. There
+// is currently NO transcript this rule books to the wrong half. The rule that
+// could go stale is the prefix one: kraken mints its lead names
+// (ZeusAgentNamePrefix, ThreadAgentNamePrefix) and a rename on the jobs side
+// would send zeus' own spend to the subagent column, which is why a test over
+// there pins the two together.
 //
 // Together they reproduce a whole-corpus dedupe by globally-unique message id
 // exactly on 118 of 119 real cell project dirs. Two cases they cannot see,
@@ -307,6 +592,13 @@ func SumTokensDelta(projectDir string, priorOffsets map[string]int64) (Tokens, m
 		total.Out += tk.Out
 		total.CacheWrite += tk.CacheWrite
 		total.CacheRead += tk.CacheRead
+		// The zeus half rides in alongside, already zeroed by sumTokensFrom for
+		// a delegated agent's transcript, so this is the same accumulation and
+		// not a second decision.
+		total.ZeusIn += tk.ZeusIn
+		total.ZeusOut += tk.ZeusOut
+		total.ZeusCacheWrite += tk.ZeusCacheWrite
+		total.ZeusCacheRead += tk.ZeusCacheRead
 		offsets[path] = end
 		if scanErr != nil {
 			partial = append(partial, scanErr.Error())
@@ -358,6 +650,13 @@ func SumTokensDelta(projectDir string, priorOffsets map[string]int64) (Tokens, m
 // reads the single record immediately before `from`. That keeps the boundary
 // exact with no stored state, and costs one small read on files that grew.
 //
+// THE ZEUS HALF is filled in here too, once per file rather than per record,
+// because it is a property of the FILE (isAgentTranscript) and not of anything
+// inside it. Every return that can carry counters goes through withZeusHalf,
+// including the partial-scan one — a floor is still a floor of somebody's
+// spend, and leaving the split off it would make the zeus and subagent halves
+// stop adding up to the total for exactly the rows that are already inexact.
+//
 // An unopenable/unseekable file degrades to "nothing summed, offset
 // unchanged" with no error, matching this package's contract for data
 // another program owns. Only a PARTIAL scan errors — sc.Err() being non-nil
@@ -374,6 +673,13 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 		return tk, from, nil
 	}
 	defer f.Close()
+
+	// Which half of the split this file's spend belongs to. Decided HERE
+	// rather than by the caller because the probe costs no extra open — this
+	// function already holds the handle, and ReadAt is a pread that disturbs
+	// nothing below — and because a caller doing it would have to open every
+	// file including the settled ones the whole design exists not to open.
+	lead := !isAgentTranscript(f, path)
 
 	// Seed the group tracker with whatever record precedes the resume point,
 	// so a message split across two passes is still counted once. A seed the
@@ -398,7 +704,7 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 		}
 	}
 	if _, err := f.Seek(from, io.SeekStart); err != nil {
-		return tk, from, nil
+		return withZeusHalf(tk, lead), from, nil
 	}
 
 	sc := bufio.NewScanner(io.LimitReader(f, limit-from))
@@ -428,13 +734,13 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 			addTokenLine(&tk, pending, own, &lastID)
 			off += int64(len(pending)) + 1
 		}
-		return tk, off, fmt.Errorf("%s: %v", filepath.Base(path), err)
+		return withZeusHalf(tk, lead), off, fmt.Errorf("%s: %v", filepath.Base(path), err)
 	}
 	if havePending && complete {
 		addTokenLine(&tk, pending, own, &lastID)
 		off += int64(len(pending)) + 1
 	}
-	return tk, off, seedErr
+	return withZeusHalf(tk, lead), off, seedErr
 }
 
 // addTokenLine folds one transcript line into tk, advancing the caller's

@@ -44,6 +44,66 @@ func TestBumpJobTokensInsertsThenAccumulates(t *testing.T) {
 	}
 }
 
+// TestBumpJobTokensAccumulatesTheZeusHalf pins that the split's four columns
+// follow the totals' rule and not sessions': they are the same delta,
+// partitioned, so they ADD. A SET here would make the row report only the
+// latest pass's lead spend against an all-time total — a split that shrinks
+// while the number it is a subset of grows.
+func TestBumpJobTokensAccumulatesTheZeusHalf(t *testing.T) {
+	s := openTest(t)
+	if err := s.BumpJobTokens("demo", JobTokens{
+		In: 10, Out: 100, CacheWrite: 1000, CacheRead: 10000, Sessions: 2,
+		ZeusIn: 6, ZeusOut: 60, ZeusCacheWrite: 600, ZeusCacheRead: 6000,
+	}); err != nil {
+		t.Fatalf("first bump: %v", err)
+	}
+	if err := s.BumpJobTokens("demo", JobTokens{
+		In: 1, Out: 2, CacheWrite: 3, CacheRead: 4, Sessions: 3,
+		ZeusIn: 1, ZeusOut: 1, ZeusCacheWrite: 1, ZeusCacheRead: 1,
+	}); err != nil {
+		t.Fatalf("second bump: %v", err)
+	}
+	got, err := s.GetJobTokens("demo")
+	if err != nil {
+		t.Fatalf("GetJobTokens: %v", err)
+	}
+	if got.ZeusIn != 7 || got.ZeusOut != 61 || got.ZeusCacheWrite != 601 || got.ZeusCacheRead != 6001 {
+		t.Errorf("zeus counters = %d/%d/%d/%d, want them summed",
+			got.ZeusIn, got.ZeusOut, got.ZeusCacheWrite, got.ZeusCacheRead)
+	}
+	// ...and the invariant every consumer subtracts against: the zeus half is
+	// a SUBSET of the total, so the derived subagent half is never negative.
+	if got.ZeusIn > got.In || got.ZeusOut > got.Out ||
+		got.ZeusCacheWrite > got.CacheWrite || got.ZeusCacheRead > got.CacheRead {
+		t.Errorf("zeus half exceeds the total it is a subset of: %+v", got)
+	}
+}
+
+// TestBumpJobTokensZeusAloneDoesNotStampUpdatedAt pins that the timestamp CASE
+// still keys off the four TOTALS. The zeus columns are a subset, so the state
+// this constructs — zeus spend with no total spend — is unreachable in
+// practice; the test exists to pin that adding them to the condition was
+// deliberately declined rather than forgotten.
+func TestBumpJobTokensZeusAloneDoesNotStampUpdatedAt(t *testing.T) {
+	s := openTest(t)
+	if err := s.BumpJobTokens("demo", JobTokens{Out: 5, Sessions: 1, UpdatedAt: 1700000000000}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.BumpJobTokens("demo", JobTokens{ZeusOut: 9, Sessions: 2, UpdatedAt: 1800000000000}); err != nil {
+		t.Fatalf("zeus-only bump: %v", err)
+	}
+	got, err := s.GetJobTokens("demo")
+	if err != nil {
+		t.Fatalf("GetJobTokens: %v", err)
+	}
+	if got.UpdatedAt != 1700000000000 {
+		t.Errorf("UpdatedAt = %d, want the seed's — no TOTAL spend moved", got.UpdatedAt)
+	}
+	if got.ZeusOut != 9 {
+		t.Errorf("ZeusOut = %d, want 9 — the column still accumulates", got.ZeusOut)
+	}
+}
+
 // TestBumpJobTokensKeepsAnExplicitTimestamp is the other half of the stamping
 // rule: a caller that supplies UpdatedAt (a test, an importer, a pass that
 // already knows the tick's clock) gets it stored verbatim rather than

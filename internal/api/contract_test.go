@@ -272,13 +272,23 @@ var webJobSpec = map[string]fieldSpec{
 // no omitempty anywhere, because a measured zero is a real answer and must
 // still ride the wire. Absence is expressed by the "tokens" key itself being
 // gone (webJobSpec above marks it optional), never by a missing counter.
+// The four zeus keys are the LEAD agent's share of the four totals above them
+// — a subset of each, never a sibling — and they are required for the same
+// reason the totals are: no omitempty anywhere on the type, so a zero must
+// still ride. Subagent spend is `in - zeus_in` and so on and has no key here
+// on purpose; a spec entry for one would be the first sign somebody had added
+// a second stored half that could disagree with the total.
 var webTokensSpec = map[string]fieldSpec{
-	"in":          {kind: wireNumber, required: true},
-	"out":         {kind: wireNumber, required: true},
-	"cache_write": {kind: wireNumber, required: true},
-	"cache_read":  {kind: wireNumber, required: true},
-	"sessions":    {kind: wireNumber, required: true},
-	"updated_at":  {kind: wireNumber, required: true},
+	"in":               {kind: wireNumber, required: true},
+	"out":              {kind: wireNumber, required: true},
+	"cache_write":      {kind: wireNumber, required: true},
+	"cache_read":       {kind: wireNumber, required: true},
+	"sessions":         {kind: wireNumber, required: true},
+	"updated_at":       {kind: wireNumber, required: true},
+	"zeus_in":          {kind: wireNumber, required: true},
+	"zeus_out":         {kind: wireNumber, required: true},
+	"zeus_cache_write": {kind: wireNumber, required: true},
+	"zeus_cache_read":  {kind: wireNumber, required: true},
 }
 
 func TestWebTokensWireShape(t *testing.T) {
@@ -290,9 +300,13 @@ func TestWebTokensWireShape(t *testing.T) {
 	}
 	assertShape(t, "webTokens (zero row)", data, webTokensSpec)
 
+	// The zeus counters are each strictly BELOW the total they shadow, which
+	// is what a subset looks like on the wire — a fixture with one of them
+	// above its total would document the opposite of the contract.
 	data, err = json.Marshal(webTokens{
 		In: 149754, Out: 15756009, CacheWrite: 87776983, CacheRead: 2555432608,
 		Sessions: 154, UpdatedAt: 1785124027359,
+		ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -383,6 +397,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		Tokens: &webTokens{
 			In: 149754, Out: 15756009, CacheWrite: 87776983, CacheRead: 2555432608,
 			Sessions: 154, UpdatedAt: 1785124027359,
+			ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 		},
 	}
 	data, err := json.Marshal(wj)

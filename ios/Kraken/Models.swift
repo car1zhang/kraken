@@ -354,6 +354,28 @@ struct WebJob: Decodable, Identifiable {
 // because `in` is a Swift keyword and a backticked `tokens.\`in\`` at every
 // call site is a footgun, not a contract. The CodingKeys below are the whole
 // of the difference.
+//
+// THE ZEUS SPLIT — the four `zeus*` properties — is how much of the same four
+// counters the cell's LEAD agent spent, as opposed to everything it delegated
+// to (teammates plus in-process subagents; a side thread counts as the lead,
+// being a fork of zeus' own session rather than work handed out). Two rules,
+// both structural:
+//
+//   - Each is a SUBSET of the counter it shadows, never a sibling. `input`
+//     already INCLUDES `zeusInput`; adding them doubles the lead's spend.
+//   - SUBAGENT spend has no key on the wire and never will — it is
+//     `input - zeusInput` and so on, subtracted here. Two halves on the wire
+//     could arrive disagreeing with the total they add up to; a derived half
+//     cannot.
+//
+// These four alone are Optional, breaking this type's own everything-required
+// rule, and for a reason the rest of the file's optionality does NOT cover: an
+// installed build outlives the `kraken serve` on this machine that it talks to,
+// so a hard-required key would fail the WHOLE job's decode — not just the
+// tokens object — against a server that predates the split. `zeusTotal` is the
+// accessor a view should ask: nil exactly when the server did not send them,
+// which is what tells the view to omit the split row rather than render a `0`
+// the server never claimed.
 struct WebTokens: Decodable {
     /// `input_tokens` — uncached input (wire key `in`).
     let input: Int64
@@ -370,6 +392,43 @@ struct WebTokens: Decodable {
     /// Unix millis: when a refresh last found new spend.
     let updatedAt: Int64
 
+    /// The lead agent's share of `input` — nil on a server predating the split.
+    let zeusInput: Int64?
+    /// The lead agent's share of `output`.
+    let zeusOutput: Int64?
+    /// The lead agent's share of `cacheWrite`.
+    let zeusCacheWrite: Int64?
+    /// The lead agent's share of `cacheRead`.
+    let zeusCacheRead: Int64?
+
+    /// The four zeus counters summed, or nil when the server did not send
+    /// them at all.
+    ///
+    /// nil is the whole point of this accessor: it means "this server does not
+    /// report the split", which is a different answer from a lead that spent
+    /// nothing, and a view must omit the split rather than draw a `0`. A
+    /// server that sends the keys sends all four, so one present is all four
+    /// present — the flatMap-free shape below reads the first and trusts the
+    /// rest, matching how the wire actually behaves (no key here carries
+    /// `omitempty`).
+    var zeusTotal: Int64? {
+        guard let input = zeusInput else { return nil }
+        return input + (zeusOutput ?? 0) + (zeusCacheWrite ?? 0) + (zeusCacheRead ?? 0)
+    }
+
+    /// Everything the job DELEGATED, summed: the four totals minus the four
+    /// zeus counters. nil for the same reason `zeusTotal` is, and derived
+    /// rather than read because the server deliberately serves only one half.
+    ///
+    /// Clamped at zero. The subtraction cannot legitimately go negative — zeus
+    /// is a subset by construction, on both the server and the wire — so a
+    /// negative here would be a server bug, and a job card reading `-2.1M
+    /// subagent` is a worse way to learn about it than a zero is.
+    var subagentTotal: Int64? {
+        guard let zeus = zeusTotal else { return nil }
+        return max(0, (input + output + cacheWrite + cacheRead) - zeus)
+    }
+
     enum CodingKeys: String, CodingKey {
         case input = "in"
         case output = "out"
@@ -377,6 +436,10 @@ struct WebTokens: Decodable {
         case cacheWrite = "cache_write"
         case cacheRead = "cache_read"
         case updatedAt = "updated_at"
+        case zeusInput = "zeus_in"
+        case zeusOutput = "zeus_out"
+        case zeusCacheWrite = "zeus_cache_write"
+        case zeusCacheRead = "zeus_cache_read"
     }
 }
 

@@ -244,8 +244,12 @@ Claude Code transcripts by the daemon and only READ by the API):
 | `cache_read` | number | always | `cache_read_input_tokens` |
 | `sessions` | number | always | how many transcript FILES were summed (root transcripts + subagent sidecars) — what tells "this job was cheap" apart from a row of zeros meaning something else |
 | `updated_at` | number | always | unix millis, when a refresh last found new spend |
+| `zeus_in` | number | always | the part of `in` the cell's LEAD agent spent. Additive key, no contract bump |
+| `zeus_out` | number | always | the part of `out` the lead spent |
+| `zeus_cache_write` | number | always | the part of `cache_write` the lead spent |
+| `zeus_cache_read` | number | always | the part of `cache_read` the lead spent |
 
-Three rules for any client rendering this:
+Four rules for any client rendering this:
 
 - **The four counters ride RAW, with no weighted total, and none is ever
   added.** They are billed at wildly different rates and no server-side "cost"
@@ -259,6 +263,23 @@ Three rules for any client rendering this:
   only be scanned part way still contributes what was read (a failed read is
   not a zero), and nothing on the wire marks which rows those are — so present
   the number as spend-so-far, never as exact.
+- **The four `zeus_*` keys are a SUBSET of the four totals, not a sibling of
+  them, and SUBAGENT spend has no key of its own.** `in` already includes
+  `zeus_in`; a client that adds the two doubles the lead's spend. What the job
+  delegated — teammates (`hephaestus`, `athena-*`, `hermes-*`) plus in-process
+  subagents — is `in - zeus_in`, `out - zeus_out`, and so on, computed by the
+  client. Only one half is ever stored or served, because two halves on the
+  wire can arrive disagreeing with the total they are supposed to add up to
+  and a derived half cannot. A cell's SIDE THREADS count as the lead: a thread
+  is a fork of zeus' own session that speaks in its place, not work zeus handed
+  out. kraken decides which half a transcript belongs to from its own head
+  records — an in-process subagent's sidecar path, Claude Code's `agent-setting`
+  record, or an `agentName` that is not one of the two kraken mints for a lead
+  (`zeus-…`, `thread-…`). A transcript carrying none of those reads as the lead;
+  on this machine that is 7 of 1,588 and all seven really are leads (claudes
+  started in a cell worktree by hand), so no transcript is currently booked to
+  the wrong half. Either way the split can only ever move spend between the two
+  halves — the four totals are unaffected.
 
 ### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
