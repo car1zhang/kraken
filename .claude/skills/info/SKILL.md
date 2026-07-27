@@ -50,10 +50,19 @@ That last row is the point of the whole skill: it is how the reader steers the n
 areas concretely ("the retry/backoff path in `daemon.go`", "how conflict state is resolved on
 import"), never vaguely ("more detail on the backend").
 
-**Diagrams in the first pass: at most one, usually zero.** Add a single diagram card only when the
-mental model is genuinely spatial or flow-shaped and a picture *replaces* prose rather than
-decorating it. Otherwise offer it as a "go deeper" item and render it when asked. Never ship the
-/aim two-core-diagram pair on a first pass.
+**Diagrams in the first pass: almost always exactly one.** Ship `00-overview.md` with a single
+`1N-<id>.html` diagram card unless you can say why a picture would add nothing — which is rare,
+because an explanation is nearly always about how parts relate, and that is the thing prose is
+worst at. The diagram carries the **mental model** row: it is the picture a reader would otherwise
+have to build in their head from that table.
+
+The bar is *replaces prose*, not *decorates it* — but assume it clears. Skipping is the exception
+you justify, not the default you fall back to: an explanation whose answer is a single value, a
+yes/no, or one linear sequence with no branching may genuinely have nothing to draw. If you do
+skip, say so in one line in the "go deeper" menu so the reader can ask for it.
+
+Still exactly ONE. Never ship the /aim two-core-diagram pair on a first pass — the cap is what
+keeps a first pass a first pass; it is the *floor* that moved, not the ceiling.
 
 **What the first pass does NOT include**, unless the request explicitly asks for it: a components
 table, a code map beyond the small "where it lives" table, a testing/verification plan, an
@@ -140,8 +149,9 @@ short form, with /info's overrides:
    trace entrypoints with `rg`, read enough implementation to cite real paths, types, and behaviors,
    and fan out parallel `Explore` agents for broad sweeps. Every codebase-answerable question gets
    answered here; none of them become open questions.
-3. **Write the short version.** Create the set root and write `00-overview.md` per the table above.
-   Add at most one diagram card, and only if it earns its place.
+3. **Write the short version.** Create the set root and write `00-overview.md` per the table above,
+   plus the one diagram card that carries its mental model. Skip the diagram only in the rare case
+   above, and say in the "go deeper" menu that you did.
 4. **Share and stop.** Give the `00-overview.md` path plus the set root (never run `open`), then
    state the "go deeper" menu in your final message so the reader can pick. Then stop — the next
    round is theirs to steer.
