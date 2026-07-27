@@ -45,6 +45,13 @@ const STATE_COLOR = {
 // the read-only editor instead of the steer/unblock modal.
 const jobKey = (j) => (j.archived ? "archive:" + j.slug : j.slug);
 
+// jobLabel is the human-facing name for a board entry — the slug it was
+// created under, which for an archived job whose file got renumbered is
+// display_slug rather than the (numbered) slug. It prefixes every artifact
+// chip's data-name, so the artifact viewer has to reproduce it exactly when
+// it rebuilds a sequence from the job payload instead of from a chip.
+const jobLabel = (j) => j.display_slug || j.slug;
+
 // keyed by jobKey, NOT slug — every read below is for an active job, whose
 // key is its plain slug, so callers still index it with a bare slug
 let jobsBySlug = {};
@@ -603,7 +610,12 @@ function branchBtnHTML(j) {
 
 // artifactListHTML renders every one of a job's artifacts as an openable
 // chip. label prefixes each chip's data-name (it differs from slug for a
-// renamed archived job).
+// renamed archived job); key is the job's jobKey, carried onto every chip as
+// data-key so the artifact viewer can rebuild the job's ordered list when one
+// is clicked — a chip knows its own url, but next/prev needs the SEQUENCE it
+// sits in, and the poll's re-sync needs to know which job to re-derive from.
+// jobKey rather than a bare slug, or an archived job and an active one that
+// reused its freed slug would resolve to each other's artifacts.
 //
 // This is now a DRILLDOWN-only renderer — the steer modal and the job editor
 // call it, the card does not (see artifactChipHTML). It used to be the card's
@@ -612,11 +624,11 @@ function branchBtnHTML(j) {
 // so it can just show the list, and the card shows a count. The cap and its
 // toggle only ever existed to stop a twelve-artifact job from owning its
 // column, which a count solves outright rather than bounds.
-function artifactListHTML(artifacts, label) {
+function artifactListHTML(artifacts, key, label) {
   return (artifacts || [])
     .map(
       (a) =>
-        `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(label)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
+        `<button class="chip" data-url="${esc(a.url)}" data-key="${esc(key)}" data-name="${esc(label)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
     )
     .join("");
 }
@@ -1112,7 +1124,7 @@ function updateAges() {
 let archiveOpen = localStorage.getItem("kraken-archive-open") === "1";
 
 function archivedCardHTML(j) {
-  const label = j.display_slug || j.slug;
+  const label = jobLabel(j);
   const renamed = j.display_slug && j.display_slug !== j.slug;
   // an archived card carries the same two counts an active one does, in the
   // same place (band 2, directly under the repo line), and for the same
@@ -1557,6 +1569,31 @@ const panelBody = document.getElementById("panel-body");
 let rawText = "";
 let showRaw = false;
 let artifactURL = "";
+// the artifact SEQUENCE: the ordered list the open artifact came from and the
+// position in it, so ‹ › and the arrow keys can walk a job's artifact set
+// without closing the viewer. Derived at open time and re-derived on every
+// board poll, never persisted. Invariant, whenever the overlay is open:
+// artifactSeq[artifactIdx].url === artifactURL — openArtifact is the only
+// writer and enforces it by falling back to a singleton.
+let artifactSeq = [];
+let artifactIdx = 0;
+// the jobKey the sequence was derived from, kept only so the poll can
+// re-derive from the same job. Written by the chip click handler (the one
+// caller that has a chip to read data-key off), never by openArtifact — a
+// step within a sequence must not change which job it came from.
+let artifactSeqKey = "";
+// artifactGen counts overlay opens, and it is the ONLY safe way for an async
+// tail in here to ask "is what I fetched still what's on screen?". Both of
+// the viewer's fetches (the markdown body, the raw toggle) bind their artifact
+// synchronously and then resolve into whatever world exists later; a step is
+// synchronous and can happen in between, so an unguarded resolution paints
+// artifact A's text under artifact B's title, with B's feedback target and
+// A's rawText behind `raw`. Comparing the captured URL against artifactURL is
+// not enough on its own: paging away and BACK lands on the same url with the
+// body already repainted and showRaw/rawText already reset, so the stale
+// write would pass a url check and still desync the toggle from the view.
+// A generation counter catches that too. Bumped by openArtifact only.
+let artifactGen = 0;
 
 const isPage = (url) => /\.(html|svg|pdf)$/i.test(url);
 const isImage = (url) => /\.(png|jpe?g|gif|webp)$/i.test(url);
@@ -1586,15 +1623,145 @@ function hideFeedbackForm() {
   document.getElementById("panel-feedback").textContent = "feedback";
 }
 
-function openArtifact(url, name) {
+// feedbackDrafts holds an unsent feedback note per artifact url, so a step
+// through the pager can't eat one. openArtifact clears the composer on every
+// open, and ‹ › now sit a few pixels from the text you're writing about — so
+// without this, one click on › silently destroys a half-typed note with no
+// undo. Refusing to step instead would make the pager look broken; carrying
+// the draft with its artifact is what the rest of this file does
+// (flushSteerDraft, flushEditorAutosave, snapshotDocInputs/restoreDocInputs
+// all exist so a rebuild or a reopen can't eat in-progress text).
+//
+// A Map, deliberately, not localStorage: surviving the tab is a bigger
+// promise than a scratch composer should make, and these are per-session by
+// nature. Every way of LEAVING an artifact banks the note — a step, Escape,
+// a backdrop click — and only the two gestures that mean "I'm finished with
+// it" drop the entry: send and an explicit cancel. That has to be all three
+// leave paths or none: "leaving banks the note, except by Escape" is
+// arbitrary from the outside, and it is the exception the rest of this file
+// refuses to make (flushSteerDraft and flushEditorAutosave are wired into
+// every close path of their overlays, and clearModalDocq says so out loud).
+const feedbackDrafts = new Map();
+
+// stashFeedbackDraft banks the composer's text against the artifact it was
+// typed about — called BEFORE openArtifact repoints the overlay, which is
+// why it reads artifactURL rather than taking one. An emptied composer drops
+// its stash rather than keeping a stale one.
+function stashFeedbackDraft() {
+  if (!artifactURL) return;
+  const text = document.getElementById("feedback-text").value;
+  if (!document.getElementById("feedback-form").hidden && text.trim()) {
+    feedbackDrafts.set(artifactURL, text);
+  } else {
+    feedbackDrafts.delete(artifactURL);
+  }
+}
+
+// restoreFeedbackDraft re-opens the composer on an artifact you left a note
+// half-written on. Runs after hideFeedbackForm has reset the form, so it is
+// the last word on both the text and the form's visibility.
+function restoreFeedbackDraft(url) {
+  const draft = feedbackDrafts.get(url);
+  if (!draft) return;
+  document.getElementById("feedback-text").value = draft;
+  document.getElementById("feedback-form").hidden = false;
+}
+
+// closeArtifact is the ONE way the viewer goes away — both close gestures
+// (Escape, backdrop click) route through it so neither can forget to bank the
+// draft. Same reason stepArtifact calls the stash: the composer sits pixels
+// from the controls that dismiss it, and Escape destroys a half-typed note
+// exactly as thoroughly as › would.
+function closeArtifact() {
+  stashFeedbackDraft();
+  overlay.hidden = true;
+}
+
+// artifactSeqFor builds the {url, name} sequence for a jobKey out of the job's
+// artifact list as the board currently has it — the job payload, not the DOM
+// the click came from, which is what lets the 3s poll re-derive the sequence
+// under an open viewer and reach an artifact a live cell wrote after it was
+// opened. Names are labelled exactly as artifactListHTML labels its chips
+// (both go through jobLabel), so the panel title reads identically whether you
+// arrived by clicking a chip or by paging onto it. Returns null for a key that
+// resolves to nothing: no data-key at all, or a job that left the board
+// between the render and the click.
+function artifactSeqFor(key) {
+  const j = key ? jobsBySlug[key] : null;
+  const list = (j && j.artifacts) || [];
+  if (!list.length) return null;
+  const label = jobLabel(j);
+  return list.map((a) => ({ url: a.url, name: `${label}/${a.name}` }));
+}
+
+// renderPager paints the ‹ n / N › group: hidden outright for a sequence of
+// one (an unresolvable chip, or a job with a single artifact — behaviour is
+// then exactly what it was before the pager existed), and each end button
+// disabled at its end, because the step CLAMPS rather than wrapping.
+function renderPager() {
+  const n = artifactSeq.length;
+  document.getElementById("panel-pager").hidden = n < 2;
+  // compare before writing. resyncArtifactSeq calls this on every 3s board
+  // poll, and #panel-pos is an aria-live region: assigning textContent
+  // replaces the text node, which is an announceable mutation even when the
+  // string is identical — so an unconditional write reads "3 / 7" aloud every
+  // three seconds for as long as the artifact is open, which is exactly the
+  // chattiness that gets a live region switched off. Guarded, it announces
+  // the two things worth hearing: a navigation, and N growing under an open
+  // viewer because a live cell wrote an artifact. Same shape as the poll's
+  // other small-text writes (see the build/usage chips).
+  const pos = `${artifactIdx + 1} / ${n}`;
+  const posEl = document.getElementById("panel-pos");
+  if (posEl.textContent !== pos) posEl.textContent = pos;
+  document.getElementById("panel-prev").disabled = artifactIdx <= 0;
+  document.getElementById("panel-next").disabled = artifactIdx >= n - 1;
+}
+
+// stepArtifact is the one navigation command — ±1 through the sequence,
+// clamped to its ends: a step past either end is a no-op, never a wrap.
+//
+// It re-opens through openArtifact rather than swapping the body in place,
+// deliberately: openArtifact is what resets showRaw, the cached rawText and
+// the open feedback form, and all three are per-artifact state that must not
+// survive a step.
+function stepArtifact(delta) {
+  const i = artifactIdx + delta;
+  if (i < 0 || i >= artifactSeq.length) return;
+  stashFeedbackDraft(); // openArtifact is about to clear the composer
+  openArtifact(artifactSeq[i].url, artifactSeq[i].name, artifactSeq, i);
+}
+
+// openArtifact renders one artifact into the overlay. seq/idx are optional:
+// with them the pager walks the job's list, without them (or with a sequence
+// that doesn't actually contain url) the artifact opens as a SINGLETON — the
+// pager hides itself and this behaves exactly as it did before next/prev
+// existed. That fallback is what keeps a chip whose job can't be resolved
+// from throwing, and it is also what enforces the
+// artifactSeq[artifactIdx].url === artifactURL invariant: the index is
+// re-found by url rather than trusted.
+function openArtifact(url, name, seq, idx) {
+  let list = seq && seq.length ? seq : null;
+  let at = -1;
+  if (list) {
+    at = list[idx] && list[idx].url === url ? idx : list.findIndex((e) => e.url === url);
+  }
+  if (at < 0) {
+    list = [{ url, name }];
+    at = 0;
+  }
+  artifactSeq = list;
+  artifactIdx = at;
+  const gen = ++artifactGen; // invalidates every async tail still in flight
   document.getElementById("panel-title").textContent = name;
   artifactURL = url;
   rawText = "";
   showRaw = false;
   overlay.hidden = false;
+  renderPager();
   document.getElementById("panel-raw").hidden = isImage(url) || /\.pdf$/i.test(url);
   document.getElementById("panel-feedback").hidden = false;
   hideFeedbackForm();
+  restoreFeedbackDraft(url);
   if (isImage(url)) {
     panelBody.className = "panel-body page";
     panelBody.innerHTML = `<img src="${esc(url)}" alt="artifact">`;
@@ -1605,6 +1772,7 @@ function openArtifact(url, name) {
     // styles/scripts can't leak into the board
     panelBody.className = "panel-body page";
     panelBody.innerHTML = `<iframe src="${esc(url)}" title="artifact"></iframe>`;
+    hookIframeKeys();
     return;
   }
   panelBody.className = "panel-body";
@@ -1612,11 +1780,89 @@ function openArtifact(url, name) {
   fetch(url)
     .then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); })
     .then((text) => {
+      // held → across a markdown set fires several of these at once and the
+      // LAST to resolve would otherwise win the body — whichever artifact
+      // that happens to be. Both tails drop: the failure message would wipe
+      // the artifact you actually navigated to just as thoroughly.
+      if (gen !== artifactGen) return;
       rawText = text;
       panelBody.className = "panel-body md";
       panelBody.innerHTML = renderMD(text);
     })
-    .catch((e) => { panelBody.textContent = "failed to load: " + e; });
+    .catch((e) => {
+      if (gen !== artifactGen) return;
+      panelBody.textContent = "failed to load: " + e;
+    });
+}
+
+// isTextEntry answers "is this keystroke someone typing?" — the pager's arrow
+// keys must never steal a caret move inside the feedback composer.
+function isTextEntry(el) {
+  if (!el || !el.tagName) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName.toUpperCase();
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+// artifactKeydown is the ArrowLeft/ArrowRight half of the pager. It is a
+// NAMED handler rather than an inline listener because it gets attached
+// twice: once to the board document, and again to each artifact iframe's own
+// document (see hookIframeKeys). A modified arrow is left alone — those are
+// the browser's (word-jump, history) and none of them mean "next artifact".
+function artifactKeydown(ev) {
+  if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+  if (overlay.hidden) return;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (isTextEntry(ev.target)) return;
+  ev.preventDefault();
+  stepArtifact(ev.key === "ArrowRight" ? 1 : -1);
+}
+
+// hookIframeKeys re-attaches artifactKeydown to the artifact iframe's OWN
+// document. Once focus lands inside the frame — one click on a diagram card
+// does it — keydown fires on contentDocument and never bubbles out to the
+// board, so without this the arrows die on exactly the artifacts you page
+// through most. Must be called on every path that creates the iframe, which
+// is openArtifact AND the raw toggle turning raw back off.
+//
+// try/catch, and a null-tolerant read: a document that isn't reachable must
+// degrade to buttons-only, never throw. A PDF is the accepted case of that —
+// the browser's built-in viewer is its own plugin document, unreachable from
+// here, so on a .pdf the arrows stay with the viewer and ‹ › are the pager.
+function hookIframeKeys() {
+  const frame = panelBody.querySelector("iframe");
+  if (!frame) return;
+  frame.addEventListener("load", () => {
+    try {
+      const doc = frame.contentDocument;
+      if (doc) doc.addEventListener("keydown", artifactKeydown);
+    } catch {
+      /* cross-origin or torn down: buttons still work */
+    }
+  });
+}
+
+// resyncArtifactSeq re-derives the open artifact's sequence from the board
+// payload that just landed. A live cell writes artifacts while the viewer is
+// open, so N has to grow and › has to reach the new ones without a reopen.
+// Position is re-found by URL, never carried as an index — the list can gain
+// entries ahead of the open one.
+//
+// It NEVER closes the overlay, and that is not an oversight: checkStaleModals
+// deliberately leaves the artifact overlay alone (it isn't scoped to a job's
+// state), and this must not become the back door that changes that. An
+// artifact that has vanished from the job's list — deleted, renamed — keeps
+// the sequence it was opened with, so it stays readable and its neighbours
+// stay reachable.
+function resyncArtifactSeq() {
+  if (overlay.hidden) return;
+  const seq = artifactSeqFor(artifactSeqKey);
+  if (!seq) return;
+  const i = seq.findIndex((e) => e.url === artifactURL);
+  if (i < 0) return;
+  artifactSeq = seq;
+  artifactIdx = i;
+  renderPager();
 }
 
 // refreshModalDocq re-renders whichever open modal carries its own copy of
@@ -1698,7 +1944,15 @@ document.addEventListener("click", (ev) => {
   }
   const chip = ev.target.closest(".chip");
   if (chip) {
-    openArtifact(chip.dataset.url, chip.dataset.name);
+    // the chip is the ONE place that knows which job this artifact belongs
+    // to, so the sequence is resolved here and the key stashed for the poll's
+    // re-derive. A chip with no resolvable job (missing data-key, or the job
+    // dropped off the board since render) passes no sequence at all and
+    // openArtifact opens it as a singleton.
+    artifactSeqKey = chip.dataset.key || "";
+    const seq = artifactSeqFor(artifactSeqKey);
+    const idx = seq ? seq.findIndex((e) => e.url === chip.dataset.url) : -1;
+    openArtifact(chip.dataset.url, chip.dataset.name, seq, idx);
     return;
   }
   const qopt = ev.target.closest(".q-opt");
@@ -2331,7 +2585,7 @@ function fillSteerContext(j, mode) {
   lastSentEl.textContent = lastSent ? `me→zeus: ${lastSent}` : "";
 
   chipsEl.hidden = !artifacts;
-  chipsEl.innerHTML = artifacts ? artifactListHTML(artifacts, j.slug) : "";
+  chipsEl.innerHTML = artifacts ? artifactListHTML(artifacts, jobKey(j), jobLabel(j)) : "";
 
   // one snapshot spans both panels: they're replaced back to back, and an
   // .fb-edit-input being retyped while a poll re-opens this context block
@@ -3430,7 +3684,7 @@ async function loadForm(slug) {
 // survive, so there is nothing to snapshot.
 function fillEditorChips(j) {
   const el = document.getElementById("editor-chips");
-  const chips = j ? artifactListHTML(j.artifacts, j.display_slug || j.slug) : "";
+  const chips = j ? artifactListHTML(j.artifacts, jobKey(j), jobLabel(j)) : "";
   el.hidden = !chips;
   // .editor-docq-head, the same class both sibling panels emit — a shared
   // class, not a shared rule, so the three labels cannot drift apart
@@ -3761,18 +4015,35 @@ document.getElementById("editor-slug").addEventListener("keydown", (ev) => {
 document.getElementById("panel-open").addEventListener("click", () => {
   if (artifactURL) window.open(artifactURL, "_blank");
 });
+document.getElementById("panel-prev").addEventListener("click", () => stepArtifact(-1));
+document.getElementById("panel-next").addEventListener("click", () => stepArtifact(1));
+document.addEventListener("keydown", artifactKeydown);
 document.getElementById("panel-raw").addEventListener("click", async () => {
+  // this handler's await window is the widest in the viewer — an html/svg
+  // diagram card reaches raw ONLY through the fetch below (the iframe path
+  // never populates rawText) and those are the biggest payloads as well as
+  // the most-paged. An arrow pressed meanwhile is not swallowed (isTextEntry
+  // is false for the button that has focus), so openArtifact runs, resets
+  // showRaw/rawText and paints the next artifact — and an unguarded resume
+  // would then paint THIS artifact's source with showRaw already false,
+  // desyncing the toggle from the view until you leave the artifact entirely.
+  const gen = artifactGen;
+  const url = artifactURL;
   showRaw = !showRaw;
   if (showRaw) {
-    if (!rawText) {
+    let text = rawText;
+    if (!text) {
       // pages render via iframe without a fetch; raw needs the text
-      try { rawText = await (await fetch(artifactURL)).text(); } catch { rawText = "failed to load"; }
+      try { text = await (await fetch(url)).text(); } catch { text = "failed to load"; }
+      if (gen !== artifactGen) return;
+      rawText = text;
     }
     panelBody.className = "panel-body raw";
-    panelBody.textContent = rawText;
-  } else if (isPage(artifactURL)) {
+    panelBody.textContent = text;
+  } else if (isPage(url)) {
     panelBody.className = "panel-body page";
-    panelBody.innerHTML = `<iframe src="${esc(artifactURL)}" title="artifact"></iframe>`;
+    panelBody.innerHTML = `<iframe src="${esc(url)}" title="artifact"></iframe>`;
+    hookIframeKeys(); // a brand new frame, and a brand new document to route arrows out of
   } else {
     panelBody.className = "panel-body md";
     panelBody.innerHTML = renderMD(rawText);
@@ -3783,10 +4054,27 @@ document.getElementById("panel-feedback").addEventListener("click", () => {
   form.hidden = !form.hidden;
   if (!form.hidden) document.getElementById("feedback-text").focus();
 });
-document.getElementById("feedback-cancel").addEventListener("click", () => hideFeedbackForm());
+// cancel is the one gesture that means "throw this away" — it must also drop
+// the stash, or the note would reappear the next time you page onto this
+// artifact
+document.getElementById("feedback-cancel").addEventListener("click", () => {
+  feedbackDrafts.delete(artifactURL);
+  hideFeedbackForm();
+});
 document.getElementById("feedback-send").addEventListener("click", async () => {
   const note = document.getElementById("feedback-note");
-  const parts = artifactParts(artifactURL);
+  const url = artifactURL;
+  // "is the composer still showing the note I sent?" — an IDENTITY question,
+  // which is why this is a url comparison and not the artifactGen counter the
+  // body/raw tails use. Those ask "has the view moved?"; here the view moving
+  // away and BACK (→ then ←, which re-opens A with its stashed draft restored)
+  // must count as still-open, or a posted note is left sitting in an open
+  // composer under a `feedback` label — every visible signal saying "not sent"
+  // — and the obvious next move is a send that duplicates the row.
+  // Re-evaluated at each use rather than snapshotted: there is an await in
+  // between, and a step across it must be seen.
+  const onSentArtifact = () => url === artifactURL;
+  const parts = artifactParts(url);
   const text = document.getElementById("feedback-text").value.trim();
   if (!parts) { note.textContent = "can't identify this artifact"; return; }
   if (!text) { note.textContent = "feedback is empty"; return; }
@@ -3800,23 +4088,31 @@ document.getElementById("feedback-send").addEventListener("click", async () => {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || String(r.status));
-    hideFeedbackForm();
+    feedbackDrafts.delete(url); // it's sent; it is no longer a draft
+    // the board/modal refresh below is about the artifact that was SENT and
+    // is right either way, but the panel belongs to whatever is on screen —
+    // page onto another artifact mid-send and clearing the composer here
+    // would wipe THAT artifact's restored draft, and "saved ✓" would appear
+    // over a note nobody has sent
+    if (onSentArtifact()) hideFeedbackForm();
     invalidateBoard(); // feedback rides the board payload — the card's count chip must pick this up
     await refresh();
     // …and so must the panel itself, one layer down: this overlay is usually
     // opened from a chip inside the steer modal or the job editor, and
     // refresh() never touches modal DOM
     refreshModalFeedback(parts.slug);
-    const label = document.getElementById("panel-feedback");
-    label.textContent = "saved ✓";
-    feedbackSavedTimer = setTimeout(() => { label.textContent = "feedback"; }, 2000);
+    if (onSentArtifact()) {
+      const label = document.getElementById("panel-feedback");
+      label.textContent = "saved ✓";
+      feedbackSavedTimer = setTimeout(() => { label.textContent = "feedback"; }, 2000);
+    }
   } catch (e) {
-    note.textContent = "failed: " + e.message;
+    if (onSentArtifact()) note.textContent = "failed: " + e.message;
   } finally {
     sendBtn.disabled = false;
   }
 });
-overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.hidden = true; });
+overlay.addEventListener("click", (ev) => { if (ev.target === overlay) closeArtifact(); });
 // one Escape closes one layer: the artifact viewer if it's on top (it can be
 // opened from inside the steer/unblock modal), else the thread overlay (which
 // can itself be opened from inside the steer modal's context block), else
@@ -3824,7 +4120,7 @@ overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.h
 // style.css — #overlay 30, #thread-overlay 25, the rest 20.
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
-  if (!overlay.hidden) { overlay.hidden = true; return; }
+  if (!overlay.hidden) { closeArtifact(); return; }
   if (!threadOverlay.hidden) { closeThread(); return; }
   if (!steerOverlay.hidden) { flushSteerDraft(); clearSteerChips(); clearSteerDocq(); steerOverlay.hidden = true; return; }
   if (!editorOverlay.hidden) { flushEditorAutosave(); clearEditorDocq(); editorOverlay.hidden = true; return; }
@@ -4575,6 +4871,10 @@ async function refresh() {
     // always: cheap, correctness-critical bookkeeping regardless of whether
     // the jobs payload itself changed since the last rebuild
     const { byCol, archived } = render(board);
+    // …including the open artifact's sequence: render() has just rebuilt
+    // jobsBySlug, and a live cell writing a new artifact must extend the
+    // pager under an open viewer rather than waiting for a reopen
+    resyncArtifactSeq();
     // board.daemon.last_tick changes every daemon tick, so compare jobs only
     // — a whole-payload compare would defeat the point of this check
     const snap = JSON.stringify(board.jobs || []);

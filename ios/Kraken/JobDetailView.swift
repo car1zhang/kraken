@@ -315,6 +315,83 @@ private func artifactFileCount(_ nodes: [ArtifactNode]) -> Int {
     }
 }
 
+/// The artifact list in DISPLAY order: the flattened `artifactTree`
+/// traversal — top-level files first (in wire order), then each folder in
+/// first-seen order with its own files after it, recursively. That is NOT the
+/// wire array's order, and the difference is the whole point: the pager walks
+/// this so "next" means "the next row in the list I just tapped from".
+///
+/// Entries carry the tree's REWRITTEN leaf names, exactly what the tapped row
+/// displayed — and, as ever, the url is what still knows the real server-side
+/// name (see artifactParts).
+///
+/// A free function rather than logic inside a View body because it is the
+/// pager's one testable seam; a SwiftUI View's body is not reachable from
+/// XCTest. See ArtifactOrderTests.
+func flattenArtifactOrder(_ artifacts: [WebArtifact]) -> [WebArtifact] {
+    flattenArtifactNodes(artifactTree(artifacts))
+}
+
+private func flattenArtifactNodes(_ nodes: [ArtifactNode]) -> [WebArtifact] {
+    var out: [WebArtifact] = []
+    for node in nodes {
+        switch node {
+        case .file(let a):
+            out.append(a)
+        case .folder(_, let children):
+            out.append(contentsOf: flattenArtifactNodes(children))
+        }
+    }
+    return out
+}
+
+/// The page sequence ArtifactPagerView shows: display order when `selected`
+/// is actually part of it, a SINGLETON of `selected` otherwise.
+///
+/// The fallback is not defensive noise: `showingArtifact` is @State and
+/// outlives the `job` value it was picked from, so a poll that drops the
+/// artifact leaves the sheet holding one the flattened order no longer
+/// contains. It degrades to a single page with no chevrons rather than an
+/// out-of-range index.
+///
+/// The `kraken://job/<slug>/artifact/<name>` deep link is NOT such a case,
+/// despite resolving by NAME against the unrewritten list (see .onAppear
+/// below): artifactTree rewrites names but carries every url through
+/// untouched, so a deep-linked artifact's url is always in the order. That
+/// mismatch — name in, url out — is the reason these two lists relate through
+/// url and nothing else.
+func artifactPages(in artifacts: [WebArtifact], selected: WebArtifact) -> [WebArtifact] {
+    let order = flattenArtifactOrder(artifacts)
+    return order.contains { $0.url == selected.url } ? order : [selected]
+}
+
+/// Position of `url` in an already-flattened sequence. Matching on url and
+/// never on name is the invariant the whole pager rests on: artifactTree
+/// rewrites nested names to leaves, so a name is neither unique nor stable,
+/// while `WebArtifact.id` is already the url.
+func artifactIndex(of url: String, in pages: [WebArtifact]) -> Int? {
+    pages.firstIndex { $0.url == url }
+}
+
+/// What sits either side of `url`. Its own type rather than a tuple so the
+/// lookup can be asserted on directly, matching ArtifactRef's reasoning.
+struct ArtifactNeighbours {
+    let prev: WebArtifact?
+    let next: WebArtifact?
+}
+
+/// Clamped, never wrapping (spec Q1): nil at each end, and nil both ways for
+/// a url the sequence doesn't hold.
+func artifactNeighbours(of url: String, in pages: [WebArtifact]) -> ArtifactNeighbours {
+    guard let i = artifactIndex(of: url, in: pages) else {
+        return ArtifactNeighbours(prev: nil, next: nil)
+    }
+    return ArtifactNeighbours(
+        prev: i > 0 ? pages[i - 1] : nil,
+        next: i + 1 < pages.count ? pages[i + 1] : nil
+    )
+}
+
 // A recursive View STRUCT, not a @ViewBuilder function: a function returning
 // `some View` can't call itself (the opaque type would be defined in terms of
 // itself), but a struct referencing itself in its own body is fine. A file
@@ -1065,8 +1142,10 @@ struct JobDetailView: View {
                 // onFeedbackCreated folds the new note straight into this
                 // sheet's overlay: `job` is frozen, so nothing else would
                 // show it until the sheet is reopened.
-                ArtifactView(
-                    name: artifact.name, baseURL: baseURL, path: artifact.url,
+                // The whole list, not just the tapped row: the sheet pages
+                // across it, and `artifact` only picks the page it opens on.
+                ArtifactPagerView(
+                    artifacts: job.artifacts ?? [], selected: artifact, baseURL: baseURL,
                     onFeedbackCreated: { ref, note in addOptimisticFeedback(ref: ref, note: note) }
                 )
                 .toolbar {
@@ -2007,7 +2086,10 @@ struct SteerView: View {
         // (draftStore state isn't touched by presentation).
         .sheet(item: $showingArtifact) { artifact in
             NavigationStack {
-                ArtifactView(name: artifact.name, baseURL: baseURL, path: artifact.url)
+                // Still no onFeedbackCreated: SteerView has no optimistic
+                // overlay to fold a note into, so the note lands server-side
+                // and shows up on the next poll — unchanged by the pager.
+                ArtifactPagerView(artifacts: job.artifacts ?? [], selected: artifact, baseURL: baseURL)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             SheetCloseButton { showingArtifact = nil }

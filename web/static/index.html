@@ -117,6 +117,14 @@
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title" id="panel-title"></span>
+        <!-- next/prev through the job's artifact set: between the title and
+             the spacer, so ↗ tab / raw / feedback keep their right-hand
+             positions. Hidden for a single-artifact sequence. -->
+        <span class="panel-pager" id="panel-pager" hidden>
+          <button class="btn ghost pg" id="panel-prev" aria-label="previous artifact" title="previous artifact (←)">‹</button>
+          <span class="pg-pos" id="panel-pos" aria-live="polite"></span>
+          <button class="btn ghost pg" id="panel-next" aria-label="next artifact" title="next artifact (→)">›</button>
+        </span>
         <span class="spacer"></span>
         <button class="btn ghost" id="panel-open">↗ tab</button>
         <button class="btn ghost" id="panel-raw">raw</button>

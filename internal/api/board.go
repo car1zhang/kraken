@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -476,6 +477,10 @@ type webBoard struct {
 // pre-L4/E6 behavior: store mode returned cell ∪ store only) made a job's
 // root-level notes vanish from the board entirely the moment its cell was
 // torn down.
+//
+// Both branches end in sortedArtifacts — see its comment for why sources that
+// are each sorted do not append into a sorted list, and why the live branch
+// goes through it too even though its single source already is.
 func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
 	seen := map[string]bool{}
 	var out []webArtifact
@@ -503,12 +508,40 @@ func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
 	add(cellEntries)
 
 	// Q12: a live cell always serves straight from the cell dir — nothing
-	// else to add once cellEntries is in.
+	// else to add once cellEntries is in. It still goes through the sort:
+	// its one source is already ordered, so this is a no-op today, but the
+	// wire guarantee must not rest on that staying true.
 	if live {
-		return out
+		return sortedArtifacts(out)
 	}
 	add(storeArtifactList(j.Slug, j.ID, "pluto"))
 	add(plutoFlatArtifacts(j))
+	return sortedArtifacts(out)
+}
+
+// sortedArtifacts puts one job's artifact list into the single reading order
+// ios/API.md promises for the `artifacts` array, and is the ONE place that
+// promise is kept — every producer of a wire artifact list ends in a call to
+// it, so a future second source added to either producer inherits the
+// guarantee instead of silently breaking it.
+//
+// It exists because each source arrives sorted WITHIN itself (ListArtifacts'
+// sort.Strings, the store's ORDER BY path, ReadDir's lexical order) and
+// appending sorted lists does not produce a sorted one: a job whose
+// artifacts/ tree is mirrored in the store while a root-level note survives
+// only as a pluto flat copy served 00-overview.md AFTER 90-build-report.md.
+// That was survivable while the list was a row of chips you scan, and stopped
+// being so once the clients gained next/prev — the wire order IS the reading
+// order now, and the overview was four steps from the front of its own set.
+//
+// Sorting the deduped union rather than the sources keeps jobArtifacts' cell
+// > store > pluto precedence intact: `add` has already dropped the losers by
+// the time this runs, so no entry here can displace a higher-precedence one.
+// Pinned by TestJobArtifactsStoreModeUnionIsGloballySorted (torn-down, the
+// multi-source case) and TestJobArtifactsLiveCellIsSorted (live, the
+// single-source case that reaches the wire without passing through the union).
+func sortedArtifacts(out []webArtifact) []webArtifact {
+	sort.SliceStable(out, func(a, b int) bool { return out[a].Name < out[b].Name })
 	return out
 }
 
@@ -932,8 +965,11 @@ func buildWebBoard() webBoard {
 // wire, from the DB (storeArtifactList) — the cell's artifacts tree is
 // already store-mirrored by the time a job can be archived (teardown's
 // syncArtifactsNow already ran).
+// Single-source today (the store's own ORDER BY path), so the sort is a
+// no-op — it is here so the ordering guarantee lives with every producer
+// rather than only with jobArtifacts, which an archived job never reaches.
 func archivedWebArtifacts(a *jobs.Job) []webArtifact {
-	return storeArtifactList(a.ArchivedName, a.ID, "archive")
+	return sortedArtifacts(storeArtifactList(a.ArchivedName, a.ID, "archive"))
 }
 
 // boardHandler serves the memoized board snapshot.

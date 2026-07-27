@@ -941,6 +941,16 @@ body {
 }
 .panel-title { font: 700 11.5px var(--mono); letter-spacing: 1px; }
 .panel-title::after { content: "▊"; color: var(--accent); margin-left: 4px; }
+/* artifact pager: ‹ n / N › in the head's own vocabulary (.btn.ghost, mono,
+   lowercase), just tighter than the action buttons since the glyphs are one
+   character wide. Hiding it for a single-artifact sequence needs nothing
+   here — the global [hidden] up at the top of this file is !important. */
+.panel-pager { display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; }
+.panel-pager .pg { padding: 3px 8px; line-height: 1; }
+/* inert at the ends: .btn:disabled already dims, but .btn.ghost:hover would
+   still light the border on a button that does nothing */
+.panel-pager .pg:disabled:hover { background: transparent; border-color: var(--hairline-2); }
+.pg-pos { font: 10px var(--mono); color: var(--text-2); padding: 0 5px; letter-spacing: 0.5px; }
 /* empty on an older server (rotation_mode undefined — see
    rotationModeChipHTML in app.js): collapse out of the panel-head's flex
    gap entirely so the row looks pixel-identical to before this chip existed */

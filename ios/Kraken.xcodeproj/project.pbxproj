@@ -38,6 +38,7 @@
 		A1F01EC43FDA55C4FCF80C26 /* JobColorStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6E02C2D34FE2896351B57CD /* JobColorStrip.swift */; };
 		AD89ABFD8CFA0E618DF31D16 /* BoardDragStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5214B278157C359E0F22C13 /* BoardDragStateTests.swift */; };
 		AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */; };
+		AED48670C6A618A6C132F636 /* ArtifactOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94A425929BF278AFEDABE1AB /* ArtifactOrderTests.swift */; };
 		B0B74A169D8836ECF27810EE /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA8587CFE1F0023DA53E96B2 /* Models.swift */; };
 		BAA449326DFFF5BC1E65EC51 /* FeedbackViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 632BA67D0FE7BA5AA1E75BB6 /* FeedbackViews.swift */; };
 		BEA8E83AC97A1349F501B82B /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F80ED1D258C4D24F4AE6965 /* Theme.swift */; };
@@ -91,6 +92,7 @@
 		88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHTML.swift; sourceTree = "<group>"; };
 		8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
+		94A425929BF278AFEDABE1AB /* ArtifactOrderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactOrderTests.swift; sourceTree = "<group>"; };
 		A41BBA7E5AA9DC4807CB13F5 /* BoardDragState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardDragState.swift; sourceTree = "<group>"; };
 		AA7A2ECCC62F526C6A876B35 /* UsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageView.swift; sourceTree = "<group>"; };
 		AEF9ED32FC58893C4F52D844 /* KrakenUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakenUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -136,6 +138,7 @@
 		A7D9A2A66784BEB948E05519 /* KrakenTests */ = {
 			isa = PBXGroup;
 			children = (
+				94A425929BF278AFEDABE1AB /* ArtifactOrderTests.swift */,
 				D5214B278157C359E0F22C13 /* BoardDragStateTests.swift */,
 				D58DEA929F5C3CDC02AD93B1 /* DraftStoreTests.swift */,
 				36ABC2966905BF6437BFD422 /* DreamDecodeTests.swift */,
@@ -310,6 +313,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AED48670C6A618A6C132F636 /* ArtifactOrderTests.swift in Sources */,
 				AD89ABFD8CFA0E618DF31D16 /* BoardDragStateTests.swift in Sources */,
 				44C27A0EC3914943FCF8A6D4 /* DraftStoreTests.swift in Sources */,
 				E149A36208DBCD99F3E07B86 /* DreamDecodeTests.swift in Sources */,

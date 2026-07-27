@@ -172,6 +172,13 @@ the new build" would be false at exactly the moment it is shown.
 
 `webArtifact`: `name` (string, always — in store mode this may contain `/`
 for a nested path, e.g. `icon-variations/v2.png`), `url` (string, always).
+The `artifacts` array is **sorted by `name`**, lexicographically over the full
+path, however many sources the server unioned to build it. That is what makes
+the `00-`/`10-`/`50-`/`90-` filename prefixes read as an order rather than a
+convention, and clients rely on it: both the web board and the app page
+through this array with next/prev and neither re-sorts it. Nested paths sort
+as full paths, so a subdirectory's files cluster together. Ordering is not
+part of the wire *shape*, so this is no contract bump.
 
 `webAgent` (roster entry): `name` (string, always), `model` (string, always),
 `role` (string, always — `hephaestus`/`athena`/`hermes`/`other`), `status`

@@ -46,6 +46,15 @@ import (
 //   - /api/job/create and /api/job/save: exercised for behavior elsewhere
 //     (web_test.go) but not given their own assertShape spec here since they
 //     mirror /api/job/raw's shape exactly (see ios/API.md).
+//   - webJob.artifacts' ORDER. ios/API.md documents the array as sorted by
+//     name, and both clients page through it with next/prev rather than
+//     re-sorting, so it is a real wire guarantee — but ordering is not a
+//     wire SHAPE, and fieldSpec/assertShape have no way to express it. It is
+//     pinned instead by TestJobArtifactsStoreModeUnionIsGloballySorted and
+//     TestJobArtifactsLiveCellIsSorted (artifacts_storemode_test.go), which
+//     cover the union and live-cell producers respectively. Named here so an
+//     audit of API.md against this file doesn't read a documented guarantee
+//     as an untested one.
 //
 // wireKind is the JSON scalar/container kind a wire field is expected to
 // decode as, checked against a map[string]any built with
