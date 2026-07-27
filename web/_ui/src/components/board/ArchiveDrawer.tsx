@@ -9,8 +9,6 @@ import { useColumnDrop } from "./DragProvider.tsx";
 export interface ArchiveDrawerProps {
   archived: WebJob[];
   actions: BoardActions;
-  expandedKeys: Set<string>;
-  onToggleExpanded(key: string): void;
 }
 
 /**
@@ -29,12 +27,7 @@ export interface ArchiveDrawerProps {
  * the rule is now belt and braces rather than the mechanism; it stays because
  * style.css is byte-identical to the vanilla sheet.
  */
-export function ArchiveDrawer({
-  archived,
-  actions,
-  expandedKeys,
-  onToggleExpanded,
-}: ArchiveDrawerProps) {
+export function ArchiveDrawer({ archived, actions }: ArchiveDrawerProps) {
   const [open, setOpen] = useLocalStorageFlag("kraken-archive-open", false);
   const hasArchived = archived.length > 0;
   const drop = useColumnDrop(ARCHIVED);
@@ -56,18 +49,9 @@ export function ArchiveDrawer({
       </button>
       {hasArchived ? (
         <div className="archive-cards" hidden={!open}>
-          {archived.map((j) => {
-            const key = jobKey(j);
-            return (
-              <ArchivedCard
-                key={key}
-                job={j}
-                actions={actions}
-                expanded={expandedKeys.has(key)}
-                onToggleExpanded={onToggleExpanded}
-              />
-            );
-          })}
+          {archived.map((j) => (
+            <ArchivedCard key={jobKey(j)} job={j} actions={actions} />
+          ))}
         </div>
       ) : null}
     </div>

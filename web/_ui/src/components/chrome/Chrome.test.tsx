@@ -353,11 +353,13 @@ describe("the ⇧ SHIP iOS control", () => {
 describe("the view tabs", () => {
   it("mark the active view and navigate", async () => {
     const onNavigate = vi.fn();
-    const { container } = renderChrome(model({}), { view: "dag", onNavigate });
+    const { container } = renderChrome(model({}), { view: "dream", onNavigate });
     const tabs = [...container.querySelectorAll(".viewtab")];
-    expect(tabs.map((t) => t.textContent)).toEqual(["BOARD", "DAG", "LOG"]);
-    expect(tabs.find((t) => t.classList.contains("active"))).toHaveTextContent("DAG");
-    await userEvent.click(tabs[2]!);
+    expect(tabs.map((t) => t.textContent)).toEqual(["BOARD", "LOG", "DREAM"]);
+    expect(tabs.find((t) => t.classList.contains("active"))).toHaveTextContent(
+      "DREAM",
+    );
+    await userEvent.click(tabs[1]!);
     expect(onNavigate).toHaveBeenCalledWith("log");
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobForm, WebJob } from "../../api/types.ts";
@@ -26,14 +26,21 @@ vi.mock("../../api/client.ts", () => ({
   archiveJob: vi.fn(() => Promise.resolve({ ok: true })),
   uploadImage: vi.fn(),
   answerDocQuestion: vi.fn(() => Promise.resolve({ ok: true })),
+  editFeedback: vi.fn(() => Promise.resolve({ ok: true })),
+  deleteFeedback: vi.fn(() => Promise.resolve({ ok: true })),
+  setJobColor: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 
 import {
   createJob,
+  deleteFeedback,
   dequeueJob,
+  editFeedback,
   fetchJobForm,
   queueJob,
   saveJobForm,
+  setJobColor,
+  uploadImage,
 } from "../../api/client.ts";
 
 const mutate = async <T,>(op: () => Promise<T>) => op();
@@ -52,6 +59,7 @@ function mount(props: Partial<Parameters<typeof EditorOverlay>[0]> = {}) {
       onClose={noop}
       onCreated={noop}
       onReactivate={noop}
+      onOpenArtifact={noop}
       mutate={mutate}
       {...props}
     />,
@@ -328,6 +336,7 @@ describe("editor stale-close, with the LAZY baseline", () => {
         onClose={onClose}
         onCreated={noop}
         onReactivate={noop}
+        onOpenArtifact={noop}
         mutate={mutate}
       />,
     );
@@ -342,6 +351,7 @@ describe("editor stale-close, with the LAZY baseline", () => {
           onClose={onClose}
           onCreated={noop}
           onReactivate={noop}
+          onOpenArtifact={noop}
           mutate={mutate}
         />,
       );
@@ -357,6 +367,7 @@ describe("editor stale-close, with the LAZY baseline", () => {
         onClose={onClose}
         onCreated={noop}
         onReactivate={noop}
+        onOpenArtifact={noop}
         mutate={mutate}
       />,
     );
@@ -371,6 +382,7 @@ describe("editor stale-close, with the LAZY baseline", () => {
         onClose={onClose}
         onCreated={noop}
         onReactivate={noop}
+        onOpenArtifact={noop}
         mutate={mutate}
       />,
     );
@@ -388,6 +400,7 @@ describe("editor stale-close, with the LAZY baseline", () => {
         onClose={onClose}
         onCreated={noop}
         onReactivate={noop}
+        onOpenArtifact={noop}
         mutate={mutate}
       />,
     );
@@ -406,6 +419,7 @@ describe("editor stale-close, with the LAZY baseline", () => {
         onClose={onClose}
         onCreated={noop}
         onReactivate={noop}
+        onOpenArtifact={noop}
         mutate={mutate}
       />,
     );
@@ -447,10 +461,13 @@ describe("editor head actions", () => {
     expect(document.getElementById("editor-reactivate")).toHaveAttribute("hidden");
     unmount();
 
-    mount({ job: job({ state: "done", reactivatable: true, archived: true }) });
-    await waitFor(() =>
-      expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
-    );
+    // an archived job never shows the form at all (see the archived-branch
+    // describe below), so ↺ is unreachable by a second route as well
+    mount({
+      slug: "archive:j",
+      job: job({ slug: "j", state: "done", reactivatable: true, archived: true }),
+    });
+    expect(document.getElementById("editor-form")).toHaveAttribute("hidden");
     expect(document.getElementById("editor-reactivate")).toHaveAttribute("hidden");
   });
 
@@ -473,5 +490,341 @@ describe("editor head actions", () => {
     expect(
       docq.compareDocumentPosition(formEl) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------- #editor-chips
+//
+// Since the card reorg the board card carries a bare artifact COUNT, and a
+// done or archived card opens THIS modal rather than the steer one. That makes
+// the list below the only surface a settled job's docs are reachable from at
+// all — 69 archived jobs' worth.
+describe("the editor's artifact list", () => {
+  const artifacts = [
+    { name: "00-overview.md", url: "/api/artifact/j/artifacts/00-overview.md" },
+    { name: "13-tree.html", url: "/api/artifact/j/artifacts/13-tree.html" },
+    { name: "90-build-report.md", url: "/api/artifact/j/artifacts/90-build-report.md" },
+  ];
+
+  it("is hidden for a job with no artifacts", async () => {
+    mount({ job: job({ state: "done" }) });
+    await waitFor(() =>
+      expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
+    );
+    expect(document.getElementById("editor-chips")).toHaveAttribute("hidden");
+  });
+
+  it("lists a settled job's artifacts in full — no 3-chip cap, no +N more", () => {
+    mount({ job: job({ state: "done", artifacts }) });
+    const chips = document.querySelectorAll("#editor-chips .chip");
+    expect([...chips].map((c) => c.textContent)).toEqual([
+      "▤ 00-overview.md",
+      "▤ 13-tree.html",
+      "▤ 90-build-report.md",
+    ]);
+    expect(document.querySelector(".chip-more")).toBeNull();
+    expect(document.querySelector("#editor-chips .editor-docq-head")?.textContent)
+      .toBe("artifacts");
+  });
+
+  // web/artifactpager_test.go's TestArtifactChipsCarryJobKey. A chip knows its
+  // own url and name and NOTHING else, so nothing downstream can learn the
+  // ordered list it sits in from the chip alone — the jobKey is what gets back
+  // to the jobs map. Lose it and the pager degrades to a singleton on every
+  // artifact, which reads as "the feature was never built" rather than as a
+  // bug, and a live cell's newly-written artifacts stay unreachable until the
+  // viewer is closed and reopened.
+  //
+  // React carries it as a prop (see the click test below), so the attribute is
+  // no longer load-bearing — it is kept because the vanilla stylesheet and the
+  // screenshot diff both see this DOM, and asserted here so a port that drops
+  // the PROP is caught by the test above and one that drops the DOM by this.
+  it("emits the same data-url / data-key / data-name triple the chips always did", () => {
+    mount({ job: job({ state: "done", artifacts }) });
+    const chip = document.querySelector("#editor-chips .chip") as HTMLElement;
+    expect(chip.dataset.url).toBe("/api/artifact/j/artifacts/00-overview.md");
+    expect(chip.dataset.key).toBe("j");
+    expect(chip.dataset.name).toBe("j/00-overview.md");
+  });
+
+  it("opens the artifact viewer on a click, carrying the jobKey the pager needs", async () => {
+    const user = userEvent.setup();
+    const onOpenArtifact = vi.fn();
+    mount({ job: job({ state: "done", artifacts }), onOpenArtifact });
+    await user.click(screen.getByText("▤ 13-tree.html"));
+    // (url, name, jobKey) — the third argument is what lets the viewer rebuild
+    // this job's ORDERED list; without it every artifact opens as a singleton
+    // with the pager hidden
+    expect(onOpenArtifact).toHaveBeenCalledWith(
+      "/api/artifact/j/artifacts/13-tree.html",
+      "j/13-tree.html",
+      "j",
+    );
+  });
+
+  it("carries the ARCHIVE jobKey and the display label for an archived job", async () => {
+    const user = userEvent.setup();
+    const onOpenArtifact = vi.fn();
+    mount({
+      job: job({ state: "done", archived: true, display_slug: "old-name", artifacts }),
+      onOpenArtifact,
+    });
+    await user.click(screen.getByText("▤ 00-overview.md"));
+    // "archive:j", never a bare "j": an archived job and an active one that
+    // reused its freed slug would otherwise open each other's artifacts
+    expect(onOpenArtifact).toHaveBeenCalledWith(
+      "/api/artifact/j/artifacts/00-overview.md",
+      "old-name/00-overview.md",
+      "archive:j",
+    );
+  });
+
+  it("sits above the questions panel and the form", () => {
+    mount({
+      job: job({
+        state: "done",
+        artifacts,
+        doc_questions: [{ id: "Q1", text: "which?", importance: "P0" }],
+      }),
+    });
+    const chips = document.getElementById("editor-chips") as HTMLElement;
+    const docq = document.getElementById("editor-docq") as HTMLElement;
+    expect(
+      chips.compareDocumentPosition(docq) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------- the archived job
+//
+// An archived job's key is jobKey's synthetic `archive:<slug>` — there is no
+// such job file, so `GET /api/job/form?slug=archive:j` 404s. The whole branch
+// exists so the modal never asks (app.js:3815).
+describe("an archived job", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      Promise.resolve({ ...form }),
+    );
+  });
+
+  const archived = (over: Partial<WebJob> = {}) =>
+    job({ slug: "j", state: "done", archived: true, ...over });
+
+  const mountArchived = (over: Partial<WebJob> = {}) =>
+    mount({ slug: "archive:j", job: archived(over) });
+
+  it("asks the server for NO form", async () => {
+    mountArchived();
+    // waitFor rather than a bare assertion: a request issued from an effect
+    // would land a tick later and a synchronous check would miss it
+    await waitFor(() => expect(document.getElementById("editor-hint")?.textContent)
+      .toBe("read-only · unarchive to edit"));
+    expect(fetchJobForm).not.toHaveBeenCalled();
+    // …and therefore never paints "no such job" over a modal that is working
+    expect(document.getElementById("editor-note")?.textContent).toBe("");
+  });
+
+  it("is titled '<slug> — archived', not 'archive:j.job.md'", () => {
+    mountArchived();
+    expect(document.getElementById("editor-title")?.textContent).toBe(
+      "j — archived",
+    );
+  });
+
+  it("uses the display label of a RENAMED archive", () => {
+    mountArchived({ display_slug: "old-name" });
+    expect(document.getElementById("editor-title")?.textContent).toBe(
+      "old-name — archived",
+    );
+  });
+
+  it("shows no form and no editing affordances", () => {
+    mountArchived({ reactivatable: true });
+    expect(document.getElementById("editor-form")).toHaveAttribute("hidden");
+    expect(document.getElementById("editor-archive")).toHaveAttribute("hidden");
+    expect(document.getElementById("editor-queue")).toHaveAttribute("hidden");
+    expect(document.getElementById("editor-dequeue")).toHaveAttribute("hidden");
+    expect(document.getElementById("editor-reactivate")).toHaveAttribute("hidden");
+  });
+
+  // The read-only flag is the ONE gate on both upload paths, and with `form`
+  // left null the ordinary `!!form && !editable` rule reads FALSE — so without
+  // the explicit archived arm a ⌘V here uploads against "archive:j" and paints
+  // the server's second error over a modal that just said it was read-only.
+  it("arms neither the paste layer nor the drop sink", async () => {
+    mountArchived();
+    const file = new File(["x"], "shot.png", { type: "image/png" });
+    const ev = new Event("paste") as Event & { clipboardData: unknown };
+    Object.defineProperty(ev, "clipboardData", {
+      value: { items: [{ kind: "file", getAsFile: () => file }] },
+    });
+    document.dispatchEvent(ev);
+
+    const panel = document.querySelector("#editor-overlay .panel") as HTMLElement;
+    fireEvent.drop(panel, { dataTransfer: { files: [file], types: ["Files"] } });
+
+    await waitFor(() => expect(document.getElementById("editor-title")?.textContent)
+      .toBe("j — archived"));
+    expect(uploadImage).not.toHaveBeenCalled();
+  });
+
+  it("still reaches its artifacts and its feedback — the point of the modal", () => {
+    mountArchived({
+      artifacts: [{ name: "00-overview.md", url: "/api/artifact/j/artifacts/00-overview.md" }],
+      feedback: [{ id: 1, artifact: "00-overview.md", note: "wrong arrow", at: 1 }],
+    });
+    expect(document.getElementById("editor-chips")).not.toHaveAttribute("hidden");
+    expect(document.getElementById("editor-feedback")).not.toHaveAttribute("hidden");
+  });
+});
+
+// ------------------------------------------------------- #editor-feedback
+//
+// Before this the React board had NO reader for a feedback row anywhere: the
+// card carries a count chip whose title says to click in, and neither
+// drilldown re-homed the panel. Those rows are the dream loop's inbound
+// channel from the board.
+describe("the editor's feedback panel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      Promise.resolve({ ...form }),
+    );
+  });
+
+  const withNotes = (over: Partial<WebJob> = {}) =>
+    job({
+      state: "done",
+      feedback: [
+        { id: 7, artifact: "00-overview.md", note: "the arrow points the wrong way", at: 1 },
+        { id: 8, artifact: "13-tree.html", note: "addressed one", at: 2, addressed: "fixed" },
+      ],
+      ...over,
+    });
+
+  it("is hidden for a job with no notes", async () => {
+    mount({ job: job({ state: "done" }) });
+    await waitFor(() =>
+      expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
+    );
+    expect(document.getElementById("editor-feedback")).toHaveAttribute("hidden");
+  });
+
+  it("renders every note under its own head", () => {
+    mount({ job: withNotes() });
+    expect(document.getElementById("editor-feedback")).not.toHaveAttribute("hidden");
+    expect(
+      document.querySelector("#editor-feedback .editor-docq-head")?.textContent,
+    ).toBe("feedback");
+    expect(document.querySelectorAll("#editor-feedback .fb-row")).toHaveLength(2);
+    expect(screen.getByText("the arrow points the wrong way")).toBeTruthy();
+  });
+
+  it("edits a note through the board's own write path", async () => {
+    const user = userEvent.setup();
+    mount({ job: withNotes() });
+    await user.click(document.querySelector("#editor-feedback .fb-edit") as HTMLElement);
+    const box = document.querySelector(".fb-edit-input") as HTMLTextAreaElement;
+    await user.clear(box);
+    await user.type(box, "reworded");
+    await user.click(document.querySelector(".fb-save") as HTMLElement);
+    await waitFor(() => expect(editFeedback).toHaveBeenCalledWith("j", 7, "reworded"));
+  });
+
+  it("deletes a note behind a confirm", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mount({ job: withNotes() });
+    await user.click(document.querySelector("#editor-feedback .fb-delete") as HTMLElement);
+    await waitFor(() => expect(deleteFeedback).toHaveBeenCalledWith("j", 7));
+  });
+});
+
+// ------------------------------------------------------------ colour strip
+describe("the job colour strip", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      Promise.resolve({ ...form }),
+    );
+  });
+
+  const ready = async () => {
+    await waitFor(() =>
+      expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
+    );
+  };
+
+  it("offers 'no colour' plus the eight palette names, in /color's order", async () => {
+    mount({ job: job() });
+    await ready();
+    const radios = [
+      ...document.querySelectorAll<HTMLInputElement>('#f-swatches input[type="radio"]'),
+    ];
+    expect(radios.map((r) => r.value)).toEqual([
+      "", "red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan",
+    ]);
+    // "no colour" is a REAL radio, so a job with none still has one checked and
+    // a coloured job has a way back to neutral
+    expect(radios[0]?.checked).toBe(true);
+  });
+
+  it("reflects the job's colour, and falls back to none for an unknown one", async () => {
+    const { unmount } = mount({ job: job({ color: "cyan" }) });
+    await ready();
+    expect(
+      document.querySelector<HTMLInputElement>('#f-swatches input[value="cyan"]')?.checked,
+    ).toBe(true);
+    unmount();
+
+    mount({ job: job({ color: "chartreuse" }) });
+    await ready();
+    expect(
+      document.querySelector<HTMLInputElement>('#f-swatches input[value=""]')?.checked,
+    ).toBe(true);
+  });
+
+  it("POSTs the pick on the spot rather than through the form autosave", async () => {
+    const user = userEvent.setup();
+    mount({ job: job() });
+    await ready();
+    await user.click(
+      document.querySelector('#f-swatches input[value="purple"]') as HTMLElement,
+    );
+    await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", "purple"));
+    // saveform refuses a job whose cell is live, which is exactly when
+    // recolouring matters — a colour pick must never ride it
+    expect(saveJobForm).not.toHaveBeenCalled();
+  });
+
+  it("clears the colour with the none swatch", async () => {
+    const user = userEvent.setup();
+    mount({ job: job({ color: "red" }) });
+    await ready();
+    await user.click(
+      document.querySelector('#f-swatches input[value=""]') as HTMLElement,
+    );
+    await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", ""));
+  });
+
+  // setFormReadOnly deliberately leaves this one control enabled: everything
+  // else in the form is job-file state the crew owns while a cell is in
+  // flight, but a colour is carl's own label riding its own ungated endpoint —
+  // and recolouring a RUNNING job is the main thing the feature is for.
+  it("stays enabled while the rest of the form is read-only", async () => {
+    (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      Promise.resolve({ ...form, editable: false }),
+    );
+    const user = userEvent.setup();
+    mount({ job: job({ state: "working", live: true }) });
+    await ready();
+    expect(document.getElementById("f-repo")).toBeDisabled();
+    const purple = document.querySelector(
+      '#f-swatches input[value="purple"]',
+    ) as HTMLInputElement;
+    expect(purple.disabled).toBe(false);
+    await user.click(purple);
+    await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", "purple"));
   });
 });

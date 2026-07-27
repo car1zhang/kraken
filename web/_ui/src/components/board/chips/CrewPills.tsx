@@ -1,7 +1,7 @@
 import type { WebJob, ZeusStatus } from "../../../api/types.ts";
 
 /**
- * zeusPillHTML (app.js:457): one god icon whose COLOR is the sole status
+ * zeusPillHTML (app.js): one god icon whose COLOR is the sole status
  * indicator — "running" green, "polling" cyan, "question" amber for a pending
  * AskUserQuestion; anything else (including "waiting") falls back to the muted
  * default rather than echoing an arbitrary status string verbatim. The name
@@ -28,6 +28,7 @@ type CrewRole = (typeof CREW_ROLES)[number];
 interface RoleCount {
   working: number;
   total: number;
+  names: string[];
 }
 
 // A crew role's god glyph, in its text presentation (VS15 forces monochrome
@@ -40,14 +41,37 @@ const CREW_ICONS: Partial<Record<CrewRole, string>> = {
   hermes: "✉︎",
 };
 
+// Most teammate names a crew chip's tooltip lists before it summarises the
+// remainder — see the cap's reasoning in CrewChips.
+const CREW_TITLE_MAX = 12;
+
+/** Whether band 2 gets any crew tokens at all — see CrewChips. */
+export function crewChipsVisible(job: WebJob): boolean {
+  return !!job.zeus_status || (job.roster ?? []).length > 0;
+}
+
 /**
- * The crew line: a zeus status pill plus one working/total chip per subagent
- * role present in the roster. Port of crewHTML (app.js:475).
+ * The crew tokens: a zeus status pill plus one working/total chip per subagent
+ * role present in the roster, each chip led by its god's icon in place of the
+ * role name (the name moves to the title). Port of crewChipsHTML (app.js).
+ *
+ * Bare chips with NO wrapper, so the same markup fills both the card's unified
+ * band-2 `.chips` row and the modal's static `#steer-crew` — which carries
+ * `.crew` itself, exactly as `#steer-threads` carries `.threads`. There is no
+ * `.crew` div here any more: it only ever existed to inject a wrapper into a
+ * container that nothing styled, and on a card the tokens render bare among
+ * the branches and the counts.
  *
  * Renders nothing for an old server payload (no zeus_status, no roster) so the
  * card looks exactly as it did before these fields existed.
+ *
+ * The chip's title also NAMES every agent counted in it. That used to be a
+ * second block on the card — a `.roster` row per teammate restating what the
+ * chips had just counted, the card's only outright duplication. The chips are
+ * the version that survives: they fit on one line whatever the crew size, and
+ * nowhere else ever showed the names, so a hover keeps them reachable.
  */
-export function CrewPills({ job }: { job: WebJob }) {
+export function CrewChips({ job }: { job: WebJob }) {
   const roster = job.roster ?? [];
   if (!job.zeus_status && !roster.length) return null;
 
@@ -56,9 +80,15 @@ export function CrewPills({ job }: { job: WebJob }) {
     const role = (CREW_ROLES as readonly string[]).includes(r.role)
       ? (r.role as CrewRole)
       : "other";
-    const c = counts.get(role) ?? { working: 0, total: 0 };
+    const c = counts.get(role) ?? { working: 0, total: 0, names: [] };
     c.total++;
     if (r.working) c.working++;
+    // `?? ""` per FIELD, not on the joined string: every other field the card
+    // renders degrades a missing value to blank, and composing first would make
+    // this the one place that prints the literal "undefined". The wire says both
+    // are always present (board.go carries no omitempty on them) — this is what
+    // that contract slipping looks like if it ever does.
+    c.names.push(`${r.working ? "●" : "○"} ${r.name ?? ""} (${r.model ?? ""})`);
     counts.set(role, c);
   }
 
@@ -70,11 +100,18 @@ export function CrewPills({ job }: { job: WebJob }) {
   );
   const chips = present.map(([role, c]) => {
     const icon = CREW_ICONS[role];
+    // Capped: a native tooltip does not scroll, so a large hephaestus fleet
+    // would render a name list taller than the window with no way to see its
+    // end. The on-card `.roster` block this replaced was unbounded too, but it
+    // at least wrapped inside the column.
+    const shown = c.names.slice(0, CREW_TITLE_MAX);
+    const rest = c.names.length - shown.length;
+    const body = rest > 0 ? [...shown, `…and ${rest} more`] : shown;
     return (
       <span
         key={role}
         className={"crew-chip" + (c.working > 0 ? " active" : "")}
-        title={`${role} — ${c.working} of ${c.total} working`}
+        title={`${role} — ${c.working} of ${c.total} working\n${body.join("\n")}`}
       >
         {icon ? (
           <>
@@ -89,9 +126,9 @@ export function CrewPills({ job }: { job: WebJob }) {
 
   if (!job.zeus_status && !chips.length) return null;
   return (
-    <div className="crew">
+    <>
       {job.zeus_status ? <ZeusPill status={job.zeus_status} /> : null}
       {chips}
-    </div>
+    </>
   );
 }

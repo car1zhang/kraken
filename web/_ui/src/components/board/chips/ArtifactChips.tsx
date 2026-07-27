@@ -1,68 +1,44 @@
-import type { WebArtifact } from "../../../api/types.ts";
+import type { WebJob } from "../../../api/types.ts";
 
-export interface ArtifactChipsProps {
-  artifacts: WebArtifact[] | undefined;
-  /**
-   * The job's jobKey() — NEVER a bare slug, or an archived job and an active
-   * one that reused its freed slug would share one expand/collapse toggle.
-   */
-  jobKey: string;
-  /** Prefixes each chip's name; differs from the slug for a renamed archive. */
-  label: string;
-  expanded: boolean;
-  onToggleExpanded(jobKey: string): void;
-  onOpenArtifact(url: string, name: string): void;
+/**
+ * Whether the card's artifact count chip renders at all. Split out so band 2
+ * can ask whether it is empty without duplicating the rule — the same split
+ * DocQuestionChip already makes.
+ */
+export function artifactCountVisible(job: WebJob): boolean {
+  return (job.artifacts ?? []).length > 0;
 }
 
 /**
- * A job's artifact chips, collapsing to the first 3 plus a "+N more" toggle.
- * Port of chipsHTML (app.js:428).
+ * The BOARD's entire artifact surface: one count, no names. Port of
+ * artifactChipHTML (app.js, band 2 of cardHTML).
  *
- * The toggle carries `.chip chip-more` — both classes, because it needs
- * `.chip`'s size/padding — which in the vanilla delegated handler meant its
- * branch had to run BEFORE the generic `.chip` branch or it would try to open
- * an artifact with an undefined url. Here each button owns its own handler, so
- * the ordering hazard is gone; the classes stay for the paint.
+ * This used to be the card's own chip row — every artifact as an openable
+ * `.chip`, capped at 3 behind a "+N more" toggle whose expanded state was
+ * persisted per job in localStorage. All of that is gone: the cap and its
+ * toggle only ever existed to stop a twelve-artifact job from owning its
+ * column, which a count solves outright rather than bounds, and the list
+ * itself moved one click in (the steer modal and the job editor's
+ * `#editor-chips`, which is what a done or archived card opens).
+ *
+ * Two class rules, both load-bearing:
+ *
+ *   1. `ct-chip`, and NOT `chip` — `.chip` is the artifact-overlay click
+ *      target, so a chip-classed span would try to open an artifact with an
+ *      undefined url instead of falling through to the card's own handler.
+ *   2. a plain span, not a button — no new click target. The chip's entire
+ *      stated affordance is "click the card", which is what makes
+ *      `data-editable` on the ARCHIVED card root load-bearing (see
+ *      ArchivedCard): without it, an archived job's artifacts have no path in
+ *      the UI at all.
  */
-export function ArtifactChips({
-  artifacts,
-  jobKey,
-  label,
-  expanded,
-  onToggleExpanded,
-  onOpenArtifact,
-}: ArtifactChipsProps) {
-  const list = artifacts ?? [];
-  if (!list.length) return null;
-  const shown = expanded ? list : list.slice(0, 3);
+export function ArtifactCountChip({ job }: { job: WebJob }) {
+  const n = (job.artifacts ?? []).length;
+  if (!n) return null;
+  const title = `${n} artifact${n === 1 ? "" : "s"} — click the card to open them`;
   return (
-    <>
-      {shown.map((a) => (
-        <button
-          key={a.name}
-          className="chip"
-          data-url={a.url}
-          data-name={`${label}/${a.name}`}
-          onClick={(ev) => {
-            ev.stopPropagation();
-            onOpenArtifact(a.url, `${label}/${a.name}`);
-          }}
-        >
-          ▤ {a.name}
-        </button>
-      ))}
-      {list.length > 3 ? (
-        <button
-          className="chip chip-more"
-          data-key={jobKey}
-          onClick={(ev) => {
-            ev.stopPropagation();
-            onToggleExpanded(jobKey);
-          }}
-        >
-          {expanded ? "less" : `+${list.length - 3} more`}
-        </button>
-      ) : null}
-    </>
+    <span className="ct-chip" title={title}>
+      ▤ {n}
+    </span>
   );
 }

@@ -1,5 +1,4 @@
 import type { BoardModel } from "../../hooks/useBoard.ts";
-import { useLocalStorageSet } from "../../hooks/useLocalStorage.ts";
 import { COLUMNS } from "../../lib/columns.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
@@ -22,8 +21,22 @@ export interface BoardActions {
   onOpenSteer(slug: string, mode: SteerMode, opts?: { requireText?: boolean }): void;
   /** Job editor. `null` opens it in new-job mode (the "+ NEW JOB" button). */
   onOpenEditor(slug: string | null): void;
-  /** Artifact viewer. `name` is already prefixed "<label>/<artifact>". */
-  onOpenArtifact(url: string, name: string): void;
+  /**
+   * Artifact viewer. `name` is already prefixed "<label>/<artifact>"; `jobKey`
+   * is the key of the job it belongs to — jobKey(), never a bare slug, since
+   * the viewer's pager rebuilds that job's ORDERED artifact list from it and
+   * an archived job plus a live one that reused its freed slug would page
+   * through each other's artifacts.
+   *
+   * No card calls this any more: band 2's artifact surface is an inert COUNT
+   * and clicking the card opens the drilldown instead (that is what
+   * `expect(actions.onOpenArtifact).not.toHaveBeenCalled()` pins in the card
+   * tests). It stays on BoardActions because the drilldown surfaces reached
+   * FROM a card — the steer modal's chip row and the editor's artifact list —
+   * take the same action, and one shape across every entry point is what keeps
+   * the jobKey from being dropped at one of them.
+   */
+  onOpenArtifact(url: string, name: string, jobKey: string): void;
   /** Side-thread overlay. `tid` null opens the branch dialog. */
   onOpenThread(slug: string, tid: string | null): void;
   /**
@@ -56,9 +69,12 @@ export interface BoardViewProps {
   /** The view router hides the board rather than unmounting it, as today. */
   hidden?: boolean;
   /**
-   * Artifact-chip expansion state, keyed by jobKey(). Optional: the board owns
-   * it by default. Hoist it only if another surface must share the same
-   * toggles (the steer modal renders the same chip row).
+   * @deprecated Dead, and accepted only so App.tsx keeps compiling until the
+   * lead drops the call site. Band 2 carries a bare artifact COUNT now
+   * (ArtifactCountChip), so there is no "+N more" toggle and no per-job
+   * expansion state to share with anything. Delete this together with
+   * App.tsx's `useLocalStorageSet("kraken-expanded-artifacts")` and the
+   * `expanded`/`onToggleExpanded` props on JobCard/ArchivedCard.
    */
   expanded?: { keys: Set<string>; toggle(key: string): void };
 }
@@ -88,11 +104,7 @@ export interface BoardViewProps {
  * identity when no `<DragProvider>` is above them — so a board rendered
  * without one still lists every card in server order.
  */
-export function BoardView({ board, actions, hidden, expanded }: BoardViewProps) {
-  const [ownKeys, ownToggle] = useLocalStorageSet("kraken-expanded-artifacts");
-  const expandedKeys = expanded?.keys ?? ownKeys;
-  const toggleExpanded = expanded?.toggle ?? ownToggle;
-
+export function BoardView({ board, actions, hidden }: BoardViewProps) {
   const { byColumn, archived } = board;
 
   return (
@@ -106,28 +118,9 @@ export function BoardView({ board, actions, hidden, expanded }: BoardViewProps) 
             jobs={jobs}
             onNewJob={() => actions.onOpenEditor(null)}
             footer={
-              col === "done" ? (
-                <ArchiveDrawer
-                  archived={archived}
-                  actions={actions}
-                  expandedKeys={expandedKeys}
-                  onToggleExpanded={toggleExpanded}
-                />
-              ) : undefined
+              col === "done" ? <ArchiveDrawer archived={archived} actions={actions} /> : undefined
             }
-            renderCard={(j) => {
-              const key = jobKey(j);
-              return (
-                <JobCard
-                  key={key}
-                  job={j}
-                  col={col}
-                  actions={actions}
-                  expanded={expandedKeys.has(key)}
-                  onToggleExpanded={toggleExpanded}
-                />
-              );
-            }}
+            renderCard={(j) => <JobCard key={jobKey(j)} job={j} col={col} actions={actions} />}
           />
         );
       })}

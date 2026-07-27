@@ -189,21 +189,27 @@ describe("a reused slug", () => {
     expect(actions.onOpenEditor).not.toHaveBeenCalled();
   });
 
-  it("gives the two cards independent artifact expansion state", async () => {
+  it("routes each twin's artifact count to its OWN drilldown", async () => {
+    // The card is the only route to the artifacts now (band 2 carries a bare
+    // count), so the two twins must open different things. The archived one
+    // opens on its synthetic key; the live one on the bare slug.
     localStorage.setItem("kraken-archive-open", "1");
     const four = ["a", "b", "c", "d"].map((n) => ({ name: n, url: "/x/" + n }));
-    const { container } = renderBoard([
+    const { container, actions } = renderBoard([
       { ...live, artifacts: four },
       { ...stale, artifacts: four },
     ]);
-    const liveCard = colFor(container, "blocked").querySelector(".card")!;
-    await userEvent.click(liveCard.querySelector(".chip-more")!);
 
-    // one toggle, one card: the archived twin must still be collapsed
-    expect(colFor(container, "blocked").querySelectorAll(".chip:not(.chip-more)")).toHaveLength(4);
-    expect(
-      container.querySelectorAll(".archive-cards .chip:not(.chip-more)"),
-    ).toHaveLength(3);
-    expect(JSON.parse(localStorage.getItem("kraken-expanded-artifacts")!)).toEqual(["foo"]);
+    const liveCard = colFor(container, "blocked").querySelector(".card")!;
+    const archivedCard = container.querySelector(".archive-cards .card")!;
+    // both say "4", neither names a thing
+    expect(liveCard.querySelector(".ct-chip")).toHaveTextContent("▤ 4");
+    expect(archivedCard.querySelector(".ct-chip")).toHaveTextContent("▤ 4");
+    expect(container.querySelectorAll(".chip")).toHaveLength(0);
+
+    await userEvent.click(archivedCard);
+    expect(actions.onOpenEditor).toHaveBeenCalledWith("archive:foo");
+    await userEvent.click(liveCard);
+    expect(actions.onOpenSteer).toHaveBeenCalledWith("foo", "unblock");
   });
 });

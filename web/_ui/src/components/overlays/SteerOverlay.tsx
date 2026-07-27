@@ -3,23 +3,35 @@ import {
   useEffect,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import {
+  answerQuestion,
+  deleteFeedback,
   doneJob,
+  editFeedback,
   fetchDraft,
   fetchJobForm,
   killJob,
   reactivateJob,
+  retryJob,
   saveDraft,
+  setJobColor,
   steerJob,
   uploadImage,
 } from "../../api/client.ts";
 import type { JobForm, WebJob } from "../../api/types.ts";
+import { JOB_COLORS } from "../../lib/format.ts";
+import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useDebouncedDraft } from "../../hooks/useDebouncedDraft.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
+import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
+import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
+import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
+import { PRChip } from "../board/chips/PRChips.tsx";
+import { QuestionBlock } from "../board/chips/QuestionBlock.tsx";
+import { ThreadChips } from "../board/chips/ThreadChips.tsx";
 import { CmdComposer } from "./CmdComposer.tsx";
 import { DocQuestions } from "./DocQuestions.tsx";
 import { TokensPanel } from "./TokensPanel.tsx";
@@ -116,26 +128,35 @@ export interface SteerOverlayProps {
   /** See Overlay.tsx. */
   mutate: Mutate;
 
-  // ---- context-block slots -------------------------------------------------
-  // The steer modal shows the same crew line / PR chips / thread chips /
-  // artifact chips the CARD shows, and those renderers belong to the board
-  // slice, not this one. They arrive as children rather than being duplicated
-  // here: one renderer, two mount points, exactly the split the vanilla board
-  // already used (threadChipsHTML filling both `.threads` on the card and
-  // `#steer-threads` in this modal).
+  // ---- drilldown actions ---------------------------------------------------
+  // These two, and ONLY these two. Every surface this modal shows — the crew
+  // line, the PR chips, the thread chips and their ⑂ branch button, the
+  // artifact list, the feedback panel, the retry button, the question block
+  // and the colour strip — renders from `job` inside the component, and every
+  // mutation behind them goes through `mutate` and `api/client.ts`. What is
+  // left here is the two things this component genuinely cannot do: open
+  // ANOTHER overlay, which is App's state and not this one's.
   //
-  // Each slot is the INNER content only — the wrapper div with its id and its
-  // `hidden` rule lives here, because that rule is per-mode.
-  /** crewHTML(j) — hidden in reactivate mode (the cell is gone). */
-  crew?: ReactNode;
-  /** prChipHTML per pr — shown in EVERY mode: PRs are job history. */
-  prChips?: ReactNode;
-  /** threadChipsHTML(j) — every mode; the ⑂ branch button self-hides. */
-  threadChips?: ReactNode;
-  /** chipsHTML(artifacts, …) — hidden in reactivate mode. */
-  artifactChips?: ReactNode;
-  /** steerActionsHTML: the retry button + questionHTML. steer/unblock only. */
-  actions?: ReactNode;
+  // There are deliberately NO optional `ReactNode` slots left. Five of them
+  // existed (`crew`, `prChips`, `threadChips`, `artifactChips`, `actions`) and
+  // App.tsx filled NONE, so the whole context block rendered empty: no crew,
+  // no PRs, no threads, no branch button, no artifact list, no retry and no
+  // AskUserQuestion — every one of them a finished component wired to nothing,
+  // and every one silent, because a slot left unfilled renders exactly like a
+  // job with nothing in it. A surface that renders itself cannot be omitted;
+  // an action the integrator must supply is REQUIRED, so the omission is a
+  // compile error rather than a missing feature.
+  /**
+   * Open one artifact in the viewer. `name` arrives already prefixed
+   * "<label>/<artifact>"; `jobKey` is jobKey(job) and NEVER a bare slug — the
+   * viewer's pager rebuilds that job's ORDERED artifact list from it, and a
+   * chip opened without one degrades the pager to a singleton (see
+   * web/artifactpager_test.go). Same signature as BoardActions.onOpenArtifact
+   * so one shape serves every entry point.
+   */
+  onOpenArtifact(url: string, name: string, jobKey: string): void;
+  /** Side-thread overlay. `tid` null opens the ⑂ branch dialog. */
+  onOpenThread(slug: string, tid: string | null): void;
 }
 
 export function SteerOverlay(props: SteerOverlayProps) {
@@ -170,11 +191,8 @@ function SteerBody({
   job,
   onClose,
   mutate,
-  crew,
-  prChips,
-  threadChips,
-  artifactChips,
-  actions,
+  onOpenArtifact,
+  onOpenThread,
   fileSink,
 }: SteerOverlayProps & { fileSink: FileSink }) {
   const jobSlug = slug as string;
@@ -379,8 +397,25 @@ function SteerBody({
   // reactivate targets a dead cell: no crew to show, no artifacts to act on,
   // and nothing to retry or mark done. PRs, threads, the two messages and the
   // questions are job history and show in every mode.
-  const showCrew = mode !== "reactivate" && !!crew;
-  const showArtifacts = mode !== "reactivate" && !!artifactChips;
+  const showCrew = mode !== "reactivate" && !!job && crewChipsVisible(job);
+  // PRs are job history rather than cell state, so they show in EVERY mode —
+  // "what already shipped" is exactly the reactivation context.
+  const prs = job?.prs ?? [];
+  const artifacts = job?.artifacts ?? [];
+  const showArtifacts = mode !== "reactivate" && artifacts.length > 0;
+  // Side threads are job history too (a closed thread outlives its cell), so
+  // like PRs they render in every mode. ThreadChips itself drops the ⑂ branch
+  // affordance once the cell isn't live, which is the only part of the row a
+  // reactivate-mode open couldn't act on — so the container shows for a live
+  // job with no threads yet (the branch button alone) and for a dead job with
+  // closed ones (the chips alone), and hides only when both are empty.
+  const threads = job?.threads ?? [];
+  const showThreads = !!job && (threads.length > 0 || job.live);
+  // carl's per-artifact feedback: job history, every mode, and this modal is
+  // one of only TWO surfaces in the app that renders it at all now that the
+  // card carries a bare count — those rows are the dream loop's inbound
+  // channel from the board, so "read it somewhere else" is not an option.
+  const hasFeedback = (job?.feedback ?? []).length > 0;
   const detail = job?.detail;
   const lastSent = job?.last_sent;
   const hasDocq = !!job?.doc_questions?.length;
@@ -396,15 +431,71 @@ function SteerBody({
       (tok.in || 0) + (tok.out || 0) + (tok.cache_write || 0) + (tok.cache_read || 0) ||
       tok.sessions
     );
+  // steerActionsHTML (app.js): the retry button plus the pending
+  // AskUserQuestion. steer/unblock only — reactivate targets a dead cell, so
+  // there is nothing on it to retry and nothing waiting on an answer.
+  //
+  // `retryable` is the SAME rule the card's band 6 applies: an unhealthy cell
+  // is retryable unless the health text says the cell is beyond retrying
+  // ("is gone" / "startup prompt"), which a retry would only re-fail on.
+  const retryable = !!job?.health && !/is gone|startup prompt/.test(job.health);
+  const question = job?.question;
+  const showActions = mode !== "reactivate" && (retryable || !!question);
+
   const showContext =
     showCrew ||
-    !!prChips ||
-    !!threadChips ||
+    prs.length > 0 ||
+    showThreads ||
     !!detail ||
     !!lastSent ||
     showArtifacts ||
     hasDocq ||
+    hasFeedback ||
     hasTokens;
+
+  // ---- feedback save / delete ---------------------------------------------
+  // Deliberately NOT props. FeedbackPanel's two callbacks are pure mutations
+  // with no App-owned state behind them, so routing them through the
+  // integrator would have added two more slots to forget — and one forgotten
+  // slot is why this panel had no caller in the whole app. `mutate` already
+  // owns the refetch-and-report-failure policy (Overlay.tsx), so this is the
+  // same POST App.tsx's BoardActions makes, minus the chance to omit it.
+  //
+  // The shape inverts: Mutate resolves the parsed body or null on FAILURE,
+  // while FeedbackPanel wants null on SUCCESS and an Error on failure (its
+  // row paints "save failed" and stays open on one). The status bar already
+  // carries the real message, so the Error here is only a flag.
+  const saveFeedback = useCallback(
+    async (s: string, id: number, note: string): Promise<Error | null> => {
+      const res = await mutate(() => editFeedback(s, id, note));
+      return res === null ? new Error("save failed") : null;
+    },
+    [mutate],
+  );
+  const removeFeedback = useCallback(
+    (s: string, id: number) => {
+      void mutate(() => deleteFeedback(s, id));
+    },
+    [mutate],
+  );
+
+  // Same inversion as saveFeedback's, and here it is load-bearing rather than
+  // cosmetic: QuestionBlock kills every option the moment one is clicked, and
+  // ONLY a returned failure brings them back. Answering `void` would leave a
+  // failed answer's question unanswerable from the board short of a reload.
+  const answer = useCallback(
+    async (s: string, optionIndex: number): Promise<Error | null> => {
+      const res = await mutate(() => answerQuestion(s, optionIndex));
+      return res === null ? new Error("answer failed") : null;
+    },
+    [mutate],
+  );
+
+  const key = job ? jobKey(job) : jobSlug;
+  // display_slug || slug — a renamed archive entry prefixes its chips with the
+  // name it was archived UNDER, which is what the artifact viewer's title
+  // shows and what its pager pages within.
+  const label = job ? job.display_slug || job.slug : jobSlug;
 
   return (
     <>
@@ -412,6 +503,15 @@ function SteerBody({
         <span className="panel-title" id="steer-title">
           {jobSlug + TITLE_SUFFIX[mode]}
         </span>
+        {/* The same nine-swatch colour strip as the job editor's. It has to be
+            HERE and not only in the editor: the board routes a live
+            working/blocked card to this modal and never to the editor, so
+            without this copy the picker would be reachable only while the cell
+            is down — and /api/job/color is ungated precisely so a RUNNING job
+            can be recoloured. It rides no mode check (recolouring is valid in
+            steer, unblock and reactivate alike) and touches nothing else: a
+            pick POSTs the colour and never sends a steer message. */}
+        <ColorPicker slug={jobSlug} color={job?.color} mutate={mutate} />
         <span className="spacer"></span>
         <button
           className="btn tmux-open open-tmux"
@@ -446,14 +546,30 @@ function SteerBody({
       </div>
       <div className="panel-body answer-body">
         <div className="steer-context" id="steer-context" hidden={!showContext}>
-          <div className="steer-crew" id="steer-crew" hidden={!showCrew}>
-            {showCrew ? crew : null}
+          {/* `crew`, not `steer-crew`: .crew is the class on this element
+              itself, exactly as .threads is on #steer-threads, and style.css
+              says so at the .crew rule. Both are MODAL-ONLY — on a card the
+              same tokens render bare in band 2's .chips row. */}
+          <div className="crew" id="steer-crew" hidden={!showCrew}>
+            {job && showCrew ? <CrewChips job={job} /> : null}
           </div>
-          <div className="prs" id="steer-prs" hidden={!prChips}>
-            {prChips}
+          {/* PRChip, not PRChips: the plural renders its own `.prs` wrapper
+              for the CARD's band 5, and this container already carries the
+              class — nesting them would double the row's padding. */}
+          <div className="prs" id="steer-prs" hidden={!prs.length}>
+            {prs.map((pr, i) => (
+              <PRChip key={`${pr.url}|${i}`} pr={pr} />
+            ))}
           </div>
-          <div className="threads" id="steer-threads" hidden={!threadChips}>
-            {threadChips}
+          {/* The card passes withBranch={false}, delegating ⑂ to this modal —
+              so this is the ONLY mount point of BranchButton in the app, and
+              with it unrendered no control anywhere could branch a thread.
+              Default withBranch here (no argument), which is exactly the split
+              BranchButton's header states. */}
+          <div className="threads" id="steer-threads" hidden={!showThreads}>
+            {job && showThreads ? (
+              <ThreadChips job={job} onOpenThread={onOpenThread} />
+            ) : null}
           </div>
           <div
             className="steer-detail"
@@ -465,11 +581,54 @@ function SteerBody({
           <div className="last-sent" id="steer-lastsent" hidden={!lastSent}>
             {lastSent ? `me→zeus: ${lastSent}` : ""}
           </div>
+          {/* artifactListHTML (app.js) — EVERY artifact as an openable chip,
+              no cap and no "+N more": the card's band-2 surface is now a bare
+              COUNT and a modal scrolls, so the drilldown just shows the list
+              where the card had to bound it.
+
+              Not shared with EditorOverlay's ArtifactList even though the
+              markup matches, and that is a deliberate hold rather than an
+              oversight: the two drilldowns are owned by different slices right
+              now, and the renderer's real home is the board chips module
+              beside ThreadChips/PRChips. Collapse the two there in one commit;
+              until then the data-* attributes and the class are pinned by both
+              test files.
+
+              `key` is jobKey(job) and not job.slug — see onOpenArtifact. */}
           <div className="chips" id="steer-chips" hidden={!showArtifacts}>
-            {showArtifacts ? artifactChips : null}
+            {showArtifacts
+              ? artifacts.map((a) => {
+                  const name = `${label}/${a.name}`;
+                  return (
+                    <button
+                      key={a.url}
+                      className="chip"
+                      data-url={a.url}
+                      data-key={key}
+                      data-name={name}
+                      onClick={() => onOpenArtifact(a.url, name, key)}
+                    >
+                      ▤ {a.name}
+                    </button>
+                  );
+                })
+              : null}
           </div>
           <div className="steer-docq" id="steer-docq" hidden={!hasDocq}>
             {job && hasDocq ? <DocQuestions job={job} mutate={mutate} /> : null}
+          </div>
+          {/* carl's per-artifact feedback notes: a drilldown surface, like the
+              questions panel above it. The card carries only a count chip
+              whose title says "click the card to read them" — this is where
+              they are read, edited and deleted. */}
+          <div className="steer-feedback" id="steer-feedback" hidden={!hasFeedback}>
+            {job && hasFeedback ? (
+              <FeedbackPanel
+                job={job}
+                onSaveFeedback={saveFeedback}
+                onDeleteFeedback={removeFeedback}
+              />
+            ) : null}
           </div>
           {/* last because it is ambient: nothing here is actionable, and a
               job that was never measured leaves this hidden entirely rather
@@ -479,12 +638,30 @@ function SteerBody({
           </div>
         </div>
 
-        <div
-          className="steer-actions"
-          id="steer-actions"
-          hidden={mode === "reactivate" || !actions}
-        >
-          {mode === "reactivate" ? null : actions}
+        {/* Both children are DIRECT children of this element on purpose:
+            style.css scopes them as `.steer-actions > .btn.retry` and
+            `.steer-actions > .question`, the latter so the question block
+            cannot collide with the zeus status pill's own `question` class. */}
+        <div className="steer-actions" id="steer-actions" hidden={!showActions}>
+          {showActions && retryable ? (
+            <button
+              className="btn retry"
+              data-slug={jobSlug}
+              onClick={() => void mutate(() => retryJob(jobSlug))}
+            >
+              ↻ retry
+            </button>
+          ) : null}
+          {showActions && job && question ? (
+            // Keyed on the question's identity so a NEW question always mounts
+            // a fresh block: the old one may have disabled its options on a
+            // click that has since been answered in the pane.
+            <QuestionBlock
+              key={question.tool_use_id}
+              job={job}
+              onAnswerQuestion={answer}
+            />
+          ) : null}
         </div>
 
         <div className="steer-spec" id="steer-spec" hidden={!form}>
@@ -564,6 +741,68 @@ function SteerBody({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * The job-colour picker: nine radios — "no colour" plus /color's own eight, in
+ * /color's own order. Port of swatchStripHTML + setSwatchStrip + initSwatchStrip
+ * (app.js:107-155), collapsed into one component because React makes the
+ * "reflect the job's colour into the strip" half a render rather than a call.
+ *
+ * Generated from JOB_COLORS rather than hand-written, so this strip and the
+ * editor's cannot drift in palette, order or markup.
+ *
+ * `name` must differ per strip — both strips can be in the DOM at once and
+ * radios sharing a name are ONE group, so a reused name would make a pick here
+ * silently unpick the editor's. `steer-color` is this one's, `f-color` the
+ * editor's, exactly as in vanilla.
+ *
+ * "No colour" is a REAL radio (value "") rather than an absence: an
+ * unrecognised colour from the wire falls back to it instead of leaving the
+ * strip with nothing checked and no way to click back to neutral.
+ *
+ * The pick POSTs immediately and is deliberately NOT the debounced form
+ * autosave every editor control rides: saveform refuses any job whose cell is
+ * live — which is exactly when recolouring is useful — a full-replace save
+ * from an older client could wipe the colour by omitting the key, and a
+ * discrete one-click choice has nothing to debounce.
+ */
+function ColorPicker({
+  slug,
+  color,
+  mutate,
+}: {
+  slug: string;
+  color: string | undefined;
+  mutate: Mutate;
+}) {
+  // The optimistic pick, held only while the POST is in flight. Cleared on
+  // BOTH outcomes because `mutate` has refetched the board by then, so `color`
+  // is authoritative either way: on success it is the new colour, and on
+  // failure it is the old one — which is how the strip can never be left
+  // showing a colour the server rejected.
+  const [pick, setPick] = useState<string | null>(null);
+  const known = (v: string | undefined): string =>
+    v && (JOB_COLORS as readonly string[]).includes(v) ? v : "";
+  const current = pick ?? known(color);
+  const choose = async (v: string) => {
+    setPick(v);
+    await mutate(() => setJobColor(slug, v));
+    setPick(null);
+  };
+  return (
+    <span className="f-swatches compact" id="steer-swatches" title="job color">
+      <SwatchStrip
+        // `steer-color` vs the editor's `f-color`: both strips can be in the
+        // DOM at once and radios sharing a name are ONE group, so a shared
+        // name would make a pick here silently unpick the editor's.
+        name="steer-color"
+        value={current}
+        onPick={(v) => void choose(v)}
+        compact
+      />
+    </span>
   );
 }
 

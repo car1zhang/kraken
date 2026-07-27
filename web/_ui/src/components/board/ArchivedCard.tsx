@@ -1,42 +1,84 @@
 import type { CSSProperties } from "react";
 
 import type { WebJob } from "../../api/types.ts";
-import { age } from "../../lib/format.ts";
+import { age, jobColorVar } from "../../lib/format.ts";
 import { jobKey } from "../../lib/jobKey.ts";
-import { ArtifactChips } from "./chips/ArtifactChips.tsx";
-import { FeedbackPanel } from "./chips/FeedbackPanel.tsx";
+import { ArtifactCountChip, artifactCountVisible } from "./chips/ArtifactChips.tsx";
+import { FeedbackChip, feedbackChipVisible } from "./chips/FeedbackChip.tsx";
 import type { BoardActions } from "./BoardView.tsx";
 
 export interface ArchivedCardProps {
   job: WebJob;
   actions: BoardActions;
-  expanded: boolean;
-  onToggleExpanded(key: string): void;
+  /** @deprecated Dead — see JobCardProps.expanded. Kept so App.tsx compiles. */
+  expanded?: boolean;
+  /** @deprecated See `expanded`. */
+  onToggleExpanded?(key: string): void;
 }
 
 /**
  * One archived job's card, inside the drawer under DONE. Port of
- * archivedCardHTML (app.js:850).
+ * archivedCardHTML (app.js).
  *
- * `data-slug` is the jobKey here, not the bare archive name — nothing reads an
+ * It follows the same bands as a live card, minus the ones that cannot arise:
+ * band 1 identity, band 2 counts, band 3's outcome line, and band 6's
+ * unarchive/delete pair. There is no band 5 — an archived job's PRs are not on
+ * the wire — and no band 4.
+ *
+ * `data-slug` is the jobKey, not the bare archive name: nothing reads an
  * archived card's data-slug as a server key (unarchive/delete carry their own,
- * which is `job.slug`, the archive name the server resolves).
- *
- * There is no click-the-card fallback: the vanilla delegate matched
- * `.card[data-editable]`, and an archived card never carried that attribute.
+ * `job.slug`, which is what the server resolves), but a bare slug would make
+ * this card and an active job that reused the freed slug collide.
  */
-export function ArchivedCard({ job, actions, expanded, onToggleExpanded }: ArchivedCardProps) {
+export function ArchivedCard({ job, actions }: ArchivedCardProps) {
   const label = job.display_slug || job.slug;
   const renamed = !!job.display_slug && job.display_slug !== job.slug;
   const key = jobKey(job);
-  const hasChips = (job.artifacts ?? []).length > 0;
+  // band 2 — the same two counts an active card carries, in the same place and
+  // for the same reason: both open in the job editor, which is what a click on
+  // an archived card already opens, and which renders the artifact list itself.
+  // Nothing about an archived job is worth naming on the card that isn't worth
+  // naming on a live one.
+  const hasChips = artifactCountVisible(job) || feedbackChipVisible(job);
+  // The colour SURVIVES archiving. The card is dimmed as a whole by
+  // .card.archived's opacity, so the accent bar reads as muted without needing
+  // a treatment of its own — same all-or-nothing emission as the live card: no
+  // --job-color means the bar falls through to --text-2.
+  const jc = jobColorVar(job);
+
+  const openDrilldown = () => {
+    // A click that ends a text selection is not a click on the card.
+    if (window.getSelection()?.toString()) return;
+    // The jobKey, exactly as the vanilla handler passed the card's data-slug:
+    // an archived job's key is the synthetic "archive:<slug>" (there is no such
+    // job file), and the editor is expected to recognise it and skip the form
+    // load — the panels ARE the whole modal for it.
+    actions.onOpenEditor(key);
+  };
 
   return (
     <div
       className="card archived"
-      style={{ "--state": "var(--text-2)" } as CSSProperties}
+      style={
+        { "--state": "var(--text-2)", ...(jc ? { "--job-color": jc } : {}) } as CSSProperties
+      }
       data-slug={key}
+      // data-editable="false" is what makes the card CLICKABLE. The open-card
+      // route matches on PRESENCE of the attribute and reads the value only to
+      // decide whether the editor renders read-only — so "false" still opens.
+      //
+      // An archived card carried no such attribute at all and so had never been
+      // clickable, which was harmless only while it rendered real `.chip`
+      // buttons the artifact handler could open directly. It carries a bare ▤
+      // COUNT now (ArtifactCountChip), whose entire affordance is "click the
+      // card", so without this the archive's artifacts would have no path in
+      // the UI at all — 69 archived jobs' worth. Caught in review before it
+      // shipped; web/jobkey_test.go's TestArchivedCardIsClickable pins the
+      // vanilla end and ArchivedCard.test.tsx pins this one.
+      data-editable="false"
+      onClick={openDrilldown}
     >
+      {/* ---- band 1: IDENTITY */}
       <div className="card-top">
         <span className="slug">{label}</span>
         {renamed ? <span className="state">as {job.slug}</span> : null}
@@ -46,25 +88,20 @@ export function ArchivedCard({ job, actions, expanded, onToggleExpanded }: Archi
         <span>{job.repo}</span>
         <span data-age={job.mtime}>{age(job.mtime)}</span>
       </div>
-      {job.outcome ? <div className="outcome">→ {job.outcome}</div> : null}
+
+      {/* ---- band 2: CHIPS — counts, not lists */}
       {hasChips ? (
         <div className="chips">
-          <ArtifactChips
-            artifacts={job.artifacts}
-            jobKey={key}
-            label={label}
-            expanded={expanded}
-            onToggleExpanded={onToggleExpanded}
-            onOpenArtifact={actions.onOpenArtifact}
-          />
+          <ArtifactCountChip job={job} />
+          <FeedbackChip job={job} />
         </div>
       ) : null}
-      <FeedbackPanel
-        job={job}
-        onSaveFeedback={actions.onSaveFeedback}
-        onDeleteFeedback={actions.onDeleteFeedback}
-      />
-      <div className="review-row">
+
+      {/* ---- band 3: STATUS (the outcome line is all that can survive archiving) */}
+      {job.outcome ? <div className="outcome">→ {job.outcome}</div> : null}
+
+      {/* ---- band 6: ACTIONS */}
+      <div className="card-actions">
         <button
           className="btn unarchive"
           data-slug={job.slug}

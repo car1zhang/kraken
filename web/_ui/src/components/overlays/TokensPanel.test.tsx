@@ -80,10 +80,12 @@ describe("<TokensPanel>", () => {
         })}
       />,
     );
-    // 7.5M total, 500K out
+    // the head is the total alone now — `out` moved into the breakdown
     expect(container.querySelector(".tok-big")?.textContent).toBe("7.5M");
-    expect(container.querySelector(".tok-mid")?.textContent).toBe("500K");
-    const cells = [...container.querySelectorAll(".tok-cell")].map((c) => c.textContent);
+    expect(container.querySelector(".tok-mid")).toBeNull();
+    const cells = [...container.querySelectorAll(".tok-break:not(.tok-origin) .tok-cell")].map(
+      (c) => c.textContent,
+    );
     expect(cells).toEqual(["in1M", "out500K", "cache w2M", "cache r4M"]);
   });
 
@@ -109,5 +111,68 @@ describe("<TokensPanel>", () => {
       />,
     );
     expect(container.querySelector(".tok-note")?.textContent).toMatch(/2m ago$/);
+  });
+});
+
+describe("<TokensPanel> origin row (zeus vs subagents)", () => {
+  const originOf = (c: HTMLElement) =>
+    [...c.querySelectorAll(".tok-origin .tok-cell")].map((e) => e.textContent);
+
+  it("derives the subagent half as the remainder, never as its own key", () => {
+    // zeus is a SUBSET of the totals: in already includes zeus_in. Summing
+    // them would double-count the lead.
+    const { container } = render(
+      <TokensPanel
+        job={withTokens({
+          in: 1_000_000,
+          out: 1_000_000,
+          cache_write: 0,
+          cache_read: 0,
+          sessions: 4,
+          zeus_in: 250_000,
+          zeus_out: 250_000,
+          zeus_cache_write: 0,
+          zeus_cache_read: 0,
+        })}
+      />,
+    );
+    // total 2M, zeus 500K, subagents = remainder = 1.5M
+    expect(originOf(container)).toEqual(["zeus500K", "subagents1.5M"]);
+  });
+
+  it("drops the row entirely on a server predating the zeus keys", () => {
+    // rendering it would claim 100% subagent, which is a lie rather than a gap
+    const { container } = render(
+      <TokensPanel job={withTokens({ in: 10, sessions: 1 })} />,
+    );
+    expect(container.querySelector(".tok-origin")).toBeNull();
+  });
+
+  it("shows the row when the lead genuinely burned nothing", () => {
+    // presence is tested on ONE key, not on the sum — an all-zero zeus half is
+    // a real state (every token spent by a teammate) that a sum test would hide
+    const { container } = render(
+      <TokensPanel
+        job={withTokens({
+          in: 1_000_000,
+          sessions: 2,
+          zeus_in: 0,
+          zeus_out: 0,
+          zeus_cache_write: 0,
+          zeus_cache_read: 0,
+        })}
+      />,
+    );
+    expect(originOf(container)).toEqual(["zeus0", "subagents1M"]);
+  });
+
+  it("clamps rather than showing a negative subagent half", () => {
+    // a stale zeus row paired with a fresh total mid-rescan is the one window
+    // where a subset could momentarily exceed its total
+    const { container } = render(
+      <TokensPanel
+        job={withTokens({ in: 100, sessions: 1, zeus_in: 500 })} />,
+    );
+    expect(originOf(container)).toEqual(["zeus100", "subagents0"]);
   });
 });

@@ -13,11 +13,15 @@
 import type {
   CaptureResult,
   DraftResult,
+  DreamReports,
   JobForm,
   LogPage,
   ThreadOp,
   ThreadRead,
   UploadResult,
+  WatchlistPage,
+  WatchState,
+  WatchVerdict,
   WebBoard,
   WebUsage,
 } from "./types.ts";
@@ -108,6 +112,39 @@ export const fetchLog = (file?: string, signal?: AbortSignal) =>
     file ? `/api/logs?file=${encodeURIComponent(file)}` : "/api/logs",
     signal,
   );
+
+/** Every night report, newest first. */
+export const fetchDream = (signal?: AbortSignal) =>
+  getJSON<DreamReports>("/api/dream", signal);
+
+/**
+ * The watchlist. An empty `state` means EVERY row — the filter is a
+ * narrowing, not a required argument — but the DREAM view always asks for
+ * "watching", since shipped and declined rows are finished business.
+ */
+export const fetchWatchlist = (
+  state: WatchState = "watching",
+  signal?: AbortSignal,
+) =>
+  getJSON<WatchlistPage>(
+    state ? `/api/watchlist?state=${encodeURIComponent(state)}` : "/api/watchlist",
+    signal,
+  );
+
+/**
+ * Carl's verdict on one watchlist row — the ONLY inbound channel the dream
+ * loop has, read first by the next run.
+ *
+ * The comment rides along with the verdict rather than saving separately:
+ * one click, no second control. An empty verdict AND an empty comment is the
+ * documented undo, clearing commented_at with them. Every agent-owned key is
+ * absent by construction; the server refuses one by name if it appears.
+ */
+export const setWatchVerdict = (
+  id: number,
+  verdict: WatchVerdict | "",
+  comment: string,
+) => postJSON("/api/watchlist", { id, verdict, comment });
 
 export const fetchUpdateStatus = (signal?: AbortSignal) =>
   getJSON<import("./types.ts").WebUpdate>("/api/update/status", signal);
@@ -211,6 +248,18 @@ export const switchAccount = (slug: string) =>
 
 export const setRotationMode = (mode: "auto" | "manual") =>
   postJSON<{ mode: string }>("/api/account/mode", { mode });
+
+/**
+ * Set (or clear) a job's colour. `""` clears it.
+ *
+ * The colour is written to the job file's `color` field, and the daemon then
+ * types the SAME colour into the cell's live tmux pane on a later pass
+ * (internal/jobs/color.go) — so this one POST is why a board swatch and a
+ * pane's prompt bar end up the same pixel colour. The server validates the
+ * name against jobs.ValidColor and 400s an unknown one.
+ */
+export const setJobColor = (slug: string, color: string) =>
+  postJSON("/api/job/color", { slug, color });
 
 // ------------------------------------------------- update / ship
 //

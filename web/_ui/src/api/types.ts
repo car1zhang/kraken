@@ -136,7 +136,37 @@ export interface WebTokens {
   sessions: number;
   /** unix MILLIS, matching WebJob.mtime's convention */
   updated_at: number;
+
+  /**
+   * Zeus' half of the four counters above — a SUBSET of them, not an addend:
+   * `in` already INCLUDES `zeus_in`, so summing the two would double-count the
+   * lead's spend.
+   *
+   * Subagent spend has no key of its own and never will: it is `in - zeus_in`
+   * and so on, derived client-side. Two halves on the wire could arrive
+   * disagreeing with the total they are supposed to add up to; a derived half
+   * cannot.
+   *
+   * Optional HERE but not on the wire: the Go struct tags carry no omitempty,
+   * so a current server always sends all four. A server predating them sends
+   * none, and that absence is the whole presence test — checked on ONE key
+   * rather than on their sum, because a job whose lead genuinely burned
+   * nothing (every token spent by a teammate) is a real state a sum-based
+   * test would hide.
+   */
+  zeus_in?: number;
+  zeus_out?: number;
+  zeus_cache_write?: number;
+  zeus_cache_read?: number;
 }
+
+/**
+ * A palette colour name. The RUNTIME list lives in `lib/format.ts`
+ * (`JOB_COLORS`), not here: this module is wire TYPES and every other export in
+ * it is erasable, so a value would change its category — and one list is the
+ * point. `jobColorVar` and both swatch strips read that one.
+ */
+export type JobColor = string;
 
 export type JobState =
   | "draft"
@@ -154,6 +184,17 @@ export interface WebJob {
   state: JobState | string;
   err?: string;
   outcome?: string;
+  /**
+   * The job's chosen colour: one of JOB_COLORS, omitted entirely when unset —
+   * a client that sees no key renders the card exactly as it did before
+   * colours existed, which is why the cards emit `--job-color` only when this
+   * is present and let style.css fall back to `--text-2` otherwise.
+   *
+   * Typed as the union WIDENED with string: the server validates against
+   * jobs.ValidColor, so an unknown value cannot normally arrive, but a future
+   * palette entry must not fail the decode.
+   */
+  color?: JobColor | string;
   cell?: string;
   live: boolean;
   prereqs?: WebPrereq[];
@@ -371,6 +412,85 @@ export interface LogPage {
   file: string;
   prev?: string;
   entries?: LogEntry[];
+}
+
+// ---------------------------------------------------------------- dream
+//
+// Two endpoints, two owners, and they are deliberately NOT merged into one
+// payload: /api/dream is a filter over the artifact plumbing (a night report
+// is an ordinary artifact of the dream-<date> job that wrote it) while
+// /api/watchlist reads the `watchlist` table. The DREAM view fetches them
+// independently so a failure on one pane cannot blank the other.
+
+/** Mirrors api.webDreamReport (internal/api/dream.go). No omitempty on any
+ *  field, so all three are always present. `body` is raw markdown, served
+ *  inline rather than as a URL — the view renders every visible report. */
+export interface WebDreamReport {
+  /** YYYY-MM-DD, the dream job's slug with `dream-` stripped */
+  date: string;
+  slug: string;
+  body: string;
+}
+
+/** GET /api/dream. Always an array, never null (dreamHandler). */
+export interface DreamReports {
+  reports: WebDreamReport[];
+}
+
+/** store/watchlist.go's `class` column, validated server-side by
+ *  api.watchClasses. `| string` so an unknown future class decodes. */
+export type WatchClass =
+  | "feedback"
+  | "correction"
+  | "repetition"
+  | "waste"
+  | "prompting"
+  | string;
+
+/** api.watchStates. */
+export type WatchState = "watching" | "shipped" | "declined" | string;
+
+/**
+ * api.watchVerdicts, minus the empty string: absence IS the unjudged state
+ * here, since `verdict` carries omitempty on the Go side. "" is still what
+ * the POST sends to CLEAR a verdict — see setWatchVerdict.
+ */
+export type WatchVerdict = "fine" | "fix" | string;
+
+/**
+ * One `watchlist` row — api.webWatchItem (internal/api/watchlist.go).
+ *
+ * The row has TWO owners and the wire carries both halves, because every
+ * reader needs the agent's observation and carl's verdict together. The
+ * optionality mirrors that split exactly: the agent's columns are on the
+ * wire unconditionally (the counters especially — a zero `sightings` is a
+ * measured zero), while `verdict`/`comment`/`commented_at` are omitempty
+ * because an unjudged row genuinely has none of the three.
+ *
+ * Watchlist rows are GLOBAL: no job_id, no slug, no cascade.
+ */
+export interface WebWatchItem {
+  id: number;
+  observation: string;
+  class: WatchClass;
+  state: WatchState;
+  sightings: number;
+  /** unix MILLIS, the same convention WebJob.mtime uses */
+  first_seen: number;
+  last_seen: number;
+  evidence?: string;
+  suggested_fix?: string;
+  pr_url?: string;
+  updated_at: number;
+  verdict?: WatchVerdict;
+  comment?: string;
+  /** RFC3339, stamped SERVER-side — never accepted from a client */
+  commented_at?: string;
+}
+
+/** GET /api/watchlist[?state=…]. Always an array, never null. */
+export interface WatchlistPage {
+  watchlist: WebWatchItem[];
 }
 
 // ---------------------------------------------------------------- misc

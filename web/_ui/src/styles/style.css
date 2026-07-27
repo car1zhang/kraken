@@ -423,7 +423,8 @@ body {
 }
 
 /* the poll loop's own stated reason for waiting — a muted secondary line
-   under .detail, same treatment as .last-sent */
+   directly under the .chip-wakeup countdown it explains, same treatment as
+   .last-sent */
 .wakeup-reason {
   font: 10px var(--mono); color: var(--text-2); opacity: 0.7;
   margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -455,19 +456,27 @@ body {
 .pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
 .pr-chip.pr-closed:hover { background: var(--counter-soft); opacity: 1; border-color: var(--counter); }
 
-/* side-thread chips: one per fork of zeus' session, sitting just under the
-   PR chips on the card and inside the steer modal's context block. A live
+/* side-thread chips: one per fork of zeus' session. On the card they sit
+   among the crew tokens and the counts in the .chips row (band 2); .threads
+   itself is modal-only now (#steer-threads), since threadsHTML went away with
+   the card's separate rows. A live
    thread takes --polling (cyan — a second conversation is running, the same
    hue the polling zeus pill and the CLI use); a closed one dims to the
    hairline and stays as history. Deliberately NOT .chip — that class is
    claimed by the delegated handler that opens an artifact panel (same reason
    .queue-cancel keeps its own class). */
 .threads { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; align-items: center; }
+/* the only chip in the card's row whose width is not bounded by a count or a
+   PR number: its label carries the thread's title, which is renamable to
+   anything from the thread overlay. Capped and ellipsised, or one long rename
+   makes a flex item wider than the column and overflows the card sideways —
+   the full title is on the chip's own title attribute either way. */
 .thread-chip {
   font: 10px var(--mono);
   background: transparent; color: var(--polling);
   border: 1px solid var(--polling-soft);
   padding: 2px 7px; cursor: pointer;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   /* no box-shadow here: --polling has no glow token, and these chips lift by
      filling in rather than glowing (unlike .chip/.pr-chip) */
   transition: background 80ms var(--ease), border-color 80ms var(--ease);
@@ -480,7 +489,9 @@ body {
 .thread-chip.closed { color: var(--text-2); border-color: var(--hairline-2); opacity: 0.8; }
 .thread-chip.closed:hover { background: var(--raised); opacity: 1; border-color: var(--text-2); color: var(--text); }
 .thread-chip.closed .dot { background: var(--hairline-2); }
-/* dashed, like .chip-more: an affordance rather than a thing that exists */
+/* dashed rather than solid: an affordance rather than a thing that exists.
+   Modal-only now — the card's chip row shows branches that EXIST and leaves
+   starting one to the click-in. */
 .branch-btn {
   font: 10px var(--mono);
   background: transparent; color: var(--text-2);
@@ -514,20 +525,25 @@ body {
   margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.roster { margin-top: 5px; display: flex; flex-direction: column; gap: 1px; }
-.roster-row { font: 10px var(--mono); color: var(--text-2); }
-.roster-row .dim { opacity: 0.6; }
-.roster-dot { margin-right: 2px; }
-.roster-dot.on { color: var(--solved); }
+/* no .roster block any more: the card used to render the crew chips AND a
+   name-per-teammate list restating the same roster directly under them. The
+   names moved into the chips' title attribute (see crewChipsHTML) — the card's
+   only outright duplication, and the one worth the tooltip.
 
-/* crew line: zeus's god icon (color IS its status) + one god-icon working/
-   total chip per subagent role. Shown on both working and blocked live cards
-   (see zeusPillHTML/crewHTML) — muted by default, colored only when
-   something on the row is actually active. The god's name lives only in the
-   title attribute, so hover/assistive tech still reads "zeus", "hephaestus",
-   etc. */
-.crew { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-.steer-context .crew, .steer-context .threads { margin-top: 0; }
+   .crew is MODAL-ONLY: it is the class on #steer-crew itself, exactly as
+   .threads is the class on #steer-threads. On a card the same tokens render
+   bare, among the branches and counts in the .chips row (band 2), so there is
+   no .crew element there to lay out. No margin-top for that reason — .steer-context
+   spaces its own children, and the one this rule used to carry was overridden
+   to 0 on the only surface that still renders it.
+
+   The tokens themselves: zeus's god icon (color IS its status) + one god-icon
+   working/total chip per subagent role (see zeusPillHTML/crewChipsHTML) —
+   muted by default, colored only when something is actually active. The god's
+   name lives only in the title attribute, so hover/assistive tech still reads
+   "zeus", "hephaestus", etc. */
+.crew { display: flex; flex-wrap: wrap; gap: 5px; }
+.steer-context .threads { margin-top: 0; }
 .crew-pill, .crew-chip {
   font: 10px var(--mono); letter-spacing: 0.3px;
   padding: 2px 7px; border: 1px solid var(--hairline-2);
@@ -693,7 +709,18 @@ body {
 .fb-edit-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; margin-top: 5px; }
 .fb-edit-note { font: 10px var(--mono); color: var(--counter); margin-right: auto; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+/* align-items: center is load-bearing because this is the card's one
+   MIXED-HEIGHT chip row (.prs below is the other chip row, but everything in
+   it is one size). This row always mixed buttons and spans, but everything in
+   it used to be the same HEIGHT — 10px mono, 2px 7px padding, 1px border — so
+   the default `stretch` had nothing to stretch and was a no-op. Today it also
+   holds 13px crew pills, and under `stretch` the crew's taller box is forced
+   onto every sibling: a <button> centres its text in the extra height, a
+   blockified <span> does not, so .dq-chip/.ct-chip/.fb-chip would hug the top
+   of a box ~3px taller than their text while .thread-chip beside them sat
+   centred. Only rows with a live crew would show it, which is what makes it
+   easy to miss. */
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
 .chip {
   font: 10px var(--mono);
   background: transparent; color: var(--accent);
@@ -702,10 +729,26 @@ body {
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
 .chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
-.chip-more { color: var(--text-2); border: 1px dashed var(--hairline-2); }
-.chip-more:hover { background: var(--raised); box-shadow: none; border-color: var(--text-2); color: var(--text); }
+/* no .chip-more any more: .chip is a modal-only renderer now (artifactListHTML
+   fills #steer-chips and #editor-chips), and a modal scrolls, so there is
+   nothing left to collapse behind a "+N more" toggle. */
 
-/* the board's whole question surface: an open-count chip in the artifact-chip
+/* the board's whole artifact surface: a bare count in the card's chip row,
+   the artifacts themselves one click into the job (artifactChipHTML). Third
+   of the three count chips, and the same plain span rather than a .chip for
+   the same reason as the two below — .chip is the artifact-overlay click
+   target, and this one must fall through to the card's open-the-drilldown
+   handler instead. Muted always: unlike an open question or an unaddressed
+   note, a pile of artifacts is never something owed. */
+.ct-chip {
+  font: 10px var(--mono);
+  color: var(--text-2); border: 1px solid var(--hairline-2);
+  padding: 2px 7px; cursor: pointer;
+  transition: border-color 80ms var(--ease), color 80ms var(--ease);
+}
+.card:hover .ct-chip { color: var(--text); border-color: var(--text-2); }
+
+/* the board's whole question surface: an open-count chip in the card's chip
    row, the questions themselves one click into the job (docQuestionsChipHTML).
    Deliberately NOT class .chip — that class is the artifact-overlay click
    target — so a click falls through to the card's own open-the-drilldown
@@ -728,7 +771,7 @@ body {
 .card:hover .dq-chip.p0 { border-color: var(--counter); box-shadow: var(--glow-hot); }
 
 /* the board's whole feedback surface, exactly parallel to .dq-chip above:
-   a count in the PR row, the notes themselves one click into the job
+   a count in the card's chip row, the notes themselves one click into the job
    (feedbackChipHTML). Also a plain span, not a .chip, for the same
    fall-through reason. Amber rather than counter-pink when notes are still
    unaddressed: an open note is work owed, not a job blocked on a human —
@@ -860,25 +903,43 @@ body {
 .spec-meta-row.wide { grid-column: 1 / -1; }
 
 /* per-job token spend, in the steer modal's context block (tokensHTML).
-   Deliberately three tiers of loudness rather than four equal numbers:
-   the headline is the only thing readable at a glance, the four-way
-   breakdown is a size and a shade quieter, and the provenance line is
-   quieter still. No neon: this is a fact about the past, never something
-   that's hot or interactive. */
+
+   The box is the same raised / border-left panel .doc-questions and
+   .job-feedback use — those three are the modal context's neutral
+   drilldown panels and reading as one family is the point; a full 1px
+   border on --surface made this one look like a different kind of thing
+   sitting among them.
+
+   Everything is FADED: the whole block inherits --text-2, including the
+   headline, and separates its four tiers (headline / counters / origin /
+   provenance) by size and opacity rather than by brightness. Nothing here
+   is hot or interactive — it is a fact about the past — so nothing here
+   earns full --text, let alone neon. */
 .tok {
-  padding: 8px 11px; background: var(--surface); border: 1px solid var(--hairline);
+  margin-top: 7px; padding: 6px 8px;
+  background: var(--raised);
+  border-left: 2px solid var(--hairline-2);
+  font: 11px var(--mono); line-height: 1.45;
+  color: var(--text-2);
 }
 .tok-head { display: flex; align-items: baseline; gap: 5px; }
-.tok-big { font: 600 17px var(--mono); color: var(--text); letter-spacing: 0.5px; }
-.tok-mid { font: 600 13px var(--mono); color: var(--text-2); }
-.tok-unit { font: 9px var(--mono); color: var(--text-2); text-transform: uppercase; letter-spacing: 1.2px; }
-.tok-dot { color: var(--hairline-2); margin: 0 2px; }
+.tok-big { font: 600 15px var(--mono); letter-spacing: 0.5px; }
+.tok-unit { font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; opacity: 0.65; }
 .tok-break {
-  display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 6px;
-  font: 10px var(--mono); color: var(--text-2);
+  display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 5px;
+  font-size: 10px; opacity: 0.85;
 }
-.tok-cell i { font-style: normal; opacity: 0.6; margin-right: 5px; }
-.tok-note { margin-top: 5px; font: 9px var(--mono); color: var(--text-2); opacity: 0.6; }
+/* the origin row (zeus vs subagents) is a second .tok-break, tightened up
+   against the first: the two rows are both per-counter breakdowns of the
+   same headline, cut two different ways, so they read as one stack rather
+   than as two panels */
+.tok-origin { margin-top: 2px; }
+/* 0.7 NESTED inside .tok-break's 0.85 is 0.6 effective — the flat 0.6 the
+   iOS copy applies to the same labels (JobDetailView's tokenCell). The two
+   surfaces render this block row for row and the label tier is the one
+   place a nested opacity could quietly desynchronise them. */
+.tok-cell i { font-style: normal; opacity: 0.7; margin-right: 5px; }
+.tok-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
 .spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
 .spec-meta-row .v { color: var(--text); }
 .panel {
@@ -898,6 +959,16 @@ body {
 }
 .panel-title { font: 700 11.5px var(--mono); letter-spacing: 1px; }
 .panel-title::after { content: "▊"; color: var(--accent); margin-left: 4px; }
+/* artifact pager: ‹ n / N › in the head's own vocabulary (.btn.ghost, mono,
+   lowercase), just tighter than the action buttons since the glyphs are one
+   character wide. Hiding it for a single-artifact sequence needs nothing
+   here — the global [hidden] up at the top of this file is !important. */
+.panel-pager { display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; }
+.panel-pager .pg { padding: 3px 8px; line-height: 1; }
+/* inert at the ends: .btn:disabled already dims, but .btn.ghost:hover would
+   still light the border on a button that does nothing */
+.panel-pager .pg:disabled:hover { background: transparent; border-color: var(--hairline-2); }
+.pg-pos { font: 10px var(--mono); color: var(--text-2); padding: 0 5px; letter-spacing: 0.5px; }
 /* empty on an older server (rotation_mode undefined — see
    rotationModeChipHTML in app.js): collapse out of the panel-head's flex
    gap entirely so the row looks pixel-identical to before this chip existed */
@@ -1175,7 +1246,7 @@ body {
 }
 .u-manual-banner .btn { flex: none; }
 /* bare .dim spans inside the usage widget/modal (email, "usage —",
-   fetched-ago) — .stat.dim/.roster-row .dim don't reach them */
+   fetched-ago) — .stat.dim doesn't reach them */
 .usage-stat .dim,
 #usage-overlay .dim { opacity: 0.55; }
 .btn.mini { font-size: 9.5px; letter-spacing: 0.3px; padding: 2px 7px; }
@@ -1268,6 +1339,18 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
    Reuses .editor-docq-head for the label so the two panels can't drift. */
 .editor-feedback { flex: none; display: flex; flex-direction: column; gap: 4px; }
 .editor-feedback .job-feedback { margin-top: 0; max-height: 40vh; overflow-y: auto; }
+/* the editor's artifact list, third of the same family — the click-into
+   surface for a done or archived job's docs, which is the only kind of surface
+   those docs have now that the card carries a count. Emits .editor-docq-head
+   for its label like the feedback panel does, so all three share one class
+   rather than one grouped selector. Capped like both of them, and for the same
+   reason: this panel sits ABOVE the spec textarea, which is what you came to
+   the editor for, so an unusually long list must scroll inside itself rather
+   than push the textarea off-screen. 24vh not 40vh — chips are one dense
+   wrapped row each, so a cap that size already holds far more of them than a
+   question list of the same height. */
+.editor-chips { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.editor-chips .chips { margin-top: 0; max-height: 24vh; overflow-y: auto; }
 .mini-add {
   background: none; border: 1px solid var(--hairline-2); cursor: pointer;
   font: 10px var(--mono); color: var(--text-2); padding: 1px 7px;
@@ -1314,33 +1397,13 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 }
 .btn-new:hover { background: var(--accent-soft); box-shadow: var(--glow); }
 .btn-new:active { animation: glitch 120ms steps(2, end); }
-.card.editable { cursor: pointer; }
-.card.editable:hover { border-color: var(--accent-soft); border-left-color: var(--job-color, var(--text-2)); }
-
-/* ---- dag view ---- */
-.dag { padding: 18px 16px 40px; overflow: auto; }
-.dag-canvas { position: relative; min-height: 300px; }
-#dag-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-#dag-edges path { fill: none; stroke: var(--hairline-2); stroke-width: 1.3; }
-#dag-edges path.done { stroke: var(--solved); opacity: 0.7; }
-#dag-edges path.gated { stroke: var(--counter); stroke-dasharray: 5 4; }
-#dag-edges text { font: 10px var(--mono); fill: var(--counter); }
-#dag-nodes { position: relative; }
-.dag-node {
-  position: absolute; width: 190px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-left: 2px solid var(--job-color, var(--text-2));
-  padding: 7px 10px;
-  cursor: default;
-}
-.dag-node.editable { cursor: pointer; }
-.dag-node.editable:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--text-2)); }
-/* no .dag-node.flagged rule either, for the same reason as .card.flagged */
-.dag-node .slug { font: 700 11px var(--mono); display: block; word-break: break-all; }
-.dag-node .nstate { font: 9.5px var(--mono); color: var(--state, var(--text-2)); }
-.dag-node .nrepo { font: 9.5px var(--mono); color: var(--text-2); margin-left: 8px; }
-.dag-empty { color: var(--text-2); opacity: 0.5; font-size: 11px; padding: 30px; text-align: center; }
+/* .archived is named alongside .editable because an archived card opens the
+   editor too now (data-editable="false" — read-only, but it opens). It does
+   not carry .editable, so without this it would be a silent hit area: a
+   clickable card with a default cursor and no hover feedback, its only visible
+   affordance the cursor:pointer on the ▤/✎ count chips themselves. */
+.card.editable, .card.archived { cursor: pointer; }
+.card.editable:hover, .card.archived:hover { border-color: var(--accent-soft); border-left-color: var(--job-color, var(--text-2)); }
 
 @media (max-width: 1200px) { .board { grid-template-columns: repeat(3, minmax(200px, 1fr)); } }
 @media (max-width: 700px) { .board { grid-template-columns: 1fr; } }
@@ -1351,17 +1414,43 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   background: #fff;
 }
 
-/* open the cell's tmux pane in Ghostty — review-row name predates the
-   removal of the nvim/code review buttons it used to sit alongside.
-   wireframe like every other outline button, in yellow. */
+/* open the cell's tmux pane in Ghostty — wireframe like every other outline
+   button, in yellow. */
 .btn.tmux-open {
   background: transparent; color: var(--revealed);
   border: 1px solid var(--revealed-soft);
   font-size: 10px; letter-spacing: 1px;
 }
 .btn.tmux-open:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
-.review-row { display: flex; gap: 8px; margin-top: 8px; }
-.review-row .btn.tmux-open { flex: 1; padding: 5px 0; }
+
+/* band 6 of the card (see cardHTML): the card's controls, in one row at its
+   foot. archivedCardHTML renders it too, holding unarchive + delete — those
+   are plain .btns and keep .btn's own sizing, since only the tmux/retry/
+   reactivate rules below name a class.
+   It replaces .review-row plus the loose buttons that sat at two further
+   depths in the card body — .btn.retry as a width:100% bar below the chips,
+   .btn.reactivate on a line of its own under the question block — so every
+   button a card offers is now in one place instead of three.
+   tmux keeps flex: 1 and .review-row's taller padding: it is the way INTO the
+   cell and stays the card's one big target, exactly as before. retry and
+   reactivate size to their text beside it, and on a card that has no tmux
+   button (a done or dead cell) reactivate simply sits alone at its natural
+   width rather than stretching — a settled job's one button should not read
+   as loud as a live job's. */
+.card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.card-actions > .btn.tmux-open { flex: 1; padding: 5px 0; }
+/* retry and reactivate are the two that arrive carrying geometry from the era
+   of standalone bars — retry a display:block/width:100%/margin-top, reactivate
+   a margin-top alone. Both source rules are (0,2,0), so a (0,2,0) reset here
+   would ride on nothing but source order; naming them (0,3,0) is how
+   .steer-actions > .btn.retry already solves this. Overridden here rather than
+   deleted at the source because retry ALSO renders outside this row, in
+   #steer-actions, where it keeps its full-width treatment. */
+.card-actions > .btn.retry,
+.card-actions > .btn.reactivate {
+  display: inline-block; width: auto; margin-top: 0;
+  font-size: 10px; letter-spacing: 1px; padding: 5px 9px;
+}
 
 /* honor the OS-level motion preference — kills the remaining finite
    animations/transitions (panel-in, glitch, hover fades) outright */

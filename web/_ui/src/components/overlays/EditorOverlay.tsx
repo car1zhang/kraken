@@ -1,17 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   archiveJob,
   createJob,
+  deleteFeedback,
   dequeueJob,
+  editFeedback,
   fetchJobForm,
   queueJob,
   saveJobForm,
+  setJobColor,
   uploadImage,
 } from "../../api/client.ts";
-import type { JobForm, JobFormPrereq, WebJob } from "../../api/types.ts";
+import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
+import {
+  type JobForm,
+  type JobFormPrereq,
+  type WebArtifact,
+  type WebJob,
+} from "../../api/types.ts";
 import { insertIntoTextarea } from "../../hooks/useCmdHighlight.ts";
 import { useDebouncedCallback } from "../../hooks/useDebouncedDraft.ts";
+import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
+import { jobKey } from "../../lib/jobKey.ts";
 import { CmdComposer } from "./CmdComposer.tsx";
 import { DocQuestions } from "./DocQuestions.tsx";
 import {
@@ -73,8 +89,67 @@ export interface EditorOverlayProps {
    * into the resume prompt) exactly as the card's own ↺ does.
    */
   onReactivate: (slug: string) => void;
+  /**
+   * Open one of the job's artifacts in the artifact viewer.
+   *
+   * The third argument is the job's jobKey() and it is not decorative: the
+   * viewer's pager rebuilds the job's ORDERED list from it, so a chip opened
+   * without one degrades to a singleton with the pager hidden.
+   *
+   * Optional only so the board can be wired incrementally — absent, the list
+   * still renders (it is the settled job's inventory either way) and a click
+   * does nothing.
+   */
+  onOpenArtifact: (url: string, name: string, jobKey: string) => void;
   /** See Overlay.tsx. */
   mutate: Mutate;
+}
+
+export interface ArtifactListProps {
+  artifacts: WebArtifact[] | undefined;
+  /**
+   * The job's jobKey() — NEVER a bare slug, or an archived job and an active
+   * one that reused its freed slug would open each other's artifacts.
+   */
+  jobKey: string;
+  /** Prefixes each chip's name; differs from the slug for a renamed archive. */
+  label: string;
+  onOpen?: (url: string, name: string, jobKey: string) => void;
+}
+
+/**
+ * `artifactListHTML` (app.js:659) — EVERY one of a job's artifacts as an
+ * openable chip, with no cap and no "+N more" toggle.
+ *
+ * This is the DRILLDOWN renderer, deliberately different from the card's:
+ * since the card reorg the card carries a bare COUNT, and a modal scrolls, so
+ * it can just show the list where the card had to bound it.
+ */
+export function ArtifactList({
+  artifacts,
+  jobKey,
+  label,
+  onOpen,
+}: ArtifactListProps) {
+  return (
+    <>
+      {(artifacts ?? []).map((a) => {
+        const name = `${label}/${a.name}`;
+        return (
+          <button
+            key={a.url}
+            className="chip"
+            data-url={a.url}
+            data-key={jobKey}
+            data-name={name}
+            onClick={() => onOpen?.(a.url, name, jobKey)}
+          >
+            ▤ {a.name}
+          </button>
+        );
+      })}
+    </>
+  );
 }
 
 export function EditorOverlay(props: EditorOverlayProps) {
@@ -102,6 +177,7 @@ function EditorBody({
   onClose,
   onCreated,
   onReactivate,
+  onOpenArtifact,
   mutate,
   fileSink,
 }: EditorOverlayProps & { fileSink: FileSink }) {
@@ -133,8 +209,26 @@ function EditorBody({
   // set by "+ add" so the row that appears takes focus — an added row is there
   // to be typed into, and an empty one is dropped from the payload anyway
   const focusNewPrereq = useRef(false);
+  /**
+   * The ARCHIVED branch (app.js:3815). An archived job's key is jobKey's
+   * synthetic `archive:<slug>` — there is no such job file — so there is no
+   * form to load: the panels below (artifacts, questions, feedback) ARE the
+   * whole modal for it. Asking the server for one 404s and paints "no such
+   * job" over a view that is working exactly as intended.
+   *
+   * `readOnly` is forced TRUE from here rather than being left to fall out of
+   * `form`, and that ordering is the load-bearing part the vanilla comment
+   * insists on. Three paths gate on this flag ALONE rather than on the form
+   * being hidden — the panel's dragover, its drop, and the document paste
+   * layer, all funnelling into addFiles — and with `form` null the
+   * `!!form && !editable` rule below yields FALSE, leaving every one of them
+   * armed. A ⌘V on this read-only modal would then upload against the
+   * synthetic `archive:<slug>` key and paint the server's second error over
+   * a modal that just said it was read-only.
+   */
+  const archived = !!job?.archived;
   const editable = !!form?.editable;
-  const readOnly = !!form && !editable;
+  const readOnly = archived || (!!form && !editable);
 
   // ---- load ---------------------------------------------------------------
   const load = useCallback(
@@ -164,7 +258,7 @@ function EditorBody({
   );
 
   useEffect(() => {
-    if (!slug) return;
+    if (!slug || archived) return; // see the archived branch above
     const ac = new AbortController();
     load(slug, ac.signal).catch((e: unknown) => {
       if (ac.signal.aborted) return;
@@ -172,7 +266,7 @@ function EditorBody({
       setNote(e instanceof Error ? e.message : String(e));
     });
     return () => ac.abort();
-  }, [load, slug]);
+  }, [archived, load, slug]);
 
   // ---- autosave -----------------------------------------------------------
   const save = useCallback(async () => {
@@ -325,17 +419,23 @@ function EditorBody({
   // the modal opens
   const armed = draftMode && spec.trim() !== "" && !syncWarn && !boardErr;
 
-  const hint = readOnly
-    ? "read-only — cell in flight"
-    : queuedMode
-      ? "queued — cancel returns it to draft"
-      : draftMode
-        ? armed
-          ? "synced ✓ — queueable"
-          : spec.trim() === ""
-            ? "write a spec to queue"
-            : ""
-        : "";
+  // the archived case is FIRST, which is this expression's whole equivalent of
+  // vanilla calling setFormReadOnly BEFORE writing #editor-hint: both branches
+  // are read-only, and the archived wording ("unarchive to edit" — there is no
+  // cell) has to win over the in-flight one
+  const hint = archived
+    ? "read-only · unarchive to edit"
+    : readOnly
+      ? "read-only — cell in flight"
+      : queuedMode
+        ? "queued — cancel returns it to draft"
+        : draftMode
+          ? armed
+            ? "synced ✓ — queueable"
+            : spec.trim() === ""
+              ? "write a spec to queue"
+              : ""
+          : "";
 
   const doQueue = useCallback(async () => {
     if (!slug) return;
@@ -408,14 +508,77 @@ function EditorBody({
   const showReactivate =
     !!job && !job.archived && job.state === "done" && !!job.reactivatable;
 
+  /**
+   * The feedback panel's two writes, taken straight through `mutate` rather
+   * than through props the integrator has to remember to pass.
+   *
+   * That is deliberate and it is the lesson of the pager: an optional callback
+   * left unwired is a feature that renders and does nothing, with nothing
+   * failing anywhere to say so. These need no state App owns — only the
+   * board-refresh policy, which `mutate` already IS — so there is nothing for
+   * a prop to carry but the risk of being forgotten. (`BoardActions`'
+   * onSaveFeedback/onDeleteFeedback remain the card's path, if the card ever
+   * takes the panel back.)
+   *
+   * FeedbackPanel wants `Error | null`, matching mutate's null-on-failure with
+   * the sign flipped: mutate has already parked the server's own sentence in
+   * the status corner, so the Error here only has to be non-null — the row
+   * prints its own "save failed — see status bar" and never this text.
+   */
+  const onSaveFeedback = useCallback(
+    async (s: string, id: number, note_: string) =>
+      (await mutate(() => editFeedback(s, id, note_)))
+        ? null
+        : new Error("save failed"),
+    [mutate],
+  );
+  const onDeleteFeedback = useCallback(
+    (s: string, id: number) => void mutate(() => deleteFeedback(s, id)),
+    [mutate],
+  );
+
+  /**
+   * The colour pick (app.js:141 initSwatchStrip). Deliberately NOT the
+   * debounced form autosave every other control in this form rides:
+   * `saveform` refuses any job whose cell is live — which is exactly when
+   * recolouring is useful — and a full-replace save from an older client could
+   * wipe the colour by omitting the key. A discrete one-click choice has
+   * nothing to debounce either.
+   *
+   * `pending` is what the strip shows while the POST is in flight, so the pick
+   * lands instantly instead of waiting a round trip; clearing it hands
+   * authority back to the board payload, which means a REFUSED pick snaps back
+   * to whatever the server actually has. The strip can therefore never sit
+   * showing a colour the server rejected.
+   */
+  const [pendingColor, setPendingColor] = useState<string | null>(null);
+  const pickColor = useCallback(
+    async (c: string) => {
+      if (!slug) return;
+      setPendingColor(c);
+      await mutate(() => setJobColor(slug, c));
+      setPendingColor(null);
+    },
+    [mutate, slug],
+  );
+
   const repos = form?.repos || [];
   const hasDocq = !!job?.doc_questions?.length;
+  const artifacts = job?.artifacts ?? [];
+  const hasFeedback = !!job?.feedback?.length;
+  // an archived job's `slug` prop is the synthetic key, so the title is built
+  // from the job's own label — "old — archived", never "archive:old.job.md"
+  const title = isNew
+    ? "new job"
+    : archived && job
+      ? `${job.display_slug || job.slug} — archived`
+      : slug + ".job.md";
 
   return (
     <>
       <div className="panel-head">
         <span className="panel-title" id="editor-title">
-          {isNew ? "new job" : slug + ".job.md"}
+          {title}
         </span>
         <span className="stat dim" id="editor-hint">
           {hint}
@@ -487,6 +650,38 @@ function EditorBody({
           </button>
         </div>
 
+        {/* The job's artifacts. This modal is the ONLY way to reach a done or
+            archived job's docs: the board card carries a bare count and a
+            settled job never opens the steer modal, whose #steer-chips is the
+            live cell's equivalent. Before the card gave up its chip list this
+            container did not exist, and a click on a done card landed on a
+            spec textarea with no path to the twelve artifacts the job had just
+            shipped — 69 archived jobs' worth of stranded docs.
+
+            Rendered once per open with no snapshot/restore, unlike the two
+            panels below it: nothing re-runs it (there is no half-typed input
+            and no scroll position inside it to survive a replacement), where
+            the questions and feedback panels are re-rendered after every
+            answer and every post. */}
+        <div className="editor-chips" id="editor-chips" hidden={!artifacts.length}>
+          {job && artifacts.length ? (
+            <>
+              {/* .editor-docq-head, the same class both sibling panels emit —
+                  a shared class, not a shared rule, so the three labels cannot
+                  drift apart */}
+              <div className="editor-docq-head">artifacts</div>
+              <div className="chips">
+                <ArtifactList
+                  artifacts={artifacts}
+                  jobKey={jobKey(job)}
+                  label={job.display_slug || job.slug}
+                  onOpen={onOpenArtifact}
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
+
         {/* Questions ABOVE the form, not below it: on a done job they are what
             you clicked in for, and the spec textarea would push them past the
             fold. Rendered for ANY job that has them, not just done ones — this
@@ -496,6 +691,26 @@ function EditorBody({
             <>
               <div className="editor-docq-head">questions</div>
               <DocQuestions job={job} mutate={mutate} />
+            </>
+          ) : null}
+        </div>
+
+        {/* the editor's copy of the feedback panel — the click-into surface for
+            a done or archived job's notes, which is where most of them live
+            (they are left on shipped artifacts, and a shipped artifact belongs
+            to a settled job). Without it the board has no reader for a feedback
+            row AT ALL: the card carries only a count chip whose title says to
+            click in, and these rows are the dream loop's inbound channel from
+            the board. Same split as the questions panel above. */}
+        <div className="editor-feedback" id="editor-feedback" hidden={!hasFeedback}>
+          {job && hasFeedback ? (
+            <>
+              <div className="editor-docq-head">feedback</div>
+              <FeedbackPanel
+                job={job}
+                onSaveFeedback={onSaveFeedback}
+                onDeleteFeedback={onDeleteFeedback}
+              />
             </>
           ) : null}
         </div>
@@ -557,6 +772,21 @@ function EditorBody({
                 onChange={(e) => setModel(e.target.value)}
               />
             </label>
+            {/* job colour. It is the ONE control in this form that is not
+                disabled while read-only, and that is deliberate rather than an
+                oversight (setFormReadOnly says so out loud): everything else
+                here is job-file state the crew owns while a cell is in flight,
+                so the server refuses it, whereas a colour is carl's own label
+                on the card riding its own ungated endpoint — and recolouring a
+                RUNNING job is the main thing the feature is for. */}
+            <div className="f-colors">
+              color
+              <SwatchStrip
+                name="f-color"
+                value={pendingColor ?? job?.color}
+                onPick={(c) => void pickColor(c)}
+              />
+            </div>
             <span className="f-toggles">
               <label className="check">
                 <input

@@ -28,6 +28,57 @@ export function stateColor(state: string): string {
   return STATE_COLOR[state] ?? "var(--text-2)";
 }
 
+// ---------------------------------------------------------------- job colour
+
+/**
+ * The eight names Claude Code's own `/color` accepts, in `/color`'s order —
+ * the same list internal/jobs/color.go's Palette carries and the same eight
+ * `--job-*` custom properties style.css declares (guarded against the Go
+ * palette by web/jobpalette_test.go).
+ *
+ * A COLOUR, not a default: unset means NO colour rather than one auto-assigned,
+ * and an uncoloured job renders exactly as it always did.
+ */
+export const JOB_COLORS = [
+  "red",
+  "blue",
+  "green",
+  "yellow",
+  "purple",
+  "orange",
+  "pink",
+  "cyan",
+] as const;
+
+/**
+ * jobColorVar resolves a job's colour to the CSS var holding it, or "" when the
+ * job has none. Ported verbatim from app.js:102.
+ *
+ * The value lands on the card root as the `--job-color` inline custom property
+ * and style.css reads it back for the 2px left accent bar
+ * (`border-left: 2px solid var(--job-color, var(--text-2))`). That bar is the
+ * job's colour channel and NOTHING else — it carries neither state nor alerts —
+ * so a card that stops emitting the property does not degrade, it silently
+ * loses a whole feature: every coloured job's bar falls back to grey, with no
+ * error anywhere. The colour is also what internal/jobs/color.go types into the
+ * cell's live tmux pane on a daemon pass, so board and pane are meant to be the
+ * same pixel colour.
+ *
+ * The whitelist check is what makes the result safe to hand to a style
+ * attribute at all: an unrecognised value from the wire drops to "" rather than
+ * reaching the stylesheet. Callers must then OMIT the property rather than set
+ * it to "" — a custom property set to the empty string substitutes nothing, and
+ * `var(--job-color, …)` would resolve to nothing rather than to its fallback,
+ * making the whole `border-left` declaration invalid at computed-value time.
+ *
+ * The parameter is `{ color?: string }` rather than `Pick<WebJob, "color">` so
+ * the rule does not depend on how the wire type spells the field.
+ */
+export function jobColorVar(j: { color?: string } | null | undefined): string {
+  const c = j?.color;
+  return c && (JOB_COLORS as readonly string[]).includes(c) ? `var(--job-${c})` : "";
+}
+
 // ---------------------------------------------------------------- clocks
 
 /**

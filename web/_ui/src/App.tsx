@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { fetchUsage } from "./api/client.ts";
-import type { WebJob, WebUsage } from "./api/types.ts";
+import type { WebUsage } from "./api/types.ts";
 import { BoardView, type BoardActions } from "./components/board/BoardView.tsx";
 import { JobCard } from "./components/board/JobCard.tsx";
 import { DragProvider } from "./components/board/DragProvider.tsx";
 import { Chrome } from "./components/chrome/Chrome.tsx";
-import { DagView } from "./components/dag/DagView.tsx";
+import { DreamView } from "./components/dream/DreamView.tsx";
 import { LogView } from "./components/log/LogView.tsx";
 import { ArtifactOverlay } from "./components/overlays/ArtifactOverlay.tsx";
 import { EditorOverlay } from "./components/overlays/EditorOverlay.tsx";
@@ -80,9 +80,16 @@ export function App() {
     requireText: boolean;
   } | null>(null);
   const [editor, setEditor] = useState<{ slug: string | null } | null>(null);
-  const [artifact, setArtifact] = useState<{ url: string; name: string } | null>(
-    null,
-  );
+  // `key` is the jobKey the artifact was opened with, NOT a bare slug: the
+  // pager rebuilds the job's ordered artifact list from it, and an archived
+  // job plus a live one that reused its freed slug would otherwise page
+  // through each other's artifacts. It must SURVIVE a step — stepping within
+  // a sequence changes url/name but never the job it belongs to.
+  const [artifact, setArtifact] = useState<{
+    url: string;
+    name: string;
+    key: string;
+  } | null>(null);
   const [thread, setThread] = useState<{ slug: string; tid: string | null } | null>(
     null,
   );
@@ -120,34 +127,11 @@ export function App() {
     [],
   );
 
-  /**
-   * "Open this job" — the routing behind a plain click on a DAG node, ported
-   * from app.js:3550-3557, which is byte-for-byte the same rule the board
-   * card's own fallback uses (app.js:1659-1665). Both route on the job's LIVE
-   * display column, which is NOT its state: an unhealthy live cell reads as
-   * blocked whatever the job file says (liveDisplayColumn, app.js:2057), so a
-   * working-but-sick job correctly opens the UNBLOCK composer.
-   *
-   * A job that is not live has no composer to open and falls through to the
-   * editor, which renders itself read-only when the server says so.
-   */
-  const openJob = useCallback(
-    (job: WebJob) => {
-      const liveCol = job.live ? (job.health ? "blocked" : job.state) : null;
-      if (liveCol === "working" || liveCol === "blocked") {
-        openSteer(job.slug, liveCol === "blocked" ? "unblock" : "steer");
-      } else {
-        setEditor({ slug: job.slug });
-      }
-    },
-    [openSteer],
-  );
-
   const actions = useMemo<BoardActions>(
     () => ({
       onOpenSteer: openSteer,
       onOpenEditor: (slug) => setEditor({ slug }),
-      onOpenArtifact: (url, name) => setArtifact({ url, name }),
+      onOpenArtifact: (url, name, key) => setArtifact({ url, name, key }),
       onOpenThread: (slug, tid) => setThread({ slug, tid }),
       onAnswerQuestion: (slug, i) => void board.mutate(() => answerQuestion(slug, i)),
       onRetry: (slug) => void board.mutate(() => retryJob(slug)),
@@ -220,12 +204,14 @@ export function App() {
         />
       </DragProvider>
 
-      <DagView
-        board={board.board}
-        active={view === "dag"}
-        onNodeClick={openJob}
-      />
+      {/* Both stay MOUNTED across view switches, hidden rather than
+          unmounted: LogView keeps its paged history and scroll position, and
+          DreamView keeps which report dates are expanded plus any half-typed
+          watchlist comment. Unmounting would throw all of that away on every
+          tab switch — the vanilla board kept them in module state for the same
+          reason. */}
       <LogView active={view === "log"} />
+      <DreamView active={view === "dream"} mutate={mutate} onToast={showToast} />
 
       <SteerOverlay
         open={steer !== null}
@@ -233,6 +219,14 @@ export function App() {
         mode={steer?.mode ?? "steer"}
         requireText={steer?.requireText ?? false}
         job={jobFor(steer?.slug)}
+        // Both REQUIRED, deliberately: these replaced optional `artifactChips`
+        // / `threadChips` slots that App never filled, which left the modal's
+        // artifact list and its branch button rendering nothing at all. An
+        // optional slot the integrator must remember to fill is exactly how
+        // that shipped silently — required props make the omission a compile
+        // error instead.
+        onOpenArtifact={(url, name, key) => setArtifact({ url, name, key })}
+        onOpenThread={(slug, tid) => setThread({ slug, tid })}
         onClose={() => setSteer(null)}
         mutate={mutate}
       />
@@ -247,6 +241,10 @@ export function App() {
           setEditor(null);
           openSteer(slug, "reactivate", { requireText: true });
         }}
+        // The editor is the only surface a settled job's artifacts are
+        // reachable from now that the card carries a bare count, so leaving
+        // this unpassed made every chip in that list a silent no-op.
+        onOpenArtifact={(url, name, key) => setArtifact({ url, name, key })}
         mutate={mutate}
       />
 
@@ -254,6 +252,12 @@ export function App() {
         open={artifact !== null}
         url={artifact?.url ?? ""}
         name={artifact?.name ?? ""}
+        // looked up by jobKey, never bare slug — see the artifact state above
+        job={artifact ? board.byKey.get(artifact.key) : undefined}
+        // a step keeps the jobKey it opened with; only url/name move
+        onNavigate={(url, name) =>
+          setArtifact((a) => (a ? { ...a, url, name } : a))
+        }
         onClose={() => setArtifact(null)}
         mutate={mutate}
       />

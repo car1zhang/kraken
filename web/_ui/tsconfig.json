@@ -5,7 +5,10 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "types": ["vitest/globals", "@testing-library/jest-dom"],
+    // @types/node is here for the few test/config files that touch the
+// filesystem — palette.test.ts reads style.css to check the TS palette
+// against it, since web/jobpalette_test.go cannot see TypeScript.
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"],
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
