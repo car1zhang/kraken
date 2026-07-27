@@ -372,6 +372,96 @@ struct WebFeedback: Decodable, Identifiable {
     }
 }
 
+// MARK: - the dream loop
+
+// WebDreamReport mirrors api/dream.go's webDreamReport — one night's report
+// from GET /api/dream, newest first. `body` is the raw markdown of that
+// night's `00-dream-report.md`, served inline rather than as a URL because a
+// report is one short page and the DREAM view renders every visible one.
+// Nothing here is omitempty server-side, so nothing is Optional.
+struct WebDreamReport: Decodable, Identifiable {
+    /// YYYY-MM-DD, taken from the dream job's own `dream-<date>` slug.
+    let date: String
+    let slug: String
+    let body: String
+
+    var id: String { slug }
+}
+
+// GET /api/dream — always an array, never null (a machine that has never
+// dreamt serves []).
+struct DreamReportsResponse: Decodable {
+    let reports: [WebDreamReport]
+}
+
+// WebWatchItem mirrors api/watchlist.go's webWatchItem — one `watchlist` row,
+// both halves of the table's ownership split in one shape. The agent owns
+// observation/class/state/sightings/*_seen/evidence/suggested_fix/pr_url;
+// carl owns verdict/comment/commented_at, exactly as he owns
+// WebDocQuestion.answer. Unlike questions and feedback, a watchlist row is
+// GLOBAL — it belongs to no job, so there is no slug or job id here.
+//
+// Timestamps are unix millis (`first_seen`/`last_seen`/`updated_at`), except
+// `commented_at`, which is RFC3339 like WebDocQuestion.answeredAt — that
+// asymmetry is the server's, mirrored rather than smoothed over.
+struct WebWatchItem: Decodable, Identifiable {
+    let id: Int64
+    let observation: String
+    /// feedback|correction|repetition|waste|prompting.
+    let watchClass: String
+    /// watching|shipped|declined.
+    let state: String
+    let sightings: Int64
+    let firstSeen: Int64
+    let lastSeen: Int64
+    /// Local-only JSON sample of the most recent occurrence; never enters git.
+    let evidence: String?
+    let suggestedFix: String?
+    let prURL: String?
+    let updatedAt: Int64
+    /// ""|fine|fix — absent means carl hasn't judged this row yet.
+    let verdict: String?
+    /// carl's instruction for a `fix`. When present this IS the spec the next
+    /// dream run follows, which is why the UI treats it as a primary control.
+    let comment: String?
+    let commentedAt: String?
+
+    /// An absent/empty verdict means untouched — the agent is still watching
+    /// it. Same absence-is-the-signal convention as WebFeedback.isAddressed.
+    var isJudged: Bool { !(verdict ?? "").isEmpty }
+
+    enum CodingKeys: String, CodingKey {
+        case id, observation
+        case watchClass = "class"
+        case state, sightings
+        case firstSeen = "first_seen"
+        case lastSeen = "last_seen"
+        case evidence
+        case suggestedFix = "suggested_fix"
+        case prURL = "pr_url"
+        case updatedAt = "updated_at"
+        case verdict, comment
+        case commentedAt = "commented_at"
+    }
+}
+
+// GET /api/watchlist[?state=] — always an array, never null.
+struct WatchlistResponse: Decodable {
+    let watchlist: [WebWatchItem]
+}
+
+// WatchVerdictRequest mirrors POST /api/watchlist's whole body: carl's
+// judgement of one row and nothing else. Every agent-owned key is absent BY
+// CONSTRUCTION (the server 400s a request that so much as names one), which
+// is why this is its own tiny DTO rather than a partial WebWatchItem.
+// `commented_at` is stamped server-side and is deliberately not sendable.
+struct WatchVerdictRequest: Encodable {
+    let id: Int64
+    /// ""|fine|fix — empty clears the judgement.
+    let verdict: String
+    let comment: String
+}
+
 // MARK: - side threads
 
 // WebThread mirrors one entry of a job's `threads` array: a side thread is a

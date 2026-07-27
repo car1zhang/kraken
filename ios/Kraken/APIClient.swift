@@ -322,6 +322,34 @@ actor APIClient {
         let _: OkResponse = try await post(baseURL: baseURL, path: "/api/stop", body: SlugRequest(slug: slug))
     }
 
+    // MARK: - the dream loop
+
+    /// Every night report the machine has kept, newest first. Additive
+    /// endpoint, no contract bump. A night still in progress has no report
+    /// yet and simply isn't in the list.
+    func fetchDreamReports(baseURL: String) async throws -> DreamReportsResponse {
+        try await get(baseURL: baseURL, path: "/api/dream")
+    }
+
+    /// Watchlist rows, newest-observation-first. `state` narrows to one of
+    /// watching|shipped|declined; nil/empty means every row (the server 400s
+    /// an unrecognized state rather than serving an empty list, so a typo is
+    /// loud rather than indistinguishable from "nothing to review").
+    func fetchWatchlist(baseURL: String, state: String? = nil) async throws -> WatchlistResponse {
+        let query = (state?.isEmpty == false) ? [("state", state!)] : []
+        return try await get(baseURL: baseURL, path: "/api/watchlist", query: query)
+    }
+
+    /// carl's verdict on one watchlist row. `verdict` is ""|fine|fix — empty
+    /// with an empty comment clears the judgement outright. `commented_at` is
+    /// stamped server-side and is deliberately not ours to send.
+    func setWatchVerdict(baseURL: String, id: Int64, verdict: String, comment: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/watchlist",
+            body: WatchVerdictRequest(id: id, verdict: verdict, comment: comment)
+        )
+    }
+
     // MARK: - side threads
 
     /// One side-thread mutation, all five ops through the one endpoint the

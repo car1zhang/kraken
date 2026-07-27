@@ -109,6 +109,17 @@ enum KTheme {
     static let skillPr = Color(uiColor: skillPrUI)
     static let skillPrSoftUI = dyn(light: 0xDCF3E4, dark: 0x0F2E1D)
     static let skillPrSoft = Color(uiColor: skillPrSoftUI)
+    // /dream is the fifth skill hue, and violet is the pick because the four
+    // above are blue/red/yellow/green — the five chips sit side by side in
+    // CmdChipsRow, so separation from all four at once is what matters. Its
+    // nearest neighbour is the generic `accent` purple, which never appears
+    // IN the chip row, so that collision is cosmetic rather than confusing.
+    // Doubles as the DREAM surface's own accent (DreamView, the feedback
+    // section header, the artifact-viewer feedback chip).
+    static let skillDreamUI = dyn(light: 0x7E22CE, dark: 0xC084FC)
+    static let skillDream = Color(uiColor: skillDreamUI)
+    static let skillDreamSoftUI = dyn(light: 0xF3E8FF, dark: 0x2A1440)
+    static let skillDreamSoft = Color(uiColor: skillDreamSoftUI)
 
     // Per-job colors: the eight names Claude Code's own `/color` command
     // accepts, in `/color`'s order. The DARK values are Claude Code's exact

@@ -26,6 +26,11 @@ var mirrorGatedRoutes = []string{
 	// reachable — a thread read is a read), and every POST op but rename
 	// opens, kills or types into a real tmux window.
 	"/api/feedback", "/api/questions", "/api/threads",
+	// watchlist: the same inline gate, on both halves of its ownership split
+	// — carl's verdict write and the agent's observation write. Their reads
+	// (GET /api/watchlist, GET /api/feedback/sweep, GET /api/feedback/snapshot,
+	// GET /api/dream) stay open, like every other read on this surface.
+	"/api/watchlist", "/api/watchlist/item",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",

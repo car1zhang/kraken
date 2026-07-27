@@ -5,8 +5,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cmd_feedback_test.go — `kraken feedback get|addressed`'s testable core
@@ -263,5 +265,88 @@ func TestRunFeedbackAddressedRefusesInteractiveTTY(t *testing.T) {
 	err := runFeedbackAddressed([]string{"demo-job", "7"}, fakeTTYFile{strings.NewReader("")})
 	if err == nil || !strings.Contains(err.Error(), "usage:") {
 		t.Fatalf("err = %v, want a usage error refusing to block on a TTY", err)
+	}
+}
+
+// --- sweep ---
+
+// TestRunFeedbackSweepDefaultWindow pins the one place a default window is
+// allowed to live: the CLI, where it is visible in the usage line. The
+// server's own handler requires `since` and 400s without it, so the floor
+// this verb sends must be a real recent timestamp, not zero.
+func TestRunFeedbackSweepDefaultWindow(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Write([]byte(`{"feedback":[]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
+
+	before := time.Now().Add(-feedbackSweepWindow).UnixMilli()
+	if _, err := runFeedbackSweep(nil); err != nil {
+		t.Fatalf("runFeedbackSweep: %v", err)
+	}
+	after := time.Now().Add(-feedbackSweepWindow).UnixMilli()
+
+	raw := strings.TrimPrefix(gotQuery, "since=")
+	if raw == gotQuery {
+		t.Fatalf("query = %q, want a since= floor", gotQuery)
+	}
+	got, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("since = %q: %v", raw, err)
+	}
+	if got < before || got > after {
+		t.Fatalf("since = %d, want ~24h ago (between %d and %d)", got, before, after)
+	}
+}
+
+func TestRunFeedbackSweepExplicitSince(t *testing.T) {
+	for _, args := range [][]string{{"--since", "1750000000000"}, {"--since=1750000000000"}} {
+		var gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path + "?" + r.URL.RawQuery
+			w.Write([]byte(`{"feedback":[]}`))
+		}))
+		t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
+		_, err := runFeedbackSweep(args)
+		srv.Close()
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if gotPath != "/api/feedback/sweep?since=1750000000000" {
+			t.Fatalf("%v: path = %q", args, gotPath)
+		}
+	}
+}
+
+// TestRunFeedbackSweepBadArgs: a mistyped flag must be a usage error, never a
+// silently ignored argument that widens the window back to the default.
+func TestRunFeedbackSweepBadArgs(t *testing.T) {
+	for _, args := range [][]string{
+		{"--since"},
+		{"--since", "yesterday"},
+		{"--since=nope"},
+		{"demo-job"}, // sweep takes no slug — it is the cross-job read
+		{"--sinse", "1"},
+	} {
+		if _, err := runFeedbackSweep(args); err == nil {
+			t.Fatalf("args %v: want an error", args)
+		}
+	}
+}
+
+func TestCmdFeedbackSweepDispatchWritesStdout(t *testing.T) {
+	want := `{"feedback":[{"id":1,"job":"demo","artifact":"a.md","note":"n","at":5,"snapshot_url":"/api/feedback/snapshot?id=1"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(want))
+	}))
+	defer srv.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
+
+	got := captureStdout(t, func() { cmdFeedback([]string{"sweep"}) })
+	if got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 }

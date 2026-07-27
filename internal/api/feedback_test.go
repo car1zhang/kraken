@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -761,5 +762,196 @@ func TestFeedbackMutationRefusesCrossGenerationSameSlug(t *testing.T) {
 	}
 	if got.Note != "gen1 note" || got.Addressed != "" {
 		t.Fatalf("gen1's row was mutated by a same-slug-string request targeting the active generation: %+v", got)
+	}
+}
+
+// --- GET /api/feedback/sweep (the dream loop's cross-job read) ---
+
+func getFeedbackSweep(t *testing.T, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/feedback/sweep"+query, nil)
+	rec := httptest.NewRecorder()
+	feedbackSweepHandler(rec, req)
+	return rec
+}
+
+// TestFeedbackSweepIsCrossJobAndFloored pins the two things that make this a
+// sweep rather than a second /api/feedback: it spans jobs (each row naming
+// its own), and `since` is an inclusive floor.
+func TestFeedbackSweepIsCrossJobAndFloored(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	a := mustCreateStoreJob(t, st, store.Job{Slug: "sweep-a", Repo: "monolith"})
+	b := mustCreateStoreJob(t, st, store.Job{Slug: "sweep-b", Repo: "monolith"})
+	if _, err := st.AddFeedback(store.Feedback{JobID: a.ID, JobSlug: "sweep-a", Artifact: "00-overview.md", Note: "old", TS: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddFeedback(store.Feedback{JobID: a.ID, JobSlug: "sweep-a", Artifact: "10-x.md", Note: "at the floor", TS: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddFeedback(store.Feedback{JobID: b.ID, JobSlug: "sweep-b", Artifact: "50-y.md", Note: "other job", TS: 3000}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := getFeedbackSweep(t, "?since=2000")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Feedback []webSweepFeedback `json:"feedback"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Feedback) != 2 {
+		t.Fatalf("swept %d rows, want the 2 at/after the floor: %+v", len(resp.Feedback), resp.Feedback)
+	}
+	if resp.Feedback[0].Job != "sweep-a" || resp.Feedback[1].Job != "sweep-b" {
+		t.Fatalf("rows must name their own job and stay ts-ordered: %+v", resp.Feedback)
+	}
+	if resp.Feedback[0].SnapshotURL != feedbackSnapshotURL(resp.Feedback[0].ID) {
+		t.Fatalf("snapshot_url = %q", resp.Feedback[0].SnapshotURL)
+	}
+}
+
+// TestFeedbackSweepNeverNull: an empty window must serve "[]", the same B3
+// convention feedbackGet follows.
+func TestFeedbackSweepNeverNull(t *testing.T) {
+	useTestStore(t)
+	rec := getFeedbackSweep(t, "?since=99999999")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"feedback":[]`) {
+		t.Fatalf("body = %s, want an empty array", rec.Body.String())
+	}
+}
+
+// TestFeedbackSweepRequiresNumericSince pins the deliberate absence of a
+// server-side default window: a missing or unparseable floor is a 400, never
+// a silent "everything" that would re-mine months of settled notes.
+func TestFeedbackSweepRequiresNumericSince(t *testing.T) {
+	useTestStore(t)
+	for _, q := range []string{"", "?since=", "?since=yesterday", "?since=12.5"} {
+		rec := getFeedbackSweep(t, q)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: status %d, want 400, body %s", q, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestFeedbackSweepMethodNotAllowed(t *testing.T) {
+	useTestStore(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/feedback/sweep?since=0", nil)
+	rec := httptest.NewRecorder()
+	feedbackSweepHandler(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status %d, want 405", rec.Code)
+	}
+}
+
+// --- GET /api/feedback/snapshot (the frozen blob's first read path) ---
+
+func getFeedbackSnapshot(t *testing.T, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/feedback/snapshot"+query, nil)
+	rec := httptest.NewRecorder()
+	feedbackSnapshotHandler(rec, req)
+	return rec
+}
+
+func TestFeedbackSnapshotServesFrozenBytes(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := seedPlutoArtifact(t, st, "snap-job", "00-overview.md", "the bytes carl saw")
+	if rec := postFeedback(t, feedbackReq{Slug: "snap-job", Home: "pluto", Name: "00-overview.md", Feedback: "note"}); rec.Code != http.StatusOK {
+		t.Fatalf("create: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	fs, err := st.ListFeedback(j.ID)
+	if err != nil || len(fs) != 1 {
+		t.Fatalf("ListFeedback: %+v, err %v", fs, err)
+	}
+
+	rec := getFeedbackSnapshot(t, "?id="+strconv.FormatInt(fs[0].ID, 10))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "the bytes carl saw" {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment;") {
+		t.Fatalf("Content-Disposition = %q, want an attachment (a snapshot must never be a top-level document)", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", got)
+	}
+}
+
+// TestFeedbackSnapshotHTMLIsInert is the security-shaped half of this route:
+// an .html artifact's frozen bytes are untrusted, replayed from the board's
+// OWN origin — so they must never be served as a document type a browser
+// would execute.
+func TestFeedbackSnapshotHTMLIsInert(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	id, err := st.AddFeedback(store.Feedback{
+		JobSlug: "x", Artifact: "diagram.html", Note: "n",
+		Snapshot: []byte("<script>alert(1)</script>"), SnapshotExt: "html",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := getFeedbackSnapshot(t, "?id="+strconv.FormatInt(id, 10))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "html") {
+		t.Fatalf("Content-Type = %q — an html snapshot must be declawed to text/plain", ct)
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "sandbox") {
+		t.Fatalf("Content-Security-Policy = %q, want a sandbox", csp)
+	}
+}
+
+// TestFeedbackSnapshotEmptyBlobIs404 pins the distinction the brief calls
+// for: "this row has no frozen copy" is not "here is an empty frozen copy".
+func TestFeedbackSnapshotEmptyBlobIs404(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	id, err := st.AddFeedback(store.Feedback{JobSlug: "x", Artifact: "a.md", Note: "n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := getFeedbackSnapshot(t, "?id="+strconv.FormatInt(id, 10)); rec.Code != http.StatusNotFound {
+		t.Fatalf("empty blob: status %d, want 404", rec.Code)
+	}
+	if rec := getFeedbackSnapshot(t, "?id="+strconv.FormatInt(id+999, 10)); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown id: status %d, want 404", rec.Code)
+	}
+}
+
+func TestFeedbackSnapshotBadIDIs400(t *testing.T) {
+	useTestStore(t)
+	for _, q := range []string{"", "?id=", "?id=abc"} {
+		if rec := getFeedbackSnapshot(t, q); rec.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: status %d, want 400", q, rec.Code)
+		}
+	}
+}
+
+// TestSnapshotExtOKRejectsHostileExtensions: snapshot_ext is stored data that
+// this handler interpolates into a filename and a mime lookup, so anything
+// that isn't a plain alphanumeric extension is simply dropped.
+func TestSnapshotExtOKRejectsHostileExtensions(t *testing.T) {
+	for _, ok := range []string{"md", "png", "html", "JPEG"} {
+		if !snapshotExtOK(ok) {
+			t.Errorf("snapshotExtOK(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "../etc", `md"`, "a/b", "waytoolongextension", "m d"} {
+		if snapshotExtOK(bad) {
+			t.Errorf("snapshotExtOK(%q) = true, want false", bad)
+		}
 	}
 }

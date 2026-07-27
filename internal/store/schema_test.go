@@ -24,6 +24,25 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v9: drop the watchlist table (added at v9, absent through v8)
+	// and the feedback(ts) index it shipped alongside. The watchlist's own
+	// indexes go with the table — SQLite drops a table's indexes along with
+	// it — but feedback_ts sits on a table that SURVIVES, so it has to be
+	// dropped by name or the v9 migration's CREATE INDEX would collide on the
+	// way back up.
+	//
+	// Reversed BEFORE v8 below: downgrades unwind newest-first, mirroring the
+	// order migrate() applies them.
+	if target < 9 {
+		for _, stmt := range []string{
+			`DROP TABLE watchlist`,
+			`DROP INDEX feedback_ts`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v9) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v8: drop jobs.color (added at v8, absent through v7).
 	if target < 8 {
 		if _, err := s.db.Exec(`ALTER TABLE jobs DROP COLUMN color`); err != nil {
@@ -729,6 +748,213 @@ func TestSchemaV6ToV7AddsThreads(t *testing.T) {
 	}
 	if next != "t1" {
 		t.Fatalf("NextThreadID on the re-created table = %q, want t1", next)
+	}
+}
+
+// TestSchemaV8ToV9AddsWatchlistAndFeedbackTSIndex covers the v9 migration: a
+// real kraken.db can exist at PRAGMA user_version = 8 (no watchlist table, no
+// feedback(ts) index) from before the dream loop shipped. Reopening such a
+// database must create both — usable immediately — while leaving every
+// pre-existing row untouched, since v9 is a pure add with no data to move
+// forward (migrations[9] carries no hook).
+func TestSchemaV8ToV9AddsWatchlistAndFeedbackTSIndex(t *testing.T) {
+	// Opened directly (not via openTest) so the path is in hand for the real
+	// re-Open below, mirroring the migration tests above.
+	dbPath := filepath.Join(t.TempDir(), "kraken.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	jobID, err := s.CreateJob(&Job{Slug: "v8-shaped", Repo: "kraken"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := s.AddFeedback(Feedback{JobID: jobID, JobSlug: "v8-shaped", Note: "pre-existing", TS: 5}); err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+
+	downgradeFreshDB(t, s, 8)
+
+	// both really are gone at the v8 shape — otherwise this test would pass
+	// without the migration doing anything.
+	var exists int
+	err = s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist'`).Scan(&exists)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("watchlist table still present at the v8 shape: err=%v", err)
+	}
+	err = s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='feedback_ts'`).Scan(&exists)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("feedback_ts index still present at the v8 shape: err=%v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v7: %v", err)
+	}
+
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
+	}
+
+	// the new table is usable end to end.
+	wid, err := s.AddWatchItem(WatchItem{Observation: "post-migrate", Class: "waste"})
+	if err != nil {
+		t.Fatalf("AddWatchItem after migration: %v", err)
+	}
+	list, err := s.ListWatchItems("")
+	if err != nil {
+		t.Fatalf("ListWatchItems after migration: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != wid || list[0].Observation != "post-migrate" {
+		t.Fatalf("unexpected watchlist rows after migration: %+v", list)
+	}
+
+	// ...and the index the sweep read depends on exists by name.
+	if err := s.db.QueryRow(
+		`SELECT 1 FROM sqlite_master WHERE type='index' AND name='feedback_ts'`,
+	).Scan(&exists); err != nil {
+		t.Fatalf("feedback_ts index missing after migration: %v", err)
+	}
+
+	// pre-existing rows survive untouched, and the new sweep read sees them.
+	j, err := s.GetJobBySlug("v8-shaped")
+	if err != nil {
+		t.Fatalf("GetJobBySlug after migration: %v", err)
+	}
+	if j.Repo != "kraken" {
+		t.Fatalf("job row mangled by migration: %+v", j)
+	}
+	swept, err := s.FeedbackSince(0)
+	if err != nil {
+		t.Fatalf("FeedbackSince after migration: %v", err)
+	}
+	if len(swept) != 1 || swept[0].Note != "pre-existing" {
+		t.Fatalf("feedback row mangled by migration: %+v", swept)
+	}
+
+	// Fidelity check: the assertions above ran an in-process s.migrate() call
+	// directly — roll the same on-disk file back to v8-shaped again, close it,
+	// and re-Open it for real, mirroring the other migration tests'
+	// second-downgrade check.
+	downgradeFreshDB(t, s, 8)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close before re-Open: %v", err)
+	}
+
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("re-Open a v8-shaped db: %v", err)
+	}
+	defer s2.Close()
+
+	var version2 int
+	if err := s2.db.QueryRow(`PRAGMA user_version`).Scan(&version2); err != nil {
+		t.Fatalf("read user_version after re-Open: %v", err)
+	}
+	if version2 != schemaVersion {
+		t.Fatalf("user_version after re-Open = %d, want %d", version2, schemaVersion)
+	}
+	// The 2nd downgrade dropped the (seeded) watchlist table, so the
+	// re-created one starts empty — enough to prove it survives a real Open()
+	// round-trip.
+	list2, err := s2.ListWatchItems("")
+	if err != nil {
+		t.Fatalf("ListWatchItems after re-Open: %v", err)
+	}
+	if len(list2) != 0 {
+		t.Fatalf("expected an empty watchlist after the 2nd downgrade+re-Open: %+v", list2)
+	}
+}
+
+// schemaDump returns every table/index/trigger definition in the database,
+// sorted by name — the whole shape, not just the one table a given test
+// happens to care about. Comparing two dumps is what makes "migrated forward"
+// and "created fresh" a checkable claim rather than an assumption.
+//
+// sqlite_autoindex_* entries are skipped: SQLite invents those for implicit
+// PRIMARY KEY/UNIQUE constraints, gives them a NULL sql, and numbers them per
+// table in creation order — so an ALTER-heavy migration path can legitimately
+// end up with the same constraints under different autoindex numbers.
+func schemaDump(t *testing.T, s *Store) string {
+	t.Helper()
+	rows, err := s.db.Query(
+		`SELECT type, name, COALESCE(sql,'') FROM sqlite_master
+			WHERE name NOT LIKE 'sqlite_autoindex_%' ORDER BY type, name`)
+	if err != nil {
+		t.Fatalf("read sqlite_master: %v", err)
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var typ, name, ddl string
+		if err := rows.Scan(&typ, &name, &ddl); err != nil {
+			t.Fatalf("scan sqlite_master row: %v", err)
+		}
+		fmt.Fprintf(&b, "%s %s\n%s\n---\n", typ, name, strings.Join(strings.Fields(ddl), " "))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("sqlite_master rows: %v", err)
+	}
+	return b.String()
+}
+
+// TestMigratedSchemaMatchesFreshSchema is the invariant every one of the
+// per-version migration tests above assumes but none of them actually checks:
+// a database that walked the whole migration chain must end up with the SAME
+// shape as one created from scratch today. A migration that adds a column
+// with a subtly different declaration (missing NOT NULL, a different DEFAULT)
+// or forgets an index leaves a database that passes every functional test and
+// then behaves differently under load or under a NULL — this compares the
+// full sqlite_master dump so that drift is caught structurally instead.
+func TestMigratedSchemaMatchesFreshSchema(t *testing.T) {
+	fresh := openTest(t)
+	want := schemaDump(t, fresh)
+
+	for _, from := range []int{1, 2, 3, 4, 5, 6, 7} {
+		dbPath := filepath.Join(t.TempDir(), "kraken.db")
+		s, err := Open(dbPath)
+		if err != nil {
+			t.Fatalf("Open (from v%d): %v", from, err)
+		}
+		downgradeFreshDB(t, s, from)
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close before re-Open (from v%d): %v", from, err)
+		}
+		s2, err := Open(dbPath)
+		if err != nil {
+			t.Fatalf("re-Open a v%d-shaped db: %v", from, err)
+		}
+		got := schemaDump(t, s2)
+		s2.Close()
+		if got != want {
+			t.Errorf("schema after migrating from v%d differs from a fresh database:\n--- migrated ---\n%s\n--- fresh ---\n%s", from, got, want)
+		}
+	}
+}
+
+// TestSchemaMigrateTwiceIsNoOp pins migrate()'s idempotence directly at the
+// current schemaVersion: v9's step is pure CREATE (no IF NOT EXISTS), so a
+// second application would fail loudly on "table watchlist already exists" if
+// the user_version guard ever stopped holding it back.
+func TestSchemaMigrateTwiceIsNoOp(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.AddWatchItem(WatchItem{Observation: "survivor"}); err != nil {
+		t.Fatalf("AddWatchItem: %v", err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatalf("re-running migrate() on an already-current db: %v", err)
+	}
+	list, err := s.ListWatchItems("")
+	if err != nil {
+		t.Fatalf("ListWatchItems: %v", err)
+	}
+	if len(list) != 1 || list[0].Observation != "survivor" {
+		t.Fatalf("a no-op migrate must not touch data: %+v", list)
 	}
 }
 

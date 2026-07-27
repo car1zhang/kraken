@@ -59,6 +59,7 @@
       <button class="viewtab active" data-view="board">BOARD</button>
       <button class="viewtab" data-view="dag">DAG</button>
       <button class="viewtab" data-view="log">LOG</button>
+      <button class="viewtab" data-view="dream">DREAM</button>
     </span>
     <span class="spacer"></span>
     <!-- self-update: fast-forward main, rebuild, reinstall, restart the
@@ -101,6 +102,21 @@
       <div class="log-more" id="log-more" hidden>· scroll up for older ·</div>
       <div id="log-entries"><div class="log-empty">no log entries yet</div></div>
     </div>
+  </main>
+  <!-- the nightly dream loop's two surfaces side by side: the night-by-night
+       report history (left, read out of dream-* jobs' artifacts) and the open
+       watchlist (right, `watchlist` rows in kraken.db). The watchlist is the
+       only place carl talks back to the loop — his verdict and comment are
+       read FIRST by the next run, ahead of any evidence. -->
+  <main class="dreamview" id="dream" hidden>
+    <section class="dream-pane reports">
+      <div class="dream-panehdr">reports <span class="ct" id="dream-reports-ct"></span></div>
+      <div class="dream-scroll" id="dream-reports"></div>
+    </section>
+    <section class="dream-pane watch">
+      <div class="dream-panehdr">watchlist <span class="ct" id="dream-watch-ct"></span></div>
+      <div class="dream-scroll" id="dream-watchlist"></div>
+    </section>
   </main>
 
   <!-- artifact viewer -->
@@ -164,6 +180,11 @@
           <div class="last-sent" id="steer-lastsent" hidden></div>
           <div class="chips" id="steer-chips" hidden></div>
           <div class="steer-docq" id="steer-docq" hidden></div>
+          <!-- carl's per-artifact feedback notes: a drilldown surface, like
+               the questions panel above it. The card carries only a count
+               chip (feedbackChipHTML) — the panel itself lives here and in
+               the job editor, the same two places a question is answerable. -->
+          <div class="steer-feedback" id="steer-feedback" hidden></div>
         </div>
         <div class="steer-actions" id="steer-actions" hidden></div>
         <div class="steer-spec" id="steer-spec" hidden>
@@ -302,6 +323,11 @@
              clicked in for, and the spec textarea would otherwise push them
              past the fold. -->
         <div class="editor-docq" id="editor-docq" hidden></div>
+        <!-- the editor's copy of the feedback panel — the click-into surface
+             for a done/archived job's notes, which is where most of them
+             live (they're left on shipped artifacts). Same split as the
+             doc-questions panel above. -->
+        <div class="editor-feedback" id="editor-feedback" hidden></div>
         <div class="editor-form" id="editor-form" hidden>
           <div class="f-row">
             <label>repo <select id="f-repo"></select></label>

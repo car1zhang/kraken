@@ -22,10 +22,11 @@ import (
 // counts and header-comment shape.
 func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 	want := map[string]string{
-		"info": "info",
-		"aim":  "aim",
-		"do":   "do",
-		"pr":   "pr",
+		"info":  "info",
+		"aim":   "aim",
+		"do":    "do",
+		"pr":    "pr",
+		"dream": "dream",
 	}
 	for dir, wantName := range want {
 		data, err := fs.ReadFile(skillsFS, ".claude/skills/"+dir+"/SKILL.md")
@@ -147,6 +148,20 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"git fetch origin && git checkout -B", "NEVER ends the job",
 			"awaiting checks", "Never poll",
 		}},
+		// dream owns the nightly corroboration pass end to end: the
+		// destination rule (which is the only mistake here that is hard to
+		// undo), the order of operations, how carl's verdicts are read, the
+		// two-sighting default and when judgment may go below it, the report
+		// shape, and its own closing line. None of it is in zeus' brief.
+		{"dream", []string{
+			"Inside A Kraken Cell", "<cellDir>/artifacts/", "dream swept:",
+			"Use `0` where a count is zero", "Never declare the job done",
+			"Findings never enter git", "00-dream-report.md",
+			"kraken watchlist get|add|update|remove", "kraken feedback sweep --since",
+			"two independent sightings", "judgment calls",
+			"suggested_fix", "prompting",
+			"unnamed subagents", "solo: true",
+		}},
 	} {
 		src := readEmbedded(t, c.skill+"/SKILL.md")
 		for _, want := range c.want {
@@ -209,7 +224,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "pr"} {
+	for _, want := range []string{"info", "aim", "do", "pr", "dream"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}

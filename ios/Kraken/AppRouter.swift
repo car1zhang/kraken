@@ -11,6 +11,8 @@ import Observation
 ///   kraken://board                 → Board tab
 ///   kraken://board/<column>        → Board tab, jump pager to that column
 ///   kraken://overview              → Board tab, open the overview sheet
+///   kraken://dream                 → Board tab, open the DREAM sheet
+///                                     (the nightly loop's reports + watchlist)
 ///   kraken://job/<slug>            → Board tab, open that job's detail
 ///                                     (waits for the board to load if needed)
 ///   kraken://job/<slug>/answer     → …and open the answer sheet
@@ -39,6 +41,9 @@ final class AppRouter {
     // Consumed (read + reset to nil/false) by the owning view once acted on.
     var pendingBoardColumn: BoardColumn?
     var pendingOverview = false
+    // The DREAM screen is a sheet over the Board (not a tab — see DreamView),
+    // so it routes exactly the way the overview sheet does.
+    var pendingDream = false
     var pendingJobSlug: String?
     var pendingJobAction: JobAction?
     var pendingSessionPane: String?
@@ -60,6 +65,9 @@ final class AppRouter {
         case "overview":
             selectedTab = .board
             pendingOverview = true
+        case "dream":
+            selectedTab = .board
+            pendingDream = true
         case "job":
             selectedTab = .board
             if let slug = components.first, !slug.isEmpty {

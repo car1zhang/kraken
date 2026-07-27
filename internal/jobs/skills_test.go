@@ -23,6 +23,7 @@ func testSkillsFS() fstest.MapFS {
 		"aim/assets/lint-fixtures/x.svg": {Data: []byte("<svg>fixture</svg>")},
 		"do/SKILL.md":                    {Data: []byte("---\nname: do\n---\ndo body")},
 		"pr/SKILL.md":                    {Data: []byte("---\nname: pr\n---\npr body")},
+		"dream/SKILL.md":                 {Data: []byte("---\nname: dream\n---\ndream body")},
 	}
 }
 

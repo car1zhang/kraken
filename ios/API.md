@@ -332,6 +332,189 @@ Response: `{"feedback": [webFeedback]}` (same `webFeedback` shape as the
 board's per-job array above). Always an array, never `null` — a job with no
 feedback yet serves `[]`.
 
+### `GET /api/feedback/sweep?since=<unix-millis>`
+
+The dream loop's CROSS-JOB read: every feedback note created at or after the
+floor, across all jobs, oldest first (`ts`, then `id`). Reached by the
+nightly pass through the `kraken feedback sweep` cell verb. **Additive, no
+contract bump.** Distinct from `/api/feedback?slug=` in two ways that matter:
+it spans jobs (so each row names its own), and each row carries a
+`snapshot_url`.
+
+`since` is REQUIRED and must parse as an integer — a missing or non-numeric
+value is a 400, never a silent "everything" or a default window. The default
+window lives in the CLI verb instead (last 24h), where it is visible in a
+usage line. The floor is inclusive (`ts >= since`), so a caller sweeping
+consecutive windows should advance past the last row it consumed.
+
+Response: `{"feedback": [webSweepFeedback]}` — always an array, never `null`.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | the feedback row id |
+| `job` | string | always | the owning job's slug (an archived job's numbered archive name) — this read spans jobs, so the row names its own |
+| `artifact` | string | always | artifact name/path the note was left on |
+| `note` | string | always | carl's note text |
+| `at` | number | always | unix millis, submit time (immutable — an edit does not restamp it) |
+| `addressed` | string | omitempty | zeus' own account of how it handled the note |
+| `addressed_at` | string | omitempty | RFC3339 |
+| `snapshot_url` | string | always | `/api/feedback/snapshot?id=<id>` — always present; a row whose frozen blob is empty 404s when fetched (the sweep excludes blobs, so it cannot know which) |
+
+Errors: 400 (missing/non-numeric `since`), 500 `no store wired`. A GET is a
+read, so it stays reachable under `--mirror`.
+
+### `GET /api/feedback/snapshot?id=<row id>`
+
+Not JSON — serves the raw bytes a feedback row froze at submit (or last edit)
+time: the artifact exactly as carl was looking at it when he wrote the note.
+The first read path this column has ever had. **Additive, no contract bump.**
+
+The bytes are served INERT, and deliberately so: a snapshot is untrusted
+content (an agent wrote it, months ago) replayed from the board's own origin.
+`Content-Type` is derived from the row's stored `snapshot_ext` by the same
+extension map the artifact route uses, EXCEPT that `text/html` and
+`image/svg+xml` are downgraded to `text/plain; charset=utf-8` — both are
+script-executing document types. Alongside it: `Content-Disposition:
+attachment` (never a top-level document), `X-Content-Type-Options: nosniff`,
+`Content-Security-Policy: sandbox; default-src 'none'`, and `Cache-Control:
+no-store` (an edit re-freezes the blob under the same id).
+
+Errors: 400 (missing/non-numeric `id`), 404 (unknown id, **or** a row whose
+blob is empty — "no frozen copy" is not "an empty frozen copy"), 405
+(non-GET), 500 `no store wired`.
+
+### `GET /api/watchlist[?state=]`
+
+The dream loop's watchlist: observations the nightly pass is tracking, newest
+observation first (`last_seen` DESC, `id` DESC). **Additive, no contract
+bump.** Unlike questions and feedback, watchlist rows are GLOBAL — they
+belong to no job, so there is no `slug` on this route or either of its
+writes.
+
+`state` narrows to one of `watching`|`shipped`|`declined`; omitted or empty
+means every row. An unrecognized state is a 400, not an empty list — a typo'd
+filter and an empty watchlist are different answers.
+
+Response: `{"watchlist": [webWatchItem]}` — always an array, never `null`.
+Modeled in the iOS app (`WebWatchItem`/`WatchlistResponse` in Models.swift,
+`fetchWatchlist` in APIClient.swift) — the DREAM screen's watchlist pane,
+which reads `?state=watching`. Note `class` is a Swift keyword, so the Swift
+property is `watchClass` behind an explicit CodingKey.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | |
+| `observation` | string | always | what the pass noticed |
+| `class` | string | always | `feedback`\|`correction`\|`repetition`\|`waste`\|`prompting` |
+| `state` | string | always | `watching`\|`shipped`\|`declined` |
+| `sightings` | number | always | a repeat folds into the existing row and increments this, rather than adding a second row |
+| `first_seen` | number | always | unix millis |
+| `last_seen` | number | always | unix millis |
+| `evidence` | string | omitempty | JSON sample of the most recent occurrence, replaced wholesale on each sighting. Local-only — it never enters git |
+| `suggested_fix` | string | omitempty | the agent's proposed correction |
+| `pr_url` | string | omitempty | |
+| `updated_at` | number | always | unix millis — the AGENT's last write; a verdict deliberately does not bump it |
+| `verdict` | string | omitempty | carl-owned: `fine`\|`fix` |
+| `comment` | string | omitempty | carl-owned |
+| `commented_at` | string | omitempty | carl-owned, RFC3339, stamped server-side |
+
+The row's columns have two owners, and the two writes below are split to
+match — the store enforces it column by column (`UpdateWatchItem` never
+writes carl's trio; `SetWatchVerdict` never writes anything else).
+
+### `POST /api/watchlist`
+
+**Carl's write** — the board's DREAM view judging a row. Web-UI/iOS-facing.
+Nothing else: it cannot express an observation edit, and a request that even
+MENTIONS an agent-owned key (`observation`, `class`, `state`, `sightings`,
+`first_seen`, `last_seen`, `evidence`, `suggested_fix`, `pr_url`,
+`updated_at`) is refused with a 400 rather than having it silently dropped.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | required | the watchlist row id |
+| `verdict` | string | required | `fine`\|`fix`, or `""` to CLEAR the judgement |
+| `comment` | string | omitempty | trimmed |
+
+`commented_at` is stamped server-side in RFC3339 and is never accepted from
+the client. An empty `verdict` **and** an empty `comment` clears all three
+columns (reopening the row) — the documented undo.
+
+Response: `{"ok": true}`. Errors: 400 (missing/zero `id`, a verdict outside
+the set, an agent-owned key), 404 (unknown id), 413 (body over 1MB), 500.
+Gated under `--mirror` with the standard plain-text 403.
+
+Modeled in the iOS app (`WatchVerdictRequest` in Models.swift,
+`setWatchVerdict` in APIClient.swift) — the DREAM screen's fine/fix control
+and its comment box. The request DTO carries exactly `{id, verdict, comment}`
+and always sends `comment`, even empty: `""` is the documented clear, not an
+absence.
+
+### `POST /api/watchlist/item`
+
+**The agent's write** — add/update/remove of the observation itself, reached
+only through the `kraken watchlist add|update|remove` cell verb; never called
+by the iOS app or the web UI, so it is not modeled in
+Models.swift/APIClient.swift (same convention as `/api/pr-attach`).
+
+`verdict`/`comment`/`commented_at` are refused with a 400 here — at the
+request root AND inside `item` — rather than dropped: the store preserves
+them across every agent write, so honoring them is impossible, and an agent
+that echoed a whole row back from the GET needs to be told.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `op` | string | required | `add`\|`update`\|`remove` |
+| `item` | object | required for add/update | a `watchItemWire` (below) |
+| `id` | number | required for remove | the row id |
+
+`watchItemWire` — every key optional on the wire; the handler validates:
+
+| key | type | notes |
+|---|---|---|
+| `id` | number | required on `update`, ignored on `add` |
+| `observation` | string | required, non-blank after trim |
+| `class` | string | required, one of the five classes above |
+| `state` | string | one of the three states; blank defaults to `watching` on add, and PRESERVES the row's current state on update |
+| `sightings` | number | blank/zero on update preserves the row's current count |
+| `first_seen` / `last_seen` | number | unix millis; blank/zero on update preserves the row's current values — an update is a full-row restatement, so these are back-filled rather than zeroed |
+| `evidence` | string | JSON sample, replaced wholesale |
+| `suggested_fix` | string | |
+| `pr_url` | string | |
+
+Response: `{"ok": true, "id": number}` — the id is why this isn't the
+standard `{"ok": true}`: a caller that just created a row has no other way to
+learn it. Errors: 400 (unknown op, missing item, blank observation, bad class
+or state, missing id on update/remove, a carl-owned key), 404 (unknown id on
+update/remove), 413 (body over 1MB), 500. Gated under `--mirror`.
+
+### `GET /api/dream`
+
+The board's DREAM view: the night reports, newest first. **Additive, no
+contract bump.** A report is the `00-dream-report.md` artifact of a job whose
+slug starts `dream-`, resolved through the same cell ∪ store ∪ pluto artifact
+plumbing every other artifact read uses — so a report survives its cell's
+teardown with no second persistence path. Both the active and archived job
+namespaces are swept.
+
+A dream job that has not written its report yet (its cell is still running)
+is simply absent, rather than present with an empty `body`.
+
+Response: `{"reports": [webDreamReport]}` — always an array, never `null`.
+Modeled in the iOS app (`WebDreamReport`/`DreamReportsResponse` in
+Models.swift, `fetchDreamReports` in APIClient.swift) — the DREAM screen's
+report list, which renders `body` through the app's own markdown renderer
+(MarkdownText.swift) rather than a WKWebView.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `date` | string | always | `YYYY-MM-DD`, taken from the job's own slug (`dream-<date>`) |
+| `slug` | string | always | the dream job's slug |
+| `body` | string | always | the report's raw markdown, served inline — a report is one short page and the view renders every visible one, so a URL per report would be N round trips for nothing |
+
+Errors: 405 (non-GET). A GET is a read, so it stays reachable under
+`--mirror`.
+
 ### `GET /api/questions?slug=`
 
 zeus-side read: every doc-question row for a job, re-read on every resume via

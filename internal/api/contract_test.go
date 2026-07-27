@@ -1517,3 +1517,243 @@ func TestLogsWireShape(t *testing.T) {
 		t.Fatalf("traversal name: status %d, want 404", rec.Code)
 	}
 }
+
+// --- the dream loop's routes: GET /api/feedback/sweep, GET /api/watchlist +
+// its two POSTs, GET /api/dream (feedback.go, watchlist.go, dream.go).
+//
+// All four are ADDITIVE — new endpoints, no key retyped/renamed/removed
+// anywhere — so apiContract stays where it was; TestAPIContractUnchanged
+// below pins that explicitly rather than leaving it to be noticed.
+//
+// GET /api/feedback/snapshot has no spec here on purpose: it serves raw
+// bytes, not JSON (its headers and 400/404 shapes are covered in
+// feedback_test.go), the same reason /api/artifact has none.
+
+var feedbackSweepSpec = map[string]fieldSpec{
+	"feedback": {kind: wireArray, required: true},
+}
+
+// webSweepFeedbackSpec covers the elements of that array — feedbackSweepSpec
+// itself only asserts it IS an array.
+var webSweepFeedbackSpec = map[string]fieldSpec{
+	"id":           {kind: wireNumber, required: true},
+	"job":          {kind: wireString, required: true},
+	"artifact":     {kind: wireString, required: true},
+	"note":         {kind: wireString, required: true},
+	"at":           {kind: wireNumber, required: true},
+	"addressed":    {kind: wireString, required: false},
+	"addressed_at": {kind: wireString, required: false},
+	"snapshot_url": {kind: wireString, required: true},
+}
+
+func TestFeedbackSweepWireShape(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "contract-sweep", Repo: "monolith"})
+	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: "contract-sweep", Artifact: "00-overview.md", Note: "n", TS: 5}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	feedbackSweepHandler(rec, httptest.NewRequest(http.MethodGet, "/api/feedback/sweep?since=0", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/feedback/sweep", rec.Body.Bytes(), feedbackSweepSpec)
+
+	var resp struct {
+		Feedback []json.RawMessage `json:"feedback"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Feedback) != 1 {
+		t.Fatalf("want one swept row, got %d", len(resp.Feedback))
+	}
+	assertShape(t, "/api/feedback/sweep element (empty optionals)", resp.Feedback[0], webSweepFeedbackSpec)
+
+	populated, err := json.Marshal(webSweepFeedback{
+		ID: 1, Job: "j", Artifact: "a.md", Note: "n", At: 5,
+		Addressed: "done", AddressedAt: "2026-07-26T00:00:00Z", SnapshotURL: "/api/feedback/snapshot?id=1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webSweepFeedback (populated)", populated, webSweepFeedbackSpec)
+}
+
+var watchlistGetSpec = map[string]fieldSpec{
+	"watchlist": {kind: wireArray, required: true},
+}
+
+var webWatchItemSpec = map[string]fieldSpec{
+	"id":            {kind: wireNumber, required: true},
+	"observation":   {kind: wireString, required: true},
+	"class":         {kind: wireString, required: true},
+	"state":         {kind: wireString, required: true},
+	"sightings":     {kind: wireNumber, required: true},
+	"first_seen":    {kind: wireNumber, required: true},
+	"last_seen":     {kind: wireNumber, required: true},
+	"evidence":      {kind: wireString, required: false},
+	"suggested_fix": {kind: wireString, required: false},
+	"pr_url":        {kind: wireString, required: false},
+	"updated_at":    {kind: wireNumber, required: true},
+	"verdict":       {kind: wireString, required: false},
+	"comment":       {kind: wireString, required: false},
+	"commented_at":  {kind: wireString, required: false},
+}
+
+func TestWatchlistGetWireShape(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	if _, err := st.AddWatchItem(store.WatchItem{Observation: "o", Class: "waste"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	watchlistHandler(rec, httptest.NewRequest(http.MethodGet, "/api/watchlist", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/watchlist (GET)", rec.Body.Bytes(), watchlistGetSpec)
+
+	var resp struct {
+		Watchlist []json.RawMessage `json:"watchlist"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Watchlist) != 1 {
+		t.Fatalf("want one row, got %d", len(resp.Watchlist))
+	}
+	assertShape(t, "webWatchItem (empty optionals)", resp.Watchlist[0], webWatchItemSpec)
+
+	populated, err := json.Marshal(webWatchItem{
+		ID: 1, Observation: "o", Class: "waste", State: "watching", Sightings: 3,
+		FirstSeen: 1, LastSeen: 2, Evidence: `{"n":1}`, SuggestedFix: "fix",
+		PRURL: "https://example/pr/1", UpdatedAt: 2, Verdict: "fix", Comment: "c",
+		CommentedAt: "2026-07-26T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webWatchItem (populated)", populated, webWatchItemSpec)
+}
+
+// watchVerdictReqSpec / watchItemReqSpec / watchItemWireSpec pin the REQUEST
+// shapes of the two writes. Both bodies get their own spec for the reason
+// updateReqSpec does: a round-trip through the handler's own struct renames
+// both sides at once when a json tag changes, so only a transcribed spec can
+// catch the drift.
+var watchVerdictReqSpec = map[string]fieldSpec{
+	"id":      {kind: wireNumber, required: true},
+	"verdict": {kind: wireString, required: true},
+	"comment": {kind: wireString, required: false},
+}
+
+var watchItemReqSpec = map[string]fieldSpec{
+	"op":   {kind: wireString, required: true},
+	"item": {kind: wireObject, required: false},
+	"id":   {kind: wireNumber, required: false},
+}
+
+var watchItemWireSpec = map[string]fieldSpec{
+	"id":            {kind: wireNumber, required: false},
+	"observation":   {kind: wireString, required: false},
+	"class":         {kind: wireString, required: false},
+	"state":         {kind: wireString, required: false},
+	"sightings":     {kind: wireNumber, required: false},
+	"first_seen":    {kind: wireNumber, required: false},
+	"last_seen":     {kind: wireNumber, required: false},
+	"evidence":      {kind: wireString, required: false},
+	"suggested_fix": {kind: wireString, required: false},
+	"pr_url":        {kind: wireString, required: false},
+}
+
+// watchItemRespSpec is the agent write's 200: {"ok":true,"id":N}. The id is
+// the only reason this isn't the standard {"ok":true} — a caller that just
+// created a row has no other way to learn its id.
+var watchItemRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+	"id": {kind: wireNumber, required: true},
+}
+
+func TestWatchlistWriteWireShapes(t *testing.T) {
+	verdictReq, err := json.Marshal(watchVerdictReq{ID: 1, Verdict: "fix", Comment: "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "watchVerdictReq", verdictReq, watchVerdictReqSpec)
+
+	itemReq, err := json.Marshal(watchItemReq{Op: "update", Item: &watchItemWire{ID: 1, Observation: "o", Class: "waste"}, ID: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "watchItemReq", itemReq, watchItemReqSpec)
+
+	itemWire, err := json.Marshal(watchItemWire{
+		ID: 1, Observation: "o", Class: "waste", State: "watching", Sightings: 2,
+		FirstSeen: 1, LastSeen: 2, Evidence: `{"n":1}`, SuggestedFix: "fix", PRURL: "u",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "watchItemWire", itemWire, watchItemWireSpec)
+
+	useTestStore(t)
+	rec := httptest.NewRecorder()
+	body := mustJSON(t, map[string]any{"op": "add", "item": map[string]any{"observation": "o", "class": "waste"}})
+	watchItemHandler(rec, httptest.NewRequest(http.MethodPost, "/api/watchlist/item", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/watchlist/item", rec.Body.Bytes(), watchItemRespSpec)
+}
+
+var dreamGetSpec = map[string]fieldSpec{
+	"reports": {kind: wireArray, required: true},
+}
+
+var webDreamReportSpec = map[string]fieldSpec{
+	"date": {kind: wireString, required: true},
+	"slug": {kind: wireString, required: true},
+	"body": {kind: wireString, required: true},
+}
+
+func TestDreamWireShape(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	seedDreamReport(t, st, "dream-2026-07-26", "# report")
+
+	rec := httptest.NewRecorder()
+	dreamHandler(rec, httptest.NewRequest(http.MethodGet, "/api/dream", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/dream", rec.Body.Bytes(), dreamGetSpec)
+
+	var resp struct {
+		Reports []json.RawMessage `json:"reports"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Reports) != 1 {
+		t.Fatalf("want one report, got %d", len(resp.Reports))
+	}
+	assertShape(t, "/api/dream element", resp.Reports[0], webDreamReportSpec)
+}
+
+// TestAPIContractUnchanged pins apiContract at the value the dream loop's
+// routes did NOT move it to. Every endpoint that shipped with them is
+// additive — a whole new path, never a key retyped, renamed or removed on an
+// existing one — and additive shapes never bump the contract (old clients
+// ignore what they don't know). A literal here rather than a comparison
+// against itself: a future change that genuinely IS breaking has to come here
+// and change this number deliberately, in the same commit as
+// expectedContract in APIClient.swift.
+func TestAPIContractUnchanged(t *testing.T) {
+	if apiContract != 5 {
+		t.Fatalf("apiContract = %d, want 5 — bump this ONLY alongside ios/API.md and APIClient.swift's expectedContract, and only for a breaking change", apiContract)
+	}
+}
