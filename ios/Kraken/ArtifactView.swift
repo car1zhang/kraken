@@ -135,6 +135,18 @@ struct ArtifactView: View {
     let name: String
     let baseURL: String
     let path: String
+    /// Whether this instance contributes the feedback pencil to the enclosing
+    /// nav bar. ArtifactPagerView is the only caller; it passes false for the
+    /// pages it is holding off-screen, because every materialized page's
+    /// `.toolbar` resolves against the SAME NavigationStack and an unguarded
+    /// one would stack up to three identical pencils in one bar. Exactly the
+    /// reason `.navigationTitle` moved up to the pager, applied to the toolbar
+    /// item as well.
+    ///
+    /// Deliberately no default: with one call site a default is unreachable
+    /// code, and a second call site should have to answer this rather than
+    /// inherit an answer.
+    let showsFeedbackButton: Bool
     /// Called after a note has been accepted by the server, with the artifact
     /// it was attached to and the note text — so a presenting JobDetailView
     /// can fold it into its optimistic overlay. nil (the default) simply means
@@ -186,13 +198,14 @@ struct ArtifactView: View {
                     .background(KTheme.ground)
             }
         }
-        .navigationTitle(name)
-        .navigationBarTitleDisplayMode(.inline)
+        // No .navigationTitle here: this view is always a page inside
+        // ArtifactPagerView, and a page's own title inside a TabView is
+        // unreliable — the pager titles the bar from its selection instead.
         .toolbar {
             // Only when the path actually parses as an artifact URL: without
             // a {slug, home, name} triple there is nothing to address a
             // create at, and a chip that always 400s is worse than no chip.
-            if let ref = artifactRef {
+            if showsFeedbackButton, let ref = artifactRef {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         composingFeedback = true
@@ -246,5 +259,141 @@ struct ArtifactView: View {
                 errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+}
+
+// MARK: - artifact pager
+
+/// What the artifact sheet actually presents: one ArtifactView per artifact
+/// in the job's display order, with a horizontal swipe moving between them.
+/// The sheet's own dismiss gesture is vertical, so the horizontal axis was
+/// free — nothing had to be given up to page sideways.
+///
+/// `TabView(selection:) … .tabViewStyle(.page)` is the app's own paging idiom
+/// (BoardView's columns, SessionsView's tabs), and as on both of those the
+/// swipe is paired with a visible non-swipe selector — here the bottom bar's
+/// chevrons. On this screen that pairing is load-bearing rather than a
+/// courtesy: a swipe that starts over horizontally-scrollable web content is
+/// swallowed by the WKWebView, so the chevrons are the only path that always
+/// works.
+///
+/// **Memory — the one thing to be honest about.** MarkdownText.swift:6-11
+/// records that inline WKWebViews once got this app jetsam-killed, and that
+/// the only one left is ArtifactView's. A page-style TabView materializes the
+/// pages either side of the selected one, so this holds up to THREE live
+/// ArtifactViews where today there is one — and a materialized page is not
+/// idle: each runs its own `.task { await load() }`, which on the plain and
+/// markdown paths really does fetch its artifact, cap it at 1 MB and render it
+/// into a WKWebView. Opening the pager therefore fetches and renders BOTH
+/// neighbours immediately, and every swipe pulls in one more. Three live web
+/// views each holding a rendered document is exactly the shape MarkdownText's
+/// history is about, which is why 52-testing-plan.md still owes an Instruments
+/// pass on a ≥10-artifact set — that measurement is not discharged by anything
+/// here.
+///
+/// What this code does guarantee is only that it never WIDENS that window:
+/// nothing pre-renders, nothing reaches past the adjacent pages, `pages` is
+/// read by index and count alone, and the page count in flight is independent
+/// of the artifact count. The ±1 window itself is SwiftUI's materialization
+/// policy — undocumented, and it has moved between releases. If it ever
+/// widens, the ceiling widens with it, and the fallback is spec Q4's single
+/// WKWebView driven by a DragGesture.
+struct ArtifactPagerView: View {
+    let baseURL: String
+    /// Already flattened to display order with the singleton fallback applied
+    /// (artifactPages), so `selection` is always one of these — which is what
+    /// lets every index lookup below treat a miss as impossible rather than
+    /// clamping defensively.
+    private let pages: [WebArtifact]
+    private let onFeedbackCreated: ((ArtifactRef, String) -> Void)?
+
+    /// The URL, never the name: artifactTree rewrites a nested artifact's name
+    /// to its leaf, so a name is neither unique across a set nor equal to
+    /// anything in the job's wire list. WebArtifact.id is already the url.
+    @State private var selection: String
+
+    init(
+        artifacts: [WebArtifact],
+        selected: WebArtifact,
+        baseURL: String,
+        onFeedbackCreated: ((ArtifactRef, String) -> Void)? = nil
+    ) {
+        self.baseURL = baseURL
+        self.pages = artifactPages(in: artifacts, selected: selected)
+        self.onFeedbackCreated = onFeedbackCreated
+        _selection = State(initialValue: selected.url)
+    }
+
+    private var index: Int { artifactIndex(of: selection, in: pages) ?? 0 }
+    private var neighbours: ArtifactNeighbours { artifactNeighbours(of: selection, in: pages) }
+
+    var body: some View {
+        TabView(selection: $selection) {
+            ForEach(pages) { artifact in
+                ArtifactView(
+                    name: artifact.name, baseURL: baseURL, path: artifact.url,
+                    showsFeedbackButton: artifact.url == selection,
+                    onFeedbackCreated: onFeedbackCreated
+                )
+                // Tagging by url — the same value ForEach identifies by — is
+                // what keeps a page's identity stable across a selection
+                // change, and so what keeps ArtifactWebView's `lastLoaded`
+                // guard effective: an unstable id would rebuild the coordinator
+                // and reload the page on every swipe.
+                .tag(artifact.url)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .background(KTheme.ground)
+        .navigationTitle(pages[index].name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Hidden outright for a one-page sheet (a single-artifact job, or
+            // the singleton fallback): "1 / 1" between two dead chevrons is
+            // noise, and today's behavior is exactly what's left without it.
+            if pages.count > 1 {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Button {
+                        step(to: neighbours.prev)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .tint(KTheme.accent)
+                    .disabled(neighbours.prev == nil)
+                    .accessibilityLabel("Previous artifact")
+
+                    Spacer()
+                    // Text, not the page dots BoardView uses for its five
+                    // columns: an artifact set routinely runs past ten, where
+                    // dots stop being countable and "n / N" still reads.
+                    Text("\(index + 1) / \(pages.count)")
+                        .font(.data(11))
+                        .foregroundStyle(KTheme.text2)
+                        .accessibilityLabel("Artifact \(index + 1) of \(pages.count)")
+                    Spacer()
+
+                    Button {
+                        step(to: neighbours.next)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .tint(KTheme.accent)
+                    .disabled(neighbours.next == nil)
+                    .accessibilityLabel("Next artifact")
+                }
+            }
+        }
+    }
+
+    /// nil target = an end of the sequence, so this is a no-op rather than a
+    /// wrap — the second half of the same clamp the disabled chevrons express,
+    /// kept here so the invariant survives a caller that forgets the first.
+    private func step(to target: WebArtifact?) {
+        guard let target else { return }
+        withAnimation { selection = target.url }
     }
 }
