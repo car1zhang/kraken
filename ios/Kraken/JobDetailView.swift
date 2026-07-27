@@ -1447,7 +1447,10 @@ struct JobDetailView: View {
 /// One side-thread chip — "⑂ <title>", green while the thread's window is
 /// live, muted once it's closed. Same outlined-stroke treatment as PRChip
 /// above, so a job's chips all read as one family.
-private struct ThreadChip: View {
+/// Not private: the board card renders these too, in its own chip row (see
+/// JobCardView), so a job's branches read the same on the board as they do in
+/// the detail sheet.
+struct ThreadChip: View {
     let thread: WebThread
 
     var body: some View {
@@ -1455,9 +1458,16 @@ private struct ThreadChip: View {
         HStack(spacing: 4) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.data(9, weight: .semibold))
-            // Capped, not just single-line: the chips live in a horizontal
-            // scroller, so an unbounded title would stretch one chip off the
-            // screen and hide every thread behind it.
+            // Capped, not just single-line — one reason per surface, since
+            // this chip renders on two. In the detail sheet the chips live in
+            // a horizontal scroller, so an unbounded title would stretch one
+            // chip off the screen and hide every thread behind it. On the
+            // board card they live in CardChipFlow, which wraps rather than
+            // scrolls, so the cap is instead what keeps a renamed thread
+            // inside the card width — the same job style.css's
+            // `.thread-chip { max-width: 100%; text-overflow: ellipsis }`
+            // does on web, and what lets CardChipFlow's placement clamp
+            // ellipsise a first-on-line chip rather than overflow it.
             Text(thread.displayTitle)
                 .lineLimit(1)
                 .truncationMode(.tail)

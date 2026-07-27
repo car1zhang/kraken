@@ -57,7 +57,6 @@
     <span class="usage-stat" id="usage-stat" hidden role="button" tabindex="0" title="usage — claude code pool"></span>
     <span class="viewtabs">
       <button class="viewtab active" data-view="board">BOARD</button>
-      <button class="viewtab" data-view="dag">DAG</button>
       <button class="viewtab" data-view="log">LOG</button>
       <button class="viewtab" data-view="dream">DREAM</button>
     </span>
@@ -89,12 +88,6 @@
   <div class="update-banner" id="ship-banner" hidden></div>
 
   <main class="board" id="board"></main>
-  <main class="dag" id="dag" hidden>
-    <div class="dag-canvas" id="dag-canvas">
-      <svg id="dag-edges"></svg>
-      <div id="dag-nodes"></div>
-    </div>
-  </main>
   <!-- unified event log: newest at the bottom; scrolling to the top pulls
        the previous (older) log file into view, one file per fetch -->
   <main class="logview" id="log" hidden>
@@ -169,7 +162,11 @@
       </div>
       <div class="panel-body answer-body">
         <div class="steer-context" id="steer-context" hidden>
-          <div class="steer-crew" id="steer-crew" hidden></div>
+          <!-- carries .crew itself and is filled with BARE chips, exactly as
+               #steer-threads carries .threads — see crewChipsHTML. It used to
+               carry a .steer-crew class that nothing styled and receive a
+               wrapper <div class="crew"> inside it. -->
+          <div class="crew" id="steer-crew" hidden></div>
           <div class="prs" id="steer-prs" hidden></div>
           <!-- side threads, beside the PR chips: like PRs they're job
                history, not cell state, so they render in every mode (the
@@ -321,6 +318,14 @@
           <input id="editor-slug" placeholder="job-slug" spellcheck="false">
           <button class="btn" id="editor-create">create</button>
         </div>
+        <!-- the job's artifacts. This modal is the ONLY way to reach a
+             done or archived job's docs: the board card carries a bare count
+             (artifactChipHTML) and a settled job never opens the steer modal,
+             whose #steer-chips is the live cell's equivalent. Before the card
+             gave up its chip list this container did not exist, and a click
+             on a done card landed on a spec textarea with no path to the
+             twelve artifacts the job had just shipped. -->
+        <div class="editor-chips" id="editor-chips" hidden></div>
         <!-- doc questions: off the board for a done/archived job (see
              settledJob in app.js), so this modal — what a plain click on a
              done card opens — is where they're read and answered. Above the
