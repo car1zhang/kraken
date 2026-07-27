@@ -1583,10 +1583,66 @@ private struct OverviewDropDelegate: DropDelegate {
     }
 }
 
+/// The board card, laid out in the same bands as the web board's (see
+/// `cardHTML` in web/static/app.js — the two are meant to read as one design,
+/// so a change to either belongs in both). WEB'S BAND NUMBERS ARE KEPT, gaps
+/// included, because the numbers are shared vocabulary across app.js,
+/// style.css and this file — renumbering them here would make a bare
+/// "band 4" resolve to two different things depending on which file you were
+/// last reading.
+///
+///   1. IDENTITY — title (+ "as <slug>" when an archived job was renamed), the
+///      ⚑ pending-question flag, repo, state · cell.
+///   2. CHIPS — one wrapped row directly under the identity block, and the
+///      card's inventory surface: crew, branches, then a bare count for each of
+///      questions, artifacts and feedback. Nothing here names an individual
+///      thing except a branch. Everything the counts stand for is one tap away
+///      in the job sheet — that is the rule this row exists to enforce, and it
+///      is why the per-teammate roster list that used to sit at the foot of
+///      this card is gone: `CrewChipsView` already counts the same roster, and
+///      two renderings of it was the card's only outright duplication.
+///   3. STATUS — health, err, then the poll countdown WITH its stated reason.
+///      Those two are adjacent on purpose: web's band 3 exists partly to undo
+///      a layout that had them nine rows apart, and this card used to
+///      reproduce that split (chip on the state row, reason down here) while
+///      claiming to be the same design.
+///   5. PRS — their own row at the foot. A PR is the job's OUTPUT rather than
+///      part of its inventory, it is the one chip that leaves the app, and it
+///      is the only one naming a specific external thing — so it sits apart
+///      from band 2 rather than inside it.
+///
+/// No band 4 (NEEDS YOU) and no band 6 (ACTIONS) on phone. A pending question
+/// is the ⚑ flag in band 1 and is answered in the job sheet. Of web's three
+/// action buttons, retry and reactivate are sheet actions here; there is no
+/// tmux equivalent anywhere in this app, because that button asks the server
+/// to raise a Ghostty pane on the Mac and a phone has nothing to raise.
 private struct JobCardView: View {
     let job: WebJob
 
     private var hasPendingQuestion: Bool { job.question != nil }
+
+    /// Mirrors web's `settledJob`: a done or archived job's open questions are
+    /// no longer something owed, so the chip is suppressed for it exactly as
+    /// the board suppresses `docQuestionsChipHTML`.
+    private var isSettled: Bool { job.archived == true || job.state == "done" }
+
+    private var openQuestions: [WebDocQuestion] {
+        isSettled ? [] : (job.docQuestions ?? []).filter { !$0.isAnswered }
+    }
+
+    /// Must be at least as strict as every chip's own render condition, or the
+    /// row exists with nothing in it and the enclosing VStack pays its 6pt gap
+    /// twice for a band you cannot see. The zeus test is `isEmpty == false`
+    /// rather than `!= nil` for exactly that reason: `CrewChipsView` draws
+    /// nothing for an empty-string status, which `!= nil` would let through.
+    /// Web's `crewChipsHTML` gets this free — `j.zeus_status` is falsy for
+    /// both, so its `!j.zeus_status` guard fires either way — and
+    /// JobDetailView's Roster section already spells it this way.
+    private var hasChipRow: Bool {
+        job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty
+            || !(job.threads ?? []).isEmpty || !openQuestions.isEmpty
+            || !(job.artifacts ?? []).isEmpty || !(job.feedback ?? []).isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1616,52 +1672,206 @@ private struct JobCardView: View {
                 if job.live, let cell = job.cell {
                     Text("· \(cell)").font(.data(10)).foregroundStyle(KTheme.text2)
                 }
-                if let wakeup = job.wakeup, job.state == "working" {
-                    WakeupChip(wakeup: wakeup)
-                }
             }
-            if let wakeup = job.wakeup, !wakeup.reason.isEmpty, job.state == "working" {
-                Text("↻ " + wakeup.reason)
-                    .font(.data(10))
-                    .foregroundStyle(KTheme.text2)
-                    .lineLimit(1)
-            }
-            // Feedback count beside the PR chips — passive display only, no
-            // long-press menu: that gesture already contends with the card's
-            // drag-to-reorder. Tapping the card opens the job sheet, where
-            // the notes themselves live.
-            if !(job.feedback ?? []).isEmpty || !(job.prs ?? []).isEmpty {
-                HStack(spacing: 6) {
+            // band 2. Every chip here is passive display — no tap target and no
+            // long-press menu, since both gestures already contend with the
+            // card's drag-to-reorder. Tapping the card opens the job sheet,
+            // which is where each count's contents live.
+            //
+            // One honest divergence from web: CrewChipsView is its own HStack,
+            // so CardChipFlow sees the whole crew as ONE subview and cannot
+            // wrap BETWEEN the zeus pill and the role chips the way web's
+            // .chips wraps between flex items. A four-bucket crew is the only
+            // realistic case that gets near a phone's card width; it compresses
+            // rather than wrapping, and CardChipFlow's placement clamp is what
+            // keeps it inside the card instead of drawing over the border.
+            // Flattening it would mean CrewChipsView emitting bare chips for a
+            // Layout to flatten, which changes a view the job sheet also uses.
+            if hasChipRow {
+                CardChipFlow {
+                    CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
+                    ForEach(job.threads ?? [], id: \.tid) { ThreadChip(thread: $0) }
+                    DocQuestionCountChip(open: openQuestions)
+                    ArtifactCountChip(count: (job.artifacts ?? []).count)
                     FeedbackCountChip(feedback: job.feedback ?? [])
-                    ForEach(job.prs ?? [], id: \.url) { pr in
-                        PRChip(pr: pr)
-                    }
                 }
             }
+            // band 3
             if let health = job.health, !health.isEmpty {
                 Text("⚠ " + health).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
             if let err = job.err, !err.isEmpty {
                 Text("✕ " + err).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
-            CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
-            if let roster = job.roster, !roster.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(roster.enumerated()), id: \.offset) { _, agent in
-                        HStack(spacing: 4) {
-                            Text(agent.working == true ? "●" : "○")
-                                .foregroundStyle(agent.working == true ? KTheme.solved : KTheme.text2)
-                            Text("\(agent.name) (\(agent.model))")
-                                .foregroundStyle(KTheme.text2)
-                        }
-                        .font(.data(9))
-                    }
+            if let wakeup = job.wakeup, job.state == "working" {
+                WakeupChip(wakeup: wakeup)
+                if !wakeup.reason.isEmpty {
+                    Text("↻ " + wakeup.reason)
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.text2)
+                        .lineLimit(1)
+                }
+            }
+            // band 5
+            if !(job.prs ?? []).isEmpty {
+                CardChipFlow {
+                    ForEach(job.prs ?? [], id: \.url) { PRChip(pr: $0) }
                 }
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardBackground(barColor: BoardTheme.jobColor(job.color))
+    }
+}
+
+/// A wrapping chip row — the direct equivalent of the web card's
+/// `flex-wrap: wrap` on `.chips`. An `HStack` would compress its children past
+/// legibility or run off the card edge (the card is not horizontally
+/// scrollable), and a job with a crew, two branches and three counts overflows
+/// a phone-width card easily.
+///
+/// A real `Layout` rather than a `ViewThatFits` pair. `ViewThatFits` chooses
+/// among a fixed set of hand-authored arrangements, so it cannot wrap an
+/// arbitrary number of chips into as many rows as the width happens to need —
+/// that would mean pre-authoring one branch per row count. Its usual fallback,
+/// a `VStack`, would be selected (a vertical stack IS narrower than the
+/// horizontal one, so the branches do differ in width), but it throws away the
+/// horizontal space the wrap exists to use: one chip per line.
+///
+/// Cross-axis alignment is centre, for the same reason web's `.chips` sets
+/// `align-items: center`: crew pills are taller than the count chips beside
+/// them, and top-aligning would leave the shorter chips' text riding high.
+private struct CardChipFlow: Layout {
+    var spacing: CGFloat = 5
+    var lineSpacing: CGFloat = 4
+
+    /// Rows of (subview index, size), plus each row's height, for a given width.
+    private func rows(for proposal: ProposedViewSize, subviews: Subviews) -> (rows: [[(Int, CGSize)]], heights: [CGFloat]) {
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [[(Int, CGSize)]] = []
+        var heights: [CGFloat] = []
+        var current: [(Int, CGSize)] = []
+        var currentWidth: CGFloat = 0
+        var currentHeight: CGFloat = 0
+        // subviews.indices, NOT enumerated(): placeSubviews' trailing
+        // zero-placement loop iterates indices, and the two must key off the
+        // same index space. They agree today only because LayoutSubviews is
+        // 0-based — with enumerated() the offsets stored here are subscripted
+        // back as `subviews[index]`, which on a non-zero-based collection
+        // would index outside its range and trap. This form is correct by
+        // construction instead.
+        for i in subviews.indices {
+            let size = subviews[i].sizeThatFits(.unspecified)
+            // an empty chip (every count chip renders nothing at zero) must not
+            // consume a slot or a gap
+            if size.width == 0, size.height == 0 { continue }
+            let needed = current.isEmpty ? size.width : currentWidth + spacing + size.width
+            if !current.isEmpty, needed > maxWidth {
+                rows.append(current)
+                heights.append(currentHeight)
+                current = [(i, size)]
+                currentWidth = size.width
+                currentHeight = size.height
+            } else {
+                current.append((i, size))
+                currentWidth = needed
+                currentHeight = max(currentHeight, size.height)
+            }
+        }
+        if !current.isEmpty {
+            rows.append(current)
+            heights.append(currentHeight)
+        }
+        return (rows, heights)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (rows, heights) = rows(for: proposal, subviews: subviews)
+        guard !rows.isEmpty else { return .zero }
+        let width = rows.map { row in
+            row.reduce(0) { $0 + $1.1.width } + spacing * CGFloat(max(0, row.count - 1))
+        }.max() ?? 0
+        let height = heights.reduce(0, +) + lineSpacing * CGFloat(max(0, heights.count - 1))
+        return CGSize(width: min(width, proposal.width ?? width), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (rows, heights) = rows(for: proposal, subviews: subviews)
+        // Layout's contract is that every subview gets placed. rows() drops the
+        // zero-size ones (see the skip there) so they can't earn a gap, so they
+        // are placed here at zero — cheap, and it means a future child whose
+        // IDEAL size is zero but which draws when actually proposed one (a
+        // Spacer, say) is laid out rather than silently vanishing.
+        var placed = Set<Int>()
+        var y = bounds.minY
+        for (rowIndex, row) in rows.enumerated() {
+            let rowHeight = heights[rowIndex]
+            var x = bounds.minX
+            for (index, size) in row {
+                placed.insert(index)
+                subviews[index].place(
+                    at: CGPoint(x: x, y: y + (rowHeight - size.height) / 2), // centre in the line
+                    // clamped to the container: rows() never wraps a subview
+                    // that is the first on its line, so one wider than the
+                    // whole row would otherwise be placed at its natural width
+                    // and drawn straight past the card's edge — nothing here
+                    // clips. Proposing the clamp lets it wrap or ellipsise
+                    // itself instead.
+                    proposal: ProposedViewSize(
+                        width: min(size.width, bounds.width), height: size.height))
+                x += size.width + spacing
+            }
+            y += rowHeight + lineSpacing
+        }
+        for index in subviews.indices where !placed.contains(index) {
+            subviews[index].place(at: CGPoint(x: bounds.minX, y: bounds.minY),
+                                  proposal: ProposedViewSize(width: 0, height: 0))
+        }
+    }
+}
+
+/// "⚑ N questions" — the board card's passive open-question summary, mirroring
+/// web's `.dq-chip`. Counter-coloured the moment a P0 is open, which is the
+/// same signal the web chip and the board's flag counter carry. Renders
+/// nothing when nothing is open.
+private struct DocQuestionCountChip: View {
+    let open: [WebDocQuestion]
+
+    var body: some View {
+        if !open.isEmpty {
+            let p0 = open.filter { $0.importance == "P0" }.count
+            let color = p0 > 0 ? KTheme.counter : KTheme.text2
+            Text("⚑ \(open.count) question\(open.count == 1 ? "" : "s")")
+                .font(.data(10, weight: .semibold))
+                .foregroundStyle(color)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .overlay(Rectangle().stroke(color, lineWidth: 1))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(open.count) open questions\(p0 > 0 ? ", \(p0) P0" : "")")
+        }
+    }
+}
+
+/// "▤ N" — the board card's entire artifact surface, mirroring web's
+/// `.ct-chip`. A count and nothing else: the names live one tap in, in the job
+/// sheet. Always muted, because unlike an open question or an unaddressed note
+/// a pile of artifacts is never something owed.
+private struct ArtifactCountChip: View {
+    let count: Int
+
+    var body: some View {
+        if count > 0 {
+            Text("▤ \(count)")
+                .font(.data(10, weight: .semibold))
+                .foregroundStyle(KTheme.text2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .overlay(Rectangle().stroke(KTheme.text2, lineWidth: 1))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(count) artifact\(count == 1 ? "" : "s")")
+        }
     }
 }
 

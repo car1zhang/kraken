@@ -71,11 +71,6 @@ function invalidateBoard() {
   boardSnapshot = "";
 }
 
-// per-slug artifact-chips-expanded state, persisted the same way archiveOpen
-// is (see archiveOpen below) so it survives the 3s poll re-render, which
-// rebuilds #board innerHTML and would otherwise wipe any .expanded class
-let expandedArtifacts = new Set(JSON.parse(localStorage.getItem("kraken-expanded-artifacts") || "[]"));
-
 function columnFor(state) {
   for (const c of COLUMNS) {
     if (c.states.includes(state)) return c.key;
@@ -569,61 +564,77 @@ function tokensHTML(j) {
 // ---- side threads: one chip per fork of zeus' session (see openThread) ----
 //
 // threadChipsHTML renders the chips alone so the same markup can fill both
-// the card's own .threads row (threadsHTML wraps it) and the steer modal's
-// static #steer-threads container — exactly the split prChipHTML/.prs
-// already uses. Live threads take the cyan --polling tone (a second
-// conversation is actually running); closed ones dim and stay as history.
-// The dashed ⑂ branch affordance renders on any live cell, whatever state
-// it's in. Renders nothing at all for a job with no threads on a dead cell
-// (and for an older server payload with no threads array), so those cards
-// look exactly as they did before this row existed.
-function threadChipsHTML(j) {
+// the card's unified chip row and the steer modal's static #steer-threads
+// container — exactly the split prChipHTML/.prs already uses. Live threads
+// take the cyan --polling tone (a second conversation is actually running);
+// closed ones dim and stay as history. Renders nothing at all for a job with
+// no threads on a dead cell (and for an older server payload with no threads
+// array).
+//
+// withBranch appends the dashed ⑂ branch affordance (live cells only). It
+// defaults ON, which is the MODAL's behaviour — the modal passes no argument
+// at all. The CARD is the one that opts out, with an explicit false: a branch
+// chip is a STATUS ("this branch exists, and it is live or closed"), which is
+// what the card's chip row is for, while starting a new branch is a detail
+// action and belongs behind the click-in with the rest of them.
+function threadChipsHTML(j, withBranch = true) {
   const list = j.threads || [];
   const chips = list
     .map((t) => {
       const closed = t.state !== "live";
       const label = `⑂ ${t.tid}${t.title ? " · " + t.title : ""}`;
-      const title = closed
-        ? `${t.tid} — closed thread; open it to revive`
-        : `${t.tid} — live thread`;
+      // the title repeats the thread's name, which the label also carries: the
+      // label is ellipsised on a card (style.css .thread-chip) because a name
+      // is renamable to any length, and the tooltip is where the tail it cuts
+      // stays readable — same job title does for every count chip in the row.
+      const title =
+        (t.title ? `${t.tid} · ${t.title}\n` : "") +
+        (closed ? `${t.tid} — closed thread; open it to revive` : `${t.tid} — live thread`);
       return `<button class="thread-chip${closed ? " closed" : ""}" data-slug="${esc(j.slug)}" data-tid="${esc(t.tid)}" title="${esc(title)}"><span class="dot"></span>${esc(label)}</button>`;
     })
     .join("");
-  const branch = j.live
-    ? `<button class="branch-btn" data-slug="${esc(j.slug)}" title="branch a side thread off zeus' session — zeus is not interrupted">⑂ branch</button>`
-    : "";
+  const branch = withBranch && j.live ? branchBtnHTML(j) : "";
   return chips + branch;
 }
 
-function threadsHTML(j) {
-  const inner = threadChipsHTML(j);
-  return inner ? `<div class="threads">${inner}</div>` : "";
+function branchBtnHTML(j) {
+  return `<button class="branch-btn" data-slug="${esc(j.slug)}" title="branch a side thread off zeus' session — zeus is not interrupted">⑂ branch</button>`;
 }
 
-// chipsHTML renders a job's artifact chips, collapsing to the first 3 (plus
-// a "+N more" toggle) unless key is in expandedArtifacts — key is the job's
-// jobKey (never a bare slug, or an archived job and an active one that reused
-// its freed slug would share one expand/collapse toggle), label prefixes each
-// chip's data-name (differs from slug for a renamed archived job)
-function chipsHTML(artifacts, key, label) {
-  const list = artifacts || [];
-  if (!list.length) return "";
-  const expanded = expandedArtifacts.has(key);
-  const shown = expanded ? list : list.slice(0, 3);
-  const chips = shown
+// artifactListHTML renders every one of a job's artifacts as an openable
+// chip. label prefixes each chip's data-name (it differs from slug for a
+// renamed archived job).
+//
+// This is now a DRILLDOWN-only renderer — the steer modal and the job editor
+// call it, the card does not (see artifactChipHTML). It used to be the card's
+// own row, capped at 3 chips behind a "+N more" toggle whose expanded state
+// was persisted per job in localStorage. All of that is gone: a modal scrolls,
+// so it can just show the list, and the card shows a count. The cap and its
+// toggle only ever existed to stop a twelve-artifact job from owning its
+// column, which a count solves outright rather than bounds.
+function artifactListHTML(artifacts, label) {
+  return (artifacts || [])
     .map(
       (a) =>
         `<button class="chip" data-url="${esc(a.url)}" data-name="${esc(label)}/${esc(a.name)}">▤ ${esc(a.name)}</button>`,
     )
     .join("");
-  const toggle =
-    list.length > 3
-      ? `<button class="chip chip-more" data-key="${esc(key)}">${expanded ? "less" : `+${list.length - 3} more`}</button>`
-      : "";
-  return chips + toggle;
 }
 
-// zeusPillHTML renders the zeus status pill for crewHTML: one god icon
+// artifactChipHTML renders the BOARD's entire artifact surface: one count,
+// no names — the same subtraction docQuestionsChipHTML and feedbackChipHTML
+// already made for questions and notes, now applied to the third and largest
+// list on the card. A plain span, not a .chip (that class is claimed by the
+// delegated handler that opens an artifact) and not a button, so a click falls
+// through to the card-open fallback that reaches the list itself.
+function artifactChipHTML(j) {
+  const n = (j.artifacts || []).length;
+  if (!n) return "";
+  const title = `${n} artifact${n === 1 ? "" : "s"} — click the card to open them`;
+  return `<span class="ct-chip" title="${esc(title)}">▤ ${n}</span>`;
+}
+
+// zeusPillHTML renders the zeus status pill for crewChipsHTML: one god icon
 // (cloud) whose color is the sole status indicator — "running" green,
 // "polling" cyan, "question" flags a pending AskUserQuestion (amber),
 // anything else (including "waiting") falls back to the muted default
@@ -647,20 +658,43 @@ const CREW_ROLES = ["hephaestus", "athena", "hermes", "other"];
 // "other" has no god and keeps its plain text label.
 const CREW_ICONS = { hephaestus: "⚒︎", athena: "⚖︎", hermes: "✉︎" };
 
-// crewHTML renders the crew line: a zeus status pill plus one working/total
-// chip per subagent role present in the roster, each chip led by its god's
-// icon in place of the role name (icon replaces the name; the name moves to
-// title). Renders nothing for an old server payload (no zeus_status, no
+// most teammate names a crew chip's tooltip lists before it summarises the
+// remainder — see the cap's reasoning in crewChipsHTML
+const CREW_TITLE_MAX = 12;
+
+// crewChipsHTML renders the crew tokens: a zeus status pill plus one working/
+// total chip per subagent role present in the roster, each chip led by its
+// god's icon in place of the role name (icon replaces the name; the name moves
+// to title). Renders nothing for an old server payload (no zeus_status, no
 // roster) so the card looks exactly as it did before these fields existed.
-function crewHTML(j) {
+//
+// Bare chips with no wrapper, so the same markup fills both the card's unified
+// chip row and the modal's static #steer-crew — which carries .crew itself,
+// exactly as #steer-threads carries .threads for threadChipsHTML. There is no
+// crewHTML wrapper any more: it existed only to inject a <div class="crew">
+// into a container classed .steer-crew that nothing styled.
+//
+// The chip's title also names every agent counted in it. That used to be a
+// second block on the card — a .roster row per teammate restating what the
+// chips had just counted, the card's only outright duplication. The chips are
+// the version that survives: they fit on one line whatever the crew size, and
+// nowhere else ever showed the names, so a hover keeps them reachable.
+function crewChipsHTML(j) {
   const roster = j.roster || [];
   if (!j.zeus_status && !roster.length) return "";
   const zeusPill = j.zeus_status ? zeusPillHTML(j.zeus_status) : "";
   const counts = {};
   for (const r of roster) {
     const role = CREW_ROLES.includes(r.role) ? r.role : "other";
-    (counts[role] ||= { working: 0, total: 0 }).total++;
-    if (r.working) counts[role].working++;
+    const c = (counts[role] ||= { working: 0, total: 0, names: [] });
+    c.total++;
+    if (r.working) c.working++;
+    // `?? ""` per field, not on the joined blob: every other field the card
+    // renders degrades a missing value to blank through esc(), and composing
+    // first would make this the one place that prints the literal "undefined".
+    // The wire says both are always present (board.go carries no omitempty on
+    // them) — this is what that contract slipping looks like if it ever does.
+    c.names.push(`${r.working ? "●" : "○"} ${r.name ?? ""} (${r.model ?? ""})`);
   }
   const chips = CREW_ROLES.filter((role) => counts[role])
     .map((role) => {
@@ -669,20 +703,61 @@ function crewHTML(j) {
       const label = icon
         ? `<span class="crew-ico">${icon}</span> ${c.working}/${c.total}`
         : `${esc(role)} ${c.working}/${c.total}`;
-      const title = `${role} — ${c.working} of ${c.total} working`;
+      // capped: a native tooltip does not scroll, so a large hephaestus fleet
+      // would render a name list taller than the window with no way to see its
+      // end. The on-card .roster block this replaced was unbounded too, but it
+      // at least wrapped inside the column.
+      const shown = c.names.slice(0, CREW_TITLE_MAX);
+      const rest = c.names.length - shown.length;
+      const body = rest > 0 ? [...shown, `…and ${rest} more`] : shown;
+      const title = `${role} — ${c.working} of ${c.total} working\n${body.join("\n")}`;
       return `<span class="crew-chip${c.working > 0 ? " active" : ""}" title="${esc(title)}">${label}</span>`;
     })
     .join("");
   if (!zeusPill && !chips) return "";
-  return `<div class="crew">${zeusPill}${chips}</div>`;
+  return zeusPill + chips;
 }
 
+// cardHTML lays a job out in six bands, in this order and always this order,
+// whatever column the card is in. Bands 1-5 answer, top to bottom, the five
+// questions you ask a card in the order you ask them; band 6 gives you the
+// controls. These numbers are shared vocabulary — style.css and the iOS
+// JobCardView both reference bands by them, so renumbering here means
+// renumbering there. Before this they were interleaved: the countdown chip and the PR/
+// thread rows sat BETWEEN the slug and the repo/age line, so identity was
+// split in two, and zeus' own words landed below a full-width button, that
+// same countdown chip and two chip rows.
+//
+//   1. IDENTITY — slug · state, then repo · cell · age · prereqs. Contiguous:
+//      nothing may be inserted between these two lines.
+//   2. CHIPS — one wrapped row of tokens directly under the repo line, and the
+//      card's inventory surface: agent/subagent status, branches, then a bare
+//      count for each of questions, artifacts and feedback. It sits with
+//      identity rather than down by the actions because it answers "what is in
+//      this job", which is read at the same glance as "which job is this".
+//      Nothing here names an individual thing except a branch, which has
+//      nothing longer to say. Everything the counts stand for is one click away
+//      in the modal — that is the rule this row exists to enforce, and it is
+//      why the artifact NAMES moved out (see artifactChipHTML) rather than
+//      being capped.
+//   3. STATUS — what is true right now, worst-first: outcome, err/health, then
+//      the me→zeus/zeus conversation pair (chronological, so it reads as a
+//      transcript), then the poll countdown WITH its stated reason (those two
+//      were 9 rows apart).
+//   4. NEEDS YOU — the pending AskUserQuestion. Above the PR row, not below
+//      it: it is the one block on a card carrying buttons you must press.
+//   5. PRS — their own row, deliberately NOT folded into band 2. A PR is the
+//      job's OUTPUT, not part of its inventory: it is the last thing that
+//      happened rather than something the job contains, it is the one chip that
+//      leaves the app entirely, and it is the only one that names a specific
+//      external thing. So it sits low, next to the actions, where the "what
+//      came of this" reading is.
+//   6. ACTIONS — tmux, big, at the foot, plus retry and reactivate when the
+//      job's state offers them. ⑂ branch is deliberately NOT here: branching
+//      is a detail action and lives in the modal, which has always had its own
+//      button for it.
 function cardHTML(j, col) {
   const color = stateColor(j.state);
-  // the feedback chip rides the PR row rather than a row of its own: both are
-  // job history that outlives the cell, and both are read one click in — the
-  // same pairing the steer modal's context block already makes
-  const prs = (j.prs || []).map(prChipHTML).join("") + feedbackChipHTML(j);
   const prereqs = (j.prereqs || [])
     .map((p) => {
       const cls = p.done ? "ok" : p.gated ? "gate" : "pend";
@@ -690,13 +765,24 @@ function cardHTML(j, col) {
       return `<span class="${cls}">${esc(p.job)}${mark}</span>`;
     })
     .join(" ");
-  // the questions chip rides in the artifact-chip row rather than a row of
-  // its own: both answer "what's in this job", and one wrapped flex row
-  // costs the card no extra height when there's already a chip line
-  const chips = chipsHTML(j.artifacts, jobKey(j), j.slug) + docQuestionsChipHTML(j);
-  const roster = (j.roster || [])
-    .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
-    .join("");
+  // band 2 — assembled most-live-first: who is working on it, what has been
+  // branched off it, then what it has accumulated.
+  const chips = [
+    crewChipsHTML(j),
+    threadChipsHTML(j, false),
+    docQuestionsChipHTML(j),
+    artifactChipHTML(j),
+    feedbackChipHTML(j),
+  ].join("");
+  // band 5 — PRs alone; see the band note above for why they are not band 2
+  const prs = (j.prs || []).map(prChipHTML).join("");
+  // band 6, assembled here rather than inline so the row can be dropped
+  // whole when a card offers nothing to press (every draft/queued card)
+  const actions = [
+    j.live ? `<button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button>` : "",
+    j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : "",
+    (col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : "",
+  ].join("");
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
   // an uncoloured job emits no --job-color declaration at all and its accent
   // bar falls through to grey. --state is still emitted: it no longer feeds
@@ -709,28 +795,23 @@ function cardHTML(j, col) {
       <span class="state">● ${esc(j.state)}</span>
       ${col === "queued" && !j.live ? `<button class="queue-cancel" data-slug="${esc(j.slug)}" title="cancel — return to draft (spec is kept)">✕</button>` : ""}
     </div>
-    ${wakeupChipHTML(j)}
-    ${prs ? `<div class="prs">${prs}</div>` : ""}
-    ${threadsHTML(j)}
     <div class="meta">
       <span>${esc(j.repo)}</span>
       ${j.live ? `<span>${esc(j.cell)}</span>` : ""}
       <span data-age="${j.mtime}">${age(j.mtime)}</span>
       ${prereqs ? `<span class="prereq">${prereqs}</span>` : ""}
     </div>
-    ${j.live ? `<div class="review-row"><button class="btn tmux-open open-tmux" data-slug="${esc(j.slug)}" title="raise zeus' pane in Ghostty">⧉ tmux</button></div>` : ""}
+    ${chips ? `<div class="chips">${chips}</div>` : ""}
+    ${j.outcome && col === "done" ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${j.err ? `<div class="err">✕ ${esc(j.err)}</div>` : ""}
     ${j.health ? `<div class="err">⚠ ${esc(j.health)}</div>` : ""}
     ${j.last_sent ? `<div class="last-sent">me→zeus: ${esc(j.last_sent)}</div>` : ""}
     ${j.detail ? `<div class="detail">${esc(j.detail)}</div>` : ""}
+    ${wakeupChipHTML(j)}
     ${j.wakeup && j.wakeup.reason && j.state === "working" ? `<div class="wakeup-reason">↻ ${esc(j.wakeup.reason)}</div>` : ""}
-    ${crewHTML(j)}
-    ${roster ? `<div class="roster">${roster}</div>` : ""}
-    ${j.outcome && col === "done" ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
-    ${chips ? `<div class="chips">${chips}</div>` : ""}
-    ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
-    ${(col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
+    ${prs ? `<div class="prs">${prs}</div>` : ""}
+    ${actions ? `<div class="card-actions">${actions}</div>` : ""}
   </div>`;
 }
 
@@ -850,7 +931,7 @@ function render(board) {
 // (value + focus + selection) across an innerHTML rebuild of any surface
 // that renders one: #steer-docq/#steer-feedback (fillSteerContext re-rendering
 // the steer modal's copies of the questions and feedback panels on
-// open/chip-more/post-answer), #editor-docq/#editor-feedback (fillEditorDocq
+// open/post-answer), #editor-docq/#editor-feedback (fillEditorDocq
 // and fillEditorFeedback doing the same for the job editor), and
 // #dream-watchlist (renderDreamWatchlist rebuilding the watchlist on every
 // poll while the DREAM view is up — the comment box there is a composer carl
@@ -1033,24 +1114,35 @@ let archiveOpen = localStorage.getItem("kraken-archive-open") === "1";
 function archivedCardHTML(j) {
   const label = j.display_slug || j.slug;
   const renamed = j.display_slug && j.display_slug !== j.slug;
-  // an archived card has no PR row to hang the feedback chip off, so it goes
-  // in the chip row — the same row that carries the artifacts the notes are
-  // about. The panel behind it opens in the job editor, which is what a
-  // click on an archived card already opens.
+  // an archived card carries the same two counts an active one does, in the
+  // same place (band 2, directly under the repo line), and for the same
+  // reason: both open in the job editor, which is what a click on an archived
+  // card already opens, and which now renders the artifact list itself
+  // (fillEditorChips). Nothing about an archived job is worth naming on the
+  // card that isn't worth naming on a live one. It has no PR row — an archived
+  // job's PRs are not on the wire — so band 5 simply doesn't arise here.
   //
   // data-slug is the jobKey here, not the bare archive name: nothing reads an
   // archived card's data-slug as a server key (unarchive/delete carry their
   // own, below), but snapshotDocInputs/restoreDocInputs use it as a per-card
   // scroll key — and a bare slug would make this card and an active job that
   // reused the freed slug restore each other's feedback-panel scroll position.
-  const chips = chipsHTML(j.artifacts, jobKey(j), label) + feedbackChipHTML(j);
+  const chips = artifactChipHTML(j) + feedbackChipHTML(j);
 
   // the colour survives archiving — the card is dimmed as a whole by
   // .card.archived's opacity, so the accent bar reads as muted without
   // needing a treatment of its own. Same all-or-nothing emission as the live
   // card: no --job-color means the bar falls through to --text-2.
   const jc = jobColorVar(j);
-  return `<div class="card archived" style="--state:var(--text-2)${jc ? `;--job-color:${jc}` : ""}" data-slug="${esc(jobKey(j))}">
+  // data-editable="false" makes the card CLICKABLE — the delegated fallback
+  // matches `.card[data-editable]` on presence, and reads the value only to
+  // decide whether the editor renders read-only. An archived card carried no
+  // such attribute and so had never been clickable, which was harmless only
+  // while it rendered real .chip buttons the artifact handler could open
+  // directly. It carries a bare ▤ count now, whose entire affordance is
+  // "click the card", so without this the archive's artifacts would have no
+  // path in the UI at all.
+  return `<div class="card archived" style="--state:var(--text-2)${jc ? `;--job-color:${jc}` : ""}" data-slug="${esc(jobKey(j))}" data-editable="false">
     <div class="card-top">
       <span class="slug">${esc(label)}</span>
       ${renamed ? `<span class="state">as ${esc(j.slug)}</span>` : ""}
@@ -1060,9 +1152,9 @@ function archivedCardHTML(j) {
       <span>${esc(j.repo)}</span>
       <span data-age="${j.mtime}">${age(j.mtime)}</span>
     </div>
-    ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
-    <div class="review-row">
+    ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
+    <div class="card-actions">
       <button class="btn unarchive" data-slug="${esc(j.slug)}">⬆ unarchive</button>
       <button class="btn danger delete" data-slug="${esc(j.slug)}">✕ delete forever</button>
     </div>
@@ -1593,8 +1685,7 @@ document.addEventListener("click", (ev) => {
   // clickable area (and inside the steer modal's context block), so they
   // must return before the generic .chip branch below — which would open an
   // artifact — and before the card-open fallback at the bottom, which would
-  // drop the steer/editor modal on top of the thread overlay. Same hazard
-  // the .chip-more comment below documents, one layer earlier.
+  // drop the steer/editor modal on top of the thread overlay.
   const threadChip = ev.target.closest(".thread-chip");
   if (threadChip) {
     openThread(threadChip.dataset.slug, threadChip.dataset.tid);
@@ -1603,23 +1694,6 @@ document.addEventListener("click", (ev) => {
   const branchBtn = ev.target.closest(".branch-btn");
   if (branchBtn) {
     openThread(branchBtn.dataset.slug, null);
-    return;
-  }
-  // must come before the .chip branch below — chip-more also matches .chip
-  // (it needs the same size/padding) but must never open an artifact
-  const chipMore = ev.target.closest(".chip-more");
-  if (chipMore) {
-    // data-key is a jobKey, not a slug — for an active job the two are the
-    // same string, which is why the steerSlug comparison below still holds
-    const key = chipMore.dataset.key;
-    if (expandedArtifacts.has(key)) expandedArtifacts.delete(key);
-    else expandedArtifacts.add(key);
-    localStorage.setItem("kraken-expanded-artifacts", JSON.stringify([...expandedArtifacts]));
-    invalidateBoard();
-    refresh();
-    if (!steerOverlay.hidden && steerSlug === key) {
-      fillSteerContext(jobsBySlug[steerSlug], steerMode);
-    }
     return;
   }
   const chip = ev.target.closest(".chip");
@@ -2208,7 +2282,7 @@ function fillSteerContext(j, mode) {
   const fbEl = document.getElementById("steer-feedback");
   const tokEl = document.getElementById("steer-tokens");
 
-  const crew = mode !== "reactivate" && j && crewHTML(j);
+  const crew = mode !== "reactivate" && j && crewChipsHTML(j);
   // PRs are job history, not cell state — shown in every mode, including
   // reactivate ("what already shipped" is exactly the reactivation context)
   const prs = j && j.prs && j.prs.length ? j.prs : null;
@@ -2257,7 +2331,7 @@ function fillSteerContext(j, mode) {
   lastSentEl.textContent = lastSent ? `me→zeus: ${lastSent}` : "";
 
   chipsEl.hidden = !artifacts;
-  chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, jobKey(j), j.slug) : "";
+  chipsEl.innerHTML = artifacts ? artifactListHTML(artifacts, j.slug) : "";
 
   // one snapshot spans both panels: they're replaced back to back, and an
   // .fb-edit-input being retyped while a poll re-opens this context block
@@ -3339,6 +3413,30 @@ async function loadForm(slug) {
   if (d.err) editorNote.textContent = "current file won't run: " + d.err;
 }
 
+// fillEditorChips renders the job's artifacts in the editor — the third and
+// last panel to move off the card and behind the click-in, after questions and
+// feedback, and the one whose absence would bite hardest. A done or archived
+// job routes a plain click HERE, never to the steer modal, so with the card
+// down to a bare count (artifactChipHTML) this is the only surface left that
+// names a settled job's docs at all — and settled jobs are exactly the ones
+// carrying ten or twelve of them.
+//
+// No snapshot/restore and no scroll save, unlike its two siblings below —
+// and NOT because the panel can't scroll (it is capped and scrolls, same as
+// they are). Because it is rendered exactly once per open: openEditor is its
+// only caller, and nothing re-runs it, where fillEditorFeedback is re-run
+// after every feedback post and fillEditorDocq after every answer. There is no
+// innerHTML replacement here for a scroll position or a half-typed input to
+// survive, so there is nothing to snapshot.
+function fillEditorChips(j) {
+  const el = document.getElementById("editor-chips");
+  const chips = j ? artifactListHTML(j.artifacts, j.display_slug || j.slug) : "";
+  el.hidden = !chips;
+  // .editor-docq-head, the same class both sibling panels emit — a shared
+  // class, not a shared rule, so the three labels cannot drift apart
+  el.innerHTML = chips ? `<div class="editor-docq-head">artifacts</div><div class="chips">${chips}</div>` : "";
+}
+
 // fillEditorDocq renders the job editor's own copy of the doc-questions
 // panel — the click-into surface for a done job's questions, which the card
 // no longer shows (settledJob). Rendered for any job that has questions, not
@@ -3417,10 +3515,32 @@ function openEditor(slug) {
   // #editor-overlay as never the authority, so the freshly-rendered panel
   // has to already read as visible for a card-side draft to seed it
   editorOverlay.hidden = false;
+  fillEditorChips(slug ? jobsBySlug[slug] : null);
   fillEditorDocq(slug ? jobsBySlug[slug] : null);
   fillEditorFeedback(slug ? jobsBySlug[slug] : null);
   if (isNew) {
     document.getElementById("editor-slug").focus();
+    return;
+  }
+  // an archived job's key is jobKey's synthetic "archive:<slug>" (there is no
+  // such job file), so there is no form to load — the panels filled above ARE
+  // the whole modal for it. Asking the server for one would 404 and paint an
+  // error over a view that is working exactly as intended.
+  const aj = jobsBySlug[slug];
+  if (aj && aj.archived) {
+    // setFormReadOnly FIRST, and not only for the form it hides: it is the one
+    // writer of editorText.readOnly, and three paths gate on that flag ALONE
+    // rather than on #editor-form being hidden — the panel's dragover and drop
+    // handlers and the document paste handler, all funnelling into
+    // addEditorFiles. Skipping it would leave them armed at whatever the last
+    // editable open set, so a ⌘V on this read-only modal would upload against
+    // the synthetic "archive:<slug>" key and paint the server's 404 into a
+    // panel that just said it was read-only.
+    // It must come BEFORE the two writes below, because it sets #editor-hint
+    // itself and this branch's wording has to win.
+    setFormReadOnly(true);
+    document.getElementById("editor-title").textContent = (aj.display_slug || aj.slug) + " — archived";
+    document.getElementById("editor-hint").textContent = "read-only · unarchive to edit";
     return;
   }
   loadForm(slug).catch((e) => { editorNote.textContent = String(e.message || e); });
@@ -3711,9 +3831,18 @@ document.addEventListener("keydown", (ev) => {
   if (!usageOverlay.hidden) { usageOverlay.hidden = true; return; }
 });
 
-// ---- dag view: jobs layered by dependency depth, edges = prereqs ----
+// ---- view switching: BOARD · LOG · DREAM, the whole tab strip ----
 
-let view = localStorage.getItem("kraken-view") || "board";
+const VIEWS = ["board", "log", "dream"];
+
+// a stored view that no longer exists falls back to the board rather than
+// hiding every <main> and leaving a blank page — this is the read path a
+// browser still holding "dag" from the removed prereq-graph view takes, and
+// setView overwrites the stale value the first time a tab is clicked.
+// Validating against VIEWS rather than `|| "board"` is the whole point: a
+// stale-but-truthy value passes an || guard and then matches no <main>.
+const storedView = localStorage.getItem("kraken-view");
+let view = VIEWS.includes(storedView) ? storedView : "board";
 
 // setView is the tabs' handler, and also how a surface outside the tab strip
 // sends you somewhere — the failed-update banner's OPEN LOG, say.
@@ -3721,7 +3850,6 @@ function setView(v) {
   view = v;
   localStorage.setItem("kraken-view", view);
   applyView();
-  invalidateBoard(); // switching to dag must render it even though jobs are unchanged
   refresh();
 }
 
@@ -3731,119 +3859,10 @@ document.querySelectorAll(".viewtab").forEach((tab) =>
 function applyView() {
   document.querySelectorAll(".viewtab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
-  document.getElementById("board").hidden = view !== "board";
-  document.getElementById("dag").hidden = view !== "dag";
-  document.getElementById("log").hidden = view !== "log";
-  document.getElementById("dream").hidden = view !== "dream";
+  for (const v of VIEWS) document.getElementById(v).hidden = view !== v;
   if (view === "log") refreshLog();
   if (view === "dream") refreshDream();
 }
-
-const NODE_W = 190;
-const NODE_H = 52;
-const GAP_X = 90;
-const GAP_Y = 22;
-
-// dagLayers assigns each job a column: roots at 0, dependents one past their
-// deepest prereq. Cycles (already erred by the parser) fall out of the
-// resolution loop and go in a final column.
-function dagLayers(jobs) {
-  const bySlug = Object.fromEntries(jobs.map((j) => [j.slug, j]));
-  const depth = {};
-  let progress = true;
-  while (progress) {
-    progress = false;
-    for (const j of jobs) {
-      if (depth[j.slug] !== undefined) continue;
-      const deps = (j.prereqs || []).filter((p) => bySlug[p.job]);
-      if (deps.every((p) => depth[p.job] !== undefined)) {
-        depth[j.slug] = deps.length ? 1 + Math.max(...deps.map((p) => depth[p.job])) : 0;
-        progress = true;
-      }
-    }
-  }
-  const maxD = Math.max(0, ...Object.values(depth));
-  for (const j of jobs) if (depth[j.slug] === undefined) depth[j.slug] = maxD + 1; // cycle members
-  return depth;
-}
-
-function renderDag(board) {
-  // archived jobs stay out of the dag: they're out of the active namespace,
-  // and their prereq slugs may now point at unrelated newer jobs
-  const jobs = (board.jobs || []).filter((j) => !j.archived);
-  const nodesEl = document.getElementById("dag-nodes");
-  const edgesEl = document.getElementById("dag-edges");
-  if (!jobs.length) {
-    nodesEl.innerHTML = '<div class="dag-empty">no jobs — + new on the board creates one</div>';
-    edgesEl.innerHTML = "";
-    return;
-  }
-  const depth = dagLayers(jobs);
-  const layers = {};
-  for (const j of jobs) (layers[depth[j.slug]] ||= []).push(j);
-  const pos = {};
-  let maxX = 0;
-  let maxY = 0;
-  for (const [d, js] of Object.entries(layers)) {
-    js.sort((a, b) => a.slug.localeCompare(b.slug));
-    js.forEach((j, i) => {
-      const x = d * (NODE_W + GAP_X);
-      const y = i * (NODE_H + GAP_Y);
-      pos[j.slug] = { x, y };
-      maxX = Math.max(maxX, x + NODE_W);
-      maxY = Math.max(maxY, y + NODE_H);
-    });
-  }
-  nodesEl.style.height = maxY + 20 + "px";
-  nodesEl.innerHTML = jobs
-    .map((j) => {
-      const p = pos[j.slug];
-      const editable = !j.live && ["draft", "queued", "done"].includes(columnFor(j.state));
-      // same accent-bar channel as the kanban card, so a job reads as the
-      // same colour in both views
-      const jc = jobColorVar(j);
-      return `<div class="dag-node editable"
-        style="left:${p.x}px;top:${p.y}px;--state:${stateColor(j.state)}${jc ? `;--job-color:${jc}` : ""}"
-        data-slug="${esc(j.slug)}" data-editable="${editable}">
-        <span class="slug">${esc(j.slug)}</span>
-        <span class="nstate">● ${esc(j.state)}</span><span class="nrepo">${esc(j.repo)}</span>
-      </div>`;
-    })
-    .join("");
-  const canvas = document.getElementById("dag-canvas");
-  canvas.style.width = maxX + 20 + "px";
-  canvas.style.height = maxY + 20 + "px";
-  edgesEl.setAttribute("viewBox", `0 0 ${maxX + 20} ${maxY + 20}`);
-  edgesEl.setAttribute("width", maxX + 20);
-  edgesEl.setAttribute("height", maxY + 20);
-  const bySlug = Object.fromEntries(jobs.map((j) => [j.slug, j]));
-  let paths = "";
-  for (const j of jobs) {
-    for (const p of j.prereqs || []) {
-      const from = pos[p.job];
-      const to = pos[j.slug];
-      if (!from || !to) continue;
-      const x1 = from.x + NODE_W;
-      const y1 = from.y + NODE_H / 2;
-      const x2 = to.x;
-      const y2 = to.y + NODE_H / 2;
-      const mx = (x1 + x2) / 2;
-      const cls = p.gated ? "gated" : p.done ? "done" : "";
-      paths += `<path class="${cls}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
-      if (p.gated) paths += `<text x="${mx - 5}" y="${(y1 + y2) / 2 - 4}">⚑</text>`;
-    }
-  }
-  edgesEl.innerHTML = paths;
-}
-
-document.getElementById("dag-nodes").addEventListener("click", (ev) => {
-  const node = ev.target.closest(".dag-node");
-  if (!node || window.getSelection().toString()) return;
-  const slug = node.dataset.slug;
-  const liveCol = liveDisplayColumn(slug);
-  if (liveCol === "working" || liveCol === "blocked") openSteer(slug, liveCol === "blocked" ? "unblock" : "steer");
-  else openEditor(slug);
-});
 
 // ---- usage widget: header at-a-glance + drilldown modal over GET /api/usage
 // (core.AccountUsage — see api/usage.go). The "main" account is whichever
@@ -4562,7 +4581,6 @@ async function refresh() {
     if (snap !== boardSnapshot) {
       boardSnapshot = snap;
       renderBoardDOM(byCol, archived);
-      if (view === "dag") renderDag(board);
     } else {
       updateAges(); // a rebuild renders fresh ages itself
     }
