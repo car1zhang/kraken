@@ -45,14 +45,14 @@
     <text x="107" y="275">info/SKILL.md</text>
   </g>
 
-  <g class="node accent">
+  <g class="node blue">
     <rect x="320" y="140" width="180" height="52" rx="8"/>
-    <text x="410" y="160"><tspan x="410">hermes-contract.md</tspan><tspan x="410" dy="1.2em">(new asset)</tspan></text>
+    <text x="410" y="160"><tspan x="410">+ hermes-contract.md</tspan><tspan x="410" dy="1.2em">(new asset)</tspan></text>
   </g>
 
-  <g class="node accent">
+  <g class="node blue">
     <rect x="620" y="40" width="190" height="52" rx="8"/>
-    <text x="715" y="60"><tspan x="715">lint_svg.py</tspan><tspan x="715" dy="1.2em">(new asset)</tspan></text>
+    <text x="715" y="60"><tspan x="715">+ lint_svg.py</tspan><tspan x="715" dy="1.2em">(new asset)</tspan></text>
   </g>
 
   <g class="file">

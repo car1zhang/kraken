@@ -93,9 +93,9 @@
       <rect x="346" y="410" width="180" height="26" rx="3"/>
       <text x="436" y="427">pr-hooks</text>
     </g>
-    <g class="cell ok">
+    <g class="cell green">
       <rect x="530" y="410" width="66" height="26" rx="3"/>
-      <text x="563" y="427">working</text>
+      <text x="563" y="427">✓ working</text>
     </g>
   </g>
 </svg>

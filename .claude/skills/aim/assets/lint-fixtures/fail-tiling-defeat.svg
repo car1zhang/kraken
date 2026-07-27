@@ -17,7 +17,7 @@
   <rect class="store" x="66" y="94" width="108" height="30" rx="2"/>
   <rect class="store" x="66" y="130" width="108" height="30" rx="2"/>
   <!-- viewport band -->
-  <rect class="node accent" x="66" y="167" width="108" height="70" rx="2"/>
+  <rect class="node blue" x="66" y="167" width="108" height="70" rx="2"/>
   <text x="120" y="206" font-size="12" text-anchor="middle">viewport</text>
   <!-- resident tiles below the viewport -->
   <rect class="store" x="66" y="246" width="108" height="30" rx="2"/>

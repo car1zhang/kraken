@@ -7,8 +7,8 @@
   <style>
     .node rect { fill:#f5f6f8; stroke:#b8bec8; stroke-width:1; rx:6; ry:6; }
     .node text { fill:#1f2430; font-size:13px; text-anchor:middle; dominant-baseline:middle; }
-    .node.accent rect { fill:#fff4e0; stroke:#e0a020; stroke-width:1.6; }
-    .node.accent text { fill:#7a4d05; }
+    .node.blue rect { fill:#fff4e0; stroke:#e0a020; stroke-width:1.6; }
+    .node.blue text { fill:#7a4d05; }
     .group { fill:none; stroke:#9aa2b1; stroke-width:1.2; stroke-dasharray:6 4; rx:10; ry:10; }
     .glabel { fill:#6b7280; font-size:12px; font-weight:600; }
     .store rect { fill:#eef2ff; stroke:#7c86a0; stroke-width:1.2; rx:8; ry:8; }
@@ -25,7 +25,7 @@
   <rect class="group" x="25" y="44" width="300" height="278"/>
   <text class="glabel" x="37" y="63">Board card (calm, read-mostly)</text>
 
-  <g class="node accent">
+  <g class="node blue">
     <rect x="37" y="78" width="276" height="32"/>
     <text x="175" y="94">slug · ● state (no ✕)</text>
   </g>
@@ -33,7 +33,7 @@
     <rect x="37" y="128" width="276" height="32"/>
     <text x="175" y="144">meta · detail</text>
   </g>
-  <g class="node accent">
+  <g class="node blue">
     <rect x="37" y="178" width="276" height="32"/>
     <text x="175" y="194">chips: first 3 + [+N more] toggle</text>
   </g>
@@ -48,7 +48,7 @@
   <text class="glabel" x="530" y="62">Steer/unblock modal</text>
   <text class="glabel" x="530" y="78">THE opened job (live working/blocked)</text>
 
-  <g class="node accent">
+  <g class="node blue">
     <rect x="533" y="92" width="290" height="32"/>
     <text x="678" y="108">panel head: ✕ cancel job (confirm)</text>
   </g>
@@ -56,7 +56,7 @@
     <rect x="533" y="138" width="290" height="32"/>
     <text x="678" y="154">context: detail · last sent · chips</text>
   </g>
-  <g class="node accent">
+  <g class="node blue">
     <rect x="533" y="184" width="290" height="48"/>
     <text x="678" y="200">
       <tspan x="678" dy="0">▸ spec — ❄ frozen ·</tspan>

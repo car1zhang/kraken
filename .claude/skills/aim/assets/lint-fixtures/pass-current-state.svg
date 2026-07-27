@@ -12,9 +12,9 @@
     <text x="105" y="70">zeus (doc agent)</text>
   </g>
 
-  <g class="node warn">
+  <g class="node yellow">
     <rect x="204" y="38" width="162" height="64" rx="8"/>
-    <text x="285" y="54"><tspan x="285" dy="0">hermes brief</tspan><tspan x="285" dy="1.2em">layout rules only —</tspan><tspan x="285" dy="1.2em">no style contract</tspan></text>
+    <text x="285" y="54"><tspan x="285" dy="0">⚠ hermes brief</tspan><tspan x="285" dy="1.2em">layout rules only —</tspan><tspan x="285" dy="1.2em">no style contract</tspan></text>
   </g>
 
   <g class="node">
@@ -43,22 +43,22 @@
     <text x="44" y="202">defect classes reaching the board unchecked (audit: 7 of 18 diagrams)</text>
   </g>
 
-  <g class="node danger">
+  <g class="node red">
     <rect x="64" y="228" width="236" height="78" rx="8"/>
-    <text x="182" y="251"><tspan x="182" dy="0">bare-shape classes</tspan><tspan x="182" dy="1.2em">&lt;rect class='node'&gt; misses</tspan><tspan x="182" dy="1.2em">'svg .node rect' → black fill</tspan></text>
+    <text x="182" y="251"><tspan x="182" dy="0">✗ bare-shape classes</tspan><tspan x="182" dy="1.2em">&lt;rect class='node'&gt; misses</tspan><tspan x="182" dy="1.2em">'svg .node rect' → black fill</tspan></text>
   </g>
 
-  <g class="node danger">
+  <g class="node red">
     <rect x="334" y="228" width="210" height="78" rx="8"/>
-    <text x="439" y="251"><tspan x="439" dy="0">embedded &lt;style&gt; blocks</tspan><tspan x="439" dy="1.2em">rules leak document-wide,</tspan><tspan x="439" dy="1.2em">break dark mode</tspan></text>
+    <text x="439" y="251"><tspan x="439" dy="0">✗ embedded &lt;style&gt; blocks</tspan><tspan x="439" dy="1.2em">rules leak document-wide,</tspan><tspan x="439" dy="1.2em">break dark mode</tspan></text>
   </g>
 
-  <g class="node danger">
+  <g class="node red">
     <rect x="578" y="228" width="200" height="78" rx="8"/>
-    <text x="678" y="259"><tspan x="678" dy="0">coords outside viewBox</tspan><tspan x="678" dy="1.2em">labels clipped at edges</tspan></text>
+    <text x="678" y="259"><tspan x="678" dy="0">✗ coords outside viewBox</tspan><tspan x="678" dy="1.2em">labels clipped at edges</tspan></text>
   </g>
 
-  <path class="edge danger" d="M466,96 L182,228" marker-end="url(#arrow-current-state)"/>
-  <path class="edge danger" d="M466,96 L439,228" marker-end="url(#arrow-current-state)"/>
-  <path class="edge danger" d="M466,96 L678,228" marker-end="url(#arrow-current-state)"/>
+  <path class="edge red" d="M466,96 L182,228" marker-end="url(#arrow-current-state)"/>
+  <path class="edge red" d="M466,96 L439,228" marker-end="url(#arrow-current-state)"/>
+  <path class="edge red" d="M466,96 L678,228" marker-end="url(#arrow-current-state)"/>
 </svg>

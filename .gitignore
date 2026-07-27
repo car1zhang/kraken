@@ -9,3 +9,8 @@ xcuserdata/
 *.ipa
 /.claude/settings.json
 /.playwright-mcp/
+# lint_svg.py gets imported as a module by tests and reviewers, which drops
+# bytecode next to the skill assets. go:embed skips _-prefixed names so it can
+# never reach the binary, but it should not reach a commit either.
+__pycache__/
+*.pyc

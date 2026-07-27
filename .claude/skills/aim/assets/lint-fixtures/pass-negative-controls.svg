@@ -1,4 +1,4 @@
-<svg viewBox="0 0 860 320" role="img" aria-label="Negative controls for the one-shape-class rule: cell head, node accent, bar ok, region warn, store holds, edge dashed ok, a sparkle path inside an agent, and a window holding a table holding cells.">
+<svg viewBox="0 0 860 320" role="img" aria-label="Negative controls for the one-shape-class rule: cell head, node blue, bar green, region yellow, store holds, edge dashed green, a sparkle path inside an agent, and a window holding a table holding cells.">
   <text class="title" x="16" y="26">modifier and paint classes compose with one silhouette</text>
 
   <g class="cell head">
@@ -6,21 +6,21 @@
     <text x="90" y="67">kind</text>
   </g>
 
-  <g class="node accent">
+  <g class="node blue">
     <rect x="30" y="90" width="150" height="46" rx="8"/>
     <text x="105" y="117">fallback</text>
   </g>
 
-  <g class="bar ok">
+  <g class="bar green">
     <rect x="30" y="152" width="150" height="18" rx="4"/>
   </g>
 
-  <g class="region warn">
+  <g class="region yellow">
     <rect x="30" y="186" width="150" height="60" rx="6"/>
     <text x="44" y="206">phase two</text>
   </g>
 
-  <path class="edge dashed ok" d="M 200,120 H 300"/>
+  <path class="edge dashed green" d="M 200,120 H 300"/>
 
   <g class="agent">
     <rect x="330" y="90" width="180" height="60" rx="10"/>
