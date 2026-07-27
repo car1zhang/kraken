@@ -802,9 +802,11 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// through done — a merge after carl accepts still deserves recording —
 	// and stops only when the job is archived (autoArchivePass below drops
 	// it from LoadJobs' namespace entirely).
-	// mirror: no PR tracking/polling/scanning/repair — every one of these
-	// shells out to gh and/or writes prs: history that only matters for a
-	// real cell's lifecycle.
+	// mirror: nothing in this block runs. Every pass here either shells out
+	// to gh and/or writes prs: history that only matters for a real cell's
+	// lifecycle, or TYPES INTO A LIVE PANE (the PR watcher's bumps, the
+	// colour reconcile's /color) — and a mirror board is read-only by
+	// policy, most of all toward panes belonging to the real deployment.
 	if !mirror {
 		for _, j := range jobs {
 			if !prTrackable(j) {
@@ -821,6 +823,12 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		// review, a newly-failing CI check, or a fresh merge conflict.
 		for _, j := range jobs {
 			d.watchPRs(j, all, live)
+		}
+		// colour reconcile (its own pass after the PR watcher, same
+		// per-tick cadence): type /color into zeus' pane whenever the job's
+		// chosen colour differs from what was last delivered to this cell.
+		for _, j := range jobs {
+			d.syncColor(j, all, live)
 		}
 	}
 
@@ -1233,6 +1241,30 @@ func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
 			continue
 		}
 		dlogEvent("info", "pr-bump", "%s: bumped zeus for %s: %s", j.Slug, pr.URL, msg)
+	}
+}
+
+// syncColor is the colour reconcile's per-job step, a sibling of watchPRs
+// above and reduced to the same shape: every gate, the send, and the
+// watermark live in syncCellColor (color.go), and all this owns is the
+// logging. The success line reports the arg syncCellColor actually TYPED
+// rather than re-deriving the ""→"default" rule, so the log can never
+// disagree with the pane.
+func (d *daemonState) syncColor(j *Job, all []*core.Peer, live map[string]bool) {
+	sent, arg, err := syncCellColor(j, all, live)
+	if err != nil {
+		// dedup like watchPRs' bumpfail key: a question-blocked cell would
+		// otherwise write ~4 identical lines a minute overnight while carl
+		// is asleep
+		if key := "colorfail:" + j.Slug; d.Notified[key] == 0 {
+			dlogErr("%s: color sync failed: %v", j.Slug, err)
+			d.Notified[key] = time.Now().Unix()
+		}
+		return
+	}
+	delete(d.Notified, "colorfail:"+j.Slug)
+	if sent {
+		dlogEvent("info", "color-sync", "%s: /color %s → zeus", j.Slug, arg)
 	}
 }
 

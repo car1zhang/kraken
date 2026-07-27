@@ -35,6 +35,10 @@ struct JobFormView: View {
     @State private var ready = false
     @State private var solo = false
     @State private var model = ""
+    // The job's color as last known from the server — "" means none. Only
+    // ever seeds JobColorStrip (which owns the picking, the POST and its own
+    // error row); the form's own save payload never carries it.
+    @State private var color = ""
     @State private var prereqRows: [PrereqRow] = []
     @State private var spec = ""
     @State private var mtime: Int64 = 0
@@ -188,6 +192,17 @@ struct JobFormView: View {
                                 .overlay(Rectangle().stroke(KTheme.accentSoft, lineWidth: 1))
                         }
                     }
+                }
+                .listRowBackground(Color.clear)
+            }
+            kSection("Color") {
+                // Deliberately NOT gated on `editable` and deliberately not
+                // part of autosave: the strip posts to /api/job/color, which
+                // neither full-replaces the job file nor applies saveform's
+                // cell-in-flight gate. Same picker JobDetailView shows —
+                // see JobColorStrip's header for why it is shared.
+                JobColorStrip(baseURL: baseURL, slug: slug, serverColor: color) { saved in
+                    color = saved
                 }
                 .listRowBackground(Color.clear)
             }
@@ -363,6 +378,9 @@ struct JobFormView: View {
     // Every autosaved field except `ready` (see the dedicated onChange
     // above) — a snapshot string so a single onChange can watch them all at
     // once, the same idiom SpecSection uses for its `.task(id:)` key.
+    // `color` is deliberately NOT here: it doesn't ride on saveform's
+    // full-replace payload at all, it posts to its own endpoint on tap, so
+    // including it would fire a pointless (and cell-gated) form save.
     private var autosaveSnapshotKey: String {
         let prereqsPart = prereqRows.map { "\($0.job)=\($0.gated)" }.joined(separator: ",")
         return "\(repo)|\(base)|\(model)|\(solo)|\(prereqsPart)|\(spec)"
@@ -378,6 +396,7 @@ struct JobFormView: View {
             ready = f.ready
             solo = f.solo
             model = f.model ?? ""
+            color = f.color ?? ""
             prereqRows = f.prereqs.map { PrereqRow(job: $0.job, gated: $0.gated) }
             spec = f.spec
             mtime = f.mtime

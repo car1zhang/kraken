@@ -44,6 +44,11 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/job/save", webJobSave)
 	mux.HandleFunc("/api/job/form", webJobForm)
 	mux.HandleFunc("/api/job/saveform", webJobSaveForm)
+	// Colour is its own one-field route rather than part of the form save:
+	// it is cosmetic, so it is deliberately usable on a LIVE cell (see
+	// webJobColor). Its own mirror gate lives inside the handler, beside the
+	// PushJobColor call that is the only thing needing one.
+	mux.HandleFunc("/api/job/color", webJobColor)
 	mux.HandleFunc("/api/upload", uploadHandler)
 	mux.HandleFunc("/api/logs/files", webLogFiles)
 	mux.HandleFunc("/api/logs", webLogRead)

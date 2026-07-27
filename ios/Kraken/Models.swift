@@ -293,6 +293,12 @@ struct WebJob: Decodable, Identifiable {
     // are revivable conversations. Additive key, absent on older servers
     // (and on any job that never had one), so no contract bump.
     let threads: [WebThread]?
+    // The job's optional color — one of red/blue/green/yellow/purple/orange/
+    // pink/cyan (the names Claude Code's `/color` accepts), absent or "" when
+    // the job has none. Additive key, absent on older servers, so no contract
+    // bump; render through BoardTheme.jobColor, which degrades an unknown
+    // name from a newer server to "no color".
+    let color: String?
 
     var id: String { slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
@@ -312,6 +318,7 @@ struct WebJob: Decodable, Identifiable {
         case docQuestions = "doc_questions"
         case feedback
         case threads
+        case color
     }
 }
 
@@ -558,6 +565,12 @@ struct JobForm: Decodable {
     // skip_doc is gone (v5, breaking): the doc phase now runs purely from
     // zeus' own read of the job spec text, never a stored flag.
     let model: String?
+    // The job's color, "" when unset — read-only: it comes back on the form
+    // GET so the picker can show the current selection, but it is written by
+    // POST /api/job/color, never by saveform (see JobColorRequest). Optional
+    // here for the same wire tolerance as `model`: an older server's payload
+    // simply lacks the key.
+    let color: String?
     let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
@@ -569,6 +582,7 @@ struct JobForm: Decodable {
     enum CodingKeys: String, CodingKey {
         case slug, repo, base, ready, solo
         case model
+        case color
         case prereqs, spec, mtime, editable, err, slugs, repos
     }
 }
@@ -613,6 +627,17 @@ struct JobFormSaveRequest: Encodable {
         case model
         case prereqs, spec, mtime
     }
+}
+
+// JobColorRequest is POST /api/job/color's body. Color deliberately does NOT
+// ride on JobFormSaveRequest above: saveform is a FULL REPLACE, so any client
+// that doesn't emit the key (every build shipped before this one) would
+// silently wipe a color set from the web board. Its own endpoint also skips
+// saveform's editable-job gate, which matters because recoloring a running
+// job is exactly when the picker is useful. "" clears the color.
+struct JobColorRequest: Encodable {
+    let slug: String
+    let color: String
 }
 
 // MARK: - board action requests/responses

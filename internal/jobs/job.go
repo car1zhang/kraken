@@ -38,7 +38,13 @@ type Job struct {
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
 	// model can't change out from under it. Empty means core.DefaultModel,
 	// kraken's own default — never "whatever claude's config says".
-	Model   string   `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
+	// Color is the job's chosen colour — one of the eight names Claude
+	// Code's /color accepts (see color.go's Palette). Same ownership class
+	// as Model: hand-authored, kraken never writes it on its own. Empty
+	// means NO colour, not "pick one" — every surface renders exactly what
+	// it rendered before the field existed.
+	Color   string   `json:"color,omitempty"`
 	Prereqs []Prereq `json:"prereqs,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
@@ -286,6 +292,16 @@ func ParseJob(name string, data []byte) *Job {
 			} else {
 				j.Model = val
 			}
+		case "color":
+			// Mirrors model's validate-or-err shape. This case is
+			// load-bearing beyond validation: the default: arm below marks
+			// any unknown key Err, and an erred job never runs — so without
+			// it every job file carrying color: would pin to draft.
+			if val != "" && !ValidColor(val) {
+				j.addErr(fmt.Sprintf("bad color value %q", core.TruncateOneLine(val, 24)))
+			} else {
+				j.Color = val
+			}
 		case "skip-doc":
 			// tolerated legacy key: pluto job files predating the
 			// doc-iff-/aim-or-/info rule (Q14) may still carry a skip-doc:
@@ -509,6 +525,8 @@ func JobTemplate(slug string) string {
 		"solo: false               # true → zeus works alone: no teammate crew at all, prose-only doc (no diagram agents)\n" +
 		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
 		"                          # applied once at cell start, default = " + core.DefaultModel + "\n" +
+		"# color: purple           # optional: board/pane colour (red | blue | green | yellow | purple | orange | pink | cyan);\n" +
+		"                          # unset = no colour\n" +
 		"---\n"
 }
 
@@ -1045,6 +1063,8 @@ func WriteJobFields(j *Job, keyvals ...string) error {
 			j.Session = keyvals[i+1]
 		case "teardown":
 			j.Teardown = keyvals[i+1]
+		case "color":
+			j.Color = keyvals[i+1]
 		case "run":
 			if n, err := strconv.Atoi(keyvals[i+1]); err == nil {
 				j.Run = n

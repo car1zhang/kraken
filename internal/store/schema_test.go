@@ -24,6 +24,12 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v8: drop jobs.color (added at v8, absent through v7).
+	if target < 8 {
+		if _, err := s.db.Exec(`ALTER TABLE jobs DROP COLUMN color`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v8, drop jobs.color): %v", target, err)
+		}
+	}
 	// Reverse v7: drop the threads table entirely (added at v7, absent
 	// through v6). Its unique index goes with it — SQLite drops a table's
 	// indexes along with the table.
@@ -831,5 +837,52 @@ func TestKeywordColumnsAreQuotedInDDL(t *testing.T) {
 	}
 	if got != "@4" {
 		t.Fatalf(`threads."window" = %q, want @4`, got)
+	}
+}
+
+// TestSchemaV7ToV8AddsColor covers the v8 migration against a database that
+// really is at v7: the column must appear with every EXISTING row left on
+// the empty string — "no colour", which is exactly the behaviour those jobs had before the
+// column existed. A migration that defaulted to some palette entry instead
+// would silently recolour (and, via the daemon's reconcile, retype) every
+// job on the board the first time the new binary ran.
+func TestSchemaV7ToV8AddsColor(t *testing.T) {
+	s := openTest(t)
+	downgradeFreshDB(t, s, 7)
+
+	if _, err := s.db.Exec(
+		`INSERT INTO jobs (slug, state, rev, run) VALUES ('legacy', 'working', 1, 1)`,
+	); err != nil {
+		t.Fatalf("seed v7 row: %v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v7: %v", err)
+	}
+
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d after migrate, want %d", version, schemaVersion)
+	}
+
+	var color string
+	if err := s.db.QueryRow(`SELECT color FROM jobs WHERE slug = 'legacy'`).Scan(&color); err != nil {
+		t.Fatalf("read migrated color: %v", err)
+	}
+	if color != "" {
+		t.Fatalf("pre-existing row got color %q, want '' (no colour)", color)
+	}
+
+	// and the column is NOT NULL DEFAULT '', so an insert that never
+	// mentions it still scans into a plain string field
+	got, err := s.GetJobBySlug("legacy")
+	if err != nil {
+		t.Fatalf("GetJobBySlug: %v", err)
+	}
+	if got.Color != "" {
+		t.Fatalf("scanned color = %q, want empty", got.Color)
 	}
 }

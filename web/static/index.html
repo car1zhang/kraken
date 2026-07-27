@@ -137,6 +137,15 @@
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title" id="steer-title"></span>
+        <!-- the same nine-swatch colour strip as the job editor's, filled by
+             app.js's initSwatchStrip. It has to be HERE and not only in the
+             editor: the board routes a live working/blocked card to this
+             modal and never to the editor, so without this copy the picker
+             would be reachable only while the cell is down and /api/job/color
+             — which is ungated precisely so a running job can be recoloured —
+             would have no caller. A pick POSTs the colour and nothing else;
+             it never sends a steer message or touches the cell. -->
+        <span class="f-swatches compact" id="steer-swatches" title="job color"></span>
         <span class="spacer"></span>
         <button class="btn tmux-open open-tmux" id="steer-tmux" hidden title="raise zeus' pane in Ghostty">⧉ tmux</button>
         <button class="btn steer-done" id="steer-markdone" hidden title="mark this job done">✓ mark done</button>
@@ -299,6 +308,16 @@
             <label>base <input id="f-base" placeholder="origin/main" spellcheck="false"></label>
             <label>model <input id="f-model" list="model-list" placeholder="claude-opus-5" spellcheck="false"
               title="claude model for zeus (--model value) — applied once at cell start; empty = kraken's default, claude-opus-5"></label>
+            <!-- job colour. Filled by app.js's initSwatchStrip, not written
+                 out here, because the identical strip also lives in the steer
+                 modal's head and two hand-written copies would drift. It is
+                 the one control in this form that does NOT ride the debounced
+                 form autosave: it POSTs /api/job/color on the spot, because
+                 saveform refuses a job whose cell is live and that is exactly
+                 when recolouring matters. -->
+            <div class="f-colors">color
+              <span class="f-swatches" id="f-swatches"></span>
+            </div>
             <span class="f-toggles">
               <label class="check"><input type="checkbox" id="f-solo"> solo</label>
             </span>

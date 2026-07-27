@@ -28,7 +28,7 @@ import (
 // read path's lookup key. Version 7 adds the threads table: side threads,
 // forked claude sessions branched off a job's zeus and living in a second
 // tmux window of the same cell (threads.go).
-const schemaVersion = 7
+const schemaVersion = 8
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -294,6 +294,17 @@ CREATE TABLE threads (
 CREATE UNIQUE INDEX threads_job_tid ON threads(job_id, tid);
 `
 
+// schemaV8 adds jobs.color: the job's chosen Claude Code prompt-bar colour,
+// one of /color's eight names, empty meaning no colour at all (NOT a
+// default to auto-assign). Appended rather than folded into schemaV1 for
+// the reason schemaV2's doc comment spells out: real kraken.db files
+// already exist at earlier versions. The empty-string DEFAULT is what makes
+// the migration total — every pre-existing row lands on "no colour", which is
+// exactly the behaviour those jobs had before the column existed.
+const schemaV8 = `
+ALTER TABLE jobs ADD COLUMN color TEXT NOT NULL DEFAULT '';
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -315,8 +326,9 @@ type migrationStep struct {
 // relational rows (migrateV5Questions below); migrations[6] adds
 // feedback.job_id and backfills it for existing rows (migrateV6FeedbackJobID
 // below); migrations[7] adds the threads table (no hook — a brand-new table
-// has nothing to migrate forward). Future schema changes append
-// migrations[8], migrations[9], ... rather than editing an existing
+// has nothing to migrate forward); migrations[8] adds jobs.color (no hook —
+// the column's empty-string DEFAULT is the whole backfill). Future schema changes append
+// migrations[9], migrations[10], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -327,6 +339,7 @@ var migrations = map[int]migrationStep{
 	5: {sql: schemaV5, hook: migrateV5Questions},
 	6: {sql: schemaV6, hook: migrateV6FeedbackJobID},
 	7: {sql: schemaV7},
+	8: {sql: schemaV8},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

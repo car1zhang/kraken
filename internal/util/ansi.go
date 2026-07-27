@@ -3,6 +3,7 @@ package util
 import (
 	"os"
 	"regexp"
+	"strconv"
 )
 
 const (
@@ -35,6 +36,17 @@ func Paint(on bool, code, s string) string {
 		return s
 	}
 	return code + s + Reset
+}
+
+// Color256 is the SGR foreground escape for one of the 256 xterm palette
+// slots — the form a job's chosen colour needs, since the eight /color
+// names don't map onto the 8 basic SGR codes above. It is a plain "on"
+// code, so it composes with Paint the same way Cyan/Green do
+// (Paint(on, Color256(n), s)), and its "\x1b[38;5;<n>m" shape is inside
+// AnsiRe's "\x1b\[[0-9;]*m" — VisWidth and FormatTableLines keep counting
+// zero width for it, so columns stay aligned.
+func Color256(n int) string {
+	return "\x1b[38;5;" + strconv.Itoa(n) + "m"
 }
 
 func StatusColor(status string) string {

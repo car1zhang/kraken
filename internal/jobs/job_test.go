@@ -170,6 +170,7 @@ func TestParseJobStrict(t *testing.T) {
 		"duplicate key":      "---\nrepo: a\nrepo: b\n---\n",
 		"bad bool":           "---\nready: yes\n---\n",
 		"bad state":          "---\nstate: bananas\n---\n",
+		"bad color":          "---\ncolor: purpel\n---\n",
 		"stray indented":     "---\nrepo: a\n  orphan: true\n---\n",
 		"junk under prereqs": "---\nprereqs:\n  not an item\n---\n",
 		"prereq missing job": "---\nprereqs:\n  - gated: true\n---\n",
@@ -977,5 +978,37 @@ func TestUpdatePRWatermark(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if string(before) != string(after) {
 		t.Fatalf("unknown-URL update touched the file:\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+func TestParseJobColor(t *testing.T) {
+	// every one of /color's eight names parses clean and lands on the field
+	for _, name := range []string{"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"} {
+		src := "---\njob: x\nrepo: monolith\ncolor: " + name + "\n---\n"
+		j := ParseJob("x.job.md", []byte(src))
+		if j.Err != "" || j.Color != name {
+			t.Errorf("color %q: err=%q color=%q", name, j.Err, j.Color)
+		}
+	}
+	// absent and explicitly-empty both mean NO colour, cleanly
+	for _, src := range []string{"---\njob: x\nrepo: monolith\n---\n", "---\njob: x\ncolor:\n---\n"} {
+		if j := ParseJob("x.job.md", []byte(src)); j.Err != "" || j.Color != "" {
+			t.Errorf("%q: err=%q color=%q, want clean and empty", src, j.Err, j.Color)
+		}
+	}
+	// comments strip like any scalar
+	if j := ParseJob("x.job.md", []byte("---\njob: x\ncolor: pink  # the good one\n---\n")); j.Err != "" || j.Color != "pink" {
+		t.Errorf("commented color: err=%q color=%q", j.Err, j.Color)
+	}
+	// off-palette values err loudly — the value is typed straight into a
+	// live claude's pane as `/color <val>`, so an allowlist is the contract
+	for _, val := range []string{"purpel", "default", "PURPLE", "#827DBD", "red blue"} {
+		src := "---\njob: x\ncolor: " + val + "\n---\n"
+		j := ParseJob("x.job.md", []byte(src))
+		if j.Err == "" {
+			t.Errorf("color %q: expected Err, got clean parse", val)
+		} else if !strings.Contains(j.Err, "bad color value") {
+			t.Errorf("color %q: Err=%q, want a bad color value message", val, j.Err)
+		}
 	}
 }

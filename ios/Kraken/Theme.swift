@@ -110,6 +110,37 @@ enum KTheme {
     static let skillPrSoftUI = dyn(light: 0xDCF3E4, dark: 0x0F2E1D)
     static let skillPrSoft = Color(uiColor: skillPrSoftUI)
 
+    // Per-job colors: the eight names Claude Code's own `/color` command
+    // accepts, in `/color`'s order. The DARK values are Claude Code's exact
+    // RGB, so a swatch here is the same pixel color as the prompt bar of the
+    // pane that job's cell opens; light is the darkened sibling of each,
+    // chosen to clear WCAG AA 4.5:1 against `raised` (#E3E9F1) and white.
+    // The same sixteen hexes are spelled out in web/static/style.css's two
+    // --job-* blocks and in internal/jobs/color.go's `Palette`, which is the
+    // source of truth; TestJobPaletteMatchesCSS and TestJobPaletteMatchesSwift
+    // (web/jobpalette_test.go) are what hold all three in step — the second
+    // reads THIS file — so an edit here without the other two fails the
+    // build rather than drifting silently, which is exactly how
+    // --skill-info and --skill-do drifted before any such test existed. Keep
+    // each entry as one literal `dyn(light: 0x…, dark: 0x…)` line: a hex
+    // assembled from constants would read as a changed palette to that check.
+    static let jobRedUI = dyn(light: 0xCA2323, dark: 0xDC2626)
+    static let jobRed = Color(uiColor: jobRedUI)
+    static let jobBlueUI = dyn(light: 0x496B8D, dark: 0x6A9BCC)
+    static let jobBlue = Color(uiColor: jobBlueUI)
+    static let jobGreenUI = dyn(light: 0x107937, dark: 0x16A34A)
+    static let jobGreen = Color(uiColor: jobGreenUI)
+    static let jobYellowUI = dyn(light: 0x8B5F03, dark: 0xCA8A04)
+    static let jobYellow = Color(uiColor: jobYellowUI)
+    static let jobPurpleUI = dyn(light: 0x676395, dark: 0x827DBD)
+    static let jobPurple = Color(uiColor: jobPurpleUI)
+    static let jobOrangeUI = dyn(light: 0x9C563F, dark: 0xD97757)
+    static let jobOrange = Color(uiColor: jobOrangeUI)
+    static let jobPinkUI = dyn(light: 0x9B516A, dark: 0xC46686)
+    static let jobPink = Color(uiColor: jobPinkUI)
+    static let jobCyanUI = dyn(light: 0x06718B, dark: 0x0891B2)
+    static let jobCyan = Color(uiColor: jobCyanUI)
+
     // --- global chrome (nav bar / tab bar / page dots) ---
     // Configured once via UIKit appearance proxies rather than threading
     // .toolbarBackground through every NavigationStack (there are many —
@@ -278,6 +309,28 @@ enum BoardTheme {
             return KTheme.text2
         default:
             return KTheme.text2
+        }
+    }
+
+    /// The eight legal job-color names, in `/color`'s own order — the order
+    /// the form's picker strip renders them in.
+    static let jobColorNames = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"]
+
+    /// A job's `color` field → its swatch color, or nil for "no color".
+    /// nil/empty is the unset case (the card renders exactly as it always
+    /// has); an UNRECOGNIZED name — a newer server growing a ninth color —
+    /// degrades to nil too rather than crashing or guessing.
+    static func jobColor(_ name: String?) -> Color? {
+        switch name {
+        case "red": return KTheme.jobRed
+        case "blue": return KTheme.jobBlue
+        case "green": return KTheme.jobGreen
+        case "yellow": return KTheme.jobYellow
+        case "purple": return KTheme.jobPurple
+        case "orange": return KTheme.jobOrange
+        case "pink": return KTheme.jobPink
+        case "cyan": return KTheme.jobCyan
+        default: return nil
         }
     }
 }

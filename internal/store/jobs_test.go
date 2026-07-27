@@ -775,3 +775,74 @@ func TestListFeedbackNullJobIDNeverMatchesAJobButSurvivesFullSweep(t *testing.T)
 		t.Fatalf("ListFeedback(0) full sweep = %+v, err %v — the fossil must still be reachable somehow", all, err)
 	}
 }
+
+// TestJobColorRoundTrip covers the color column end to end through the two
+// paths that can go wrong independently: scanJob's POSITIONAL scan (a field
+// added to jobColumns but not scanJob, or vice versa, silently shifts every
+// later column), and jobFieldColumns' allowlist (without the entry,
+// UpdateJobFields refuses the key outright).
+func TestJobColorRoundTrip(t *testing.T) {
+	s := openTest(t)
+	j := &Job{Slug: "hued", Repo: "kraken", Model: "opus", Color: "purple", Body: "b", State: "working"}
+	id, err := s.CreateJob(j)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	got, err := s.GetJobBySlug("hued")
+	if err != nil {
+		t.Fatalf("GetJobBySlug: %v", err)
+	}
+	if got.Color != "purple" {
+		t.Fatalf("created color = %q, want purple", got.Color)
+	}
+	// the neighbours of the new scan position, asserted explicitly: a
+	// positional slip shows up here rather than as a mystery elsewhere
+	if got.Model != "opus" || got.Body != "b" || got.State != "working" {
+		t.Fatalf("columns shifted around color: %+v", got)
+	}
+
+	if _, err := s.UpdateJobFields(id, got.Rev, map[string]any{"color": "cyan"}); err != nil {
+		t.Fatalf("UpdateJobFields color: %v", err)
+	}
+	got, err = s.GetJobBySlug("hued")
+	if err != nil {
+		t.Fatalf("GetJobBySlug after update: %v", err)
+	}
+	if got.Color != "cyan" {
+		t.Fatalf("updated color = %q, want cyan", got.Color)
+	}
+	// clearing back to "no colour" is a normal update, not a delete
+	if _, err := s.UpdateJobFields(id, got.Rev, map[string]any{"color": ""}); err != nil {
+		t.Fatalf("UpdateJobFields clear: %v", err)
+	}
+	if got, _ = s.GetJobBySlug("hued"); got.Color != "" {
+		t.Fatalf("cleared color = %q, want empty", got.Color)
+	}
+}
+
+// TestCreateArchivedJobKeepsColor pins the OTHER two statements carrying the
+// column: CreateArchivedJob's insert and its update-in-place branch.
+func TestCreateArchivedJobKeepsColor(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.CreateArchivedJob(&Job{
+		Slug: "old", ArchivedName: "old-1", Color: "green", State: "done",
+	}); err != nil {
+		t.Fatalf("CreateArchivedJob: %v", err)
+	}
+	list, err := s.ListArchivedJobs()
+	if err != nil {
+		t.Fatalf("ListArchivedJobs: %v", err)
+	}
+	if len(list) != 1 || list[0].Color != "green" {
+		t.Fatalf("archived insert lost color: %+v", list)
+	}
+	// re-import of the same archive file, colour changed by hand
+	if _, err := s.CreateArchivedJob(&Job{
+		Slug: "old", ArchivedName: "old-1", Color: "pink", State: "done",
+	}); err != nil {
+		t.Fatalf("CreateArchivedJob (update): %v", err)
+	}
+	if list, _ = s.ListArchivedJobs(); len(list) != 1 || list[0].Color != "pink" {
+		t.Fatalf("archived update lost color: %+v", list)
+	}
+}
