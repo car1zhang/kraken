@@ -63,6 +63,8 @@ func main() {
 		cmdQuestions(rest)
 	case "feedback":
 		cmdFeedback(rest)
+	case "watchlist":
+		cmdWatchlist(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":
@@ -157,7 +159,7 @@ Commands:
                       takes a bare qid. A 400 (bad qid/importance) or an
                       unreachable serve prints a clean message to stderr and
                       exits non-zero.
-  k feedback get|addressed <slug> ...
+  k feedback get|sweep|addressed <slug> ...
                       cell-side verb zeus uses to read carl's per-artifact
                       feedback and record how it addressed an entry, proxied
                       the same way as 'k questions'; get prints open+
@@ -165,6 +167,19 @@ Commands:
                       <text...> marks one entry addressed (text from args,
                       or stdin if omitted), addressed --clear <slug> <id>
                       clears a prior addressed note and reopens the entry.
+                      sweep [--since <unix-millis>] takes NO slug: it is the
+                      nightly dream pass' cross-job read, every note in the
+                      window (last 24h by default) with its job slug and a
+                      snapshot_url for the artifact bytes carl was looking at.
+  k watchlist get|add|update|remove ...
+                      cell-side verb the nightly dream pass uses to track
+                      recurring observations, proxied the same way. The
+                      watchlist is GLOBAL — no slug on any op. get [state]
+                      prints the rows as JSON (state filter optional:
+                      watching|shipped|declined); add/update read one watch-
+                      item object from stdin; remove takes a bare row id.
+                      verdict/comment are carl's, set from the board — sending
+                      either here is a 400, not a silent drop.
 
 <sel>: index from 'k ls', '.' for the current pane, an exact pane id (%3), or
 substring match on name/project/agent/tmux-session; also a session-uuid

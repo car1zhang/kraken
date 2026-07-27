@@ -8,17 +8,23 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"kraken/internal/util"
 )
 
-// cmd_feedback.go — `k feedback get|addressed <slug> ...`: zeus' own
-// read/write surface for carl's per-artifact feedback, proxying to kraken
-// serve's GET /api/feedback and POST /api/feedback (internal/api/feedback.go).
+// cmd_feedback.go — `k feedback get|addressed <slug> ...` plus `k feedback
+// sweep`: zeus' own read/write surface for carl's per-artifact feedback,
+// proxying to kraken serve's GET /api/feedback, POST /api/feedback and GET
+// /api/feedback/sweep (internal/api/feedback.go).
 // Exact spellings match the "Open questions and carl's per-artifact
 // feedback are rows" paragraph in crew.go's zeusBrief, which is where zeus
 // learns these verbs. zeus only ever reads entries and marks them addressed; creation/edit/delete are carl-facing board actions this verb
 // deliberately does NOT expose.
+//
+// `sweep` is the odd one out and takes no slug at all: it is the nightly
+// dream pass' CROSS-JOB read (.claude/skills/dream/SKILL.md), every note in
+// a time window regardless of which job it was left on.
 //
 // Same behavior contract as cmd_questions.go: GET prints server JSON
 // verbatim to stdout; a write confirms on stderr; a 400 prints the server's
@@ -27,12 +33,20 @@ import (
 // (qfclient.go) for the shared HTTP plumbing.
 func cmdFeedback(args []string) {
 	if len(args) == 0 {
-		util.Die("usage: k feedback get|addressed <slug> ...")
+		util.Die("usage: k feedback get|sweep|addressed <slug> ...")
 	}
 	op, rest := args[0], args[1:]
 	switch op {
 	case "get":
 		out, err := runFeedbackGet(rest)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		if _, err := os.Stdout.Write(out); err != nil {
+			util.Die("write stdout: %v", err)
+		}
+	case "sweep":
+		out, err := runFeedbackSweep(rest)
 		if err != nil {
 			util.Die("%v", err)
 		}
@@ -52,7 +66,7 @@ func cmdFeedback(args []string) {
 			fmt.Fprintln(os.Stderr, "feedback marked addressed")
 		}
 	default:
-		util.Die("usage: k feedback get|addressed <slug> ... (unknown op %q)", op)
+		util.Die("usage: k feedback get|sweep|addressed <slug> ... (unknown op %q)", op)
 	}
 }
 
@@ -63,6 +77,50 @@ func runFeedbackGet(args []string) ([]byte, error) {
 		return nil, fmt.Errorf("usage: k feedback get <slug>")
 	}
 	return qfGet("/api/feedback?slug=" + url.QueryEscape(strings.TrimSpace(args[0])))
+}
+
+// feedbackSweepUsage is the one usage string every bad-args path of `sweep`
+// prints, so the window default stays visible whichever check fails.
+const feedbackSweepUsage = "usage: k feedback sweep [--since <unix-millis>] (no slug — this is the cross-job sweep; default window is the last 24h)"
+
+// feedbackSweepWindow is how far back `sweep` looks when --since is omitted:
+// one day, matching the dream loop's own nightly cadence. The DEFAULT lives
+// here and not in the API — internal/api/feedback.go's handler requires
+// `since` and 400s without it on purpose, so a typo'd parameter can never
+// silently re-mine months of already-corroborated notes. A default is only
+// safe where it is visible, which is a usage line, not a query string.
+const feedbackSweepWindow = 24 * time.Hour
+
+// runFeedbackSweep is `kraken feedback sweep [--since <ms>]`: GET
+// /api/feedback/sweep?since= — prints {"feedback": [...]} (every job's notes
+// at or after the floor, each with its job slug and a snapshot_url) straight
+// through. Both `--since <ms>` and `--since=<ms>` are accepted; anything else
+// is a usage error rather than a silently ignored argument, so a mistyped
+// flag can't quietly widen the window to the default.
+func runFeedbackSweep(args []string) ([]byte, error) {
+	since := time.Now().Add(-feedbackSweepWindow).UnixMilli()
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		var raw string
+		switch {
+		case a == "--since":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("%s (--since needs a value)", feedbackSweepUsage)
+			}
+			raw = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--since="):
+			raw = strings.TrimPrefix(a, "--since=")
+		default:
+			return nil, fmt.Errorf("%s (unexpected argument %q)", feedbackSweepUsage, a)
+		}
+		v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("bad --since %q: want unix millis", raw)
+		}
+		since = v
+	}
+	return qfGet("/api/feedback/sweep?since=" + strconv.FormatInt(since, 10))
 }
 
 // feedbackAddressedUsage is the one usage string every bad-args path here

@@ -15,6 +15,7 @@ _k() {
         'account:rotation status, or switch/pin the main Claude login (auto|<slug>)'
         'questions:cell-side verb — read/write a job'"'"'s open doc questions via kraken serve'
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
+        'watchlist:cell-side verb — read/write the dream loop'"'"'s global watchlist via kraken serve'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
         'update:self-update — fast-forward, rebuild, reinstall, restart the launchd job'
@@ -94,6 +95,7 @@ _k() {
                 local -a ops
                 ops=(
                     'get:print open+addressed feedback as JSON'
+                    'sweep:print every job'"'"'s feedback in a time window as JSON (no slug)'
                     'addressed:mark one feedback entry addressed'
                 )
                 _describe -t ops 'op' ops
@@ -105,6 +107,34 @@ _k() {
                     '--clear:clear the addressed note and reopen the entry'
                 )
                 _describe -t flags 'flag' fbflags
+            elif [[ $words[3] == sweep ]]; then
+                local -a swflags
+                swflags=(
+                    '--since:window floor in unix millis (default: 24h ago)'
+                )
+                _describe -t flags 'flag' swflags
+            fi
+            ;;
+        watchlist)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'get:print watchlist rows as JSON (optional state filter)'
+                    'add:add one observation from a JSON object on stdin'
+                    'update:update one observation from a JSON object on stdin'
+                    'remove:remove one row by id'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == get && CURRENT == 4 ]]; then
+                # the state filter's whole value set — the same three
+                # store/watchlist.go documents; omitting it means every row.
+                local -a states
+                states=(
+                    'watching:still being tracked'
+                    'shipped:folded into a change already'
+                    'declined:looked at and dropped'
+                )
+                _describe -t states 'state' states
             fi
             ;;
     esac

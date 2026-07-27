@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -113,6 +115,204 @@ func feedbackGet(w http.ResponseWriter, r *http.Request) {
 		out = []webFeedback{}
 	}
 	webJSON(w, http.StatusOK, map[string]any{"feedback": out})
+}
+
+// webSweepFeedback is one row of GET /api/feedback/sweep: the dream loop's
+// CROSS-JOB read, so unlike webFeedback (the board's per-job array, where the
+// owning job is implied by the card the array hangs off) every entry has to
+// name its own job. It also carries snapshot_url — the first read path the
+// frozen `snapshot` column has ever had — so the nightly pass can look at the
+// artifact bytes carl was actually staring at when he wrote the note, rather
+// than at whatever the artifact says today.
+//
+// Kept as its own DTO rather than an extra field or two bolted onto
+// webFeedback for the reason every wire type in this package is its own DTO:
+// the board polls webFeedback on a tick for every visible card, and neither
+// of these two keys has any business riding that poll.
+type webSweepFeedback struct {
+	ID       int64  `json:"id"`
+	Job      string `json:"job"`
+	Artifact string `json:"artifact"`
+	Note     string `json:"note"`
+	At       int64  `json:"at"`
+	// Addressed/AddressedAt are zeus' own account of how it handled the note
+	// — omitempty, exactly as on webFeedback: an open note simply has neither.
+	Addressed   string `json:"addressed,omitempty"`
+	AddressedAt string `json:"addressed_at,omitempty"`
+	// SnapshotURL always rides, even for a row whose blob happens to be empty:
+	// FeedbackSince deliberately does not fetch snapshot bytes (they'd be pure
+	// waste on a sweep that mostly never opens them), so this handler cannot
+	// know which rows have one. Fetching a blob-less row's URL 404s — see
+	// feedbackSnapshotHandler.
+	SnapshotURL string `json:"snapshot_url"`
+}
+
+// feedbackSnapshotURL is the route a swept row's frozen bytes are served
+// from. Built here rather than by the caller so the sweep response and the
+// route registration can never drift.
+func feedbackSnapshotURL(id int64) string {
+	return "/api/feedback/snapshot?id=" + strconv.FormatInt(id, 10)
+}
+
+// webSweepFeedbackFrom converts store.Feedback rows into the sweep DTO —
+// same nil/empty-to-nil convention as webFeedbackFrom; the handler turns nil
+// into an empty array so the wire never carries null (B3).
+func webSweepFeedbackFrom(fs []store.Feedback) []webSweepFeedback {
+	if len(fs) == 0 {
+		return nil
+	}
+	out := make([]webSweepFeedback, len(fs))
+	for i, f := range fs {
+		out[i] = webSweepFeedback{
+			ID: f.ID, Job: f.JobSlug, Artifact: f.Artifact, Note: f.Note, At: f.TS,
+			Addressed: f.Addressed, AddressedAt: f.AddressedAt,
+			SnapshotURL: feedbackSnapshotURL(f.ID),
+		}
+	}
+	return out
+}
+
+// feedbackSweepHandler serves GET /api/feedback/sweep?since=<unix millis>:
+// every feedback note created at or after the floor, across ALL jobs, in the
+// order store.FeedbackSince returns them (oldest first, ts then id). This is
+// the dream loop's evidence read — the first caller of ListFeedback's
+// long-advertised unscoped sweep, by way of FeedbackSince.
+//
+// `since` is required and must parse as an integer: there is deliberately no
+// default window. A sweep that silently fell back to "everything" (or to
+// "the last day") the moment a caller typo'd the parameter would either
+// re-mine months of already-corroborated notes or quietly mine the wrong
+// window, and neither failure announces itself — a 400 does. The CLI verb
+// (`kraken feedback sweep`) is where the convenience default lives instead,
+// because there the default is visible in `--help` and in the usage line.
+//
+// A GET is a read, so it stays reachable under --mirror.
+func feedbackSweepHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+		return
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("since"))
+	if raw == "" {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing since (unix millis)"})
+		return
+	}
+	since, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad since " + strconv.Quote(raw) + " — want unix millis"})
+		return
+	}
+	st := jobs.ActiveStore()
+	if st == nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "no store wired"})
+		return
+	}
+	fs, err := st.FeedbackSince(since)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := webSweepFeedbackFrom(fs)
+	if out == nil {
+		out = []webSweepFeedback{}
+	}
+	webJSON(w, http.StatusOK, map[string]any{"feedback": out})
+}
+
+// snapshotExtOK reports whether ext is a plain alphanumeric file extension.
+// snapshot_ext is stored from a filename's own extension, so in practice it
+// is always something like "md"/"png" — but it is stored data, and this
+// handler interpolates it into a Content-Disposition filename and an
+// extension-keyed mime lookup, so it is validated rather than trusted.
+func snapshotExtOK(ext string) bool {
+	if ext == "" || len(ext) > 8 {
+		return false
+	}
+	for _, r := range ext {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// inertSnapshotMimeType is artifactMimeType with active content declawed:
+// text/html and image/svg+xml are both script-executing document types in a
+// browser, and a snapshot is UNTRUSTED bytes — an artifact an agent wrote,
+// frozen months ago, replayed now from a same-origin route that also serves
+// the board's own API. Serving one as text/html would let it script the
+// board's origin. Everything else (png/pdf/plain/...) keeps its real type,
+// which is what makes the route useful for looking at what carl saw.
+func inertSnapshotMimeType(name string) string {
+	mt := artifactMimeType(name)
+	if strings.HasPrefix(mt, "text/html") || mt == "image/svg+xml" {
+		return "text/plain; charset=utf-8"
+	}
+	return mt
+}
+
+// feedbackSnapshotHandler serves GET /api/feedback/snapshot?id=<row id>: the
+// frozen artifact bytes one feedback row captured at submit (or last edit)
+// time. The dream loop's evidence link and the board's feedback drilldown
+// both read it; nothing else in the binary has ever read this column.
+//
+// The bytes are served INERT, three headers deep, for the reason
+// inertSnapshotMimeType explains: Content-Disposition: attachment (never a
+// top-level document), X-Content-Type-Options: nosniff (the declawed
+// text/plain can't be sniffed back up into html), and a `sandbox` CSP (belt
+// and suspenders if some future caller renders it in a frame anyway). A
+// snapshot of an .html artifact must never execute on this origin.
+//
+// A missing/non-numeric id is 400, an unknown id 404, and a row whose blob is
+// empty is ALSO 404 rather than a zero-byte 200: "this row has no frozen
+// copy" and "here is the frozen copy, which is empty" are different answers,
+// and only the first one is true.
+func feedbackSnapshotHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+		return
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("id"))
+	if raw == "" {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
+		return
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad id " + strconv.Quote(raw)})
+		return
+	}
+	st := jobs.ActiveStore()
+	if st == nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "no store wired"})
+		return
+	}
+	f, err := st.GetFeedback(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown feedback"})
+			return
+		}
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(f.Snapshot) == 0 {
+		webJSON(w, http.StatusNotFound, map[string]string{"error": "no snapshot for this feedback"})
+		return
+	}
+	name := "feedback-" + strconv.FormatInt(id, 10)
+	if snapshotExtOK(f.SnapshotExt) {
+		name += "." + f.SnapshotExt
+	}
+	w.Header().Set("Content-Type", inertSnapshotMimeType(name))
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	// A snapshot row is immutable-ish (an edit re-freezes it in place under the
+	// same id), so no-store keeps a re-read after an edit from serving the old
+	// bytes — the same reasoning web/serve.go's artifactHandler uses.
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(f.Snapshot))
 }
 
 // feedbackPost decodes the shared request body and dispatches to whichever

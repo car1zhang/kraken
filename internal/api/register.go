@@ -26,6 +26,18 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/question", webAction("question", webAnswerQuestion))
 	mux.HandleFunc("/api/doc-question", webAction("doc-question", webAnswerDocQuestion))
 	mux.HandleFunc("/api/feedback", feedbackHandler)
+	// The dream loop's two feedback reads. Both are exact patterns, so
+	// neither shadows "/api/feedback" (a ServeMux exact pattern and a
+	// different exact pattern never collide) and neither is a subtree.
+	mux.HandleFunc("/api/feedback/sweep", feedbackSweepHandler)
+	mux.HandleFunc("/api/feedback/snapshot", feedbackSnapshotHandler)
+	// The watchlist's two write surfaces, split by column ownership — carl's
+	// verdict on /api/watchlist, the agent's observation edits on
+	// /api/watchlist/item (see watchlist.go's header). Both POSTs gate
+	// themselves inline so their GET stays reachable under --mirror.
+	mux.HandleFunc("/api/watchlist", watchlistHandler)
+	mux.HandleFunc("/api/watchlist/item", watchItemHandler)
+	mux.HandleFunc("/api/dream", dreamHandler)
 	mux.HandleFunc("/api/questions", questionsHandler)
 	mux.HandleFunc("/api/threads", threadsHandler)
 	mux.HandleFunc("/api/thread/read", threadReadHandler)

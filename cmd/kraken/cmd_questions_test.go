@@ -74,12 +74,15 @@ func TestHelperProcess(t *testing.T) {
 		cmdQuestions(args)
 	case "feedback":
 		cmdFeedback(args)
+	case "watchlist":
+		cmdWatchlist(args)
 	}
 }
 
 // runDispatchSubprocess re-execs the test binary to call cmdQuestions(args)
-// (which=="questions") or cmdFeedback(args) (which=="feedback") in a real
-// child process, returning its stderr and exit code.
+// (which=="questions"), cmdFeedback(args) (which=="feedback") or
+// cmdWatchlist(args) (which=="watchlist") in a real child process, returning
+// its stderr and exit code.
 func runDispatchSubprocess(t *testing.T, which string, args []string) (stderrOut string, exitCode int) {
 	t.Helper()
 	cmdArgs := append([]string{"-test.run=^TestHelperProcess$", "--"}, args...)
