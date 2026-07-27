@@ -74,13 +74,21 @@ type SessionDigest struct {
 	// report 12 tool calls instead of 400 and zero errors instead of nine,
 	// and the night would read clean. Same failure and same fix as
 	// scanPendingQuestion's in internal/jobs/status.go.
-	Truncated       bool
-	ToolCounts      map[string]int // tool name -> calls
-	ErrorCounts     map[string]int // tool name -> tool_results with is_error true
-	Interrupts      int            // "[Request interrupted" user turns
-	SyntheticErrors int            // "<synthetic>" assistant records
-	TurnDurations   []int64        // system/turn_duration durationMs
-	RepeatedCalls   map[string]int // identical tool-call signature -> count, only entries > 1
+	Truncated bool
+	// In/Out/CacheWrite/CacheRead are the session's four token counters
+	// (tokens.go's Tokens, flattened), summed from the `usage` object on
+	// every assistant record inside the window. They ride along in
+	// digestTranscript's existing forward pass — it already decodes every
+	// one of those records — so they cost four adds and no extra I/O.
+	// Truncated applies to them exactly as it does to the counts below:
+	// a partial scan makes them a floor.
+	In, Out, CacheWrite, CacheRead int64
+	ToolCounts                     map[string]int // tool name -> calls
+	ErrorCounts                    map[string]int // tool name -> tool_results with is_error true
+	Interrupts                     int            // "[Request interrupted" user turns
+	SyntheticErrors                int            // "<synthetic>" assistant records
+	TurnDurations                  []int64        // system/turn_duration durationMs
+	RepeatedCalls                  map[string]int // identical tool-call signature -> count, only entries > 1
 }
 
 // MineResult is one night's mechanical sweep.
@@ -94,6 +102,12 @@ type MineResult struct {
 	// everything in the window — the one number that separates a quiet night
 	// from a half-read one.
 	Truncated int
+	// Tokens is the four counters summed across every digest in Digests,
+	// with Sessions the number of those digests. It is what lets the nightly
+	// pass rank a night's waste by real spend rather than by tool-call count.
+	// A non-zero Truncated above makes it a floor, for the same reason it
+	// makes every other count one.
+	Tokens Tokens
 }
 
 // MineTranscripts walks ~/.claude/projects for transcripts touched at or
@@ -161,6 +175,11 @@ func MineTranscripts(since int64) (*MineResult, error) {
 			if dg.Truncated {
 				res.Truncated++
 			}
+			res.Tokens.In += dg.In
+			res.Tokens.Out += dg.Out
+			res.Tokens.CacheWrite += dg.CacheWrite
+			res.Tokens.CacheRead += dg.CacheRead
+			res.Tokens.Sessions++
 			res.Digests = append(res.Digests, dg)
 			return nil
 		})
@@ -191,6 +210,11 @@ type mineRecord struct {
 	Message    struct {
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
+		// Usage is claude's own per-assistant-record token report. Shared
+		// verbatim with tokens.go's sum (same type, one transcription of
+		// the four wire names) so the digest and the per-job total can
+		// never disagree about what a field is called.
+		Usage tokenUsage `json:"usage"`
 	} `json:"message"`
 }
 
@@ -287,6 +311,15 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			if inWindow && rec.Message.Model == "<synthetic>" {
 				// an API failure the harness gave up retrying
 				dg.SyntheticErrors++
+			}
+			if inWindow {
+				// gated on the window like every other count here, so a
+				// digest's spend describes the same records its tool counts
+				// and its FirstTS/LastTS span do
+				dg.In += rec.Message.Usage.Input
+				dg.Out += rec.Message.Usage.Output
+				dg.CacheWrite += rec.Message.Usage.CacheCreation
+				dg.CacheRead += rec.Message.Usage.CacheRead
 			}
 			for _, b := range mineBlocks(rec.Message.Content) {
 				if b.Type != "tool_use" || b.Name == "" {

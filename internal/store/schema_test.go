@@ -24,6 +24,22 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v10: drop the two token tables (added at v10, absent through
+	// v9). Both are brand-new tables with no indexes of their own, so
+	// dropping them is the whole reversal.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 10 {
+		for _, stmt := range []string{
+			`DROP TABLE job_token_files`,
+			`DROP TABLE job_tokens`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v10) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v9: drop the watchlist table (added at v9, absent through v8)
 	// and the feedback(ts) index it shipped alongside. The watchlist's own
 	// indexes go with the table — SQLite drops a table's indexes along with
@@ -31,8 +47,6 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	// dropped by name or the v9 migration's CREATE INDEX would collide on the
 	// way back up.
 	//
-	// Reversed BEFORE v8 below: downgrades unwind newest-first, mirroring the
-	// order migrate() applies them.
 	if target < 9 {
 		for _, stmt := range []string{
 			`DROP TABLE watchlist`,

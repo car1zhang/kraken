@@ -288,7 +288,12 @@ type daemonState struct {
 	// it on restart just means the next real transition (not a spurious one
 	// — there's no false trigger from a blank map) does the mirror instead.
 	ArtifactSyncState map[string]string
-	tickN             int
+	// TokenScan throttles tokensPass over jobs with no live cell (slug →
+	// unix millis of the last sum). In-process only, like the dedup maps
+	// above: losing it on a restart costs one extra sum per job, which is a
+	// stat per transcript file and no writes when nothing moved.
+	TokenScan map[string]int64
+	tickN     int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
 	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
@@ -304,6 +309,7 @@ func newDaemon() *daemonState {
 		PRHeads:           map[string]string{},
 		RepairTries:       map[string]int{},
 		ArtifactSyncState: map[string]string{},
+		TokenScan:         map[string]int64{},
 	}
 }
 
@@ -830,6 +836,18 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		for _, j := range jobs {
 			d.syncColor(j, all, live)
 		}
+	}
+
+	// token pass (every tick, self-paced internally — see tokensPass): keep
+	// each job's job_tokens row current from its own transcripts, so the
+	// board and the nightly dream pass can read a number instead of summing
+	// tens of megabytes on demand. Its own block rather than a line in the
+	// one above because it shares none of that block's reasons for existing:
+	// it types into no pane, shells out to nothing, and its only writes are
+	// two store tables. Skipped under mirror all the same — mirror's tick
+	// runs state derivation and the block-event artifact sync, nothing else.
+	if !mirror {
+		d.tokensPass(jobs, live, now)
 	}
 
 	// usage poll (throttled, first-tick eager so UIs have data right after
