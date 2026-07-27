@@ -363,13 +363,27 @@ enum SessionTheme {
 
 // MARK: - reusable view pieces
 
-/// One kanban card's chrome: surface bg, 1px hairline border, 2px leading
-/// bar in the state color. Flagged (a pending question, or unhealthy) swaps
-/// the leading bar to counter and adds a soft pink glow — mirrors
-/// .card / .card.flagged.
+/// One kanban card's chrome: surface bg, 1px hairline border, and a 2px
+/// leading bar that is the job's COLOR channel — mirrors .card /
+/// .card.flagged in style.css, including its precedence.
+///
+/// Precedence is flagged > job color > state, and each step earns its place.
+/// Flagged (a pending question, or unhealthy) stays on top and keeps its soft
+/// pink glow: it is an alert, and losing it would cost the one signal meaning
+/// "this needs you now". Below that the job's own color wins over state —
+/// state is still readable from the card's column and its `● working` chip,
+/// whereas a job's identity has nowhere else to live. A job with no color
+/// passes nil and the bar falls straight through to the state color, so an
+/// uncolored card looks exactly as it did before colors existed.
 struct CardBackground: ViewModifier {
     var stateColor: Color
+    var jobColor: Color?
     var flagged: Bool = false
+
+    private var barColor: Color {
+        if flagged { return KTheme.counter }
+        return jobColor ?? stateColor
+    }
 
     func body(content: Content) -> some View {
         content
@@ -377,7 +391,7 @@ struct CardBackground: ViewModifier {
             .overlay(Rectangle().stroke(KTheme.hairline, lineWidth: 1))
             .overlay(alignment: .leading) {
                 Rectangle()
-                    .fill(flagged ? KTheme.counter : stateColor)
+                    .fill(barColor)
                     .frame(width: 2)
             }
             .shadow(color: flagged ? KTheme.counter.opacity(0.28) : .clear, radius: flagged ? 5 : 0)
@@ -385,8 +399,8 @@ struct CardBackground: ViewModifier {
 }
 
 extension View {
-    func cardBackground(stateColor: Color, flagged: Bool = false) -> some View {
-        modifier(CardBackground(stateColor: stateColor, flagged: flagged))
+    func cardBackground(stateColor: Color, jobColor: Color? = nil, flagged: Bool = false) -> some View {
+        modifier(CardBackground(stateColor: stateColor, jobColor: jobColor, flagged: flagged))
     }
 }
 

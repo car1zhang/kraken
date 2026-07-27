@@ -349,10 +349,20 @@ body {
 .col.drophover .col-cards { background: var(--drop-tint-hover); }
 
 /* ---- cards ---- */
+/* the 2px left accent bar is the job's colour channel. Precedence, and the
+   reason for it: flagged > job colour > state. Flagged (--counter) stays on
+   top because it is an ALERT — a pending question or a health error — and
+   losing it would cost the one signal that means "this needs you now".
+   Below that the job's own colour wins over state, which is the trade
+   carl chose: state is still legible from the card's column and its
+   `● working` chip, whereas a job's identity has nowhere else to live.
+   An uncoloured job never sets --job-color, so it falls straight through to
+   the state colour and its card is byte-identical to a board without
+   colours. */
 .card {
   background: var(--surface);
   border: 1px solid var(--hairline);
-  border-left: 2px solid var(--state, var(--hairline));
+  border-left: 2px solid var(--job-color, var(--state, var(--hairline)));
   padding: 8px 10px 9px;
   transition: border-color 140ms var(--ease);
 }
@@ -362,21 +372,9 @@ body {
    current slot; the native drag ghost carries the "real" card under the
    cursor */
 .card.dragging { opacity: 0.35; cursor: grabbing; }
-.card:hover { border-color: var(--hairline-2); border-left-color: var(--state, var(--hairline-2)); }
+.card:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--state, var(--hairline-2))); }
 .card.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
 .card-top { display: flex; align-items: baseline; gap: 8px; }
-/* the job's own colour — its own channel, deliberately NOT the card's 2px
-   left accent bar: that bar already carries state, flagged (--counter) and
-   archived (--text-2), and a fourth claimant would make the most legible
-   signal on the card ambiguous. Rendered only when the job HAS a colour, so
-   an uncoloured card is byte-identical to before. align-self:center is
-   load-bearing — .card-top aligns on the baseline, and an empty inline
-   element has no baseline to align to, so it would otherwise sit low. */
-.card-swatch {
-  flex: 0 0 8px; width: 8px; height: 8px;
-  align-self: center; border-radius: 1px;
-  background: var(--job-color, transparent);
-}
 .slug { font: 700 11.5px var(--mono); color: var(--text); word-break: break-all; }
 .state {
   margin-left: auto; white-space: nowrap;
@@ -1234,7 +1232,7 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 .btn-new:hover { background: var(--accent-soft); box-shadow: var(--glow); }
 .btn-new:active { animation: glitch 120ms steps(2, end); }
 .card.editable { cursor: pointer; }
-.card.editable:hover { border-color: var(--accent-soft); border-left-color: var(--state); }
+.card.editable:hover { border-color: var(--accent-soft); border-left-color: var(--job-color, var(--state)); }
 
 /* ---- dag view ---- */
 .dag { padding: 18px 16px 40px; overflow: auto; }
@@ -1249,12 +1247,12 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   position: absolute; width: 190px;
   background: var(--surface);
   border: 1px solid var(--hairline);
-  border-left: 2px solid var(--state, var(--hairline));
+  border-left: 2px solid var(--job-color, var(--state, var(--hairline)));
   padding: 7px 10px;
   cursor: default;
 }
 .dag-node.editable { cursor: pointer; }
-.dag-node.editable:hover { border-color: var(--hairline-2); border-left-color: var(--state); }
+.dag-node.editable:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--state)); }
 .dag-node.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
 .dag-node .slug { font: 700 11px var(--mono); display: block; word-break: break-all; }
 .dag-node .nstate { font: 9.5px var(--mono); color: var(--state, var(--text-2)); }
