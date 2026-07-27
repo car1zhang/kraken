@@ -368,20 +368,21 @@ body {
 .col.drophover .col-cards { background: var(--drop-tint-hover); }
 
 /* ---- cards ---- */
-/* the 2px left accent bar is the job's colour channel. Precedence, and the
-   reason for it: flagged > job colour > state. Flagged (--counter) stays on
-   top because it is an ALERT — a pending question or a health error — and
-   losing it would cost the one signal that means "this needs you now".
-   Below that the job's own colour wins over state, which is the trade
-   carl chose: state is still legible from the card's column and its
-   `● working` chip, whereas a job's identity has nowhere else to live.
-   An uncoloured job never sets --job-color, so it falls straight through to
-   the state colour and its card is byte-identical to a board without
-   colours. */
+/* the 2px left accent bar is the job's colour channel, and NOTHING else:
+   precedence is flagged > job colour > grey. It deliberately no longer
+   carries state — an uncoloured job is grey regardless of whether it is
+   draft, queued, working, blocked or done, so the bar means "which job is
+   this", never "how is it going". State is still fully legible from the
+   card's column and its `● working` chip, which keep var(--state).
+   Flagged (--counter) stays on top because it is an ALERT — a pending
+   question or a health error — and it carries its own glow; losing it would
+   cost the one signal that means "this needs you now".
+   The grey is --text-2, the same value draft/done/archived cards already
+   showed here, so it is proven legible at 2px rather than a new token. */
 .card {
   background: var(--surface);
   border: 1px solid var(--hairline);
-  border-left: 2px solid var(--job-color, var(--state, var(--hairline)));
+  border-left: 2px solid var(--job-color, var(--text-2));
   padding: 8px 10px 9px;
   transition: border-color 140ms var(--ease);
 }
@@ -391,7 +392,7 @@ body {
    current slot; the native drag ghost carries the "real" card under the
    cursor */
 .card.dragging { opacity: 0.35; cursor: grabbing; }
-.card:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--state, var(--hairline-2))); }
+.card:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--text-2)); }
 .card.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
 .card-top { display: flex; align-items: baseline; gap: 8px; }
 .slug { font: 700 11.5px var(--mono); color: var(--text); word-break: break-all; }
@@ -1285,7 +1286,7 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 .btn-new:hover { background: var(--accent-soft); box-shadow: var(--glow); }
 .btn-new:active { animation: glitch 120ms steps(2, end); }
 .card.editable { cursor: pointer; }
-.card.editable:hover { border-color: var(--accent-soft); border-left-color: var(--job-color, var(--state)); }
+.card.editable:hover { border-color: var(--accent-soft); border-left-color: var(--job-color, var(--text-2)); }
 
 /* ---- dag view ---- */
 .dag { padding: 18px 16px 40px; overflow: auto; }
@@ -1300,12 +1301,12 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   position: absolute; width: 190px;
   background: var(--surface);
   border: 1px solid var(--hairline);
-  border-left: 2px solid var(--job-color, var(--state, var(--hairline)));
+  border-left: 2px solid var(--job-color, var(--text-2));
   padding: 7px 10px;
   cursor: default;
 }
 .dag-node.editable { cursor: pointer; }
-.dag-node.editable:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--state)); }
+.dag-node.editable:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--text-2)); }
 .dag-node.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
 .dag-node .slug { font: 700 11px var(--mono); display: block; word-break: break-all; }
 .dag-node .nstate { font: 9.5px var(--mono); color: var(--state, var(--text-2)); }
