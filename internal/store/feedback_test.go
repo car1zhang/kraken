@@ -141,3 +141,116 @@ func TestListFeedbackMetaOmitsSnapshot(t *testing.T) {
 		t.Fatalf("meta fields: %+v", m)
 	}
 }
+
+// TestFeedbackSinceWindow pins the sweep read's window semantics: the floor is
+// INCLUSIVE (a row stamped exactly at it is in), rows below it are out, the
+// result is oldest-first, and the read is unscoped — so a NULL-job_id fossil
+// (a pre-v5 row, or one orphaned by DeleteJob's ON DELETE SET NULL) still
+// surfaces, which is the whole reason the dream loop can mine notes whose job
+// no longer exists. Snapshot blobs are excluded like ListFeedbackMeta's.
+func TestFeedbackSinceWindow(t *testing.T) {
+	s := openTest(t)
+	jobID, err := s.CreateJob(&Job{Slug: "swept"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for _, seed := range []struct {
+		note string
+		ts   int64
+	}{
+		{"below the floor", 99},
+		{"exactly at the floor", 100},
+		{"above the floor", 101},
+	} {
+		if _, err := s.AddFeedback(Feedback{
+			JobID: jobID, JobSlug: "swept", Artifact: "a.md",
+			Snapshot: []byte("bytes"), SnapshotExt: "md",
+			Note: seed.note, TS: seed.ts,
+		}); err != nil {
+			t.Fatalf("AddFeedback %q: %v", seed.note, err)
+		}
+	}
+	// a fossil with no owning job at all — job_id NULL, inside the window
+	if _, err := s.AddFeedback(Feedback{JobSlug: "ghost-job", Artifact: "a.md", Note: "fossil", TS: 150}); err != nil {
+		t.Fatalf("AddFeedback fossil: %v", err)
+	}
+
+	got, err := s.FeedbackSince(100)
+	if err != nil {
+		t.Fatalf("FeedbackSince: %v", err)
+	}
+	want := []string{"exactly at the floor", "above the floor", "fossil"}
+	if len(got) != len(want) {
+		t.Fatalf("FeedbackSince(100) = %d rows, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].Note != w {
+			t.Fatalf("row %d = %q, want %q (oldest first): %+v", i, got[i].Note, w, got)
+		}
+	}
+	for _, f := range got {
+		if f.Snapshot != nil {
+			t.Fatalf("FeedbackSince must exclude snapshot blobs: %+v", f)
+		}
+	}
+	if got[2].JobID != 0 {
+		t.Fatalf("fossil row should carry JobID 0 (NULL job_id): %+v", got[2])
+	}
+
+	// CountFeedbackSince must agree with the list, at several floors.
+	for _, floor := range []int64{0, 99, 100, 101, 151, 1_000_000} {
+		list, err := s.FeedbackSince(floor)
+		if err != nil {
+			t.Fatalf("FeedbackSince(%d): %v", floor, err)
+		}
+		n, err := s.CountFeedbackSince(floor)
+		if err != nil {
+			t.Fatalf("CountFeedbackSince(%d): %v", floor, err)
+		}
+		if n != len(list) {
+			t.Fatalf("CountFeedbackSince(%d) = %d, want %d (len of FeedbackSince)", floor, n, len(list))
+		}
+	}
+}
+
+// TestFeedbackSinceEmptyTable pins that a sweep over a database with no
+// feedback at all is a normal empty read, not an error the nightly pass has to
+// special-case.
+func TestFeedbackSinceEmptyTable(t *testing.T) {
+	s := openTest(t)
+	got, err := s.FeedbackSince(0)
+	if err != nil {
+		t.Fatalf("FeedbackSince on an empty table: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("want no rows, got %+v", got)
+	}
+	n, err := s.CountFeedbackSince(0)
+	if err != nil {
+		t.Fatalf("CountFeedbackSince on an empty table: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("count = %d, want 0", n)
+	}
+}
+
+// TestFeedbackSinceUsesCreationTimeNotEditTime pins why ts is immutable after
+// insert: an edited old note must NOT re-enter a later window, or consecutive
+// non-overlapping sweeps would mine the same note twice.
+func TestFeedbackSinceUsesCreationTimeNotEditTime(t *testing.T) {
+	s := openTest(t)
+	id, err := s.AddFeedback(Feedback{JobSlug: "j", Artifact: "a.md", Note: "old note", TS: 10})
+	if err != nil {
+		t.Fatalf("AddFeedback: %v", err)
+	}
+	if err := s.UpdateFeedbackNote(id, "edited much later", []byte("v2"), "md"); err != nil {
+		t.Fatalf("UpdateFeedbackNote: %v", err)
+	}
+	got, err := s.FeedbackSince(100)
+	if err != nil {
+		t.Fatalf("FeedbackSince: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("an edit must not move a row into a later window: %+v", got)
+	}
+}

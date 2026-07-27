@@ -176,6 +176,71 @@ func (s *Store) ListFeedbackMeta(jobID int64) ([]Feedback, error) {
 	return out, rows.Err()
 }
 
+// FeedbackSince returns every feedback row created at or after sinceMS,
+// across ALL jobs, oldest first. Snapshot blobs are excluded (like
+// ListFeedbackMeta) — the dream loop's nightly sweep only needs metadata, and
+// dragging every frozen artifact snapshot in the window through a sweep that
+// never reads them would be pure waste.
+//
+// "Arrived in the window" means CREATED in the window, not touched in it: ts
+// is immutable after insert — UpdateFeedbackNote deliberately rewrites
+// note/snapshot and leaves ts alone — so editing an old note does not make it
+// look new to a later sweep, and a row is swept exactly once by consecutive
+// non-overlapping windows.
+//
+// The read is UNSCOPED, so a NULL-job_id fossil (a pre-v5 row the migration
+// couldn't match, or a row orphaned by DeleteJob's ON DELETE SET NULL) still
+// surfaces here — the same rows ListFeedback(0) returns and a job_id-scoped
+// call never can. That is deliberate: the note is worth mining whether or not
+// its job still exists. The comparison is `>= sinceMS`, so a row stamped
+// exactly at the floor is IN the window (a caller sweeping consecutive
+// windows should advance its floor past the last one it consumed).
+//
+// schemaV8's feedback_ts index is what makes this a seek rather than a full
+// scan: schemaV1's only feedback index leads with job_slug, which an unscoped
+// ts predicate cannot use. The predicate is a BARE `ts >= ?` rather than the
+// COALESCE(ts,0) this file's other reads use in their SELECT lists, and that
+// asymmetry is deliberate: ts is NOT NULL DEFAULT 0 so a NULL isn't reachable,
+// and wrapping the indexed column in a function would make the index
+// unusable — turning the sweep back into the full table scan feedback_ts was
+// added to avoid. Defensive COALESCE belongs in the projection, never in the
+// predicate that has to hit an index.
+func (s *Store) FeedbackSince(sinceMS int64) ([]Feedback, error) {
+	rows, err := s.db.Query(
+		`SELECT id, job_id, COALESCE(job_slug,''), COALESCE(artifact,''), NULL,
+			COALESCE(snapshot_ext,''), COALESCE(note,''), COALESCE(ts,0),
+			COALESCE(session,''), COALESCE(addressed,''), COALESCE(addressed_at,'')
+			FROM feedback WHERE ts >= ? ORDER BY ts, id`,
+		sinceMS,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list feedback since %d: %w", sinceMS, err)
+	}
+	defer rows.Close()
+	var out []Feedback
+	for rows.Next() {
+		f, err := scanFeedback(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list feedback since %d: %w", sinceMS, err)
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+// CountFeedbackSince is FeedbackSince's cheap sibling: how many rows the
+// window holds, without materializing any of them. Same window semantics
+// (created-in-window, unscoped, floor inclusive) — it is the count of exactly
+// the rows FeedbackSince would return, so a caller can decide whether a sweep
+// is worth running at all before paying for one.
+func (s *Store) CountFeedbackSince(sinceMS int64) (int, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM feedback WHERE ts >= ?`, sinceMS).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count feedback since %d: %w", sinceMS, err)
+	}
+	return n, nil
+}
+
 // UpdateFeedbackNote edits an existing entry's note and re-freezes its
 // snapshot (Q4: an edit captures the artifact as CURRENTLY served, not the
 // original submit-time bytes) — session/addressed/addressed_at/ts are left

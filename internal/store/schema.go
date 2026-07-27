@@ -27,8 +27,11 @@ import (
 // store.ArchiveJob's doc comment) — job_slug itself is untouched as every
 // read path's lookup key. Version 7 adds the threads table: side threads,
 // forked claude sessions branched off a job's zeus and living in a second
-// tmux window of the same cell (threads.go).
-const schemaVersion = 8
+// tmux window of the same cell (threads.go). Version 8 adds jobs.color.
+// Version 9 adds the dream loop's watchlist table plus a feedback(ts) index
+// for its unscoped time-window sweep (watchlist.go, feedback.go's
+// FeedbackSince).
+const schemaVersion = 9
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -305,6 +308,77 @@ const schemaV8 = `
 ALTER TABLE jobs ADD COLUMN color TEXT NOT NULL DEFAULT '';
 `
 
+// schemaV9 adds the dream loop's two pieces, both pure additions with
+// nothing to move forward (no Go hook). Appended rather than folded into an
+// earlier schemaV<N> for the reason schemaV2's doc comment spells out: real
+// kraken.db files already exist at earlier versions, and migrate() only ever
+// applies versions ABOVE the database's current one.
+//
+// feedback_ts exists because schemaV1's only feedback index is
+// (job_slug, ts) with job_slug LEADING, and a composite index can only be
+// seeked on a prefix of its columns — so the nightly sweep's unscoped
+// `WHERE ts >= ?` across ALL jobs (FeedbackSince/CountFeedbackSince,
+// feedback.go) can't use it at all and degrades to a full table scan. A
+// second index with ts leading is what makes that read a seek.
+//
+// watchlist deliberately has NO job_id, no FK, and no cascade — the one
+// table here that isn't scoped to a job. A watchlist row is an observation
+// the nightly pass is TRACKING (a recurring correction, a wasted step, a
+// prompting pattern), and its whole point is that it OUTLIVES the job that
+// happened to surface it: the same observation recurs across many jobs, and
+// a row must survive its originating job's teardown, archive, and even
+// hard-delete. Attaching it to a job would make it cascade away exactly when
+// it has finally been seen often enough to matter.
+//
+// The (state, last_seen) index serves the only listing this table has:
+// ListWatchItems filters on state and orders by last_seen DESC, so both
+// columns are covered in the order the query uses them.
+//
+// watchlist_observation_key is an EXPRESSION index, not a plain column one,
+// and it is deliberately written as the exact expression FindWatchItem
+// (watchlist.go) puts in its WHERE clause. That coupling is the point — the
+// normalisation rule is one expression, so the lookup and the index cannot
+// drift into disagreeing about which rows are "the same observation"; the
+// EXPLAIN QUERY PLAN assertion in watchlist_test.go fails loudly if they do,
+// since a drifted pair still returns correct answers and merely stops using
+// the index.
+//
+// char(32,9,10,13) is the trim set — space, tab, newline, carriage return.
+// Bare TRIM() strips SPACES ONLY, which is not enough here: the caller is an
+// LLM and a trailing newline on a generated string is entirely ordinary, so
+// the default would miss the repeat and insert a duplicate — the exact
+// failure FindWatchItem exists to prevent. char() and TRIM() are both
+// deterministic, which is what lets the expression be indexed at all. It is
+// not UNIQUE: rows
+// predating the lookup (or written by a caller that never looked first) may
+// already collide, and a UNIQUE index would turn that into a failed INSERT
+// on the nightly pass rather than the duplicate FindWatchItem is there to
+// prevent in the first place.
+const schemaV9 = `
+CREATE INDEX feedback_ts ON feedback(ts);
+
+CREATE TABLE watchlist (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	observation   TEXT NOT NULL DEFAULT '',
+	class         TEXT NOT NULL DEFAULT '',
+	state         TEXT NOT NULL DEFAULT 'watching',
+	sightings     INTEGER NOT NULL DEFAULT 1,
+	first_seen    INTEGER NOT NULL DEFAULT 0, -- unix millis
+	last_seen     INTEGER NOT NULL DEFAULT 0, -- unix millis
+	evidence      TEXT NOT NULL DEFAULT '',
+	suggested_fix TEXT NOT NULL DEFAULT '',
+	pr_url        TEXT NOT NULL DEFAULT '',
+	updated_at    INTEGER NOT NULL DEFAULT 0, -- unix millis
+	-- carl-owned trio: only SetWatchVerdict ever writes these, exactly as
+	-- questions.answer/answered_at are kraken-owned (questions.go).
+	verdict       TEXT NOT NULL DEFAULT '',
+	comment       TEXT NOT NULL DEFAULT '',
+	commented_at  TEXT NOT NULL DEFAULT '' -- RFC3339
+);
+CREATE INDEX watchlist_state_last_seen ON watchlist(state, last_seen);
+CREATE INDEX watchlist_observation_key ON watchlist(LOWER(TRIM(observation, char(32,9,10,13))));
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -327,8 +401,10 @@ type migrationStep struct {
 // feedback.job_id and backfills it for existing rows (migrateV6FeedbackJobID
 // below); migrations[7] adds the threads table (no hook — a brand-new table
 // has nothing to migrate forward); migrations[8] adds jobs.color (no hook —
-// the column's empty-string DEFAULT is the whole backfill). Future schema changes append
-// migrations[9], migrations[10], ... rather than editing an existing
+// the column's empty-string DEFAULT is the whole backfill); migrations[9] adds
+// the watchlist table and the feedback(ts) index (no hook, same reason).
+// Future schema changes append
+// migrations[10], migrations[11], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -340,6 +416,7 @@ var migrations = map[int]migrationStep{
 	6: {sql: schemaV6, hook: migrateV6FeedbackJobID},
 	7: {sql: schemaV7},
 	8: {sql: schemaV8},
+	9: {sql: schemaV9},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
