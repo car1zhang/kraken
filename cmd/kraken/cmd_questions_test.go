@@ -76,6 +76,8 @@ func TestHelperProcess(t *testing.T) {
 		cmdFeedback(args)
 	case "watchlist":
 		cmdWatchlist(args)
+	case "mine":
+		cmdMine(args)
 	}
 }
 
