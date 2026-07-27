@@ -206,7 +206,40 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	setPhase(jobs.UpdateFetching)
 	util.LogEvent("update", "info", "update-fetch", "fetching origin/main in "+pf.Repo)
 	if _, err := updateGit(pf.Repo, "fetch", "origin", "main"); err != nil {
-		return fail(err)
+		// The one failure the updater rescues itself from: git authenticates
+		// this fetch as whichever gh account is ACTIVE, and with the wrong one
+		// GitHub answers "Repository not found" for a repo it can't see.
+		// internal/jobs/ghauth.go owns that whole decision and the reasons it
+		// is a narrow one.
+		//
+		// Never under --dry-run. That flag promises to change nothing, and the
+		// machine's active gh account is the most global thing this command
+		// can touch — every other consumer on the box reads it (other claude
+		// sessions, the daemon's own `gh pr list`). A dry run that silently
+		// re-signed the machine in would be the one mutation nobody could have
+		// expected from it.
+		if opts.dryRun {
+			fmt.Fprintln(out, "dry run: fetch failed — a real update would try a gh account switch here; nothing was changed")
+			return fail(err)
+		}
+		account, ghErr := updateGHRecover(pf.Repo, err.Error())
+		if ghErr != nil {
+			// Nothing was switched, so the fetch's own error is the true one —
+			// ghErr only explains why the rescue did not apply, and reporting
+			// it as the failure would replace the real cause with a footnote.
+			util.LogEvent("update", "info", "update-gh-skip", "not switching gh accounts: "+ghErr.Error())
+			return fail(err)
+		}
+		util.LogEvent("update", "info", "update-gh-switch", "fetch failed as the wrong gh account; switched to "+account+" and retrying")
+		fmt.Fprintf(out, "fetch failed; switched gh to %s (origin's owner) and retrying\n", account)
+		// Exactly one retry, and only after an actual switch: the credential
+		// changed, so this is a genuinely different attempt rather than a
+		// hopeful repeat of the same one.
+		if _, retryErr := updateGit(pf.Repo, "fetch", "origin", "main"); retryErr != nil {
+			// Named rather than shadowing err, so the account the retry ran as
+			// is attached to the RETRY's failure and not to the first one.
+			return fail(fmt.Errorf("%w (retried as gh account %s)", retryErr, account))
+		}
 	}
 
 	behindOut, err := updateGit(pf.Repo, "rev-list", "--count", "HEAD..origin/main")
@@ -435,5 +468,6 @@ var (
 	updatePreflight   = jobs.PreflightUpdate
 	updateAcquireLock = jobs.AcquireUpdateLock
 	updateWriteStatus = jobs.WriteUpdateStatus
+	updateGHRecover   = jobs.RecoverGHAccount
 	updateSleep       = time.Sleep
 )
