@@ -1,7 +1,6 @@
 package web
 
 import (
-	"io/fs"
 	"os"
 	"regexp"
 	"strings"
@@ -32,9 +31,17 @@ type cssVar struct{ name, hex string }
 
 func cssJobVars(t *testing.T) []cssVar {
 	t.Helper()
-	data, err := fs.ReadFile(webAssets, "static/style.css")
+	// The React board's stylesheet, read from source on disk rather than from
+	// the embed. The embed now holds _ui/dist — vite's hashed, minified
+	// bundle — so locating the CSS in it would mean globbing a content-hashed
+	// filename and parsing minified output; the source file is the same bytes
+	// and is what a human edits. web/static/style.css is still on disk during
+	// the React port and is kept byte-identical to this one, so either would
+	// pass today; this is deliberately the copy that SHIPS, so the guard keeps
+	// meaning what it says once web/static/ is deleted.
+	data, err := os.ReadFile("_ui/src/styles/style.css")
 	if err != nil {
-		t.Fatalf("read embedded static/style.css: %v", err)
+		t.Fatalf("read _ui/src/styles/style.css: %v", err)
 	}
 	var out []cssVar
 	for _, m := range cssJobVarRe.FindAllStringSubmatch(string(data), -1) {
