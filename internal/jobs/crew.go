@@ -25,8 +25,11 @@ import (
 // intact, which is what turns athena's fix round into a continuation — the same
 // hephaestus that wrote the slice fixes it, and only the flagging variant
 // re-reads it — instead of a fresh brief re-deriving everything each round.
-// Anonymous subagents keep exactly one job: read-only exploration that writes
-// nothing and returns no verdict anyone acts on.
+// Anonymous subagents keep exactly one job: read-only exploration that changes
+// nothing in the repo and returns no verdict anyone acts on. Read-only is about
+// the REPO, not the filesystem — such a subagent still writes its own findings
+// to a scratch path, because a report that exists only as a chat reply is one
+// the lead may never receive (the reply channel truncates).
 //
 // The brief names hephaestus and athena because delegation shape is cell
 // policy; it does NOT describe the doc pipeline's rendering teammates, which is
@@ -61,10 +64,11 @@ func DiagramCardPath() string {
 }
 
 // HermesContractPath is the parts-kit style contract (markup patterns, class
-// vocabulary, geometry/animation rules, ban list) every hermes brief must
-// paste in verbatim — a kraken-owned skill asset materialized into every cell
-// worktree by installSkills before zeus launches. The rule requiring it lives
-// in .claude/skills/aim/SKILL.md.
+// vocabulary, geometry/animation rules, ban list) every hermes brief must name
+// the path of, for the teammate to Read before writing markup — never pasted
+// into the brief, since a re-typed copy diverges from this file. A kraken-owned
+// skill asset materialized into every cell worktree by installSkills before
+// zeus launches. The rule requiring it lives in .claude/skills/aim/SKILL.md.
 func HermesContractPath() string {
 	return filepath.Join(".claude", "skills", "aim", "assets", "hermes-contract.md")
 }
@@ -143,7 +147,7 @@ func zeusBrief(j *Job) string {
 	if j.Solo {
 		b.WriteString("Work entirely alone: no teammates and no subagents at all — not even a read-only exploration subagent, no implementation crew and no diagram agents; when Phase 1 applies, write every artifact by hand, prose only, with no diagram cards.\n")
 	} else {
-		b.WriteString("When you do delegate real work, it goes to TEAMMATES, never to in-process subagents. A teammate is an Agent-tool call that passes a `name` (with `model: opus`): this cell's own `.claude/settings.json` turns agent teams on, so a named agent gets its own tmux pane, is addressable by that name via SendMessage for follow-up rounds, and shows up nested under this cell in `k ls`/`k v` where carl can watch it. Every agent that produces or judges output — the crew below, and any rendering agents a skill sends you to spawn — must be spawned that way, named. The ONE exception is read-only exploration: an unnamed subagent that searches the codebase and answers a question about it, writing nothing. Research answers are exactly what that carve-out is for — a verdict means an accept/reject judgment on work product, not a finding. If an agent will write a file or judge someone's output, it is a teammate.\n")
+		b.WriteString("When you do delegate real work, it goes to TEAMMATES, never to in-process subagents. A teammate is an Agent-tool call that passes a `name` (with `model: opus`): this cell's own `.claude/settings.json` turns agent teams on, so a named agent gets its own tmux pane, is addressable by that name via SendMessage for follow-up rounds, and shows up nested under this cell in `k ls`/`k v` where carl can watch it. Every agent that produces or judges output — the crew below, and any rendering agents a skill sends you to spawn — must be spawned that way, named. The ONE exception is read-only exploration: an unnamed subagent that searches the codebase and answers a question about it, changing no file in the repo — it still writes its own report to the scratch path you give it, since read-only is about the repo rather than the filesystem. Research answers are exactly what that carve-out is for — a verdict means an accept/reject judgment on work product, not a finding. If an agent will change a file in the repo or judge someone's output, it is a teammate.\n")
 		b.WriteString("Delegation is for work that actually parallelizes, not a ritual. When a change is small enough to hold in your own head — a few files, one coherent edit, nothing that splits into independent slices — just make the edit yourself; briefing a teammate to do it costs more than doing it. Reach for hephaestus when the work genuinely divides into slices that can run at once, or is large enough that its bulk would crowd out your own context. The athena review below is the opposite case: reviews are independent by construction, so run them in parallel every time, on your own edits exactly as on a teammate's.\n")
 		b.WriteString("Delegate parallelizable implementation slices to teammates you name hephaestus, run on the opus model — each slice gets a focused, unique brief with exact scope and file targets. Before accepting a slice, review it with three teammates you name athena-logic, athena-edge, and athena-style, also on the opus model, dispatched in parallel (one message, three Agent calls) — each gets its own single-dimension reviewer brief (never hephaestus' brief): athena-logic checks correctness, bugs, and scalability; athena-edge checks edge cases and boundary conditions; athena-style checks stylistic standards, best practices, and CLAUDE.md compliance. If any variant flags a blocking finding, send hephaestus a fix brief citing the exact finding (SendMessage to its name resumes it with its context intact), then re-review with only the flagging variant(s) — not all three — before accepting.\n")
 		b.WriteString("Crew hygiene: stop an agent (TaskStop — a teammate stops by its bare name) the moment its work is ACCEPTED, not the moment it reports done. An agent is done when the gate that judges its output has passed it: a slice once your review round clears it, a rendering agent once its output passes whatever check the skill runs. Keeping it alive until then is what lets a fix round go back to the same teammate with its context intact instead of re-briefing a fresh one. Once accepted, stop it immediately and free its pane — never leave accepted agents resident.\n")

@@ -81,8 +81,9 @@ user prose, tool calls and assistant text, with thinking, tool results and attac
 which is about an eighth of the bytes.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
-digest. They are read-only exploration — they write nothing and judge nothing — so they are unnamed
-subagents, not teammates. Spawn them in waves rather than all at once; a few at a time, with the
+digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
+unnamed subagents, not teammates. Give each one a scratch path and require its findings there: a
+scout's report is long, and the reply channel truncates. Spawn them in waves rather than all at once; a few at a time, with the
 remainder running as slots free. Every transcript gets read; the pass simply takes as long as it
 takes.
 
@@ -165,8 +166,9 @@ specific, and it is the only place the cell's real paths appear:
 - **Read and write watchlist rows with `kraken watchlist get|add|update|remove`**; sweep feedback with
   `kraken feedback sweep --since <ts>`. Never run `kraken feedback addressed` — that verb belongs to
   the job whose artifact the note was left on.
-- **Scouts are unnamed subagents**, never teammates: they read and report, and write nothing. The
-  crew rules in the brief govern any agent that does write.
+- **Scouts are unnamed subagents**, never teammates: they read and report, and change nothing in the
+  repo — they still write their own findings to the scratch path you give them. The crew rules in
+  the brief govern any agent that changes the repo.
 - **Never `open`** (there is no browser in a cell).
 - **The phase ends with one line, then you stop.** Say exactly:
 

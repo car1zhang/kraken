@@ -97,12 +97,15 @@ short form, with /info's overrides:
   diagram ids are; keep ids lowercase `[a-z0-9-]` and ≤ 40 chars, since the id rides inside a
   schema-validated agent name) — which buys it its own pane and keeps it addressable for a later
   round; an unnamed in-process subagent is for read-only exploration, never for rendering.
-- Every brief carries the **full contents of `.claude/skills/aim/assets/hermes-contract.md`
-  verbatim**, the diagram's exact content, a card-unique `arrow-<id>` marker id and path-id prefix,
-  the fragment output path, and the anti-artifact rules: no overlapping elements, text measured
-  against its box (~7px/char at 13px) and wrapped with tspans before it can overflow, edges attached
-  to box borders and routed around (never through) other boxes, every coordinate inside the viewBox,
-  generous whitespace between groups.
+- Every brief carries the **path** `.claude/skills/aim/assets/hermes-contract.md` with an
+  instruction to Read it in full before writing any markup and to compose only from it — never its
+  contents pasted inline, which is /aim's rule and not an /info override: a re-typed contract
+  silently diverges from the file and from the other teammates' copies, and the file is already
+  materialized in the teammate's own cwd. Then the diagram's exact content, a card-unique
+  `arrow-<id>` marker id and path-id prefix, the fragment output path, and the anti-artifact rules:
+  no overlapping elements, text measured against its box (~7px/char at 13px) and wrapped with
+  tspans before it can overflow, edges attached to box borders and routed around (never through)
+  other boxes, every coordinate inside the viewBox, generous whitespace between groups.
 - Boxes are `box → kind` pairs using the sanctioned kind list in the contract's Shape Kit section;
   the teammate derives the silhouette from the kind — never dictate a shape class.
 - Lint before wrapping: `python3 .claude/skills/aim/assets/lint_svg.py <fragment> --marker-id
