@@ -366,7 +366,9 @@ function docQuestionsChipHTML(j) {
 //
 // fbEditing tracks which feedback rows are currently open for editing, by
 // row id — module-level for the same reason reansweringDocQ is: it must
-// survive the wholesale #board innerHTML rebuild every poll triggers. Keyed
+// survive the wholesale innerHTML rebuild of whichever surface renders the
+// panel (the steer modal's context block or the editor's copy — the board
+// carries only a count chip now). Keyed
 // on the bare id (unlike reansweringDocQ's slug|id) because feedback ids are
 // global kraken.db rowids, not per-job qids — two different jobs can never
 // share one, so there's nothing for the slug to disambiguate.
@@ -389,7 +391,7 @@ function feedbackRowHTML(j, f) {
       <textarea class="fb-edit-input" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">${esc(f.note)}</textarea>
       <div class="fb-edit-actions">
         <span class="fb-edit-note"></span>
-        <button class="fb-cancel" data-id="${esc(f.id)}">cancel</button>
+        <button class="fb-cancel" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">cancel</button>
         <button class="fb-save" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">save</button>
       </div>
     </div>`;
@@ -398,7 +400,7 @@ function feedbackRowHTML(j, f) {
     <div class="fb-head">
       <span class="fb-artifact">${esc(f.artifact)}</span>
       <span class="fb-actions">
-        <button class="fb-edit" data-id="${esc(f.id)}">edit</button>
+        <button class="fb-edit" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">edit</button>
         <button class="fb-delete" data-slug="${esc(j.slug)}" data-id="${esc(f.id)}">delete</button>
       </span>
     </div>
@@ -411,11 +413,38 @@ function feedbackRowHTML(j, f) {
 // (own neutral panel, same empty-renders-nothing convention so a job with
 // no feedback array, from an older server or simply no notes yet, looks
 // exactly as before).
+//
+// This panel is a DRILLDOWN surface only, exactly like docQuestionsHTML's:
+// the steer modal (fillSteerContext) and the job editor (fillEditorFeedback)
+// render it, the card renders only feedbackChipHTML's count. It used to sit
+// on the card itself, which made a job carrying a handful of notes taller
+// than everything around it — and a note is a paragraph of prose, so it did
+// that far more readily than a question ever did.
 function feedbackHTML(j) {
   const list = j.feedback || [];
   if (!list.length) return "";
   const rows = list.map((f) => feedbackRowHTML(j, f)).join("");
   return `<div class="job-feedback">${rows}</div>`;
+}
+
+// feedbackChipHTML renders the BOARD's entire feedback surface: one chip
+// carrying the totals, nothing else — the same subtraction docQuestionsChipHTML
+// already made for questions, and for the same reason. A plain span, not a
+// .chip (that class opens an artifact) and not a button, so a click falls
+// through to the card-open fallback that reaches the panel itself.
+//
+// Both counts ride it: the total is what the job accumulated, the open count
+// (notes zeus hasn't posted an `addressed` line for) is what is still owed.
+// Unlike a question, a note is never "settled" by the job being done — carl
+// leaves most of them ON done work — so there is no settledJob() suppression
+// here.
+function feedbackChipHTML(j) {
+  const list = j.feedback || [];
+  if (!list.length) return "";
+  const open = list.filter((f) => !f.addressed).length;
+  const label = open ? `${list.length} feedback · ${open} open` : `${list.length} feedback`;
+  const title = `${list.length} feedback note${list.length === 1 ? "" : "s"}${open ? `, ${open} not yet addressed` : ", all addressed"} — click the card to read them`;
+  return `<span class="fb-chip${open ? " open" : ""}" title="${esc(title)}">✎ ${esc(label)}</span>`;
 }
 
 // wakeupChipHTML renders a live cell's poll-timer chip: a countdown to its
@@ -564,7 +593,10 @@ function crewHTML(j) {
 
 function cardHTML(j, col) {
   const color = stateColor(j.state);
-  const prs = (j.prs || []).map(prChipHTML).join("");
+  // the feedback chip rides the PR row rather than a row of its own: both are
+  // job history that outlives the cell, and both are read one click in — the
+  // same pairing the steer modal's context block already makes
+  const prs = (j.prs || []).map(prChipHTML).join("") + feedbackChipHTML(j);
   const prereqs = (j.prereqs || [])
     .map((p) => {
       const cls = p.done ? "ok" : p.gated ? "gate" : "pend";
@@ -612,7 +644,6 @@ function cardHTML(j, col) {
     ${chips ? `<div class="chips">${chips}</div>` : ""}
     ${j.health && !/is gone|startup prompt/.test(j.health) ? `<button class="btn retry" data-slug="${esc(j.slug)}">↻ retry</button>` : ""}
     ${j.question ? questionHTML(j) : ""}
-    ${feedbackHTML(j)}
     ${(col === "done" || j.cell_gone) && j.reactivatable ? `<button class="btn reactivate" data-slug="${esc(j.slug)}">↺ reactivate</button>` : ""}
   </div>`;
 }
@@ -731,20 +762,25 @@ function render(board) {
 
 // snapshotDocInputs/restoreDocInputs preserve in-progress free-text inputs
 // (value + focus + selection) across an innerHTML rebuild of any surface
-// that renders one: #board (renderBoardDOM's wholesale replace on every
-// changed poll, for the feedback panel's .fb-edit-input — the board renders
-// no .dq-input at all now, only docQuestionsChipHTML's count chip),
-// #steer-docq (fillSteerContext re-rendering the steer modal's copy of the
-// questions panel on open/chip-more/post-answer), and #editor-docq
-// (fillEditorDocq doing the same for the job editor). All are wholesale
-// replaces with no diffing, so anything typed into one is gone the instant
-// it rebuilds unless snapshotted first — every other composer lives in a
-// modal textarea, whose draft is server-synced instead (see
-// flushSteerDraft). Keyed on slug+id (both already ride as data attrs on
-// every covered element) rather than DOM position, since sortDocQuestions
-// can reorder rows between polls. A .dq-input id ("Q<digits>") and an
-// .fb-edit-input id (a bare feedback row number) never collide as strings,
-// so both element kinds safely share one values map.
+// that renders one: #steer-docq/#steer-feedback (fillSteerContext re-rendering
+// the steer modal's copies of the questions and feedback panels on
+// open/chip-more/post-answer), #editor-docq/#editor-feedback (fillEditorDocq
+// and fillEditorFeedback doing the same for the job editor), and
+// #dream-watchlist (renderDreamWatchlist rebuilding the watchlist on every
+// poll while the DREAM view is up — the comment box there is a composer carl
+// types whole sentences into, and it is the one input on a surface that
+// rebuilds on a timer rather than only on an action). #board renders none of
+// these any more: both panels left the card for the drilldowns, leaving only
+// their count chips behind. All are wholesale replaces with no diffing, so
+// anything typed into one is gone the instant it rebuilds unless snapshotted
+// first — every other composer lives in a modal textarea, whose draft is
+// server-synced instead (see flushSteerDraft). Keyed on slug+id (both already
+// ride as data attrs on every covered element) rather than DOM position,
+// since sortDocQuestions can reorder rows between polls. A .dq-input id
+// ("Q<digits>"), an .fb-edit-input id (a bare feedback row number) and a
+// .wl-comment id (a watchlist rowid, under the reserved pseudo-slug
+// "watchlist" no real job can take) never collide as strings, so all three
+// element kinds safely share one values map.
 //
 // A modal copy is only ever a snapshot AUTHORITY while that modal is
 // actually visible: snapshotDocInputs skips anything inside a hidden
@@ -757,20 +793,18 @@ function render(board) {
 // draft actually propagates as "cleared" instead of being overwritten by a
 // stale non-empty copy.
 const DQ_INPUT_SELECTOR =
-  "#board .fb-edit-input, #steer-docq .dq-input, #editor-docq .dq-input";
+  "#steer-docq .dq-input, #steer-feedback .fb-edit-input, " +
+  "#editor-docq .dq-input, #editor-feedback .fb-edit-input, " +
+  "#dream-watchlist .wl-comment";
 
 // the modal surfaces DQ_INPUT_SELECTOR reaches into — snapshot/restore skip
 // an input inside whichever of these is currently hidden, so a
 // closed-but-not-yet-cleared modal can never outrank a visible surface in
-// document order.
+// document order. (#dream-watchlist isn't listed: it's a view, not a modal,
+// and applyView hides the whole <main> — an input inside a hidden view is
+// unreachable either way, and its value is worth carrying across a tab
+// switch rather than dropping.)
 const HIDDEN_DOCQ_SURFACE = "#steer-overlay, #editor-overlay";
-
-// SCROLL_PANEL_SELECTORS: card-embedded panels whose own scroll position
-// (see style.css's per-card max-height caps) must survive a #board rebuild
-// the same way input values do — see snapshotDocInputs/restoreDocInputs.
-// .doc-questions dropped out of this list when the panel left the card: the
-// only scroll-capped panel a card still renders is its feedback list.
-const SCROLL_PANEL_SELECTORS = [".job-feedback"];
 
 const dqDraftKey = (slug, id) => JSON.stringify([slug, id]);
 
@@ -820,8 +854,22 @@ function seedDocqDrafts(el) {
   });
 }
 
-const clearSteerDocq = () => clearModalDocq("steer-docq");
-const clearEditorDocq = () => clearModalDocq("editor-docq");
+// clearModalFeedback is clearModalDocq's counterpart for the feedback panel.
+// No draft stash on this side: an unsaved edit is discarded when the modal
+// closes, and the row re-opens (fbEditing outlives the close) pre-filled from
+// the server's copy of the note. That's deliberate — a feedback note is
+// edited in place against text that already exists, so re-seeding half-typed
+// text over the authoritative version would be the surprising behavior. The
+// innerHTML wipe itself is what matters: it stops a closed modal from holding
+// an .fb-edit-input that snapshotDocInputs would otherwise have to reason
+// about.
+function clearModalFeedback(elID) {
+  const el = document.getElementById(elID);
+  if (el) el.innerHTML = "";
+}
+
+const clearSteerDocq = () => { clearModalDocq("steer-docq"); clearModalFeedback("steer-feedback"); };
+const clearEditorDocq = () => { clearModalDocq("editor-docq"); clearModalFeedback("editor-feedback"); };
 
 function snapshotDocInputs() {
   const values = {};
@@ -834,17 +882,10 @@ function snapshotDocInputs() {
   if (active && active.matches && active.matches(DQ_INPUT_SELECTOR)) {
     focused = { key: docInputKey(active), start: active.selectionStart, end: active.selectionEnd };
   }
-  const scroll = {};
-  document.querySelectorAll(".card[data-slug]").forEach((card) => {
-    SCROLL_PANEL_SELECTORS.forEach((sel) => {
-      const el = card.querySelector(sel);
-      if (el && el.scrollTop) scroll[card.dataset.slug + sel] = el.scrollTop;
-    });
-  });
-  return { values, focused, scroll };
+  return { values, focused };
 }
 
-function restoreDocInputs({ values, focused, scroll }) {
+function restoreDocInputs({ values, focused }) {
   if (Object.keys(values).length || focused) {
     let focusEl = null;
     document.querySelectorAll(DQ_INPUT_SELECTOR).forEach((el) => {
@@ -860,28 +901,16 @@ function restoreDocInputs({ values, focused, scroll }) {
       }
     }
   }
-  // .job-feedback carries a scroll cap (style.css) — renderBoardDOM replaces
-  // #board wholesale, which destroys the scroller and its scrollTop on every
-  // poll, so restore it per-card+panel the same way input values are restored
-  // above. (.card .doc-questions was the other capped panel until questions
-  // moved off the card entirely — see SCROLL_PANEL_SELECTORS.)
-  if (scroll && Object.keys(scroll).length) {
-    document.querySelectorAll(".card[data-slug]").forEach((card) => {
-      SCROLL_PANEL_SELECTORS.forEach((sel) => {
-        const key = card.dataset.slug + sel;
-        if (key in scroll) {
-          const el = card.querySelector(sel);
-          if (el) el.scrollTop = scroll[key];
-        }
-      });
-    });
-  }
 }
 
 // renderBoardDOM is the expensive part of render(): only called when
 // board.jobs actually changed (see refresh()).
+//
+// No snapshot/restore pair around the rebuild any more: the card renders
+// count chips only — every free-text input this board ever carried
+// (.dq-input, then .fb-edit-input) moved to a modal, and the modals are not
+// what this replaces. See DQ_INPUT_SELECTOR for where they went.
 function renderBoardDOM(byCol, archived) {
-  const dqState = snapshotDocInputs();
   document.getElementById("board").innerHTML = COLUMNS.map(
     (c) => `<section class="col ${byCol[c.key].length ? "has-cards" : ""}" data-col="${c.key}">
       <div class="col-head"><b>${c.title}</b><span class="n">${byCol[c.key].length}</span></div>
@@ -892,7 +921,6 @@ function renderBoardDOM(byCol, archived) {
       ${c.key === "done" ? archiveDrawerHTML(archived) : ""}
     </section>`,
   ).join("");
-  restoreDocInputs(dqState);
 }
 
 // updateAges refreshes the age chips and wakeup countdowns in place without
@@ -919,12 +947,17 @@ let archiveOpen = localStorage.getItem("kraken-archive-open") === "1";
 function archivedCardHTML(j) {
   const label = j.display_slug || j.slug;
   const renamed = j.display_slug && j.display_slug !== j.slug;
-  const chips = chipsHTML(j.artifacts, jobKey(j), label);
+  // an archived card has no PR row to hang the feedback chip off, so it goes
+  // in the chip row — the same row that carries the artifacts the notes are
+  // about. The panel behind it opens in the job editor, which is what a
+  // click on an archived card already opens.
+  //
   // data-slug is the jobKey here, not the bare archive name: nothing reads an
   // archived card's data-slug as a server key (unarchive/delete carry their
   // own, below), but snapshotDocInputs/restoreDocInputs use it as a per-card
   // scroll key — and a bare slug would make this card and an active job that
-  // reused the freed slug restore each other's feedback-panel scroll position
+  // reused the freed slug restore each other's feedback-panel scroll position.
+  const chips = chipsHTML(j.artifacts, jobKey(j), label) + feedbackChipHTML(j);
 
   // the swatch survives archiving — the card is dimmed as a whole by
   // .card.archived's opacity, so the colour reads as muted without needing a
@@ -942,7 +975,6 @@ function archivedCardHTML(j) {
     </div>
     ${j.outcome ? `<div class="outcome">→ ${esc(j.outcome)}</div>` : ""}
     ${chips ? `<div class="chips">${chips}</div>` : ""}
-    ${feedbackHTML(j)}
     <div class="review-row">
       <button class="btn unarchive" data-slug="${esc(j.slug)}">⬆ unarchive</button>
       <button class="btn danger delete" data-slug="${esc(j.slug)}">✕ delete forever</button>
@@ -1024,9 +1056,9 @@ document.addEventListener("dragstart", (ev) => {
   // also start a card drag — some browsers treat a press-and-drag gesture
   // starting on/over a form control inside a draggable ancestor as dragging
   // the ancestor rather than selecting text, which would turn "select my
-  // typed note to fix a word" into "post a real column move". The questions
-  // panel is modal-only now (never inside a draggable card), but it keeps
-  // its guard: a modal drag has nothing to do either way, and the rule is
+  // typed note to fix a word" into "post a real column move". BOTH panels are
+  // modal-only now (never inside a draggable card), but they keep their
+  // guards: a modal drag has nothing to do either way, and the rule is
   // "panels with text inputs never start a drag", not "cards only".
   if (ev.target.closest(".doc-questions") || ev.target.closest(".job-feedback")) {
     ev.preventDefault();
@@ -1424,6 +1456,21 @@ function refreshModalDocq(slug) {
   }
 }
 
+// refreshModalFeedback is refreshModalDocq's sibling for the feedback panel,
+// and it exists for the same reason: the card carries only a count chip, so
+// an open modal is the ONLY surface showing the notes themselves, and the
+// #board rebuild every action triggers never reaches modal DOM. Called from
+// every fb-* handler — the edit/cancel toggles (pure local state, no server
+// round trip at all) and after a save/delete lands.
+function refreshModalFeedback(slug) {
+  if (steerOverlay && !steerOverlay.hidden && steerSlug === slug) {
+    fillSteerContext(jobsBySlug[slug], steerMode);
+  }
+  if (editorOverlay && !editorOverlay.hidden && editorSlug === slug) {
+    fillEditorFeedback(jobsBySlug[slug]);
+  }
+}
+
 // sendDocQuestionAnswer posts one doc-question answer (either "accept rec"
 // or free-text send), disabling the row's controls synchronously so a
 // double-click/double-Enter can't double-post. Shared by the click handler's
@@ -1540,19 +1587,20 @@ document.addEventListener("click", (ev) => {
     refreshModalDocq(dqAnswered.dataset.slug);
     return;
   }
-  // ---- job feedback panel ----
+  // ---- job feedback panel (modal-only — see feedbackHTML) ----
+  //
+  // Toggling edit mode is a purely local state change: the board shows a
+  // count, not the note, so only the modal's own copy has to re-render.
   const fbEdit = ev.target.closest(".fb-edit");
   if (fbEdit) {
     fbEditing.add(fbEdit.dataset.id);
-    invalidateBoard();
-    refresh();
+    refreshModalFeedback(fbEdit.dataset.slug);
     return;
   }
   const fbCancel = ev.target.closest(".fb-cancel");
   if (fbCancel) {
     fbEditing.delete(fbCancel.dataset.id);
-    invalidateBoard();
-    refresh();
+    refreshModalFeedback(fbCancel.dataset.slug);
     return;
   }
   const fbSave = ev.target.closest(".fb-save");
@@ -1566,48 +1614,36 @@ document.addEventListener("click", (ev) => {
       return;
     }
     const id = fbSave.dataset.id;
+    const slug = fbSave.dataset.slug;
     fbSave.disabled = true;
-    post("/api/feedback", { slug: fbSave.dataset.slug, id: Number(id), feedback: text }).then((ok) => {
+    post("/api/feedback", { slug, id: Number(id), feedback: text }).then((ok) => {
       if (ok) {
         fbEditing.delete(id);
-        invalidateBoard();
-        refresh();
+        refreshModalFeedback(slug);
         return;
       }
-      // post() already rebuilt #board on the failure path (its own
-      // invalidateBoard()+refresh() inside the catch branch), which orphans
-      // `row`/`noteEl` captured above — writing into them would be a
-      // silent no-op. fbEditing still holds `id`, so the fresh row rendered
-      // read-only-editing again; re-query it by id to land the message.
-      const freshNote = document.querySelector(`.fb-row[data-fb-id="${CSS.escape(id)}"] .fb-edit-note`);
-      if (freshNote) {
-        freshNote.textContent = "save failed — see status bar";
-        return;
-      }
-      // no fresh row: the note is gone from the board entirely (deleted
-      // elsewhere, or its job left the view). The message has nowhere to
-      // land — the status bar already carries the failure — so drop the id
-      // rather than leaving fbEditing pinned to a row that will never render
-      // again, which would silently re-open an edit box if that id ever came
-      // back.
-      fbEditing.delete(id);
+      // post()'s failure path rebuilds #board, which no longer holds this
+      // row — the panel lives in a modal, and nothing here re-renders it —
+      // so `row`/`noteEl` are still live and the message lands directly.
+      // The row stays in edit mode with its text intact for a retry.
+      if (noteEl) noteEl.textContent = "save failed — see status bar";
+      fbSave.disabled = false;
     });
     return;
   }
   const fbDelete = ev.target.closest(".fb-delete");
   if (fbDelete) {
     if (!confirm("delete this feedback note? this can't be undone.")) return;
+    const slug = fbDelete.dataset.slug;
     fbDelete.disabled = true;
-    post("/api/feedback", { slug: fbDelete.dataset.slug, id: Number(fbDelete.dataset.id), delete: true });
+    post("/api/feedback", { slug, id: Number(fbDelete.dataset.id), delete: true }).then((ok) => {
+      // the deleted row has to leave the open modal's copy of the panel too
+      // — the #board rebuild post() already ran only updates the count chip
+      if (ok) refreshModalFeedback(slug);
+      else fbDelete.disabled = false;
+    });
     return;
   }
-  // must come before the card-open fallback below (same reason as
-  // .queue-cancel above): a click into the in-card free-text feedback edit
-  // field should focus/type into it, not fall through to opening the
-  // steer/editor modal on top of it and stealing focus. The doc-question
-  // input needs no such guard any more — it only exists inside a modal now,
-  // which the card fallback never reaches.
-  if (ev.target.closest(".fb-edit-input")) return;
   const retry = ev.target.closest(".retry");
   if (retry) {
     retry.disabled = true;
@@ -1812,23 +1848,28 @@ function pastedFiles(ev) {
   return items.map((it) => it.getAsFile()).filter(Boolean);
 }
 
-// ---- command chips: /info /aim /do /pr insertion into composer textareas ----
-// one-tap insertion of the kraken build-pipeline commands (info -> aim -> do
-// -> pr) into whichever prompt composer they're wired to. Always lands at the
-// cursor position (replacing any selection) with a trailing space, then
-// returns focus to the textarea so typing continues right after the command.
-// Fires a bubbling "input" event afterward so listeners already wired to the
-// textarea (draft sync, autosave) see the change like any other keystroke.
-const CMD_CHIPS = ["/info", "/aim", "/do", "/pr"];
+// ---- command chips: /info /aim /do /pr /dream insertion into composer
+// textareas ----
+// one-tap insertion of the kraken pipeline commands (info -> aim -> do
+// -> pr, plus /dream, which is not part of that chain — it's the nightly
+// corroboration pass, and the only one a job usually gets from the daemon
+// rather than from carl) into whichever prompt composer they're wired to.
+// Always lands at the cursor position (replacing any selection) with a
+// trailing space, then returns focus to the textarea so typing continues
+// right after the command. Fires a bubbling "input" event afterward so
+// listeners already wired to the textarea (draft sync, autosave) see the
+// change like any other keystroke.
+const CMD_CHIPS = ["/info", "/aim", "/do", "/pr", "/dream"];
 
-// ---- command highlight: mirrored backdrop rendering /info /aim /do /pr,
-// each in its own skill color with glow (info blue, aim red, do yellow, pr
-// green), behind the (now text-transparent) composer textareas — a
+// ---- command highlight: mirrored backdrop rendering /info /aim /do /pr
+// /dream, each in its own skill color with glow (info blue, aim red, do
+// yellow, pr green, dream violet), behind the (now text-transparent)
+// composer textareas — a
 // <textarea> can't style substrings of its own value, so the real glyphs
 // live in a sibling div instead (style.css's .cmd-hl-wrap/.cmd-hl-backdrop,
 // unioned with #steer-text/#editor-text's own rule for font/padding/
 // border-width so the two surfaces can't drift apart). Escaping runs first,
-// then the boundary match — none of the four commands' characters are
+// then the boundary match — none of the five commands' characters are
 // HTML-special, so matching against already-escaped text is safe. Derived
 // from CMD_CHIPS (single source) rather than hand-duplicated, and anchored
 // on a leading (^|\s) group in addition to the trailing \b: without it a
@@ -1839,7 +1880,11 @@ const CMD_CHIPS = ["/info", "/aim", "/do", "/pr"];
 // first segment happens to be a command still lights up (e.g.
 // "[image: /do/x.png]", since "/do" sits right after a space and "/"
 // satisfies \b same as a space would). Harmless in practice: kraken's own
-// upload paths are ~/.kraken/uploads/..., never /info, /aim, /do, or /pr.
+// upload paths are ~/.kraken/uploads/..., never /info, /aim, /do, /pr, or
+// /dream. The trailing \b is also what keeps the alternation order harmless
+// now that one command is a prefix of another: leftmost-first would match
+// "/do" inside "/dream", but the boundary check fails between "o" and "r"
+// and the engine backtracks to the "/dream" branch.
 const CMD_HL_RE = new RegExp("(^|\\s)(/(?:" + CMD_CHIPS.map((c) => c.slice(1)).join("|") + "))\\b", "g");
 
 function cmdHighlightHTML(text) {
@@ -2073,6 +2118,7 @@ function fillSteerContext(j, mode) {
   const lastSentEl = document.getElementById("steer-lastsent");
   const chipsEl = document.getElementById("steer-chips");
   const docqEl = document.getElementById("steer-docq");
+  const fbEl = document.getElementById("steer-feedback");
 
   const crew = mode !== "reactivate" && j && crewHTML(j);
   // PRs are job history, not cell state — shown in every mode, including
@@ -2095,6 +2141,10 @@ function fillSteerContext(j, mode) {
   // seedDocqDrafts refills it from whatever a previous close stashed, then
   // snapshot/restore lets a live in-modal draft win over that stash.
   const docq = j ? docQuestionsHTML(j) : "";
+  // carl's per-artifact feedback, same story as the questions above: job
+  // history, every mode, and this modal is one of the only two surfaces that
+  // renders it at all now that the card shows a count chip.
+  const fb = j ? feedbackHTML(j) : "";
 
   crewEl.hidden = !crew;
   crewEl.innerHTML = crew || "";
@@ -2115,13 +2165,18 @@ function fillSteerContext(j, mode) {
   chipsEl.hidden = !artifacts;
   chipsEl.innerHTML = artifacts ? chipsHTML(artifacts, jobKey(j), j.slug) : "";
 
+  // one snapshot spans both panels: they're replaced back to back, and an
+  // .fb-edit-input being retyped while a poll re-opens this context block
+  // deserves exactly the treatment a .dq-input gets
   const dqState = snapshotDocInputs();
   docqEl.hidden = !docq;
   docqEl.innerHTML = docq;
+  fbEl.hidden = !fb;
+  fbEl.innerHTML = fb;
   seedDocqDrafts(docqEl);
   restoreDocInputs(dqState);
 
-  container.hidden = !crew && !prs && !threads && !detail && !lastSent && !artifacts && !docq;
+  container.hidden = !crew && !prs && !threads && !detail && !lastSent && !artifacts && !docq && !fb;
 }
 
 // liveDisplayColumn mirrors render()'s column bucketing for a single job:
@@ -3195,8 +3250,9 @@ async function loadForm(slug) {
 // around it so a draft typed on either surface survives, plus the panel's own
 // scrollTop (this copy is capped, style.css, and the scroller itself is what
 // gets replaced — without this, answering one question in a long list throws
-// you back to the top). snapshotDocInputs' scroll map only covers card-
-// embedded panels, hence the local save/restore here.
+// you back to the top). snapshotDocInputs carries no scroll map at all (the
+// panels it covers are all uncapped now bar this one), hence the local
+// save/restore here.
 function fillEditorDocq(j) {
   const el = document.getElementById("editor-docq");
   const docq = j ? docQuestionsHTML(j) : "";
@@ -3209,6 +3265,29 @@ function fillEditorDocq(j) {
   restoreDocInputs(dqState);
   if (scrollTop) {
     const next = el.querySelector(".doc-questions");
+    if (next) next.scrollTop = scrollTop;
+  }
+}
+
+// fillEditorFeedback is fillEditorDocq's sibling for the feedback panel, and
+// it matters more here than the questions one does: a note is usually left on
+// a SHIPPED artifact, so most feedback belongs to a done or archived job —
+// exactly the jobs whose card opens this editor rather than the steer modal.
+// Without this copy, moving the panel off the card would have made a done
+// job's notes unreachable from the board entirely. Same capped-scroller and
+// snapshot/restore treatment as the questions panel above it, for the same
+// two reasons.
+function fillEditorFeedback(j) {
+  const el = document.getElementById("editor-feedback");
+  const fb = j ? feedbackHTML(j) : "";
+  const prev = el.querySelector(".job-feedback");
+  const scrollTop = prev ? prev.scrollTop : 0;
+  const dqState = snapshotDocInputs();
+  el.hidden = !fb;
+  el.innerHTML = fb ? `<div class="editor-docq-head">feedback</div>${fb}` : "";
+  restoreDocInputs(dqState);
+  if (scrollTop) {
+    const next = el.querySelector(".job-feedback");
     if (next) next.scrollTop = scrollTop;
   }
 }
@@ -3241,6 +3320,7 @@ function openEditor(slug) {
   // has to already read as visible for a card-side draft to seed it
   editorOverlay.hidden = false;
   fillEditorDocq(slug ? jobsBySlug[slug] : null);
+  fillEditorFeedback(slug ? jobsBySlug[slug] : null);
   if (isNew) {
     document.getElementById("editor-slug").focus();
     return;
@@ -3503,8 +3583,12 @@ document.getElementById("feedback-send").addEventListener("click", async () => {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || String(r.status));
     hideFeedbackForm();
-    invalidateBoard(); // feedback rides the board payload — the card's panel must pick this up too
-    refresh();
+    invalidateBoard(); // feedback rides the board payload — the card's count chip must pick this up
+    await refresh();
+    // …and so must the panel itself, one layer down: this overlay is usually
+    // opened from a chip inside the steer modal or the job editor, and
+    // refresh() never touches modal DOM
+    refreshModalFeedback(parts.slug);
     const label = document.getElementById("panel-feedback");
     label.textContent = "saved ✓";
     feedbackSavedTimer = setTimeout(() => { label.textContent = "feedback"; }, 2000);
@@ -3552,7 +3636,9 @@ function applyView() {
   document.getElementById("board").hidden = view !== "board";
   document.getElementById("dag").hidden = view !== "dag";
   document.getElementById("log").hidden = view !== "log";
+  document.getElementById("dream").hidden = view !== "dream";
   if (view === "log") refreshLog();
+  if (view === "dream") refreshDream();
 }
 
 const NODE_W = 190;
@@ -4034,6 +4120,326 @@ document.getElementById("log-scroll").addEventListener("scroll", (ev) => {
   if (ev.target.scrollTop < 40) loadOlderLog();
 });
 
+// ---- DREAM view: the nightly corroboration loop's two surfaces ----
+//
+// Left pane: one collapsed header per night's report, newest first, expanding
+// to the rendered `00-dream-report.md`. Right pane: the open watchlist, where
+// carl rules on each parked observation. Read-only on the left, the loop's
+// only inbound channel on the right — the next run reads these verdicts and
+// comments FIRST, ahead of any evidence, so a row marked `fine` is never
+// proposed again and a `fix` comment becomes the specification the run
+// follows. That ordering is why the comment box is the primary control here
+// rather than an afterthought behind an edit toggle.
+//
+// Both panes re-fetch on the 3s board tick while the view is up, and both
+// rebuild wholesale — hence the snapshot compare before each rebuild (the
+// cheap defense: an unchanged payload never touches the DOM at all) plus
+// snapshotDocInputs/restoreDocInputs around the watchlist's (the real one:
+// a payload that DID change must not eat a half-typed comment).
+
+let dreamReports = [];
+let dreamWatch = [];
+let dreamReportsSnapshot = "";
+let dreamWatchSnapshot = "";
+let dreamReportsNote = ""; // an endpoint error, shown in place of the empty state
+let dreamWatchNote = "";
+// which report dates are expanded — module-level so a rebuild can't collapse
+// what carl opened. Seeded once with the newest night, since that is the one
+// he came to read.
+const dreamExpanded = new Set();
+let dreamSeeded = false;
+let dreamLoading = false;
+
+async function dreamFetch(url) {
+  const r = await fetch(url);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || String(r.status));
+  return d;
+}
+
+// dreamDay shortens a watchlist timestamp to a local "MM-DD" for the sighting
+// line. It has to take two shapes, because the row carries both: first_seen
+// and last_seen are unix MILLIS (numbers, the same wire convention job mtimes
+// use), while commented_at is an RFC3339 string stamped server-side. A number
+// goes through Date so the day is the LOCAL one — a sighting logged at 23:30
+// belongs to the evening carl remembers, not to the UTC tomorrow — and a
+// string is read off its ISO prefix rather than parsed, since that prefix is
+// already local-clock text. Anything else (0, "", an unexpected shape) reads
+// as blank instead of "Invalid Date" or "1970".
+function dreamDay(v) {
+  if (typeof v === "number") {
+    if (!v) return "";
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return "";
+    const p = (n) => String(n).padStart(2, "0");
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || ""));
+  return m ? `${m[2]}-${m[3]}` : "";
+}
+
+// dreamSectionCount counts the bullets under the FIRST heading whose text
+// matches `re`, stopping at the next heading of any level. The report's
+// section names are fixed by .claude/skills/dream/SKILL.md ("Shipped",
+// "Judgment calls", "Watching", …) but the heading LEVEL it writes them at
+// isn't, so the match is level-agnostic. A section that spells out "None"
+// carries no bullets and counts 0 — which is exactly the header a quiet
+// night should get.
+function dreamSectionCount(body, re) {
+  let inside = false;
+  let n = 0;
+  for (const line of String(body || "").split("\n")) {
+    const h = /^#{1,6}\s+(.*)$/.exec(line);
+    if (h) {
+      if (inside) break;
+      inside = re.test(h[1].trim());
+      continue;
+    }
+    if (inside && /^\s*[-*]\s+\S/.test(line)) n++;
+  }
+  return n;
+}
+
+// dreamPRCount counts the DISTINCT PRs a night shipped, straight out of the
+// report body — the loop's PRs belong to no job's `prs:` list (they're
+// kraken's own hardening, opened from the dream cell), so the report text is
+// the only place they're recorded. Lazy \S*? so trailing punctuation — the
+// ")" of a markdown link, a sentence's full stop — stays out of the match.
+function dreamPRCount(body) {
+  return new Set(String(body || "").match(/https?:\/\/\S*?\/pull\/\d+/g) || []).size;
+}
+
+function dreamTagHTML(cls, n, one, many) {
+  if (!n) return "";
+  return `<span class="rep-tag ${cls}">${n} ${n === 1 ? one : many}</span>`;
+}
+
+function dreamReportHTML(r) {
+  const open = dreamExpanded.has(r.date);
+  const prs = dreamPRCount(r.body);
+  const watching = dreamSectionCount(r.body, /^watching\b/i);
+  const judged = dreamSectionCount(r.body, /^judgment calls?\b/i);
+  const quiet = !prs && !watching && !judged;
+  return `<div class="rep${open ? " open" : ""}">
+    <button class="rep-h" data-date="${esc(r.date)}" aria-expanded="${open}">
+      <span class="tri">${open ? "▾" : "▸"}</span>
+      <span class="d">${esc(r.date)}</span>
+      ${dreamTagHTML("pr", prs, "PR", "PRs")}
+      ${dreamTagHTML("watch", watching, "watching", "watching")}
+      ${dreamTagHTML("judge", judged, "judgment call", "judgment calls")}
+      <span class="spacer"></span>
+      <span class="sum">${esc(quiet ? "nothing shipped" : r.slug || "")}</span>
+    </button>
+    ${open ? `<div class="rep-b md">${renderMD(r.body || "")}</div>` : ""}
+  </div>`;
+}
+
+function renderDreamReports() {
+  const el = document.getElementById("dream-reports");
+  const ct = document.getElementById("dream-reports-ct");
+  ct.textContent = dreamReports.length
+    ? `· ${dreamReports.length} night${dreamReports.length === 1 ? "" : "s"}`
+    : "";
+  el.innerHTML =
+    dreamReports.map(dreamReportHTML).join("") ||
+    `<div class="dream-empty">${esc(dreamReportsNote || "no reports yet — the nightly pass writes one per night")}</div>`;
+}
+
+// wlSeenText: sightings plus the window they span. A single sighting has no
+// window worth printing, and first == last collapses to one date.
+function wlSeenText(w) {
+  const n = w.sightings || 1;
+  const parts = [`${n} sighting${n === 1 ? "" : "s"}`];
+  const first = dreamDay(w.first_seen);
+  const last = dreamDay(w.last_seen);
+  if (first) parts.push(`first ${first}`);
+  if (last && last !== first) parts.push(`last ${last}`);
+  return parts.join(" · ");
+}
+
+function wlPRHTML(url) {
+  // agent-written field — only linkify http(s), same rule prChipHTML applies
+  if (!/^https?:\/\//i.test(String(url || ""))) return "";
+  const m = /\/pull\/(\d+)/.exec(url);
+  return `<a class="pr-chip pr-open" href="${esc(url)}" target="_blank" rel="noreferrer">${esc(m ? "#" + m[1] : "PR")}</a>`;
+}
+
+// wlVerdict normalizes the server's field to the three states this UI knows
+// — anything unexpected reads as "not ruled on yet" rather than rendering a
+// row whose buttons all look off while the server thinks otherwise.
+const wlVerdict = (w) => (w.verdict === "fine" || w.verdict === "fix" ? w.verdict : "");
+
+// watchRowHTML renders one parked observation and its verdict controls.
+//
+// Three states, per the spec's own framing:
+//   untouched — the loop is still counting sightings; comment box empty
+//   fix       — carl wants it done; the comment IS the spec, so the box stays
+//               open and editable and shows what he already wrote
+//   fine      — "stop even watching this". The row dims, sinks to the bottom
+//               of the list (see sortWatch) and drops its comment box for a
+//               read-back of what he said, because there is nothing left to
+//               specify. Clicking either button un-settles it — the verdict is
+//               carl's field, and he is allowed to change his mind.
+function watchRowHTML(w) {
+  const verdict = wlVerdict(w);
+  const settled = verdict === "fine";
+  const comment = w.comment || "";
+  const btn = (kind, label, title) =>
+    `<button class="wl-btn ${kind}${verdict === kind ? " on" : ""}" data-id="${esc(w.id)}" data-verdict="${kind}" title="${esc(title)}">${label}</button>`;
+  return `<div class="wl${settled ? " done" : ""}" data-wl-id="${esc(w.id)}" data-comment="${esc(comment)}">
+    <div class="wl-h"><span class="obs">${inlineMD(w.observation || "")}</span></div>
+    <div class="wl-meta">
+      ${w.class ? `<span class="cls">${esc(w.class)}</span>` : ""}
+      <span class="seen">${esc(wlSeenText(w))}</span>
+      ${wlPRHTML(w.pr_url)}
+    </div>
+    ${w.suggested_fix ? `<div class="wl-fix">→ ${inlineMD(w.suggested_fix)}</div>` : ""}
+    <div class="wl-ctrl">
+      ${btn("fine", "fine as-is", "stop watching this — the loop never proposes it again")}
+      ${btn("fix", "needs fixing", "the next run fixes this — whatever you write below is the spec it follows")}
+      ${w.commented_at ? `<span class="wl-stamp">${esc(dreamDay(w.commented_at))}</span>` : ""}
+    </div>
+    ${settled
+      ? (comment ? `<div class="wl-said"><span class="who">you said</span>${inlineMD(comment)}</div>` : "")
+      : `<textarea class="wl-comment" data-slug="watchlist" data-id="${esc(w.id)}" rows="2"
+          placeholder="how should this be fixed? — whatever you write here becomes the spec">${esc(comment)}</textarea>`}
+  </div>`;
+}
+
+// sortWatch: everything still open first (untouched and fix alike — both are
+// work the loop hasn't finished with), then the rows ruled `fine`, dimmed at
+// the bottom. Within each group this reproduces the server's own order
+// (ListWatchItems is last_seen DESC, id DESC) rather than inventing a second
+// one — numerically, since last_seen is unix millis, and with id as the
+// tiebreak so the order is stable across polls.
+function sortWatch(list) {
+  const rank = (w) => (wlVerdict(w) === "fine" ? 1 : 0);
+  return [...list].sort(
+    (a, b) => rank(a) - rank(b) || (b.last_seen || 0) - (a.last_seen || 0) || (b.id || 0) - (a.id || 0),
+  );
+}
+
+function renderDreamWatchlist() {
+  const el = document.getElementById("dream-watchlist");
+  const ct = document.getElementById("dream-watch-ct");
+  const rows = sortWatch(dreamWatch);
+  const open = rows.filter((w) => wlVerdict(w) !== "fine").length;
+  ct.textContent = rows.length ? `· ${open} open` : "";
+  // the comment box is a real composer on a surface that rebuilds on a timer
+  // — snapshot/restore is what keeps a long comment from losing characters
+  // every 3s (see DQ_INPUT_SELECTOR, which reaches .wl-comment)
+  const dqState = snapshotDocInputs();
+  el.innerHTML =
+    rows.map(watchRowHTML).join("") ||
+    `<div class="dream-empty">${esc(dreamWatchNote || "nothing on the watchlist — the loop parks observations here")}</div>`;
+  restoreDocInputs(dqState);
+}
+
+// refreshDream re-fetches both panes. They're fetched and rendered
+// independently: the watchlist endpoint failing must not blank a report carl
+// is mid-read, and vice versa. Overlapping calls are dropped rather than
+// queued — the next 3s tick is never far away.
+async function refreshDream() {
+  if (dreamLoading) return;
+  dreamLoading = true;
+  await Promise.all([
+    (async () => {
+      try {
+        const d = await dreamFetch("/api/dream");
+        dreamReports = d.reports || [];
+        dreamReportsNote = "";
+        // seed the newest night open, once — that's the one you came to read
+        if (!dreamSeeded && dreamReports.length) {
+          dreamExpanded.add(dreamReports[0].date);
+          dreamSeeded = true;
+          dreamReportsSnapshot = "";
+        }
+      } catch (e) {
+        dreamReports = [];
+        dreamReportsNote = "couldn't load reports: " + e.message;
+      }
+      const snap = JSON.stringify([dreamReports, [...dreamExpanded], dreamReportsNote]);
+      if (snap !== dreamReportsSnapshot) {
+        dreamReportsSnapshot = snap;
+        renderDreamReports();
+      }
+    })(),
+    (async () => {
+      try {
+        const d = await dreamFetch("/api/watchlist?state=watching");
+        dreamWatch = d.watchlist || [];
+        dreamWatchNote = "";
+      } catch (e) {
+        dreamWatch = [];
+        dreamWatchNote = "couldn't load the watchlist: " + e.message;
+      }
+      const snap = JSON.stringify([dreamWatch, dreamWatchNote]);
+      if (snap !== dreamWatchSnapshot) {
+        dreamWatchSnapshot = snap;
+        renderDreamWatchlist();
+      }
+    })(),
+  ]);
+  dreamLoading = false;
+}
+
+// postWatchVerdict sends one row's verdict together with whatever is in its
+// comment box right now — one click, no separate save. The comment travels
+// even on `fine` (carl explaining why he's suppressing something is worth
+// keeping), and on a settled row, whose box is gone, it comes off the row's
+// data-comment so re-clicking a button can't silently erase what he wrote.
+async function postWatchVerdict(row, id, verdict) {
+  const ta = row.querySelector(".wl-comment");
+  const comment = ta ? ta.value.trim() : row.dataset.comment || "";
+  const controls = [...row.querySelectorAll("button, textarea")];
+  controls.forEach((el) => (el.disabled = true));
+  try {
+    const r = await fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: Number(id), verdict, comment }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || String(r.status));
+    dreamWatchSnapshot = ""; // the row's own markup changed — force the rebuild
+    await refreshDream();
+  } catch (e) {
+    // same surfacing as post()'s failure path, plus a toast: this view has no
+    // card behind it to re-render, so the status bar alone is easy to miss
+    document.getElementById("tick-stat").textContent = "✕ " + e.message;
+    showToast("verdict failed: " + e.message);
+    controls.forEach((el) => (el.disabled = false));
+  }
+}
+
+// one delegated listener on the static #dream container — both panes rebuild
+// wholesale on every changed poll, so a per-element listener would leak on
+// every tick
+document.getElementById("dream").addEventListener("click", (ev) => {
+  const repHead = ev.target.closest(".rep-h");
+  if (repHead) {
+    const date = repHead.dataset.date;
+    if (dreamExpanded.has(date)) dreamExpanded.delete(date);
+    else dreamExpanded.add(date);
+    dreamSeeded = true; // an explicit collapse must not be re-opened by the seed
+    renderDreamReports();
+    // keep the snapshot in step with what's now on screen, so the next tick
+    // doesn't rebuild (and re-scroll) the pane for a change already applied
+    dreamReportsSnapshot = JSON.stringify([dreamReports, [...dreamExpanded], dreamReportsNote]);
+    return;
+  }
+  const wlBtn = ev.target.closest(".wl-btn");
+  if (wlBtn) {
+    const row = wlBtn.closest(".wl");
+    if (!row) return;
+    // clicking the verdict already in force clears it — back to untouched,
+    // which is the only way out of a mis-click on `fine`
+    const next = wlBtn.classList.contains("on") ? "" : wlBtn.dataset.verdict;
+    postWatchVerdict(row, wlBtn.dataset.id, next);
+    return;
+  }
+});
+
 // ---- poll (paused while dragging so the board doesn't rebuild mid-drag,
 // and while the tab is hidden — nothing is watching it either way) ----
 
@@ -4041,6 +4447,7 @@ async function refresh() {
   if (dragging) return;
   if (document.hidden) return;
   if (view === "log") refreshLog(); // stream new entries while the log is up
+  if (view === "dream") refreshDream(); // …and pick up a running dream job's report/rows
   try {
     const r = await fetch("/api/board");
     const board = await r.json();

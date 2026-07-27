@@ -23,14 +23,18 @@
   --glow-warn: 0 0 10px rgba(245, 184, 77, 0.3);
   --zebra: rgba(255, 255, 255, 0.02);
   --text-glow: 0 0 1px var(--accent), 0 0 9px var(--accent);
-  /* skill palette: one color per pipeline command (/info /aim /do /pr),
-     used by the command-highlight backdrop and chips (see app.js's
+  /* skill palette: one color per pipeline command (/info /aim /do /pr
+     /dream), used by the command-highlight backdrop and chips (see app.js's
      cmdHighlightHTML/attachCmdChips) — each gets a glow pair mirroring
-     --glow/--text-glow above. */
+     --glow/--text-glow above. The five chips sit side by side, so dream takes
+     violet: the four before it are blue/red/yellow/green, and violet is the
+     one remaining hue with real separation from all of them. It doubles as
+     the DREAM view's own accent. */
   --skill-info: #5EA8FF; --skill-info-soft: #102A45;
   --skill-aim: #FF6B6B; --skill-aim-soft: #3A1414;
   --skill-do: #F5D34D; --skill-do-soft: #332B0E;
   --skill-pr: #4ADE80; --skill-pr-soft: #0F2E1D;
+  --skill-dream: #C084FC; --skill-dream-soft: #2A1440;
   --glow-skill-info: 0 0 12px rgba(94, 168, 255, 0.30), 0 0 2px rgba(94, 168, 255, 0.7);
   --text-glow-skill-info: 0 0 1px var(--skill-info), 0 0 9px var(--skill-info);
   --glow-skill-aim: 0 0 12px rgba(255, 107, 107, 0.30), 0 0 2px rgba(255, 107, 107, 0.7);
@@ -39,6 +43,8 @@
   --text-glow-skill-do: 0 0 1px var(--skill-do), 0 0 9px var(--skill-do);
   --glow-skill-pr: 0 0 12px rgba(74, 222, 128, 0.30), 0 0 2px rgba(74, 222, 128, 0.7);
   --text-glow-skill-pr: 0 0 1px var(--skill-pr), 0 0 9px var(--skill-pr);
+  --glow-skill-dream: 0 0 12px rgba(192, 132, 252, 0.30), 0 0 2px rgba(192, 132, 252, 0.7);
+  --text-glow-skill-dream: 0 0 1px var(--skill-dream), 0 0 9px var(--skill-dream);
   /* job palette: the eight names Claude Code's own /color command accepts,
      in /color's order, at Claude Code's exact RGB — so a board swatch is the
      same pixel colour as the prompt bar of the pane that job opens. A solid
@@ -82,11 +88,14 @@
      4.60/4.60, do 4.64/4.96, pr 4.61/4.82); aim's initial pick already
      cleared both (4.61/4.52) so it's untouched. pr's contrast-driven hex no
      longer matches --solved's light value, so it stays its own literal
-     rather than aliasing --solved. */
+     rather than aliasing --solved. dream needed no darkening past its naive
+     violet — it measures 5.72 against --raised and 5.92 against its own
+     -soft, the widest margin of the five. */
   --skill-info: #1866C4; --skill-info-soft: #DCEAFB;
   --skill-aim: #C42B2B; --skill-aim-soft: #FBE0E0;
   --skill-do: #7B6505; --skill-do-soft: #F7F0D4;
   --skill-pr: #14773B; --skill-pr-soft: #DCF3E4;
+  --skill-dream: #7E22CE; --skill-dream-soft: #F3E8FF;
   --glow-skill-info: 0 1px 6px rgba(24, 102, 196, 0.25);
   --text-glow-skill-info: none;
   --glow-skill-aim: 0 1px 6px rgba(196, 43, 43, 0.25);
@@ -95,6 +104,8 @@
   --text-glow-skill-do: none;
   --glow-skill-pr: 0 1px 6px rgba(20, 119, 59, 0.25);
   --text-glow-skill-pr: none;
+  --glow-skill-dream: 0 1px 6px rgba(126, 34, 206, 0.25);
+  --text-glow-skill-dream: none;
   /* job palette, light siblings — darkened per the same rule as the skill
      block above: each clears WCAG AA 4.5:1 against both --raised (#E3E9F1)
      and white, so the editor's 20px swatches and the card's 8px one stay
@@ -170,6 +181,14 @@ body {
 }
 .viewtab.active { color: var(--accent); border-color: var(--accent-soft); text-shadow: var(--glow); }
 .viewtab:hover:not(.active) { color: var(--text); }
+/* DREAM wears its skill color when active — the /dream chip, the report
+   accents and this tab are the one surface family, and the violet is the
+   cheapest way to say "this view belongs to the nightly loop, not the
+   board". Every other tab keeps the shared --accent. */
+.viewtab[data-view="dream"].active {
+  color: var(--skill-dream); border-color: var(--skill-dream-soft);
+  text-shadow: var(--text-glow-skill-dream);
+}
 .theme-btn {
   background: none; border: none; cursor: pointer;
   font: 10px var(--mono); letter-spacing: 2px;
@@ -619,14 +638,19 @@ body {
 
 /* job feedback panel — same family as .doc-questions/.dq-row, its own
    neutral panel so it reads as a distinct kind of thing from both artifact
-   chips and doc questions. Works for done/archived jobs too (Q2). */
+   chips and doc questions. Works for done/archived jobs too (Q2).
+   No `.card .job-feedback` cap any more, for the same reason .doc-questions
+   lost its: the panel is modal-only and the card carries .fb-chip's counts
+   (feedbackChipHTML). Capping it was bounding a problem — a card taller than
+   its column — that moving the panel removes outright. The steer copy stays
+   uncapped (.panel-body already scrolls the whole composer); the editor copy
+   sets its own cap below, beside the questions panel's. */
 .job-feedback {
   margin-top: 7px; padding: 6px 8px;
   background: var(--raised);
   border-left: 2px solid var(--hairline-2);
   font-size: 11px; line-height: 1.45;
 }
-.card .job-feedback { max-height: 340px; overflow-y: auto; }
 .fb-row { margin-top: 7px; }
 .fb-row:first-child { margin-top: 0; }
 .fb-head { display: flex; align-items: baseline; gap: 6px; }
@@ -695,6 +719,24 @@ body {
 .card:hover .dq-chip:not(.p0) { color: var(--text); border-color: var(--text-2); }
 .dq-chip.p0 { color: var(--counter); border-color: var(--counter-soft); }
 .card:hover .dq-chip.p0 { border-color: var(--counter); box-shadow: var(--glow-hot); }
+
+/* the board's whole feedback surface, exactly parallel to .dq-chip above:
+   a count in the PR row, the notes themselves one click into the job
+   (feedbackChipHTML). Also a plain span, not a .chip, for the same
+   fall-through reason. Amber rather than counter-pink when notes are still
+   unaddressed: an open note is work owed, not a job blocked on a human —
+   which is the distinction --revealed already carries elsewhere. The :not()
+   on the hover rule is load-bearing for the same specificity reason
+   .dq-chip's is. */
+.fb-chip {
+  font: 10px var(--mono);
+  color: var(--text-2); border: 1px solid var(--hairline-2);
+  padding: 2px 7px; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
+}
+.card:hover .fb-chip:not(.open) { color: var(--text); border-color: var(--text-2); }
+.fb-chip.open { color: var(--revealed); border-color: var(--revealed-soft); }
+.card:hover .fb-chip.open { border-color: var(--revealed); box-shadow: var(--glow-warn); }
 
 .prereq span { font: 10px var(--mono); }
 .prereq .ok { color: var(--solved); }
@@ -914,16 +956,18 @@ body {
    inheriting plain body text. */
 .cmd-hl-backdrop .cmd-hl { color: var(--accent); text-shadow: var(--text-glow); }
 /* per-skill color: each .cmd-hl-<name> aliases the shared custom props
-   consumed by the one rule below it, so a fifth skill is one alias line
+   consumed by the one rule below it, so another skill is one alias line
    plus a CMD_CHIPS entry in app.js, not a new color rule. */
 .cmd-hl-backdrop .cmd-hl-info { --skill: var(--skill-info); --skill-glow: var(--text-glow-skill-info); }
 .cmd-hl-backdrop .cmd-hl-aim  { --skill: var(--skill-aim);  --skill-glow: var(--text-glow-skill-aim); }
 .cmd-hl-backdrop .cmd-hl-do   { --skill: var(--skill-do);   --skill-glow: var(--text-glow-skill-do); }
 .cmd-hl-backdrop .cmd-hl-pr   { --skill: var(--skill-pr);   --skill-glow: var(--text-glow-skill-pr); }
+.cmd-hl-backdrop .cmd-hl-dream { --skill: var(--skill-dream); --skill-glow: var(--text-glow-skill-dream); }
 .cmd-hl-backdrop .cmd-hl-info,
 .cmd-hl-backdrop .cmd-hl-aim,
 .cmd-hl-backdrop .cmd-hl-do,
-.cmd-hl-backdrop .cmd-hl-pr {
+.cmd-hl-backdrop .cmd-hl-pr,
+.cmd-hl-backdrop .cmd-hl-dream {
   color: var(--skill); text-shadow: var(--skill-glow);
 }
 #steer-text-wrap { background: var(--raised); }
@@ -1002,8 +1046,9 @@ body {
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
 .answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
 
-/* command chips: one-tap /info /aim /do /pr insertion above a composer
-   textarea, colored per skill (info blue, aim red, do yellow, pr green) —
+/* command chips: one-tap /info /aim /do /pr /dream insertion above a
+   composer textarea, colored per skill (info blue, aim red, do yellow,
+   pr green, dream violet) —
    inactive rests in its -soft border, hover/active (command present in the
    textarea, see attachCmdChips) fills with the -soft tint and glows. The
    base rule's own color/border-color is the generic accent fallback for a
@@ -1023,19 +1068,21 @@ body {
   transition: background 80ms var(--ease), box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
 /* each .cmd-chip-<name> aliases the shared custom props consumed by the one
-   rule set below it — a fifth skill is one alias line plus a CMD_CHIPS
+   rule set below it — another skill is one alias line plus a CMD_CHIPS
    entry in app.js, not a new color/hover/active rule. */
 .cmd-chip-info { --skill: var(--skill-info); --skill-soft: var(--skill-info-soft); --skill-glow: var(--glow-skill-info); }
 .cmd-chip-aim  { --skill: var(--skill-aim);  --skill-soft: var(--skill-aim-soft);  --skill-glow: var(--glow-skill-aim); }
 .cmd-chip-do   { --skill: var(--skill-do);   --skill-soft: var(--skill-do-soft);   --skill-glow: var(--glow-skill-do); }
 .cmd-chip-pr   { --skill: var(--skill-pr);   --skill-soft: var(--skill-pr-soft);   --skill-glow: var(--glow-skill-pr); }
-.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr {
+.cmd-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); --skill-glow: var(--glow-skill-dream); }
+.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr, .cmd-chip-dream {
   color: var(--skill); border-color: var(--skill-soft);
 }
 .cmd-chip-info:hover, .cmd-chip-info.active,
 .cmd-chip-aim:hover, .cmd-chip-aim.active,
 .cmd-chip-do:hover, .cmd-chip-do.active,
-.cmd-chip-pr:hover, .cmd-chip-pr.active {
+.cmd-chip-pr:hover, .cmd-chip-pr.active,
+.cmd-chip-dream:hover, .cmd-chip-dream.active {
   background: var(--skill-soft); border-color: var(--skill); box-shadow: var(--skill-glow);
 }
 
@@ -1187,6 +1234,12 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 .editor-docq { flex: none; display: flex; flex-direction: column; gap: 4px; }
 .editor-docq-head { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
 .editor-docq .doc-questions { margin-top: 0; max-height: 40vh; overflow-y: auto; }
+/* the editor's copy of the feedback panel, beside the questions one — same
+   labeled + capped treatment, same reasoning (this is where a done job's
+   notes are read, and they must not push the spec textarea off-screen).
+   Reuses .editor-docq-head for the label so the two panels can't drift. */
+.editor-feedback { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.editor-feedback .job-feedback { margin-top: 0; max-height: 40vh; overflow-y: auto; }
 .mini-add {
   background: none; border: 1px solid var(--hairline-2); cursor: pointer;
   font: 10px var(--mono); color: var(--text-2); padding: 1px 7px;
@@ -1309,6 +1362,115 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   color: var(--text-2); font-size: 10px; text-align: center; margin: 6px 0;
   border-top: 1px dashed var(--raised); padding-top: 4px;
 }
+
+/* ---- DREAM view (see the DREAM section in app.js) ----
+   Two independently-scrolling panes at the log view's height: the night-by-
+   night reports on the left, the open watchlist on the right. --skill-dream
+   is the accent throughout, tying the view to its /dream chip and tab. */
+
+.dreamview {
+  height: calc(100vh - 64px);
+  display: grid; grid-template-columns: 1.15fr 1fr;
+  gap: 14px; padding: 12px 16px 16px;
+}
+.dream-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.dream-panehdr {
+  font: 10px var(--mono); letter-spacing: 2px; text-transform: uppercase;
+  color: var(--text-2); padding-bottom: 8px;
+}
+.dream-panehdr .ct { color: var(--skill-dream); letter-spacing: 1px; }
+.dream-scroll {
+  flex: 1; min-height: 0; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--hairline);
+  padding: 10px;
+}
+.dream-empty { color: var(--text-2); opacity: 0.6; font-size: 11px; padding: 26px 10px; text-align: center; }
+
+/* a night's report: a full-width header button that toggles the body */
+.rep { border: 1px solid var(--hairline); background: var(--ground); }
+.rep + .rep { margin-top: 8px; }
+.rep-h {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  background: var(--raised); border: none; cursor: pointer;
+  padding: 8px 10px; text-align: left; color: var(--text);
+}
+.rep-h:hover { background: var(--accent-soft); }
+.rep-h .tri { color: var(--skill-dream); font-size: 10px; flex: none; }
+.rep-h .d { font: 700 11.5px var(--mono); flex: none; }
+.rep-h .sum { font: 10px var(--mono); color: var(--text-2); flex: none; }
+.rep.open { border-color: var(--skill-dream-soft); }
+/* section counts pulled out of the report body (dreamSectionCount) — the
+   header has to say whether a night was worth opening */
+.rep-tag {
+  font: 9.5px var(--mono); letter-spacing: 0.5px; flex: none;
+  padding: 1px 5px; border: 1px solid var(--hairline-2); color: var(--text-2);
+}
+.rep-tag.pr { color: var(--solved); border-color: var(--solved-soft); }
+.rep-tag.watch { color: var(--revealed); border-color: var(--revealed-soft); }
+.rep-tag.judge { color: var(--counter); border-color: var(--counter-soft); }
+.rep-b { padding: 4px 12px 10px; border-top: 1px solid var(--hairline); }
+/* the report is markdown rendered by renderMD, so it arrives wearing .md —
+   only the h1 accent is retuned, to the view's own violet */
+.rep-b.md h1 { color: var(--skill-dream); }
+.rep-b.md blockquote { border-left-color: var(--skill-dream); color: var(--text); font-style: italic; }
+
+/* ---- watchlist rows: the loop's one inbound channel ---- */
+.wl { border: 1px solid var(--hairline); background: var(--ground); }
+.wl + .wl { margin-top: 9px; }
+.wl-h { padding: 9px 11px 0; }
+.wl-h .obs { font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.wl-h .obs code { font: 11px var(--mono); background: var(--raised); color: var(--revealed); padding: 1px 4px; }
+.wl-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 11px 0; }
+.cls {
+  font: 9.5px var(--mono); letter-spacing: 0.5px;
+  background: var(--raised); color: var(--text-2); padding: 2px 6px;
+}
+.seen { font: 10px var(--mono); color: var(--text-2); }
+.wl-fix {
+  font-size: 11px; color: var(--text-2); font-style: italic;
+  padding: 5px 11px 0; overflow-wrap: anywhere;
+}
+.wl-ctrl { display: flex; align-items: center; gap: 6px; padding: 8px 11px; }
+.wl-btn {
+  font: 600 10.5px var(--sans); letter-spacing: 0.3px;
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--hairline-2);
+  padding: 5px 11px; cursor: pointer;
+  transition: background 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
+}
+.wl-btn:hover:not(:disabled) { color: var(--text); border-color: var(--text-2); }
+.wl-btn:disabled { opacity: 0.4; cursor: default; }
+/* the two verdicts take the colors they already mean elsewhere: green for
+   settled, amber for "a human wants something done" */
+.wl-btn.fine.on { color: var(--solved); border-color: var(--solved); background: var(--solved-soft); }
+.wl-btn.fix.on { color: var(--revealed); border-color: var(--revealed); background: var(--revealed-soft); }
+.wl-stamp { font: 9.5px var(--mono); color: var(--text-2); margin-left: auto; }
+/* the comment box is the PRIMARY control on a fix, not a disclosure behind an
+   edit toggle: what carl types here becomes the spec the next run follows, so
+   it is always open, always visible, and sized to hold a sentence. */
+.wl-comment {
+  display: block; width: calc(100% - 22px); margin: 0 11px 11px;
+  font: 11.5px/1.5 var(--sans); color: var(--text);
+  background: var(--raised); border: 1px solid var(--hairline-2);
+  padding: 7px 9px; resize: vertical; min-height: 40px;
+}
+.wl-comment:focus { outline: none; border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.wl-comment::placeholder { color: var(--text-2); opacity: 1; }
+/* a row ruled `fine` is suppressed for good — dimmed, sunk to the bottom of
+   the list (sortWatch), its comment read back rather than editable */
+.wl.done { opacity: 0.55; }
+.wl.done:hover { opacity: 0.85; }
+.wl-said {
+  margin: 0 11px 11px; padding: 7px 9px;
+  border-left: 2px solid var(--solved); background: var(--solved-soft);
+  font-size: 11.5px; color: var(--text); overflow-wrap: anywhere;
+}
+.wl-said .who {
+  display: block; margin-bottom: 3px;
+  font: 700 9.5px var(--mono); letter-spacing: 1px; color: var(--solved);
+}
+
+@media (max-width: 900px) { .dreamview { grid-template-columns: 1fr; height: auto; } }
 
 /* ---- side-thread overlay (#thread-overlay — see openThread in app.js) ----
    Two modes in one panel: the branch dialog (#thread-new) and the thread
