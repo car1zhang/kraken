@@ -11,7 +11,7 @@ import (
 // from a genuinely cheap job.
 func TestGetJobTokensNotFoundIsMeaningful(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.GetJobTokens("never-ran"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetJobTokens(404); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetJobTokens on an unmeasured job = %v, want ErrNotFound", err)
 	}
 }
@@ -23,13 +23,13 @@ func TestGetJobTokensNotFoundIsMeaningful(t *testing.T) {
 // dozens).
 func TestBumpJobTokensInsertsThenAccumulates(t *testing.T) {
 	s := openTest(t)
-	if err := s.BumpJobTokens("demo", JobTokens{In: 10, Out: 100, CacheWrite: 1000, CacheRead: 10000, Sessions: 2}); err != nil {
+	if err := s.BumpJobTokens(7, JobTokens{In: 10, Out: 100, CacheWrite: 1000, CacheRead: 10000, Sessions: 2}); err != nil {
 		t.Fatalf("first bump: %v", err)
 	}
-	if err := s.BumpJobTokens("demo", JobTokens{In: 1, Out: 2, CacheWrite: 3, CacheRead: 4, Sessions: 3}); err != nil {
+	if err := s.BumpJobTokens(7, JobTokens{In: 1, Out: 2, CacheWrite: 3, CacheRead: 4, Sessions: 3}); err != nil {
 		t.Fatalf("second bump: %v", err)
 	}
-	got, err := s.GetJobTokens("demo")
+	got, err := s.GetJobTokens(7)
 	if err != nil {
 		t.Fatalf("GetJobTokens: %v", err)
 	}
@@ -39,8 +39,8 @@ func TestBumpJobTokensInsertsThenAccumulates(t *testing.T) {
 	if got.Sessions != 3 {
 		t.Errorf("Sessions = %d, want 3 — a file count is SET, never accumulated", got.Sessions)
 	}
-	if got.Slug != "demo" || got.UpdatedAt == 0 {
-		t.Errorf("row = %+v, want the slug back and a stamped updated_at", got)
+	if got.JobID != 7 || got.UpdatedAt == 0 {
+		t.Errorf("row = %+v, want the job id back and a stamped updated_at", got)
 	}
 }
 
@@ -51,19 +51,19 @@ func TestBumpJobTokensInsertsThenAccumulates(t *testing.T) {
 // while the number it is a subset of grows.
 func TestBumpJobTokensAccumulatesTheZeusHalf(t *testing.T) {
 	s := openTest(t)
-	if err := s.BumpJobTokens("demo", JobTokens{
+	if err := s.BumpJobTokens(7, JobTokens{
 		In: 10, Out: 100, CacheWrite: 1000, CacheRead: 10000, Sessions: 2,
 		ZeusIn: 6, ZeusOut: 60, ZeusCacheWrite: 600, ZeusCacheRead: 6000,
 	}); err != nil {
 		t.Fatalf("first bump: %v", err)
 	}
-	if err := s.BumpJobTokens("demo", JobTokens{
+	if err := s.BumpJobTokens(7, JobTokens{
 		In: 1, Out: 2, CacheWrite: 3, CacheRead: 4, Sessions: 3,
 		ZeusIn: 1, ZeusOut: 1, ZeusCacheWrite: 1, ZeusCacheRead: 1,
 	}); err != nil {
 		t.Fatalf("second bump: %v", err)
 	}
-	got, err := s.GetJobTokens("demo")
+	got, err := s.GetJobTokens(7)
 	if err != nil {
 		t.Fatalf("GetJobTokens: %v", err)
 	}
@@ -86,13 +86,13 @@ func TestBumpJobTokensAccumulatesTheZeusHalf(t *testing.T) {
 // deliberately declined rather than forgotten.
 func TestBumpJobTokensZeusAloneDoesNotStampUpdatedAt(t *testing.T) {
 	s := openTest(t)
-	if err := s.BumpJobTokens("demo", JobTokens{Out: 5, Sessions: 1, UpdatedAt: 1700000000000}); err != nil {
+	if err := s.BumpJobTokens(7, JobTokens{Out: 5, Sessions: 1, UpdatedAt: 1700000000000}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := s.BumpJobTokens("demo", JobTokens{ZeusOut: 9, Sessions: 2, UpdatedAt: 1800000000000}); err != nil {
+	if err := s.BumpJobTokens(7, JobTokens{ZeusOut: 9, Sessions: 2, UpdatedAt: 1800000000000}); err != nil {
 		t.Fatalf("zeus-only bump: %v", err)
 	}
-	got, err := s.GetJobTokens("demo")
+	got, err := s.GetJobTokens(7)
 	if err != nil {
 		t.Fatalf("GetJobTokens: %v", err)
 	}
@@ -110,10 +110,10 @@ func TestBumpJobTokensZeusAloneDoesNotStampUpdatedAt(t *testing.T) {
 // overwritten by now.
 func TestBumpJobTokensKeepsAnExplicitTimestamp(t *testing.T) {
 	s := openTest(t)
-	if err := s.BumpJobTokens("demo", JobTokens{Out: 1, Sessions: 1, UpdatedAt: 1700000000000}); err != nil {
+	if err := s.BumpJobTokens(7, JobTokens{Out: 1, Sessions: 1, UpdatedAt: 1700000000000}); err != nil {
 		t.Fatalf("BumpJobTokens: %v", err)
 	}
-	got, err := s.GetJobTokens("demo")
+	got, err := s.GetJobTokens(7)
 	if err != nil {
 		t.Fatalf("GetJobTokens: %v", err)
 	}
@@ -122,15 +122,17 @@ func TestBumpJobTokensKeepsAnExplicitTimestamp(t *testing.T) {
 	}
 }
 
-// TestBumpJobTokensRejectsAnEmptySlug: the slug is the primary key, so a
-// blank one would silently collect every unkeyed write into one row.
-func TestBumpJobTokensRejectsAnEmptySlug(t *testing.T) {
+// TestBumpJobTokensRejectsAZeroID: the id is the primary key, so a zero one
+// would silently collect every unkeyed write into one shared row. Zero is
+// reachable — ParseJob never sets Job.ID — which is exactly why this is a
+// refusal rather than an assumption.
+func TestBumpJobTokensRejectsAZeroID(t *testing.T) {
 	s := openTest(t)
-	if err := s.BumpJobTokens("", JobTokens{Out: 1}); err == nil {
-		t.Fatal("BumpJobTokens with an empty slug must be refused")
+	if err := s.BumpJobTokens(0, JobTokens{Out: 1}); err == nil {
+		t.Fatal("BumpJobTokens with a zero job id must be refused")
 	}
-	if err := s.SetJobTokenOffsets("", map[string]int64{"/a": 1}); err == nil {
-		t.Fatal("SetJobTokenOffsets with an empty slug must be refused")
+	if err := s.SetJobTokenOffsets(0, map[string]int64{"/a": 1}); err == nil {
+		t.Fatal("SetJobTokenOffsets with a zero job id must be refused")
 	}
 }
 
@@ -138,17 +140,17 @@ func TestBumpJobTokensRejectsAnEmptySlug(t *testing.T) {
 // build uses instead of one query per job.
 func TestListJobTokensReturnsEveryMeasuredJob(t *testing.T) {
 	s := openTest(t)
-	for _, slug := range []string{"beta", "alpha"} {
-		if err := s.BumpJobTokens(slug, JobTokens{Out: 5, Sessions: 1}); err != nil {
-			t.Fatalf("bump %s: %v", slug, err)
+	for _, id := range []int64{20, 10} {
+		if err := s.BumpJobTokens(id, JobTokens{Out: 5, Sessions: 1}); err != nil {
+			t.Fatalf("bump %d: %v", id, err)
 		}
 	}
 	rows, err := s.ListJobTokens()
 	if err != nil {
 		t.Fatalf("ListJobTokens: %v", err)
 	}
-	if len(rows) != 2 || rows[0].Slug != "alpha" || rows[1].Slug != "beta" {
-		t.Fatalf("rows = %+v, want both jobs slug-ordered", rows)
+	if len(rows) != 2 || rows[0].JobID != 10 || rows[1].JobID != 20 {
+		t.Fatalf("rows = %+v, want both jobs id-ordered", rows)
 	}
 }
 
@@ -159,7 +161,7 @@ func TestListJobTokensReturnsEveryMeasuredJob(t *testing.T) {
 // table without bound.
 func TestJobTokenOffsetsRoundTripAndReplace(t *testing.T) {
 	s := openTest(t)
-	empty, err := s.JobTokenOffsets("demo")
+	empty, err := s.JobTokenOffsets(7)
 	if err != nil {
 		t.Fatalf("JobTokenOffsets on an unmeasured job: %v", err)
 	}
@@ -167,10 +169,10 @@ func TestJobTokenOffsetsRoundTripAndReplace(t *testing.T) {
 		t.Fatalf("offsets = %v, want an empty non-nil map", empty)
 	}
 
-	if err := s.SetJobTokenOffsets("demo", map[string]int64{"/p/a.jsonl": 10, "/p/b.jsonl": 20}); err != nil {
+	if err := s.SetJobTokenOffsets(7, map[string]int64{"/p/a.jsonl": 10, "/p/b.jsonl": 20}); err != nil {
 		t.Fatalf("SetJobTokenOffsets: %v", err)
 	}
-	got, err := s.JobTokenOffsets("demo")
+	got, err := s.JobTokenOffsets(7)
 	if err != nil {
 		t.Fatalf("JobTokenOffsets: %v", err)
 	}
@@ -179,10 +181,10 @@ func TestJobTokenOffsetsRoundTripAndReplace(t *testing.T) {
 	}
 
 	// b.jsonl vanished, a.jsonl grew
-	if err := s.SetJobTokenOffsets("demo", map[string]int64{"/p/a.jsonl": 99}); err != nil {
+	if err := s.SetJobTokenOffsets(7, map[string]int64{"/p/a.jsonl": 99}); err != nil {
 		t.Fatalf("SetJobTokenOffsets (replace): %v", err)
 	}
-	got, err = s.JobTokenOffsets("demo")
+	got, err = s.JobTokenOffsets(7)
 	if err != nil {
 		t.Fatalf("JobTokenOffsets: %v", err)
 	}
@@ -190,10 +192,10 @@ func TestJobTokenOffsetsRoundTripAndReplace(t *testing.T) {
 		t.Fatalf("offsets = %v, want the write to have REPLACED the set", got)
 	}
 
-	if err := s.SetJobTokenOffsets("demo", nil); err != nil {
+	if err := s.SetJobTokenOffsets(7, nil); err != nil {
 		t.Fatalf("SetJobTokenOffsets (clear): %v", err)
 	}
-	got, _ = s.JobTokenOffsets("demo")
+	got, _ = s.JobTokenOffsets(7)
 	if len(got) != 0 {
 		t.Fatalf("offsets = %v, want an empty map after clearing", got)
 	}
@@ -206,20 +208,20 @@ func TestJobTokenOffsetsRoundTripAndReplace(t *testing.T) {
 // other's sum.
 func TestAllJobTokenOffsetsIsScopedPerJob(t *testing.T) {
 	s := openTest(t)
-	if err := s.SetJobTokenOffsets("one", map[string]int64{"/p/a.jsonl": 1}); err != nil {
+	if err := s.SetJobTokenOffsets(1, map[string]int64{"/p/a.jsonl": 1}); err != nil {
 		t.Fatalf("set one: %v", err)
 	}
-	if err := s.SetJobTokenOffsets("two", map[string]int64{"/p/a.jsonl": 2, "/p/b.jsonl": 3}); err != nil {
+	if err := s.SetJobTokenOffsets(2, map[string]int64{"/p/a.jsonl": 2, "/p/b.jsonl": 3}); err != nil {
 		t.Fatalf("set two: %v", err)
 	}
 	all, err := s.AllJobTokenOffsets()
 	if err != nil {
 		t.Fatalf("AllJobTokenOffsets: %v", err)
 	}
-	if len(all) != 2 || all["one"]["/p/a.jsonl"] != 1 || all["two"]["/p/a.jsonl"] != 2 || all["two"]["/p/b.jsonl"] != 3 {
+	if len(all) != 2 || all[1]["/p/a.jsonl"] != 1 || all[2]["/p/a.jsonl"] != 2 || all[2]["/p/b.jsonl"] != 3 {
 		t.Fatalf("all = %v", all)
 	}
-	if _, ok := all["nobody"]; ok {
+	if _, ok := all[99]; ok {
 		t.Fatal("an unmeasured job must simply be absent from the outer map")
 	}
 }
@@ -234,23 +236,23 @@ func TestJobTokensSurviveTheJobsCascade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.BumpJobTokens("doomed", JobTokens{Out: 42, Sessions: 1}); err != nil {
+	if err := s.BumpJobTokens(id, JobTokens{Out: 42, Sessions: 1}); err != nil {
 		t.Fatalf("BumpJobTokens: %v", err)
 	}
-	if err := s.SetJobTokenOffsets("doomed", map[string]int64{"/p/a.jsonl": 7}); err != nil {
+	if err := s.SetJobTokenOffsets(id, map[string]int64{"/p/a.jsonl": 7}); err != nil {
 		t.Fatalf("SetJobTokenOffsets: %v", err)
 	}
 	if err := s.DeleteJob(id); err != nil {
 		t.Fatalf("DeleteJob: %v", err)
 	}
-	got, err := s.GetJobTokens("doomed")
+	got, err := s.GetJobTokens(id)
 	if err != nil {
 		t.Fatalf("the token row must survive a hard-deleted job: %v", err)
 	}
 	if got.Out != 42 {
 		t.Fatalf("Out = %d, want 42", got.Out)
 	}
-	offs, err := s.JobTokenOffsets("doomed")
+	offs, err := s.JobTokenOffsets(id)
 	if err != nil || offs["/p/a.jsonl"] != 7 {
 		t.Fatalf("watermarks = %v (err %v), want them to survive too", offs, err)
 	}

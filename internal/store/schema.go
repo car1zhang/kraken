@@ -33,8 +33,12 @@ import (
 // FeedbackSince). Version 10 adds the per-job token counters and their
 // per-file byte watermarks (tokens.go). Version 11 splits those counters into
 // a zeus half and a subagent half, and WIPES both token tables so the daemon
-// re-sums every job with the split in place (see schemaV11).
-const schemaVersion = 11
+// re-sums every job with the split in place (see schemaV11). Version 12
+// finishes what version 6 started: a job's identity is jobs.id everywhere
+// below the HTTP handler, so board_order and the two token tables move off the
+// mutable slug onto the immutable id, events GAINS a job_id beside its
+// job_slug fossil, and the never-used drafts table is dropped.
+const schemaVersion = 12
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -413,6 +417,27 @@ CREATE INDEX watchlist_observation_key ON watchlist(LOWER(TRIM(observation, char
 // (jobs/cell.go's teardownCell) but Claude Code keeps the transcripts
 // indefinitely, and retrospective cost is the entire point of storing this.
 //
+// THE SLUG-KEYING ARGUMENT ABOVE IS NO LONGER TRUE, and schemaV12 is what
+// changed it. A cell dir is now `<slugified slug>-<id>` (jobs/cell.go's
+// cellName), so the measured directory is derived from the slug AND the id,
+// and two jobs sharing a slug no longer share a directory — the premise the
+// whole paragraph rests on. Keeping the tables slug-keyed after that would
+// have preserved exactly the defect the id was added to remove: five archived
+// jobs slugged `asdf` measured into one row that honestly belongs to none of
+// them. So v12 re-keys both tables onto job_id, still with no FK and no
+// cascade, for the SECOND half of the argument above, which is untouched: an
+// archived or hard-deleted job's number must survive, because retrospective
+// cost is the point.
+//
+// One consequence is permanent and is not a defect to be fixed later:
+// transcripts written BEFORE the cutover are filed by Claude Code under the
+// legacy bare-slug path, where same-slug jobs genuinely did share a directory.
+// Their spend is inseparable in the source data, not merely in the schema.
+// jobs/tokens.go's JobProjectDirs still sums that legacy base — dropping it
+// would report zero for every job's entire pre-cutover history — so a job that
+// once shared a slug carries some of its predecessor's old spend. Attributing
+// it any other way would require information that was never recorded.
+//
 // updated_at is stamped only when a refresh actually FOUND something, so a
 // settled job's row keeps the timestamp of its last real spend rather than
 // creeping forward on every no-op pass.
@@ -490,6 +515,111 @@ DELETE FROM job_tokens;
 DELETE FROM job_token_files;
 `
 
+// schemaV12 moves a job's identity off the mutable SLUG and onto the
+// immutable jobs.id for every table that still keyed on the string, drops the
+// drafts table, and clears both token tables. Appended rather than folded into
+// an earlier schemaV<N> for the reason schemaV2's doc comment spells out: real
+// kraken.db files already exist at earlier versions — and in this case at
+// exactly v11, since that is what ~/.kraken/kraken.db is already running.
+//
+// v11 vs v12, so the numbering reads honestly: v11 is the zeus/subagent TOKEN
+// SPLIT and it is not this change's work at all; v12 is the id re-key. They
+// landed on separate branches and both touch job_tokens, which is the one
+// place they interact — see the CREATE below.
+//
+// WHY, in one sentence: a slug is unique only among ACTIVE jobs
+// (jobs_active_slug), archiving deliberately FREES it, and every table below
+// keyed on that freed string — so an archived job and the new job that reused
+// its name were, to these tables, one job.
+//
+// board_order: slug -> job_id, no FK and no cascade. No FK specifically
+// because a stale entry must not VANISH: SetBoardColumn's cross-column
+// dedupe and ApplyColumnOrder both tolerate an id that no longer resolves
+// (it is simply not a member and is pruned on the column's next save),
+// whereas a cascade firing mid-drag would silently reshuffle the board under
+// carl's cursor. The table is rebuilt rather than ALTERed because the column
+// changes TYPE and the rows must be re-keyed by the hook; the old table is
+// renamed out of the way here and dropped by the hook once it has been read,
+// the same shape schemaV5 used for questions_blob.
+//
+// events: job_id is ADDED and job_slug is KEPT. This is the one table where
+// the slug stays a first-class stored value, because an events row is a
+// FOSSIL — it deliberately outlives its job's hard delete (see schemaV6's
+// ON DELETE SET NULL reasoning, and DeleteJob's contract) — and once the job
+// row is gone the id resolves to nothing while the slug still says which job
+// the line was about. Nullable, no FK, no cascade, for exactly that reason.
+//
+// job_tokens / job_token_files: re-keyed to job_id, and EVERY EXISTING ROW IS
+// DROPPED rather than mapped. That is Q4 ("we can just regenerate all token
+// counters") and it is also the only honest option: on this machine five
+// archived jobs share the slug `asdf`, so their single row measures all five
+// together and there is no mapping — to any one of the five, or split among
+// them — that is true. The daemon's existing throttled pass (jobs/tokens.go's
+// tokensPass) re-sums from scratch afterwards, which is why the drop is
+// affordable: re-summing inside this transaction would mean re-reading 20-60
+// MB per cell dir across ~110 jobs synchronously while kraken serve starts.
+// The board reads zero for a few minutes after a deliberate overnight
+// migration, which is the accepted cost. DROP + CREATE rather than a rebuild
+// with a data move, because deleting the rows IS the migration.
+//
+// THE RECREATED job_tokens MUST CARRY v11's FOUR zeus_* COLUMNS. This is the
+// one place the two migrations interact, and getting it wrong is silent in the
+// worst way: v11 ADDs those columns to the v10 table, v12 DROPs that table, so
+// a CREATE that lists only schemaV10's columns would quietly take the zeus
+// half of the token split back out — and the code that reads it lives on the
+// other branch, so nothing here would fail to compile. The columns are carried
+// with no backfill and no data move, which is exactly right: v11 wipes every
+// row and v12 wipes them again, so there is nothing to carry, only a shape to
+// preserve.
+//
+// drafts: DROPPED. It has zero non-test callers and zero rows on the live
+// database — /api/draft is served entirely out of api/draft.go's in-memory
+// draftStore, which is explicitly never persisted. Nothing reads this table,
+// so nothing can miss it.
+const schemaV12 = `
+ALTER TABLE board_order RENAME TO board_order_slug;
+
+CREATE TABLE board_order (
+	"column"  TEXT NOT NULL,
+	position  INTEGER NOT NULL,
+	job_id    INTEGER NOT NULL,
+	PRIMARY KEY ("column", position)
+);
+
+ALTER TABLE events ADD COLUMN job_id INTEGER;
+
+DROP TABLE job_tokens;
+DROP TABLE job_token_files;
+
+CREATE TABLE job_tokens (
+	job_id      INTEGER PRIMARY KEY NOT NULL,
+	in_tokens   INTEGER NOT NULL DEFAULT 0, -- input_tokens
+	out_tokens  INTEGER NOT NULL DEFAULT 0, -- output_tokens
+	cache_write INTEGER NOT NULL DEFAULT 0, -- cache_creation_input_tokens
+	cache_read  INTEGER NOT NULL DEFAULT 0, -- cache_read_input_tokens
+	sessions    INTEGER NOT NULL DEFAULT 0, -- transcript FILES summed (root + sidecars)
+	updated_at  INTEGER NOT NULL DEFAULT 0, -- unix millis
+	-- v11's zeus half of the token split, carried across the DROP above. Not
+	-- new here and not this migration's feature — see the doc comment: the
+	-- four columns exist so the recreated table is v11's shape re-keyed, not
+	-- schemaV10's shape resurrected. The subagent half stays derived
+	-- (total minus zeus) and is deliberately not a column.
+	zeus_in          INTEGER NOT NULL DEFAULT 0,
+	zeus_out         INTEGER NOT NULL DEFAULT 0,
+	zeus_cache_write INTEGER NOT NULL DEFAULT 0,
+	zeus_cache_read  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE job_token_files (
+	job_id      INTEGER NOT NULL,
+	path        TEXT NOT NULL, -- absolute transcript path
+	byte_offset INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (job_id, path)
+);
+
+DROP TABLE drafts;
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -520,9 +650,12 @@ type migrationStep struct {
 // migrations[11] adds the four zeus columns and WIPES both token tables (no
 // hook — the wipe IS the migration's data half, and it is expressible in SQL:
 // accumulate-forward counters cannot be backfilled, so re-summing from byte
-// zero is the only way the split is ever right).
+// zero is the only way the split is ever right);
+// migrations[12] re-keys board_order and the two token tables onto jobs.id,
+// adds events.job_id, and drops drafts (migrateV12JobIDs below does the
+// slug -> id mapping the SQL cannot express).
 // Future schema changes append
-// migrations[12], migrations[13], ... rather than editing an existing
+// migrations[13], migrations[14], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -537,6 +670,7 @@ var migrations = map[int]migrationStep{
 	9:  {sql: schemaV9},
 	10: {sql: schemaV10},
 	11: {sql: schemaV11},
+	12: {sql: schemaV12, hook: migrateV12JobIDs},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
@@ -694,6 +828,205 @@ func migrateV6FeedbackJobID(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// resolveV12Slug maps one legacy slug string to the job id it most likely
+// meant, or 0 when nothing plausible matches. It is the whole of v12's
+// judgment, and the precedence is ordered most-certain first:
+//
+//  1. The ACTIVE job with that slug. jobs_active_slug makes this unique, and
+//     an active job is what every slug-addressed write in the running system
+//     already resolves to — so this is not a guess, it is the same answer the
+//     handler would give today.
+//  2. Else the archived job whose ARCHIVED_NAME is that string.
+//     jobs_archived_name makes this unique too. It catches the rows written
+//     while the job was still active and then re-keyed by ArchiveJob, plus
+//     everything the archive namespace addresses by name.
+//  3. Else the NEWEST archived job that still carries that slug. This is the
+//     only genuine guess in the list, and it is where the duplicate-slug shapes
+//     on the live database land: five archived jobs slugged `asdf`, two
+//     `helper-catalog`, two `sadfsa`. Newest-wins because a board_order row or
+//     an events line naming a slug was, overwhelmingly, written by whichever
+//     generation held it most recently.
+//  4. Else nothing (0). The job was hard-deleted, or the string never named a
+//     job at all.
+//
+// Deliberately DIFFERENT from migrateV6FeedbackJobID's rule, which refuses to
+// choose when a slug matches both an active and an archived job and leaves the
+// row NULL. That refusal was right there because a feedback row carries carl's
+// own words and mis-filing it moves content between cards. Nothing here has
+// that weight: a board_order row is a scroll position and an events row is a
+// log line, so a best-guess attachment costs at worst a card that sorts oddly
+// once, while refusing to choose costs the position outright.
+func resolveV12Slug(tx *sql.Tx, slug string) (int64, error) {
+	if slug == "" {
+		return 0, nil
+	}
+	for _, q := range []string{
+		`SELECT id FROM jobs WHERE slug = ? AND archived_at IS NULL`,
+		`SELECT id FROM jobs WHERE archived_name = ? AND archived_at IS NOT NULL`,
+		`SELECT id FROM jobs WHERE slug = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC LIMIT 1`,
+	} {
+		var id int64
+		err := tx.QueryRow(q, slug).Scan(&id)
+		if err == nil {
+			return id, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("resolve slug %q: %w", slug, err)
+		}
+	}
+	return 0, nil
+}
+
+// migrateV12JobIDs is migrations[12]'s Go hook: schemaV12's SQL has already
+// renamed board_order out of the way as board_order_slug, created the new
+// job_id-keyed board_order, added the nullable events.job_id, recreated the
+// two token tables empty, and dropped drafts. What is left is the slug -> id
+// mapping, which SQL alone cannot express because the precedence in
+// resolveV12Slug is three ordered lookups rather than one join.
+//
+// Two tables, and they are treated DIFFERENTLY on the unmappable case:
+//
+//   - board_order: the row is DROPPED. Its whole content is (column, position,
+//     identity); with no identity there is nothing left to carry, and a row
+//     that names no job would just sit in the table forever, since a column is
+//     only ever pruned by being re-saved. Each drop gets an events row, the
+//     same log-and-continue ruling migrateV5Questions follows — carl's ordering
+//     is his own work, and losing a piece of it silently is not acceptable even
+//     though losing it is.
+//   - events: the row STAYS, with job_id left NULL. An events row is a fossil
+//     that deliberately outlives its job's hard delete, so "no job matches this
+//     slug any more" is its NORMAL end state rather than a defect — dropping
+//     those rows would delete precisely the history the fossil exists to keep,
+//     and would grow with every job carl ever deletes. job_slug still says what
+//     the line was about.
+//
+// The events backfill runs FIRST and per DISTINCT slug rather than per row:
+// the table is capped at maxEvents (50,000) rows over a few dozen slugs, so
+// one UPDATE per slug is two orders of magnitude fewer statements than one per
+// row. Running it before the board_order pass also keeps the drop-log rows
+// this hook itself writes out of its own input.
+func migrateV12JobIDs(tx *sql.Tx) error {
+	// One resolve per distinct slug across both passes: resolveV12Slug costs
+	// up to three queries and the same slug recurs constantly (an events table
+	// holds thousands of rows over a handful of jobs).
+	resolved := map[string]int64{}
+	resolve := func(slug string) (int64, error) {
+		if id, ok := resolved[slug]; ok {
+			return id, nil
+		}
+		id, err := resolveV12Slug(tx, slug)
+		if err != nil {
+			return 0, err
+		}
+		resolved[slug] = id
+		return id, nil
+	}
+
+	// --- events: backfill job_id, keep every row ---
+	eventSlugs, err := v12DistinctEventSlugs(tx)
+	if err != nil {
+		return err
+	}
+	for _, slug := range eventSlugs {
+		id, err := resolve(slug)
+		if err != nil {
+			return err
+		}
+		if id == 0 {
+			continue // fossil of a job that no longer exists — job_slug still tells the story
+		}
+		if _, err := tx.Exec(`UPDATE events SET job_id = ? WHERE job_slug = ?`, id, slug); err != nil {
+			return fmt.Errorf("backfill events job_id for slug %q: %w", slug, err)
+		}
+	}
+
+	// --- board_order: re-key, dropping (and logging) what cannot be mapped ---
+	rows, err := tx.Query(`SELECT "column", slug FROM board_order_slug ORDER BY "column", position`)
+	if err != nil {
+		return fmt.Errorf("read board_order_slug: %w", err)
+	}
+	type orderRow struct{ column, slug string }
+	var legacy []orderRow
+	for rows.Next() {
+		var r orderRow
+		if err := rows.Scan(&r.column, &r.slug); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan board_order_slug row: %w", err)
+		}
+		legacy = append(legacy, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read board_order_slug rows: %w", err)
+	}
+	rows.Close()
+
+	// Positions are REPACKED per column rather than carried across, because a
+	// dropped row would otherwise leave a hole and — more importantly — two
+	// different legacy slugs can resolve to the SAME job (a job's slug and its
+	// archived_name are both matched, and they differ), which would collide on
+	// the (column, position) primary key only by luck. Dedupe by id, first
+	// occurrence wins, exactly as SetBoardColumn does.
+	next := map[string]int{}
+	placed := map[int64]bool{}
+	for _, r := range legacy {
+		id, err := resolve(r.slug)
+		if err != nil {
+			return err
+		}
+		if id == 0 {
+			if _, err := tx.Exec(
+				`INSERT INTO events (ts, src, level, event, msg, job_slug) VALUES (?, ?, ?, ?, ?, ?)`,
+				time.Now().UnixMilli(), "migrate", "warn", "board-order-migration-drop",
+				fmt.Sprintf("board order entry for %q in column %q dropped: no active or archived job holds that slug", r.slug, r.column),
+				r.slug,
+			); err != nil {
+				return fmt.Errorf("log dropped board order entry %q: %w", r.slug, err)
+			}
+			continue
+		}
+		if placed[id] {
+			continue
+		}
+		placed[id] = true
+		if _, err := tx.Exec(
+			`INSERT INTO board_order ("column", position, job_id) VALUES (?, ?, ?)`,
+			r.column, next[r.column], id,
+		); err != nil {
+			return fmt.Errorf("insert migrated board order entry %q: %w", r.slug, err)
+		}
+		next[r.column]++
+	}
+
+	if _, err := tx.Exec(`DROP TABLE board_order_slug`); err != nil {
+		return fmt.Errorf("drop board_order_slug: %w", err)
+	}
+	return nil
+}
+
+// v12DistinctEventSlugs is migrateV12JobIDs' events input, split out only so
+// the rows cursor is closed before the UPDATE statements run against the same
+// transaction.
+func v12DistinctEventSlugs(tx *sql.Tx) ([]string, error) {
+	rows, err := tx.Query(`SELECT DISTINCT job_slug FROM events WHERE job_slug != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("read event slugs: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, fmt.Errorf("scan event slug: %w", err)
+		}
+		out = append(out, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read event slugs: %w", err)
+	}
+	return out, nil
 }
 
 // legacyQuestion is parseLegacyQuestions' output shape — field-for-field the

@@ -84,14 +84,14 @@ func TestJobArtifactsStoreModeUnionsStoreAndPluto(t *testing.T) {
 		t.Fatal(err)
 	}
 	// dup.md: also exists as a pluto flat copy — store must win the dedup.
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "art-union.dup.md"), []byte("pluto version"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"dup.md"), []byte("pluto version"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// pluto-only.md: exists ONLY as a pluto flat copy (e.g. a job's
 	// root-level doc, preserved straight from the worktree root by
 	// preserveArtifacts — never synced into the artifacts table at all
 	// since syncCellArtifacts only mirrors the artifacts/ subdir).
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "art-union.pluto-only.md"), []byte("pluto only"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"pluto-only.md"), []byte("pluto only"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +129,7 @@ func TestJobArtifactsStoreModeInfoJobPlutoOnly(t *testing.T) {
 	if err := os.MkdirAll(jobs.PlutoDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "info-only.explain.md"), []byte("the doc"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"explain.md"), []byte("the doc"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,7 +169,7 @@ func TestJobArtifactsStoreModeUnionIsGloballySorted(t *testing.T) {
 	}
 	// 00-overview.md reaches the board ONLY as a pluto flat copy, which is
 	// the lowest-precedence source and therefore appended last.
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "art-order.00-overview.md"), []byte("d"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"00-overview.md"), []byte("d"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -305,8 +305,26 @@ struct WebJob: Decodable, Identifiable {
     // bump; render through BoardTheme.jobColor, which degrades an unknown
     // name from a newer server to "no color".
     let color: String?
+    // Why the daemon's last StartCell attempt for this job failed — free-text
+    // prose from the error it returned, populated for QUEUED jobs only and
+    // absent once a start succeeds. Distinct from `err` (the job file's own
+    // recorded error) and from DaemonStatus.lastError, which is board-wide:
+    // whichever failure happened to be last across every job. Without this a
+    // job that cannot start is indistinguishable from one merely waiting its
+    // turn. Additive key, absent on older servers, so no contract bump.
+    let startError: String?
 
-    var id: String { slug }
+    // Identity is (slug, archived), NOT the bare slug — the same pairing
+    // `jobKey` uses in web/static/app.js, and for the same reason. An archived
+    // job rides this very `jobs` array under its NUMBERED archive name, and
+    // that name is numbered against the archive's own contents only, so
+    // archiving `foo` and then creating a new active `foo` puts two entries
+    // with slug "foo" on the board. Returning the bare slug here hands both
+    // the same Identifiable id, which is duplicate identities in every
+    // ForEach over jobs — SwiftUI's rows then reuse and swap state between two
+    // unrelated jobs. The wire keeps carrying the slug deliberately (it is the
+    // human-facing name); disambiguating is the client's job, on both clients.
+    var id: String { archived == true ? "archive:" + slug : slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
     var title: String { displaySlug ?? slug }
 
@@ -326,6 +344,7 @@ struct WebJob: Decodable, Identifiable {
         case threads
         case tokens
         case color
+        case startError = "start_error"
     }
 }
 

@@ -228,6 +228,17 @@ export interface WebJob {
   threads?: WebThread[];
   /** Absent means NEVER MEASURED, which is not a measured zero — see WebTokens. */
   tokens?: WebTokens;
+  /**
+   * Why the daemon's last attempt to start this job's cell failed. Set only
+   * while the job is QUEUED — a running job has nothing to explain, and a
+   * stale reason on a live card would read as a current fault.
+   *
+   * Before this existed the failure was invisible: it went to ~/.kraken/logs
+   * and to daemon.last_error, which is one string for the whole tick rather
+   * than per job. A job once sat queued through 24 identical failed starts
+   * over nine minutes with nothing on screen.
+   */
+  start_error?: string;
 }
 
 /** Mirrors jobs.DaemonStatus (internal/jobs/daemon.go:50). */

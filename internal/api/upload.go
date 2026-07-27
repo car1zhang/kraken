@@ -132,7 +132,23 @@ func UploadPath(slug, name string) (string, error) {
 	if !uploadNamePattern.MatchString(name) {
 		return "", fmt.Errorf("bad upload name")
 	}
-	root := jobs.UploadsDir(slug)
+	// The uploads dir is <slug>-<id>, so the slug off the URL has to be
+	// resolved to its job first — the handler-resolves-inward rule. Active
+	// jobs only, which is the whole reason a slug is still safe on the wire:
+	// jobs_active_slug makes them unique, so this cannot land on an archived
+	// generation's files.
+	st := jobs.ActiveStore()
+	if st == nil {
+		return "", fmt.Errorf("no store")
+	}
+	sr, err := st.GetJobBySlug(slug)
+	if err != nil {
+		return "", fmt.Errorf("no active job %q", slug)
+	}
+	root := jobs.UploadsDir(slug, sr.ID)
+	if root == "" {
+		return "", fmt.Errorf("bad slug")
+	}
 	p := filepath.Join(root, name)
 	if rel, err := filepath.Rel(root, p); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes uploads dir")

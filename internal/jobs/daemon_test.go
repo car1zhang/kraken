@@ -790,14 +790,22 @@ func TestRepairFilter(t *testing.T) {
 // branchFamily must match exactly the branches a job could actually have
 // shipped from — every run through the job's current Run, nothing that
 // merely shares the slug as a prefix.
+//
+// It matches TWO families since branches took the job id: the current
+// carl/<slug>-<id> names, and the pre-cutover bare-slug ones that PRs opened
+// before the change still sit on. Dropping the legacy half would make the
+// PR-repair pass stop recognising those PRs as the job's own.
 func TestBranchFamily(t *testing.T) {
-	fam1 := branchFamily(&Job{Slug: "slug", Run: 1})
-	if len(fam1) != 1 || !fam1["carl/slug"] {
-		t.Fatalf("run 1: got %v, want just carl/slug", fam1)
+	fam1 := branchFamily(&Job{Slug: "slug", ID: 7, Run: 1})
+	if len(fam1) != 2 || !fam1["carl/slug-7"] || !fam1["carl/slug"] {
+		t.Fatalf("run 1: got %v, want carl/slug-7 plus the legacy carl/slug", fam1)
 	}
 
-	fam3 := branchFamily(&Job{Slug: "slug", Run: 3})
-	want := []string{"carl/slug", "carl/slug-r2", "carl/slug-r3"}
+	fam3 := branchFamily(&Job{Slug: "slug", ID: 7, Run: 3})
+	want := []string{
+		"carl/slug-7", "carl/slug-7-r2", "carl/slug-7-r3",
+		"carl/slug", "carl/slug-r2", "carl/slug-r3",
+	}
 	if len(fam3) != len(want) {
 		t.Fatalf("run 3: got %v, want exactly %v", fam3, want)
 	}
@@ -822,15 +830,16 @@ func TestBranchFamily(t *testing.T) {
 
 	// a hand-typo'd run (e.g. `run: 2000000000`) must not make branchFamily
 	// allocate/iterate billions of entries — the cap holds maxRun at 64,
-	// giving exactly base (r=1) + r2..r64 = 64 entries, and the whole call
-	// must return quickly.
+	// giving base (r=1) + r2..r64 = 64 names per family, and since the family
+	// covers both the id-form and the legacy bare-slug branches that is 128
+	// entries. The whole call must still return quickly.
 	start := time.Now()
-	famHuge := branchFamily(&Job{Slug: "slug", Run: 2000000000})
+	famHuge := branchFamily(&Job{Slug: "slug", ID: 7, Run: 2000000000})
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("run 2000000000: took %v, want fast (cap should bound the loop)", elapsed)
 	}
-	if len(famHuge) != 64 {
-		t.Fatalf("run 2000000000: got %d entries, want exactly 64 (cap applied)", len(famHuge))
+	if len(famHuge) != 128 {
+		t.Fatalf("run 2000000000: got %d entries, want exactly 128 (64 per family, cap applied)", len(famHuge))
 	}
 }
 

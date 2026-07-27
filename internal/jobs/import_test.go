@@ -327,9 +327,17 @@ func TestImportAllCounts(t *testing.T) {
 	if report.Archived.Found != 1 || report.Archived.Imported != 1 {
 		t.Fatalf("Archived report = %+v", report.Archived)
 	}
-	// board order counts slugs, not columns: queued:[minimal] + done:[rich,foo] = 3
-	if report.BoardOrder.Found != 3 || report.BoardOrder.Imported != 3 {
+	// Board order counts slugs, not columns: queued:[minimal] + done:[rich,foo]
+	// = 3 found. Only TWO import: "foo" names the ARCHIVED job, and since
+	// schema v11 board_order keys on jobs.id resolved through the ACTIVE
+	// namespace only — which matches what the board actually renders, since an
+	// archived job rides the "archived" pseudo-state and has no column
+	// position at all. The drop is reported rather than silent.
+	if report.BoardOrder.Found != 3 || report.BoardOrder.Imported != 2 || len(report.BoardOrder.Skipped) != 1 {
 		t.Fatalf("BoardOrder report = %+v", report.BoardOrder)
+	}
+	if !strings.Contains(report.BoardOrder.Skipped[0], "foo") {
+		t.Fatalf("BoardOrder skip note = %q, want it to name the dropped slug", report.BoardOrder.Skipped[0])
 	}
 	// rich: img-001.png + img-002.jpg = 2; ghost orphan: 1 file counted+skipped
 	if report.Uploads.Found != 3 || report.Uploads.Imported != 2 || len(report.Uploads.Skipped) != 1 {
@@ -442,11 +450,16 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBoardOrder: %v", err)
 	}
-	if len(order["queued"]) != 1 || order["queued"][0] != "minimal" {
-		t.Fatalf("board order queued: %+v", order["queued"])
+	// board_order keys on jobs.id since schema v11, so the imported column
+	// must point at the row importActiveJobs just created for that slug.
+	if len(order["queued"]) != 1 || order["queued"][0] != minimal.ID {
+		t.Fatalf("board order queued: %+v, want [%d] (the minimal job's id)", order["queued"], minimal.ID)
 	}
-	if len(order["done"]) != 2 {
-		t.Fatalf("board order done: %+v", order["done"])
+	// 1, not 2: order.json's done column lists ["rich", "foo"], and "foo" is
+	// the ARCHIVED job — not resolvable in the active namespace board_order
+	// keys on since v11.
+	if len(order["done"]) != 1 || order["done"][0] != rich.ID {
+		t.Fatalf("board order done: %+v, want [%d] (rich only)", order["done"], rich.ID)
 	}
 
 	uploads, err := st.ListUploads(rich.ID)
@@ -660,7 +673,8 @@ func TestImportAllDryRunWritesNothing(t *testing.T) {
 	if report.Jobs.Imported != 2 || report.Archived.Imported != 1 {
 		t.Fatalf("dry-run should still count would-be imports: jobs=%+v archived=%+v", report.Jobs, report.Archived)
 	}
-	if report.BoardOrder.Found != 3 || report.BoardOrder.Imported != 3 {
+	// 2, not 3: "foo" is the archived job (see TestImportAllCounts)
+	if report.BoardOrder.Found != 3 || report.BoardOrder.Imported != 2 {
 		t.Fatalf("dry-run board order: %+v", report.BoardOrder)
 	}
 

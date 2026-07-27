@@ -212,6 +212,12 @@ export function JobCard({ job, col, actions }: JobCardProps) {
       {job.outcome && col === "done" ? <div className="outcome">→ {job.outcome}</div> : null}
       {job.err ? <div className="err">✕ {job.err}</div> : null}
       {job.health ? <div className="err">⚠ {job.health}</div> : null}
+      {job.start_error ? (
+        <div className="start-error">
+          <span className="start-error-label">start failed</span>
+          <span className="start-error-msg">{job.start_error}</span>
+        </div>
+      ) : null}
       {job.last_sent ? <div className="last-sent">me→zeus: {job.last_sent}</div> : null}
       {job.detail ? <div className="detail">{job.detail}</div> : null}
       <WakeupChip job={job} />

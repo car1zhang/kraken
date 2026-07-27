@@ -5,19 +5,31 @@ import (
 	"testing"
 )
 
-// jobkey_test.go — the board payload's `slug` is unique only WITHIN a
-// namespace. An archived job rides the same jobs array as the active ones
-// (api/board.go) under its numbered archive name, and that name is numbered
-// only against the archive's own contents — so archiving `foo` and then
-// creating a new active `foo` puts TWO entries with slug "foo" on the board,
-// archived last.
+// jobkey_test.go — the board payload identifies a job by its SLUG, and that
+// is the permanent, deliberate answer rather than a workaround awaiting a
+// proper id. A job's immutable row id is what kraken keys on INWARD — cell
+// paths, store rows, every lookup below a handler — but the slug is the name
+// a human types and an agent says, so it stays what the wire, the routes and
+// the cell-side CLI verbs all speak. `(slug, archived)` is the pairing that
+// makes that unambiguous on the client, and jobKey is where it lives.
+//
+// A pairing is needed because a slug is unique only WITHIN a namespace. An
+// archived job rides the same jobs array as the active ones (api/board.go)
+// under its numbered archive name, and that name is numbered only against the
+// archive's own contents — so archiving `foo` and then creating a new active
+// `foo` puts TWO entries with slug "foo" on the board, archived last. Active
+// slugs on their own ARE unique (the store enforces it), which is why the
+// REQUEST side was never the bug: only the payload mixes the two namespaces,
+// so only the client has to tell them apart.
 //
 // Keying any client-side map by bare slug therefore hands the archived entry
 // a last-writer-wins victory over the live job, and the symptom is silent and
 // nasty: jobsBySlug["foo"] returned the archived entry (live:false), so
 // liveDisplayColumn read null and a click on the LIVE blocked card fell
 // through to the read-only editor instead of the unblock modal — the job
-// became unsteerable from the web UI for as long as both existed.
+// became unsteerable from the web UI for as long as both existed. That
+// incident is why these guards exist, and why each one below names the
+// consequence it prevents rather than restating the rule.
 //
 // These are string tests over app.js for the same reason boardsurface_test.go
 // is: there is no JS test harness in this repo, and this failure mode passes

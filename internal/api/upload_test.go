@@ -82,7 +82,7 @@ func TestUploadPathValidation(t *testing.T) {
 	// store row for the seed slug must exist before it can write anything.
 	useTestStore(t)
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
-	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "upload-path-test", Repo: "monolith"})
+	uj := mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "upload-path-test", Repo: "monolith"})
 
 	// seed a real uploaded file so the "valid" case can resolve to a real
 	// path, plus a four-digit name — the sequence is unbounded past 999 and
@@ -90,7 +90,7 @@ func TestUploadPathValidation(t *testing.T) {
 	if _, _, err := jobs.SaveUpload("upload-path-test", "png", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(jobs.UploadsDir("upload-path-test"), "img-1000.png"), []byte("y"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(jobs.UploadsDir("upload-path-test", uj.ID), "img-1000.png"), []byte("y"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

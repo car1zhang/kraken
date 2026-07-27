@@ -282,7 +282,10 @@ func TestArchiveUnarchiveDeleteStoreBacked(t *testing.T) {
 }
 
 func TestBoardOrderStoreBacked(t *testing.T) {
-	useTestStore(t)
+	st := useTestStore(t)
+	// Real job rows: board_order keys on jobs.id since schema v11, and
+	// SaveColumnOrder resolves each slug through the active namespace.
+	seedJobs(t, st, "a", "b")
 	if err := SaveColumnOrder("working", []string{"b", "a", "b"}); err != nil {
 		t.Fatal(err)
 	}

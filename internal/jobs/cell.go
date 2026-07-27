@@ -29,8 +29,75 @@ func cellsRoot() string {
 	return filepath.Join(util.Home(), ".kraken", "cells")
 }
 
+// cellName is the basename every one of a job's runtime names is built from:
+// the slugified job name with the job's immutable store id appended.
+//
+// The id is what makes it collision-proof, and that is the whole point. A
+// slug is unique only among ACTIVE jobs (the jobs_active_slug partial index),
+// and archiving deliberately FREES it — store.ArchiveJob stamps
+// archived_at/archived_name and leaves jobs.slug untouched — so a new job may
+// legitimately hold a name an archived job still has files under. Before the
+// id was here, both generations resolved to one directory: an archived job's
+// leftover git worktree made every StartCell for the new job fail with
+// "worktree ... already exists" (24 consecutive daemon ticks, in the incident
+// this was written for), and the board served the OLD job's artifacts off the
+// new job's card because jobArtifacts walks a slug-named directory.
+//
+// Slug FIRST, id second, because this name is read by a human: `k ls`, the
+// editor root inside a cell, and the tmux session all show it, and leading
+// with the slug keeps it searchable. The id only disambiguates.
+func cellName(j *Job) string {
+	return util.Slugify(j.Slug) + "-" + strconv.FormatInt(j.ID, 10)
+}
+
 func cellDir(j *Job) string {
+	return filepath.Join(cellsRoot(), cellName(j))
+}
+
+// legacyCellDir is the pre-id naming: the bare slugified slug. Nothing
+// CREATES this any more — it exists so readers that must still find state
+// written before the cutover can look there too. Its one live caller is
+// JobProjectDirs (tokens.go): Claude Code buckets a transcript by the agent's
+// startup cwd, so every transcript written before the cutover is filed under
+// a path derived from this name, and a token scan that only knew the new name
+// would report zero for a job's entire history.
+//
+// Deliberately NOT used by anything that creates, starts, or deletes a cell —
+// see cellName for why sharing this name across two jobs is the bug.
+func legacyCellDir(j *Job) string {
 	return filepath.Join(cellsRoot(), util.Slugify(j.Slug))
+}
+
+// LegacyCellWorktree is CellWorktree under the pre-id cell naming. Same
+// read-only, find-what-was-already-written purpose as legacyCellDir.
+func LegacyCellWorktree(j *Job, repo string) string {
+	return filepath.Join(legacyCellDir(j), "wt-"+filepath.Base(repo))
+}
+
+// checkCellIdentity refuses a job that cannot name a cell safely. It is
+// called at the two points that actually CREATE or DESTROY cell state
+// (StartCell, teardownCell) rather than inside cellDir, because cellDir has
+// fifteen call sites that only ever derive a read path — and a read against a
+// wrong path is a harmless "not found", while a CREATE against one silently
+// makes ~/.kraken/cells/foo-0 and a DELETE against one removes the wrong
+// tree.
+//
+// A zero id is the real hazard and it is reachable: ParseJob never sets ID
+// (the id is minted by the store and never appears in the .job.md file), and
+// LoadJobs falls back to LoadJobsFromFiles whenever no store is wired, so a
+// file-backed *Job carries ID == 0. Failing loudly here is what stops that
+// becoming a directory named for a job that does not exist.
+func checkCellIdentity(j *Job) error {
+	if j == nil {
+		return fmt.Errorf("no job")
+	}
+	if util.Slugify(j.Slug) == "" {
+		return fmt.Errorf("job slug %q slugifies to nothing — it cannot name a cell", j.Slug)
+	}
+	if j.ID < 1 {
+		return fmt.Errorf("job %q has no store id (got %d) — a cell is named <slug>-<id>, so it cannot be created from a job that was never persisted", j.Slug, j.ID)
+	}
+	return nil
 }
 
 // CellWorktree names the worktree wt-<repo>: the dir basename is what shows
@@ -86,8 +153,17 @@ func ExistingWorktree(j *Job, repo string) string {
 	return ""
 }
 
+// CellSession names the job's tmux session. It carries the id for a
+// correctness reason, not merely to match cellDir: CellZeus, CellHealth,
+// InterruptCell, RetryCell and /api/steer all resolve a job to its running
+// agent THROUGH this name, so if an archived job's session were still alive
+// when a new same-slug job started, the new job would adopt the old job's
+// zeus — and carl's steer messages would go to the wrong agent, silently.
+// ArchiveJob does guard against a live cell, but liveSessionTimes fails OPEN
+// (an empty map when `tmux list-sessions` errors), so that guard is not
+// absolute.
 func CellSession(j *Job) string {
-	return "cell-" + util.Slugify(j.Slug)
+	return "cell-" + cellName(j)
 }
 
 func CellArtifacts(j *Job) string {
@@ -95,12 +171,16 @@ func CellArtifacts(j *Job) string {
 }
 
 // AllArtifactPaths lists a job's artifacts from both homes: the live cell's
-// artifacts dir and the preserved <slug>.<name> copies in pluto (which are
-// all that remain after teardown). Questions are rows in kraken.db, not
+// artifacts dir and the preserved <slug>-<id>.<name> copies in pluto (which
+// are all that remain after teardown). Questions are rows in kraken.db, not
 // files, so there is no reserved name to exclude here any more.
+//
+// The prefix carries the id for the same reason cellName does: matching on
+// the bare slug served an ARCHIVED job's preserved copies off a new
+// same-slug job's card.
 func AllArtifactPaths(j *Job) []string {
 	out := ListArtifacts(j)
-	prefix := util.Slugify(j.Slug) + "."
+	prefix := PlutoArtifactPrefix(j)
 	entries, err := os.ReadDir(PlutoDir())
 	if err != nil {
 		return out
@@ -114,27 +194,61 @@ func AllArtifactPaths(j *Job) []string {
 	return out
 }
 
-// branchForRun names the branch for a given cell run: the bare slug branch
-// normally, -rN only for fallback runs (an existing branch with unmerged
-// commits that a forced reuse would orphan — see ensureUsableBranch).
-func branchForRun(slug string, run int) string {
-	if run >= 2 {
-		return fmt.Sprintf("carl/%s-r%d", util.Slugify(slug), run)
+// PlutoArtifactPrefix is the filename prefix a job's preserved flat artifact
+// copies carry in ~/Documents/pluto (and, after archiving, in its archive/
+// subdir): "<slug>-<id>.". One definition, because a writer and a reader that
+// disagree about this string is a job whose artifacts silently vanish from
+// its card.
+func PlutoArtifactPrefix(j *Job) string {
+	// No store wired means no ids at all: ParseJob never sets one, so every
+	// file-backed job carries ID == 0. Fall back to the bare slug, which is
+	// both the pre-cutover spelling and the only name available — and which
+	// cannot be ambiguous in that mode, since without a store there is no
+	// archive namespace for a second generation of the slug to live in.
+	//
+	// This is a READ-side accommodation only. The paths that create or
+	// destroy cell state go through checkCellIdentity and refuse a zero id
+	// outright, so this can never quietly produce a directory.
+	if j.ID < 1 {
+		return util.Slugify(j.Slug) + "."
 	}
-	return "carl/" + util.Slugify(slug)
+	return cellName(j) + "."
+}
+
+// branchForRun names the branch for a given cell run: carl/<slug>-<id>
+// normally, -rN appended only for fallback runs (an existing branch with
+// unmerged commits that a forced reuse would orphan — see ensureUsableBranch).
+//
+// The id is here on the same reasoning as cellName: a reused slug otherwise
+// resolves to a branch another job already has checked out. It goes AFTER the
+// slug so `git branch` stays readable and searchable by job name.
+func branchForRun(j *Job, run int) string {
+	if run >= 2 {
+		return fmt.Sprintf("carl/%s-r%d", cellName(j), run)
+	}
+	return "carl/" + cellName(j)
 }
 
 func CellBranch(j *Job) string {
-	return branchForRun(j.Slug, j.Run)
+	return branchForRun(j, j.Run)
 }
 
-// branchFamily enumerates a job's legitimate head branches: carl/<slug>
-// through every run the job has actually advanced through (branchForRun for
-// r = 1..max(j.Run,1)), covering a recycled-then-advanced branch history —
-// not just the current CellBranch. Used by the PR-repair pass (daemon.go) to
-// tell a job's own PRs apart from another job's foreign ones attached by the
-// historical raw-text scan; exact matches only; pure, so it's table-testable
-// without gh.
+// branchFamily enumerates a job's legitimate head branches: every run the job
+// has actually advanced through (branchForRun for r = 1..max(j.Run,1)),
+// covering a recycled-then-advanced branch history — not just the current
+// CellBranch. Used by the PR-repair pass (daemon.go) to tell a job's own PRs
+// apart from another job's foreign ones attached by the historical raw-text
+// scan; exact matches only; pure, so it's table-testable without gh.
+//
+// It enumerates TWO families: the current carl/<slug>-<id> names and the
+// pre-cutover carl/<slug> ones. The legacy half is not tidiness — PRs opened
+// before the id landed sit on bare-slug branches (four were open on the day
+// this changed), and dropping those names from the family makes the repair
+// pass stop recognising a job's own PRs as its own. That failure is silent
+// and looks like PRs detaching from their cards.
+//
+// The legacy names are matched, never created: branchForRun is the only
+// writer and it always emits the id form.
 func branchFamily(j *Job) map[string]bool {
 	maxRun := j.Run
 	if maxRun < 1 {
@@ -146,9 +260,15 @@ func branchFamily(j *Job) map[string]bool {
 	if maxRun > 64 {
 		maxRun = 64
 	}
-	fam := make(map[string]bool, maxRun)
+	slug := util.Slugify(j.Slug)
+	fam := make(map[string]bool, maxRun*2)
 	for r := 1; r <= maxRun; r++ {
-		fam[branchForRun(j.Slug, r)] = true
+		fam[branchForRun(j, r)] = true
+		if r >= 2 {
+			fam[fmt.Sprintf("carl/%s-r%d", slug, r)] = true
+		} else {
+			fam["carl/"+slug] = true
+		}
 	}
 	return fam
 }
@@ -390,6 +510,11 @@ var rotationGate = RotationGate
 // (parseable, ready, unstarted, prereqs met) — this owns mechanics only, and
 // is shared by the board's start action (webStart) and the daemon.
 func StartCell(j *Job, repo string) error {
+	// Loud refusal before anything is created — see checkCellIdentity. A job
+	// with no store id would otherwise silently produce ~/.kraken/cells/<slug>-0.
+	if err := checkCellIdentity(j); err != nil {
+		return fmt.Errorf("cannot start cell: %w", err)
+	}
 	sess := CellSession(j)
 	if LiveSessions()[sess] {
 		return fmt.Errorf("cell %s is already live (k o %s to jump in)", sess, sess)
@@ -724,6 +849,13 @@ func guardSelfTeardown(target, own string) error {
 // demo-job incident). force is the explicit human sign-off (board Done, kill),
 // where dirt is listed and discarded instead.
 func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
+	// Same guard as StartCell, and here it is the DESTRUCTIVE direction that
+	// matters: this function ends in os.RemoveAll(cellDir(j)), and a job with
+	// no id would aim that at a directory belonging to no job — or, with an
+	// empty slug, at something far worse.
+	if err := checkCellIdentity(j); err != nil {
+		return fmt.Errorf("cannot tear down cell: %w", err)
+	}
 	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
 		return err
 	}
@@ -1134,10 +1266,14 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 			}
 			return
 		}
-		dst := filepath.Join(PlutoDir(), util.Slugify(j.Slug)+"."+name)
-		if _, err := os.Stat(dst); err == nil {
-			return // never overwrite an earlier copy
-		}
+		dst := filepath.Join(PlutoDir(), PlutoArtifactPrefix(j)+name)
+		// A collision here used to be routine and silently lost the NEW
+		// job's file: the prefix was the bare slug, so an earlier job of the
+		// same name already owned the path and this returned quietly, leaving
+		// teardown to delete the source. With the id in the prefix a
+		// collision can only be this same job's own earlier copy — a genuine
+		// re-teardown — so overwriting is the correct resolution rather than
+		// skipping, and the destination is refreshed from the live artifact.
 		if err := os.WriteFile(dst, data, 0o644); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("preserve %s: %v", dst, err)

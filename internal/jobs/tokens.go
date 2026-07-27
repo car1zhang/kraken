@@ -58,10 +58,32 @@ const tokensIdleBatch = 8
 // owns that dir and kraken only ever reads it. A number that vanished at
 // teardown would defeat the entire point, which is retrospective cost.
 //
-// Two BASE dirs, not one: cells created before worktrees were named
-// wt-<repo> used a bare "wt" (see ExistingWorktree's own comment), which
-// munges to a different project dir. A repo of "" yields nothing — with no
-// resolved repo there is no worktree path to munge.
+// FOUR BASE dirs, not one, along two independent legacy axes — and every one
+// of them is load-bearing, because a base that is missing here reports as a
+// clean zero rather than as an error:
+//
+//   - wt-<repo> vs a bare "wt": cells created before worktrees were named
+//     wt-<repo> used a bare "wt" (see ExistingWorktree's own comment), which
+//     munges to a different project dir.
+//   - <slug>-<id> vs a bare <slug>: a cell dir carries the job's id (cell.go's
+//     cellName) so that two jobs sharing a slug stop sharing a directory. Every
+//     transcript written BEFORE that cutover is filed by Claude Code under the
+//     bare-slug path — Claude Code buckets by the agent's startup cwd and has
+//     no idea kraken renamed anything — so a scan that knew only the new name
+//     would report ZERO for every job's entire history. That is not a
+//     hypothetical: the v11 migration DROPS every token row and the daemon
+//     re-sums from scratch, so the legacy base is the only thing standing
+//     between the board and a wall of zeroes the morning after the cutover.
+//
+// The legacy bare-slug base is the one place where two same-slug jobs still
+// collide, and it is not fixable here: their pre-cutover transcripts are
+// physically in one directory and nothing recorded which agent wrote which
+// file. Summing it for both is the honest answer — under-reporting a job's
+// real history would be worse, and the alternative (dropping the base) reports
+// zero for both.
+//
+// A repo of "" yields nothing — with no resolved repo there is no worktree
+// path to munge.
 //
 // Plus every project dir whose name extends one of those bases, because
 // Claude Code buckets a transcript by the agent's STARTUP CWD, not by the
@@ -77,12 +99,13 @@ const tokensIdleBatch = 8
 //
 // The extension must be at a SEPARATOR (base + "-"). That is what keeps the
 // match inside this job: the text between `-kraken-cells-` and `-wt-` is the
-// slug, so a dir extending `…-cells-demo-wt-…` can only belong to slug
-// `demo`. Two jobs whose slugs merely share a prefix — `demo` and `demo-2`,
-// which is exactly the shape archive numbering produces — do NOT collide,
-// because `…-cells-demo-2-wt-monolith` does not extend `…-cells-demo-wt`.
-// Prefixing on the CELL DIR instead of the worktree would collide on that
-// pair, which is why the bases are worktree-shaped.
+// cell name, so a dir extending `…-cells-demo-25-wt-…` can only belong to job
+// 25. Two cell names that merely share a prefix do NOT collide, because
+// `…-cells-demo-2-5-wt-monolith` does not extend `…-cells-demo-25-wt`.
+// Prefixing on the CELL DIR instead of the worktree would collide on exactly
+// that pair, which is why the bases are worktree-shaped. Note that appending
+// the id made this MORE important rather than less: `demo` id 25 and `demo-2`
+// id 5 are a pair the id itself cannot separate — only the `-wt` anchor can.
 //
 // One consequence is deliberate rather than accidental: the legacy bare-`wt`
 // base is itself a prefix of every `wt-<repo>` name, so it also sweeps in
@@ -109,7 +132,16 @@ func JobProjectDirs(j *Job, repo string) ([]string, error) {
 	root := filepath.Join(util.Home(), ".claude", "projects")
 	seen := map[string]bool{}
 	var bases []string
-	for _, wt := range []string{CellWorktree(j, repo), filepath.Join(cellDir(j), "wt")} {
+	// Current naming first, legacy second, so dirs[0] is always the base a
+	// live cell is actually writing into. The bare-"wt" variant of each is
+	// listed beside it; ProjectDirName-level dedup below collapses any pair
+	// that happens to munge identically.
+	for _, wt := range []string{
+		CellWorktree(j, repo),
+		filepath.Join(cellDir(j), "wt"),
+		LegacyCellWorktree(j, repo),
+		filepath.Join(legacyCellDir(j), "wt"),
+	} {
 		name := core.ProjectDirName(wt)
 		if seen[name] {
 			continue
@@ -254,10 +286,10 @@ func refreshJobTokens(st *store.Store, j *Job, repo string, prior map[string]int
 	// change and not this pass's to make. Documented rather than claimed
 	// away — the counters are exact under append-only and monotonic
 	// otherwise.
-	if err := st.SetJobTokenOffsets(j.Slug, offsets); err != nil {
+	if err := st.SetJobTokenOffsets(j.ID, offsets); err != nil {
 		return false, err
 	}
-	if err := st.BumpJobTokens(j.Slug, delta); err != nil {
+	if err := st.BumpJobTokens(j.ID, delta); err != nil {
 		return false, err
 	}
 	return true, scanErr
@@ -329,6 +361,26 @@ func (d *daemonState) tokensPass(jobs []*Job, live map[string]bool, now time.Tim
 		if !j.Started() {
 			continue
 		}
+		// A job with no store id cannot own a row: job_tokens is keyed on the
+		// id since v11, and BumpJobTokens refuses a zero one rather than
+		// letting every unpersisted job accumulate into a shared row 0. Only
+		// file-backed jobs (ParseJob never sets ID) reach this, and only in
+		// entrypoints that have no store — which the ActiveStore check above
+		// has already returned for. Skipped silently: it is the same "this job
+		// has no transcripts to measure" state as a job that never started.
+		if j.ID == 0 {
+			continue
+		}
+		// d.TokenScan stays keyed on the SLUG while everything around it moved
+		// to the id, and that is a deliberate exception rather than an
+		// oversight. It is not an identity: it is a per-tick throttle clock over
+		// the ACTIVE board only, whose slugs jobs_active_slug already makes
+		// unique, it lives in daemon memory and never persists, and the one
+		// hazard slug-keying carries here — a freed slug's stale stamp making an
+		// unrelated later job wait out an interval it never earned — is closed
+		// by the prune at the bottom of this function. Re-keying it would mean
+		// retyping daemonState.TokenScan in daemon.go, which this change has no
+		// other reason to touch.
 		if !live[CellSession(j)] {
 			if last := d.TokenScan[j.Slug]; last != 0 && now.UnixMilli()-last < tokensIdleInterval.Milliseconds() {
 				continue
@@ -359,7 +411,7 @@ func (d *daemonState) tokensPass(jobs []*Job, live map[string]bool, now time.Tim
 		if repo == "" {
 			continue
 		}
-		wrote, err := refreshJobTokens(st, j, repo, all[j.Slug])
+		wrote, err := refreshJobTokens(st, j, repo, all[j.ID])
 		if err != nil {
 			key := "tokensfail:" + j.Slug
 			if d.Notified[key] == 0 {

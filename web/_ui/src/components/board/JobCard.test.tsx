@@ -551,3 +551,23 @@ describe("AskUserQuestion", () => {
     );
   });
 });
+
+// A queued job that cannot start used to show NOTHING on its card. The reason
+// went to ~/.kraken/logs and to daemon.last_error — which is one string for
+// the whole tick rather than per job, and which the board never rendered — so
+// a real job sat queued through 24 identical failed starts over nine minutes
+// with no explanation on screen, and the workaround was to rename it.
+describe("start_error", () => {
+  it("renders the daemon's reason on a queued card", () => {
+    const msg =
+      "worktree ~/.kraken/cells/helper-catalog/wt-monolith already exists — clean it up first";
+    renderCard(job({ slug: "helper-catalog", state: "queued", start_error: msg }));
+    expect(screen.getByText("start failed")).toBeTruthy();
+    expect(screen.getByText(msg)).toBeTruthy();
+  });
+
+  it("shows nothing when the field is absent", () => {
+    const { container } = renderCard(job({ slug: "helper-catalog", state: "queued" }));
+    expect(container.querySelector(".start-error")).toBeNull();
+  });
+});

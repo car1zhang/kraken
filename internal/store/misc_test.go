@@ -110,42 +110,10 @@ func TestFeedbackAddAndList(t *testing.T) {
 	}
 }
 
-func TestDraftsRoundTrip(t *testing.T) {
-	s := openTest(t)
-	if _, err := s.GetDraft("no-draft"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
-	}
-	if err := s.SetDraft("job-x", "hello"); err != nil {
-		t.Fatalf("SetDraft: %v", err)
-	}
-	d, err := s.GetDraft("job-x")
-	if err != nil {
-		t.Fatalf("GetDraft: %v", err)
-	}
-	if d.Text != "hello" {
-		t.Fatalf("d.Text = %q, want hello", d.Text)
-	}
-	if err := s.SetDraft("job-x", "updated"); err != nil {
-		t.Fatalf("SetDraft update: %v", err)
-	}
-	d, err = s.GetDraft("job-x")
-	if err != nil {
-		t.Fatalf("GetDraft after update: %v", err)
-	}
-	if d.Text != "updated" {
-		t.Fatalf("d.Text = %q, want updated", d.Text)
-	}
-	if err := s.DeleteDraft("job-x"); err != nil {
-		t.Fatalf("DeleteDraft: %v", err)
-	}
-	if _, err := s.GetDraft("job-x"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err after delete = %v, want ErrNotFound", err)
-	}
-	// deleting a nonexistent draft is not an error
-	if err := s.DeleteDraft("never-existed"); err != nil {
-		t.Fatalf("DeleteDraft nonexistent: %v", err)
-	}
-}
+// The drafts table (and its round-trip test) was dropped in schema v11. It
+// had zero non-test callers and zero rows on the live database: /api/draft is
+// served entirely out of api/draft.go's in-memory draftStore, which is
+// explicitly never persisted. Its behaviour lives in api/draft_test.go now.
 
 func TestKVRoundTrip(t *testing.T) {
 	s := openTest(t)

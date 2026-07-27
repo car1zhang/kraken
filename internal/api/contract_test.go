@@ -274,6 +274,15 @@ var webJobSpec = map[string]fieldSpec{
 	"feedback":      {kind: wireArray, required: false},
 	"threads":       {kind: wireArray, required: false},
 	"tokens":        {kind: wireObject, required: false},
+	// why the last StartCell attempt for this job failed — populated for
+	// queued jobs only, omitempty, so absent means "the last attempt worked,
+	// or none was made". Additive: a key ADDED to an existing shape, which
+	// old clients ignore, so apiContract does NOT bump for it
+	// (TestAPIContractUnchanged still pins 5). It is listed here because
+	// assertShape rejects any key the spec doesn't document — an addition
+	// that skips this map fails the suite rather than sliding through
+	// undocumented, which is the whole point of transcribing ios/API.md.
+	"start_error": {kind: wireString, required: false},
 }
 
 // webTokensSpec covers board.go's webTokens, webJob's "tokens" object — one
@@ -408,6 +417,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 			Sessions: 154, UpdatedAt: 1785124027359,
 			ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 		},
+		StartError: "worktree already exists — clean it up first",
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
