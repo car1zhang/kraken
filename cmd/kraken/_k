@@ -16,6 +16,7 @@ _k() {
         'questions:cell-side verb — read/write a job'"'"'s open doc questions via kraken serve'
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'watchlist:cell-side verb — read/write the dream loop'"'"'s global watchlist via kraken serve'
+        'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
         'update:self-update — fast-forward, rebuild, reinstall, restart the launchd job'
@@ -135,6 +136,24 @@ _k() {
                     'declined:looked at and dropped'
                 )
                 _describe -t states 'state' states
+            fi
+            ;;
+        mine)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'digest:one mechanical digest per transcript in the window, as JSON'
+                    'reduce:print ONE transcript cut to its decision-relevant slice'
+                )
+                _describe -t ops 'op' ops
+            elif (( CURRENT == 4 )); then
+                local -a mflags
+                mflags=(
+                    '--since:window floor in unix millis (default: 24h ago)'
+                )
+                _describe -t flags 'flag' mflags
+                # reduce's positional is a transcript path; digest takes none.
+                [[ $words[3] == reduce ]] && _files
             fi
             ;;
     esac

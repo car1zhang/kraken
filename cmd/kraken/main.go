@@ -65,6 +65,8 @@ func main() {
 		cmdFeedback(rest)
 	case "watchlist":
 		cmdWatchlist(rest)
+	case "mine":
+		cmdMine(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":
@@ -180,6 +182,20 @@ Commands:
                       item object from stdin; remove takes a bare row id.
                       verdict/comment are carl's, set from the board — sending
                       either here is a 400, not a silent drop.
+  k mine digest|reduce [--since <unix-millis>] ...
+                      the nightly dream pass' mechanical read of claude's own
+                      transcripts under ~/.claude/projects — a pure local file
+                      read, so unlike the three verbs above it needs no
+                      'kraken serve'. digest walks every transcript touched in
+                      the window (root files AND the subagents/agent-*.jsonl
+                      sidecars, which carry ~24% of all tool calls) and prints
+                      one JSON digest each: tool mix, is_error clusters by
+                      tool, interrupts, <synthetic> API failures, turn
+                      durations, repeated calls. reduce <path> prints ONE
+                      transcript cut to the ~3% that carries a decision (user
+                      prose, tool calls, assistant text; thinking, tool
+                      results and attachments dropped) — what a per-transcript
+                      scout actually reads. Both default to the last 24h.
 
 <sel>: index from 'k ls', '.' for the current pane, an exact pane id (%3), or
 substring match on name/project/agent/tmux-session; also a session-uuid
