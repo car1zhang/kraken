@@ -1661,7 +1661,7 @@ private struct JobCardView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardBackground(barColor: BoardTheme.jobColor(job.color), flagged: hasPendingQuestion)
+        .cardBackground(barColor: BoardTheme.jobColor(job.color))
     }
 }
 

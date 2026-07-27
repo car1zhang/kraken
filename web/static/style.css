@@ -368,15 +368,16 @@ body {
 .col.drophover .col-cards { background: var(--drop-tint-hover); }
 
 /* ---- cards ---- */
-/* the 2px left accent bar is the job's colour channel, and NOTHING else:
-   precedence is flagged > job colour > grey. It deliberately no longer
-   carries state — an uncoloured job is grey regardless of whether it is
-   draft, queued, working, blocked or done, so the bar means "which job is
-   this", never "how is it going". State is still fully legible from the
-   card's column and its `● working` chip, which keep var(--state).
-   Flagged (--counter) stays on top because it is an ALERT — a pending
-   question or a health error — and it carries its own glow; losing it would
-   cost the one signal that means "this needs you now".
+/* the 2px left accent bar is the job's colour channel, and NOTHING else —
+   there are no exceptions and no precedence chain: a card shows its colour,
+   or grey. It carries neither state (an uncoloured job is grey whether it is
+   draft, queued, working, blocked or done) nor alerts (a pending question or
+   health error used to force it to --counter with a hot glow; that rule is
+   gone). So the bar means "which job is this", never "how is it going" or
+   "does this need me". Both of those are still legible elsewhere on the
+   card: state from its column and its `● working` chip, which keep
+   var(--state); a question from its answer button, its .dq-chip.p0 count and
+   the --counter .err line.
    The grey is --text-2, the same value draft/done/archived cards already
    showed here, so it is proven legible at 2px rather than a new token. */
 .card {
@@ -393,7 +394,14 @@ body {
    cursor */
 .card.dragging { opacity: 0.35; cursor: grabbing; }
 .card:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--text-2)); }
-.card.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
+/* there is deliberately no .card.flagged bar/glow rule: a question or health
+   error used to force the bar to --counter with a hot glow, from before jobs
+   had colours of their own. The bar is the job's colour channel now and has
+   no exceptions — a card is its colour, or grey, and nothing else. The
+   "needs you" signal did not disappear with it: the answer button, the
+   --counter .err line, the .dq-chip.p0 count and the column header's own
+   flag all still carry it, and blocked jobs still sit in the blocked
+   column under a `● blocked` chip. */
 .card-top { display: flex; align-items: baseline; gap: 8px; }
 .slug { font: 700 11.5px var(--mono); color: var(--text); word-break: break-all; }
 .state {
@@ -1307,7 +1315,7 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 }
 .dag-node.editable { cursor: pointer; }
 .dag-node.editable:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--text-2)); }
-.dag-node.flagged { border-left-color: var(--counter); box-shadow: var(--glow-hot); }
+/* no .dag-node.flagged rule either, for the same reason as .card.flagged */
 .dag-node .slug { font: 700 11px var(--mono); display: block; word-break: break-all; }
 .dag-node .nstate { font: 9.5px var(--mono); color: var(--state, var(--text-2)); }
 .dag-node .nrepo { font: 9.5px var(--mono); color: var(--text-2); margin-left: 8px; }
