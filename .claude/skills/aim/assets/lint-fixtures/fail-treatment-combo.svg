@@ -1,0 +1,13 @@
+<svg viewBox="0 0 860 200" role="img" aria-label="A box painted red and purple at once, which the stylesheet can only render as one of them, beside the one legal stacking in the palette: grey with dim.">
+  <text class="title" x="16" y="26">a box makes one claim about itself, so it takes one treatment</text>
+
+  <g class="node red purple">
+    <rect x="40" y="70" width="300" height="52" rx="8"/>
+    <text x="190" y="102">✗ ★ two claims at once</text>
+  </g>
+
+  <g class="node grey dim">
+    <rect x="420" y="70" width="300" height="52" rx="8"/>
+    <text x="570" y="102">∅ absent and off-story</text>
+  </g>
+</svg>

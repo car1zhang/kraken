@@ -1,0 +1,33 @@
+<svg viewBox="0 0 860 240" role="img" aria-label="Four glyphless red boxes and a single red legend pill: the pill answers for one of them, and the other three are still reported.">
+  <text class="title" x="16" y="26">one pill answers for one box, not for the whole figure</text>
+
+  <g class="pill red">
+    <rect x="40" y="52" width="120" height="24" rx="12"/>
+    <text x="100" y="69">✗ failing</text>
+  </g>
+
+  <g class="node red">
+    <rect x="40" y="96" width="180" height="44" rx="8"/>
+    <text x="130" y="123">archive step</text>
+  </g>
+
+  <g class="node red">
+    <rect x="250" y="96" width="180" height="44" rx="8"/>
+    <text x="340" y="123">export step</text>
+  </g>
+
+  <g class="node red">
+    <rect x="460" y="96" width="180" height="44" rx="8"/>
+    <text x="550" y="123">upload step</text>
+  </g>
+
+  <g class="node red">
+    <rect x="670" y="96" width="150" height="44" rx="8"/>
+    <text x="745" y="123">notify step</text>
+  </g>
+
+  <g class="node green">
+    <rect x="40" y="170" width="180" height="44" rx="8"/>
+    <text x="130" y="197">✓ preflight</text>
+  </g>
+</svg>

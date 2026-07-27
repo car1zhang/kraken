@@ -117,6 +117,25 @@ short form, with /info's overrides:
   other boxes, every coordinate inside the viewBox, generous whitespace between groups.
 - Boxes are `box → kind` pairs using the sanctioned kind list in the contract's Shape Kit section;
   the teammate derives the silhouette from the kind — never dictate a shape class.
+- **Colour states what is going on with the thing, never how to feel about it.** A treatment is a
+  factual claim about the element it lands on — which means it can be WRONG, and only you know
+  whether it is true, so the brief must assign the treatment AND name its glyph: hermes applies what
+  you assign, invents neither, and cannot check whether the claim holds. Six treatments:
+  - `grey` `∅` — missing · absent · removed (renders dotted; the one treatment that survives greyscale)
+  - `red` `✗` — critically wrong: confirmed AND critical
+  - `yellow` `⚠` — warning · likely wrong · less critically wrong
+  - `green` `✓` — fixed · passing · working
+  - `blue` `+` — new · added
+  - `purple` `★` — emphasis · unorthodox (reach for it least often)
+  - `dim` — out of this figure's story; no glyph
+
+  Two decisive rules: **red vs yellow** — red needs confirmed AND critical, and hesitation itself
+  means unconfirmed, so yellow; **blue vs green** — provenance vs state: new in this change → blue,
+  existed and now works → green (new AND working is blue). **Most boxes carry no treatment at all**
+  — a treated element is the exception. The full table, the three bans, the two exemptions, and the
+  decision procedure live in `.claude/skills/aim/assets/hermes-contract.md` § Colour Semantics; read
+  that before assigning, and LOOK at `.claude/skills/aim/assets/palette-reference.html` whenever a
+  call is not obvious.
 - Lint before wrapping: `python3 .claude/skills/aim/assets/lint_svg.py <fragment> --marker-id
   arrow-<id> --prefix <prefix>`. `SendMessage` line-numbered violations back to that same
   `hermes-<diagram-id>` teammate — it still holds its fragment's context, so never spawn a fresh

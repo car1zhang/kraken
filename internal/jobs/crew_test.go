@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -498,6 +499,118 @@ func TestZeusBriefSkillsPrecedence(t *testing.T) {
 		} {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s (solo=%v) brief missing skills-precedence text %q", j.Slug, j.Solo, want)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The colour rule, on the skills' side.
+//
+// The contract (hermes-contract.md) tells HERMES what a treatment looks like and
+// what it claims. But hermes never picks one: the brief it is handed assigns the
+// treatment and names the glyph, and the brief is written by zeus. So the half of
+// the rule that decides WHICH colour a box gets has to live where zeus reads it —
+// in the two skills that govern the doc phase — or it lives nowhere, and zeus
+// picks by taste.
+//
+// Both files carry it, and both must: the explanation path reads info/SKILL.md
+// INSTEAD of aim/SKILL.md, never both, so a rule present in only one is absent
+// from one whole path. Same reason the diagram-teammate naming rule is duplicated
+// there (TestSkillsOwnTheCellContract in skills_embed_test.go).
+// ---------------------------------------------------------------------------
+
+// treatmentGlyphs is the palette as the skills must state it: six treatments,
+// each paired with the glyph that carries its meaning through greyscale, print,
+// and red–green CVD. Held as a Go literal because this test asks whether the
+// SKILL.md files say the right thing, not whether they agree with each other.
+var treatmentGlyphs = []struct{ class, glyph string }{
+	{"grey", "∅"},
+	{"red", "✗"},
+	{"yellow", "⚠"},
+	{"green", "✓"},
+	{"blue", "+"},
+	{"purple", "★"},
+}
+
+// readRepoSkill reads a SKILL.md out of the repo's own .claude/skills tree. The
+// package's tests run with cwd at internal/jobs, and this file already speaks in
+// worktree-relative asset paths (HermesContractPath and friends), so the repo
+// root is two levels up from here. Fails loudly rather than skipping: a test that
+// silently passes because it could not find the file is the failure mode the
+// whole crew-contract suite exists to avoid.
+func readRepoSkill(t *testing.T, skill string) string {
+	t.Helper()
+	path := filepath.Join("..", "..", ".claude", "skills", skill, "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v — the skill moved or this test's repo-root-relative path is wrong; fix "+
+			"the path rather than leaving the colour-rule check silently dead", path, err)
+	}
+	return string(data)
+}
+
+// TestSkillsCarryColourRule pins the colour rule in both doc-phase skills.
+//
+// Each treatment must be named WITH its glyph on the same line — a rule that
+// lists six class names and a separate pile of glyphs leaves zeus to pair them,
+// and a mispaired glyph is worse than none (it asserts the wrong claim in the one
+// channel that survives greyscale). Both decisive rules must be stated, because
+// they are the two calls zeus actually hesitates over: red vs yellow turns on
+// confirmed-AND-critical, blue vs green on provenance-beats-state. And each skill
+// must point at the contract's Colour Semantics section, since the bans, the
+// exemptions and the decision procedure live there and are deliberately NOT
+// copied here.
+func TestSkillsCarryColourRule(t *testing.T) {
+	for _, skill := range []string{"aim", "info"} {
+		src := readRepoSkill(t, skill)
+		lines := strings.Split(src, "\n")
+
+		for _, tr := range treatmentGlyphs {
+			token := "`" + tr.class + "`"
+			named, paired := false, false
+			for _, line := range lines {
+				if !strings.Contains(line, token) {
+					continue
+				}
+				named = true
+				if strings.Contains(line, tr.glyph) {
+					paired = true
+					break
+				}
+			}
+			if !named {
+				t.Errorf(".claude/skills/%s/SKILL.md never names the treatment %s — zeus reads this file to "+
+					"decide which colour a box gets, so a treatment it does not list is one zeus will never "+
+					"assign (or will assign by taste)", skill, token)
+				continue
+			}
+			if !paired {
+				t.Errorf(".claude/skills/%s/SKILL.md names %s but not its glyph %q on the same line — zeus "+
+					"assigns the treatment AND names the glyph in the hermes brief, and pairing them by hand "+
+					"from two separate lists is how a box ends up asserting the wrong claim in the one channel "+
+					"that survives greyscale", skill, token, tr.glyph)
+			}
+		}
+
+		for _, rule := range []struct{ want, why string }{
+			{"red vs yellow", "the first decisive rule, by name"},
+			{"confirmed AND critical", "what red actually requires — both halves"},
+			{"blue vs green", "the second decisive rule, by name"},
+			{"provenance", "blue is about provenance, green about state"},
+		} {
+			if !strings.Contains(src, rule.want) {
+				t.Errorf(".claude/skills/%s/SKILL.md is missing %q (%s) — these are the two calls zeus "+
+					"hesitates over, and a skill that lists the six treatments without them leaves both "+
+					"undecidable", skill, rule.want, rule.why)
+			}
+		}
+
+		for _, pointer := range []string{HermesContractPath(), "Colour Semantics"} {
+			if !strings.Contains(src, pointer) {
+				t.Errorf(".claude/skills/%s/SKILL.md no longer points at %q — the three bans, the two "+
+					"exemptions and the decision procedure live in the contract and are deliberately not "+
+					"copied here, so dropping the pointer drops them from this path entirely", skill, pointer)
 			}
 		}
 	}

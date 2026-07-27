@@ -1,0 +1,345 @@
+<meta charset="utf-8">
+<title>Palette reference — six treatments, what each one reports, both modes</title>
+<!--
+  PALETTE REFERENCE — the human-readable card for the six treatments (grey, red, yellow, green,
+  blue, purple, plus dim), each shown in both light and dark with its hex values, its glyph, the
+  red/yellow severity pair, the grey-vs-dim separation, and the greyscale proof.
+  - Read by zeus, not filled in by anyone: when a treatment call is not obvious, this is the page
+    to LOOK at. Both .claude/skills/aim/SKILL.md and .claude/skills/info/SKILL.md point here, and
+    the normative rules it illustrates live in hermes-contract.md's "Colour Semantics" section —
+    this file shows, that file governs.
+  - The hex values below must stay in step with the :root blocks of the three stylesheets
+    (diagram-card.html, spec-template.html, explain-template.html); a test now pins them against
+    diagram-card.html, so a drifting hue fails the build rather than shipping a lying swatch.
+    Hue variables are declared in the canonical order red, yellow, green, blue, purple — the same
+    order the stylesheets and the contract use — so all four copies diff by eye. The visible
+    content below is deliberately in a DIFFERENT order (grey first as the non-hue, then the
+    lifecycle), because that ordering is the page's argument.
+  - This file is deliberately a BODY FRAGMENT — no DOCTYPE, html, head, or body tags. Browsers
+    render it fine when opened locally, and it stays self-contained (inline CSS, no external
+    assets) so it can be viewed or shared on its own, exactly like a diagram card.
+-->
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
+    --surface: #f6f8fa;
+    --red: #d1242f; --yellow: #9a6700; --green: #1a7f37; --blue: #0969da; --purple: #8250df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+      --surface: #161b22;
+      --red: #f85149; --yellow: #d29922; --green: #3fb950; --blue: #4493f8; --purple: #ab7df8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 940px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem;
+  }
+  h1 { font-size: 1.8rem; border-bottom: 1px solid var(--line); padding-bottom: .4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2.2rem; }
+  p.lede { color: var(--muted); font-size: .95rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; }
+
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .modes { grid-template-columns: 1fr; } }
+  .mode { border: 1px solid var(--line); border-radius: 8px; padding: 14px;
+    background: var(--p-bg); color: var(--p-fg); }
+  .mode > h3 { margin: 0 0 .7rem; font-size: .76rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--p-muted); font-weight: 600; }
+  .lt { --p-bg:#ffffff; --p-fg:#1f2328; --p-muted:#656d76;
+        --p-red:#d1242f; --p-yellow:#9a6700; --p-green:#1a7f37; --p-blue:#0969da; --p-purple:#8250df; }
+  .dk { --p-bg:#0d1117; --p-fg:#e6edf3; --p-muted:#8b949e;
+        --p-red:#f85149; --p-yellow:#d29922; --p-green:#3fb950; --p-blue:#4493f8; --p-purple:#ab7df8; }
+
+  /* A chip is a miniature of the real diagram box: page fill, treatment stroke, treatment text */
+  .row { display: flex; align-items: center; gap: 9px; margin: 0 0 8px; flex-wrap: wrap; }
+  .chip { flex: 0 0 auto; min-width: 168px; padding: 7px 10px; border-radius: 8px;
+    border: 1.8px solid var(--p-fg); background: var(--p-bg); color: var(--p-fg);
+    font-size: 12.5px; text-align: center; line-height: 1.25; }
+  .chip.grey   { border-color: var(--p-muted); color: var(--p-muted); border-style: dotted; border-width: 2.2px; }
+  .chip.red    { border-color: var(--p-red);    color: var(--p-red); }
+  .chip.yellow { border-color: var(--p-yellow); color: var(--p-yellow); }
+  .chip.green  { border-color: var(--p-green);  color: var(--p-green); }
+  .chip.blue   { border-color: var(--p-blue);   color: var(--p-blue); }
+  .chip.purple { border-color: var(--p-purple); color: var(--p-purple); }
+  .chip.dim    { opacity: .45; }
+  .chip .k { display: block; font-size: 10.5px; color: var(--p-muted); font-weight: 400; }
+  .hex { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; color: var(--p-muted); }
+
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; margin: .8rem 0 0; }
+  th, td { border: 1px solid var(--line); padding: .5rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--surface); font-size: .82rem; }
+  td.c { white-space: nowrap; font-weight: 600; }
+  td.no { color: var(--muted); }
+  .g { display: inline-block; min-width: 1.3em; font-weight: 700; text-align: center; }
+  .sw-grey { color: var(--muted); } .sw-red { color: var(--red); } .sw-yellow { color: var(--yellow); }
+  .sw-green { color: var(--green); } .sw-blue { color: var(--blue); } .sw-purple { color: var(--purple); }
+
+  /* The severity pair, drawn as a pair */
+  .pair { display: flex; gap: 10px; align-items: stretch; margin: .9rem 0 0; flex-wrap: wrap; }
+  .pair .side { flex: 1 1 260px; border: 1.8px solid var(--line); border-radius: 8px; padding: 11px 12px; }
+  .pair .side.red { border-color: var(--red); }
+  .pair .side.yellow { border-color: var(--yellow); }
+  .pair .side b { display: block; font-size: 13.5px; margin-bottom: 3px; }
+  .pair .side.red b { color: var(--red); } .pair .side.yellow b { color: var(--yellow); }
+  .pair .side ul { margin: .3rem 0 0; padding-left: 1.1rem; font-size: 12.5px; color: var(--muted); }
+
+  /* Greyscale proof strip */
+  .proof { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: .8rem; }
+  @media (max-width: 760px) { .proof { grid-template-columns: 1fr; } }
+  .strip { border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+    background: var(--p-bg); display: flex; gap: 7px; }
+  .strip.grey-f { filter: grayscale(1); }
+  .sw { flex: 1; height: 46px; border-radius: 6px; display: flex; align-items: flex-end;
+    justify-content: center; padding-bottom: 3px; font-size: 9.5px; color: #ffffff; font-weight: 600; }
+  .sw.outline { background: none; border: 2.2px dotted var(--p-muted); color: var(--p-muted); }
+  .proof-lbl { font-size: .78rem; color: var(--muted); margin: .5rem 0 .2rem; }
+  blockquote { margin: 1rem 0; padding: .6rem 1rem; border-left: 3px solid var(--purple);
+    background: var(--surface); font-size: .93rem; }
+  figcaption { margin-top: .9rem; font-size: .85rem; color: var(--muted); }
+</style>
+
+<h1>Palette reference — six treatments, what each one reports, both modes</h1>
+
+<p class="lede">A treatment reports <strong>what is going on with the thing it is drawn on</strong> — not how to
+feel about it. Five are hues. The sixth, absence, deliberately is not: it gets a dotted border instead, so it
+does not compete for hue with the states that describe a thing that actually exists.</p>
+
+<h2>The treatments, rendered</h2>
+
+<div class="modes">
+  <div class="mode lt">
+    <h3>light</h3>
+    <div class="row"><span class="chip grey">∅ grey + dotted<span class="k">missing · absent · removed</span></span><span class="hex">#656d76</span></div>
+    <div class="row"><span class="chip red">✗ red<span class="k">critically wrong</span></span><span class="hex">#d1242f</span></div>
+    <div class="row"><span class="chip yellow">⚠ yellow<span class="k">warning · likely wrong</span></span><span class="hex">#9a6700</span></div>
+    <div class="row"><span class="chip green">✓ green<span class="k">fixed · passing · working</span></span><span class="hex">#1a7f37</span></div>
+    <div class="row"><span class="chip blue">+ blue<span class="k">new · added</span></span><span class="hex">#0969da</span></div>
+    <div class="row"><span class="chip purple">★ purple<span class="k">emphasis · unorthodox</span></span><span class="hex">#8250df</span></div>
+    <div class="row"><span class="chip">no class<span class="k">present, ordinary</span></span><span class="hex">stroke #1f2328</span></div>
+    <div class="row"><span class="chip dim">dim<span class="k">out of the story</span></span><span class="hex">opacity .45</span></div>
+  </div>
+  <div class="mode dk">
+    <h3>dark</h3>
+    <div class="row"><span class="chip grey">∅ grey + dotted<span class="k">missing · absent · removed</span></span><span class="hex">#8b949e</span></div>
+    <div class="row"><span class="chip red">✗ red<span class="k">critically wrong</span></span><span class="hex">#f85149</span></div>
+    <div class="row"><span class="chip yellow">⚠ yellow<span class="k">warning · likely wrong</span></span><span class="hex">#d29922</span></div>
+    <div class="row"><span class="chip green">✓ green<span class="k">fixed · passing · working</span></span><span class="hex">#3fb950</span></div>
+    <div class="row"><span class="chip blue">+ blue<span class="k">new · added</span></span><span class="hex">#4493f8</span></div>
+    <div class="row"><span class="chip purple">★ purple<span class="k">emphasis · unorthodox</span></span><span class="hex">#ab7df8</span></div>
+    <div class="row"><span class="chip">no class<span class="k">present, ordinary</span></span><span class="hex">stroke #e6edf3</span></div>
+    <div class="row"><span class="chip dim">dim<span class="k">out of the story</span></span><span class="hex">opacity .45</span></div>
+  </div>
+</div>
+
+<h2>Red and yellow are one pair, split on two conditions</h2>
+
+<p class="lede">This is the line every real disagreement lands on, so it is a rule rather than guidance:
+<strong>red needs both conditions; yellow takes everything else that is wrong.</strong></p>
+
+<div class="pair">
+  <div class="side red">
+    <b>✗ red — critically wrong</b>
+    confirmed <em>and</em> it matters
+    <ul>
+      <li>auto-reap killed a live cell and destroyed uncommitted work</li>
+      <li>a crash, data loss, a wrong answer shipped</li>
+    </ul>
+  </div>
+  <div class="side yellow">
+    <b>⚠ yellow — warning · likely wrong · less critically wrong</b>
+    anything else that is wrong
+    <ul>
+      <li><em>a warning</em> — a caution the reader needs</li>
+      <li><em>likely wrong</em> — suspected, unproven, any severity</li>
+      <li><em>less critically wrong</em> — proven but tolerable: the slow legacy <code>CRM_CUSTOMERS</code> table</li>
+    </ul>
+  </div>
+</div>
+
+<h2>One meaning each — and the meaning each one gives up</h2>
+
+<table>
+  <thead>
+    <tr><th>Treatment</th><th>Reports, and only this</th><th>Glyph</th><th>Does <em>not</em> mean</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="c sw-grey">grey&nbsp;+&nbsp;dotted</td>
+      <td><strong>Missing · absent · removed.</strong> Not there: deleted, unset, never created, discarded. The only treatment with a <em>structural</em> signal.</td>
+      <td><span class="g sw-grey">∅</span></td>
+      <td class="no">broken · deprecated · background context (<code>dim</code>)</td>
+    </tr>
+    <tr>
+      <td class="c sw-red">red</td>
+      <td><strong>Critically wrong.</strong> Confirmed broken <em>and</em> consequential. Should be rare.</td>
+      <td><span class="g sw-red">✗</span></td>
+      <td class="no">removed · slow · deprecated · being replaced</td>
+    </tr>
+    <tr>
+      <td class="c sw-yellow">yellow</td>
+      <td><strong>Warning · likely wrong · less critically wrong.</strong> Wrong, but not both confirmed and critical.</td>
+      <td><span class="g sw-yellow">⚠</span></td>
+      <td class="no">a second category · a middle value on a scale</td>
+    </tr>
+    <tr>
+      <td class="c sw-green">green</td>
+      <td><strong>Fixed · passing · working.</strong> An observation: a repaired bug, a passing check, an assertion that holds.</td>
+      <td><span class="g sw-green">✓</span></td>
+      <td class="no">good · preferred · recommended · the path taken</td>
+    </tr>
+    <tr>
+      <td class="c sw-blue">blue</td>
+      <td><strong>New · added.</strong> This change introduces it: a new file, table, function, section, call site.</td>
+      <td><span class="g sw-blue">+</span></td>
+      <td class="no">focus · emphasis · the interesting bit · a magnitude</td>
+    </tr>
+    <tr>
+      <td class="c sw-purple">purple</td>
+      <td><strong>Emphasis · unorthodox.</strong> A reader will otherwise get this wrong — the surprising mechanism, the thing that looks like a mistake and is not.</td>
+      <td><span class="g sw-purple">★</span></td>
+      <td class="no">important · the subject of the figure</td>
+    </tr>
+    <tr>
+      <td class="c">no class</td>
+      <td>Present, ordinary, nothing to report. <strong>Most boxes.</strong></td>
+      <td>—</td>
+      <td class="no">—</td>
+    </tr>
+    <tr>
+      <td class="c">dim</td>
+      <td>Out of this figure's story: background context, untaken alternatives, the rest of the system. Opacity only, so it composes with any treatment.</td>
+      <td>—</td>
+      <td class="no">missing <em>(grey carries that)</em></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Why grey is full-opacity, and why <code>dim</code> must stay opacity-only</h2>
+
+<p class="lede">Grey at <code>.45</code> opacity measures <strong>1.89 : 1</strong> against the light page —
+not legible. Worse, grey at that same <code>.45</code> sits only <strong>1.46 : 1</strong> from what
+<code>dim</code> already does to an ordinary box — 1.84 : 1 in dark mode — so "absent" and "background
+context" would be the same picture. At full
+opacity grey is 5.25 : 1 light and 6.15 : 1 dark, and the <em>dotted border</em> carries the entire absent
+signal. That is also why <code>dim</code> can never take on a stroke colour or a border style of its own.</p>
+
+<div class="modes">
+  <div class="mode lt">
+    <h3>light — the two must not converge</h3>
+    <div class="row">
+      <span class="chip grey">∅ deleted<span class="k">grey + dotted, full opacity</span></span>
+      <span class="chip dim">background<span class="k">dim: opacity .45, solid</span></span>
+    </div>
+  </div>
+  <div class="mode dk">
+    <h3>dark — the two must not converge</h3>
+    <div class="row">
+      <span class="chip grey">∅ deleted<span class="k">grey + dotted, full opacity</span></span>
+      <span class="chip dim">background<span class="k">dim: opacity .45, solid</span></span>
+    </div>
+  </div>
+</div>
+
+<h2>Why the glyph is mandatory on the five hues</h2>
+
+<p class="lede">The five hues are one grey. Measured on the actual palette, the <em>widest-separated</em>
+pair (yellow / red) is 1.08 : 1 in light mode and 1.33 : 1 in dark; the narrowest is 1.01 : 1. Each clears
+about 4.9 : 1 against the page — they just carry nothing against <em>each other</em>. The right-hand strip
+is what greyscale, and roughly what red–green colour vision deficiency, does to them. Note the one
+treatment that survives it intact.</p>
+
+<div class="proof">
+  <div>
+    <div class="proof-lbl">as rendered</div>
+    <div class="strip lt">
+      <span class="sw outline">∅ grey</span>
+      <span class="sw" style="background:#d1242f">✗ red</span>
+      <span class="sw" style="background:#9a6700">⚠ yellow</span>
+      <span class="sw" style="background:#1a7f37">✓ green</span>
+      <span class="sw" style="background:#0969da">+ blue</span>
+      <span class="sw" style="background:#8250df">★ purple</span>
+    </div>
+    <div class="strip dk" style="margin-top:8px">
+      <span class="sw outline">∅ grey</span>
+      <span class="sw" style="background:#f85149">✗ red</span>
+      <span class="sw" style="background:#d29922">⚠ yellow</span>
+      <span class="sw" style="background:#3fb950">✓ green</span>
+      <span class="sw" style="background:#4493f8">+ blue</span>
+      <span class="sw" style="background:#ab7df8">★ purple</span>
+    </div>
+  </div>
+  <div>
+    <div class="proof-lbl">greyscale — the same six</div>
+    <div class="strip lt grey-f">
+      <span class="sw outline">∅ grey</span>
+      <span class="sw" style="background:#d1242f">✗ red</span>
+      <span class="sw" style="background:#9a6700">⚠ yellow</span>
+      <span class="sw" style="background:#1a7f37">✓ green</span>
+      <span class="sw" style="background:#0969da">+ blue</span>
+      <span class="sw" style="background:#8250df">★ purple</span>
+    </div>
+    <div class="strip dk grey-f" style="margin-top:8px">
+      <span class="sw outline">∅ grey</span>
+      <span class="sw" style="background:#f85149">✗ red</span>
+      <span class="sw" style="background:#d29922">⚠ yellow</span>
+      <span class="sw" style="background:#3fb950">✓ green</span>
+      <span class="sw" style="background:#4493f8">+ blue</span>
+      <span class="sw" style="background:#ab7df8">★ purple</span>
+    </div>
+  </div>
+</div>
+
+<blockquote>
+Grey is the exception that proves the rule: because its signal is a border style rather than a hue, it is
+the only treatment that reads correctly in greyscale — which is a good argument for having taken absence
+off the colour channel. For the five hues, <code>✗ ⚠ ✓ + ★</code> do the actual work, and that is why a
+sixth hue would buy nothing: it would be a sixth indistinguishable grey.
+</blockquote>
+
+<h2>Reading it in place</h2>
+
+<div class="modes">
+  <div class="mode lt">
+    <h3>light — one mixed figure</h3>
+    <div class="row">
+      <span class="chip blue">+ customer_search<span class="k">sqlite table · added here</span></span>
+      <span class="chip yellow">⚠ CRM_CUSTOMERS<span class="k">snowflake table · slow</span></span>
+    </div>
+    <div class="row">
+      <span class="chip grey">∅ QWEN_STT_WS_URL<span class="k">env var · unset</span></span>
+      <span class="chip green">✓ backfill<span class="k">function · passing</span></span>
+    </div>
+    <div class="row">
+      <span class="chip red">✗ auto-reap on merge<span class="k">killed a live cell, lost WIP</span></span>
+      <span class="chip purple">★ Setsid: true<span class="k">or kickstart kills the child</span></span>
+    </div>
+  </div>
+  <div class="mode dk">
+    <h3>dark — the same figure</h3>
+    <div class="row">
+      <span class="chip blue">+ customer_search<span class="k">sqlite table · added here</span></span>
+      <span class="chip yellow">⚠ CRM_CUSTOMERS<span class="k">snowflake table · slow</span></span>
+    </div>
+    <div class="row">
+      <span class="chip grey">∅ QWEN_STT_WS_URL<span class="k">env var · unset</span></span>
+      <span class="chip green">✓ backfill<span class="k">function · passing</span></span>
+    </div>
+    <div class="row">
+      <span class="chip red">✗ auto-reap on merge<span class="k">killed a live cell, lost WIP</span></span>
+      <span class="chip purple">★ Setsid: true<span class="k">or kickstart kills the child</span></span>
+    </div>
+  </div>
+</div>
+
+<figcaption>All six treatments in both modes, with the one thing each reports and the meanings each gives
+up. Absence is deliberately not a hue — it takes a dotted border, which is why it is the only treatment
+still legible in the greyscale strip, and why <code>dim</code> must stay opacity-only (at equal opacity the
+two are just 1.46 : 1 apart in lightness, so the border style is the entire difference). Red and yellow are one severity
+pair split on two conditions: red needs confirmed <em>and</em> critical, yellow takes the rest. The bottom
+pair shows the palette working in one figure, where in practice most boxes would carry no treatment at
+all.</figcaption>

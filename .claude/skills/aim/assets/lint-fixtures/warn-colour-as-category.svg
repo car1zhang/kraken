@@ -1,0 +1,86 @@
+<svg viewBox="0 0 860 560" role="img" aria-label="Three tables of coloured cells: one flat rainbow with no header cell, one row-grouped table whose header row makes the same colouring legitimate, and one rainbow split across two row groups so that no single parent holds four cells.">
+  <text class="title" x="16" y="26">colour is a verdict, not a category — a header cell is what names one</text>
+
+  <g class="table">
+    <rect x="40" y="60" width="330" height="200" rx="2"/>
+    <text x="205" y="52">runs · flat</text>
+    <g class="cell green">
+      <rect x="56" y="76" width="298" height="26" rx="3"/>
+      <text x="205" y="94">✓ build</text>
+    </g>
+    <g class="cell red">
+      <rect x="56" y="112" width="298" height="26" rx="3"/>
+      <text x="205" y="130">✗ archive</text>
+    </g>
+    <g class="cell yellow">
+      <rect x="56" y="148" width="298" height="26" rx="3"/>
+      <text x="205" y="166">⚠ export</text>
+    </g>
+    <g class="cell green">
+      <rect x="56" y="184" width="298" height="26" rx="3"/>
+      <text x="205" y="202">✓ upload</text>
+    </g>
+    <g class="cell red">
+      <rect x="56" y="220" width="298" height="26" rx="3"/>
+      <text x="205" y="238">✗ notify</text>
+    </g>
+  </g>
+
+  <g class="table">
+    <rect x="490" y="60" width="330" height="200" rx="2"/>
+    <text x="655" y="52">runs · row-grouped</text>
+    <g>
+      <g class="cell head">
+        <rect x="506" y="76" width="298" height="26" rx="3"/>
+        <text x="655" y="94">phase · verdict</text>
+      </g>
+    </g>
+    <g>
+      <g class="cell green">
+        <rect x="506" y="112" width="298" height="26" rx="3"/>
+        <text x="655" y="130">✓ build</text>
+      </g>
+      <g class="cell red">
+        <rect x="506" y="148" width="298" height="26" rx="3"/>
+        <text x="655" y="166">✗ archive</text>
+      </g>
+      <g class="cell yellow">
+        <rect x="506" y="184" width="298" height="26" rx="3"/>
+        <text x="655" y="202">⚠ export</text>
+      </g>
+      <g class="cell green">
+        <rect x="506" y="220" width="298" height="26" rx="3"/>
+        <text x="655" y="238">✓ upload</text>
+      </g>
+    </g>
+  </g>
+
+  <g class="table">
+    <rect x="40" y="330" width="330" height="200" rx="2"/>
+    <text x="205" y="322">runs · split, no header</text>
+    <g>
+      <g class="cell green">
+        <rect x="56" y="346" width="298" height="26" rx="3"/>
+        <text x="205" y="364">✓ build</text>
+      </g>
+      <g class="cell red">
+        <rect x="56" y="382" width="298" height="26" rx="3"/>
+        <text x="205" y="400">✗ archive</text>
+      </g>
+    </g>
+    <g>
+      <g class="cell yellow">
+        <rect x="56" y="418" width="298" height="26" rx="3"/>
+        <text x="205" y="436">⚠ export</text>
+      </g>
+      <g class="cell green">
+        <rect x="56" y="454" width="298" height="26" rx="3"/>
+        <text x="205" y="472">✓ upload</text>
+      </g>
+      <g class="cell red">
+        <rect x="56" y="490" width="298" height="26" rx="3"/>
+        <text x="205" y="508">✗ notify</text>
+      </g>
+    </g>
+  </g>
+</svg>

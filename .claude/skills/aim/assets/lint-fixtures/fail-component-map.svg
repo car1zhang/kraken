@@ -27,7 +27,7 @@
       }
     }
     .cm-root .node { fill: var(--cm-card); stroke: var(--cm-card-stroke); stroke-width: 1.5; rx: 8; }
-    .cm-root .accent { fill: var(--cm-accent); stroke: var(--cm-accent-stroke); stroke-width: 1.75; }
+    .cm-root .blue { fill: var(--cm-accent); stroke: var(--cm-accent-stroke); stroke-width: 1.75; }
     .cm-root .group { fill: none; stroke: var(--cm-group-stroke); stroke-width: 1.5; stroke-dasharray: 6 5; rx: 12; }
     .cm-root .groupLabel { fill: var(--cm-group-label); font: 700 13px system-ui, sans-serif; text-anchor: start; }
     .cm-root .nodeText { fill: var(--cm-text); font: 13px system-ui, sans-serif; text-anchor: middle; }
@@ -49,16 +49,16 @@
     <rect class="group" x="30" y="56" width="400" height="306"/>
     <text class="groupLabel" x="42" y="50">web assets — most change</text>
 
-    <!-- Node A: app.js (accent) -->
-    <rect class="node accent" x="50" y="84" width="360" height="70" rx="8"/>
+    <!-- Node A: app.js (blue) -->
+    <rect class="node blue" x="50" y="84" width="360" height="70" rx="8"/>
     <text class="nodeText" x="230" y="107">web/app.js —<tspan x="230" dy="1.2em">cardHTML, archivedCardHTML,</tspan><tspan x="230" dy="1.2em">editor overlay, handlers</tspan></text>
 
-    <!-- Node B: index.html (accent) -->
-    <rect class="node accent" x="50" y="186" width="360" height="60" rx="8"/>
+    <!-- Node B: index.html (blue) -->
+    <rect class="node blue" x="50" y="186" width="360" height="60" rx="8"/>
     <text class="nodeText" x="230" y="211">web/index.html —<tspan x="230" dy="1.2em">#editor-overlay markup</tspan></text>
 
-    <!-- Node C: style.css (accent) -->
-    <rect class="node accent" x="50" y="278" width="360" height="60" rx="8"/>
+    <!-- Node C: style.css (blue) -->
+    <rect class="node blue" x="50" y="278" width="360" height="60" rx="8"/>
     <text class="nodeText" x="230" y="303">web/style.css — .kill deleted,<tspan x="230" dy="1.2em">composer styles</tspan></text>
 
     <!-- ================= GROUP 2: Go server (top right) ================= -->
@@ -77,12 +77,12 @@
     <rect class="group" x="470" y="296" width="360" height="180"/>
     <text class="groupLabel" x="482" y="290">iOS app — one shared pattern</text>
 
-    <!-- Node F: JobDetailView (accent) -->
-    <rect class="node accent" x="488" y="324" width="324" height="58" rx="8"/>
+    <!-- Node F: JobDetailView (blue) -->
+    <rect class="node blue" x="488" y="324" width="324" height="58" rx="8"/>
     <text class="nodeText" x="650" y="347">JobDetailView.swift —<tspan x="650" dy="1.2em">artifact collapse in Detail + Steer</tspan></text>
 
-    <!-- Node G: API.md (accent) -->
-    <rect class="node accent" x="488" y="406" width="324" height="56" rx="8"/>
+    <!-- Node G: API.md (blue) -->
+    <rect class="node blue" x="488" y="406" width="324" height="56" rx="8"/>
     <text class="nodeText" x="650" y="428">ios/API.md —<tspan x="650" dy="1.2em">/api/review section deleted</tspan></text>
 
     <!-- ================= EDGES ================= -->

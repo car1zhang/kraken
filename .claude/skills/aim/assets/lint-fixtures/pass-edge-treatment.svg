@@ -1,0 +1,24 @@
+<svg viewBox="0 0 860 200" role="img" aria-label="Two edges carrying treatments: a blue edge for a newly added call and a grey edge for a call that was removed, both drawn as paths between plain boxes.">
+  <text class="title" x="16" y="26">a treatment rides an edge as readily as a box</text>
+
+  <g class="proc">
+    <rect x="40" y="70" width="200" height="56" rx="6"/>
+    <text x="140" y="104">daemon</text>
+  </g>
+
+  <g class="proc">
+    <rect x="330" y="70" width="200" height="56" rx="6"/>
+    <text x="430" y="104">pr tracker</text>
+  </g>
+
+  <g class="proc">
+    <rect x="620" y="70" width="200" height="56" rx="6"/>
+    <text x="720" y="104">reaper</text>
+  </g>
+
+  <path class="edge blue" d="M 240,98 H 330"/>
+  <text class="edgeLabel" x="285" y="90">+ new</text>
+
+  <path class="edge grey" d="M 530,98 H 620"/>
+  <text class="edgeLabel" x="575" y="90">∅ gone</text>
+</svg>

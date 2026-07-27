@@ -14,8 +14,8 @@
   {
     "file": "fail-target-surfaces.svg",
     "expect": "fail",
-    "warnings": 4,
-    "note": "embedded <style> block + hex color literals -> STYLE_BLOCK + COLOR_LITERAL; the four warnings are pre-existing TEXT_OVERFLOW near the right margin"
+    "warnings": 7,
+    "note": "embedded <style> block + hex color literals -> STYLE_BLOCK + COLOR_LITERAL; four of the warnings are pre-existing TEXT_OVERFLOW near the right margin, and three are COLOUR_NO_GLYPH on its \"node blue\" boxes. Its fourth blue box escapes only because its label reads \"first 3 + [+N more]\": the rule demands the treatment's OWN glyph, and blue's is \"+\", a character prose uses too. That residual is recorded rather than fixed — see the KNOWN LIMITATION note on COLOUR_NO_GLYPH — because the alternative is taking \"+\" away from blue, and \"+\" is the diff convention every reader already knows. This fixture is the pin for it"
   },
   {
     "file": "fail-component-map.svg",
@@ -28,6 +28,12 @@
     "expect": "fail",
     "warnings": 0,
     "note": "<script>/<foreignObject>/<image> present -> BANNED_ELEMENT (ban-list line 155)"
+  },
+  {
+    "file": "fail-treatment-combo.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "<g class=\"node red purple\"> -> exactly one TREATMENT_COMBO failure, the mirror of SHAPE_COMBO one level up: a box makes ONE claim about itself and the stylesheet can only paint one of the two. Its label states both glyphs, so the failure is isolated from COLOUR_NO_GLYPH. The \"node grey dim\" beside it is the legal stacking (see pass-treatments.svg, where a PASS verdict proves it)"
   },
   {
     "file": "fail-shape-combo.svg",
@@ -130,14 +136,14 @@
     "expect": "pass",
     "marker_id": "arrow-current-state",
     "warnings": 0,
-    "note": "clean contract-conforming fragment from this spec's own doc"
+    "note": "clean contract-conforming fragment from this spec's own doc, renamed to the treatments (warn->yellow, danger->red) and given each treatment's glyph in its label — a shipped worked example has to follow the rule it demonstrates, and COLOUR_NO_GLYPH is covered properly by the dedicated warn-colour-* fixtures. Its \"edge red\" arrows carry no glyph and never needed one: an edge has no label of its own"
   },
   {
     "file": "pass-code-map.svg",
     "expect": "pass",
     "marker_id": "arrow-code-map",
     "warnings": 1,
-    "note": "clean contract-conforming fragment from this spec's own doc; its two former \"node store\" boxes are now \"file\" documents. The one warning is a pre-existing TEXT_OVERFLOW on an edgeLabel near the right margin, unrelated to the shape kit"
+    "note": "contract-conforming fragment from this spec's own doc; its two former \"node store\" boxes are now \"file\" documents, and its two \"node blue\" boxes now lead their labels with the + they were marking in colour alone. The one remaining warning is the pre-existing TEXT_OVERFLOW on an edgeLabel near the right margin — unrelated to the shape kit and older than this job, which is why this entry is 1 rather than 0"
   },
   {
     "file": "pass-shape-kit.svg",
@@ -149,12 +155,42 @@
     "file": "pass-nesting.svg",
     "expect": "pass",
     "warnings": 0,
-    "note": "the five legal containments (store>table, machine>proc+store, pkg>fn, proc>iface, ui>cell), every parent carrying \"holds\" and every child — including the iface lollipop knob, which is a <circle> outside its rect — inside the parent's well"
+    "note": "the five legal containments (store>table, machine>proc+store, pkg>fn, proc>iface, ui>cell), every parent carrying \"holds\" and every child — including the iface lollipop knob, which is a <circle> outside its rect — inside the parent's well. Its \"cell green\" now reads \"✓ working\" rather than leaving the tick to the paint"
   },
   {
     "file": "pass-negative-controls.svg",
     "expect": "pass",
+    "warnings": 1,
+    "note": "combos that must NOT trip SHAPE_COMBO: cell head, node blue, bar green, region yellow, store holds, edge dashed green, a spark path inside an agent, and ui > table > cell. Both \"holds\" parents really do hold something, so neither draws HOLDS_EMPTY. The one warning is COLOUR_NO_GLYPH on its \"node blue\", a true positive; the treated bar, region and edge beside it stay silent, which is what pins their exemptions"
+  },
+  {
+    "file": "pass-treatments.svg",
+    "expect": "pass",
     "warnings": 0,
-    "note": "combos that must NOT trip SHAPE_COMBO: cell head, node accent, bar ok, region warn, store holds, edge dashed ok, a spark path inside an agent, and ui > table > cell. Both \"holds\" parents really do hold something, so neither draws HOLDS_EMPTY"
+    "note": "all six treatments on boxes — grey, red, yellow, green, blue, purple — each stating its OWN glyph, so the pairing COLOUR_NO_GLYPH demands is pinned by a fixture that emits nothing at all. The seventh box is \"node grey dim\": the one legal stacking in the palette, and the only place a PASS verdict proves TREATMENT_COMBO does not count \"dim\" (a fail fixture could not — the manifest pins the failure VERDICT, never the failure count, so an extra failure there would be invisible)"
+  },
+  {
+    "file": "pass-edge-treatment.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "<path class=\"edge blue\"> and <path class=\"edge grey\"> -> clean; a treatment is legal on an edge as well as on a box, and an edge is never asked for a glyph of its own (its mark, when it has one, rides on the edgeLabel beside it)"
+  },
+  {
+    "file": "warn-colour-no-glyph.svg",
+    "expect": "pass",
+    "warnings": 2,
+    "note": "two COLOUR_NO_GLYPH, one per way of failing the rule: a \"node yellow\" whose label says nothing about why it is yellow, and a \"node purple\" labelled \"✓ shipped\" — the WRONG treatment's glyph, which the rule counts as no glyph at all because a mark contradicting the paint is worse in greyscale than a bare box. Everything beside them is a control that must stay quiet: a \"node green\" stating ✓, a \"node red\" covered by an adjacent \"pill red\" stating ✗, an unlabelled \"bar purple\", a \"region grey\", and an \"edge blue\" path"
+  },
+  {
+    "file": "warn-legend-defeat.svg",
+    "expect": "pass",
+    "warnings": 3,
+    "note": "four glyphless \"node red\" boxes and ONE \"pill red\" legend -> three COLOUR_NO_GLYPH, not zero. The adjacent-pill escape is a budget: a pill answers for one box and is then spent. As a predicate it was defeated by exactly the pattern it was written to catch — hermes fragments are flat, so every part is a sibling of every other, and one pill in a corner silenced the whole figure. The \"node green\" states its own glyph and never touches the budget"
+  },
+  {
+    "file": "warn-colour-as-category.svg",
+    "expect": "pass",
+    "warnings": 2,
+    "note": "three tables, two COLOUR_AS_CATEGORY. (1) five flat cells in three treatments with no header cell -> hue is doing a category's job. (2) the same colouring row-grouped, with the \"cell head\" in a <g> row of its own and the data cells in another: MUST NOT fire, and did fire before the rule grouped cells by their table instead of by their immediate parent — the cry-wolf case, on completely ordinary markup. (3) the same rainbow split across two row <g>s with no header anywhere: MUST fire, and was silent for the mirror-image reason. Every cell states its glyph, so the count isolates this rule from COLOUR_NO_GLYPH"
   }
 ]

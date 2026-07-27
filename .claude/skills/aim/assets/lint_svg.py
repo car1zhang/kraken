@@ -10,7 +10,8 @@ Hard failures print as "line N: RULE_NAME: message" and cause a non-zero exit.
 Warnings print the same way with a "(warning)" suffix and never affect the exit code.
 
 Warn-tier rules, the complete list: TEXT_OVERFLOW, SHAPE_TEXT_FIT, NEST_WELL,
-HOLDS_MISSING, HOLDS_EMPTY, GEOM_UNPARSEABLE. Every other rule is a hard failure.
+HOLDS_MISSING, HOLDS_EMPTY, GEOM_UNPARSEABLE, COLOUR_NO_GLYPH, COLOUR_AS_CATEGORY.
+Every other rule is a hard failure.
 Anything this linter cannot parse or read degrades to a finding — it never raises.
 
 stdlib only: re, sys, json, argparse, pathlib, xml.parsers.expat.
@@ -23,9 +24,10 @@ import xml.parsers.expat as expat
 from pathlib import Path
 
 ALLOWED_CLASSES = {
-    "node", "accent", "group", "store", "lane",
+    "node", "group", "store", "lane",
     "edge", "dashed", "edgeLabel", "arrowhead", "flow-dot",
-    "ok", "warn", "danger",
+    # ---- the six treatments (see TREATMENT_GLYPHS) ----
+    "grey", "red", "yellow", "green", "blue", "purple",
     "cell", "step",
     "pill", "decision", "actor", "badge", "bar", "axis", "region",
     "title", "note", "dim",
@@ -38,12 +40,42 @@ ALLOWED_CLASSES = {
     "head", "holds", "spark",
 }
 
+# The six TREATMENTS and the glyph each one is required to state, verbatim from the
+# contract's treatment table. Colour is never the only carrier of a claim — a reader
+# who cannot separate red from green, or who is looking at a greyscale print, still has
+# to be able to read the figure — so every treated box says its meaning in a glyph too.
+# This dict is the single source of truth for the six: STATUS_CLASSES is derived from
+# its keys and COLOUR_NO_GLYPH reads its values, so a treatment can only ever be added
+# here (and to ALLOWED_CLASSES, whose literal list mirrors the contract's Ban List).
+TREATMENT_GLYPHS = {
+    "grey": "∅",     # missing · absent · removed
+    "red": "✗",      # critically wrong
+    "yellow": "⚠",   # warning · likely wrong
+    "green": "✓",    # fixed · passing · working
+    "blue": "+",     # new · added
+    "purple": "★",   # emphasis · unorthodox
+}
+
+# Treated <g>s that COLOUR_NO_GLYPH never asks for a glyph, because they are scaffolding
+# or marks rather than claims: a flow-dot and a spark are marks with no label at all, and
+# a step/bar/region is a band or a backdrop whose label names a phase, not a verdict.
+# (An <path class="edge …"> is exempt for the same reason and needs no entry: the sweep
+# only ever looks at <g>, and an edge's glyph — when it has one — rides on its edgeLabel.)
+#
+# `flow-dot` and `spark` are unreachable by design, and kept anyway: CLASS_PLACEMENT pins
+# the first to <circle> and the second to <path>, and this sweep only visits <g>, so no
+# conformant OR non-conformant fragment can reach them. Only step/bar/region do real work
+# today. They are listed because the exemption is a statement about what those parts MEAN,
+# which stays true if either ever gains a <g> form — the same reason CONTAINER_SHAPES
+# keeps `lane`, whose depth exemption is likewise unreachable.
+GLYPH_EXEMPT_CLASSES = {"flow-dot", "step", "bar", "region", "spark"}
+
 # Elements banned outright by the contract's ban list — they leak into or execute
 # in the host document once flattened. (<style> has its own STYLE_BLOCK rule.)
 BANNED_ELEMENTS = {"script", "foreignObject", "image"}
 
 # Classes that name a silhouette. Exactly one of these may appear on an element:
-# a box is one kind of thing. Modifiers (accent/ok/warn/danger/dim/head/holds/dashed)
+# a box is one kind of thing. Modifiers (the six treatments, plus dim/head/holds/dashed)
 # and non-silhouette parts (edge/edgeLabel/arrowhead/flow-dot/axis/title/note/spark)
 # are deliberately absent, so they compose with any shape.
 SHAPE_CLASSES = {
@@ -55,8 +87,10 @@ SHAPE_CLASSES = {
     "pkg", "machine", "cloud",
 }
 
-# Classes that ONLY ever belong on a <g> wrapping a box/container.
-BOX_ONLY_CLASSES = {"node", "accent", "store", "group", "lane", "cell", "step",
+# Classes that ONLY ever belong on a <g> wrapping a box/container. No TREATMENT appears
+# here: all six are legal on a <path class="edge …"> as well as on a box, and it is
+# STATUS_CLASSES that pins them to those two hosts.
+BOX_ONLY_CLASSES = {"node", "store", "group", "lane", "cell", "step",
                     "pill", "decision", "actor", "badge", "bar", "region",
                     # the 17 silhouettes always wrap their geometry in a <g>
                     "proc", "cli", "thread", "fn", "agent", "llm", "timer",
@@ -189,9 +223,11 @@ GEOM_ATTRS = {
 # Classes that ONLY ever belong on a <text> element.
 TEXT_ONLY_CLASSES = {"edgeLabel", "title", "note"}
 
-# Status classes are dual-purpose in the contract: a box variant on <g> (node ok/warn/danger)
-# or an edge variant on <path> (edge ok/warn/danger) — valid host is <g> or <path>, never anything else.
-STATUS_CLASSES = {"ok", "warn", "danger"}
+# The six treatments are dual-purpose in the contract: a box variant on <g>
+# (node red / cell green) or an edge variant on <path> (edge blue / edge grey) — valid
+# host is <g> or <path>, never anything else. Derived from TREATMENT_GLYPHS so the set
+# of treatments and the glyph each one owes can never drift apart.
+STATUS_CLASSES = set(TREATMENT_GLYPHS)
 
 # (?<!&) keeps XML numeric character references (&#8594; etc.) from matching as hex colors.
 COLOR_LITERAL_RE = re.compile(r"(?<!&)#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
@@ -396,6 +432,26 @@ def own_geometry(el):
             continue
         out.append(c)
     return out
+
+
+def own_label_text(el):
+    """Every character this element's OWN labels contain: the text of its <text>/<tspan>
+    descendants, through any number of unclassed wrappers but STOPPING at the next
+    shape-carrying <g> — the same walk own_geometry does, for the same reason. A child
+    box's label is the child's claim, never the parent's, so a nested `<g class="cell
+    green">` saying ✓ must not answer COLOUR_NO_GLYPH on the box around it.
+
+    Iterative rather than recursive: a pathological fragment can be 20 000 <g>s deep."""
+    out = []
+    stack = list(reversed(el.children))
+    while stack:
+        c = stack.pop()
+        if c.tag == "g" and shape_of(c) is not None:
+            continue
+        if c.tag in ("text", "tspan"):
+            out.append(c.text)
+        stack.extend(reversed(c.children))
+    return "".join(out)
 
 
 def own_rect_boxes(el):
@@ -637,6 +693,28 @@ def lint(path, marker_id=None, prefix=None):
                               f'classes ({" + ".join(shape_toks)}); exactly one silhouette per '
                               f"<g> — pick the single shape for this box's kind from the "
                               f"kind→shape table{hint}"))
+        # TREATMENT_COMBO — the exact mirror of SHAPE_COMBO, one level up: a box is one
+        # kind of thing, and it makes one claim about itself. Two treatments on one
+        # element is not a judgement call about intent (which is why this is a failure
+        # while the two COLOUR_ rules are warnings) — it is a box asserting, say, both
+        # "critically wrong" and "unorthodox", with a stylesheet that can only paint one
+        # of them. Deduped for SHAPE_COMBO's reason: `class="red red"` names one
+        # treatment. Not gated on the tag, also for SHAPE_COMBO's reason: on a <rect> it
+        # is already a CLASS_PLACEMENT, and the pair reads as the two distinct defects
+        # they are. `dim` is not a treatment and never counts here, which is what keeps
+        # `grey dim` — the one legal stacking in the palette — legal.
+        treat_toks = []
+        for t in tokens:
+            if t in STATUS_CLASSES and t not in treat_toks:
+                treat_toks.append(t)
+        if len(treat_toks) > 1:
+            failures.append((el.line, "TREATMENT_COMBO",
+                              f'classes "{treat_toks[0]}" and "{treat_toks[1]}" are both '
+                              f'treatments ({" + ".join(treat_toks)}); exactly one treatment '
+                              f"per element — a box or an edge states ONE claim about itself, "
+                              f"so pick the single verdict this one makes from the treatment "
+                              f'table ("dim" is not a treatment: "grey dim" is the one legal '
+                              f"stacking)"))
         box_tokens = [t for t in tokens if t in BOX_ONLY_CLASSES]
         if box_tokens and el.tag != "g":
             failures.append((el.line, "CLASS_PLACEMENT",
@@ -976,6 +1054,123 @@ def lint(path, marker_id=None, prefix=None):
                               f'estimated label width {width:.0f}px exceeds the "{shape}" '
                               f"usable interior {usable:.0f}px (W-{allowance} of a {box_w:g}px "
                               f"box); widen the box or shorten the label"))
+
+    # COLOUR_NO_GLYPH (warning) — a box that carries a treatment must SAY what the
+    # treatment means, because colour alone is not a channel every reader has: the
+    # contract pairs each of the six with a glyph for exactly that reason. Two ways to
+    # satisfy it, both accepted here: the treatment's OWN glyph sits in the box's own
+    # label, or an adjacent `<g class="pill <treatment>">` states it for the box beside
+    # it (the sanctioned escape for a box whose label has no room). Warn-tier, never a
+    # failure: a glyphless treated box renders exactly as intended, it just reads as
+    # decoration.
+    #
+    # The MATCHING glyph, not any of the six. Accepting any sanctioned mark let a
+    # `<g class="node red">` labelled "✓ done" pass — a box claiming "critically wrong"
+    # while showing a tick, waved through. A glyph from another treatment is worse than
+    # no glyph at all, because greyscale leaves the reader with only the contradiction.
+    #
+    # KNOWN LIMITATION, deliberately left standing: blue's glyph is `+`, a character
+    # ordinary prose uses, so a label like "first 3 + [+N more]" auto-satisfies blue
+    # (lint-fixtures/fail-target-surfaces.svg pins exactly that). Do NOT "fix" this by
+    # giving blue a rarer mark: `+` is the diff convention every reader already knows,
+    # and a missed "this is new" annotation is the cheapest of the six to get wrong.
+    # The adjacent-pill escape is a BUDGET, not a predicate: each pill answers for exactly
+    # ONE box, and a second glyphless box of the same treatment beside it warns.
+    #
+    # It was a predicate — "some sibling <g> carries `pill` and this treatment" — and that
+    # was defeated by the very pattern it was written to stop. Hermes fragments are FLAT:
+    # every part is a direct child of the root <svg>, so "sibling" means "anywhere in the
+    # figure", and one <g class="pill red"> in a corner silenced every glyphless red box in
+    # the diagram. Neither of the other two candidate fixes holds up: excluding the root
+    # <svg> as a shared parent deletes the escape outright in the only markup shape hermes
+    # writes, and geometric adjacency has to invent a distance threshold and then decides
+    # nothing at all for a box whose geometry does not measure (silhouette_box returns None
+    # for a rect-drawn shape that drew no rect). A budget needs no threshold, cannot be
+    # defeated by adding one more box, and still scales to a figure that legitimately pills
+    # several boxes: it just has to carry one pill each.
+    #
+    # Spending is in document order, which is the order a reader meets the boxes in, and a
+    # pill NEVER pays for itself — a legend pill's whole job is to state the glyph, so a
+    # glyphless one is always reported.
+    pill_budget = {}
+    for el in elements:
+        if el.tag != "g" or el.parent is None:
+            continue
+        toks = class_tokens(el)
+        if "pill" not in toks:
+            continue
+        for t in toks:
+            if t in STATUS_CLASSES:
+                key = (id(el.parent), t)
+                pill_budget[key] = pill_budget.get(key, 0) + 1
+
+    for el in elements:
+        if el.tag != "g":
+            continue
+        toks = class_tokens(el)
+        if any(t in GLYPH_EXEMPT_CLASSES for t in toks):
+            continue
+        label = own_label_text(el)
+        missing = [t for t in toks
+                   if t in STATUS_CLASSES and TREATMENT_GLYPHS[t] not in label]
+        if not missing:
+            continue
+        if "pill" not in toks and el.parent is not None:
+            unpaid = []
+            for t in missing:
+                key = (id(el.parent), t)
+                if pill_budget.get(key, 0) > 0:
+                    pill_budget[key] -= 1
+                else:
+                    unpaid.append(t)
+            missing = unpaid
+        if not missing:
+            continue
+        first = missing[0]
+        warnings.append((el.line, "COLOUR_NO_GLYPH",
+                          f'<g class="{el.attrib.get("class", "")}"> states no '
+                          f'"{first}" glyph; add {TREATMENT_GLYPHS[first]} to its label '
+                          f'or an adjacent <g class="pill {first}">'))
+
+    # COLOUR_AS_CATEGORY (warning) — four or more cells in one table painted in two or more
+    # different treatments, with no `cell head` naming what the cells mean, is colour
+    # standing in for a category: the reader is left to infer a taxonomy from hue, which the
+    # standard bans (the six treatments are verdicts, not a palette). A header cell is what
+    # makes the same colouring legitimate, so its presence is the exemption.
+    #
+    # The group is the cells' nearest SHAPE ancestor — the `table`/`ui`/`type` holding them
+    # — not their immediate parent, and the `head` exemption is taken from that same scope.
+    # Immediate-parent bucketing broke in both directions on markup that is completely
+    # ordinary, because cells get row-grouped in bare <g>s: a table whose header row and
+    # body rows are separate <g>s warned despite carrying two `cell head`s (the cry-wolf
+    # case, on conformant markup), while a genuine rainbow split across two row wrappers
+    # stayed silent. nearest_shape_g sees through those wrappers, exactly as the nesting
+    # rules do. Cells with no shape ancestor at all share the sentinel scope 0 — no id() is
+    # ever 0 — which is the right grouping too: they are all loose in the same figure.
+    cells_by_scope = {}
+    for el in elements:
+        if el.tag != "g" or "cell" not in class_tokens(el):
+            continue
+        scope_g, _ = nearest_shape_g(el)
+        cells_by_scope.setdefault(id(scope_g) if scope_g is not None else 0, []).append(el)
+    for cells in cells_by_scope.values():
+        if len(cells) < 4:
+            continue
+        if any("head" in class_tokens(c) for c in cells):
+            continue
+        found = []
+        for c in cells:
+            for t in class_tokens(c):
+                if t in STATUS_CLASSES and t not in found:
+                    found.append(t)
+        if len(found) < 2:
+            continue
+        warnings.append((cells[0].line, "COLOUR_AS_CATEGORY",
+                          f'{len(cells)} <g class="cell"> boxes in one table carry '
+                          f'{len(found)} distinct treatments ({", ".join(found)}) and none '
+                          f'of them is a "cell head"; colour is standing in for a category '
+                          f"— add a header cell naming what the column means, or paint the "
+                          f"whole group one treatment"))
 
     failures.sort(key=lambda f: f[0])
     warnings.sort(key=lambda w: w[0])

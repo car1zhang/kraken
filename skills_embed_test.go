@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -249,15 +250,25 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 // that is the copy that must agree with itself.
 // ---------------------------------------------------------------------------
 
-// canonicalShapeClasses is the vocabulary of record: the 45 sanctioned class
-// tokens. Held here as a Go literal on purpose — a test that derived the list
-// from one of the files it checks would agree with itself by construction and
-// catch nothing.
+// canonicalShapeClasses is the vocabulary of record: the sanctioned class
+// tokens, sanctionedClassCount of them. Held here as a Go literal on purpose —
+// a test that derived the list from one of the files it checks would agree with
+// itself by construction and catch nothing. This slice is the FIFTH copy of the
+// vocabulary, alongside lint_svg.py's ALLOWED_CLASSES, the three stylesheets,
+// and hermes-contract.md's Ban List; adding or renaming a class means editing
+// all five, and TestShapeKitClassParity/TestAllowlistMatchesContract are what
+// make forgetting one of them a red run instead of a silently unstyled diagram.
 var canonicalShapeClasses = []string{
 	// base kit
-	"node", "accent", "group", "store", "lane",
+	"node", "group", "store", "lane",
 	"edge", "dashed", "edgeLabel", "arrowhead", "flow-dot",
-	"ok", "warn", "danger",
+	// the six treatments — colour names in a list of structural classes because
+	// a treatment IS a class, applied on top of whatever silhouette a box already
+	// has. Each is a factual claim about the thing it is drawn on (absent, wrong,
+	// fixed, new, counter-intuitive), each pairs with a glyph, and
+	// hermes-contract.md § Colour Semantics is where those claims are written
+	// down. They replaced accent/ok/warn/danger in a clean cutover — no aliases.
+	"grey", "red", "yellow", "green", "blue", "purple",
 	"cell", "step",
 	"pill", "decision", "actor", "badge", "bar", "axis", "region",
 	"title", "note", "dim",
@@ -1091,4 +1102,615 @@ func parseNeverAParent(t *testing.T, contract string) map[string]bool {
 			"rather than leaving the leaf parity check silently dead", marker, list)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Palette parity: the COLOUR half of the same duplication problem.
+//
+// TestShapeKitClassParity/TestStylesheetsIdentical above cover the shape
+// vocabulary and the shared SVG rule block. Nothing covered the palette itself:
+// the `:root` custom properties and the dark-mode overrides are a THIRD verbatim
+// copy in each of the three stylesheets, and a one-hex drift in one of them
+// renders every diagram in exactly one artifact type in a colour no other
+// artifact uses — with no failure, no warning, and a diff no human reads through.
+//
+// Nor was there any link between the linter's class list and the WRITTEN meaning
+// of a treatment. A treatment added to ALLOWED_CLASSES with no `### <treatment>`
+// section in hermes-contract.md is a class zeus can legally assign and no agent
+// can correctly use, because nothing anywhere says what it claims.
+// ---------------------------------------------------------------------------
+
+// sanctionedClassCount is the size of the class vocabulary of record: 6
+// treatments + the base kit + the 17 silhouettes + the modifiers. Pinned as a
+// number on purpose. Adding a class is a five-file edit (linter, contract, three
+// stylesheets) and bumping this line is the cheapest part of it — a test that
+// derived the count from one of those files would agree with itself and never
+// notice the other four.
+const sanctionedClassCount = 47
+
+// cssBraceBlock returns the first block in `css` introduced by `opener`: from the
+// opener through the `}` that balances its `{`. Brace-matched rather than
+// line-counted so a reflow of the block's contents cannot truncate the extract
+// (and so the nested `:root` inside the dark-mode `@media` comes along with it).
+func cssBraceBlock(css, opener string) (string, bool) {
+	i := strings.Index(css, opener)
+	if i < 0 {
+		return "", false
+	}
+	open := strings.Index(css[i:], "{")
+	if open < 0 {
+		return "", false
+	}
+	depth := 0
+	for k := i + open; k < len(css); k++ {
+		switch css[k] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return css[i : k+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+// svgRules returns every CSS rule in `css` whose selector prelude starts with
+// `svg `, each flattened to a single space-joined line. Rules are collected by
+// brace balance, not by line, because the stylesheets wrap long selector lists
+// onto a continuation line (`svg .store > rect, … \n { fill: … }`) — a
+// line-oriented scan would compare the selector and silently skip the
+// declarations under it, which is exactly where a colour drift would hide.
+//
+// Leading indentation is trimmed, so the reduced-motion `@media` block's
+// deeper-indented `svg .flow-dot` rule compares equal across files that agree on
+// content. Comments are stripped first: prose about a rule is not the rule.
+func svgRules(css string) []string {
+	css = cssCommentRe.ReplaceAllString(css, "")
+	var rules []string
+	var cur []string
+	depth := 0
+	opened := false
+	for _, line := range strings.Split(css, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if len(cur) == 0 {
+			if trimmed != "svg" && !strings.HasPrefix(trimmed, "svg ") && !strings.HasPrefix(trimmed, "svg{") {
+				continue
+			}
+		}
+		cur = append(cur, trimmed)
+		for _, c := range trimmed {
+			switch c {
+			case '{':
+				depth++
+				opened = true
+			case '}':
+				depth--
+			}
+		}
+		if opened && depth <= 0 {
+			rules = append(rules, strings.Join(cur, " "))
+			cur, depth, opened = nil, 0, false
+		}
+	}
+	return rules
+}
+
+// palette is the part of a stylesheet that MUST be byte-identical across the
+// three templates. Everything else in them — body, h1-h4, code/pre, table,
+// blockquote.meta, figure — legitimately differs: a card has no prose, a spec
+// doc has four heading levels, and comparing those would just be noise.
+type palette struct {
+	root string
+	dark string
+	svg  []string
+}
+
+func readPalette(t *testing.T, path string) palette {
+	t.Helper()
+	css := styleBlocks(readEmbedded(t, path))
+	if strings.TrimSpace(css) == "" {
+		t.Fatalf("%s: no <style> block — the extractor broke or the template stopped carrying its own CSS", path)
+	}
+	css = cssCommentRe.ReplaceAllString(css, "")
+	root, ok := cssBraceBlock(css, ":root")
+	if !ok {
+		t.Fatalf("%s: no `:root { … }` block — the custom properties moved or were renamed; fix this "+
+			"parser rather than leaving the palette parity check silently dead", path)
+	}
+	dark, ok := cssBraceBlock(css, "@media (prefers-color-scheme: dark)")
+	if !ok {
+		t.Fatalf("%s: no `@media (prefers-color-scheme: dark)` block — dark mode moved or was renamed; "+
+			"fix this parser rather than leaving the palette parity check silently dead", path)
+	}
+	rules := svgRules(css)
+	if len(rules) == 0 {
+		t.Fatalf("%s: found no `svg …` rules — the SVG styling moved or the extractor broke; fix this "+
+			"parser rather than leaving the palette parity check silently dead", path)
+	}
+	return palette{root: root, dark: dark, svg: rules}
+}
+
+// TestPaletteInSync pins the three stylesheets' palette to one value. The six
+// treatment hues are defined once per file and consumed by ~40 `svg .<treatment>`
+// rules per file, so a single drifted hex in one template silently repaints every
+// diagram in that one artifact type — a card and a spec doc showing the same
+// fragment in different reds, with nothing failing anywhere.
+//
+// Only the three shared regions are compared: `:root`, the dark-mode override,
+// and the `svg …` rules. The prose CSS around them is meant to differ.
+func TestPaletteInSync(t *testing.T) {
+	base := shapeKitStylesheets[0]
+	want := readPalette(t, base)
+	for _, path := range shapeKitStylesheets[1:] {
+		got := readPalette(t, path)
+		if got.root != want.root {
+			t.Errorf("`:root` custom properties differ between %s and %s:\n%s",
+				base, path, diffReport(base, want.root, path, got.root))
+		}
+		if got.dark != want.dark {
+			t.Errorf("dark-mode `@media (prefers-color-scheme: dark)` block differs between %s and %s:\n%s",
+				base, path, diffReport(base, want.dark, path, got.dark))
+		}
+		if strings.Join(got.svg, "\n") != strings.Join(want.svg, "\n") {
+			t.Errorf("`svg …` rule set differs between %s and %s:\n%s", base, path,
+				diffReport(base, strings.Join(want.svg, "\n"), path, strings.Join(got.svg, "\n")))
+		}
+	}
+}
+
+// paletteReferencePath is the swatch sheet zeus is told to LOOK at whenever a
+// treatment call is not obvious — the one palette artifact meant for human eyes
+// rather than for a renderer.
+//
+// Spelled as a literal rather than reached through a jobs.* helper because,
+// unlike hermes-contract.md / lint_svg.py / diagram-card.html, it has no helper:
+// nothing in the Go code opens it, only the two SKILL.md files point at it. That
+// is precisely why it needs pinning here — a rename breaks nothing the compiler
+// can see and leaves both skills sending agents to a dead path.
+const paletteReferencePath = ".claude/skills/aim/assets/palette-reference.html"
+
+// paletteHues are the five hue custom properties every palette copy must agree
+// on. `grey` is deliberately absent: it has no hue of its own — it paints from
+// `--muted` and signals through a dotted border, which is what makes it the one
+// treatment that survives greyscale.
+var paletteHues = []string{"red", "yellow", "green", "blue", "purple"}
+
+// cssVarDeclRe matches a `--name: #hex` custom-property declaration. Only hex
+// values are read: a `var(--x)` indirection is not a palette definition, and a
+// non-colour property is not a hue.
+var cssVarDeclRe = regexp.MustCompile(`--([a-zA-Z][a-zA-Z0-9-]*)\s*:\s*(#[0-9a-fA-F]{3,8})`)
+
+// cssVars reads every `--name: #hex` declaration in a block into a map. Keyed by
+// NAME, never by position, so the order the hues are declared in is free — the
+// swatch sheet lists them in reading order and the templates list them in
+// severity order, and neither is wrong.
+func cssVars(block string) map[string]string {
+	out := map[string]string{}
+	for _, m := range cssVarDeclRe.FindAllStringSubmatch(block, -1) {
+		out[m[1]] = strings.ToLower(m[2])
+	}
+	return out
+}
+
+// paletteBlockVars extracts one named block from a stylesheet and reads its
+// custom properties. Fails loudly when the block is missing rather than
+// returning an empty map, which would make every comparison below pass vacuously.
+func paletteBlockVars(t *testing.T, path, css, opener, what string) map[string]string {
+	t.Helper()
+	block, ok := cssBraceBlock(css, opener)
+	if !ok {
+		t.Fatalf("%s: no %s block (looked for %q) — the palette moved or was renamed; fix this parser "+
+			"rather than leaving the swatch-sheet parity check silently dead", path, what, opener)
+	}
+	vars := cssVars(block)
+	if len(vars) == 0 {
+		t.Fatalf("%s: the %s block declares no `--name: #hex` custom properties — fix this parser rather "+
+			"than leaving the swatch-sheet parity check silently dead", path, what)
+	}
+	return vars
+}
+
+// TestPaletteReferenceInSync pins the FOURTH copy of the palette.
+//
+// palette-reference.html is not a template — it renders no fragment and carries
+// no `svg …` rules — so it cannot join shapeKitStylesheets and TestPaletteInSync's
+// whole-block comparison, which is exactly how it slipped through: it defines the
+// same ten hex values in a different shape (its own `:root`, plus `.lt`/`.dk`
+// mirror vars that paint its forced side-by-side light/dark panels, since a
+// single page cannot render both modes from one `prefers-color-scheme`).
+//
+// A drift here is the worst kind in the whole palette, because this is the sheet
+// zeus is told to LOOK at when a call is not obvious: the swatch would show one
+// red and every rendered diagram would use another, and the reference would be
+// actively lying rather than merely stale.
+//
+// Compared per HUE NAME against diagram-card.html, the copy of record, so the
+// declaration order in any file is free to change.
+func TestPaletteReferenceInSync(t *testing.T) {
+	const base = "aim/assets/diagram-card.html"
+	ref := strings.TrimPrefix(paletteReferencePath, ".claude/skills/")
+
+	baseCSS := cssCommentRe.ReplaceAllString(styleBlocks(readEmbedded(t, base)), "")
+	refCSS := cssCommentRe.ReplaceAllString(styleBlocks(readEmbedded(t, ref)), "")
+
+	for _, mode := range []struct{ name, opener string }{
+		{"light", ":root"},
+		{"dark", "@media (prefers-color-scheme: dark)"},
+	} {
+		want := paletteBlockVars(t, base, baseCSS, mode.opener, mode.name+" palette")
+		got := paletteBlockVars(t, ref, refCSS, mode.opener, mode.name+" palette")
+		for _, hue := range paletteHues {
+			w, ok := want[hue]
+			if !ok {
+				t.Errorf("%s: its %s block defines no `--%s` — that file is the copy of record for the "+
+					"palette, so this check has nothing to compare against", base, mode.name, hue)
+				continue
+			}
+			g, ok := got[hue]
+			if !ok {
+				t.Errorf("%s: its %s block defines no `--%s`, but %s does (%s) — the swatch sheet is "+
+					"missing a treatment zeus is told to look up there", ref, mode.name, hue, base, w)
+				continue
+			}
+			if g != w {
+				t.Errorf("hue `--%s` disagrees in %s mode: %s says %s, %s says %s — the sheet zeus LOOKS at "+
+					"to make a colour call would show a different %s from every rendered diagram",
+					hue, mode.name, base, w, ref, g, hue)
+			}
+		}
+	}
+
+	// The `.lt`/`.dk` mirrors are a second copy of the same ten values INSIDE the
+	// swatch sheet, and they are the copy that actually paints its chips — the
+	// `:root` hues above only reach the small table swatches. A drift between the
+	// two halves of one file is just as silent as a drift between two files.
+	light := paletteBlockVars(t, ref, refCSS, ":root", "light palette")
+	dark := paletteBlockVars(t, ref, refCSS, "@media (prefers-color-scheme: dark)", "dark palette")
+	for _, mirror := range []struct {
+		name, opener string
+		want         map[string]string
+	}{
+		{"light panel (`.lt`)", ".lt {", light},
+		{"dark panel (`.dk`)", ".dk {", dark},
+	} {
+		got := paletteBlockVars(t, ref, refCSS, mirror.opener, mirror.name)
+		// The neutrals ride along: `grey` paints from `--muted` and the panels
+		// reproduce the page background/foreground, so a drift there mis-renders
+		// the one treatment that has no hue.
+		for _, name := range append(append([]string{}, paletteHues...), "bg", "fg", "muted") {
+			w, ok := mirror.want[name]
+			if !ok {
+				continue // not every neutral is mirrored; only compare what both define
+			}
+			g, ok := got["p-"+name]
+			if !ok {
+				t.Errorf("%s: the %s block defines no `--p-%s`, so that panel paints from an undefined "+
+					"variable — its chips fall back to the browser's initial value, not to %s", ref, mirror.name, name, w)
+				continue
+			}
+			if g != w {
+				t.Errorf("%s: `--p-%s` in the %s block is %s but the file's own palette says %s — the two "+
+					"halves of one page disagree, so the swatch and the table below it show different colours",
+					ref, name, mirror.name, g, w)
+			}
+		}
+	}
+}
+
+// TestPaletteReferenceReachable pins the swatch sheet's existence and its two
+// pointers, the same coupling TestCrewPathsPinnedToEmbeddedTree pins for the
+// three assets that DO have Go path helpers.
+//
+// Without it, renaming or deleting the file is green everywhere: no Go code
+// opens it, so the compiler sees nothing, and both SKILL.md files keep telling
+// agents to LOOK at a path that no longer resolves. A pointer to nothing is
+// worse than no pointer — it reads as an instruction that was followed.
+func TestPaletteReferenceReachable(t *testing.T) {
+	rel := strings.TrimPrefix(paletteReferencePath, ".claude/skills/")
+	if _, err := fs.ReadFile(jobs.SkillsFS, rel); err != nil {
+		t.Fatalf("jobs.SkillsFS missing %q (from %s): %v — installSkills materializes only what is "+
+			"embedded, so a cell would have no swatch sheet at the path both skills name",
+			rel, paletteReferencePath, err)
+	}
+	for _, skill := range []string{"aim", "info"} {
+		src := readEmbedded(t, skill+"/SKILL.md")
+		if !strings.Contains(src, paletteReferencePath) {
+			t.Errorf(".claude/skills/%s/SKILL.md no longer references %q — that is the artifact zeus is "+
+				"told to LOOK at when a treatment call is not obvious, and this skill is the only thing "+
+				"that points at it", skill, paletteReferencePath)
+		}
+	}
+}
+
+// mdSection returns the body of the `## <name>` section of a markdown file: from
+// the heading line through the line before the next `## ` heading (or EOF).
+// Anchored on a heading at the START of a line, so the many inline `## Colour
+// Semantics` cross-references in the contract's prose cannot be mistaken for the
+// section itself.
+func mdSection(src, name string) (string, bool) {
+	heading := "\n## " + name + "\n"
+	i := strings.Index(src, heading)
+	if i < 0 {
+		return "", false
+	}
+	body := src[i+len(heading):]
+	if j := strings.Index(body, "\n## "); j >= 0 {
+		body = body[:j]
+	}
+	return body, true
+}
+
+// mdSubsectionRe matches a `### <tok>` heading whose token is exactly tok — the
+// headings continue past the token (`### grey — missing, absent, removed`), so
+// the trailing character class stands in for the lookahead RE2 does not have.
+func mdSubsectionRe(tok string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^### ` + regexp.QuoteMeta(tok) + `($|[^0-9A-Za-z_-])`)
+}
+
+// pyStrMapRowRe reads one `"grey": "∅",` row of a python str→str dict.
+var pyStrMapRowRe = regexp.MustCompile(`"([A-Za-z][A-Za-z0-9_-]*)"\s*:\s*"([^"]*)"`)
+
+// parseTreatments pulls the treatment vocabulary out of lint_svg.py. It prefers
+// `TREATMENT_GLYPHS` (a token→glyph map, which lets the caller check the glyphs
+// too) and falls back to `STATUS_CLASSES` (a bare set, glyphs unknown). Which one
+// it found is returned so failures can name it.
+//
+// Deliberately parsed rather than hardcoded: the question here is whether the
+// linter's treatments are DOCUMENTED, so the linter has to be the side that
+// speaks first. Vacuity is guarded by failing loudly when neither table parses.
+func parseTreatments(t *testing.T, lint string) (glyphs map[string]string, source string) {
+	t.Helper()
+	if body, ok := pyBraceBody(lint, "TREATMENT_GLYPHS"); ok {
+		out := map[string]string{}
+		for _, m := range pyStrMapRowRe.FindAllStringSubmatch(body, -1) {
+			out[m[1]] = m[2]
+		}
+		if len(out) > 0 {
+			return out, "TREATMENT_GLYPHS"
+		}
+		t.Fatal("aim/assets/lint_svg.py: `TREATMENT_GLYPHS = {…}` parsed to zero rows — the " +
+			"`\"treatment\": \"glyph\"` row format changed; fix this parser rather than leaving the " +
+			"treatment documentation check silently dead")
+	}
+	set, ok := parsePySet(lint, "STATUS_CLASSES")
+	if !ok {
+		t.Fatal("aim/assets/lint_svg.py: found neither `TREATMENT_GLYPHS` nor a parseable " +
+			"`STATUS_CLASSES` — the treatment vocabulary was renamed or reshaped; fix this parser " +
+			"rather than leaving the treatment documentation check silently dead")
+	}
+	out := map[string]string{}
+	for tok := range set {
+		out[tok] = ""
+	}
+	return out, "STATUS_CLASSES"
+}
+
+// contractTreatmentGlyphs reads the `| class | means | glyph |` table out of the
+// contract's Colour Semantics section. Scoped to that section so the Parts Index
+// (whose header also says "class") can never be picked up by mistake.
+func contractTreatmentGlyphs(t *testing.T, section string) map[string]string {
+	t.Helper()
+	rows := mdTableRows(section, "class", "glyph")
+	if len(rows) == 0 {
+		t.Fatal("aim/assets/hermes-contract.md: the `## Colour Semantics` section has no markdown table " +
+			"whose header names both \"class\" and \"glyph\" — that table is where every treatment's glyph " +
+			"is published; fix this parser rather than leaving the glyph check silently dead")
+	}
+	out := map[string]string{}
+	for _, row := range rows {
+		if len(row) < 3 {
+			t.Fatalf("aim/assets/hermes-contract.md: Colour Semantics row %q has %d columns, want at least 3 "+
+				"(class, means, glyph) — fix this parser", strings.Join(row, " | "), len(row))
+		}
+		out[mdToken(row[0])] = mdToken(row[2])
+	}
+	return out
+}
+
+// TestContractDefinesEveryTreatment closes the loop between "the linter accepts
+// this class" and "an agent can find out what it claims". A treatment is a
+// factual assertion about the thing it is drawn on; a treatment with no written
+// meaning is a class zeus will assign by vibe, which is the exact failure the
+// Colour Semantics section exists to prevent.
+//
+// For every treatment the LINTER recognises, the contract must carry a
+// `### <treatment>` subsection with real prose under it, and a glyph — the glyph
+// being what survives greyscale, a printout, and red–green CVD, so a documented
+// treatment without one is undocumented in the way that matters.
+func TestContractDefinesEveryTreatment(t *testing.T) {
+	lint := readEmbedded(t, "aim/assets/lint_svg.py")
+	treatments, source := parseTreatments(t, lint)
+	const wantTreatments = 6
+	if len(treatments) != wantTreatments {
+		t.Errorf("aim/assets/lint_svg.py: %s names %d treatments (%v), want %d — the palette is "+
+			"grey/red/yellow/green/blue/purple", source, len(treatments), sortedKeys(treatments), wantTreatments)
+	}
+
+	allowed, ok := parsePySet(lint, "ALLOWED_CLASSES")
+	if !ok {
+		t.Fatal("aim/assets/lint_svg.py: could not parse ALLOWED_CLASSES (found no tokens) — the set was " +
+			"renamed or reshaped; fix this parser rather than leaving this check silently dead")
+	}
+	for _, tok := range sortedKeys(treatments) {
+		if !allowed[tok] {
+			t.Errorf("treatment %q is in %s but not in ALLOWED_CLASSES in aim/assets/lint_svg.py — the "+
+				"linter would reject every fragment that uses it", tok, source)
+		}
+	}
+
+	contract := readEmbedded(t, "aim/assets/hermes-contract.md")
+	section, ok := mdSection(contract, "Colour Semantics")
+	if !ok {
+		t.Fatal("aim/assets/hermes-contract.md: no `## Colour Semantics` section — that section is where " +
+			"every treatment's meaning, glyph, bans and decision procedure live, and both SKILL.md files " +
+			"point agents at it by name")
+	}
+	tableGlyphs := contractTreatmentGlyphs(t, section)
+
+	for _, tok := range sortedKeys(treatments) {
+		loc := mdSubsectionRe(tok).FindStringIndex(section)
+		if loc == nil {
+			t.Errorf("treatment %q (from %s in aim/assets/lint_svg.py) has no `### %s` subsection in "+
+				"hermes-contract.md's Colour Semantics — the linter accepts a class whose claim is written "+
+				"down nowhere, so hermes and zeus can only guess at what it asserts", tok, source, tok)
+			continue
+		}
+		// A heading with nothing under it documents nothing. Bound the body at the
+		// next `### ` (or the end of the section) and require real prose.
+		body := section[loc[1]:]
+		if j := strings.Index(body, "\n### "); j >= 0 {
+			body = body[:j]
+		}
+		const minBody = 80
+		if len(strings.TrimSpace(body)) < minBody {
+			t.Errorf("treatment %q: the `### %s` subsection in hermes-contract.md is %d characters of prose, "+
+				"under the %d-character floor — a heading with no claim under it is not a definition",
+				tok, tok, len(strings.TrimSpace(body)), minBody)
+		}
+		glyph, present := tableGlyphs[tok]
+		if !present {
+			t.Errorf("treatment %q has no row in hermes-contract.md's Colour Semantics `| class | means | "+
+				"glyph |` table — that table is the only place its glyph is published, and the glyph is what "+
+				"the treatment reads as in greyscale, in print, and under red–green CVD", tok)
+			continue
+		}
+		if glyph == "" || glyph == "—" || glyph == "-" {
+			t.Errorf("treatment %q states no glyph in hermes-contract.md's Colour Semantics table (glyph cell "+
+				"is %q) — every treated element must carry one, so a treatment without one cannot be used at all",
+				tok, glyph)
+		}
+		if want := treatments[tok]; want != "" && want != glyph {
+			t.Errorf("glyph for treatment %q disagrees: %s in aim/assets/lint_svg.py says %q, "+
+				"hermes-contract.md's Colour Semantics table says %q — the linter would reject the very glyph "+
+				"the contract told hermes to draw", tok, source, want, glyph)
+		}
+	}
+}
+
+// sortedKeys gives every failure message above a stable order, so a red run reads
+// the same twice and a diff of two runs means something.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// parseBanListClasses reads the class allowlist the contract publishes in prose:
+// the "any class outside this catalog — N tokens" bullet in the Ban List, whose
+// indented sub-bullets group every sanctioned token by the element it must sit
+// on. Returns the tokens and the count the prose CLAIMS, which is itself a fact
+// that can go stale.
+//
+// Anchored on the bullet's own wording and terminated by the next unindented
+// `- ` bullet, so re-grouping the tokens, re-wrapping the lines, or adding an
+// element family all still parse. Fails loudly on a missing bullet or an empty
+// parse rather than passing vacuously.
+func parseBanListClasses(t *testing.T, contract string) (tokens map[string]bool, declared int) {
+	t.Helper()
+	section, ok := mdSection(contract, "Ban List")
+	if !ok {
+		t.Fatal("aim/assets/hermes-contract.md: no `## Ban List` section — that section publishes the " +
+			"sanctioned class vocabulary and says to edit it together with lint_svg.py; fix this parser " +
+			"rather than leaving the allowlist parity check silently dead")
+	}
+	const marker = "any class outside this catalog"
+	lines := strings.Split(section, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.Contains(line, marker) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("aim/assets/hermes-contract.md: the Ban List has no %q bullet — that bullet and its "+
+			"sub-bullets ARE the published allowlist; fix this parser rather than leaving the allowlist "+
+			"parity check silently dead", marker)
+	}
+	if m := regexp.MustCompile(`(\d+)\s+tokens`).FindStringSubmatch(lines[start]); m != nil {
+		declared, _ = strconv.Atoi(m[1])
+	}
+	var region strings.Builder
+	region.WriteString(lines[start])
+	region.WriteString("\n")
+	for _, line := range lines[start+1:] {
+		if strings.HasPrefix(line, "- ") { // the next top-level ban; the list ended
+			break
+		}
+		region.WriteString(line)
+		region.WriteString("\n")
+	}
+	tokens = map[string]bool{}
+	for _, m := range backtickTokenRe.FindAllStringSubmatch(region.String(), -1) {
+		tokens[m[1]] = true
+	}
+	if len(tokens) == 0 {
+		t.Fatalf("aim/assets/hermes-contract.md: parsed zero class tokens out of the %q bullet (%q) — fix "+
+			"this parser rather than leaving the allowlist parity check silently dead", marker, region.String())
+	}
+	return tokens, declared
+}
+
+// TestAllowlistMatchesContract enforces the instruction the contract gives in its
+// own words — "enforced by lint_svg.py, which carries the second copy of this
+// vocabulary (edit both together)" — which until now was an honour system.
+//
+// Both directions matter and they fail differently. A token in the contract but
+// not the linter is markup hermes is invited to write and the linter then
+// rejects, mid-fan-out, after the fragment is drawn. A token in the linter but
+// not the contract is a class that lints clean and no agent knows exists — dead
+// vocabulary that nothing will ever emit.
+func TestAllowlistMatchesContract(t *testing.T) {
+	contract := readEmbedded(t, "aim/assets/hermes-contract.md")
+	lint := readEmbedded(t, "aim/assets/lint_svg.py")
+
+	published, declared := parseBanListClasses(t, contract)
+	allowed, ok := parsePySet(lint, "ALLOWED_CLASSES")
+	if !ok {
+		t.Fatal("aim/assets/lint_svg.py: could not parse ALLOWED_CLASSES (found no tokens) — the set was " +
+			"renamed or reshaped; fix this parser rather than leaving the allowlist parity check silently dead")
+	}
+
+	var missingFromLinter, missingFromContract []string
+	for _, tok := range sortedKeys(published) {
+		if !allowed[tok] {
+			missingFromLinter = append(missingFromLinter, tok)
+		}
+	}
+	for _, tok := range sortedKeys(allowed) {
+		if !published[tok] {
+			missingFromContract = append(missingFromContract, tok)
+		}
+	}
+	if len(missingFromLinter) > 0 {
+		t.Errorf("hermes-contract.md's Ban List publishes %v, which ALLOWED_CLASSES in lint_svg.py does not "+
+			"accept — hermes is told it may use these and the linter rejects the fragment that does",
+			missingFromLinter)
+	}
+	if len(missingFromContract) > 0 {
+		t.Errorf("ALLOWED_CLASSES in lint_svg.py accepts %v, which hermes-contract.md's Ban List never "+
+			"publishes — dead vocabulary no agent knows exists", missingFromContract)
+	}
+
+	if len(published) != sanctionedClassCount {
+		t.Errorf("hermes-contract.md's Ban List publishes %d class tokens, want %d — if the vocabulary "+
+			"genuinely changed, bump sanctionedClassCount here as the last step of the five-file edit "+
+			"(linter, contract, three stylesheets)", len(published), sanctionedClassCount)
+	}
+	if len(allowed) != sanctionedClassCount {
+		t.Errorf("ALLOWED_CLASSES in lint_svg.py has %d tokens, want %d — see sanctionedClassCount",
+			len(allowed), sanctionedClassCount)
+	}
+	if declared == 0 {
+		t.Error("hermes-contract.md's Ban List no longer states a token COUNT (\"— N tokens\") in its " +
+			"class bullet — that number is what tells a human reader the list is complete")
+	} else if declared != len(published) {
+		t.Errorf("hermes-contract.md's Ban List says %d tokens but lists %d — the prose count went stale "+
+			"against its own list", declared, len(published))
+	}
 }

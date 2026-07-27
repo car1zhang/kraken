@@ -18,8 +18,10 @@
   - viewBox="0 0 860 H" (pick H per diagram), no width/height attributes — CSS scales it.
   - Shared classes styled by this doc's CSS:
       .node  — <g class="node"><rect .../><text .../></g>  box with centered label
-      .accent — add to a .node group to highlight new/changed parts
-      .ok / .warn / .danger — status variants, on a .node <g> (box) or a .edge <path> (edge)
+      .grey / .red / .yellow / .green / .blue / .purple — the six treatments, on a .node <g>
+               (box), a bare shape, or a .edge <path>. grey = missing/absent/removed (dotted),
+               red = critically wrong, yellow = warning/likely wrong, green = fixed/passing/
+               working, blue = new/added, purple = emphasis/unorthodox
       .group — dashed container rect for ownership/service boundaries
       .store — data stores (use rect with larger rx or cylinder-ish shape)
       .lane  — swimlane header rects in sequence/swimlane diagrams
@@ -28,7 +30,7 @@
       .flow-dot — animated SMIL dot riding an edge path (see ANIMATION CONVENTIONS)
       .cell  — <g class="cell"><rect/><text/></g> compact cell for example data rendered in its
                natural shape (matrix/2D-array grids, schedules, payload field stacks); variants
-               compose (cell store = header, cell accent = touched by the example)
+               compose (cell store = header, cell blue = touched by the example)
       .step  — <g class="step"><circle/><text/></g> numbered badge marking walkthrough order
       .pill / .decision / .actor / .badge / .bar / .axis / .region — terminals & tags, branch
                gates, human actors, count bubbles, magnitude bars, timeline axes, tinted zones
@@ -74,14 +76,14 @@
 <style>
   :root {
     --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
-    --surface: #f6f8fa; --accent: #0969da;
-    --ok: #1a7f37; --warn: #9a6700; --danger: #d1242f;
+    --surface: #f6f8fa;
+    --red: #d1242f; --yellow: #9a6700; --green: #1a7f37; --blue: #0969da; --purple: #8250df;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
-      --surface: #161b22; --accent: #4493f8;
-      --ok: #3fb950; --warn: #d29922; --danger: #f85149;
+      --surface: #161b22;
+      --red: #f85149; --yellow: #d29922; --green: #3fb950; --blue: #4493f8; --purple: #ab7df8;
     }
   }
   * { box-sizing: border-box; }
@@ -111,20 +113,26 @@
   figure.diagram figcaption { margin-top: .6rem; font-size: .85rem; color: var(--muted); }
   /* ===== Shared SVG styling — HARDENED (this block is deliverable D1) ===== */
   svg { display: block; width: 100%; height: auto; font-family: inherit; }
-  /* Baseline safety net: zero-specificity defaults so NO shape can ever render as SVG's
-     default solid black. Class rules below always win; explicit fill/stroke attrs are respected. */
-  svg :where(rect, circle, ellipse, polygon):not([fill]) { fill: var(--surface); }
-  svg :where(rect, circle, ellipse, polygon):not([stroke]) { stroke: var(--line); }
-  svg :where(path):not([fill]) { fill: none; }
-  svg :where(path):not([stroke]):not([class]) { stroke: var(--muted); }
+  /* Baseline safety net: TRULY zero-specificity defaults so NO shape can ever render as SVG's
+     default solid black. Class rules below always win; explicit fill/stroke attrs are respected.
+     EVERY :not() must sit INSIDE the :where(), never beside it. :where() zeroes only its own
+     argument, so `svg :where(path):not([stroke]):not([class])` is (0,2,1) — it OUT-RANKS every
+     treatment rule at (0,1,2) and repaints path-drawn silhouettes (store, decision, cloud, file,
+     event, the actor stem, path regions, every inner-detail path) muted, silently discarding the
+     claim the treatment was making. Written as below each rule is (0,0,1) and loses to everything,
+     which is the entire point of a safety net. */
+  svg :where(rect:not([fill]), circle:not([fill]), ellipse:not([fill]), polygon:not([fill]))
+    { fill: var(--surface); }
+  svg :where(rect:not([stroke]), circle:not([stroke]), ellipse:not([stroke]), polygon:not([stroke]))
+    { stroke: var(--line); }
+  svg :where(path:not([fill])) { fill: none; }
+  svg :where(path:not([stroke]):not([class])) { stroke: var(--muted); }
   svg text { fill: var(--fg); font-size: 13px; }
   /* Dual selectors: match both <g class="node"><rect/></g> AND bare <rect class="node"/>.
      Every SHAPE rule uses the direct-child combinator (>): containment nests a child <g> inside
      its parent <g>, and a descendant selector would repaint the nested child's own geometry. */
   svg .node > rect, svg rect.node { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
   svg .node > text, svg .store > text, svg .lane > text { text-anchor: middle; dominant-baseline: middle; }
-  svg .accent > rect, svg rect.accent { stroke: var(--accent); stroke-width: 1.8; }
-  svg .accent > text, svg text.accent { fill: var(--accent); font-weight: 600; }
   svg .group > rect, svg rect.group { fill: none; stroke: var(--line); stroke-dasharray: 5 4; }
   svg .group > text, svg text.group { fill: var(--muted); font-size: 12px; text-anchor: start; }
   svg .store > rect, svg rect.store, svg .store > ellipse, svg ellipse.store, svg .store > path
@@ -134,20 +142,61 @@
   svg .edge.dashed { stroke-dasharray: 5 4; }
   svg .edgeLabel { fill: var(--muted); font-size: 12px; text-anchor: middle; }
   svg .arrowhead { fill: var(--muted); stroke: none; }
-  svg .flow-dot { fill: var(--accent); stroke: none; }
+  svg .flow-dot { fill: var(--blue); stroke: none; }
   svg .cell > rect, svg rect.cell { fill: var(--bg); stroke: var(--line); }
   svg .cell > text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
-  svg .step > circle { fill: var(--accent); stroke: none; }
+  svg .step > circle { fill: var(--blue); stroke: none; }
   svg .step > text { fill: var(--bg); font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
-  /* Semantic status classes — the sanctioned replacement for ad-hoc hex colors */
-  svg .ok > rect, svg rect.ok { stroke: var(--ok); }
-  svg .ok > text, svg text.ok { fill: var(--ok); }
-  svg .warn > rect, svg rect.warn { stroke: var(--warn); }
-  svg .warn > text, svg text.warn { fill: var(--warn); }
-  svg .danger > rect, svg rect.danger { stroke: var(--danger); }
-  svg .danger > text, svg text.danger { fill: var(--danger); }
-  svg .edge.ok { stroke: var(--ok); } svg .edge.warn { stroke: var(--warn); } svg .edge.danger { stroke: var(--danger); }
-  svg .edge.ok + marker path, svg .edge.warn + marker path { } /* markers inherit .arrowhead */
+  /* A treatment on a .step must carry the DISC, not just the ring: at (0,1,2) the treatment
+     rules below would otherwise leave a red ring and red numeral on a blue disc. These are
+     (0,2,2), so they win wherever they sit. The numeral is reasserted to --bg for the same
+     reason — the treatment's own > text rule would repaint it into its own fill. */
+  svg .step.grey > circle { fill: var(--muted); }
+  svg .step.red > circle { fill: var(--red); }
+  svg .step.yellow > circle { fill: var(--yellow); }
+  svg .step.green > circle { fill: var(--green); }
+  svg .step.blue > circle { fill: var(--blue); }
+  svg .step.purple > circle { fill: var(--purple); }
+  svg .step.grey > text, svg .step.red > text, svg .step.yellow > text,
+  svg .step.green > text, svg .step.blue > text, svg .step.purple > text
+    { fill: var(--bg); }
+  /* Semantic TREATMENT classes — the sanctioned replacement for ad-hoc hex colors.
+     One claim each: grey = missing/absent/removed, red = critically wrong, yellow =
+     warning/likely wrong, green = fixed/passing/working, blue = new/added, purple =
+     emphasis/unorthodox. All six carry the SAME emphasis (stroke-width 1.8 on the shape,
+     font-weight 600 on the text) so a claim reads equally strongly whichever treatment
+     states it — the strength is the claim, the hue is which claim.
+     The bare-element halves (svg rect.grey, svg text.red, ...) are DEFENCE IN DEPTH, not an
+     expected authoring form: CLASS_PLACEMENT pins all six treatments to a <g> or a <path>, so
+     lint-clean markup never produces a bare <rect class="grey">. They stay because the pattern
+     predates this cutover and costs nothing, and because an unstyled box is the worst failure
+     this stylesheet has — but write the <g> form. */
+  /* grey repeats its dash pattern on that bare-element half rather than relying on the
+     silhouette rule below: grey is the one treatment whose load-bearing signal is the border
+     STYLE, so if the fallback ever does fire, muted-stroke-only would read as
+     ordinary-and-faded — a different claim, not a weaker one. */
+  svg .grey > rect, svg rect.grey { stroke: var(--muted); stroke-width: 1.8; stroke-dasharray: 2 3; }
+  svg .grey > text, svg text.grey { fill: var(--muted); font-weight: 600; }
+  svg .red > rect, svg rect.red { stroke: var(--red); stroke-width: 1.8; }
+  svg .red > text, svg text.red { fill: var(--red); font-weight: 600; }
+  svg .yellow > rect, svg rect.yellow { stroke: var(--yellow); stroke-width: 1.8; }
+  svg .yellow > text, svg text.yellow { fill: var(--yellow); font-weight: 600; }
+  svg .green > rect, svg rect.green { stroke: var(--green); stroke-width: 1.8; }
+  svg .green > text, svg text.green { fill: var(--green); font-weight: 600; }
+  svg .blue > rect, svg rect.blue { stroke: var(--blue); stroke-width: 1.8; }
+  svg .blue > text, svg text.blue { fill: var(--blue); font-weight: 600; }
+  svg .purple > rect, svg rect.purple { stroke: var(--purple); stroke-width: 1.8; }
+  svg .purple > text, svg text.purple { fill: var(--purple); font-weight: 600; }
+  /* All six are legal on edges too. .edge.grey is DOTTED (2 3) where .edge.dashed is DASHED
+     (5 4) so the two never read as the same mark, and it is placed after .edge.dashed
+     above so an `edge dashed grey` resolves to the dotted pattern the treatment asks for.
+     Edge markers need no per-treatment rule: they inherit .arrowhead. */
+  svg .edge.grey { stroke: var(--muted); stroke-dasharray: 2 3; }
+  svg .edge.red { stroke: var(--red); }
+  svg .edge.yellow { stroke: var(--yellow); }
+  svg .edge.green { stroke: var(--green); }
+  svg .edge.blue { stroke: var(--blue); }
+  svg .edge.purple { stroke: var(--purple); }
   svg .pill > rect { fill: var(--surface); stroke: var(--muted); }
   svg .pill > text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
   svg .decision > path { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
@@ -157,11 +206,31 @@
   svg .actor > text { fill: var(--fg); font-size: 12px; text-anchor: middle; }
   svg .badge > circle { fill: var(--surface); stroke: var(--line); }
   svg .badge > text { fill: var(--fg); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
-  svg .bar > rect { fill: var(--accent); stroke: none; }
-  svg .bar.ok > rect { fill: var(--ok); } svg .bar.warn > rect { fill: var(--warn); } svg .bar.danger > rect { fill: var(--danger); }
+  svg .bar > rect { fill: var(--blue); stroke: none; }
+  svg .bar.grey > rect { fill: var(--muted); }
+  svg .bar.red > rect { fill: var(--red); }
+  svg .bar.yellow > rect { fill: var(--yellow); }
+  svg .bar.green > rect { fill: var(--green); }
+  svg .bar.blue > rect { fill: var(--blue); }
+  svg .bar.purple > rect { fill: var(--purple); }
   svg .axis { stroke: var(--muted); stroke-width: 1; fill: none; }
-  svg .region > rect, svg .region > ellipse, svg .region > path { fill: var(--accent); opacity: .12; stroke: none; }
-  svg .region.ok > rect { fill: var(--ok); } svg .region.warn > rect { fill: var(--warn); } svg .region.danger > rect { fill: var(--danger); }
+  svg .region > rect, svg .region > ellipse, svg .region > path { fill: var(--blue); opacity: .12; stroke: none; }
+  /* Match the base .region rule above: a region is a coverage ZONE and a blob is its natural
+     shape, so a path- or ellipse-drawn `region red` must recolor too rather than stay blue.
+     The path arm excludes .spark: these variants are (0,2,2) and would otherwise out-specify
+     the spark rule, which relies on being (0,1,2)-and-last and cannot be raised. */
+  svg .region.grey > rect, svg .region.grey > ellipse, svg .region.grey > path:not(.spark)
+    { fill: var(--muted); }
+  svg .region.red > rect, svg .region.red > ellipse, svg .region.red > path:not(.spark)
+    { fill: var(--red); }
+  svg .region.yellow > rect, svg .region.yellow > ellipse, svg .region.yellow > path:not(.spark)
+    { fill: var(--yellow); }
+  svg .region.green > rect, svg .region.green > ellipse, svg .region.green > path:not(.spark)
+    { fill: var(--green); }
+  svg .region.blue > rect, svg .region.blue > ellipse, svg .region.blue > path:not(.spark)
+    { fill: var(--blue); }
+  svg .region.purple > rect, svg .region.purple > ellipse, svg .region.purple > path:not(.spark)
+    { fill: var(--purple); }
   svg .region > text { fill: var(--muted); font-size: 12px; text-anchor: start; }
   svg .title { fill: var(--fg); font-size: 14px; font-weight: 600; text-anchor: start; }
   svg .note { fill: var(--muted); font-size: 12px; text-anchor: start; }
@@ -196,24 +265,45 @@
   /* A parent holding children moves its label to a top-left band (wins over the rule above) */
   svg .holds > text
     { text-anchor: start; dominant-baseline: auto; font-size: 12px; fill: var(--muted); }
-  /* Status variants must reach path/circle/ellipse silhouettes, not just rects.
+  /* Treatment variants must reach path/circle/ellipse silhouettes, not just rects.
      Direct children only, so edges and arrowheads are never caught. */
-  svg .accent > rect, svg .accent > path, svg .accent > circle, svg .accent > ellipse
-    { stroke: var(--accent); stroke-width: 1.8; }
-  svg .ok > rect, svg .ok > path, svg .ok > circle, svg .ok > ellipse { stroke: var(--ok); }
-  svg .warn > rect, svg .warn > path, svg .warn > circle, svg .warn > ellipse { stroke: var(--warn); }
-  svg .danger > rect, svg .danger > path, svg .danger > circle, svg .danger > ellipse { stroke: var(--danger); }
-  /* bar and region are fill-carried, never stroked — reassert after the status variants,
-     whose (0,1,2) selectors would otherwise give them an outline they never had */
-  svg .bar > rect, svg .region > rect, svg .region > ellipse, svg .region > path { stroke: none; }
-  /* The sparkle: a filled accent mark, not an outlined silhouette — accent-filled at any size.
+  /* grey is the one treatment that also changes the stroke PATTERN — absence reads as a
+     DOTTED outline. The mechanism is the one `svg .thread > rect { stroke-dasharray: 5 4 }`
+     above already uses; only the pattern differs (2 3, so grey and thread/dashed stay
+     distinguishable). Two reasons it is written exactly here:
+       - FULL OPACITY, deliberately: no .grey opacity rule. Grey at .45 measures 1.89:1
+         against the light page, and lands 1.46:1 from what `dim` does to an ordinary box —
+         so "this thing is absent" and "this is background context" would render as the same
+         thing. The dotted pattern, not a fade, is what carries absence.
+       - <g class="thread grey"> puts two stroke-dasharray declarations at equal specificity
+         (0,1,2) and source order alone decides the winner, so .grey is placed AFTER .thread:
+         the treatment is the more important claim. */
+  svg .grey > rect, svg .grey > path, svg .grey > circle, svg .grey > ellipse
+    { stroke: var(--muted); stroke-width: 1.8; stroke-dasharray: 2 3; }
+  svg .red > rect, svg .red > path, svg .red > circle, svg .red > ellipse
+    { stroke: var(--red); stroke-width: 1.8; }
+  svg .yellow > rect, svg .yellow > path, svg .yellow > circle, svg .yellow > ellipse
+    { stroke: var(--yellow); stroke-width: 1.8; }
+  svg .green > rect, svg .green > path, svg .green > circle, svg .green > ellipse
+    { stroke: var(--green); stroke-width: 1.8; }
+  svg .blue > rect, svg .blue > path, svg .blue > circle, svg .blue > ellipse
+    { stroke: var(--blue); stroke-width: 1.8; }
+  svg .purple > rect, svg .purple > path, svg .purple > circle, svg .purple > ellipse
+    { stroke: var(--purple); stroke-width: 1.8; }
+  /* bar and region are fill-carried, never stroked — reassert after ALL SIX treatment
+     variants, whose (0,1,2) selectors would otherwise give them an outline they never had
+     (and, for grey, a dash pattern to go with it) */
+  svg .bar > rect, svg .region > rect, svg .region > ellipse, svg .region > path
+    { stroke: none; stroke-dasharray: none; }
+  /* The sparkle: a filled blue mark, not an outlined silhouette — blue-filled at any size.
      A spark badge is legal inside ANY silhouette, and every per-shape rule that could hit it
-     (svg .fn > path, svg .store > path, svg .event > path, svg .region > path, the status
-     variants, ...) is specificity (0,1,2). So this rule must BOTH out-specify them — hence
-     `svg path.spark`, also (0,1,2) — and come last, to win the source-order tiebreak.
+     (svg .fn > path, svg .store > path, svg .event > path, svg .region > path, the six
+     treatment variants — grey, red, yellow, green, blue, purple — ...) is specificity (0,1,2).
+     So this rule must BOTH out-specify them — hence `svg path.spark`, also (0,1,2) — and come
+     last, to win the source-order tiebreak.
      Do not "simplify" it back to a bare `svg .spark`: at (0,1,1) it loses to every one of those
      rules and the badge renders as a hollow gray outline in every card. */
-  svg path.spark, svg .spark { fill: var(--accent); stroke: none; }
+  svg path.spark, svg .spark { fill: var(--blue); stroke: none; }
   @media (prefers-reduced-motion: reduce) {
     svg .flow-dot { display: none; }
     figure.diagram * { animation: none !important; }
@@ -248,7 +338,7 @@
 <p>{{The proposed high-level architecture in 1-2 sentences. The diagram is the real content.}}</p>
 
 <figure class="diagram">
-  <!-- SVG: target architecture — REQUIRED. Highlight new/changed parts with class="node accent".
+  <!-- SVG: target architecture — REQUIRED. Highlight new/changed parts with class="node blue".
        Example skeleton (replace entirely; keep marker id doc-unique): -->
   <svg viewBox="0 0 860 160" role="img" aria-label="Target shape">
     <defs>
@@ -259,7 +349,7 @@
     </defs>
     <g class="node"><rect x="20" y="50" width="200" height="60" rx="8"/><text x="120" y="80">{{Trigger / Input}}</text></g>
     <path class="edge" d="M220,80 H330" marker-end="url(#arrow-target-shape)"/>
-    <g class="node accent"><rect x="330" y="50" width="200" height="60" rx="8"/><text x="430" y="80">{{New / Changed System}}</text></g>
+    <g class="node blue"><rect x="330" y="50" width="200" height="60" rx="8"/><text x="430" y="80">{{New / Changed System}}</text></g>
     <path class="edge" d="M530,80 H640" marker-end="url(#arrow-target-shape)"/>
     <g class="node"><rect x="640" y="50" width="200" height="60" rx="8"/><text x="740" y="80">{{Output / Side Effects}}</text></g>
   </svg>
@@ -355,7 +445,7 @@
        the lanes, this shows ONE real instance moving through them. Trace one named example (a real
        user action, a sample record/request with actual field values) stage by stage: .step badges in
        time order, the instance's data as .cell chips/grids whose values visibly change between
-       stages, the taken path highlighted (.accent boxes, .ok edges) while alternatives stay plain.
+       stages, the taken path highlighted (.blue boxes, .green edges) while alternatives stay plain.
        If the doc deals in structured data (API response, matrix, 2D array, schedule), render the
        example data in its natural shape (.cell grid with headers, day/time strip), not raw JSON.
        Delete only if the doc truly has no runtime flow at all. -->
