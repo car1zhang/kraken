@@ -12,7 +12,8 @@ import (
 	"kraken/internal/jobs"
 )
 
-// skillsFS embeds kraken's kraken-owned skill bundle (info, aim, do, pr) so
+// skillsFS embeds kraken's kraken-owned skill bundle (info, aim, do, pr,
+// dream) so
 // every cell gets them without a runtime dependency on carl's personal
 // ~/.claude/skills bank. jobs cannot import this package (the util ← core ←
 // jobs ← api ← web dependency chain runs the other way) — so root embeds
