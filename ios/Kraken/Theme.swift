@@ -375,25 +375,30 @@ enum SessionTheme {
 // MARK: - reusable view pieces
 
 /// One kanban card's chrome: surface bg, 1px hairline border, and a 2px
-/// leading bar that is the job's COLOR channel — mirrors .card /
-/// .card.flagged in style.css, including its precedence.
+/// leading bar that is the job's COLOR channel and nothing else — mirrors
+/// .card / .card.flagged in style.css, including its precedence.
 ///
-/// Precedence is flagged > job color > state, and each step earns its place.
+/// Precedence is flagged > job color > grey. The bar deliberately no longer
+/// carries state: an uncolored job is grey whether it is draft, queued,
+/// working, blocked or done, so the bar answers "which job is this", never
+/// "how is it going". State stays fully readable from the card's column and
+/// its `● working` chip, which still use BoardTheme.color(forState:).
 /// Flagged (a pending question, or unhealthy) stays on top and keeps its soft
-/// pink glow: it is an alert, and losing it would cost the one signal meaning
-/// "this needs you now". Below that the job's own color wins over state —
-/// state is still readable from the card's column and its `● working` chip,
-/// whereas a job's identity has nowhere else to live. A job with no color
-/// passes nil and the bar falls straight through to the state color, so an
-/// uncolored card looks exactly as it did before colors existed.
+/// pink glow: it is an alert, not a status, and losing it would cost the one
+/// signal meaning "this needs you now".
+///
+/// The parameter is `barColor` rather than `jobColor` or `stateColor`
+/// because two different callers fill it: a board card passes the job's
+/// colour, while JobDetailView's DetailCard passes a state colour, which is
+/// meaningful there — you are already looking at exactly one job. nil means
+/// grey either way.
 struct CardBackground: ViewModifier {
-    var stateColor: Color
-    var jobColor: Color?
+    var barColor: Color?
     var flagged: Bool = false
 
-    private var barColor: Color {
+    private var resolvedBar: Color {
         if flagged { return KTheme.counter }
-        return jobColor ?? stateColor
+        return barColor ?? KTheme.text2
     }
 
     func body(content: Content) -> some View {
@@ -402,7 +407,7 @@ struct CardBackground: ViewModifier {
             .overlay(Rectangle().stroke(KTheme.hairline, lineWidth: 1))
             .overlay(alignment: .leading) {
                 Rectangle()
-                    .fill(barColor)
+                    .fill(resolvedBar)
                     .frame(width: 2)
             }
             .shadow(color: flagged ? KTheme.counter.opacity(0.28) : .clear, radius: flagged ? 5 : 0)
@@ -410,8 +415,8 @@ struct CardBackground: ViewModifier {
 }
 
 extension View {
-    func cardBackground(stateColor: Color, jobColor: Color? = nil, flagged: Bool = false) -> some View {
-        modifier(CardBackground(stateColor: stateColor, jobColor: jobColor, flagged: flagged))
+    func cardBackground(barColor: Color? = nil, flagged: Bool = false) -> some View {
+        modifier(CardBackground(barColor: barColor, flagged: flagged))
     }
 }
 

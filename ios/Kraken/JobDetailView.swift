@@ -1502,7 +1502,7 @@ private struct DetailCard: View {
         MarkdownText(markdown: text)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .cardBackground(stateColor: stateColor)
+            .cardBackground(barColor: stateColor)
             .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
             .listRowBackground(Color.clear)
     }
