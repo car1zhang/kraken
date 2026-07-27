@@ -3,7 +3,7 @@ import PhotosUI
 
 // MARK: - command chips
 
-/// Row of four tappable command chips — /info /aim /do /pr — for one-tap
+/// Row of five tappable command chips — /info /aim /do /pr /dream — for one-tap
 /// insertion into a composer's bound text, mirroring the web SPA's command
 /// chips (app.js's attachCmdChips). This still appends rather than inserting
 /// at the caret even though HighlightingTextEditor is UIKit-backed (and so
@@ -22,7 +22,7 @@ import PhotosUI
 struct CmdChipsRow: View {
     @Binding var text: String
 
-    static let commands = ["/info", "/aim", "/do", "/pr"]
+    static let commands = ["/info", "/aim", "/do", "/pr", "/dream"]
 
     var body: some View {
         HStack(spacing: 6) {
@@ -58,6 +58,7 @@ struct CmdChipsRow: View {
         case "/aim": return (KTheme.skillAimUI, KTheme.skillAimSoftUI)
         case "/do": return (KTheme.skillDoUI, KTheme.skillDoSoftUI)
         case "/pr": return (KTheme.skillPrUI, KTheme.skillPrSoftUI)
+        case "/dream": return (KTheme.skillDreamUI, KTheme.skillDreamSoftUI)
         default: return nil
         }
     }
@@ -607,6 +608,13 @@ struct JobDetailView: View {
     // reset on every fresh presentation since a new sheet gets a new View
     // instance (and thus fresh @State).
     @State private var docQuestionOverlay: [String: String] = [:]
+    // Local optimistic overlay of feedback creates/edits/deletes, for exactly
+    // the frozen-snapshot reason docQuestionOverlay exists — plus a hidden-id
+    // set, since a delete has to remove a row rather than rewrite one.
+    @State private var feedbackOverlay = FeedbackOverlay()
+    @State private var editingFeedback: WebFeedback?
+    @State private var deletingFeedback: WebFeedback?
+    @State private var showingFeedbackDeleteConfirm = false
     @State private var showingBranchThread = false
     // Threads branched from this sheet since it opened. Same frozen-snapshot
     // problem docQuestionOverlay solves: `job` never refreshes while the
@@ -886,6 +894,31 @@ struct JobDetailView: View {
                         }
                     }
                 }
+                // Deliberately NOT gated on `!isArchived`, unlike Doc
+                // questions above: `feedback` IS served for archived jobs
+                // (rows outlive the cell — see webJob's `feedback` key),
+                // so copying that gate would hide exactly the notes worth
+                // keeping. Open notes first, then addressed ones, both in
+                // server order — same shape as sortedDocQuestions.
+                if !mergedFeedback.isEmpty {
+                    kSection("Feedback · \(mergedFeedback.count)") {
+                        ForEach(sortedFeedback) { f in
+                            FeedbackRow(
+                                item: f,
+                                onEdit: f.isOptimistic ? nil : { editingFeedback = f },
+                                onDelete: f.isOptimistic ? nil : {
+                                    deletingFeedback = f
+                                    showingFeedbackDeleteConfirm = true
+                                }
+                            )
+                        }
+                        Text("notes land in kraken.db — the agent reads them when it next resumes")
+                            .font(.voice(11))
+                            .foregroundStyle(KTheme.text2)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
+                            .listRowBackground(Color.clear)
+                    }
+                }
                 if let artifacts = job.artifacts, !artifacts.isEmpty {
                     kSection("Artifacts") {
                         CollapsedArtifactList(artifacts: artifacts, onOpen: { showingArtifact = $0 })
@@ -953,6 +986,30 @@ struct JobDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        // Same destructive-confirmation pattern as Kill / Delete Forever
+        // above — a note is prose carl typed, and there is no undo.
+        .confirmationDialog(
+            "Delete this feedback note? The row is removed from kraken.db.",
+            isPresented: $showingFeedbackDeleteConfirm, titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let f = deletingFeedback { deleteFeedback(f) }
+                deletingFeedback = nil
+            }
+            Button("Cancel", role: .cancel) { deletingFeedback = nil }
+        }
+        .sheet(item: $editingFeedback) { f in
+            NavigationStack {
+                FeedbackComposeView(
+                    baseURL: baseURL,
+                    target: .edit(slug: job.slug, id: f.id, artifact: f.artifact),
+                    initialNote: f.note
+                ) { note in
+                    feedbackOverlay.edits[f.id] = note
+                    onUpdate()
+                }
+            }
+        }
         .sheet(isPresented: $showingReactivate) {
             NavigationStack {
                 ReactivateView(job: job, baseURL: baseURL) {
@@ -993,12 +1050,18 @@ struct JobDetailView: View {
         }
         .sheet(item: $showingArtifact) { artifact in
             NavigationStack {
-                ArtifactView(name: artifact.name, baseURL: baseURL, path: artifact.url)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            SheetCloseButton { showingArtifact = nil }
-                        }
+                // onFeedbackCreated folds the new note straight into this
+                // sheet's overlay: `job` is frozen, so nothing else would
+                // show it until the sheet is reopened.
+                ArtifactView(
+                    name: artifact.name, baseURL: baseURL, path: artifact.url,
+                    onFeedbackCreated: { ref, note in addOptimisticFeedback(ref: ref, note: note) }
+                )
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        SheetCloseButton { showingArtifact = nil }
                     }
+                }
             }
         }
     }
@@ -1227,6 +1290,47 @@ struct JobDetailView: View {
     private func answerDocQuestion(id: String, text: String) {
         runAction(dismissOnSuccess: false, onSuccess: { docQuestionOverlay[id] = text }) {
             try await APIClient.shared.answerDocQuestion(baseURL: baseURL, slug: job.slug, id: id, text: text)
+        }
+    }
+
+    // job.feedback with the local overlay applied — the sheet's `job` never
+    // refreshes on its own while open, so this is what lets a create/edit/
+    // delete visibly land without dismissing (see feedbackOverlay).
+    private var mergedFeedback: [WebFeedback] {
+        feedbackOverlay.apply(to: job.feedback ?? [])
+    }
+
+    // Open notes first, addressed ones after, each keeping server order —
+    // the same "still needs you first" shape sortedDocQuestions uses. The
+    // explicit offset tiebreak is load-bearing for the same reason it is
+    // there: Swift's sorted(by:) is documented as NOT stable.
+    private var sortedFeedback: [WebFeedback] {
+        let indexed = Array(mergedFeedback.enumerated())
+        let open = indexed.filter { !$0.element.isAddressed }.sorted { $0.offset < $1.offset }
+        let addressed = indexed.filter { $0.element.isAddressed }.sorted { $0.offset < $1.offset }
+        return open.map(\.element) + addressed.map(\.element)
+    }
+
+    // A note created from the artifact viewer, folded in as an optimistic row
+    // until the next board poll replaces it with the served one. `ref.name`
+    // is the artifact's SERVER-side name (derived from its URL), which is
+    // what the served row's `artifact` field will read too.
+    private func addOptimisticFeedback(ref: ArtifactRef, note: String) {
+        let id = feedbackOverlay.nextOptimisticID()
+        feedbackOverlay.created.append(WebFeedback(
+            id: id, artifact: ref.name, note: note,
+            at: Int64(Date().timeIntervalSince1970 * 1000),
+            addressed: nil, addressedAt: nil
+        ))
+        onUpdate()
+    }
+
+    // Non-dismissing like answerDocQuestion: feedback is an N-item list, not
+    // a one-shot action. onUpdate() still fires the immediate extra board
+    // poll so every other surface catches up.
+    private func deleteFeedback(_ f: WebFeedback) {
+        runAction(dismissOnSuccess: false, onSuccess: { feedbackOverlay.hidden.insert(f.id) }) {
+            try await APIClient.shared.deleteFeedback(baseURL: baseURL, slug: job.slug, id: f.id)
         }
     }
 }

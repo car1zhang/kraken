@@ -20,15 +20,16 @@ final class HighlightingTextEditorTests: XCTestCase {
         Token(range: NSRange(location: location, length: length), command: command)
     }
 
-    // MARK: - all four commands
+    // MARK: - all five commands
 
-    func testAllFourCommandsMatch() {
-        let text = "/info /aim /do /pr"
+    func testAllFiveCommandsMatch() {
+        let text = "/info /aim /do /pr /dream"
         XCTAssertEqual(matches(text), [
             token(0, 5, "/info"),
             token(6, 4, "/aim"),
             token(11, 3, "/do"),
             token(15, 3, "/pr"),
+            token(19, 6, "/dream"),
         ])
     }
 

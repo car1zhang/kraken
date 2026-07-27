@@ -135,11 +135,26 @@ struct ArtifactView: View {
     let name: String
     let baseURL: String
     let path: String
+    /// Called after a note has been accepted by the server, with the artifact
+    /// it was attached to and the note text — so a presenting JobDetailView
+    /// can fold it into its optimistic overlay. nil (the default) simply means
+    /// nobody is listening: the note still lands, it just isn't mirrored
+    /// anywhere until the next poll. SteerView presents this view that way.
+    var onFeedbackCreated: ((ArtifactRef, String) -> Void)?
 
     @State private var content: ArtifactContent?
     @State private var errorMessage: String?
+    @State private var composingFeedback = false
 
     private var kind: ArtifactKind { ArtifactKind(name: name) }
+
+    /// This is the only screen that knows WHICH artifact is on screen, which
+    /// is why creating a note lives here and not on the job sheet — the same
+    /// reason the web board hangs its feedback chip off the artifact overlay.
+    /// The {slug, home, name} triple comes from the URL rather than from
+    /// `name`: the artifact tree rewrites a nested artifact's displayed name
+    /// to a relative leaf while preserving the url (see artifactParts).
+    private var artifactRef: ArtifactRef? { artifactParts(from: path) }
 
     var body: some View {
         Group {
@@ -173,6 +188,32 @@ struct ArtifactView: View {
         }
         .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Only when the path actually parses as an artifact URL: without
+            // a {slug, home, name} triple there is nothing to address a
+            // create at, and a chip that always 400s is worse than no chip.
+            if let ref = artifactRef {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        composingFeedback = true
+                    } label: {
+                        Label("Feedback", systemImage: "square.and.pencil")
+                    }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Leave feedback on \(ref.name)")
+                    .tint(KTheme.skillDream)
+                }
+            }
+        }
+        .sheet(isPresented: $composingFeedback) {
+            if let ref = artifactRef {
+                NavigationStack {
+                    FeedbackComposeView(baseURL: baseURL, target: .create(ref)) { note in
+                        onFeedbackCreated?(ref, note)
+                    }
+                }
+            }
+        }
         .task { await load() }
     }
 

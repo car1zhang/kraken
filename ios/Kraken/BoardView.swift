@@ -740,6 +740,10 @@ struct BoardView: View {
     @State private var jobSheetNav = SheetNavState()
     @State private var showingNewJob = false
     @State private var showingOverview = false
+    // The DREAM screen hangs off this toolbar rather than a sixth tab — iOS
+    // collapses a TabView past five items into a "More" list, which would
+    // bury an existing tab behind a disclosure. See DreamView's header.
+    @State private var showingDream = false
     @State private var selectedColumn: BoardColumn = .draft
 
     // MARK: - drag reorder / cross-column drag state
@@ -795,6 +799,16 @@ struct BoardView: View {
             .background(KTheme.ground)
             .navigationTitle("Board")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingDream = true
+                    } label: {
+                        Image(systemName: "moon.stars")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(KTheme.skillDream)
+                    .accessibilityLabel("Dream")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingNewJob = true
@@ -893,6 +907,11 @@ struct BoardView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showingDream) {
+                NavigationStack {
+                    DreamView(baseURL: serverURL)
+                }
+            }
             .sheet(isPresented: $showingOverview) {
                 NavigationStack {
                     BoardOverviewSheet(vm: vm, baseURL: serverURL) {
@@ -932,6 +951,7 @@ struct BoardView: View {
             .onAppear { consumePendingBoardRoutes() }
             .onChange(of: router.pendingBoardColumn) { consumePendingBoardRoutes() }
             .onChange(of: router.pendingOverview) { consumePendingBoardRoutes() }
+            .onChange(of: router.pendingDream) { consumePendingBoardRoutes() }
             .task(id: router.pendingJobSlug) {
                 guard let slug = router.pendingJobSlug else { return }
                 // The board may not have loaded yet (e.g. a cold launch
@@ -968,6 +988,10 @@ struct BoardView: View {
         if router.pendingOverview {
             showingOverview = true
             router.pendingOverview = false
+        }
+        if router.pendingDream {
+            showingDream = true
+            router.pendingDream = false
         }
     }
 
@@ -1611,9 +1635,14 @@ private struct JobCardView: View {
                     .foregroundStyle(KTheme.text2)
                     .lineLimit(1)
             }
-            if let prs = job.prs, !prs.isEmpty {
+            // Feedback count beside the PR chips — passive display only, no
+            // long-press menu: that gesture already contends with the card's
+            // drag-to-reorder. Tapping the card opens the job sheet, where
+            // the notes themselves live.
+            if !(job.feedback ?? []).isEmpty || !(job.prs ?? []).isEmpty {
                 HStack(spacing: 6) {
-                    ForEach(prs, id: \.url) { pr in
+                    FeedbackCountChip(feedback: job.feedback ?? [])
+                    ForEach(job.prs ?? [], id: \.url) { pr in
                         PRChip(pr: pr)
                     }
                 }
