@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -207,7 +208,14 @@ type mineRecord struct {
 	Subtype    string `json:"subtype"`
 	DurationMs int64  `json:"durationMs"`
 	Timestamp  string `json:"timestamp"`
-	Message    struct {
+	// SessionID is `session_id` (SNAKE case): the session that actually made
+	// the API call. Not `sessionId`, which a fork rewrites on every replayed
+	// record. See tokenRecordOwned (tokens.go).
+	SessionID string `json:"session_id"`
+	Message   struct {
+		// ID is the API message id — one message spans N records, all with
+		// the same usage, so this is what collapses them to one.
+		ID      string          `json:"id"`
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
 		// Usage is claude's own per-assistant-record token report. Shared
@@ -275,6 +283,17 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// would otherwise lose its name.
 	pending := map[string]string{}
 
+	// lastMsgID is the group tracker for the token counters below: the
+	// message id of the previous assistant record, so the N records one API
+	// message is split across contribute their shared usage exactly once.
+	lastMsgID := ""
+
+	// own is the session this FILE belongs to, which for a sidecar is its
+	// parent's rather than its `agent-<id>` stem — the same derivation
+	// SumTokensDelta uses, so the two readers cannot disagree about which
+	// records are replayed.
+	own := fileSessionID(path, filepath.Base(path))
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
 	for sc.Scan() {
@@ -283,8 +302,19 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			continue
 		}
 		var rec mineRecord
-		if json.Unmarshal(line, &rec) != nil {
-			continue // malformed or truncated line: skip it, keep the rest
+		if err := json.Unmarshal(line, &rec); err != nil {
+			// A wrongly-TYPED field is not a malformed line: encoding/json
+			// fills in everything it could and reports the type error at the
+			// end, so discarding the record would throw away every good field
+			// beside the bad one. addTokenLine (tokens.go) already makes that
+			// distinction, and the two must agree — otherwise the board's
+			// per-job number and this digest's per-session number differ by
+			// exactly the records with one bad field, on rules that are
+			// otherwise identical.
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &typeErr) {
+				continue // malformed or truncated line: skip it, keep the rest
+			}
 		}
 		ts := isoMillis(rec.Timestamp)
 		// A record with no parseable timestamp (custom-title, agent-name,
@@ -312,7 +342,22 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 				// an API failure the harness gave up retrying
 				dg.SyntheticErrors++
 			}
-			if inWindow {
+			// Token counters, under the same two rules SumTokensDelta applies
+			// (tokens.go) — a naive per-record sum over-counts real
+			// transcripts by ~2x:
+			//
+			//   - One API message is written as one record per content block,
+			//     each stamped with the SAME cumulative usage, so a message
+			//     contributes once. lastMsgID advances on every assistant
+			//     record — window-admitted or not — because it tracks the
+			//     file's record sequence, not the counted subset.
+			//   - A record replayed into this file from a forked parent
+			//     session is not this session's spend (tokenRecordOwned).
+			//
+			// This digest always reads a whole file, so unlike the
+			// incremental sum it needs no boundary seed.
+			if newGroup := rec.Message.ID == "" || rec.Message.ID != lastMsgID; inWindow && newGroup &&
+				tokenRecordOwned(tokenRecord{SessionID: rec.SessionID}, own) {
 				// gated on the window like every other count here, so a
 				// digest's spend describes the same records its tool counts
 				// and its FirstTS/LastTS span do
@@ -321,6 +366,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 				dg.CacheWrite += rec.Message.Usage.CacheCreation
 				dg.CacheRead += rec.Message.Usage.CacheRead
 			}
+			lastMsgID = rec.Message.ID
 			for _, b := range mineBlocks(rec.Message.Content) {
 				if b.Type != "tool_use" || b.Name == "" {
 					continue

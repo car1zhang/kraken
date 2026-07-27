@@ -1,7 +1,10 @@
 package jobs
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"kraken/internal/core"
@@ -55,27 +58,102 @@ const tokensIdleBatch = 8
 // owns that dir and kraken only ever reads it. A number that vanished at
 // teardown would defeat the entire point, which is retrospective cost.
 //
-// Two dirs, not one: cells created before worktrees were named wt-<repo>
-// used a bare "wt" (see ExistingWorktree's own comment), which munges to a
-// different project dir. Both are returned, deduped, and summed together.
-// A repo of "" yields nothing — with no resolved repo there is no worktree
-// path to munge.
-func JobProjectDirs(j *Job, repo string) []string {
+// Two BASE dirs, not one: cells created before worktrees were named
+// wt-<repo> used a bare "wt" (see ExistingWorktree's own comment), which
+// munges to a different project dir. A repo of "" yields nothing — with no
+// resolved repo there is no worktree path to munge.
+//
+// Plus every project dir whose name extends one of those bases, because
+// Claude Code buckets a transcript by the agent's STARTUP CWD, not by the
+// worktree root. Agents in a cell routinely start deeper — a teammate
+// spawned in a subpackage, an iOS build agent in ios/ — and each such cwd
+// becomes its own sibling dir: `…-cells-asr-latency-wt-monolith` gains
+// `…-wt-monolith-internal-dashboard`, `…-cells-kraken-ios-wt-kraken` gains
+// `…-wt-kraken-ios`. Both exist on this machine. Measured across every cell
+// dir, the deeper ones hold 5.0% of all spend and up to 26.2% for a single
+// job — a silent under-count that varies per job, which is worse than a flat
+// one because it makes jobs incomparable, and comparing them is the entire
+// purpose of a per-job cost.
+//
+// The extension must be at a SEPARATOR (base + "-"). That is what keeps the
+// match inside this job: the text between `-kraken-cells-` and `-wt-` is the
+// slug, so a dir extending `…-cells-demo-wt-…` can only belong to slug
+// `demo`. Two jobs whose slugs merely share a prefix — `demo` and `demo-2`,
+// which is exactly the shape archive numbering produces — do NOT collide,
+// because `…-cells-demo-2-wt-monolith` does not extend `…-cells-demo-wt`.
+// Prefixing on the CELL DIR instead of the worktree would collide on that
+// pair, which is why the bases are worktree-shaped.
+//
+// One consequence is deliberate rather than accidental: the legacy bare-`wt`
+// base is itself a prefix of every `wt-<repo>` name, so it also sweeps in
+// OTHER-repo worktrees of the SAME slug. That is correct — a job whose
+// `repo:` changed has transcripts under both and they are all its own spend.
+// Reaching a DIFFERENT job would require that job's slug to literally contain
+// `wt-`, which nobody writes. Checked against every project dir on this
+// machine, driving all 95 known slugs: 114 dirs claimed, zero claimed by more
+// than one slug.
+//
+// The error is NOT cosmetic and a caller must not drop it. It means the
+// returned list may be SHORT — the deeper dirs could not be enumerated — and a
+// short list is indistinguishable from "those dirs went away". Since
+// refreshJobTokens stores a watermark per file and SetJobTokenOffsets is
+// replace-all, a silently short list DELETES the watermarks of every deeper
+// dir and re-sums those files from byte zero into counters that only
+// accumulate. Measured: one unlistable ReadDir turned a true 600 into a
+// permanent 1100. Returning the bases with an error lets the caller keep
+// those watermarks instead.
+func JobProjectDirs(j *Job, repo string) ([]string, error) {
 	if j == nil || repo == "" {
-		return nil
+		return nil, nil
 	}
 	root := filepath.Join(util.Home(), ".claude", "projects")
 	seen := map[string]bool{}
-	var out []string
+	var bases []string
 	for _, wt := range []string{CellWorktree(j, repo), filepath.Join(cellDir(j), "wt")} {
 		name := core.ProjectDirName(wt)
 		if seen[name] {
 			continue
 		}
 		seen[name] = true
+		bases = append(bases, name)
+	}
+	out := make([]string, 0, len(bases))
+	for _, name := range bases {
 		out = append(out, filepath.Join(root, name))
 	}
-	return out
+	// One ReadDir of ~/.claude/projects (~145 entries) per job per refresh.
+	// It is comparable to the WalkDir each returned dir already costs, and
+	// only jobs the pass actually decided to sum get here. A projects dir that
+	// can't be listed still yields the bases — they are named by pure string
+	// derivation and need no listing — but it is an ERROR, because the deeper
+	// dirs are missing from an answer the caller turns into a watermark set.
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		// No projects dir AT ALL is not a degradation — it is a machine with
+		// no transcripts, so there are no deeper dirs to miss and no
+		// watermarks to protect. Anything else (a permission blip, EMFILE in
+		// a long-lived daemon) means the deeper dirs exist and we simply
+		// could not see them, which is the case the caller must not mistake
+		// for "they went away". Exactly the root-absent/subtree-failed split
+		// core.SumTokensDelta's walk makes, for the same reason.
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return out, fmt.Errorf("list %s: %v", root, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || seen[e.Name()] {
+			continue
+		}
+		for _, base := range bases {
+			if strings.HasPrefix(e.Name(), base+"-") {
+				seen[e.Name()] = true
+				out = append(out, filepath.Join(root, e.Name()))
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 // refreshJobTokens sums one job's transcripts forward from the watermarks in
@@ -87,18 +165,25 @@ func JobProjectDirs(j *Job, repo string) []string {
 // core.SumTokensDelta opens none of them, the delta is zero, the offsets are
 // identical, and this returns (false, nil) without touching the database.
 //
-// A partial scan (core.SumTokensDelta's error contract — a line over the
-// 16 MB ceiling, a mid-file read error) still WRITES: the counters it did
-// find are real and the watermarks stop at the last complete line, so folding
-// them in is strictly better than dropping them, and the error is returned so
-// the caller can say out loud that the number is a floor. That is the
-// distinction this repo has got wrong three times: a failed read is not a
-// zero, and it must not be presented as a total.
+// A degraded scan (core.SumTokensDelta's error contract — a line over the
+// 16 MB ceiling, a mid-file read error, an unlistable subtree, an unstattable
+// file) still WRITES: the counters it did find are real and the watermarks
+// stop at the last complete line, so folding them in is strictly better than
+// dropping them, and the error is returned so the caller can say out loud
+// that the number is not exact. That is the distinction this repo has got
+// wrong three times: a failed read is not a zero, and it must not be
+// presented as a total.
+//
+// EVERY way of seeing less than the whole truth has to arrive as an error,
+// not just the ones inside the scan. A short dir list from JobProjectDirs
+// counts too, and is folded into the same scanErr, because the carry-forward
+// below is the only thing standing between a transient read failure and a
+// permanently inflated row — and it can only act on what it is told.
 func refreshJobTokens(st *store.Store, j *Job, repo string, prior map[string]int64) (bool, error) {
 	var delta store.JobTokens
 	offsets := map[string]int64{}
-	var scanErr error
-	for _, dir := range JobProjectDirs(j, repo) {
+	dirs, scanErr := JobProjectDirs(j, repo)
+	for _, dir := range dirs {
 		tk, next, err := core.SumTokensDelta(dir, prior)
 		if err != nil && scanErr == nil {
 			scanErr = err
@@ -113,6 +198,27 @@ func refreshJobTokens(st *store.Store, j *Job, repo string, prior map[string]int
 		}
 	}
 
+	// An incomplete scan — a dir list that came up short, a subtree that could
+	// not be listed, a file that could not be stat'd, a file that stopped part
+	// way — means `offsets` is missing entries for files that still exist.
+	// Writing it as-is would DELETE those watermarks (SetJobTokenOffsets is
+	// replace-all) and the next pass would re-sum those files from byte zero
+	// into counters that only ever accumulate, permanently doubling them.
+	// Carrying the unseen ones forward costs at worst a stale row for a
+	// genuinely deleted transcript, which is inert; the alternative silently
+	// corrupts the number for good.
+	//
+	// This guard is only as good as the reporting that feeds it, which is why
+	// every degradation above is an error rather than a quietly shorter
+	// answer. Two of them were silent and this guard could not see either.
+	if scanErr != nil {
+		for path, off := range prior {
+			if _, seen := offsets[path]; !seen {
+				offsets[path] = off
+			}
+		}
+	}
+
 	if sameOffsets(prior, offsets) && delta.In == 0 && delta.Out == 0 &&
 		delta.CacheWrite == 0 && delta.CacheRead == 0 {
 		return false, scanErr
@@ -121,8 +227,21 @@ func refreshJobTokens(st *store.Store, j *Job, repo string, prior map[string]int
 	// counters advanced with the watermarks behind, which would re-sum the
 	// same bytes on the next pass and double-count them into a column that
 	// only ever accumulates. Written in the other order, the worst case is a
-	// delta silently lost once — an undercount, which is the direction this
-	// number is allowed to be wrong in.
+	// delta silently lost once — an undercount, which is the cheaper way to
+	// be wrong here, because nothing can ever take an over-count back out.
+	//
+	// That asymmetry is the standing hazard of accumulate-only counters, and
+	// it is not fully closed. Two states still add a file's bytes twice: a
+	// transcript REPLACED by a shorter one (core.SumTokensDelta re-reads it
+	// whole while the row already holds the old file's contribution), and the
+	// derived project dir CHANGING for a started job (ResolveRepo's answer
+	// moving, which re-keys every path). Both need something outside
+	// append-only to happen and neither is reachable today; the principled
+	// fix is to store per-file totals in job_token_files and make job_tokens
+	// a SUM over them rather than a running total, which is a storage-model
+	// change and not this pass's to make. Documented rather than claimed
+	// away — the counters are exact under append-only and monotonic
+	// otherwise.
 	if err := st.SetJobTokenOffsets(j.Slug, offsets); err != nil {
 		return false, err
 	}
@@ -207,6 +326,13 @@ func (d *daemonState) tokensPass(jobs []*Job, live map[string]bool, now time.Tim
 			}
 			idle++
 		}
+		// Stamped HERE — before the repo resolve can bail — because this job
+		// has now had its turn whatever comes of it. Stamping only on success
+		// meant a job whose repo no longer resolves consumed an idle slot and
+		// was immediately due again, every tick, forever: with
+		// tokensIdleBatch such jobs on the board, no other idle job was ever
+		// refreshed again, silently, since a repo bail logs nothing.
+		d.TokenScan[j.Slug] = now.UnixMilli()
 		repo, ok := repos[j.Repo]
 		if !ok {
 			// A resolve failure is cached as "" and reported by the queue
@@ -221,12 +347,11 @@ func (d *daemonState) tokensPass(jobs []*Job, live map[string]bool, now time.Tim
 		if repo == "" {
 			continue
 		}
-		d.TokenScan[j.Slug] = now.UnixMilli()
 		wrote, err := refreshJobTokens(st, j, repo, all[j.Slug])
 		if err != nil {
 			key := "tokensfail:" + j.Slug
 			if d.Notified[key] == 0 {
-				dlogErr("%s: token sum is a FLOOR, not a total: %v", j.Slug, err)
+				dlogErr("%s: token sum is not exact: %v", j.Slug, err)
 				d.Notified[key] = now.Unix()
 			}
 			continue

@@ -747,6 +747,18 @@ struct JobDetailView: View {
                     }
                 }
 
+                // Token spend sits this high — beside Repo rather than down
+                // with Artifacts — because it is one glanceable fact about
+                // the job as a whole, and the artifact tree below can run
+                // long enough to bury anything under it. `tokens` being nil
+                // is what hides the whole section: nil means NEVER MEASURED
+                // (no transcripts, or the daemon hasn't reached this job),
+                // which is a different answer from a measured zero, and a
+                // rendered 0 would state the false one.
+                if let tokens = job.tokens {
+                    kSection("Tokens") { tokensRows(tokens) }
+                }
+
                 // Outside every editability gate on purpose. The spec editor
                 // (and the color picker inside it) is only reachable through
                 // the Edit Spec button below, which requires `isEditable` —
@@ -1199,6 +1211,103 @@ struct JobDetailView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(KTheme.hairline).frame(height: 1)
         }
+    }
+
+    // MARK: - token spend
+
+    /// Renders one raw counter at a glance: 15_756_009 -> "15.8M". Precision
+    /// shrinks as the magnitude grows (2dp under 10, 1dp under 100, none
+    /// above) so every value lands in four characters plus a unit — the four
+    /// counters the wire carries are full-width integers, and side by side at
+    /// full width they read as noise. Nothing here is exact enough to earn
+    /// the digits either: see `tokensRows` on the floor caveat.
+    private func fmtTokens(_ n: Int64) -> String {
+        let v = Double(max(0, n))
+        let units: [(Double, String)] = [(1e9, "B"), (1e6, "M"), (1e3, "K")]
+        for (i, unit) in units.enumerated() where v >= unit.0 {
+            let scaled = v / unit.0
+            let dp = scaled < 10 ? 2 : (scaled < 100 ? 1 : 0)
+            var s = String(format: "%.\(dp)f", scaled)
+            // rounding can carry a value into the next unit up — 999_999
+            // formats as "1000K", which is both wrong-looking and wider than
+            // the unit exists to keep it. Promote instead.
+            if (Double(s) ?? 0) >= 1000, i > 0 { return "1" + units[i - 1].1 }
+            // trim only INSIDE a decimal part — a blanket trim of "0" would
+            // turn "100" into "1"
+            if s.contains(".") {
+                while s.hasSuffix("0") { s.removeLast() }
+                if s.hasSuffix(".") { s.removeLast() }
+            }
+            return s + unit.1
+        }
+        return String(max(0, n))
+    }
+
+    /// The job's token spend: the four raw counters the daemon sums out of
+    /// this job's own Claude Code transcripts (`job_tokens`, served as
+    /// `WebJob.tokens`).
+    ///
+    /// Three tiers of loudness rather than four equal numbers. The sum
+    /// answers "how big was this job" and output answers "how much work came
+    /// out of it" — the two questions a drilldown actually gets asked — so
+    /// they lead; the per-counter split is a size and a shade quieter, and
+    /// the provenance line quieter still. The counters stay RAW with no
+    /// blended cost: cache reads bill far below input, and weighting them
+    /// here would bake today's price ratio into the app (the same reason the
+    /// wire carries no total).
+    ///
+    /// The wording never claims exactness. A transcript caught mid-write is
+    /// resumed on the next pass rather than skipped, so a freshly scanned
+    /// job's numbers are a floor.
+    @ViewBuilder
+    private func tokensRows(_ t: WebTokens) -> some View {
+        let total = t.input + t.output + t.cacheWrite + t.cacheRead
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(fmtTokens(total)).font(.data(17, weight: .semibold)).foregroundStyle(KTheme.text)
+                Text("TOKENS").font(.data(9)).foregroundStyle(KTheme.text2)
+                Text("·").font(.data(11)).foregroundStyle(KTheme.hairline)
+                Text(fmtTokens(t.output)).font(.data(13, weight: .semibold)).foregroundStyle(KTheme.text2)
+                Text("OUT").font(.data(9)).foregroundStyle(KTheme.text2)
+                Spacer()
+            }
+            HStack(spacing: 14) {
+                tokenCell("in", t.input)
+                tokenCell("out", t.output)
+                tokenCell("cache w", t.cacheWrite)
+                tokenCell("cache r", t.cacheRead)
+                Spacer()
+            }
+            Text(tokensNote(t)).font(.data(9)).foregroundStyle(KTheme.text2).opacity(0.6)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func tokenCell(_ label: String, _ value: Int64) -> some View {
+        HStack(spacing: 5) {
+            Text(label).font(.data(10)).foregroundStyle(KTheme.text2).opacity(0.6)
+            Text(fmtTokens(value)).font(.data(10)).foregroundStyle(KTheme.text2)
+        }
+    }
+
+    /// Provenance, not a headline: how many transcript FILES the number was
+    /// summed across (root transcripts plus subagent sidecars — that count is
+    /// what tells "cheap job" apart from "barely measured"), and how long ago
+    /// a refresh last found new spend. A zero/absent stamp drops the age
+    /// clause rather than rendering "0m ago".
+    private func tokensNote(_ t: WebTokens) -> String {
+        let files = t.sessions == 1 ? "1 transcript" : "\(t.sessions) transcripts"
+        var note = t.sessions > 0 ? "measured across \(files)" : "measured"
+        if t.updatedAt > 0 {
+            let seconds = max(0, Int(Date().timeIntervalSince1970) - Int(t.updatedAt / 1000))
+            let ago: String
+            if seconds < 60 { ago = "\(seconds)s" }
+            else if seconds < 3600 { ago = "\(seconds / 60)m" }
+            else if seconds < 86400 { ago = "\(seconds / 3600)h" }
+            else { ago = "\(seconds / 86400)d" }
+            note += " · \(ago) ago"
+        }
+        return note
     }
 
     private func fieldRow(_ label: String, _ value: String) -> some View {

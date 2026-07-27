@@ -124,10 +124,16 @@ func (s *Store) ListJobTokens() ([]JobTokens, error) {
 //     thousand. core.SumTokensDelta returns it as a total for exactly this
 //     reason and says so.
 //
-// UpdatedAt is stamped to now when zero. A caller with nothing to fold in
-// should not call at all rather than passing a zero delta — the timestamp
-// means "when spend was last found", and creeping it forward on every no-op
-// pass would make a settled job look permanently busy.
+// UpdatedAt is stamped to now when zero, and — on an UPDATE — is written
+// ONLY when the delta actually carries spend. A pass can legitimately have
+// something to write with all four counters at zero: a new transcript file
+// appearing bumps `sessions` before anything has been generated into it, and
+// on a live cell that happens constantly, since a fresh session's first
+// record is a user turn. Moving the timestamp then would contradict what it
+// means — both this comment and the drilldowns render it as "measured Ns
+// ago", which on an idle job reads as spend just now. The CASE keeps that
+// honest in one statement rather than making callers pre-read the row.
+// The INSERT still stamps unconditionally: a row's first appearance IS news.
 func (s *Store) BumpJobTokens(slug string, delta JobTokens) error {
 	if slug == "" {
 		return fmt.Errorf("bump job tokens: empty slug")
@@ -144,7 +150,9 @@ func (s *Store) BumpJobTokens(slug string, delta JobTokens) error {
 				cache_write = cache_write + excluded.cache_write,
 				cache_read  = cache_read + excluded.cache_read,
 				sessions    = excluded.sessions,
-				updated_at  = excluded.updated_at`,
+				updated_at  = CASE WHEN excluded.in_tokens + excluded.out_tokens
+					+ excluded.cache_write + excluded.cache_read > 0
+					THEN excluded.updated_at ELSE updated_at END`,
 		slug, delta.In, delta.Out, delta.CacheWrite, delta.CacheRead,
 		delta.Sessions, delta.UpdatedAt,
 	)

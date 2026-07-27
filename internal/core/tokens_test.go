@@ -22,19 +22,33 @@ type tokUsage struct{ in, out, cw, cr int64 }
 // below.
 func tokAssistant(t *testing.T, ts int64, u tokUsage) string {
 	t.Helper()
-	return mineJSON(t, map[string]any{
-		"type": "assistant", "timestamp": mineISO(ts),
-		"message": map[string]any{
-			"model": "claude-opus-5",
-			"usage": map[string]any{
-				"input_tokens":                u.in,
-				"output_tokens":               u.out,
-				"cache_creation_input_tokens": u.cw,
-				"cache_read_input_tokens":     u.cr,
-			},
-			"content": []any{mineText("done")},
+	return tokAssistantFull(t, ts, u, "", "")
+}
+
+// tokAssistantFull is tokAssistant with the two identity fields the dedupe
+// rules turn on: msgID is `message.id` (the API message N records share) and
+// sessID is `session_id` (the session that actually made the call — absent
+// means "this file's own", which is what sidecars look like).
+func tokAssistantFull(t *testing.T, ts int64, u tokUsage, msgID, sessID string) string {
+	t.Helper()
+	msg := map[string]any{
+		"model": "claude-opus-5",
+		"usage": map[string]any{
+			"input_tokens":                u.in,
+			"output_tokens":               u.out,
+			"cache_creation_input_tokens": u.cw,
+			"cache_read_input_tokens":     u.cr,
 		},
-	})
+		"content": []any{mineText("done")},
+	}
+	if msgID != "" {
+		msg["id"] = msgID
+	}
+	rec := map[string]any{"type": "assistant", "timestamp": mineISO(ts), "message": msg}
+	if sessID != "" {
+		rec["session_id"] = sessID
+	}
+	return mineJSON(t, rec)
 }
 
 // tokAppend appends already-serialized jsonl lines (each newline-terminated)
@@ -385,5 +399,357 @@ func TestSumTokensDeltaLargeFileIsStreamed(t *testing.T) {
 	}
 	if got.Out != 2000 {
 		t.Fatalf("Out = %d, want 2000 (%s)", got.Out, fmt.Sprintf("%d lines", len(lines)))
+	}
+}
+
+// --- group dedupe and fork-replay (fix round 1) ---
+
+// TestSumTokensDeltaCountsOneMessageOnce is the first of the two rules that
+// separate this from a naive per-record sum. Claude Code writes one API
+// message as one record PER CONTENT BLOCK — thinking, text, each tool_use —
+// and stamps the SAME cumulative usage on every one of them. Counting each
+// record inflated real cell dirs by 1.98x; cache-read is per API call and
+// cannot legitimately be counted eight times.
+func TestSumTokensDeltaCountsOneMessageOnce(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	u := tokUsage{in: 2, out: 7479, cw: 309, cr: 430139}
+	mineWrite(t, projects, "-proj", "sess.jsonl",
+		// one message, four blocks, one usage object repeated verbatim
+		tokAssistantFull(t, now, u, "msg_A", ""),
+		tokAssistantFull(t, now, u, "msg_A", ""),
+		tokAssistantFull(t, now, u, "msg_A", ""),
+		tokAssistantFull(t, now, u, "msg_A", ""),
+		// a second, distinct message must still be counted
+		tokAssistantFull(t, now, tokUsage{in: 1, out: 2, cw: 3, cr: 4}, "msg_B", ""),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 3, 7481, 312, 430143, 1)
+}
+
+// TestSumTokensDeltaGroupSurvivesToolResults pins that the group tracker
+// SKIPS non-assistant records rather than being reset by them: a message's
+// blocks are routinely interleaved with the tool_result user records they
+// produced, and treating those as a boundary counts the message twice.
+// Measured on this machine: 9,385 same-id pairs separated by 1-5 non-assistant
+// records.
+func TestSumTokensDeltaGroupSurvivesToolResults(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	u := tokUsage{out: 100, cr: 5000}
+	mineWrite(t, projects, "-proj", "sess.jsonl",
+		tokAssistantFull(t, now, u, "msg_A", ""),
+		mineUser(t, now, []any{mineToolResult("t1", false, "ok")}),
+		mineUser(t, now, []any{mineToolResult("t2", false, "ok")}),
+		tokAssistantFull(t, now, u, "msg_A", ""), // same message, still one group
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 100, 0, 5000, 1)
+}
+
+// TestSumTokensDeltaSkipsForkReplay is the second rule. A kraken side thread
+// is `claude --fork-session` in the same worktree, so the fork's transcript is
+// SEEDED with the parent's records, `usage` and all, in the SAME project dir.
+// `session_id` (snake) names the session that actually made the call and
+// survives the fork; `sessionId` (camel) is rewritten and is useless here.
+func TestSumTokensDeltaSkipsForkReplay(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	parent := tokUsage{out: 1000, cr: 90000}
+	own := tokUsage{out: 7, cr: 11}
+
+	mineWrite(t, projects, "-proj", "parent.jsonl",
+		tokAssistantFull(t, now, parent, "msg_P", "parent"),
+	)
+	// the fork: the parent's record replayed in, then its own work
+	mineWrite(t, projects, "-proj", "fork.jsonl",
+		tokAssistantFull(t, now, parent, "msg_P", "parent"),
+		tokAssistantFull(t, now, own, "msg_F", "fork"),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	// parent's message once (from parent.jsonl), the fork's own once
+	tokWant(t, got, 0, 1007, 0, 90011, 2)
+}
+
+// TestSumTokensDeltaSidecarsHaveNoSessionID pins the "absent means own" half
+// of the ownership rule. Subagent sidecars carry no `session_id` at all
+// (verified: 159 of 159 records on a real cell), and they hold ~24% of a
+// cell's work — treating absent as foreign would discard far more than the
+// double-count it fixed.
+func TestSumTokensDeltaSidecarsHaveNoSessionID(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistantFull(t, now, tokUsage{out: 50, cr: 500}, "msg_S", ""),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 50, 0, 500, 1)
+}
+
+// TestSumTokensDeltaGroupSurvivesTheResumeBoundary is the interaction between
+// the group rule and incrementality, and it is the one that actually broke in
+// development: a message split across two passes must still be counted once.
+// The boundary is recovered from the file by precedingGroupID rather than
+// persisted, and the walk has to skip the tool_result records in between —
+// looking back exactly one record double-counted a real transcript.
+func TestSumTokensDeltaGroupSurvivesTheResumeBoundary(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	u := tokUsage{out: 7704, cr: 88000}
+
+	head := []string{
+		tokAssistantFull(t, now, u, "msg_A", ""),
+		mineUser(t, now, []any{mineToolResult("t1", false, "ok")}),
+	}
+	path := mineWrite(t, projects, "-proj", "sess.jsonl", head...)
+
+	first, offs, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	tokWant(t, first, 0, 7704, 0, 88000, 1)
+
+	// the rest of the SAME message lands after the boundary
+	tokAppend(t, path,
+		tokAssistantFull(t, now, u, "msg_A", ""),
+		tokAssistantFull(t, now, u, "msg_A", ""),
+	)
+	second, offs, err := SumTokensDelta(dir, offs)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	tokWant(t, second, 0, 0, 0, 0, 1)
+
+	// and a genuinely new message after it still counts
+	tokAppend(t, path, tokAssistantFull(t, now, tokUsage{out: 5}, "msg_B", ""))
+	third, _, err := SumTokensDelta(dir, offs)
+	if err != nil {
+		t.Fatalf("third: %v", err)
+	}
+	tokWant(t, third, 0, 5, 0, 0, 1)
+}
+
+// TestSumTokensDeltaWrongTypedUsageFieldKeepsTheRest: encoding/json fills in
+// every field it can and reports a type error at the end, so a record with one
+// bad counter must still contribute its three good ones. Discarding the whole
+// record was a silent under-count with no signal at all.
+func TestSumTokensDeltaWrongTypedUsageFieldKeepsTheRest(t *testing.T) {
+	projects := mineHome(t)
+	dir := filepath.Join(projects, "-proj")
+	mineWrite(t, projects, "-proj", "sess.jsonl",
+		`{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":"7","output_tokens":11,`+
+			`"cache_creation_input_tokens":13,"cache_read_input_tokens":17}}}`,
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 11, 13, 17, 1)
+}
+
+// TestSumTokensDeltaUnreadableSubtreeIsReported closes the watermark-loss
+// double count. A subtree that cannot be listed leaves its files absent from
+// the returned offsets — indistinguishable from deleted — and a caller that
+// replaced its watermarks with that would re-sum them from zero into
+// accumulate-only counters. The walk error is now on the error channel so
+// refreshJobTokens can carry the unseen watermarks forward. The ROOT being
+// absent stays silent: that is just a job whose cell never came up.
+func TestSumTokensDeltaUnreadableSubtreeIsReported(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	mineWrite(t, projects, "-proj", "sess.jsonl", tokAssistant(t, now, tokUsage{out: 1}))
+	sub := filepath.Join(dir, "sess", "subagents")
+	mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistant(t, now, tokUsage{out: 500}))
+
+	if err := os.Chmod(sub, 0o000); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(sub, 0o755) })
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test needs")
+	}
+
+	_, offs, err := SumTokensDelta(dir, nil)
+	if err == nil {
+		t.Fatal("an unlistable subtree must reach the error channel — silence here is what deletes watermarks")
+	}
+	if _, ok := offs[filepath.Join(sub, "agent-1.jsonl")]; ok {
+		t.Fatal("fixture wrong: the sidecar should not have been readable")
+	}
+}
+
+// TestDigestAppliesTheSameDedupeRules pins that mine.go's digest — what the
+// nightly pass ranks a night's waste by — applies BOTH rules the per-job sum
+// does. A digest that inflated tool-heavy sessions more than prose-heavy ones
+// would skew exactly the axis the dream skill asks a reader to compare on.
+func TestDigestAppliesTheSameDedupeRules(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	u := tokUsage{out: 100, cr: 9000}
+
+	// three records of one message, plus one replayed in from another session
+	mineWrite(t, projects, "-proj", "sess.jsonl",
+		tokAssistantFull(t, now, u, "msg_A", "sess"),
+		tokAssistantFull(t, now, u, "msg_A", "sess"),
+		tokAssistantFull(t, now, u, "msg_A", "sess"),
+		tokAssistantFull(t, now, tokUsage{out: 999, cr: 999}, "msg_X", "somebody-else"),
+	)
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "sess.jsonl")
+	if d.Out != 100 || d.CacheRead != 9000 {
+		t.Fatalf("digest Out=%d CacheRead=%d, want the message counted once and the replay skipped",
+			d.Out, d.CacheRead)
+	}
+	if res.Tokens.Out != 100 {
+		t.Fatalf("MineResult.Tokens.Out = %d, want 100", res.Tokens.Out)
+	}
+}
+
+// --- fix round 2 ---
+
+// TestSumTokensDeltaUnstattableFileIsReported is the sibling of
+// TestSumTokensDeltaUnreadableSubtreeIsReported and closes the same hole from
+// the other side: a file that exists but cannot be STAT'D (an un-traversable
+// parent, an lstat losing a race with a rename) is absent from the returned
+// offsets while still being on disk. Silent, a replace-all caller deletes its
+// watermark and re-sums the whole file into accumulate-only counters the
+// moment it becomes readable again.
+func TestSumTokensDeltaUnstattableFileIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test needs")
+	}
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	mineWrite(t, projects, "-proj", "sess.jsonl", tokAssistant(t, now, tokUsage{out: 1}))
+	mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistant(t, now, tokUsage{out: 500}))
+	sub := filepath.Join(dir, "sess", "subagents")
+
+	// 0444: listable (so WalkDir's ReadDir succeeds and the walk callback gets
+	// no error) but NOT traversable, so the child's lstat fails. That is the
+	// d.Info() branch specifically, not the subtree-walk branch.
+	if err := os.Chmod(sub, 0o444); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(sub, 0o755) })
+
+	_, offs, err := SumTokensDelta(dir, nil)
+	if err == nil {
+		t.Fatal("an unstattable file must reach the error channel — silence here is what deletes watermarks")
+	}
+	if !strings.Contains(err.Error(), "stat") {
+		t.Errorf("error = %v, want it to name the stat failure", err)
+	}
+	if _, ok := offs[filepath.Join(sub, "agent-1.jsonl")]; ok {
+		t.Fatal("fixture wrong: the sidecar should not have been stattable")
+	}
+}
+
+// TestPrecedingGroupIDReportsExhaustion pins the direction the lookback bounds
+// fail in and that failing is never silent. Running out of lookback leaves the
+// seed unknown, so the group at the boundary is counted as new — and if it was
+// a continuation, that message is counted TWICE. An over-count is the one
+// direction nothing downstream can subtract back out, so it must be reported
+// rather than hidden behind an empty string that means five other things.
+func TestPrecedingGroupIDReportsExhaustion(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	u := tokUsage{out: 100}
+
+	// A group split across the boundary by `gap` intervening records: within
+	// the bounds it must dedupe silently; past them it must be reported.
+	run := func(t *testing.T, gap int, filler string, wantReported bool) {
+		t.Helper()
+		lines := []string{tokAssistantFull(t, now, u, "msg_A", "sess")}
+		for i := 0; i < gap; i++ {
+			lines = append(lines, filler)
+		}
+		path := mineWrite(t, projects, "-proj", "sess.jsonl", lines...)
+		_, offs, err := SumTokensDelta(dir, nil)
+		if err != nil {
+			t.Fatalf("first pass: %v", err)
+		}
+		tokAppend(t, path, tokAssistantFull(t, now, u, "msg_A", "sess")) // SAME message
+		tk, _, err := SumTokensDelta(dir, offs)
+		if wantReported {
+			if err == nil {
+				t.Errorf("gap=%d: exhaustion must be reported", gap)
+			}
+			return
+		}
+		if err != nil {
+			t.Errorf("gap=%d: unexpected error %v", gap, err)
+		}
+		if tk.Out != 0 {
+			t.Errorf("gap=%d: resumed delta Out=%d, want 0 — the message continues, it is not new", gap, tk.Out)
+		}
+	}
+
+	small := `{"type":"user","message":{"content":"r"}}`
+	t.Run("within the record bound", func(t *testing.T) { run(t, groupLookbackRecords-33, small, false) })
+	t.Run("past the record bound", func(t *testing.T) { run(t, groupLookbackRecords+6, small, true) })
+
+	// The byte bound is the one that actually binds: the skipped records are
+	// tool_results and this repo records real lines at 8.3 MB.
+	fat := `{"type":"user","message":{"content":"` + strings.Repeat("x", 8<<20) + `"}}`
+	t.Run("past the byte bound", func(t *testing.T) { run(t, 8, fat, true) })
+}
+
+// TestSidecarOwnershipUsesTheParentSession closes the one-sided ownership
+// rule. A sidecar's stem is `agent-<id>`, a value no `session_id` can equal,
+// so before this it was carried ENTIRELY by the "absent is owned" arm — true
+// today but a format kraken does not control. If Claude Code ever stamps
+// sidecars with their parent's session id, the stem would reject every one of
+// them and silently drop ~24% of a cell's work.
+func TestSidecarOwnershipUsesTheParentSession(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	mineWrite(t, projects, "-proj", "parentsess.jsonl",
+		tokAssistantFull(t, now, tokUsage{out: 100}, "msg_P", "parentsess"))
+
+	for _, tc := range []struct {
+		name string
+		sess string
+	}{
+		{"sidecar with no session_id (today)", ""},
+		{"sidecar stamped with its parent's session_id", "parentsess"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mineWrite(t, projects, "-proj", filepath.Join("parentsess", "subagents", "agent-1.jsonl"),
+				tokAssistantFull(t, now, tokUsage{out: 40}, "msg_S", tc.sess))
+			tk, _, err := SumTokensDelta(dir, nil)
+			if err != nil {
+				t.Fatalf("SumTokensDelta: %v", err)
+			}
+			if tk.Out != 140 {
+				t.Fatalf("Out = %d, want 140 — the sidecar's work belongs to this cell either way", tk.Out)
+			}
+		})
 	}
 }

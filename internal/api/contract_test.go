@@ -264,6 +264,40 @@ var webJobSpec = map[string]fieldSpec{
 	"doc_questions": {kind: wireArray, required: false},
 	"feedback":      {kind: wireArray, required: false},
 	"threads":       {kind: wireArray, required: false},
+	"tokens":        {kind: wireObject, required: false},
+}
+
+// webTokensSpec covers board.go's webTokens, webJob's "tokens" object — one
+// `job_tokens` row (store.JobTokens). Every key is required: the type carries
+// no omitempty anywhere, because a measured zero is a real answer and must
+// still ride the wire. Absence is expressed by the "tokens" key itself being
+// gone (webJobSpec above marks it optional), never by a missing counter.
+var webTokensSpec = map[string]fieldSpec{
+	"in":          {kind: wireNumber, required: true},
+	"out":         {kind: wireNumber, required: true},
+	"cache_write": {kind: wireNumber, required: true},
+	"cache_read":  {kind: wireNumber, required: true},
+	"sessions":    {kind: wireNumber, required: true},
+	"updated_at":  {kind: wireNumber, required: true},
+}
+
+func TestWebTokensWireShape(t *testing.T) {
+	// a genuinely-zero row: every key must still be present, which is the
+	// difference between "measured, and it was zero" and no tokens key at all
+	data, err := json.Marshal(webTokens{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webTokens (zero row)", data, webTokensSpec)
+
+	data, err = json.Marshal(webTokens{
+		In: 149754, Out: 15756009, CacheWrite: 87776983, CacheRead: 2555432608,
+		Sessions: 154, UpdatedAt: 1785124027359,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webTokens (populated)", data, webTokensSpec)
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
@@ -346,6 +380,10 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		DocQuestions:  []webDocQuestion{{ID: "Q1", Text: "which approach?", Importance: "P1", Answer: "A"}},
 		Feedback:      []webFeedback{{ID: 1, Artifact: "00-overview.md", Note: "tighten the intro", At: 1234567890}},
 		Threads:       []webThread{{TID: "t1", Title: "why the retry loop", State: "live", Pane: "%42", CreatedAt: 1234567890}},
+		Tokens: &webTokens{
+			In: 149754, Out: 15756009, CacheWrite: 87776983, CacheRead: 2555432608,
+			Sessions: 154, UpdatedAt: 1785124027359,
+		},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {

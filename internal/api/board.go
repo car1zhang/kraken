@@ -266,6 +266,86 @@ func jobThreads(st *store.Store, j *jobs.Job) []webThread {
 	return webThreadsFrom(ts)
 }
 
+// webTokens mirrors one `job_tokens` row (store.JobTokens) for the wire: the
+// job's summed token spend, computed by the daemon's refresh pass
+// (internal/jobs/tokens.go's tokensPass, unexported — this package never
+// calls it and could not) and only ever READ here. This package computes
+// nothing —
+// no summing, no scanning, no weighting — for the reason spelled out in
+// jobs/tokens.go: a per-read sum of a job's transcripts costs 0.1-0.3s per
+// cell project dir, inside a board build that already holds boardCache's
+// mutex for its whole duration.
+//
+// "tokens", never "usage": `usage` in this package already means ACCOUNT
+// QUOTA (usage.go, webUsage, /api/usage), and the two numbers are unrelated.
+//
+// The four counters ride RAW with no weighted total, deliberately: they are
+// billed at wildly different rates, and a "cost" number computed here would
+// bake a price ratio into the API and go stale the moment pricing moves.
+// Consumers weight them themselves.
+//
+// No omitempty on any field, for webUpdate's reason: a client reads all six
+// unconditionally, and an absent key would be indistinguishable from a
+// measured zero. Absence is expressed one level up instead — webJob.Tokens is
+// a POINTER with omitempty, so a job with no row emits no `tokens` key at
+// all, which is what keeps "never measured" distinct from "measured, and it
+// was zero".
+//
+// A counter may be a FLOOR rather than an exact total: core.SumTokensDelta
+// returns what it found alongside an error when a transcript could only be
+// scanned part way, and refreshJobTokens folds that in on purpose (a failed
+// read is not a zero). Nothing on the wire marks which rows those are, so no
+// client should present this as exact.
+type webTokens struct {
+	In         int64 `json:"in"`          // input_tokens — uncached input
+	Out        int64 `json:"out"`         // output_tokens — generated
+	CacheWrite int64 `json:"cache_write"` // cache_creation_input_tokens
+	CacheRead  int64 `json:"cache_read"`  // cache_read_input_tokens
+	// Sessions is the number of transcript FILES summed (root transcripts
+	// plus subagent sidecars) — what lets a reader tell "this job was cheap"
+	// from a row of zeros that means something else entirely.
+	Sessions  int64 `json:"sessions"`
+	UpdatedAt int64 `json:"updated_at"` // unix millis, matching webJob.mtime's convention
+}
+
+// jobTokensIndex reads EVERY measured job's token row in one query and keys
+// it by slug, so a board build costs one query rather than one per job — the
+// payload carries ~74 of them and rebuilds roughly every two seconds, which
+// is exactly why store.ListJobTokens exists at all. nil (never an error) when
+// no store is wired, and log-and-return-nil on a query failure, the same
+// never-fail-the-whole-poll-for-one-field contract as jobQuestions/jobThreads.
+func jobTokensIndex(st *store.Store) map[string]store.JobTokens {
+	if st == nil {
+		return nil
+	}
+	rows, err := st.ListJobTokens()
+	if err != nil {
+		util.LogEvent("web", "error", "board", fmt.Sprintf("list job tokens: %v", err))
+		return nil
+	}
+	index := make(map[string]store.JobTokens, len(rows))
+	for _, r := range rows {
+		index[r.Slug] = r
+	}
+	return index
+}
+
+// webTokensFor looks one job's row out of jobTokensIndex' map and shapes it
+// for the wire. A slug with no row — the store's ErrNotFound case, and every
+// job whose transcripts have not been summed yet — returns nil, so webJob's
+// omitempty drops the key rather than synthesising a zero row that would
+// claim the job cost nothing.
+func webTokensFor(index map[string]store.JobTokens, slug string) *webTokens {
+	t, ok := index[slug]
+	if !ok {
+		return nil
+	}
+	return &webTokens{
+		In: t.In, Out: t.Out, CacheWrite: t.CacheWrite, CacheRead: t.CacheRead,
+		Sessions: t.Sessions, UpdatedAt: t.UpdatedAt,
+	}
+}
+
 type webJob struct {
 	Slug    string `json:"slug"`
 	Repo    string `json:"repo"`
@@ -349,6 +429,13 @@ type webJob struct {
 	// Threads mirrors this job's side threads — every fork of zeus' session,
 	// live or closed (see jobThreads). The clients render one chip each.
 	Threads []webThread `json:"threads,omitempty"`
+	// Tokens is this job's summed token spend, straight off its `job_tokens`
+	// row (see webTokensFor). A pointer with omitempty precisely so an
+	// unmeasured job emits NO key: "never summed" and "summed, and it was
+	// zero" are different answers and a zero object would conflate them.
+	// Survives teardown and archival — the row is keyed on the slug, with no
+	// FK and no cascade, because retrospective cost is the whole point.
+	Tokens *webTokens `json:"tokens,omitempty"`
 }
 
 type webBoard struct {
@@ -716,6 +803,11 @@ func buildWebBoard() webBoard {
 	activeStore := jobs.ActiveStore()
 	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS()}
 	order := jobs.LoadBoardOrder()
+	// One query for the WHOLE board's token rows, read before the loop and
+	// indexed by slug — never a per-job GetJobTokens, which would be ~74
+	// queries inside the cached build (store.ListJobTokens' own reason for
+	// existing). The archived loop below reads the same index.
+	tokens := jobTokensIndex(activeStore)
 	byState := map[string][]webJob{}
 	for _, j := range js {
 		var prereqs []webPrereq
@@ -740,6 +832,10 @@ func buildWebBoard() webBoard {
 			// live[] branch below — a closed thread outlives its cell and
 			// stays readable, so its chip must survive teardown too.
 			Threads: jobThreads(activeStore, j),
+			// Tokens: keyed on the job's SLUG, which is what jobs/tokens.go
+			// writes the row under (the measured project dir is derived from
+			// the slug alone), not on j.ID like Feedback above.
+			Tokens: webTokensFor(tokens, j.Slug),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -817,6 +913,16 @@ func buildWebBoard() webBoard {
 			// cross-wire onto this card. DocQuestions is deliberately absent
 			// here — never set for archived jobs.
 			Feedback: jobFeedback(activeStore, a.ID),
+			// Tokens IS set for an archived job — keeping the number after
+			// the cell is gone is the whole reason the row has no FK and no
+			// cascade. It is looked up under a.Slug (the ORIGINAL slug the
+			// daemon summed under), never a.ArchivedName, which is the
+			// archive file base and was never a cell dir name. Consequence
+			// of that slug keying, and it is the store's shape rather than
+			// this layer's to fix: a new active job that takes the freed slug
+			// back reuses the same cell path, so its transcripts land in the
+			// same project dir and both cards then show the one shared row.
+			Tokens: webTokensFor(tokens, a.Slug),
 		})
 	}
 	return board

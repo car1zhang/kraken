@@ -480,6 +480,92 @@ function prChipHTML(pr) {
   return `<a class="pr-chip ${cls}" href="${esc(pr.url)}" target="_blank" rel="noreferrer">${esc(label)}</a>`;
 }
 
+// ---- per-job token spend (webJob.tokens) ----
+//
+// fmtTokens renders one raw counter at a glance: 15756009 -> "15.8M".
+// Precision shrinks as the magnitude grows (2dp under 10, 1dp under 100,
+// none above) so every value lands in four characters plus a unit. Four
+// full-width integers side by side is the shape the wire carries and it
+// reads as noise in a drilldown; nothing here is exact enough to earn the
+// digits either (see tokensHTML on the floor caveat).
+function fmtTokens(n) {
+  const v = Math.max(0, Number(n) || 0);
+  const units = [[1e9, "B"], [1e6, "M"], [1e3, "K"]];
+  for (let i = 0; i < units.length; i++) {
+    const [div, suffix] = units[i];
+    if (v < div) continue;
+    const scaled = v / div;
+    let s = scaled.toFixed(scaled < 10 ? 2 : scaled < 100 ? 1 : 0);
+    // rounding can carry a value into the next unit up — 999_999 formats as
+    // "1000K", which is both wrong-looking and wider than the unit exists to
+    // keep it. Promote instead.
+    if (parseFloat(s) >= 1000 && i > 0) return "1" + units[i - 1][1];
+    // trim only INSIDE a decimal part — a blanket /0+$/ would turn "100"
+    // into "1"
+    if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+    return s + suffix;
+  }
+  return String(Math.round(v));
+}
+
+// tokensHTML renders what this job actually burned: the four raw counters
+// the daemon sums out of the job's own Claude Code transcripts
+// (internal/jobs/tokens.go's tokensPass writes them, the board serves them
+// as webJob.tokens).
+//
+// Two states, and they are NOT the same thing:
+//   - `tokens` ABSENT — never measured (no transcripts yet, or the daemon
+//     hasn't reached this job). Renders nothing at all. A zero here would
+//     read as "this job was free", which is a different and false claim.
+//   - measured — render it. The api emits the key only when a store row
+//     exists, so presence is the whole test.
+//
+// Layout is one headline plus a quiet breakdown, not four equal numbers:
+// the sum answers "how big was this job" and output answers "how much work
+// came out of it", which are the two questions a drilldown gets asked; the
+// per-counter split is there for whoever wants it and is deliberately
+// smaller and dimmer. The counters stay RAW, with no blended cost — cache
+// reads bill far below input, and weighting them here would bake today's
+// price ratio into the UI (the same reason the wire carries no total).
+//
+// Wording avoids claiming exactness on purpose: a transcript caught
+// mid-write is resumed on the next pass, so a freshly-scanned job's numbers
+// are a floor rather than a settled total.
+function tokensHTML(j) {
+  const t = j && j.tokens;
+  if (!t) return "";
+  const inTok = t.in || 0, out = t.out || 0;
+  const cacheWrite = t.cache_write || 0, cacheRead = t.cache_read || 0;
+  const sessions = t.sessions || 0;
+  const total = inTok + out + cacheWrite + cacheRead;
+  if (!total && !sessions) return "";
+  const rows = [["in", inTok], ["out", out], ["cache w", cacheWrite], ["cache r", cacheRead]];
+  // updated_at is unix MILLIS (webJob.mtime's convention); age() takes
+  // seconds. A missing/zero stamp drops the clause rather than rendering
+  // "0s ago" — same treatment the update banner gives its own timestamp.
+  const when = t.updated_at ? age(Math.floor(t.updated_at / 1000)) : "";
+  const note = [
+    sessions ? `measured across ${sessions} transcript${sessions === 1 ? "" : "s"}` : "measured",
+    when ? `${when} ago` : "",
+  ].filter(Boolean).join(" · ");
+  const title =
+    "token spend summed from this job's own Claude Code transcripts, subagent sidecars included. " +
+    "Counters are raw and unweighted; a transcript still being written is resumed next pass, so treat these as a floor.";
+  return (
+    `<div class="tok" title="${esc(title)}">` +
+    `<div class="tok-head">` +
+    `<span class="tok-big">${esc(fmtTokens(total))}</span><span class="tok-unit">tokens</span>` +
+    `<span class="tok-dot">·</span>` +
+    `<span class="tok-mid">${esc(fmtTokens(out))}</span><span class="tok-unit">out</span>` +
+    `</div>` +
+    `<div class="tok-break">` +
+    rows.map(([k, v]) => `<span class="tok-cell"><i>${esc(k)}</i>${esc(fmtTokens(v))}</span>`).join("") +
+    `</div>` +
+    `<div class="tok-note">${esc(note)}</div>` +
+    `</div>`
+  );
+}
+
 // ---- side threads: one chip per fork of zeus' session (see openThread) ----
 //
 // threadChipsHTML renders the chips alone so the same markup can fill both
@@ -2120,6 +2206,7 @@ function fillSteerContext(j, mode) {
   const chipsEl = document.getElementById("steer-chips");
   const docqEl = document.getElementById("steer-docq");
   const fbEl = document.getElementById("steer-feedback");
+  const tokEl = document.getElementById("steer-tokens");
 
   const crew = mode !== "reactivate" && j && crewHTML(j);
   // PRs are job history, not cell state — shown in every mode, including
@@ -2146,6 +2233,12 @@ function fillSteerContext(j, mode) {
   // history, every mode, and this modal is one of the only two surfaces that
   // renders it at all now that the card shows a count chip.
   const fb = j ? feedbackHTML(j) : "";
+  // token spend is job history in the strongest sense — it's summed from
+  // transcripts that outlive the cell dir — so like PRs it renders in every
+  // mode, reactivate included: "what did this already cost" is exactly the
+  // question a reactivation asks. Empty string when the job was never
+  // measured, which keeps its container hidden (see tokensHTML).
+  const tok = j ? tokensHTML(j) : "";
 
   crewEl.hidden = !crew;
   crewEl.innerHTML = crew || "";
@@ -2177,7 +2270,11 @@ function fillSteerContext(j, mode) {
   seedDocqDrafts(docqEl);
   restoreDocInputs(dqState);
 
-  container.hidden = !crew && !prs && !threads && !detail && !lastSent && !artifacts && !docq && !fb;
+  tokEl.hidden = !tok;
+  tokEl.innerHTML = tok;
+
+  container.hidden =
+    !crew && !prs && !threads && !detail && !lastSent && !artifacts && !docq && !fb && !tok;
 }
 
 // liveDisplayColumn mirrors render()'s column bucketing for a single job:
