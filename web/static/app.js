@@ -580,13 +580,14 @@ function cardHTML(j, col) {
     .map((r) => `<div class="roster-row"><span class="roster-dot${r.working ? " on" : ""}">${r.working ? "●" : "○"}</span> ${esc(r.name)} <span class="dim">(${esc(r.model)})</span></div>`)
     .join("");
   const editable = !j.live && ["draft", "queued", "done"].includes(col);
-  // an uncoloured job emits neither the --job-color declaration nor the
-  // swatch element — no empty span, no gap in .card-top's 8px flex gap, so
-  // the markup is byte-identical to a board that never had colours
+  // an uncoloured job emits no --job-color declaration at all, so the card's
+  // accent bar falls through to --state and the markup is byte-identical to
+  // a board that never had colours (see .card in style.css for the
+  // flagged > job colour > state precedence the bar carries)
   const jc = jobColorVar(j);
   return `<div class="card editable ${j.question || j.health || docQuestionsOpenP0(j) ? "flagged" : ""}" style="--state:${color}${jc ? `;--job-color:${jc}` : ""}"
       draggable="true" data-slug="${esc(j.slug)}" data-col="${col}" data-editable="${editable}">
-    <div class="card-top">${jc ? `<span class="card-swatch"></span>` : ""}
+    <div class="card-top">
       <span class="slug">${esc(j.slug)}</span>
       <span class="state">● ${esc(j.state)}</span>
       ${col === "queued" && !j.live ? `<button class="queue-cancel" data-slug="${esc(j.slug)}" title="cancel — return to draft (spec is kept)">✕</button>` : ""}
@@ -926,12 +927,13 @@ function archivedCardHTML(j) {
   // scroll key — and a bare slug would make this card and an active job that
   // reused the freed slug restore each other's feedback-panel scroll position
 
-  // the swatch survives archiving — the card is dimmed as a whole by
-  // .card.archived's opacity, so the colour reads as muted without needing a
-  // treatment of its own. Same all-or-nothing emission as the live card.
+  // the colour survives archiving — the card is dimmed as a whole by
+  // .card.archived's opacity, so the accent bar reads as muted without
+  // needing a treatment of its own. Same all-or-nothing emission as the live
+  // card: no --job-color means the bar falls through to --text-2.
   const jc = jobColorVar(j);
   return `<div class="card archived" style="--state:var(--text-2)${jc ? `;--job-color:${jc}` : ""}" data-slug="${esc(jobKey(j))}">
-    <div class="card-top">${jc ? `<span class="card-swatch"></span>` : ""}
+    <div class="card-top">
       <span class="slug">${esc(label)}</span>
       ${renamed ? `<span class="state">as ${esc(j.slug)}</span>` : ""}
       <span class="state">● archived</span>
@@ -3615,8 +3617,12 @@ function renderDag(board) {
     .map((j) => {
       const p = pos[j.slug];
       const editable = !j.live && ["draft", "queued", "done"].includes(columnFor(j.state));
+      // same accent-bar channel as the kanban card, so a job reads as the
+      // same colour in both views (see .card in style.css for the
+      // flagged > job colour > state precedence)
+      const jc = jobColorVar(j);
       return `<div class="dag-node editable ${j.question || j.health ? "flagged" : ""}"
-        style="left:${p.x}px;top:${p.y}px;--state:${stateColor(j.state)}"
+        style="left:${p.x}px;top:${p.y}px;--state:${stateColor(j.state)}${jc ? `;--job-color:${jc}` : ""}"
         data-slug="${esc(j.slug)}" data-editable="${editable}">
         <span class="slug">${esc(j.slug)}</span>
         <span class="nstate">● ${esc(j.state)}</span><span class="nrepo">${esc(j.repo)}</span>
