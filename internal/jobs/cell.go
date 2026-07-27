@@ -323,6 +323,47 @@ func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
 		spawnInput{"--", prompt, spawnPromptPath(j)})
 }
 
+// cellSpawnEnv is the environment the `tmux new-session` that creates a cell
+// runs under: this process' own, with the directory holding the resolved `go`
+// prepended to PATH. nil means "changed nothing" — an exec.Cmd with a nil Env
+// inherits, so the spawn is byte-for-byte what it was before this existed.
+//
+// The problem it fixes. `kraken serve` is a launchd agent, and launchd hands
+// its jobs their own PATH rather than a login shell's; on this machine the only
+// `go` lives in /usr/local/go/bin. The plist does name that directory, but
+// `launchctl kickstart -k` — how every install restarts the daemon — relaunches
+// from launchd's cached in-memory job definition and never re-reads the plist,
+// so a daemon that has been kickstarted since before that line was added is
+// still running without it. The result inside a cell was that a bare `go test`
+// / `go build` / `gofmt` failed, and agent after agent independently
+// rediscovered the same `export PATH=$PATH:/usr/local/go/bin` workaround, then
+// prefixed every later command with it. One of them never recovered and closed
+// its review with "formatting is tooling-unverified".
+//
+// Why the CLIENT's environment is the lever, and why this reaches the whole
+// crew. tmux builds a new pane's environment from the environment of the
+// process that issued the tmux command, not from the server's and not from the
+// session's — `new-session -e PATH=…` is set in the session environment and
+// then overridden, so it does nothing at all (other variables set with -e do
+// survive, which makes it a convincing dead end). Since a pane's PATH is
+// whatever its spawning client had, and zeus is what issues the `tmux
+// new-window` for each teammate Claude Code spawns under teammateMode: tmux,
+// setting it once on this one command propagates transitively: zeus' pane, the
+// hephaestus/athena/hermes panes it opens, and anything they open in turn.
+//
+// Prepended, never replaced (util.PrependToolDir): an operator-set PATH is a
+// preference, and everything else a cell shells out to — git, gh, claude,
+// kraken itself in ~/.local/bin — still has to be findable.
+func cellSpawnEnv() []string {
+	goPath, err := lookToolchain("go") // PATH first, then the known install dirs
+	if err != nil {
+		// Best effort by construction. A cell that refused to start because a
+		// toolchain probe failed would be far worse than the papercut above.
+		return nil
+	}
+	return util.ToolchainEnv(os.Environ(), goPath)
+}
+
 // jobPrompt is the spec portion of the job body — everything up to the
 // kraken-owned "## Mid-run log" section, which is bookkeeping for the file,
 // not part of zeus' initial prompt.
@@ -393,6 +434,8 @@ func StartCell(j *Job, repo string) error {
 		"-x", strconv.Itoa(core.DetachedSessionCols), "-y", strconv.Itoa(core.DetachedSessionRows),
 		"-s", sess, "-c", wt,
 		"-n", util.Slugify(j.Slug), launch)
+	// the pane's PATH is this process' PATH: see cellSpawnEnv
+	newSessionCmd.Env = cellSpawnEnv()
 	newSessionCmd.Stderr = &newSessionStderr
 	if err := newSessionCmd.Run(); err != nil {
 		if newSessionStderr.Len() > 0 {
@@ -1421,6 +1464,8 @@ func ReactivateJob(j *Job, session, message string) error {
 		"-x", strconv.Itoa(core.DetachedSessionCols), "-y", strconv.Itoa(core.DetachedSessionRows),
 		"-s", sess, "-c", wt,
 		"-n", util.Slugify(j.Slug), launch)
+	// the pane's PATH is this process' PATH: see cellSpawnEnv
+	newSessionCmd.Env = cellSpawnEnv()
 	newSessionCmd.Stderr = &newSessionStderr
 	if err := newSessionCmd.Run(); err != nil {
 		if newSessionStderr.Len() > 0 {

@@ -99,7 +99,7 @@ install: build install-completion install-serve
 # install) dies with `go: command not found` while the identical command works
 # in a terminal, because launchd jobs inherit none of the login shell's PATH.
 # (That is belt and braces only — the updater now also prepends go's real
-# directory to the PATH it hands make, cmd/kraken/cmd_update.go's toolchainEnv,
+# directory to the PATH it hands make, internal/util's PrependToolDir,
 # which is what actually makes a board-click build work.)
 # ThrottleInterval keeps a losing single-instance guard from crash-looping
 # under KeepAlive.

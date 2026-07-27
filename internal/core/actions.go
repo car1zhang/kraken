@@ -72,18 +72,32 @@ func CheckSpawnDir(dir string) error {
 // name (the running command); callers that want to label it use
 // NewWindowNamed.
 func NewWindowIn(session, dir string, argv []string) (string, error) {
-	return NewWindowNamed(session, dir, "", argv)
+	return NewWindowNamed(session, dir, "", nil, argv)
 }
 
-// NewWindowNamed is NewWindowIn with an explicit tmux window name (-n), the
-// one thing a side thread's window needs that a plain spawn doesn't: its
-// window sits beside zeus' in the cell session, so it has to announce which
-// thread it is in the status bar rather than reading as a second anonymous
-// claude. An empty name omits -n entirely, which is exactly NewWindowIn's
-// original behavior — the two share this one exec so a change to the tmux
-// invocation (the -P format string the pane id is parsed back out of, above
-// all) can never apply to only one of them.
-func NewWindowNamed(session, dir, name string, argv []string) (string, error) {
+// NewWindowNamed is NewWindowIn with an explicit tmux window name (-n) and an
+// explicit environment — the two things a side thread's window needs that a
+// plain spawn doesn't. Its window sits beside zeus' in the cell session, so it
+// has to announce which thread it is in the status bar rather than reading as a
+// second anonymous claude. An empty name omits -n entirely, which is exactly
+// NewWindowIn's original behavior — the two share this one exec so a change to
+// the tmux invocation (the -P format string the pane id is parsed back out of,
+// above all) can never apply to only one of them.
+//
+// env is the environment of the tmux CLIENT this function becomes, and a nil env
+// inherits this process' own — exactly exec.Cmd's rule, and what NewWindowIn
+// passes, so the board's spawn is unaffected. `k n`/`k c` are unaffected for a
+// different reason worth stating, since the doc above primes a reader to expect
+// all three to funnel through here: NewWindow never calls this function at all —
+// it builds its own tmuxArgs and runs its own exec, and setting no Env there
+// already means inherit. It exists because a pane's environment is the environment of the
+// process that issued its tmux command, so a caller that knows the pane needs
+// something this process wasn't given has no other way to say so. The one such
+// caller is a side thread opened by the launchd-run daemon, whose PATH does not
+// lead to the Go toolchain (internal/jobs/cell.go's cellSpawnEnv). core does not
+// resolve any toolchain itself: what belongs on PATH is knowledge of the layer
+// above, and it stays there.
+func NewWindowNamed(session, dir, name string, env, argv []string) (string, error) {
 	// tmux silently falls back to $HOME on a bad -c dir; a typo should fail
 	if err := CheckSpawnDir(dir); err != nil {
 		return "", err
@@ -93,7 +107,9 @@ func NewWindowNamed(session, dir, name string, argv []string) (string, error) {
 		tmuxArgs = append(tmuxArgs, "-n", name)
 	}
 	tmuxArgs = append(tmuxArgs, argv...)
-	out, err := exec.Command("tmux", tmuxArgs...).Output()
+	cmd := exec.Command("tmux", tmuxArgs...)
+	cmd.Env = env // nil inherits
+	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return "", fmt.Errorf("tmux new-window: %s", strings.TrimSpace(string(ee.Stderr)))

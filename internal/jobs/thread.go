@@ -528,7 +528,10 @@ func BranchThread(j *Job, title, seed string) (store.Thread, error) {
 		releaseReservedThread(st, j, t.TID)
 		return store.Thread{}, err
 	}
-	at, err := core.NewWindowNamed(sess, wt, t.TID, []string{cmd})
+	// cellSpawnEnv, not the daemon's own environment: this window is opened by
+	// kraken (launchd-run), not by zeus, so nothing has put the Go toolchain on
+	// its PATH — and a thread reads the same worktree and runs the same tools.
+	at, err := core.NewWindowNamed(sess, wt, t.TID, cellSpawnEnv(), []string{cmd})
 	if err != nil {
 		releaseReservedThread(st, j, t.TID)
 		return store.Thread{}, fmt.Errorf("%s: open thread window: %v", j.Slug, err)
@@ -610,11 +613,14 @@ func KillThread(j *Job, tid string) error {
 
 // windowOpener opens one thread window and returns tmux's `-P` line;
 // core.NewWindowNamed in production and the single seam reviveClaimed takes.
+// The env parameter is the spawning environment (cellSpawnEnv in production),
+// carried through the seam rather than resolved behind it so a test can see
+// which environment a revive would have opened the window with.
 // The ordering this file has to guarantee — claim the row BEFORE anything is
 // staged or spawned, undo the claim if the spawn then fails — is only
 // observable by watching whether a window was opened at all, and no test in
 // this repo may start a real tmux server.
-type windowOpener func(session, dir, name string, argv []string) (string, error)
+type windowOpener func(session, dir, name string, env, argv []string) (string, error)
 
 // ReviveThread resumes a killed thread's claude session in a fresh window of
 // the cell — same session id, so the conversation continues exactly where it
@@ -686,7 +692,9 @@ func reviveClaimed(st *store.Store, j *Job, t store.Thread, sess, wt string, ope
 		releaseReservedThread(st, j, t.TID)
 		return store.Thread{}, err
 	}
-	at, err := open(sess, wt, t.TID, []string{cmd})
+	// same reason as BranchThread's: a revived thread's window is opened by the
+	// daemon, so its PATH has to be told about the toolchain
+	at, err := open(sess, wt, t.TID, cellSpawnEnv(), []string{cmd})
 	if err != nil {
 		releaseReservedThread(st, j, t.TID)
 		return store.Thread{}, fmt.Errorf("%s: open thread window: %v", j.Slug, err)

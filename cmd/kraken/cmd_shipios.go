@@ -271,7 +271,7 @@ func runShipIOS(opts shipIOSOpts, out io.Writer) error {
 	if opts.dryRun {
 		scriptArgs = append(scriptArgs, "--dry-run")
 	}
-	// toolchainEnv (cmd_update.go) prepends the resolved xcodegen's directory
+	// util.ToolchainEnv prepends the resolved xcodegen's directory
 	// to PATH. Same gap it closes for the updater's bare `go`: this process may
 	// have been forked by launchd, whose PATH does not reach the homebrew
 	// prefix xcodegen lives in, and the script invokes it by bare name.
@@ -280,7 +280,7 @@ func runShipIOS(opts shipIOSOpts, out io.Writer) error {
 	// forked by the launchd daemon, which cannot be given these through
 	// launchctl at all (see jobs.ASCEnvPath) — without this the button refuses
 	// preflight forever while the identical terminal run works.
-	shipEnv := append(toolchainEnv(pf.XcodegenPath), jobs.ASCEnviron()...)
+	shipEnv := append(util.ToolchainEnv(os.Environ(), pf.XcodegenPath), jobs.ASCEnviron()...)
 	if err := shipExec(pf.Script, pf.Repo, shipEnv, scriptArgs, scan); err != nil {
 		scan.flush()
 		// Name the phase it died in. "ship failed" alone sends someone into a
@@ -493,7 +493,7 @@ var (
 	// actually happened; xcodebuild puts warnings on stderr and progress on
 	// stdout, and two separate captures would interleave wrongly or not at all.
 	//
-	// The environment is inherited whole (toolchainEnv is os.Environ() plus a
+	// The environment is inherited whole (util.ToolchainEnv is os.Environ() plus a
 	// PATH edit) because that is how ASC_KEY_ID and ASC_ISSUER_ID reach the
 	// script. They are never named on a command line — altool finds the .p8 by
 	// convention — so they stay out of the process table as well as the log.
