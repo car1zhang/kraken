@@ -21,7 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchDream, fetchWatchlist, setWatchVerdict } from "../../api/client.ts";
 import type { DreamReports, WatchlistPage, WebDreamReport } from "../../api/types.ts";
 import { usePoll } from "../../hooks/usePoll.ts";
-import { renderMD } from "../../lib/markdown.ts";
+import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
 import {
   dreamPRCount,
   dreamSectionCount,
@@ -71,6 +71,9 @@ function ReportCard({
   const watching = dreamSectionCount(report.body, /^watching\b/i);
   const judged = dreamSectionCount(report.body, /^judgment calls?\b/i);
   const quiet = !prs && !watching && !judged;
+  // memoised so the 3s dream poll cannot rebuild an open report out from
+  // under the reader's scroll — see useRenderedMD
+  const body = useRenderedMD(report.body);
   const tag = (cls: string, n: number, one: string, many: string) =>
     n ? (
       <span className={`rep-tag ${cls}`}>
@@ -94,10 +97,7 @@ function ReportCard({
         <span className="sum">{quiet ? "nothing shipped" : report.slug}</span>
       </button>
       {open ? (
-        <div
-          className="rep-b md"
-          dangerouslySetInnerHTML={{ __html: renderMD(report.body ?? "") }}
-        />
+        <div className="rep-b md" dangerouslySetInnerHTML={body} />
       ) : null}
     </div>
   );

@@ -24,6 +24,7 @@ import { JOB_COLORS } from "../../lib/format.ts";
 import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useDebouncedDraft } from "../../hooks/useDebouncedDraft.ts";
+import { useHTML, useRenderedMD } from "../../hooks/useRenderedMD.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
@@ -491,6 +492,14 @@ function SteerBody({
     [mutate],
   );
 
+  // Both bodies below are innerHTML, and both are re-derived on every 3s poll
+  // — memoised so an unchanged string leaves the DOM (and the reader's scroll
+  // and selection) alone. See useRenderedMD.
+  const detailHTML = useRenderedMD(detail);
+  const specHTML = useHTML(
+    form ? specMetaHTML(form) + renderMD(form.spec || "") : "",
+  );
+
   const key = job ? jobKey(job) : jobSlug;
   // display_slug || slug — a renamed archive entry prefixes its chips with the
   // name it was archived UNDER, which is what the artifact viewer's title
@@ -576,7 +585,7 @@ function SteerBody({
             id="steer-detail"
             hidden={!detail}
             // renderMD escapes before transforming, so agent text is inert
-            dangerouslySetInnerHTML={{ __html: detail ? renderMD(detail) : "" }}
+            dangerouslySetInnerHTML={detailHTML}
           />
           <div className="last-sent" id="steer-lastsent" hidden={!lastSent}>
             {lastSent ? `me→zeus: ${lastSent}` : ""}
@@ -676,9 +685,7 @@ function SteerBody({
             className="steer-spec-body"
             id="steer-spec-body"
             hidden={!specOpen}
-            dangerouslySetInnerHTML={{
-              __html: form ? specMetaHTML(form) + renderMD(form.spec || "") : "",
-            }}
+            dangerouslySetInnerHTML={specHTML}
           />
         </div>
 

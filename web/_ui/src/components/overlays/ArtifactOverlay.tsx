@@ -3,7 +3,7 @@ import { createFeedback } from "../../api/client.ts";
 import type { WebJob } from "../../api/types.ts";
 import { useArtifactSeq, type SeqEntry } from "../../hooks/useArtifactSeq.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
-import { renderMD } from "../../lib/markdown.ts";
+import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
 import { ArtifactPager, useArtifactKeys } from "./ArtifactPager.tsx";
 import { Overlay, type Mutate } from "./Overlay.tsx";
 
@@ -502,6 +502,17 @@ function ArtifactBodyContent({
   error: string | null;
   onKey: (ev: KeyboardEvent) => void;
 }) {
+  // Above the branches because it is a hook, and memoised because this is the
+  // component the 3s board poll used to rebuild wholesale — see useRenderedMD.
+  //
+  // Fed `undefined` whenever the markdown branch is unreachable, which is
+  // exactly `raw`: the raw branch has real `text` (needsText fetches it FOR
+  // raw) and renders it verbatim, so parsing it as markdown here would burn a
+  // whole renderMD over a body no branch will mount — on a raw-opened page
+  // artifact, potentially hundreds of KB of it. The other non-markdown
+  // branches already have `text === undefined` on their own.
+  const md = useRenderedMD(raw ? undefined : text);
+
   if (raw) {
     return (
       <div className="panel-body raw" id="panel-body">
@@ -543,7 +554,7 @@ function ArtifactBodyContent({
     <div
       className="panel-body md"
       id="panel-body"
-      dangerouslySetInnerHTML={{ __html: renderMD(text) }}
+      dangerouslySetInnerHTML={md}
     />
   );
 }
