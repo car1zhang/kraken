@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createFeedback } from "../../api/client.ts";
+import { createFeedback, threadOp } from "../../api/client.ts";
 import type { WebJob } from "../../api/types.ts";
 import { useArtifactSeq, type SeqEntry } from "../../hooks/useArtifactSeq.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
 import { ArtifactPager, useArtifactKeys } from "./ArtifactPager.tsx";
 import { Overlay, type Mutate } from "./Overlay.tsx";
+import { showToast } from "./Toast.tsx";
 
 // The artifact viewer (app.js:1774 openArtifact). FOUR render modes, picked
 // from the URL's extension alone:
@@ -34,6 +35,112 @@ export interface ArtifactParts {
   slug: string;
   home: string;
   name: string;
+}
+
+/**
+ * The two things the head's one composer can be. They share a box because they
+ * are the same gesture — "I have something to say about THIS artifact, while
+ * looking at it" — and differ only in where it goes:
+ *
+ *   feedback  → a kraken.db feedback row the job's zeus reads on its next
+ *               working session. Asynchronous, and no answer comes back.
+ *   ask       → a side thread branched off zeus, seeded with the question.
+ *               A second claude answers it in its own tmux window, WITHOUT
+ *               disturbing the job.
+ *
+ * Neither is new machinery: both endpoints already exist and neither gained a
+ * field for this. What is new is reaching the second one from the artifact you
+ * are reading rather than from the job card, where you would have to re-type
+ * which artifact you meant.
+ */
+export type ComposerMode = "feedback" | "ask";
+
+/** An unsent composer, banked against the artifact it was typed about. */
+interface ComposerDraft {
+  mode: ComposerMode;
+  text: string;
+}
+
+/** What the draft stash needs to know about the composer on screen. */
+interface ComposerSnapshot {
+  url: string;
+  text: string;
+  mode: ComposerMode | null;
+}
+
+/**
+ * A cell-home artifact name may be a subpath — the title wants its tail. An
+ * empty tail (a name that ends in the separator) falls back to the whole name
+ * rather than to nothing, which would title the thread with a bare em-dash.
+ */
+const baseName = (name: string) =>
+  name.slice(name.lastIndexOf("/") + 1) || name;
+
+/**
+ * Cut to at most `n` UTF-16 units WITHOUT splitting a surrogate pair.
+ *
+ * `slice` counts code units, so a cut landing between the halves of an astral
+ * character (emoji, and everything above the BMP) leaves a lone high surrogate.
+ * `JSON.stringify` will happily escape it, Go's `encoding/json` decodes an
+ * unpaired escape to U+FFFD, and the thread's stored title then carries a
+ * replacement glyph nothing can repair but a rename.
+ */
+function cutUnits(s: string, n: number): string {
+  const cut = s.slice(0, n);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
+/** The `maxLength` ThreadOverlay's rename input enforces, in UTF-16 units. */
+const TITLE_MAX = 80;
+/** How much of that a long artifact name may take before it is itself cut. */
+const TITLE_BASE_MAX = 40;
+
+/**
+ * The thread name a question about an artifact branches under.
+ *
+ * A thread's name is what its chip says wherever threads are listed, so "which
+ * artifact" alone is not enough: ask two things about `00-overview.md` and you
+ * would get two chips nobody can tell apart. The first line of the question is
+ * what separates them.
+ *
+ * Which is why the artifact half is budgeted rather than simply written first.
+ * A single cut at the end would let a long section-doc name eat the whole 80
+ * and truncate the question away entirely — every chip identical again, the
+ * exact failure this function exists to prevent.
+ *
+ * Capped at 80 to match the rename input's own `maxLength` — a title longer
+ * than that could be branched but never edited back to in place.
+ */
+export function askThreadTitle(artifact: string, question: string): string {
+  let base = baseName(artifact);
+  if (base.length > TITLE_BASE_MAX) base = cutUnits(base, TITLE_BASE_MAX - 1) + "…";
+  const first = (question.trim().split("\n")[0] ?? "").trim();
+  const title = first ? `${base} — ${first}` : base;
+  if (title.length <= TITLE_MAX) return title;
+  return cutUnits(title, TITLE_MAX - 1).trimEnd() + "…";
+}
+
+/**
+ * The seed prompt the branched thread comes up with.
+ *
+ * It names the artifact rather than its URL or its on-disk path: the thread is
+ * a fork of zeus in the cell's own worktree, so the artifact set is already the
+ * thing it knows by name, and a path derived from an /api/artifact URL would be
+ * a second, weaker way of saying so.
+ *
+ * The last line restates the thread contract (ThreadOverlay's own banner:
+ * "Threads are for asking, not for doing") — this composer sits on a doc, and
+ * without it "elaborate on this section" reads as a licence to go edit it.
+ */
+export function askThreadSeed(artifact: string, question: string): string {
+  return (
+    "I'm reading the artifact `" +
+    artifact +
+    "` from this job's artifact set. A question about it:\n\n" +
+    question.trim() +
+    "\n\nAnswer here in the thread — this is a question about the work, " +
+    "not a request to change it. Don't edit the artifact."
+  );
 }
 
 /**
@@ -81,6 +188,16 @@ export interface ArtifactOverlayProps {
    */
   onNavigate: (url: string, name: string) => void;
   onClose: () => void;
+  /**
+   * A question about the open artifact branched a side thread: show it.
+   *
+   * The integrator must CLOSE this overlay as it opens the thread one, not
+   * stack them — style.css puts `#overlay` at z-index 30 and `#thread-overlay`
+   * at 25, so a thread opened underneath would be invisible, and the Escape
+   * chain ranks the artifact layer above the thread layer too (ESC_PRIORITY),
+   * so the one Escape you would reach for closes the wrong thing.
+   */
+  onAskBranched: (slug: string, tid: string) => void;
   /** See Overlay.tsx. Feedback rides the board payload, so this invalidates. */
   mutate: Mutate;
 }
@@ -89,7 +206,8 @@ export function ArtifactOverlay(props: ArtifactOverlayProps) {
   const { job, url, name, open, onNavigate } = props;
 
   /**
-   * `feedbackDrafts` (app.js:1676) — an unsent feedback note per artifact url.
+   * `feedbackDrafts` (app.js:1676) — an unsent composer per artifact url, now
+   * carrying WHICH composer it was (feedback or ask) alongside its text.
    *
    * `‹ ›` now sit a few pixels from the text you are writing about, and every
    * open resets the composer, so without this one click on `›` silently
@@ -97,13 +215,17 @@ export function ArtifactOverlay(props: ArtifactOverlayProps) {
    * make the pager look broken; carrying the draft with its artifact is what
    * the rest of the board does.
    *
+   * One draft per artifact rather than one per (artifact, mode): the head has
+   * one box, and switching modes carries the text across rather than hiding it
+   * — see the mode buttons.
+   *
    * A Map on a ref, deliberately, not localStorage: surviving the tab is a
    * bigger promise than a scratch composer should make. It lives HERE rather
    * than in the body because the body remounts on every step — which is the
    * whole point of the remount — and it survives a close for the same reason
    * the vanilla module-level Map does.
    */
-  const drafts = useRef<Map<string, string>>(new Map()).current;
+  const drafts = useRef<Map<string, ComposerDraft>>(new Map()).current;
 
   // `job` is the single signal for "no sequence resolvable": undefined means
   // a singleton with the pager hidden. onNavigate used to be part of this test
@@ -157,7 +279,7 @@ export function ArtifactOverlay(props: ArtifactOverlayProps) {
 }
 
 interface ArtifactBodyProps extends ArtifactOverlayProps {
-  drafts: Map<string, string>;
+  drafts: Map<string, ComposerDraft>;
   seq: SeqEntry[];
   idx: number;
   onStep: (delta: -1 | 1) => void;
@@ -166,11 +288,13 @@ interface ArtifactBodyProps extends ArtifactOverlayProps {
 function ArtifactBody({
   url,
   name,
+  job,
   mutate,
   drafts,
   seq,
   idx,
   onStep,
+  onAskBranched,
 }: ArtifactBodyProps) {
   const [raw, setRaw] = useState(false);
   // undefined = not fetched yet; a page/image is never fetched up front (the
@@ -179,21 +303,54 @@ function ArtifactBody({
   const [error, setError] = useState<string | null>(null);
   // `restoreFeedbackDraft` (app.js:1695): an artifact you left a note
   // half-written on re-opens with the composer showing and the text back in it
-  const [showForm, setShowForm] = useState(() => drafts.has(url));
-  const [feedback, setFeedback] = useState(() => drafts.get(url) ?? "");
+  // — in the mode it was written in.
+  const [mode, setMode] = useState<ComposerMode | null>(
+    () => drafts.get(url)?.mode ?? null,
+  );
+  const [composerText, setComposerText] = useState(
+    () => drafts.get(url)?.text ?? "",
+  );
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
-  const [saved, setSaved] = useState(false);
+  // which composer last succeeded, for the head button's transient ✓ — the
+  // composer closes on success, and its note region closes with it
+  const [sentMode, setSentMode] = useState<ComposerMode | null>(null);
   // which artifact the state above describes — the whole reset block below
   const [shown, setShown] = useState(url);
-  const feedbackInput = useRef<HTMLTextAreaElement | null>(null);
+  const composerInput = useRef<HTMLTextAreaElement | null>(null);
 
   /**
    * What is on screen right now, for the draft stash — kept on a ref because
-   * the two places that bank a note (a step, an unmount) both need the CURRENT
-   * values against the CURRENT url and neither is a render.
+   * the three places that bank a note (a step, an unmount, a send that
+   * unmounts this overlay) all need the CURRENT values against the CURRENT
+   * url and none of them is a render.
    */
-  const latest = useRef({ url, feedback, showForm });
+  const latest = useRef<ComposerSnapshot>({ url, text: composerText, mode });
+
+  /**
+   * Whether this body is still mounted, read AFTER an await.
+   *
+   * The url check below catches a pager step, because the reset block re-points
+   * `latest.current`. It cannot catch a CLOSE: the overlay unmounts, but the
+   * callback lives on in the promise and the ref it captured still names the
+   * artifact it was fired from. A branch takes seconds — it spawns a claude in
+   * a new tmux window — so "ask, change your mind, press Escape" is an ordinary
+   * sequence, and without this the thread overlay would open over the board
+   * two seconds after the reader walked away from it.
+   */
+  const alive = useRef(true);
+  useEffect(() => {
+    // the `= true` is not belt-and-braces next to `useRef(true)`: main.tsx
+    // mounts the board inside <StrictMode>, which runs mount → cleanup → mount,
+    // and without it the cleanup's `false` is the value that sticks for the
+    // life of a perfectly live component — every send and every ask would then
+    // take the early return, silently, in dev only. `usePoll` writes its own
+    // aliveRef the same way.
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   /**
    * `stashFeedbackDraft` (app.js:1682) — bank the note against the artifact it
@@ -201,9 +358,10 @@ function ArtifactBody({
    * stash rather than keeping a stale one.
    */
   const stash = useCallback(
-    (of: { url: string; feedback: string; showForm: boolean }) => {
-      if (of.showForm && of.feedback.trim()) drafts.set(of.url, of.feedback);
-      else drafts.delete(of.url);
+    (of: ComposerSnapshot) => {
+      if (of.mode && of.text.trim()) {
+        drafts.set(of.url, { mode: of.mode, text: of.text });
+      } else drafts.delete(of.url);
     },
     [drafts],
   );
@@ -236,16 +394,16 @@ function ArtifactBody({
     setError(null);
     setNote("");
     setSending(false);
-    setSaved(false);
-    setShowForm(draft !== undefined);
-    setFeedback(draft ?? "");
+    setSentMode(null);
+    setMode(draft?.mode ?? null);
+    setComposerText(draft?.text ?? "");
     latest.current = {
       url,
-      feedback: draft ?? "",
-      showForm: draft !== undefined,
+      text: draft?.text ?? "",
+      mode: draft?.mode ?? null,
     };
   } else {
-    latest.current = { url, feedback, showForm };
+    latest.current = { url, text: composerText, mode };
   }
 
   const page = isPage(url);
@@ -285,25 +443,25 @@ function ArtifactBody({
   // a lingering "saved ✓" must never carry over to another artifact or stack
   // across rapid sends — the timer is owned by this mount and dies with it
   useEffect(() => {
-    if (!saved) return;
-    const id = window.setTimeout(() => setSaved(false), 2000);
+    if (!sentMode) return;
+    const id = window.setTimeout(() => setSentMode(null), 2000);
     return () => window.clearTimeout(id);
-  }, [saved]);
+  }, [sentMode]);
 
   const send = useCallback(async () => {
     const parts = artifactParts(url);
-    const body = feedback.trim();
+    const feedback = composerText.trim();
     if (!parts) {
       setNote("can't identify this artifact");
       return;
     }
-    if (!body) {
+    if (!feedback) {
       setNote("feedback is empty");
       return;
     }
     setSending(true);
     const ok = await mutate(() =>
-      createFeedback(parts.slug, parts.home, parts.name, body),
+      createFeedback(parts.slug, parts.home, parts.name, feedback),
     );
     // "is the composer still showing the note I sent?" — an IDENTITY question
     // (app.js:4104), asked AFTER the await because a step across it must be
@@ -311,19 +469,117 @@ function ArtifactBody({
     // whatever is on screen: page onto another artifact mid-send and clearing
     // the composer here would wipe THAT artifact's restored draft, and
     // "saved ✓" would appear over a note nobody has sent.
-    const onSentArtifact = latest.current.url === url;
+    const onSentArtifact = alive.current && latest.current.url === url;
     if (ok) drafts.delete(url); // it's sent; it is no longer a draft
     if (!onSentArtifact) return;
     setSending(false);
     if (ok) {
-      setShowForm(false);
-      setFeedback("");
+      setMode(null);
+      setComposerText("");
       setNote("");
-      setSaved(true);
+      setSentMode("feedback");
     } else {
       setNote("failed — see status bar");
     }
-  }, [drafts, feedback, mutate, url]);
+  }, [composerText, drafts, mutate, url]);
+
+  /**
+   * The ask composer's send: branch a side thread seeded with the question.
+   *
+   * Nothing here is new on the wire — it is the SAME `/api/threads` branch
+   * ThreadOverlay's own branch dialog posts, with the title and seed filled in
+   * from the artifact you are looking at instead of typed by hand.
+   *
+   * `job.slug` addresses the op, not `parts.slug`: the composer is only offered
+   * for a live `job`, and that row is what the server resolves a branch
+   * against — with the guard below covering the restored-draft case where the
+   * composer is on screen and the job is not. The artifact NAME still comes
+   * from the url, which is the overlay's own source of truth for what is open.
+   */
+  const ask = useCallback(async () => {
+    const parts = artifactParts(url);
+    const question = composerText.trim();
+    if (!parts) {
+      setNote("can't identify this artifact");
+      return;
+    }
+    // Reachable without the head button: an ask draft restored onto an artifact
+    // whose job has since left the board comes back with the composer open
+    // while `⑂ ask` itself is hidden. It is a different refusal from an
+    // unparseable url and says so.
+    if (!job) {
+      setNote("this job is no longer on the board");
+      return;
+    }
+    if (!question) {
+      setNote("question is empty");
+      return;
+    }
+    setSending(true);
+    const res = await mutate(() =>
+      threadOp(job.slug, "branch", {
+        title: askThreadTitle(parts.name, question),
+        text: askThreadSeed(parts.name, question),
+      }),
+    );
+    // Same identity question as `send`, and the same answer: page onto another
+    // artifact — or close the viewer — mid-branch and this panel is no longer
+    // the one that asked. The thread exists either way and the board lists it,
+    // so a branch that lands after you have moved on stays branched and simply
+    // isn't opened. That is ThreadOverlay's cancelled-branch rule, which it
+    // gets for free from its own unmount; here the callback lives one layer up
+    // in App, so `alive` is what re-states it.
+    const onAskedArtifact = alive.current && latest.current.url === url;
+    if (res) drafts.delete(url); // it's asked; it is no longer a draft
+    if (!onAskedArtifact) return;
+    setSending(false);
+    if (!res) {
+      setNote("failed — see status bar");
+      return;
+    }
+    setMode(null);
+    setComposerText("");
+    setNote("");
+    setSentMode("ask");
+    // Clear the ref BEFORE handing off: onAskBranched unmounts this body (the
+    // integrator closes the artifact overlay as it opens the thread one), and
+    // the unmount stash reads `latest.current` — not the state we just set,
+    // which no render will ever apply. Without this the question you just sent
+    // comes back as a draft the next time you open the artifact.
+    latest.current = { url, text: "", mode: null };
+    // No tid came back (defensive — the branch op always returns one): the
+    // thread exists and the board lists it, so say so out of band. The note
+    // region is not an option here; it lives inside the composer this very
+    // success just closed.
+    if (res.tid) onAskBranched(job.slug, res.tid);
+    else showToast("branched — the thread is listed on the job");
+  }, [composerText, drafts, job, mutate, onAskBranched, url]);
+
+  /**
+   * The head's two mode buttons, which drive ONE box.
+   *
+   * Clicking the mode that is already open closes it (the feedback button's
+   * original toggle). Clicking the OTHER one switches the box over and KEEPS
+   * what you have typed: those are still your words, and "actually this is a
+   * question, not a complaint" is a real thing to notice halfway through a
+   * paragraph. Clearing on a mode switch would be the same silent destruction
+   * the per-artifact drafts exist to prevent, with a single click and no undo.
+   */
+  const toggleComposer = useCallback(
+    (next: ComposerMode) => {
+      if (mode === next) {
+        setMode(null);
+        return;
+      }
+      setMode(next);
+      setNote("");
+      // on the OPEN transition the box is `hidden` until this render lands, so
+      // the focus waits for it. On a mode switch it is already on screen and
+      // already focused, and this is a harmless no-op.
+      requestAnimationFrame(() => composerInput.current?.focus());
+    },
+    [mode],
+  );
 
   return (
     <>
@@ -353,57 +609,112 @@ function ArtifactBody({
         >
           raw
         </button>
+        {/* Branching forks the cell's zeus session, so it needs a live cell —
+            the same `job.live` gate ThreadChips.tsx puts on the ⑂ it renders in
+            the steer modal. Without a job resolved (a singleton open) there is
+            nothing to fork either.
+
+            `disabled={sending}` on BOTH toggles — and on cancel below, which
+            is the third door to the same room. A branch is seconds long, and
+            closing OR switching the composer mid-flight would route its own
+            outcome — "failed — see status bar" — into a region that is no
+            longer on screen, or worse, into the other mode's. */}
+        <button
+          className="btn ghost"
+          id="panel-ask"
+          hidden={!job?.live}
+          disabled={sending}
+          title="ask about this artifact in a side thread — forks zeus, doesn't interrupt it"
+          onClick={() => toggleComposer("ask")}
+        >
+          {sentMode === "ask" ? "asked ✓" : "⑂ ask"}
+        </button>
         <button
           className="btn ghost"
           id="panel-feedback"
-          onClick={() => {
-            setShowForm((v) => {
-              const next = !v;
-              if (next) {
-                setNote("");
-                requestAnimationFrame(() => feedbackInput.current?.focus());
-              }
-              return next;
-            });
-          }}
+          disabled={sending}
+          title="leave feedback on this artifact for the job to read"
+          onClick={() => toggleComposer("feedback")}
         >
-          {saved ? "saved ✓" : "feedback"}
+          {sentMode === "feedback" ? "saved ✓" : "feedback"}
         </button>
       </div>
-      <div className="feedback-form" id="feedback-form" hidden={!showForm}>
+      <div
+        className={"feedback-form" + (mode === "ask" ? " ask" : "")}
+        id={mode === "ask" ? "ask-form" : "feedback-form"}
+        hidden={!mode}
+      >
+        {/* the ask box is one gesture away from the feedback box and does
+            something quite different with what you type — this line is what
+            keeps them apart at a glance */}
+        <div className="composer-hint" hidden={mode !== "ask"}>
+          ⑂ forks zeus' session into a side thread and asks it there — zeus
+          itself is not interrupted. Threads are for asking, not for doing.
+        </div>
         <textarea
-          id="feedback-text"
-          ref={feedbackInput}
+          id={mode === "ask" ? "ask-text" : "feedback-text"}
+          ref={composerInput}
           rows={3}
-          placeholder="what's wrong with this doc/diagram?"
-          value={feedback}
-          onChange={(e) => setFeedback(e.target.value)}
+          placeholder={
+            mode === "ask"
+              ? "what do you want elaborated? — answered in a side thread"
+              : "what's wrong with this doc/diagram?"
+          }
+          value={composerText}
+          onChange={(e) => setComposerText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey)) return;
+            // a CJK candidate's commit Enter also fires key:"Enter". Behind a
+            // modifier that is near unreachable, unlike the plain-Enter submits
+            // ThreadOverlay and DocQuestions guard — it is here because it is
+            // the pair of checks every Enter-submit in this app makes, and a
+            // divergent one would be the odd one out.
+            if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+              return;
+            }
+            e.preventDefault();
+            if (sending) return;
+            void (mode === "ask" ? ask() : send());
+          }}
         />
         <div className="feedback-actions">
-          <span className="feedback-note" id="feedback-note">
+          <span
+            className="feedback-note"
+            id={mode === "ask" ? "ask-note" : "feedback-note"}
+          >
             {note}
           </span>
           <button
             className="btn ghost"
-            id="feedback-cancel"
+            id={mode === "ask" ? "ask-cancel" : "feedback-cancel"}
+            // the third composer-closing control, locked for the same reason as
+            // the two head toggles — and for one of its own: the request is
+            // already out and cannot be recalled, so a live cancel would only
+            // let the reader express an intention the code cannot honour. It
+            // would close the composer and the thread would still open.
+            disabled={sending}
             onClick={() => {
               // the one gesture that means "throw this away": it must also drop
               // the stash, or the note reappears the next time you page onto
               // this artifact
-              setShowForm(false);
-              setFeedback("");
+              setMode(null);
+              setComposerText("");
               setNote("");
             }}
           >
             cancel
           </button>
+          {/* "⑂ branch", not a second "⑂ ask": the head toggle already carries
+              that label, and two buttons with one accessible name in one panel
+              is a screen reader announcing the same control twice. */}
           <button
             className="btn"
-            id="feedback-send"
+            id={mode === "ask" ? "ask-send" : "feedback-send"}
             disabled={sending}
-            onClick={() => void send()}
+            title="⌘⏎"
+            onClick={() => void (mode === "ask" ? ask() : send())}
           >
-            send
+            {mode === "ask" ? "⑂ branch" : "send"}
           </button>
         </div>
       </div>

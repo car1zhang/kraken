@@ -4,13 +4,23 @@ import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebArtifact, WebJob } from "../../api/types.ts";
 import { makeJob } from "../../test/fixtures.ts";
-import { ArtifactOverlay, artifactParts } from "./ArtifactOverlay.tsx";
+import {
+  ArtifactOverlay,
+  artifactParts,
+  askThreadSeed,
+  askThreadTitle,
+} from "./ArtifactOverlay.tsx";
 
 vi.mock("../../api/client.ts", () => ({
   createFeedback: vi.fn(() => Promise.resolve({ ok: true })),
+  threadOp: vi.fn(() => Promise.resolve({ ok: true, tid: "t1" })),
 }));
+// the overlay's one out-of-band channel — mocked so the tid-less branch can
+// assert what the reader is actually told, rather than that nothing crashed
+vi.mock("./Toast.tsx", () => ({ showToast: vi.fn(), Toast: () => null }));
 
-import { createFeedback } from "../../api/client.ts";
+import { createFeedback, threadOp } from "../../api/client.ts";
+import { showToast } from "./Toast.tsx";
 
 const mutate = async <T,>(op: () => Promise<T>) => op();
 
@@ -33,11 +43,13 @@ function Harness({
   start = "00-overview.md",
   label = "j",
   wired = true,
+  onAskBranched = () => {},
 }: {
   job?: WebJob;
   start?: string;
   label?: string;
   wired?: boolean;
+  onAskBranched?: (slug: string, tid: string) => void;
 }) {
   const [cur, setCur] = useState({
     url: `/api/artifact/j/artifacts/${start}`,
@@ -53,6 +65,7 @@ function Harness({
       // a no-op, NOT an omitted prop: the unwired case is now something a
       // caller must ask for, which is the whole point of making it required
       onNavigate={wired ? (url, name) => setCur({ url, name }) : () => {}}
+      onAskBranched={onAskBranched}
       onClose={() => setOpen(false)}
       mutate={mutate}
     />
@@ -407,6 +420,7 @@ describe("the feedback draft", () => {
         name="j/a.md"
         job={undefined}
         onNavigate={() => {}}
+        onAskBranched={() => {}}
         onClose={() => {}}
         mutate={mutate}
       />,
@@ -423,6 +437,7 @@ describe("the feedback draft", () => {
         name=""
         job={undefined}
         onNavigate={() => {}}
+        onAskBranched={() => {}}
         onClose={() => {}}
         mutate={mutate}
       />
@@ -434,6 +449,7 @@ describe("the feedback draft", () => {
         name="j/a.md"
         job={undefined}
         onNavigate={() => {}}
+        onAskBranched={() => {}}
         onClose={() => {}}
         mutate={mutate}
       />
@@ -526,6 +542,366 @@ describe("the feedback draft", () => {
     expect(
       (document.getElementById("feedback-text") as HTMLTextAreaElement).value,
     ).toBe("");
+  });
+});
+
+describe("askThreadTitle", () => {
+  it("names the artifact and the question's first line", () => {
+    expect(askThreadTitle("10-flow.md", "why two passes?")).toBe(
+      "10-flow.md — why two passes?",
+    );
+  });
+
+  it("takes the BASENAME — a cell-home artifact may be a subpath", () => {
+    expect(askThreadTitle("docs/diagrams/13-tree.html", "what feeds this?")).toBe(
+      "13-tree.html — what feeds this?",
+    );
+  });
+
+  it("takes the first line only — the rest is in the seed, not the chip", () => {
+    expect(askThreadTitle("a.md", "why?\nand also how?")).toBe("a.md — why?");
+  });
+
+  it("falls back to the artifact alone when there is no question text", () => {
+    expect(askThreadTitle("a.md", "   ")).toBe("a.md");
+  });
+
+  // 80 is the rename input's own maxLength: a longer title could be branched
+  // but never edited back to in place.
+  it("caps at 80 so the thread stays renamable", () => {
+    const t = askThreadTitle("a.md", "x".repeat(200));
+    expect(t.length).toBe(80);
+    expect(t.endsWith("…")).toBe(true);
+    // exactly at the boundary, nothing is cut
+    const exact = askThreadTitle("a.md", "x".repeat(80 - "a.md — ".length));
+    expect(exact.length).toBe(80);
+    expect(exact.endsWith("…")).toBe(false);
+  });
+
+  // slice() counts UTF-16 units, so a cut between the halves of an emoji leaves
+  // a lone high surrogate: JSON.stringify escapes it, Go decodes the unpaired
+  // escape to U+FFFD, and the thread wears a replacement glyph in its name
+  // until someone renames it.
+  it("never cuts an emoji in half", () => {
+    for (const base of ["a.md", "ab.md", "abc.md", "abcd.md"]) {
+      const t = askThreadTitle(base, "🎉".repeat(60));
+      expect(t.length).toBeLessThanOrEqual(80);
+      // no unpaired surrogate anywhere in the result
+      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(t)).toBe(false);
+      expect(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(t)).toBe(false);
+    }
+  });
+
+  // The question is the DISTINGUISHING half — it is why this function takes one
+  // at all. A single cut at the end would let a long section-doc name eat the
+  // whole budget and truncate every question away, making the chips identical
+  // again.
+  it("keeps the question when the artifact name is very long", () => {
+    const long =
+      "50-the-very-long-section-document-that-explains-the-token-rule.md";
+    const t = askThreadTitle(long, "why two passes?");
+    expect(t.length).toBeLessThanOrEqual(80);
+    expect(t).toContain("why two passes?");
+  });
+
+  it("falls back to the whole name when there is no basename to take", () => {
+    // never produced by the board's own artifact list, but a title of
+    // " — why?" names nothing at all
+    expect(askThreadTitle("docs/", "why?")).toBe("docs/ — why?");
+  });
+});
+
+describe("askThreadSeed", () => {
+  it("names the artifact and carries the question verbatim", () => {
+    const s = askThreadSeed("10-flow.md", "  why two passes?  ");
+    expect(s).toContain("`10-flow.md`");
+    expect(s).toContain("why two passes?");
+  });
+
+  // The thread runs in the cell's worktree with a live claude in it. Without
+  // this line "elaborate on this section" reads as a licence to go rewrite it,
+  // which is the one thing a side thread is not for.
+  it("tells the thread not to edit the artifact", () => {
+    const s = askThreadSeed("a.md", "q");
+    expect(s).toContain("Don't edit the artifact");
+  });
+});
+
+describe("the ask composer", () => {
+  const liveJob = (names: string[]) => job(names, { live: true });
+
+  it("is offered only for a job with a live cell to fork", () => {
+    const { rerender } = render(<Harness job={job(["a.md"])} />);
+    expect(document.getElementById("panel-ask")).toHaveAttribute("hidden");
+    rerender(<Harness job={liveJob(["a.md"])} />);
+    expect(document.getElementById("panel-ask")).not.toHaveAttribute("hidden");
+  });
+
+  it("branches a thread seeded with the artifact and the question", async () => {
+    const user = userEvent.setup();
+    const branched = vi.fn();
+    render(<Harness job={liveJob(["a.md"])} onAskBranched={branched} />);
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "elaborate on the dedupe rule",
+    );
+    await user.click(screen.getByText("⑂ branch"));
+
+    await waitFor(() => expect(threadOp).toHaveBeenCalled());
+    const [slug, op, extra] = (threadOp as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, string, { title: string; text: string }];
+    expect(slug).toBe("j");
+    expect(op).toBe("branch");
+    expect(extra.title).toBe("00-overview.md — elaborate on the dedupe rule");
+    expect(extra.text).toContain("00-overview.md");
+    expect(extra.text).toContain("elaborate on the dedupe rule");
+    // the integrator is handed the thread to open — this overlay never opens
+    // one itself, because it is the layer that has to close first
+    expect(branched).toHaveBeenCalledWith("j", "t1");
+  });
+
+  it("refuses an empty question without posting", async () => {
+    const user = userEvent.setup();
+    render(<Harness job={liveJob(["a.md"])} />);
+    await user.click(screen.getByText("⑂ ask"));
+    await user.click(screen.getByText("⑂ branch"));
+    expect(threadOp).not.toHaveBeenCalled();
+    expect(document.getElementById("ask-note")?.textContent).toBe(
+      "question is empty",
+    );
+  });
+
+  // One box, two modes: the words you typed are still your words, and
+  // "actually this is a question, not a complaint" is a real thing to notice
+  // halfway through writing one.
+  it("carries the text across a mode switch rather than dropping it", async () => {
+    const user = userEvent.setup();
+    render(<Harness job={liveJob(["a.md"])} />);
+    await user.click(screen.getByText("feedback"));
+    await user.type(
+      document.getElementById("feedback-text") as HTMLTextAreaElement,
+      "this section is thin",
+    );
+    await user.click(screen.getByText("⑂ ask"));
+    expect(document.getElementById("feedback-form")).toBeNull();
+    expect(
+      (document.getElementById("ask-text") as HTMLTextAreaElement).value,
+    ).toBe("this section is thin");
+    // and back the other way
+    await user.click(screen.getByText("feedback"));
+    expect(
+      (document.getElementById("feedback-text") as HTMLTextAreaElement).value,
+    ).toBe("this section is thin");
+  });
+
+  it("stashes an unsent question in ITS OWN mode across a step", async () => {
+    const user = userEvent.setup();
+    render(<Harness job={liveJob(["a.md", "b.md"])} start="a.md" />);
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "why is this ordered like that?",
+    );
+    await user.click(next());
+    expect(document.getElementById("ask-form")).toBeNull();
+    await user.click(prev());
+    // it comes back as an ASK, not as feedback — a question posted as a
+    // feedback row would sit unanswered until the job's next session
+    expect(document.getElementById("ask-form")).not.toHaveAttribute("hidden");
+    expect(
+      (document.getElementById("ask-text") as HTMLTextAreaElement).value,
+    ).toBe("why is this ordered like that?");
+  });
+
+  it("does not leave the sent question behind as a draft", async () => {
+    const user = userEvent.setup();
+    render(<Harness job={liveJob(["a.md", "b.md"])} start="a.md" />);
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "asked and answered",
+    );
+    await user.click(screen.getByText("⑂ branch"));
+    await waitFor(() => expect(threadOp).toHaveBeenCalled());
+    await user.click(next());
+    await user.click(prev());
+    expect(document.getElementById("ask-form")).toBeNull();
+    expect(
+      (document.getElementById("feedback-text") as HTMLTextAreaElement).value,
+    ).toBe("");
+  });
+
+  it("a branch that lands AFTER a step leaves the new artifact's panel alone", async () => {
+    const user = userEvent.setup();
+    const branched = vi.fn();
+    let land!: (v: unknown) => void;
+    (threadOp as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((r) => (land = r)),
+    );
+    render(
+      <Harness
+        job={liveJob(["a.md", "b.md"])}
+        start="a.md"
+        onAskBranched={branched}
+      />,
+    );
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "a question about a.md",
+    );
+    await user.click(screen.getByText("⑂ branch"));
+
+    await user.click(next()); // page onto b.md while the branch is in flight
+    expect(title()).toBe("j/b.md");
+    land({ ok: true, tid: "t9" });
+    await waitFor(() => expect(threadOp).toHaveBeenCalled());
+
+    // the thread was branched and its chip is on the card — but yanking the
+    // reader out of the artifact they moved on to is not the answer to a
+    // gesture they made two artifacts ago
+    expect(branched).not.toHaveBeenCalled();
+    expect(screen.queryByText("asked ✓")).toBeNull();
+  });
+
+  // Same rule, the other way of leaving: a branch spawns a claude in a new tmux
+  // window and takes SECONDS, so "ask, change your mind, press Escape" is an
+  // ordinary sequence. The thread still gets branched — but opening it over the
+  // board two seconds after the reader walked away is not an answer to
+  // anything. The url guard alone cannot see this: the overlay is gone and the
+  // ref it captured still names the artifact it fired from.
+  it("a branch that lands AFTER the viewer closes does not yank it open", async () => {
+    const user = userEvent.setup();
+    const branched = vi.fn();
+    let land!: (v: unknown) => void;
+    (threadOp as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((r) => (land = r)),
+    );
+    function Closer() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button onClick={() => setOpen(false)}>close it</button>
+          <ArtifactOverlay
+            open={open}
+            url="/api/artifact/j/artifacts/a.md"
+            name="j/a.md"
+            job={liveJob(["a.md"])}
+            onNavigate={() => {}}
+            onAskBranched={branched}
+            onClose={() => setOpen(false)}
+            mutate={mutate}
+          />
+        </>
+      );
+    }
+    render(<Closer />);
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "asked then abandoned",
+    );
+    await user.click(screen.getByText("⑂ branch"));
+    await user.click(screen.getByText("close it"));
+    land({ ok: true, tid: "t9" });
+    await waitFor(() => expect(threadOp).toHaveBeenCalled());
+    expect(branched).not.toHaveBeenCalled();
+  });
+
+  // ⌘⏎ is new to BOTH modes — the feedback composer never had it — so both
+  // halves are asserted: the box dispatches on its mode, not on a fixed target.
+  it("⌘⏎ sends from the box, in whichever mode it is in", async () => {
+    const user = userEvent.setup();
+    render(<Harness job={liveJob(["a.md"])} />);
+    await user.click(screen.getByText("⑂ ask"));
+    const box = document.getElementById("ask-text") as HTMLTextAreaElement;
+    await user.type(box, "sent with the keyboard");
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(threadOp).toHaveBeenCalled());
+    expect(createFeedback).not.toHaveBeenCalled();
+  });
+
+  it("⌘⏎ sends the feedback composer too", async () => {
+    const user = userEvent.setup();
+    render(<Harness job={liveJob(["a.md"])} />);
+    await user.click(screen.getByText("feedback"));
+    const box = document.getElementById("feedback-text") as HTMLTextAreaElement;
+    await user.type(box, "typed, not clicked");
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(createFeedback).toHaveBeenCalled());
+    expect(threadOp).not.toHaveBeenCalled();
+  });
+
+  // main.tsx mounts the board inside <StrictMode>, whose mount → cleanup →
+  // mount is the entire reason `alive` is re-set inside its effect rather than
+  // only by useRef's initial value. Without that line the guard settles false
+  // on a live component and every send silently no-ops — in dev only, looking
+  // for all the world like a server problem.
+  it("still branches when mounted under StrictMode", async () => {
+    const user = userEvent.setup();
+    const branched = vi.fn();
+    render(
+      <StrictMode>
+        <Harness job={liveJob(["a.md"])} onAskBranched={branched} />
+      </StrictMode>,
+    );
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "asked under strict mode",
+    );
+    await user.click(screen.getByText("⑂ branch"));
+    await waitFor(() => expect(branched).toHaveBeenCalledWith("j", "t1"));
+  });
+
+  // A branch that reports ok without a tid is defensive — the server's branch
+  // arm always sets one. There is nothing to open, so the reader is told out of
+  // band rather than through the note region this very success just closed.
+  it("says so out of band when no tid comes back", async () => {
+    const user = userEvent.setup();
+    const branched = vi.fn();
+    (threadOp as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
+      Promise.resolve({ ok: true }),
+    );
+    render(<Harness job={liveJob(["a.md"])} onAskBranched={branched} />);
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "no tid for this one",
+    );
+    await user.click(screen.getByText("⑂ branch"));
+    await waitFor(() => expect(threadOp).toHaveBeenCalled());
+    expect(branched).not.toHaveBeenCalled();
+    // the out-of-band channel itself, not just its absence of a crash — the
+    // "asked ✓" below flashes on every success and cannot tell the two apart
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    // the overlay stays put and the head button carries the confirmation
+    expect(screen.queryByText("asked ✓")).not.toBeNull();
+  });
+
+  // Every control that can close or switch the composer, since the note region
+  // lives inside it: closing mid-branch would route the branch's own outcome
+  // into a hidden element, switching would land it in the other mode's, and
+  // cancel would do the first while the thread opens anyway.
+  it("locks every composer-closing control while a branch is in flight", async () => {
+    const user = userEvent.setup();
+    let land!: (v: unknown) => void;
+    (threadOp as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((r) => (land = r)),
+    );
+    render(<Harness job={liveJob(["a.md"])} />);
+    await user.click(screen.getByText("⑂ ask"));
+    await user.type(
+      document.getElementById("ask-text") as HTMLTextAreaElement,
+      "in flight",
+    );
+    await user.click(screen.getByText("⑂ branch"));
+    expect(document.getElementById("panel-ask")).toBeDisabled();
+    expect(document.getElementById("panel-feedback")).toBeDisabled();
+    expect(document.getElementById("ask-cancel")).toBeDisabled();
+    land({ ok: true, tid: "t1" });
+    await waitFor(() => expect(threadOp).toHaveBeenCalled());
   });
 });
 
