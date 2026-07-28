@@ -808,6 +808,52 @@ body {
 .fb-chip.open { color: var(--revealed); border-color: var(--revealed-soft); }
 .card:hover .fb-chip.open { border-color: var(--revealed); box-shadow: var(--glow-warn); }
 
+/* the board's triage badge (LoadChip): zeus' unblock/scope estimates for a
+   BLOCKED card, rendered as the ratio between them. Leads the .chips row, and
+   is the one token in it that is not a count — see JobCard's band note.
+
+   Not a .chip and not a button, same fall-through reason as .ct-chip/.dq-chip/
+   .fb-chip above: .chip is the artifact-overlay click target. cursor: pointer
+   all the same, and for the same reason those three carry it — the whole CARD
+   is a click target, so the pointer is the card's affordance showing through an
+   element that does not intercept the click.
+
+   Sized exactly like its siblings (10px mono, 2px 7px, 1px border) so leading
+   the row costs the same width as any other chip in it. white-space: nowrap is
+   the one addition: the label carries two internal spaces (`⚡ 4.0× 2→8`) and a
+   flex item is free to break at them, which would split the ratio from the
+   arrow across two lines in a narrow column.
+
+   FOUR bands, and hue is deliberately not the only channel separating them —
+   red/green is the common colour-blind failure and two of these four sit either
+   side of it. Each band therefore gets a distinct BOX treatment as well:
+     hot   filled (--counter-soft) + counter text  — the board's "a human is
+           needed here" colour, which is exactly what a high ratio says
+     warm  amber text, amber border, no fill       — --revealed, "work owed",
+           the same weight .fb-chip.open carries
+     even  muted text, hairline border             — the .ct-chip resting look
+     cold  muted text, DASHED border               — the only dashed border in
+           the row, so it is legible with no colour perception at all
+   Every colour is a theme token, so both palettes follow without a second
+   block here. */
+.ld-chip {
+  font: 10px var(--mono);
+  color: var(--text-2); border: 1px solid var(--hairline-2);
+  padding: 2px 7px; white-space: nowrap; cursor: pointer;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
+}
+.ld-chip.hot { color: var(--counter); border-color: var(--counter-soft); background: var(--counter-soft); }
+.ld-chip.warm { color: var(--revealed); border-color: var(--revealed-soft); }
+.ld-chip.cold { border-style: dashed; opacity: 0.75; }
+/* :not() on the hover rules for the same specificity reason .dq-chip's carries
+   one: `.card:hover .ld-chip` (0,2,1) outranks `.ld-chip.hot` (0,2,0), so an
+   unscoped hover would repaint the hot and warm badges plain-text the moment
+   the pointer touched the card — killing the ranking signal exactly while you
+   are looking at it. */
+.card:hover .ld-chip:not(.hot):not(.warm) { color: var(--text); border-color: var(--text-2); }
+.card:hover .ld-chip.hot { border-color: var(--counter); box-shadow: var(--glow-hot); }
+.card:hover .ld-chip.warm { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+
 .prereq span { font: 10px var(--mono); }
 .prereq .ok { color: var(--solved); }
 .prereq .pend { color: var(--revealed); }

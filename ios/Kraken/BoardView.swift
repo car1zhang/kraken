@@ -1630,6 +1630,27 @@ private struct JobCardView: View {
         isSettled ? [] : (job.docQuestions ?? []).filter { !$0.isAnswered }
     }
 
+    /// The ROI badge is a BLOCKED-card control: on a working, queued, draft,
+    /// done or archived card it would answer a question that card doesn't pose,
+    /// and an estimate left from an earlier block would read as a current fact.
+    ///
+    /// "Reads as blocked" is `BoardTheme.column(for:)`, not `state == "blocked"`
+    /// — the same call that decides which column this card is sitting in, so a
+    /// job whose non-empty `health` files it under BLOCKED despite its state
+    /// gets the badge too. Web derives its own column the same way
+    /// (`columnFor(job.health ? "blocked" : job.state)` in App.tsx), which is
+    /// what keeps the two boards showing the badge on the same cards.
+    ///
+    /// The `roi != nil` half is `LoadBadge`'s OWN draw condition, repeated here
+    /// on purpose: this must be at least as strict as what the badge actually
+    /// draws, or the card gets a child that renders nothing while the enclosing
+    /// VStack still pays its 6pt gap — verbatim the failure `hasChipRow` below
+    /// spells out for the chip row. Web's `loadChipVisible` calls the same
+    /// `loadROI` its chip does, for the same reason.
+    private var showsLoadBadge: Bool {
+        BoardTheme.column(for: job) == .blocked && job.load?.roi != nil
+    }
+
     /// Must be at least as strict as every chip's own render condition, or the
     /// row exists with nothing in it and the enclosing VStack pays its 6pt gap
     /// twice for a band you cannot see. The zeus test is `isEmpty == false`
@@ -1672,6 +1693,14 @@ private struct JobCardView: View {
                 if job.live, let cell = job.cell {
                     Text("· \(cell)").font(.data(10)).foregroundStyle(KTheme.text2)
                 }
+            }
+            // The triage badge, on its own line directly under the state row.
+            // It answers "is this one worth unblocking right now", which is the
+            // first question a blocked card poses, so it sits above the counts
+            // rather than wrapping in among them where CardChipFlow could push
+            // it to a second line behind a crew.
+            if showsLoadBadge, let load = job.load {
+                LoadBadge(load: load)
             }
             // band 2. Every chip here is passive display — no tap target and no
             // long-press menu, since both gestures already contend with the
@@ -1850,6 +1879,89 @@ private struct DocQuestionCountChip: View {
                 .overlay(Rectangle().stroke(color, lineWidth: 1))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(open.count) open questions\(p0 > 0 ? ", \(p0) P0" : "")")
+        }
+    }
+}
+
+/// "⚡ 4.0× 2→8   3h ago" — zeus' triage estimate for a blocked job, as an ROI:
+/// the ratio of the claude work released (`scope`) to what carl pays to release
+/// it (`unblock`), then both halves so the ratio can be read back, then how old
+/// the estimate is. Colour-graded by band, so a column of blocked cards sorts
+/// itself by eye.
+///
+/// The AGE is a separate muted label rather than part of the badge, and that
+/// split is required rather than cosmetic. The badge text is pinned identical
+/// across this app and the web board, so it must not absorb a client-specific
+/// string — but the age still needs a VISIBLE surface here, because iOS has no
+/// hover: web puts it in the badge's `title` tooltip and a pointer reaches it,
+/// whereas on a phone an age that lived only in the accessibility label would
+/// leave every sighted viewer unable to tell a three-day-old estimate from one
+/// written a minute ago. That is precisely the failure the age exists to close
+/// — zeus estimates, carl answers, the cell later dies, the daemon's `health`
+/// files the card back under BLOCKED, and with zeus gone nothing rewrites it.
+///
+/// Renders nothing when the estimate has no usable ROI — `WebJobLoad.badgeText`
+/// is nil exactly then. Neither shape that makes it nil can reach a client from
+/// this server (a clear drops the whole key, a half-estimate is a 400), so that
+/// is defence against a hand-edited `jobs` row rather than a case to expect;
+/// see `WebJobLoad.roi`, which is where the reasoning lives. Whether the card
+/// is blocked at all is the CALLER's test (JobCardView.showsLoadBadge); this
+/// view only knows how to draw one.
+private struct LoadBadge: View {
+    let load: WebJobLoad
+
+    var body: some View {
+        if let text = load.badgeText, let band = load.band {
+            let style = BoardTheme.style(forLoadBand: band)
+            // The clock is read here rather than inside the model, so
+            // WebJobLoad stays pure — the same split wakeupCountdownLabel and
+            // its WakeupChip use. Recomputed on each render, which the board's
+            // few-second poll already drives; no separate ticker, and the age
+            // is coarse enough (one unit, no decimals) that it does not need one.
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            HStack(spacing: 5) {
+                Text(text)
+                    // The one label on this card that must not wrap: it carries
+                    // two internal spaces ("⚡ 4.0× 2→8") and breaking at either
+                    // splits the ratio from the pair it came from.
+                    .lineLimit(1)
+                    .font(.data(10, weight: .semibold))
+                    .foregroundStyle(style.text)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(style.fill ?? .clear)
+                    .overlay(
+                        Rectangle().stroke(
+                            style.border,
+                            style: StrokeStyle(lineWidth: 1, dash: style.dashed ? [3, 2] : [])
+                        )
+                    )
+                    // On the badge alone, never the row: `cold`'s dim is part
+                    // of that band's treatment, and dimming the age with it
+                    // would make the freshest information hardest to read on
+                    // exactly the cards worth doing last.
+                    .opacity(style.opacity)
+                if let age = load.age(nowMillis: now) {
+                    // Muted, unboxed and a size down, so it reads as an
+                    // annotation ON the badge rather than a second chip. "3h
+                    // ago" rather than a bare "3h" for the same reason the
+                    // token note spells it out: an unqualified duration beside
+                    // a ratio invites being read as part of the ratio.
+                    Text("\(age) ago")
+                        .lineLimit(1)
+                        .font(.data(9))
+                        .foregroundStyle(KTheme.text2)
+                        .opacity(0.7)
+                }
+            }
+            // Collapses the HStack into ONE a11y element so the sentence below
+            // replaces both children — otherwise VoiceOver reads the badge and
+            // then "3h ago" again, since the sentence already carries the age.
+            // Same reason (and same shape) as JobDetailView's chipLabel.
+            .accessibilityElement(children: .ignore)
+            // The visible text is "⚡ 4.0× 2→8", which has no spoken form worth
+            // hearing; the sentence replaces it entirely.
+            .accessibilityLabel(load.summary(nowMillis: now) ?? text)
         }
     }
 }

@@ -100,6 +100,13 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 		// whose last save didn't parse pins to "draft" in deriveState the
 		// same way an unparseable file does.
 		Err: sr.Err,
+		// Load carries across whole (schema v13's four load_* columns). It has
+		// no frontmatter spelling to parse, so this conversion is the only
+		// place a Job acquires one FROM STORAGE — jobs.SetJobLoad (jobload.go)
+		// is the only other writer, and it mirrors into j.Load the value it
+		// just wrote, so a caller holding a *Job sees its own write without a
+		// reload.
+		Load: sr.Load,
 	}
 	if sr.Archived() {
 		j.ArchivedName = sr.ArchivedName

@@ -202,6 +202,114 @@ export function docQuestionsOpenP0(j: WebJob): number {
   return (j.doc_questions ?? []).filter((q) => q.importance === "P0" && !q.answer).length;
 }
 
+// ---------------------------------------------------------------- load / roi
+
+/**
+ * The four ROI bands, best-first. Shared vocabulary with the CSS (`.ld-chip.hot`
+ * and friends in styles/style.css) and with the iOS card, which bands the same
+ * ratio — so a name added or renamed here has to move there too.
+ */
+export type LoadBand = "hot" | "warm" | "even" | "cold";
+
+export interface LoadROI {
+  /** scope / unblock, as a float — the number the band is decided on */
+  roi: number;
+  band: LoadBand;
+}
+
+/**
+ * loadROI derives a job's triage ratio and its band, or null when there is
+ * nothing to show.
+ *
+ * The bands are closed-open on the FLOAT ratio, boundary value in the HIGHER
+ * band: `>= 3.0` hot, `>= 1.5` warm, `>= 0.75` even, below that cold. Deciding
+ * on the float rather than on the one-decimal text `loadBadgeText` prints is
+ * deliberate, and it means the two can disagree at the edges — a ratio of 2.96
+ * prints "3.0×" and still bands warm. The alternative is worse: banding the
+ * rounded number would make the band depend on a display choice, and the iOS
+ * card would have to reproduce that rounding exactly to agree.
+ *
+ * null covers three cases that all mean "no badge", and the division guard is
+ * the reason they are one function rather than three checks at the call site:
+ *   - no estimate at all (absent `load` key),
+ *   - both numbers 0, and
+ *   - a half-estimate (one of the two at 0 or below).
+ *
+ * Only the first of those three can actually arrive today: a CLEAR is stored as
+ * a zero `at`, which drops the key entirely rather than sending zeroed numbers,
+ * and a half-estimate is refused 400 (see WebJobLoad in api/types.ts, which
+ * traces both). The other two arms are defensive and are meant to stay that
+ * way — `scope / 0` is Infinity and `0 / 0` is NaN, and either would reach the
+ * card as a badge reading "Infinity×" with nothing to catch it downstream.
+ */
+export function loadROI(
+  load: { unblock: number; scope: number } | null | undefined,
+): LoadROI | null {
+  if (!load) return null;
+  const { unblock, scope } = load;
+  if (!(unblock > 0) || !(scope > 0)) return null;
+  const roi = scope / unblock;
+  const band: LoadBand = roi >= 3 ? "hot" : roi >= 1.5 ? "warm" : roi >= 0.75 ? "even" : "cold";
+  return { roi, band };
+}
+
+/**
+ * loadBadgeText is the badge's exact label: `⚡ 4.0× 2→8`. The ratio carries ONE
+ * decimal — `toFixed(1)` rounds half away from zero, so 0.25 reads "0.3" as the
+ * shared contract's worked example requires.
+ *
+ * Separate from loadROI so the number and its rendering can be tested apart,
+ * and because the tooltip below needs the same ratio at the same precision
+ * without the arrow half.
+ */
+export function loadBadgeText(load: { unblock: number; scope: number }, roi: number): string {
+  return `⚡ ${roi.toFixed(1)}× ${load.unblock}→${load.scope}`;
+}
+
+/**
+ * loadBadgeTitle is the badge's tooltip AND its accessibility label — one
+ * string, because a title attribute is what a pointer gets and a screen reader
+ * announces, and two spellings of the same sentence would drift.
+ *
+ * The AGE clause is required by the shared contract, and it is the only thing
+ * on the card that can say the estimate is stale. Nothing ever refreshes or
+ * clears one: a job that blocks, is answered, and whose cell dies hours later
+ * is filed back under blocked by bucketJobs' health rule, and the badge then
+ * describes a question already answered — by an agent that is no longer alive
+ * to write a new estimate. Without the age there is nothing on screen that
+ * distinguishes that card from a fresh one.
+ *
+ * `at` is unix MILLIS and `age` takes SECONDS (its own comment is explicit that
+ * both its board callers are second-resolution), hence the divide.
+ *
+ * Dropping that divide does NOT produce an absurd age somebody would spot.
+ * `age` clamps with `Math.max(0, now - unix)`, so a millis stamp read as
+ * seconds — decades in the FUTURE — goes hugely negative and comes back 0:
+ * measured this session, `age(1769040000000)` is "0s". Every card would read
+ * `· estimated 0s ago`, permanently brand-new, which is the exact opposite of
+ * the staleness the clause exists to show and the far more plausible-looking
+ * failure of the two. The MIRROR mistake is the loud one — a SECONDS stamp
+ * passed in here gets divided a second time and measured 20454d — and it is
+ * that direction the "reads `at` as MILLIS" test next door pins.
+ *
+ * `age` returns "" for a zero/absent stamp, and the clause is then dropped
+ * rather than rendered as "estimated  ago"; a present `load` always carries
+ * `at > 0`, so that is the same defensive-only category as loadROI's zero arms.
+ *
+ * The note is appended last and only when there is one: `note` may legitimately
+ * be "", and a trailing " — " with nothing after it reads as a truncation.
+ */
+export function loadBadgeTitle(
+  load: { unblock: number; scope: number; note?: string; at?: number },
+  roi: number,
+): string {
+  let s = `unblock effort ${load.unblock}/10 · next step ${load.scope}/10 · roi ${roi.toFixed(1)}×`;
+  const ago = age(load.at ? Math.floor(load.at / 1000) : 0);
+  if (ago) s += ` · estimated ${ago} ago`;
+  if (load.note) s += ` — ${load.note}`;
+  return s;
+}
+
 // ---------------------------------------------------------------- usage
 
 /**

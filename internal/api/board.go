@@ -477,6 +477,28 @@ type webJob struct {
 	// Survives teardown and archival — the row is keyed on the slug, with no
 	// FK and no cascade, because retrospective cost is the whole point.
 	Tokens *webTokens `json:"tokens,omitempty"`
+	// Load is zeus' triage estimate for this job — unblock effort against the
+	// size of the work it unblocks (see jobload.go). A pointer with omitempty
+	// for the reason Tokens is one: a zeroed object would claim an estimate
+	// OF zero, and there is no such thing. The all-zero pair is not refused —
+	// it is the clear, accepted with a 200 — but the clear zeroes load_at too,
+	// so it is recorded as the absence of an estimate rather than as one. The
+	// absence of an estimate is therefore said by the absence of the KEY.
+	//
+	// Three states share that absence and the wire does not separate them:
+	// never estimated, cleared (a clear zeroes load_at, and webJobLoadFrom
+	// serves no object for a zero at), and archived (archivedWebJob withholds
+	// the key even for a row that holds a real estimate). A client has one
+	// rendering for all three — no badge — which is why one key is enough.
+	//
+	// The ratio the clients render is derived from these two numbers and is
+	// deliberately not a key here.
+	//
+	// ADDITIVE — a new optional key on an existing shape, not a retype,
+	// rename, or removal — so apiContract does NOT bump for it. A client that
+	// does not know the key ignores it and renders the card exactly as it did
+	// before estimates existed.
+	Load *webJobLoad `json:"load,omitempty"`
 }
 
 type webBoard struct {
@@ -939,6 +961,13 @@ func buildWebBoard() webBoard {
 			// now, so two generations of one reused name no longer share a
 			// directory OR a row.
 			Tokens: webTokensFor(tokens, j.ID),
+			// Load: straight off the job row already loaded above — no index
+			// and no extra query, unlike Tokens, because it lives on `jobs`
+			// itself. Emitted for every active job regardless of display
+			// state: a card moves between blocked and working tick to tick,
+			// so one payload shape with the clients gating on state is the
+			// only version that does not flicker the key in and out.
+			Load: webJobLoadFrom(j.Load),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -1005,34 +1034,60 @@ func buildWebBoard() webBoard {
 	// prereqs, no derivation — just the file, its artifacts, and the two
 	// actions (unarchive, delete) keyed on the archive file base
 	for _, a := range jobs.LoadArchivedJobs() {
-		board.Jobs = append(board.Jobs, webJob{
-			Slug: a.ArchivedName, Repo: a.Repo,
-			State: "archived", Archived: true, DisplaySlug: a.Slug,
-			Err: a.Err, Outcome: a.Outcome, Color: jobs.EffectiveColor(a),
-			Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
-			// Feedback (Q2: works for archived jobs too) is keyed on the
-			// job's own immutable id — same as the active loop above — not
-			// the archive name, so a later reuse of the freed slug can never
-			// cross-wire onto this card. DocQuestions is deliberately absent
-			// here — never set for archived jobs.
-			Feedback: jobFeedback(activeStore, a.ID),
-			// Tokens IS set for an archived job — keeping the number after
-			// the cell is gone is the whole reason the row has no FK and no
-			// cascade. Looked up under a.ID, which also CLOSES the cross-wire
-			// this comment used to describe: while the rows were slug-keyed,
-			// a new active job taking the freed slug back reused the same
-			// cell path, so both jobs' transcripts landed in one project dir
-			// and both cards showed the one shared row. Distinct ids, distinct
-			// cell dirs, distinct rows.
-			//
-			// The one residue is historical: transcripts written before the
-			// cutover are still physically one directory for two same-slug
-			// jobs, and no keying can separate them after the fact (see
-			// JobProjectDirs' legacy base).
-			Tokens: webTokensFor(tokens, a.ID),
-		})
+		board.Jobs = append(board.Jobs, archivedWebJob(a, activeStore, tokens))
 	}
 	return board
+}
+
+// archivedWebJob builds one archived job's card. Split out of buildWebBoard's
+// archived loop — the sibling of archivedWebArtifacts below, and for the same
+// kind of reason: the loop's body is a set of per-field DECISIONS (which of
+// the active loop's keys an archived card carries and which it deliberately
+// does not), and inside buildWebBoard none of them are reachable by a test,
+// since calling it drags in tmux/process-table discovery (LiveSessions and
+// DiscoverAll — the phrasing update_test.go and shipios_test.go already use
+// for avoiding this same function). As a function they are reachable, and the
+// Load decision in particular is one a later edit could reverse in one line.
+func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]store.JobTokens) webJob {
+	return webJob{
+		Slug: a.ArchivedName, Repo: a.Repo,
+		State: "archived", Archived: true, DisplaySlug: a.Slug,
+		Err: a.Err, Outcome: a.Outcome, Color: jobs.EffectiveColor(a),
+		Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
+		// Feedback (Q2: works for archived jobs too) is keyed on the
+		// job's own immutable id — same as the active loop above — not
+		// the archive name, so a later reuse of the freed slug can never
+		// cross-wire onto this card. DocQuestions is deliberately absent
+		// here — never set for archived jobs.
+		Feedback: jobFeedback(activeStore, a.ID),
+		// Tokens IS set for an archived job — keeping the number after
+		// the cell is gone is the whole reason the row has no FK and no
+		// cascade. Looked up under a.ID, which also CLOSES the cross-wire
+		// this comment used to describe: while the rows were slug-keyed,
+		// a new active job taking the freed slug back reused the same
+		// cell path, so both jobs' transcripts landed in one project dir
+		// and both cards showed the one shared row. Distinct ids, distinct
+		// cell dirs, distinct rows.
+		//
+		// The one residue is historical: transcripts written before the
+		// cutover are still physically one directory for two same-slug
+		// jobs, and no keying can separate them after the fact (see
+		// JobProjectDirs' legacy base).
+		Tokens: webTokensFor(tokens, a.ID),
+		// Load is deliberately NOT set here, which is the opposite call
+		// from Tokens directly above, and the two differ in what the
+		// number MEANS. Token spend is a fact about work that happened,
+		// and keeping it after the cell is gone is the whole reason its
+		// row has no cascade. An estimate is a forward-looking triage
+		// question — "is this one worth unblocking right now" — and an
+		// archived job can never be blocked again without being
+		// unarchived first, at which point it rides the active loop above
+		// and its stored estimate (the columns live on the job row and
+		// survive both directions) comes back with it. Serving it here
+		// would put a number answering a question this card cannot pose
+		// in front of a client, which is how a stale estimate starts
+		// reading as a current fact.
+	}
 }
 
 // archivedWebArtifacts lists an archived job's artifact copies for the

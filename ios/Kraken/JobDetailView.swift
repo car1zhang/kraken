@@ -630,6 +630,29 @@ struct CrewChipsView: View {
     }
 }
 
+/// Formats an elapsed span as the app's compact age — "45s", "3m", "3h", "2d",
+/// one unit and no decimals. Floored at 0: a stamp from the future (clock skew
+/// between this phone and the Mac) reads as "0s ago", never as a negative.
+///
+/// Extracted from `tokensNote`, which held the app's only multi-unit age
+/// LADDER until the board card's ROI badge needed the same thing — a grep for
+/// `3600`/`86400` across `ios/Kraken/` returns three lines and all three are
+/// now here. It is not the app's only relative-age rendering: `UsageView`'s
+/// footer has a minutes-only one-off (`"just now"` under a minute, else
+/// `"Nm ago"`), left as it is — it renders a different sentence with a
+/// different vocabulary, and nothing in this change needed it.
+///
+/// A free function taking pre-computed seconds rather than a `Date`, exactly as
+/// `wakeupCountdownLabel` below is: the clock read stays at the call site, so
+/// this stays pure and testable.
+func compactAgeLabel(secondsElapsed: Int) -> String {
+    let s = max(0, secondsElapsed)
+    if s < 60 { return "\(s)s" }
+    if s < 3600 { return "\(s / 60)m" }
+    if s < 86400 { return "\(s / 3600)h" }
+    return "\(s / 86400)d"
+}
+
 /// Formats seconds-until-fire as "Xm Ys", floored at 0 — mirrors app.js's
 /// countdown(). Callers compute `seconds` fresh at render time (the board
 /// already polls every few seconds, so that's enough granularity; no
@@ -1432,13 +1455,8 @@ struct JobDetailView: View {
         let files = t.sessions == 1 ? "1 transcript" : "\(t.sessions) transcripts"
         var note = t.sessions > 0 ? "measured across \(files)" : "measured"
         if t.updatedAt > 0 {
-            let seconds = max(0, Int(Date().timeIntervalSince1970) - Int(t.updatedAt / 1000))
-            let ago: String
-            if seconds < 60 { ago = "\(seconds)s" }
-            else if seconds < 3600 { ago = "\(seconds / 60)m" }
-            else if seconds < 86400 { ago = "\(seconds / 3600)h" }
-            else { ago = "\(seconds / 86400)d" }
-            note += " · \(ago) ago"
+            let seconds = Int(Date().timeIntervalSince1970) - Int(t.updatedAt / 1000)
+            note += " · \(compactAgeLabel(secondsElapsed: seconds)) ago"
         }
         return note
     }

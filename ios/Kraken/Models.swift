@@ -299,6 +299,23 @@ struct WebJob: Decodable, Identifiable {
     // measured zero (that arrives as an object of zeros). Never render nil
     // as 0 — see WebTokens. Additive key, no contract bump.
     let tokens: WebTokens?
+    // zeus' two 1–10 triage estimates for this job: what unblocking it costs
+    // carl, and how big the claude work that reply releases. Optional for the
+    // same reason `tokens` is and not merely "older servers" — but absence
+    // here does NOT mean only "never estimated", and that is where it parts
+    // company with `tokens`. Three distinct cases arrive as nil:
+    //
+    //   - never estimated;
+    //   - the estimate was CLEARED (api/jobload.go writes the zero row, which
+    //     zeroes `at`, and the server serves no object for a zero `at`);
+    //   - the job is ARCHIVED, where api/board.go's `archivedWebJob` withholds
+    //     the key deliberately even when the row still holds an estimate — the
+    //     argument for that is in the comment beside the omission there. The
+    //     columns survive archival and the key comes back on unarchive.
+    //
+    // So nil is "no estimate to act on", never "this job cost nothing". Never
+    // render it as 0. Additive key, no contract bump.
+    let load: WebJobLoad?
     // The job's optional color — one of red/blue/green/yellow/purple/orange/
     // pink/cyan (the names Claude Code's `/color` accepts), absent or "" when
     // the job has none. Additive key, absent on older servers, so no contract
@@ -343,6 +360,7 @@ struct WebJob: Decodable, Identifiable {
         case feedback
         case threads
         case tokens
+        case load
         case color
         case startError = "start_error"
     }
@@ -459,6 +477,159 @@ struct WebTokens: Decodable {
         case zeusOutput = "zeus_out"
         case zeusCacheWrite = "zeus_cache_write"
         case zeusCacheRead = "zeus_cache_read"
+    }
+}
+
+/// Which ROI band an estimate falls in. The raw values are the band names the
+/// shared contract spells, and the web board's CSS classes carry the same four,
+/// so the two clients cannot drift into different vocabularies for one number.
+enum LoadBand: String {
+    case hot, warm, even, cold
+
+    /// The band a ratio falls in. Closed-open from the top, so every finite
+    /// ratio lands in exactly one: `>= 3.0` hot, `>= 1.5` warm, `>= 0.75` even,
+    /// anything below that cold.
+    static func forROI(_ roi: Double) -> LoadBand {
+        if roi >= 3.0 { return .hot }
+        if roi >= 1.5 { return .warm }
+        if roi >= 0.75 { return .even }
+        return .cold
+    }
+}
+
+// WebJobLoad mirrors board.go's webJobLoad: zeus' two triage estimates for a
+// job — `unblock`, what it costs carl to unblock it (reading, deciding,
+// explaining, gathering context), and `scope`, how big the claude work that
+// reply releases. Both are 1..10.
+//
+// Every field is non-optional even though the rest of this file makes
+// omitempty keys Optional: none of these carries `omitempty` on the wire,
+// because a present object always carries all four. Absence is expressed one
+// level up, by `WebJob.load` being nil — so nil must never render as 0, the
+// same arrangement (and the same reason) as WebTokens above.
+//
+// A CLEARED estimate arrives as no key at all, exactly like one that was never
+// written — there is no both-zero object on the wire. api/jobload.go's clear
+// writes `store.JobLoad{}`, so `At` is 0; `webJobLoadFrom` returns nil for
+// `At == 0`; and `webJob.Load` is a pointer with `omitempty`. So the wire has
+// ONE spelling of "no estimate" and it is `WebJob.load == nil`.
+//
+// `roi` below nonetheless refuses an unusable pair rather than trusting that.
+// It costs one comparison, and the two shapes it catches are both things the
+// board would otherwise draw as a ratio nobody wrote: a half estimate (refused
+// with a 400 on the way in) and a both-zero object (a hand-edited row, since
+// nothing serves one). Web's `loadROI` refuses the same two.
+//
+// ROI is DERIVED here, and is deliberately never on the wire. Serving it would
+// put a third number beside the two it divides, free to arrive disagreeing with
+// them; a derived one cannot. Same reasoning as WebTokens serving one half of
+// its split and subtracting the other.
+struct WebJobLoad: Decodable {
+    /// 1..10 — what unblocking this costs carl. 1 = a mechanical action;
+    /// 5 = moderate thought; 10 = deep thought over a lot of context.
+    let unblock: Int
+    /// 1..10 — the size of the claude work that unblock releases. 1 = a
+    /// one-message reply; 5 = a moderate slice; 10 = a massive scoped build.
+    let scope: Int
+    /// zeus' one-line rationale; may be "" (server one-lines and truncates it).
+    let note: String
+    /// Unix millis the estimate was written, stamped server-side.
+    let at: Int64
+
+    /// `scope / unblock`, or nil when there is no usable estimate.
+    ///
+    /// Both numbers are guarded, not just the divisor. Neither shape can reach
+    /// a client from the current server — a clear drops the key entirely and a
+    /// half estimate is a 400 — so this is defence against a hand-edited `jobs`
+    /// row, and it is cheap: `unblock == 0` would make the ratio infinite and
+    /// `scope == 0` would draw "⚡ 0.0× 3→0", a ratio nobody wrote. Web's
+    /// `loadROI` (lib/format.ts) rejects the same two, which is what keeps the
+    /// boards showing the badge on the same cards.
+    ///
+    /// A view asks for this and omits the badge entirely on nil — including
+    /// `JobCardView.showsLoadBadge`, so the card never reserves space for a
+    /// badge this returns nil for.
+    var roi: Double? {
+        guard unblock > 0, scope > 0 else { return nil }
+        return Double(scope) / Double(unblock)
+    }
+
+    /// The band `roi` falls in, nil for the same reason `roi` is.
+    var band: LoadBand? { roi.map(LoadBand.forROI) }
+
+    /// The ratio at ONE decimal place — the only rendering of it either board
+    /// shows, so both the badge and the sentence below go through this.
+    ///
+    /// `.toNearestOrAwayFromZero` is the whole point of doing this by hand.
+    /// `String(format: "%.1f",)` rounds half to EVEN, so it prints 0.25 as
+    /// "0.2" while web's `toFixed(1)` prints "0.3" — and "0.3×" is the shared
+    /// contract's own worked example for `unblock 8, scope 2`. Rounding half
+    /// away from zero is what makes the two boards print the same string:
+    /// checked over all 100 unblock×scope pairs against `toFixed(1)`, they
+    /// agree exactly.
+    ///
+    /// Assembled from the tenths rather than formatted, which keeps this file
+    /// free of `import Foundation` — it has none today, being shapes only, and
+    /// `String(format:)` is the one thing here that would need it. Both halves
+    /// are non-negative because `roi` is nil unless both inputs are positive.
+    ///
+    /// Rounding is for DISPLAY only — the band is decided on the raw ratio
+    /// (`band` reads `roi`, not this), so a band never depends on a display
+    /// choice. Web splits it the same way.
+    private func roiText(_ roi: Double) -> String {
+        let tenths = Int((roi * 10).rounded(.toNearestOrAwayFromZero))
+        return "\(tenths / 10).\(tenths % 10)"
+    }
+
+    /// "⚡ 4.0× 2→8" — the badge's own text, the same string the web board
+    /// renders.
+    var badgeText: String? {
+        guard let roi else { return nil }
+        return "⚡ " + roiText(roi) + "× \(unblock)→\(scope)"
+    }
+
+    /// How long ago this estimate was written, as the app's compact age
+    /// ("45s", "3m", "3h", "2d") — or nil when there is no usable stamp.
+    ///
+    /// The board renders this TWICE from one computation: as a muted label
+    /// beside the badge, and inside `summary` below. Both are required and they
+    /// are not redundant — iOS has no hover, so an age that lived only in the
+    /// accessibility label would leave every sighted phone user unable to tell
+    /// a three-day-old estimate from one written a minute ago, which is exactly
+    /// the failure the age exists to close: zeus estimates, carl answers, the
+    /// cell later dies, the daemon's `health` files the card back under
+    /// BLOCKED, and with zeus gone nothing ever rewrites the estimate.
+    ///
+    /// `nowMillis` is passed in rather than read here — the same arrangement
+    /// `wakeupCountdownLabel` uses, keeping the clock at the call site so this
+    /// type stays pure. A non-positive `at` or `nowMillis` yields nil rather
+    /// than an age computed from a missing stamp; the server always stamps `at`
+    /// on a write, so that is defence, not an expected shape. `compactAgeLabel`
+    /// floors a stamp from the FUTURE at "0s" — this phone's clock and the
+    /// Mac's are independent.
+    func age(nowMillis: Int64) -> String? {
+        guard at > 0, nowMillis > 0 else { return nil }
+        return compactAgeLabel(secondsElapsed: Int(max(0, nowMillis - at) / 1000))
+    }
+
+    /// The badge's full sentence — its tooltip on the web board, its
+    /// accessibility label here:
+    ///
+    ///     unblock effort 2/10 · next step 8/10 · roi 4.0× · estimated 3h ago — <note>
+    ///
+    /// The age clause is required and its position is pinned; the age's exact
+    /// wording is not — each client formats it with its own helper, and "3h"
+    /// vs "3 h" between the two boards is acceptable drift. The badge TEXT is
+    /// the thing that must stay byte-identical, and it never absorbs the age.
+    ///
+    /// The note is appended only when there is one: `note` may legitimately be
+    /// "", and a trailing " — " with nothing after it reads as a truncation.
+    func summary(nowMillis: Int64) -> String? {
+        guard let roi else { return nil }
+        var s = "unblock effort \(unblock)/10 · next step \(scope)/10 · roi " + roiText(roi) + "×"
+        if let age = age(nowMillis: nowMillis) { s += " · estimated \(age) ago" }
+        if !note.isEmpty { s += " — " + note }
+        return s
     }
 }
 

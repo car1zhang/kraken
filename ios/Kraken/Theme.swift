@@ -344,6 +344,54 @@ enum BoardTheme {
         default: return nil
         }
     }
+
+    /// An ROI band → how the badge paints. Each band maps to the same palette
+    /// tokens web's `.ld-chip` rules name (`--counter`/`--counter-soft`,
+    /// `--revealed`/`--revealed-soft`, `--text-2`, `--hairline-2`), which this
+    /// enum's entries are the ports of, so the two boards grade one number the
+    /// same way with no new hex here to keep in step with that stylesheet.
+    /// Every token is already a dynamic light/dark pair, so both appearances
+    /// follow for free.
+    ///
+    /// Hue is deliberately not the only channel — red/green is the common
+    /// colour-blind failure and two of these four sit either side of it. So the
+    /// box treatment separates them as well: the `hot` FILL is what tells it
+    /// from `warm` without relying on pink-vs-amber, and the `cold` DASH is
+    /// what tells it from `even`, which shares its colour.
+    ///
+    ///   hot   counter text on a counter-soft fill — the palette's "a human is
+    ///         needed here" colour, which is what a high ratio says
+    ///   warm  amber text and border, no fill
+    ///   even  muted text, plain hairline border — the resting chip look
+    ///   cold  the same muted pair, dashed and dimmed, so it reads with no
+    ///         colour perception at all
+    static func style(forLoadBand band: LoadBand) -> LoadBandStyle {
+        switch band {
+        case .hot:
+            return LoadBandStyle(text: KTheme.counter, border: KTheme.counterSoft, fill: KTheme.counterSoft, dashed: false, opacity: 1)
+        case .warm:
+            return LoadBandStyle(text: KTheme.revealed, border: KTheme.revealedSoft, fill: nil, dashed: false, opacity: 1)
+        case .even:
+            return LoadBandStyle(text: KTheme.text2, border: KTheme.hairline2, fill: nil, dashed: false, opacity: 1)
+        case .cold:
+            return LoadBandStyle(text: KTheme.text2, border: KTheme.hairline2, fill: nil, dashed: true, opacity: 0.75)
+        }
+    }
+}
+
+/// How one ROI band paints. A value rather than four parallel switches so a
+/// band can only ever be described in one place — see
+/// `BoardTheme.style(forLoadBand:)`, which is the only thing that builds one.
+struct LoadBandStyle {
+    let text: Color
+    let border: Color
+    /// nil = no fill, the card surface shows through.
+    let fill: Color?
+    /// `cold`'s non-colour channel: the only dashed border on the card.
+    let dashed: Bool
+    /// `cold`'s second dimming, matching web's `.ld-chip.cold { opacity: .75 }`.
+    /// 1 everywhere else.
+    let opacity: Double
 }
 
 enum SessionTheme {

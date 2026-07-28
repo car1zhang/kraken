@@ -37,8 +37,10 @@ import (
 // finishes what version 6 started: a job's identity is jobs.id everywhere
 // below the HTTP handler, so board_order and the two token tables move off the
 // mutable slug onto the immutable id, events GAINS a job_id beside its
-// job_slug fossil, and the never-used drafts table is dropped.
-const schemaVersion = 12
+// job_slug fossil, and the never-used drafts table is dropped. Version 13
+// adds the four job-load columns — zeus' unblock/scope estimate of what a
+// blocked job costs carl and buys him (see schemaV13).
+const schemaVersion = 13
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -620,6 +622,43 @@ CREATE TABLE job_token_files (
 DROP TABLE drafts;
 `
 
+// schemaV13 adds the job LOAD estimate: the two 1-10 numbers zeus writes for
+// a blocked job — load_unblock (how much effort carl must spend to unblock
+// it) and load_scope (how big the claude work that reply unblocks is likely
+// to be) — plus the one-line rationale and the millis stamp of when they were
+// written. Four columns on `jobs` rather than a table of their own: this is
+// state ABOUT the job with exactly the job's lifetime, one row per job at
+// most, and the board already selects every job row on every build — a
+// separate table would add a join (or a second sweep) to the hottest read in
+// the process for no gain.
+//
+// Appended rather than folded into an earlier schemaV<N> for the reason
+// schemaV2's doc comment spells out: real kraken.db files already exist at
+// earlier versions, and migrate() only ever applies versions ABOVE the
+// database's current one.
+//
+// NO GO HOOK, and the DEFAULTS are why. Every pre-existing job lands on
+// unblock 0 / scope 0 / an empty note / at 0, which is not a placeholder standing
+// in for a real value — it is the feature's own "never estimated" state,
+// spelled exactly as a clear writes it. Zero for BOTH numbers is the clear
+// (a half estimate is refused at the API layer, since scope/unblock has no
+// meaning when one side is zero), and load_at 0 is what tells a reader the
+// pair was never written rather than written as zero. So the migration is
+// total on arrival with nothing left to backfill: there is no earlier place
+// an estimate could have been recorded, and nothing anywhere could reconstruct
+// one after the fact.
+//
+// The ratio the board renders (scope / unblock) is deliberately NOT a column:
+// two stored halves and a stored quotient can drift out of agreement and a
+// derived one cannot — the same reasoning job_tokens' zeus/subagent split
+// follows in schemaV11.
+const schemaV13 = `
+ALTER TABLE jobs ADD COLUMN load_unblock INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN load_scope   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN load_note    TEXT    NOT NULL DEFAULT '';
+ALTER TABLE jobs ADD COLUMN load_at      INTEGER NOT NULL DEFAULT 0; -- unix millis; 0 means never estimated
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -653,9 +692,12 @@ type migrationStep struct {
 // zero is the only way the split is ever right);
 // migrations[12] re-keys board_order and the two token tables onto jobs.id,
 // adds events.job_id, and drops drafts (migrateV12JobIDs below does the
-// slug -> id mapping the SQL cannot express).
+// slug -> id mapping the SQL cannot express);
+// migrations[13] adds the four job-load columns (no hook — the DEFAULTs land
+// every pre-existing job on "never estimated", which is exactly the state
+// those jobs are in; see schemaV13).
 // Future schema changes append
-// migrations[13], migrations[14], ... rather than editing an existing
+// migrations[14], migrations[15], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -671,6 +713,7 @@ var migrations = map[int]migrationStep{
 	10: {sql: schemaV10},
 	11: {sql: schemaV11},
 	12: {sql: schemaV12, hook: migrateV12JobIDs},
+	13: {sql: schemaV13},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
