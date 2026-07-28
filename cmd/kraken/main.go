@@ -67,6 +67,8 @@ func main() {
 		cmdFeedback(rest)
 	case "watchlist":
 		cmdWatchlist(rest)
+	case "load":
+		cmdLoad(rest)
 	case "mine":
 		cmdMine(rest)
 	case "_complete":
@@ -184,6 +186,16 @@ Commands:
                       nightly dream pass' cross-job read, every note in the
                       window (last 24h by default) with its job slug and a
                       snapshot_url for the artifact bytes carl was looking at.
+  k load get|set|clear <slug> ...
+                      cell-side verb zeus uses to record what a BLOCKED job
+                      costs and buys, proxied the same way as 'k questions':
+                      set <slug> --unblock <1-10> --scope <1-10> [--note "..."]
+                      writes how much effort unblocking it takes carl against
+                      how big the claude work that reply unblocks is, and the
+                      board ranks blocked cards by the ratio scope/unblock.
+                      Both numbers or neither — a half estimate has no ratio,
+                      and 'clear' is how an estimate is removed. get prints
+                      the pair as JSON ({"load": null} when unestimated).
   k watchlist get|add|update|remove ...
                       cell-side verb the nightly dream pass uses to track
                       recurring observations, proxied the same way. The

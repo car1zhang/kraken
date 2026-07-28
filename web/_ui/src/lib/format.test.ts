@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { WebJob } from "../api/types.ts";
+import type { WebJob, WebJobLoad } from "../api/types.ts";
 import {
   age,
   bucketJobs,
@@ -8,6 +8,9 @@ import {
   countdown,
   docQuestionsOpenP0,
   flagCount,
+  loadBadgeText,
+  loadBadgeTitle,
+  loadROI,
   logTime,
   settledJob,
   stateColor,
@@ -185,6 +188,105 @@ describe("flagCount", () => {
     expect(
       flagCount([job({ slug: "old", archived: true, question: { tool_use_id: "t" } })]),
     ).toBe(0);
+  });
+});
+
+describe("loadROI", () => {
+  // A full wire object, so the "cleared" and half-estimate cases below are the
+  // shape a server actually sends rather than the helper's structural minimum.
+  const wire = (unblock: number, scope: number): WebJobLoad => ({
+    unblock,
+    scope,
+    note: "",
+    at: 1_769_040_000_000,
+  });
+
+  it("lands the shared contract's worked examples in their stated bands", () => {
+    expect(loadROI({ unblock: 2, scope: 8 })).toEqual({ roi: 4, band: "hot" });
+    expect(loadROI({ unblock: 5, scope: 5 })).toEqual({ roi: 1, band: "even" });
+    expect(loadROI({ unblock: 8, scope: 2 })).toEqual({ roi: 0.25, band: "cold" });
+    expect(loadROI({ unblock: 3, scope: 5 })?.band).toBe("warm");
+  });
+
+  it("puts each boundary value in the HIGHER band", () => {
+    // The bands are closed-open, so the boundary itself belongs upward. Tested
+    // on the exact ratio, which is what the operator sees.
+    expect(loadROI({ unblock: 2, scope: 6 })).toEqual({ roi: 3, band: "hot" }); // 3.0
+    expect(loadROI({ unblock: 2, scope: 3 })).toEqual({ roi: 1.5, band: "warm" }); // 1.5
+    expect(loadROI({ unblock: 4, scope: 3 })).toEqual({ roi: 0.75, band: "even" }); // 0.75
+  });
+
+  it("drops to the lower band just BELOW each boundary", () => {
+    // Non-integer inputs on purpose: 1..10 integers cannot produce a ratio
+    // arbitrarily close to 3.0 from below, and it is the comparison operator
+    // being pinned here, not a value a server would send.
+    expect(loadROI({ unblock: 1, scope: 2.999 })?.band).toBe("warm");
+    expect(loadROI({ unblock: 1, scope: 1.499 })?.band).toBe("even");
+    expect(loadROI({ unblock: 1, scope: 0.749 })?.band).toBe("cold");
+  });
+
+  it("returns null for no estimate at all", () => {
+    expect(loadROI(undefined)).toBeNull();
+    expect(loadROI(null)).toBeNull();
+  });
+
+  it("returns null for both-zero — defensively, since a clear drops the key", () => {
+    // internal/api/jobload.go stores a clear as JobLoad{}, so `at` is 0,
+    // webJobLoadFrom returns nil, and the omitempty pointer drops the key: this
+    // object cannot arrive from the current server. Pinned anyway, because it
+    // is the arm standing between a future zero and an "Infinity×" badge.
+    expect(loadROI(wire(0, 0))).toBeNull();
+  });
+
+  it("never yields Infinity or NaN from a half-estimate", () => {
+    // The server 400s these, so they should not arrive — but `scope / 0` is
+    // Infinity and `0 / 0` is NaN, and either would reach the screen as a badge.
+    expect(loadROI(wire(0, 8))).toBeNull();
+    expect(loadROI(wire(8, 0))).toBeNull();
+    expect(loadROI({ unblock: -1, scope: 8 })).toBeNull();
+  });
+});
+
+describe("loadBadgeText / loadBadgeTitle", () => {
+  const NOW = 1_769_040_000_000;
+  // `at` three hours back, so every tooltip below reads "estimated 3h ago".
+  const AT = NOW - 3 * 3600_000;
+
+  it("renders the ratio to ONE decimal, rounding half away from zero", () => {
+    expect(loadBadgeText({ unblock: 2, scope: 8 }, 4)).toBe("⚡ 4.0× 2→8");
+    expect(loadBadgeText({ unblock: 8, scope: 2 }, 0.25)).toBe("⚡ 0.3× 8→2");
+    expect(loadBadgeText({ unblock: 3, scope: 5 }, 5 / 3)).toBe("⚡ 1.7× 3→5");
+  });
+
+  it("carries the AGE clause, and appends a note only when there is one", () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const base = "unblock effort 2/10 · next step 8/10 · roi 4.0× · estimated 3h ago";
+    expect(loadBadgeTitle({ unblock: 2, scope: 8, at: AT }, 4)).toBe(base);
+    // An empty note must not leave a dangling " — ", which reads as a truncation.
+    expect(loadBadgeTitle({ unblock: 2, scope: 8, note: "", at: AT }, 4)).toBe(base);
+    expect(loadBadgeTitle({ unblock: 2, scope: 8, note: "one decision", at: AT }, 4)).toBe(
+      base + " — one decision",
+    );
+    vi.restoreAllMocks();
+  });
+
+  it("reads `at` as MILLIS — the same stamp in seconds would age it by decades", () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    expect(loadBadgeTitle({ unblock: 2, scope: 8, at: Math.floor(AT / 1000) }, 4)).not.toContain(
+      "3h ago",
+    );
+    vi.restoreAllMocks();
+  });
+
+  it("drops the age clause entirely rather than printing 'estimated  ago'", () => {
+    // A present `load` always carries at > 0, so this is defensive only — but a
+    // half-rendered clause would be worse than none.
+    expect(loadBadgeTitle({ unblock: 2, scope: 8, note: "n" }, 4)).toBe(
+      "unblock effort 2/10 · next step 8/10 · roi 4.0× — n",
+    );
+    expect(loadBadgeTitle({ unblock: 2, scope: 8, at: 0 }, 4)).toBe(
+      "unblock effort 2/10 · next step 8/10 · roi 4.0×",
+    );
   });
 });
 

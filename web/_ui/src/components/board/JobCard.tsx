@@ -8,6 +8,7 @@ import { ArtifactCountChip, artifactCountVisible } from "./chips/ArtifactChips.t
 import { CrewChips, crewChipsVisible } from "./chips/CrewPills.tsx";
 import { DocQuestionChip, docQuestionChipVisible } from "./chips/DocQuestionChip.tsx";
 import { FeedbackChip, feedbackChipVisible } from "./chips/FeedbackChip.tsx";
+import { LoadChip, loadChipVisible } from "./chips/LoadChip.tsx";
 import { PRChips } from "./chips/PRChips.tsx";
 import { QuestionBlock } from "./chips/QuestionBlock.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
@@ -50,6 +51,14 @@ export interface JobCardProps {
  *      nothing longer to say. Everything the counts stand for is one click away
  *      in the modal — that is the rule this row exists to enforce, and it is
  *      why the artifact NAMES moved out rather than being capped.
+ *      ONE token in this row is not an inventory count: the ROI badge
+ *      (LoadChip), which leads the row and appears on BLOCKED cards only. It is
+ *      a judgement about the job rather than something the job contains, and it
+ *      sits here anyway because it is read at that same first glance — it
+ *      answers "is this the one to unblock next", which is a question you ask
+ *      while scanning slugs, not one you ask after reading the status lines.
+ *      Leftmost is what makes that work: the badges line up down the blocked
+ *      column and can be compared without reading the cards around them.
  *   3. STATUS — what is true right now, worst-first: outcome, err/health, then
  *      the me→zeus/zeus conversation pair (chronological, so it reads as a
  *      transcript), then the poll countdown WITH its stated reason.
@@ -89,6 +98,7 @@ export function JobCard({ job, col, actions }: JobCardProps) {
   // than by rendering and measuring, because a component that returns null
   // still occupies a slot in an array.
   const hasChips =
+    loadChipVisible(job, col) ||
     crewChipsVisible(job) ||
     threadChipsVisible(job) ||
     docQuestionChipVisible(job) ||
@@ -197,9 +207,12 @@ export function JobCard({ job, col, actions }: JobCardProps) {
       {/* ---- band 2: CHIPS — counts, not lists. Assembled most-live-first: who
            is working on it, what has been branched off it, then what it has
            accumulated. `withBranch={false}` because starting a branch is a
-           detail action; the chips here are STATUS. */}
+           detail action; the chips here are STATUS. The ROI badge leads,
+           blocked cards only — see the band note above for why a triage number
+           rides an inventory row. */}
       {hasChips ? (
         <div className="chips">
+          <LoadChip job={job} col={col} />
           <CrewChips job={job} />
           <ThreadChips job={job} onOpenThread={actions.onOpenThread} withBranch={false} />
           <DocQuestionChip job={job} />

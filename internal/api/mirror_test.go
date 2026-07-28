@@ -31,6 +31,11 @@ var mirrorGatedRoutes = []string{
 	// (GET /api/watchlist, GET /api/feedback/sweep, GET /api/feedback/snapshot,
 	// GET /api/dream) stay open, like every other read on this surface.
 	"/api/watchlist", "/api/watchlist/item",
+	// job load: the same inline gate, for the same reason its GET must stay
+	// reachable. Its sibling /api/job/color is deliberately NOT here — that
+	// route's own gate wraps only the /color it types into a live pane, not
+	// its write.
+	"/api/job/load",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",

@@ -274,6 +274,22 @@ var webJobSpec = map[string]fieldSpec{
 	"feedback":      {kind: wireArray, required: false},
 	"threads":       {kind: wireArray, required: false},
 	"tokens":        {kind: wireObject, required: false},
+	// zeus' unblock/scope triage estimate, omitempty. Absent covers THREE
+	// states the wire deliberately does not separate — never estimated;
+	// CLEARED (a clear zeroes load_at, and webJobLoadFrom serves no object for
+	// a zero at); and ARCHIVED (archivedWebJob withholds the key even when the
+	// row holds a real estimate, pinned by TestArchivedWebJobWithholdsLoad).
+	// The one thing absent never means is "estimated, and the numbers were
+	// zero". That pair is not refused — it IS the clear, accepted with a 200
+	// and written to the row as four zeroes (TestJobLoadPostSetsAndClears) —
+	// it is simply never recorded AS an estimate: the clear branch zeroes
+	// load_at along with the numbers, so webJobLoadFrom serves no object for
+	// it. What the API does refuse with a 400 is a HALF pair, exactly one of
+	// the two zero. Additive: a key ADDED to an existing
+	// shape, which old clients ignore, so apiContract does NOT bump for it
+	// (TestAPIContractUnchanged still pins 5). Listed here because assertShape
+	// rejects any key the spec doesn't document.
+	"load": {kind: wireObject, required: false},
 	// why the last StartCell attempt for this job failed — populated for
 	// queued jobs only, omitempty, so absent means "the last attempt worked,
 	// or none was made". Additive: a key ADDED to an existing shape, which
@@ -330,6 +346,119 @@ func TestWebTokensWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webTokens (populated)", data, webTokensSpec)
+}
+
+// webJobLoadSpec covers jobload.go's webJobLoad — webJob's "load" object and
+// the body of GET /api/job/load. Every key is required: the type carries no
+// omitempty anywhere, because a zero note is a real answer and must still
+// ride the wire. Absence is expressed by the "load" key itself being gone
+// (webJobSpec marks it optional) or by an explicit null on the GET, never by
+// a missing field. There is no "roi" key on purpose — the ratio is derived
+// from unblock and scope wherever it is rendered, and a spec entry for it
+// would be the first sign somebody had stored a quotient that can disagree
+// with the two numbers it came from.
+var webJobLoadSpec = map[string]fieldSpec{
+	"unblock": {kind: wireNumber, required: true},
+	"scope":   {kind: wireNumber, required: true},
+	"note":    {kind: wireString, required: true},
+	"at":      {kind: wireNumber, required: true},
+}
+
+// jobLoadGetSpec is GET /api/job/load's envelope. "load" is nullable and
+// required: the key is always present, carrying null for a job with no
+// estimate — a caller asking about one named job gets an answer either way.
+var jobLoadGetSpec = map[string]fieldSpec{
+	"load": {kind: wireObject, required: true, nullable: true},
+}
+
+// jobLoadPostReqSpec / jobLoadPostRespSpec cover POST /api/job/load's request
+// and its ack. The request carries no "at": the write time is stamped
+// server-side, and the handler REFUSES a body carrying one rather than
+// ignoring it (DisallowUnknownFields), so a spec entry would document a field
+// that is a 400. Every other key is required, which here means literally
+// required rather than merely non-omitempty: unblock and scope are pointers
+// on the Go side precisely so an absent one is a refusal instead of a silent
+// clear, and note carries no omitempty so an empty rationale still rides.
+// The response is the shared bare ack — the estimate itself rides back on the
+// next /api/board poll, already the board's single source of truth for job
+// state, exactly as /api/job/color's does.
+var jobLoadPostReqSpec = map[string]fieldSpec{
+	"slug":    {kind: wireString, required: true},
+	"unblock": {kind: wireNumber, required: true},
+	"scope":   {kind: wireNumber, required: true},
+	"note":    {kind: wireString, required: true},
+}
+
+var jobLoadPostRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+func TestWebJobLoadWireShape(t *testing.T) {
+	// a cleared-note estimate: every key must still be present, which is the
+	// difference between "estimated, with nothing to add" and no load key
+	data, err := json.Marshal(webJobLoad{Unblock: 5, Scope: 5, At: 1769040000000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webJobLoad (no note)", data, webJobLoadSpec)
+
+	data, err = json.Marshal(webJobLoad{
+		Unblock: 2, Scope: 8, Note: "one decision: which store keys the row", At: 1769040000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webJobLoad (populated)", data, webJobLoadSpec)
+
+	unblock, scope := 2, 8
+	reqData, err := json.Marshal(webJobLoadReq{Slug: "demo", Unblock: &unblock, Scope: &scope, Note: "why"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webJobLoadReq", reqData, jobLoadPostReqSpec)
+}
+
+// TestJobLoadEndpointWireShape drives the real handler for both verbs, so the
+// envelopes above are pinned as SERVED rather than as marshaled structs.
+func TestJobLoadEndpointWireShape(t *testing.T) {
+	st := useTestStore(t)
+	if _, err := st.CreateJob(&store.Job{Slug: "contract-load"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	// never estimated: the key is present and null
+	req := httptest.NewRequest(http.MethodGet, "/api/job/load?slug=contract-load", nil)
+	rec := httptest.NewRecorder()
+	jobLoadHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET (unestimated): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/job/load (unestimated)", rec.Body.Bytes(), jobLoadGetSpec)
+
+	body := mustJSON(t, map[string]any{"slug": "contract-load", "unblock": 2, "scope": 8, "note": "why"})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/load", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	jobLoadHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/job/load", rec.Body.Bytes(), jobLoadPostRespSpec)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/job/load?slug=contract-load", nil)
+	rec = httptest.NewRecorder()
+	jobLoadHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET (estimated): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/job/load (estimated)", rec.Body.Bytes(), jobLoadGetSpec)
+
+	var envelope struct {
+		Load json.RawMessage `json:"load"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "GET /api/job/load .load", envelope.Load, webJobLoadSpec)
 }
 
 func TestDaemonStatusWireShape(t *testing.T) {
@@ -417,6 +546,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 			Sessions: 154, UpdatedAt: 1785124027359,
 			ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 		},
+		Load:       &webJobLoad{Unblock: 2, Scope: 8, Note: "one decision: which store keys the row", At: 1769040000000},
 		StartError: "worktree already exists — clean it up first",
 	}
 	data, err := json.Marshal(wj)

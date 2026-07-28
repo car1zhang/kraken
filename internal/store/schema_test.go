@@ -24,6 +24,25 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v13: drop the four job-load columns (added at v13, absent
+	// through v12). Pure shape, no rows to carry back — the values only ever
+	// come from a live write.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 13 {
+		for _, stmt := range []string{
+			`ALTER TABLE jobs DROP COLUMN load_unblock`,
+			`ALTER TABLE jobs DROP COLUMN load_scope`,
+			`ALTER TABLE jobs DROP COLUMN load_note`,
+			`ALTER TABLE jobs DROP COLUMN load_at`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v13) %q: %v", target, stmt, err)
+			}
+		}
+	}
+
 	// Reverse v12: put board_order and the two token tables back on the slug,
 	// drop events.job_id, and restore the drafts table. The token tables are
 	// dropped and recreated rather than converted, because v12 deletes every

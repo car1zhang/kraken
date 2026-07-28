@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"kraken/internal/core"
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -83,6 +84,19 @@ type Job struct {
 	Body         string    `json:"-"`
 	Err          string    `json:"err,omitempty"`
 	ModTime      time.Time `json:"-"`
+	// Load is zeus' triage estimate for a blocked job: how much effort
+	// unblocking it costs carl against how much claude work that reply buys
+	// (store.JobLoad — the store's own type rather than a second copy, since
+	// this package already imports store). Store-backed ONLY: it has no
+	// frontmatter spelling, so a file-backed Job always reads as the zero
+	// value ("never estimated"), and jobs.SetJobLoad refuses rather than
+	// pretending otherwise.
+	//
+	// No omitempty: Go's omitempty has no effect on a struct value, so
+	// writing one here would document an omission that never happens. It is
+	// moot in practice — the client-visible form is api's own *webJobLoad,
+	// and nothing marshals jobs.Job itself.
+	Load store.JobLoad `json:"load"`
 	// ID and Rev are storage-internal, populated only when this Job was
 	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
 	// store row id, Rev the optimistic-concurrency counter WriteJobFields/

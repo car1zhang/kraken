@@ -162,8 +162,45 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // is not a mechanism guard — it is a second, cruder net under
 // TestZeusBriefDoesNotRestateSkills, catching bulk that arrives as prose the
 // token list does not happen to name.
+//
+// The ceiling moved 10,000 -> 12,000 to admit the load-estimate rule (the
+// `kraken load set` paragraph in zeusBrief, 1,017 bytes with its 1-10 scale,
+// measured for the "lean" slug below). That number is the ONLY thing this
+// test's failure message tells you not to touch, so the reasoning is spelled
+// out rather than left to the diff.
+//
+// WHY IT BELONGS IN THE BRIEF. zeusBrief's own doc comment sets the split:
+// the brief carries what no skill can know. Every-turn enforcement is a
+// sub-case of that — what a skill cannot DO — since a SKILL.md is read once
+// per phase and this fires at the end of every turn. That is not a criterion
+// invented here: the questions/feedback re-read paragraph in crew.go is
+// resident for the same stated reason. Moving it into .claude/skills/ would
+// also have meant three copies, since /aim, /info and /do each own a different
+// phase's cell section and a job can block inside any of them — and three
+// copies of one 1-10 ruler is exactly the drift
+// TestZeusBriefDoesNotRestateSkills exists to prevent.
+//
+// WHY 12,000 RATHER THAN A TIGHTER NUMBER. The pre-change brief was 9,833
+// bytes against the old 10,000 — 167 bytes of headroom — so the ceiling was
+// already tracking the brief rather than bounding it. It also measures a
+// 4-character slug, and the brief carries the slug TEN times: seven direct
+// interpolations plus one each inside CellBranch, CellArtifacts and
+// docFragmentsDir. So this job's own `job-load-categorizing` renders 11,020
+// bytes where "lean" renders 10,850 — 170 bytes for 17 extra characters,
+// which is the ten showing up as arithmetic. A ceiling of 11,000 would
+// therefore have passed this test and still been exceeded in production.
+// 12,000 leaves room for both the longest plausible slug and a future
+// sentence.
+//
+// What the net still catches is unchanged, and the scale is worth stating
+// because it is what makes 12,000 a bound rather than a formality: the
+// duplication that caused the original outage was the whole /aim pipeline,
+// ~10.6KB of it (zeusBrief measured 17,005 bytes at bf91ca5^ and 6,407 at
+// bf91ca5, the commit that staged the brief in a file and deduped it).
+// Anyone raising this number again should be able to write a paragraph like
+// this one first.
 func TestZeusBriefStaysLean(t *testing.T) {
-	const ceiling = 10_000
+	const ceiling = 12_000
 	brief := zeusBrief(&Job{Slug: "lean"})
 	if len(brief) > ceiling {
 		t.Errorf("brief is %d bytes, over the %d-byte ceiling — procedure has crept back in from "+
@@ -219,6 +256,47 @@ func TestZeusBriefImageHandling(t *testing.T) {
 		brief := zeusBrief(j)
 		if !strings.Contains(brief, "[image: <path>]") {
 			t.Errorf("%s brief missing the image-handling line", j.Slug)
+		}
+	}
+}
+
+// TestZeusBriefLoadEstimate pins the load-estimate rule into every brief
+// variant. Solo is not a reason to skip it: the estimate is about what CARL
+// must spend to unblock the cell, which has nothing to do with whether the
+// cell delegates.
+//
+// The slug is checked INSIDE the command because the brief interpolates the
+// cell's real slug rather than leaving a `<slug>` placeholder — which is the
+// difference between the brief's spelling of a cell verb and the skills'. A
+// skill writes `kraken questions get <slug>` (aim/SKILL.md) and relies on the
+// brief's "the job slug every kraken CLI verb takes is: %s" line to resolve it;
+// the brief, already holding the value, substitutes it. Asserting the bare verb
+// would pass on either spelling.
+//
+// The scale anchors are asserted too, and that is the load-bearing half: they
+// are ~600 of the paragraph's 1,017 bytes and they are the entire reason
+// TestZeusBriefStaysLean's ceiling had to move, yet every anchor could be
+// deleted with a verbs-only assertion still green. One phrase per axis is
+// enough to make the test fail if the ruler goes — and the ruler going is what
+// makes two cells' numbers incomparable, which is the whole feature.
+func TestZeusBriefLoadEstimate(t *testing.T) {
+	for _, j := range []*Job{
+		{Slug: "load-plain"},
+		{Slug: "load-solo", Solo: true},
+	} {
+		brief := zeusBrief(j)
+		for _, want := range []string{
+			"kraken load set " + j.Slug,
+			"kraken load clear " + j.Slug,
+			"--unblock",
+			"--scope",
+			// one anchor per axis, so the 1-10 ruler cannot be dropped silently
+			"1-10 is the effort CARL spends",
+			"a one-message reply",
+		} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s brief missing %q from the load-estimate rule", j.Slug, want)
+			}
 		}
 	}
 }

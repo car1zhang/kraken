@@ -61,6 +61,11 @@ func Register(mux *http.ServeMux) {
 	// webJobColor). Its own mirror gate lives inside the handler, beside the
 	// PushJobColor call that is the only thing needing one.
 	mux.HandleFunc("/api/job/color", webJobColor)
+	// Load is a one-field route for the same reason colour is (see
+	// jobcolor.go): the form save's editableJob gate would put it out of
+	// reach on exactly the blocked, live-celled jobs it exists for. Its POST
+	// gates itself inline so the GET stays reachable under --mirror.
+	mux.HandleFunc("/api/job/load", jobLoadHandler)
 	mux.HandleFunc("/api/upload", uploadHandler)
 	mux.HandleFunc("/api/logs/files", webLogFiles)
 	mux.HandleFunc("/api/logs", webLogRead)

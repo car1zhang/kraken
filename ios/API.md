@@ -165,6 +165,7 @@ the new build" would be false at exactly the moment it is shown.
 | `color` | string | omitempty | the job's color, one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan` (the names Claude Code's `/color` accepts, in that order); absent or `""` means the job has NO color and must render exactly as an uncolored job always has — no swatch, no reserved space. Clients degrade an unrecognized name to "no color" rather than failing. Additive, no contract bump |
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 | `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
+| `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive carl's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
 | `start_error` | string | omitempty | the reason the daemon's last `StartCell` attempt for this job failed — free-text prose from the returned error, e.g. `worktree …/wt-monolith already exists`. Populated for jobs in the `queued` display state ONLY; absent everywhere else, and absent on a queued job means the last attempt succeeded or none has been made yet. It is per-job, unlike the board-level `daemon.last_error`, which carries whichever failure happened to be last across all jobs. Render it on the queued card: without it a job that cannot start looks identical to one merely waiting its turn, and the only record is `~/.kraken/logs`. Additive, no contract bump |
 
 `webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
@@ -288,6 +289,66 @@ Four rules for any client rendering this:
   started in a cell worktree by hand), so no transcript is currently booked to
   the wrong half. Either way the split can only ever move spend between the two
   halves — the four totals are unaffected.
+
+`webJobLoad` (the job's `load_*` columns — zeus' two triage estimates for a
+BLOCKED job: how much effort carl must spend to unblock it, and how big the
+claude work that reply buys):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `unblock` | number | always | 1..10 — carl's cost to unblock. 1 = a mechanical action; 5 = moderate thought; 10 = deep thought, many decisions, lots of context |
+| `scope` | number | always | 1..10 — the size of the claude work that unblock releases. 1 = a one-message reply; 5 = a moderate implementation slice; 10 = many subagents and a massive scoped implementation |
+| `note` | string | always | zeus' one-line rationale; may be `""`. One-lined and capped at 200 **runes** (not bytes) server-side, so it is safe to render on one line without re-truncating |
+| `at` | number | always | unix millis the estimate was written; always > 0 while the object is present. Stamped SERVER-SIDE — a client never sends it |
+
+Three rules for any client rendering this:
+
+- **Absence is the "no estimate" answer, and it is not zero.** No key inside
+  the object is `omitempty`, so a present object always carries all four;
+  absence is expressed one level up, by `load` itself being missing from the
+  job — the same arrangement `tokens` uses. Never render an absent `load` as
+  `0`. **There is exactly ONE spelling of "no estimate" on the wire, and it is
+  the absent key.** A both-zero object never arrives: the clear writes a zero
+  row, `at` is zeroed with it, and the server serves no object for a zero `at`.
+  Both-zero is a STORAGE state only. A half-estimate — one of the two at zero —
+  is a 400 on the way in and likewise never arrives. Both clients nonetheless
+  refuse to draw a badge for either shape, since neither has an ROI and a
+  hand-edited row is the one way one could appear.
+- **roi is DERIVED, never on the wire.** It is `scope / unblock` as a float,
+  computed at render on each client. Storing or serving it would put a third
+  number beside the two it divides, free to drift out of agreement with them —
+  the same reasoning that keeps `webTokens` serving one half of its split and
+  subtracting the other.
+- **The badge is a BLOCKED-card control.** Both clients render it only where a
+  card reads as blocked, and only when the object is present. The question it
+  answers — "is this one worth unblocking right now" — is not one a working,
+  queued, draft, done or archived card poses, and an estimate left over from an
+  earlier block reads as a current fact on a running card.
+
+The band the badge is coloured by is derived from that float, closed-open, and
+is identical in the web CSS and the iOS theme: `hot` at `roi >= 3.0`, `warm`
+over `1.5 ..< 3.0`, `even` over `0.75 ..< 1.5`, `cold` below `0.75`. Badge text
+is `⚡ <roi>× <unblock>→<scope>` with roi to one decimal place (`⚡ 4.0× 2→8`);
+its tooltip / accessibility label is
+`unblock effort <unblock>/10 · next step <scope>/10 · roi <roi>× · estimated <age> ago`,
+with ` — <note>` appended when the note is non-empty.
+
+The **age clause is required**, and it is the only thing either client renders
+`at` for. Without it a stale estimate is indistinguishable from a fresh one on
+exactly the card the feature exists for: zeus estimates, carl answers, the cell
+later dies, the daemon's `health` files the card back under BLOCKED — and with
+zeus gone nothing rewrites the estimate, so the badge keeps describing a
+question answered hours ago. Each client formats the age with its own existing
+relative-time helper; `3h` vs `3 h` between the two boards is acceptable drift,
+the clause and its position are not.
+
+The age also needs a **visible** surface on a client with no hover. On the web
+board the `title` tooltip is enough — a pointer reaches it. iOS has neither
+hover nor a tap target here, and its accessibility label REPLACES the visible
+text rather than supplementing it, so an age living only there would be
+reachable through VoiceOver alone. The app therefore renders it as a small
+muted `<age> ago` label BESIDE the badge; the badge text itself is pinned
+identical across clients and never absorbs it.
 
 ### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
@@ -903,6 +964,75 @@ cell's zeus pane, so the claude's prompt bar matches the board. Delivery is
 watermarked per cell and never reasserted, so a `/color` typed by hand in
 the pane survives; it targets zeus only, never side threads or teammate
 panes (Claude Code refuses `/color` inside a teammate session outright).
+
+### `POST /api/job/load`
+
+Writes one job's triage estimate — the pair the board's ROI badge renders.
+Its own route rather than a `saveform` field for the same two reasons
+`/api/job/color` has one, and one more: it is written on a LIVE cell (zeus
+writes it at the end of every turn, and a blocked job is exactly when it
+matters), `saveform` is a full replace that a client predating the field would
+silently clear, and its writer is zeus via a cell verb rather than a human at
+a form.
+
+Request: `{"slug": string, "unblock": number, "scope": number, "note": string}`.
+
+- `unblock` and `scope` are integers in **1..10 inclusive**, or **both 0** —
+  the clear state, which returns the job to having no estimate at all (the
+  `load` key then disappears from the job on `/api/board`). Zero for only one
+  of the two is a 400: a half-estimate has no ROI. Both keys are **required**,
+  and omitting them is not a clear — a body carrying neither number is 400,
+  not a silent wipe of the estimate it failed to describe.
+- `note` is optional, a one-line rationale, capped at 200 **runes** (not
+  bytes). The server one-lines it — control characters become spaces and runs
+  of whitespace collapse — and truncates rather than refusing an over-long one,
+  landing on 199 runes plus `…`. The numbers are the payload; losing the write
+  over a verbose sentence would be the worse answer.
+- `at` is NOT part of this request — the server stamps it in unix millis at
+  write time, so an estimate can never claim to be fresher than the write that
+  made it. Sending it is a 400, not a silently-ignored key.
+- The body is decoded with **unknown fields rejected**: `slug`, `unblock`,
+  `scope`, `note` and nothing else. A misspelled or nested key is a 400 rather
+  than a request that decodes to "clear everything". This route is stricter
+  than its siblings because it has one writer (`k load`) and neither client
+  posts to it at all.
+
+Response: `{"ok": true}`. The new estimate rides back on the next `/api/board`
+poll (`webJob.load`) — the board stays the single source of truth for job
+state, so there is nothing to echo here. Same convention as `/api/job/color`.
+
+Errors: 400 (bad json; an unrecognized field; either number out of `1..10`; a
+half-estimate; or a body carrying neither number — `unblock`/`scope` absent is
+refused rather than read as a clear, since a clear must be written as an
+explicit `0`/`0`), 404 (no such job, including an empty `slug`), 413 (body over
+1 MiB), 500 (write failed).
+Gated under `--mirror` with the standard plain-text 403. **405 is served by the
+route, not this verb** — `/api/job/load` answers GET and POST, so 405 means a
+method that is neither.
+
+The write deliberately does NOT bump the job's `rev` or `updated_at`: zeus
+writes this at the end of every turn, `updated_at` is what both boards render
+as a card's age, and `rev` is what stales out a concurrent editor save. Bumping
+either for a number that is not part of the job's own contract would reset
+every blocked card's age on every zeus turn. Same treatment as the PR
+watermarks. **Additive, no contract bump.**
+
+### `GET /api/job/load?slug=`
+
+zeus-side read: this job's current estimate, re-read on resume through the
+`kraken load get` cell verb. Not consumed by the iOS app, which reads the
+estimate from `webJob.load` on `/api/board` instead — same arrangement as
+`GET /api/feedback?slug=`.
+
+Response: `{"load": {webJobLoad}}`, or `{"load": null}` when the job has no
+estimate. The key is always present; `null` is the no-estimate answer here,
+where on the board the same answer is the `load` key being absent from the job
+object. The caller asked about one specific job, so "this one has no estimate"
+is worth stating rather than omitting.
+
+Errors: 400 `missing slug` (the query parameter absent or empty), 404 for an
+unknown slug. A GET is a read, so it stays reachable under `--mirror`.
+**Additive, no contract bump.**
 
 ---
 

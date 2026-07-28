@@ -16,6 +16,7 @@ _k() {
         'questions:cell-side verb — read/write a job'"'"'s open doc questions via kraken serve'
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'watchlist:cell-side verb — read/write the dream loop'"'"'s global watchlist via kraken serve'
+        'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
         'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
@@ -138,6 +139,31 @@ _k() {
                 )
                 _describe -t states 'state' states
             fi
+            ;;
+        load)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'get:print the job'"'"'s unblock/scope estimate as JSON'
+                    'set:write the estimate (--unblock and --scope, both 1-10)'
+                    'clear:remove the estimate'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == set ]] && (( CURRENT > 4 )); then
+                # CURRENT > 4, not just the `set` test: word 4 is the <slug>
+                # positional, and offering flags there would suggest a slug is
+                # optional when every op requires one.
+                local -a loadflags
+                loadflags=(
+                    '--unblock:1-10 — effort carl spends to unblock this job'
+                    '--scope:1-10 — size of the claude work that reply unblocks'
+                    '--note:one-line rationale (capped at 200 runes server-side)'
+                )
+                _describe -t flags 'flag' loadflags
+            fi
+            # <slug> completion is intentionally not offered, for the reason
+            # spelled out under questions) above: job identity lives only in
+            # kraken.db, with no cheap store-backed completion source.
             ;;
         mine)
             if (( CURRENT == 3 )); then

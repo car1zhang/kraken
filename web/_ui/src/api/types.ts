@@ -161,6 +161,47 @@ export interface WebTokens {
 }
 
 /**
+ * Zeus' two 1..10 estimates for a BLOCKED job, and the board's whole triage
+ * input: `unblock` is how much of carl's own effort the unblock costs
+ * (reading, deciding, explaining), `scope` is how much claude work that reply
+ * buys. The ratio the badge renders is `scope / unblock`.
+ *
+ * roi is NOT on the wire and never will be — it is derived at render
+ * (`loadROI`, lib/format.ts). Two stored halves can drift out of agreement
+ * with what they divide to; a derived one cannot. Same reasoning as
+ * WebTokens' zeus/subagent split directly above.
+ *
+ * Whenever this object is present both numbers are integers in 1..10 — there is
+ * no zero on the wire in either direction. A CLEAR is a write of `unblock 0,
+ * scope 0`, but it does not arrive as a zeroed object: `jobLoadPost`
+ * (internal/api/jobload.go) stores `store.JobLoad{}` so `at` is 0,
+ * `webJobLoadFrom` returns nil for `at == 0`, and the Go field is a pointer
+ * with omitempty — so the KEY IS DROPPED. A half-estimate (one of the two at 0)
+ * is rejected 400 for the same reason a clear has no ratio.
+ *
+ * `loadROI` still refuses both shapes rather than dividing by them. That is
+ * defensive only — neither can be produced by the current server — and it is
+ * what keeps an `Infinity×` badge off the screen if that ever stops being true.
+ */
+export interface WebJobLoad {
+  /** carl's effort to unblock: 1..10 (see above — a clear drops the key, it does not send 0) */
+  unblock: number;
+  /** size of the claude work that unblock buys: 1..10, same as above */
+  scope: number;
+  /**
+   * One-line rationale; may be "". The server one-lines it (control characters
+   * become spaces, runs of whitespace collapse) and caps it at 200 RUNES —
+   * `core.TruncateOneLine` measures `[]rune`, which is neither a byte count
+   * (equal only for ASCII) nor JS `String.length` in UTF-16 code units (equal
+   * only within the BMP — an emoji is 1 rune but 2 code units). An over-long
+   * note therefore arrives already cut, as 199 runes plus a "…".
+   */
+  note: string;
+  /** unix MILLIS, stamped server-side at write time; > 0 whenever this object is present */
+  at: number;
+}
+
+/**
  * A palette colour name. The RUNTIME list lives in `lib/format.ts`
  * (`JOB_COLORS`), not here: this module is wire TYPES and every other export in
  * it is erasable, so a value would change its category — and one list is the
@@ -228,6 +269,27 @@ export interface WebJob {
   threads?: WebThread[];
   /** Absent means NEVER MEASURED, which is not a measured zero — see WebTokens. */
   tokens?: WebTokens;
+  /**
+   * Present means "estimated, and the estimate still stands". ABSENT is three
+   * different states the wire does not separate, so no client can:
+   *
+   *   - never estimated,
+   *   - estimated and then CLEARED — a clear zeroes `at`, `webJobLoadFrom`
+   *     returns nil for that, and the Go pointer's omitempty drops the key. It
+   *     does NOT arrive as an object with two zeros, so a test like
+   *     `job.load && job.load.unblock === 0` is unreachable forever.
+   *   - ARCHIVED, estimated or not: `archivedWebJob` (internal/api/board.go,
+   *     the helper buildWebBoard's archived loop calls) deliberately never sets
+   *     Load, and the argument is stated there — an archived job cannot be
+   *     blocked, so serving a forward-looking triage number would be a stale
+   *     estimate reading as a current fact. The four columns survive archival
+   *     on the job row, so the key comes back on unarchive.
+   *
+   * That is a weaker guarantee than `tokens` above, which is served for done
+   * and archived jobs too. Optional here, but the object's four inner fields
+   * are not: once the key is present a client reads all four unconditionally.
+   */
+  load?: WebJobLoad;
   /**
    * Why the daemon's last attempt to start this job's cell failed. Set only
    * while the job is QUEUED — a running job has nothing to explain, and a

@@ -41,6 +41,31 @@ type Job struct {
 	// editor's store-mode save paths (api/jobedit.go) whenever the saved
 	// content fails to parse; cleared the moment a later save parses clean.
 	Err string
+	// Load is zeus' triage estimate for this job (schema v13's four
+	// load_* columns), written through SetJobLoad and never through
+	// UpdateJobFields — see both methods' doc comments.
+	Load JobLoad
+}
+
+// JobLoad is one job's triage estimate: how much effort unblocking it costs
+// carl (Unblock) against how much claude work that reply buys (Scope), both
+// 1-10, plus a one-line rationale and the millis stamp of the write. Both
+// zero is the "never estimated" state — a HALF estimate is meaningless
+// (scope/unblock has no value when one side is zero) and is refused by the
+// API layer before it can reach a row.
+//
+// A named struct rather than four loose parameters on SetJobLoad: the four
+// only ever travel together, and a positional (int, int, string, int64) is
+// exactly the shape a caller silently swaps two arguments in.
+//
+// The ratio the board renders is deliberately absent — scope/unblock is
+// derived wherever it is shown, never stored, for the reason schemaV13's
+// doc comment gives.
+type JobLoad struct {
+	Unblock int
+	Scope   int
+	Note    string
+	At      int64 // unix millis; 0 means never estimated
 }
 
 // Archived reports whether the job is in the archive column.
@@ -55,7 +80,9 @@ func (j *Job) Archived() bool { return j.ArchivedAt != 0 }
 var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), ready, solo,
 	COALESCE(model,''), COALESCE(color,''), COALESCE(body,''), state, COALESCE(outcome,''),
 	COALESCE(session,''), COALESCE(teardown,''), run, rev, COALESCE(created_at,0),
-	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,'')`
+	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,''),
+	COALESCE(load_unblock,0), COALESCE(load_scope,0), COALESCE(load_note,''),
+	COALESCE(load_at,0)`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
@@ -65,6 +92,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 		&j.ID, &j.Slug, &j.Repo, &j.Base, &j.Ready, &j.Solo, &j.Model, &j.Color,
 		&j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
+		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
 	)
 	if err != nil {
 		return nil, err
@@ -324,6 +352,48 @@ func updateJobFieldsTx(x execer, id, rev int64, fields map[string]any) (int64, e
 		}
 	}
 	return rev + 1, nil
+}
+
+// SetJobLoad writes job jobID's triage estimate (schema v13's four load_*
+// columns) — a direct UPDATE, deliberately OUTSIDE UpdateJobFields and
+// therefore outside its rev gate: this call does NOT bump `rev` and does NOT
+// stamp `updated_at`, exactly as SetPRWatermark does not, and for the same
+// class of reason.
+//
+// Not bumping updated_at, first: zeus rewrites this estimate at the end of
+// every turn, and updated_at is what the board renders as each card's AGE.
+// Stamping it here would reset every blocked card's age on every zeus turn,
+// so the one column carl uses to see which job has been sitting longest would
+// track how recently an agent typed rather than how long the job has waited.
+//
+// Not bumping rev, second: rev is the editor's optimistic lock
+// (UpdateJobFields), so bumping it would 409 an open job-form save over a
+// number that form neither shows nor sends. The estimate is not part of the
+// job's authored contract — it is bookkeeping about the job, the same
+// category as a PR watermark.
+//
+// A zero-row update is an ERROR here rather than SetPRWatermark's no-op. Those
+// are different situations: a watermark's URL can legitimately vanish between
+// its caller's load and the write, whereas a job id that matches no row means
+// the caller was addressing something that does not exist — and this write's
+// caller is a CLI verb whose whole output is a confirmation line, so a silent
+// no-op would print success for a write that never happened.
+func (s *Store) SetJobLoad(jobID int64, l JobLoad) error {
+	res, err := s.db.Exec(
+		`UPDATE jobs SET load_unblock = ?, load_scope = ?, load_note = ?, load_at = ? WHERE id = ?`,
+		l.Unblock, l.Scope, l.Note, l.At, jobID,
+	)
+	if err != nil {
+		return fmt.Errorf("set job load for job %d: %w", jobID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set job load for job %d: %w", jobID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("set job load for job %d: %w", jobID, ErrNotFound)
+	}
+	return nil
 }
 
 // CreateArchivedJob upserts one archived-job row keyed on ArchivedName — the
