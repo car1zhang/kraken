@@ -1,7 +1,15 @@
-// The board's markdown renderer — a VERBATIM port of web/static/app.js's
-// esc()/inlineMD()/renderMD() (app.js:90, :1195, :1203).
+// The board's markdown renderer — a port of web/static/app.js's
+// esc()/inlineMD()/renderMD() (app.js:90, :1195, :1203), verbatim except for
+// paragraph folding (see renderMD) and the two inline rules it forces (see
+// inlineMD).
 //
-// Verbatim is a decision, not laziness (artifacts/53-port-checklist.md, Q7).
+// app.js is no longer served: web/embed.go embeds `_ui/dist` and serve.go's
+// only file server is `fs.Sub(webAssets, "_ui/dist")`. It survives on disk as
+// the historical source and for the Go port guards, so the divergences below
+// are NOT a parity gap to close — app.js is deliberately not updated, and
+// "restoring parity" here would reintroduce the bug carl reported.
+//
+// Verbatim was a decision, not laziness (artifacts/53-port-checklist.md, Q7).
 // Two reasons:
 //
 //  1. SAFETY BY CONSTRUCTION. Everything this renders is agent-authored — a
@@ -16,7 +24,10 @@
 //     vanilla board's, and its `.md` rules are written against exactly this
 //     element set (`<div class="md-table">` wrapping the table, inline
 //     `style="text-align:…"` per cell, `<pre><code>` for fences). A different
-//     emitter is a different screenshot.
+//     emitter is a different screenshot. The divergences below change how
+//     source lines GROUP into elements and which emphasis pairings are
+//     accepted, never WHICH elements are emitted, so every `.md` rule still
+//     applies to exactly the same element set.
 //
 // The subset: fenced code, `#`–`####` headings, ul/ol, blockquote, GFM pipe
 // tables with alignment, inline code/bold/em, and `https?:` links only.
@@ -37,27 +48,117 @@ export const esc = (s: unknown): string =>
   );
 
 /**
+ * A stand-in for a lifted-out code span. NUL can never appear in the input:
+ * these strings come from `.md` files and JSON wire fields, and even if one did
+ * the failure would be a mis-restored code span, never an escape hole — the
+ * substitution happens after esc() and puts back only text esc() already saw.
+ */
+const CODE_HOLE = String.fromCharCode(0);
+
+/**
  * Inline transforms, applied to ALREADY-ESCAPED text (app.js:1195).
  *
  * The link rule only accepts an `https?:` target: job files and specs are
  * hand-editable and agent-written, and esc() stops an attribute breakout but
  * not a `javascript:` scheme.
+ *
+ * Two divergences from app.js, both forced by renderMD's paragraph fold — which
+ * hands this function a whole paragraph where app.js handed it one line, so a
+ * lone `*` now has the rest of the paragraph to find a partner in:
+ *
+ *  1. CODE SPANS ARE LIFTED OUT before the emphasis rules run, and put back
+ *     after. app.js emitted `<code>` first and then let the emphasis regexes
+ *     scan straight through it, so two `` `*Job` `` spans in one paragraph
+ *     paired their asterisks into an `<em>` that opened inside one `<code>` and
+ *     closed inside the other. Per line that needed both spans on one line;
+ *     folded, one per line is enough, and `*Job`/`*.jsonl` in hard-wrapped
+ *     prose is ordinary in this repo.
+ *  2. THE EMPHASIS RULES REQUIRE NON-SPACE ON THE INNER EDGE (CommonMark's
+ *     left/right-flanking rule). Without it `It scans *.ts files` + `and *.tsx
+ *     files` folded into one paragraph renders `<em>.ts files under src and </em>`
+ *     — the asterisks vanish and half the sentence goes italic.
+ *
+ * Both are strictly narrowing: they refuse pairings, never create one. `**two\n
+ * words**` still bolds, because a soft break inside the span is untouched.
  */
 export function inlineMD(s: string): string {
-  return esc(s)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+  const code: string[] = [];
+  const held = esc(s).replace(
+    /`([^`]+)`/g,
+    (_m, c: string) => CODE_HOLE + (code.push(c) - 1) + CODE_HOLE,
+  );
+  return held
+    .replace(/\*\*(?=\S)([^*]+?)(?<=\S)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(?=\S)([^*]+?)(?<=\S)\*/g, "<em>$1</em>")
     .replace(
       /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
       '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
+    )
+    .replace(
+      new RegExp(CODE_HOLE + "(\\d+)" + CODE_HOLE, "g"),
+      (_m, i: string) => `<code>${code[Number(i)]}</code>`,
     );
+}
+
+/**
+ * A GFM pipe table's separator row (`| --- | :--: | ---: |`). Hoisted because
+ * two places have to agree on it: the branch that STARTS a table, and the
+ * paragraph fold that has to stop before one.
+ */
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/**
+ * Does this line open a block that is not a paragraph? `next` is the line after
+ * it, needed only for the table case — a table is a line containing `|`
+ * followed by a separator row, so the lookahead is what tells a table header
+ * from prose with a pipe in it.
+ *
+ * This exists so the paragraph fold below stops at exactly the lines the main
+ * loop would have claimed, rather than swallowing the heading after a
+ * paragraph.
+ *
+ * Five of the six predicates are duplicated from the main loop's own branches
+ * (the table one is shared as TABLE_SEP because it is the only non-obvious
+ * one). Change a branch, change its twin here: a mismatch makes the fold
+ * swallow a block instead of stopping at it, and there is no test at the seam
+ * that would fail — the two are only ever compared by reading them.
+ */
+function startsBlock(line: string, next: string | undefined): boolean {
+  return (
+    line.startsWith("```") ||
+    /^#{1,4}\s+/.test(line) ||
+    /^\s*[-*]\s+/.test(line) ||
+    /^\s*\d+[.)]\s+/.test(line) ||
+    line.startsWith(">") ||
+    line.trim() === "" ||
+    (line.includes("|") && next !== undefined && TABLE_SEP.test(next))
+  );
 }
 
 /**
  * Block-level render (app.js:1203). Returns an HTML string, rendered by the
  * callers through `dangerouslySetInnerHTML` — see the header comment for why
  * that is the faithful port rather than a smell.
+ *
+ * ONE deliberate divergence from app.js: consecutive prose lines fold into a
+ * single `<p>`, so a paragraph break needs a BLANK line. app.js emitted one
+ * `<p>` per source line, which meant a hard-wrapped paragraph — how most agents
+ * write markdown, and how every editor soft-wraps it back — rendered as a stack
+ * of one-line paragraphs with a margin between each. The rule is CommonMark's:
+ * a single newline is a soft break (whitespace), a blank line ends the block.
+ *
+ * The lines are joined RAW and passed to inlineMD once, rather than rendered
+ * per line and concatenated, so emphasis and code spans survive a soft break
+ * (`**two\nwords**` is bold). That is also what forces inlineMD's two narrowing
+ * rules — read them there before widening anything here.
+ *
+ * None of the four containers this output lands in sets `white-space` — `.md`
+ * (ArtifactOverlay, DreamView), `.steer-detail` and `.steer-spec-body`
+ * (SteerOverlay), `#thread-convo .blk-body` (ThreadOverlay) — so the joining
+ * newline collapses the way HTML already collapses whitespace. Setting
+ * `white-space: pre-wrap` on any of them would silently restore
+ * one-line-per-source-line rendering; `.detail` on the card does exactly that
+ * to the same zeus text in its clamped form, so the trap is one copy away.
  */
 export function renderMD(src: string): string {
   const out: string[] = [];
@@ -115,11 +216,7 @@ export function renderMD(src: string): string {
     // separator row (| --- | :--: | ---: |). A stray | in prose is left alone
     // because it requires that separator line to trigger.
     const next = lines[i + 1];
-    if (
-      line.includes("|") &&
-      next !== undefined &&
-      /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(next)
-    ) {
+    if (line.includes("|") && next !== undefined && TABLE_SEP.test(next)) {
       closeList();
       const splitRow = (r: string) =>
         r
@@ -165,8 +262,15 @@ export function renderMD(src: string): string {
       continue;
     }
     closeList();
-    out.push(`<p>${inlineMD(line)}</p>`);
-    i++;
+    // Fold every following prose line into this paragraph. The first line is
+    // known not to start a block (every branch above already declined it), so
+    // the buffer is never empty and `i` always advances.
+    const para: string[] = [];
+    while (i < lines.length && !startsBlock(lines[i] ?? "", lines[i + 1])) {
+      para.push(lines[i] ?? "");
+      i++;
+    }
+    out.push(`<p>${inlineMD(para.join("\n"))}</p>`);
   }
   closeList();
   return out.join("\n");
