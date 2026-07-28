@@ -258,6 +258,13 @@ export function App() {
         onNavigate={(url, name) =>
           setArtifact((a) => (a ? { ...a, url, name } : a))
         }
+        // A question asked from the viewer branched a thread: hand the reader
+        // over to it. This CLOSES rather than stacking — see onAskBranched's
+        // own docblock for why it cannot be left open underneath.
+        onAskBranched={(slug, tid) => {
+          setArtifact(null);
+          setThread({ slug, tid });
+        }}
         onClose={() => setArtifact(null)}
         mutate={mutate}
       />
