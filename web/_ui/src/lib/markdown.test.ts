@@ -74,6 +74,131 @@ describe("renderMD blocks", () => {
   });
 });
 
+describe("renderMD paragraph folding", () => {
+  // A single newline is a SOFT break: agents hard-wrap their prose, and one
+  // <p> per source line rendered that as a stack of one-line paragraphs with a
+  // margin between each. A blank line is what ends a paragraph.
+  it("folds hard-wrapped lines into one paragraph", () => {
+    expect(renderMD("one line\nand its continuation")).toBe(
+      "<p>one line\nand its continuation</p>",
+    );
+  });
+
+  it("takes a BLANK line, and only a blank line, as the paragraph break", () => {
+    expect(renderMD("first\n\nsecond")).toBe("<p>first</p>\n<p>second</p>");
+    // whitespace-only counts as blank, as it did before
+    expect(renderMD("first\n   \nsecond")).toBe("<p>first</p>\n<p>second</p>");
+  });
+
+  it("stops the fold at every block that follows without a blank line", () => {
+    expect(renderMD("prose\n# head")).toBe("<p>prose</p>\n<h1>head</h1>");
+    expect(renderMD("prose\n- item")).toBe(
+      "<p>prose</p>\n<ul>\n<li>item</li>\n</ul>",
+    );
+    expect(renderMD("prose\n1. item")).toBe(
+      "<p>prose</p>\n<ol>\n<li>item</li>\n</ol>",
+    );
+    expect(renderMD("prose\n> quoted")).toBe(
+      "<p>prose</p>\n<blockquote>quoted</blockquote>",
+    );
+    expect(renderMD("prose\n```\nx\n```")).toBe(
+      "<p>prose</p>\n<pre><code>x</code></pre>",
+    );
+  });
+
+  it("stops the fold before a table header, which needs the lookahead", () => {
+    // "| a | b |" is only a table because the NEXT line is a separator, so the
+    // fold has to look one line further than the line it is deciding about
+    const html = renderMD(
+      ["prose", "| a | b |", "| - | - |", "| 1 | 2 |"].join("\n"),
+    );
+    expect(html.startsWith("<p>prose</p>\n")).toBe(true);
+    expect(html).toContain('<div class="md-table">');
+    expect(html).not.toContain("<p>prose\n| a | b |</p>");
+  });
+
+  it("carries emphasis across a soft break", () => {
+    // the lines are joined RAW and inlined once, so a bold span survives a wrap
+    expect(renderMD("**two\nwords**")).toBe(
+      "<p><strong>two\nwords</strong></p>",
+    );
+  });
+
+  it("still escapes a payload split across a soft break", () => {
+    // the tag itself straddles the join, so this can only pass if esc() runs
+    // AFTER the fold concatenates
+    const html = renderMD("safe\n<scr\nipt>alert(1)</scr\nipt>");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;scr\nipt&gt;");
+  });
+
+  it("emits no empty paragraph and never stalls on degenerate input", () => {
+    expect(renderMD("")).toBe("");
+    expect(renderMD("\n")).toBe("");
+    expect(renderMD("\n  \n\t\n")).toBe("");
+  });
+
+  it("does not leak a trailing newline into the paragraph", () => {
+    expect(renderMD("prose\n")).toBe("<p>prose</p>");
+    expect(renderMD("prose\n\n")).toBe("<p>prose</p>");
+  });
+
+  it("stops at an asterisk bullet, the marker it shares with emphasis", () => {
+    expect(renderMD("prose\n* item")).toBe(
+      "<p>prose</p>\n<ul>\n<li>item</li>\n</ul>",
+    );
+    expect(renderMD("prose\n1) item")).toBe(
+      "<p>prose</p>\n<ol>\n<li>item</li>\n</ol>",
+    );
+  });
+
+  it("keeps a pipe line as prose when no line follows it", () => {
+    // the table branch reads lines[i+1]; at the last line that is undefined,
+    // and the fold has to survive it rather than start a table
+    expect(renderMD("prose\n| a | b |")).toBe("<p>prose\n| a | b |</p>");
+  });
+
+  it("terminates on an unclosed fence after prose", () => {
+    expect(renderMD("prose\n```\nx")).toBe(
+      "<p>prose</p>\n<pre><code>x</code></pre>",
+    );
+  });
+
+  it("still breaks the paragraph on a CRLF blank line", () => {
+    expect(renderMD("first\r\n\r\nsecond")).toContain("<p>second</p>");
+  });
+});
+
+describe("inlineMD pairings the fold would otherwise create", () => {
+  // renderMD hands inlineMD a whole PARAGRAPH now, so a lone `*` has the rest
+  // of the paragraph to find a partner in. Both rules below refuse pairings;
+  // neither creates one.
+  it("leaves a glob literal when its partner is on another line", () => {
+    expect(
+      renderMD("It scans *.ts files under src\nand *.tsx files too"),
+    ).toBe("<p>It scans *.ts files under src\nand *.tsx files too</p>");
+  });
+
+  it("never opens emphasis inside one code span and closes it in another", () => {
+    expect(renderMD("a `*Job` here\nand a `*Job` there")).toBe(
+      "<p>a <code>*Job</code> here\nand a <code>*Job</code> there</p>",
+    );
+  });
+
+  it("leaves an asterisk inside a code span alone", () => {
+    expect(inlineMD("logs at `~/.kraken/logs/*.jsonl` here")).toBe(
+      "logs at <code>~/.kraken/logs/*.jsonl</code> here",
+    );
+  });
+
+  it("still emphasises when both inner edges are non-space", () => {
+    expect(inlineMD("*emphasis* start")).toBe("<em>emphasis</em> start");
+    expect(inlineMD("**a `b` c**")).toBe(
+      "<strong>a <code>b</code> c</strong>",
+    );
+  });
+});
+
 describe("renderMD GFM tables", () => {
   it("honours per-column alignment from the separator row", () => {
     const html = renderMD(
@@ -98,12 +223,14 @@ describe("renderMD GFM tables", () => {
     // like "the a|b split" is safe
     const html = renderMD("the a|b split\nand more prose");
     expect(html).not.toContain("md-table");
-    expect(html).toBe("<p>the a|b split</p>\n<p>and more prose</p>");
+    // and the two lines are ONE paragraph — see the paragraph-folding block
+    expect(html).toBe("<p>the a|b split\nand more prose</p>");
   });
 
   it("does NOT treat a following dashed rule as a separator unless it lines up", () => {
     const html = renderMD("a | b\nnot a separator");
     expect(html).not.toContain("md-table");
+    expect(html).toBe("<p>a | b\nnot a separator</p>");
   });
 });
 
