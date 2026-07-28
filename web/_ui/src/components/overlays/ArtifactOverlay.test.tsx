@@ -590,3 +590,64 @@ describe("re-syncing the sequence under an open viewer", () => {
     expect(title()).toBe("j/b.md");
   });
 });
+
+/**
+ * The board hands this overlay a freshly parsed `job` on every 3s poll, so
+ * the overlay re-renders on every tick whether or not anything it shows has
+ * changed. What must NOT follow is a re-render of the rendered markdown into
+ * the DOM: `dangerouslySetInnerHTML` is diffed by the identity of the
+ * `{__html}` value, not by the HTML string, so an object literal written
+ * inline in JSX made React tear the whole body down and re-parse it every
+ * tick — taking the reader's text selection with it and leaving the scroll
+ * offset to whatever the browser re-derived for a subtree that no longer
+ * existed. ThreadOverlay already guards against exactly this imperatively;
+ * these two pin the declarative fix (hooks/useRenderedMD.ts).
+ */
+describe("the markdown body survives a board poll", () => {
+  // A tick that changes NOTHING the viewer renders, only the identity of the
+  // job object — which is what a 3s board poll is for a settled job.
+  function Tick({ names, start }: { names: string[]; start: string }) {
+    const [n, setN] = useState(0);
+    return (
+      <>
+        <button onClick={() => setN(n + 1)}>tick {n}</button>
+        {/* job() builds a fresh WebJob (and fresh artifact objects) per render,
+            exactly as a poll's freshly parsed payload does */}
+        <Harness job={job(names)} start={start} />
+      </>
+    );
+  }
+
+  it("keeps the very same DOM nodes when the tick changed nothing it renders", async () => {
+    const user = userEvent.setup();
+    render(<Tick names={["a.md", "b.md"]} start="a.md" />);
+    const body = await waitFor(() => {
+      const el = document.getElementById("panel-body");
+      if (!el?.firstElementChild) throw new Error("body not rendered yet");
+      return el;
+    });
+    const before = body.firstElementChild;
+
+    await user.click(screen.getByText(/^tick/)); // a tick: new job object
+
+    // the container is the same element AND its children were never replaced
+    expect(document.getElementById("panel-body")).toBe(body);
+    expect(body.firstElementChild).toBe(before);
+  });
+
+  it("still repaints when the artifact itself changes", async () => {
+    const user = userEvent.setup();
+    render(<Tick names={["a.md", "b.md"]} start="a.md" />);
+    const first = await waitFor(() => {
+      const t = document.getElementById("panel-body")?.textContent ?? "";
+      if (!t.includes("a.md")) throw new Error("not loaded yet");
+      return t;
+    });
+    await user.click(next()); // step to b.md
+    await waitFor(() => {
+      const t = document.getElementById("panel-body")?.textContent ?? "";
+      expect(t).not.toBe(first);
+      expect(t).toContain("b.md");
+    });
+  });
+});

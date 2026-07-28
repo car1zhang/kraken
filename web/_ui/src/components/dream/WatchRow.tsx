@@ -4,6 +4,7 @@
 import { useRef, useState } from "react";
 
 import type { WebWatchItem } from "../../api/types.ts";
+import { useHTML } from "../../hooks/useRenderedMD.ts";
 import { inlineMD } from "../../lib/markdown.ts";
 import {
   dreamDay,
@@ -102,6 +103,18 @@ export function WatchRow({ item: w, onVerdict }: WatchRowProps) {
     }
   };
 
+  // The watchlist has its own 3s poll and re-renders every row with a fresh
+  // `w` on each tick, so these three inline-MD nodes were being torn down and
+  // re-parsed every 3s — the same identity-diffed innerHTML bug the artifact
+  // body had, and the same user-visible symptom: a selection inside an
+  // observation cannot survive one tick. Hoisted above the branches below
+  // because `wl-said` renders conditionally and a hook cannot.
+  const obsHTML = useHTML(inlineMD(w.observation ?? ""));
+  const fixHTML = useHTML("→ " + inlineMD(w.suggested_fix ?? ""));
+  const saidHTML = useHTML(
+    '<span class="who">you said</span>' + inlineMD(server),
+  );
+
   const btn = (kind: "fine" | "fix", label: string, title: string) => (
     <button
       className={`wl-btn ${kind}${verdict === kind ? " on" : ""}`}
@@ -125,10 +138,7 @@ export function WatchRow({ item: w, onVerdict }: WatchRowProps) {
         {/* Every string on this row is AGENT-authored, so it goes through
             inlineMD, which escapes first and transforms the escaped text —
             see lib/markdown.ts for why that is the whole safety argument. */}
-        <span
-          className="obs"
-          dangerouslySetInnerHTML={{ __html: inlineMD(w.observation ?? "") }}
-        />
+        <span className="obs" dangerouslySetInnerHTML={obsHTML} />
       </div>
       <div className="wl-meta">
         {w.class ? <span className="cls">{w.class}</span> : null}
@@ -146,10 +156,7 @@ export function WatchRow({ item: w, onVerdict }: WatchRowProps) {
       </div>
       {w.suggested_fix ? (
         // one div, arrow and text in the same node — the vanilla DOM exactly
-        <div
-          className="wl-fix"
-          dangerouslySetInnerHTML={{ __html: "→ " + inlineMD(w.suggested_fix) }}
-        />
+        <div className="wl-fix" dangerouslySetInnerHTML={fixHTML} />
       ) : null}
       <div className="wl-ctrl">
         {btn(
@@ -168,12 +175,7 @@ export function WatchRow({ item: w, onVerdict }: WatchRowProps) {
       </div>
       {settled ? (
         server ? (
-          <div
-            className="wl-said"
-            dangerouslySetInnerHTML={{
-              __html: '<span class="who">you said</span>' + inlineMD(server),
-            }}
-          />
+          <div className="wl-said" dangerouslySetInnerHTML={saidHTML} />
         ) : null
       ) : (
         <textarea
