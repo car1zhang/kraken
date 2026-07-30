@@ -6,8 +6,19 @@ import { SortableColumn, useColumnDrop, useColumnJobs } from "./DragProvider.tsx
 
 export interface ColumnProps {
   col: ColumnKey;
-  /** This column's jobs in SERVER order; drag ordering is applied here. */
+  /**
+   * The column's jobs to RENDER, in server order — already narrowed by the
+   * search when one is running, which is why `total` exists. Drag ordering is
+   * applied here.
+   */
   jobs: WebJob[];
+  /**
+   * How many jobs the column holds BEFORE the search narrowed it. Present only
+   * while a query is active, and its presence is what switches the head count
+   * from `3` to `1/3` — so an unsearched board renders the bare count it
+   * always has.
+   */
+  total?: number;
   renderCard(job: WebJob): ReactNode;
   /** The DONE column's archive drawer; nothing anywhere else. */
   footer?: ReactNode;
@@ -27,7 +38,7 @@ export interface ColumnProps {
  * always carries the "+ NEW JOB" button, so a `·` under it would read as a
  * second, broken row.
  */
-export function BoardColumn({ col, jobs, renderCard, footer, onNewJob }: ColumnProps) {
+export function BoardColumn({ col, jobs, total, renderCard, footer, onNewJob }: ColumnProps) {
   const ordered = useColumnJobs(col, jobs);
   const drop = useColumnDrop(col);
   return (
@@ -38,7 +49,9 @@ export function BoardColumn({ col, jobs, renderCard, footer, onNewJob }: ColumnP
     >
       <div className="col-head">
         <b>{col.toUpperCase()}</b>
-        <span className="n">{ordered.length}</span>
+        <span className="n">
+          {total === undefined ? ordered.length : `${ordered.length}/${total}`}
+        </span>
       </div>
       <div className="col-cards">
         {col === "draft" ? (

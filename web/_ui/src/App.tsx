@@ -20,6 +20,7 @@ import { showToast, Toast } from "./components/overlays/Toast.tsx";
 import { UsageOverlay } from "./components/overlays/UsageOverlay.tsx";
 import { useBoard } from "./hooks/useBoard.ts";
 import { useHashRoute } from "./hooks/useHashRoute.ts";
+import { useJobSearch } from "./hooks/useJobSearch.ts";
 import { useLocalStorageSet } from "./hooks/useLocalStorage.ts";
 import { usePoll } from "./hooks/usePoll.ts";
 import { columnFor } from "./lib/format.ts";
@@ -40,10 +41,18 @@ const USAGE_POLL_MS = 60000;
 /**
  * The whole board, wired together.
  *
- * This file owns exactly two things and deliberately nothing else: WHICH
- * overlay is open (one piece of state per overlay, never a stack), and the
- * callbacks that let a card or a drop reach one. Every component below takes
- * props and holds no global state — there is no context provider for app
+ * What lives here is what more than one child needs, and nothing else: WHICH
+ * overlay is open (one piece of state per overlay, never a stack), the
+ * callbacks that let a card or a drop reach one, the board SEARCH (DragProvider
+ * and BoardView need the same instance), and the usage poll (the chrome and its
+ * overlay). Each of those STATE pieces carries its own note below naming the
+ * surfaces that forced it up here; the callbacks are not state and carry none.
+ * The `kraken-expanded-artifacts` set below is NOT in that list: it is dead —
+ * every file still DECLARING the prop marks it `@deprecated` (BoardView,
+ * JobCard, ArchivedCard), and all of them are optional, so it is kept only so
+ * App's own call sites below still compile. Delete it, those call sites, and
+ * the three props together — nothing downstream needs it. Every component below
+ * takes props and holds no global state — there is no context provider for app
  * state, no store, and no singleton beyond the toast emitter.
  *
  * Views are HIDDEN rather than unmounted, matching the vanilla board: the log
@@ -54,10 +63,14 @@ export function App() {
   const board = useBoard();
   const [view, navigate] = useHashRoute();
 
-  // Artifact-chip expansion is hoisted here rather than owned by BoardView
-  // because the steer modal renders the same chip row for the same job; if
-  // each surface kept its own set, expanding "+3 more" on a card and then
-  // opening that job would show it collapsed again.
+  // DEAD, kept only so App's own call sites below still compile. This used to
+  // be hoisted because the card and the steer modal shared one "+3 more"
+  // toggle, but band 2 carries a bare artifact COUNT now, so nothing reads it:
+  // BoardView.tsx and JobCard.tsx accept the prop, mark it `@deprecated` and
+  // drop it on the floor, ArchivedCard.tsx declares it and is never even passed
+  // one, and the steer modal never receives it at all. Every one of those props
+  // is optional, so deleting this and its two call sites leaves all three
+  // compiling untouched.
   const [expandedKeys, toggleExpanded] = useLocalStorageSet(
     "kraken-expanded-artifacts",
   );
@@ -66,6 +79,18 @@ export function App() {
     [expandedKeys, toggleExpanded],
   );
 
+  // The board search lives HERE rather than inside BoardView because two
+  // children need one instance of it: BoardView renders the filtered lists,
+  // and DragProvider — which wraps the board — needs the same instance's
+  // `visibleKeys` to know where "the end of the column" is for a drop on empty
+  // space. Two calls would be two query states, and the drag layer would read
+  // the one nobody typed into. `board` itself is still passed to DragProvider
+  // WHOLE: search narrows the render, never the model a reorder posts.
+  const search = useJobSearch(board);
+
+  // One poll, two readers: the chrome's usage corner and the overlay it opens
+  // (which also takes `refetch`, so its refresh button re-uses this poll rather
+  // than starting a second one).
   const usage = usePoll<WebUsage>((signal) => fetchUsage(signal), USAGE_POLL_MS);
 
   // ------------------------------------------------------------- overlays
@@ -94,6 +119,18 @@ export function App() {
     null,
   );
   const [usageOpen, setUsageOpen] = useState(false);
+
+  // Is anything modal open? The board's search bar is the only reader: cmd+K
+  // focuses its input from anywhere, and must not pull focus out of a composer
+  // carl is mid-sentence in. Derived here because this file is the one place
+  // that knows about every overlay — the alternative was BoardBar asking the
+  // DOM, which would tie a keyboard shortcut to another slice's markup.
+  const overlayOpen =
+    steer !== null ||
+    editor !== null ||
+    artifact !== null ||
+    thread !== null ||
+    usageOpen;
 
   /**
    * The one place the board-refresh policy lives (see Overlay.tsx's Mutate).
@@ -178,6 +215,7 @@ export function App() {
         board={board}
         onOpenSteer={openSteer}
         onToast={showToast}
+        visibleKeys={search.active ? search.visibleKeys : undefined}
         renderOverlay={(job) =>
           job ? (
             <JobCard
@@ -190,6 +228,12 @@ export function App() {
               // health-flagged `working` cell that bucketJobs puts in BLOCKED.
               col={columnFor(job.health ? "blocked" : job.state)}
               actions={actions}
+              // The search decoration travels with the card, for the same
+              // parity reason: a text-matched card carries a marker line and
+              // marked words, and a ghost without them would change shape and
+              // lose a line the instant it lifts off the column.
+              matchReason={search.reasonByKey.get(jobKey(job))}
+              matchTerms={search.terms}
               expanded={expandedKeys.has(jobKey(job))}
               onToggleExpanded={toggleExpanded}
             />
@@ -199,7 +243,9 @@ export function App() {
         <BoardView
           board={board}
           actions={actions}
+          search={search}
           hidden={view !== "board"}
+          overlayOpen={overlayOpen}
           expanded={expanded}
         />
       </DragProvider>

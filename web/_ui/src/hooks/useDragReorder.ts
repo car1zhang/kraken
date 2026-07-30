@@ -184,6 +184,22 @@ export interface DragReorderOptions {
   ) => void;
   /** Transient bottom-center notice. Only a reverted reorder uses it. */
   onToast?: (message: string) => void;
+  /**
+   * The jobKeys the board is currently RENDERING, when a search is narrowing
+   * it; undefined means every card is on screen. It is a set of ids and never
+   * a column: the reorder body is still built from the whole `board.byColumn`,
+   * because posting the visible subset would move every hidden card to the top
+   * of its column (`store.SetBoardColumn` stores exactly what it is sent and
+   * `jobs.ApplyColumnOrder` puts absent members first).
+   *
+   * The one thing it changes is where "the end" is. A drop on the column BODY
+   * lands the card in the last slot, and under a filter the last slot of the
+   * whole column is not the place the pointer is — it is below cards that are
+   * not on screen. Without this, dropping into the space under the last
+   * visible card moves it past hidden cards, and the rendered order is
+   * identical before and after: a write with nothing to show for it.
+   */
+  visibleKeys?: ReadonlySet<string>;
 }
 
 export interface DragReorderModel {
@@ -210,6 +226,7 @@ export function useDragReorder({
   board,
   onOpenSteer,
   onToast,
+  visibleKeys,
 }: DragReorderOptions): DragReorderModel {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [from, setFrom] = useState<Column | null>(null);
@@ -329,15 +346,44 @@ export function useDragReorder({
     [resolveOver],
   );
 
+  /**
+   * The index, in the WHOLE column, of the last card the board is rendering.
+   * `ordered.length - 1` when nothing is filtered — and also when a filter is
+   * running but somehow hides every card in this column, which cannot happen
+   * from a real drag: the card in the air was visible enough to grab.
+   */
+  const lastVisibleIndex = useCallback(
+    (ordered: WebJob[]): number => {
+      if (!visibleKeys) return ordered.length - 1;
+      for (let i = ordered.length - 1; i >= 0; i--) {
+        if (visibleKeys.has(jobKey(ordered[i]!))) return i;
+      }
+      return ordered.length - 1;
+    },
+    [visibleKeys],
+  );
+
   const commitReorder = useCallback(
     async (column: Column, key: string, overId: UniqueIdentifier | undefined) => {
       const ordered = orderJobs(column, byColumn[column]);
       const oldIdx = ordered.findIndex((j) => jobKey(j) === key);
       // Dropped on the column's own body rather than on a card: the slot is
-      // the end of the list, which is where the pointer necessarily is.
+      // the end of the list, which is where the pointer necessarily is — and
+      // under a filter "the end" is the last card ON SCREEN, not the last card
+      // in the column. With every card visible the two are the same index and
+      // this is the path it has always been.
+      //
+      // Clamped at oldIdx so a drop at the end can only ever move a card DOWN.
+      // `visibleKeys` is a snapshot of the CURRENT render while the drag began
+      // against an earlier one — nothing in the search bar's cmd+K handler
+      // asks whether a card is in the air — and a set that no longer holds the
+      // dragged card would otherwise report a last-visible index ABOVE it,
+      // sending a "put this at the end" gesture to the TOP of the column. The
+      // clamp makes that structural rather than an argument about which render
+      // produced the set; equal indices then take the no-op skip below.
       const newIdx =
         parseColumnDropId(overId) !== null
-          ? ordered.length - 1
+          ? Math.max(oldIdx, lastVisibleIndex(ordered))
           : ordered.findIndex((j) => jobKey(j) === String(overId));
       if (oldIdx < 0 || newIdx < 0) {
         await refetch();
@@ -388,7 +434,7 @@ export function useDragReorder({
         await refetch();
       }
     },
-    [byColumn, mutate, onToast, orderJobs, refetch],
+    [byColumn, lastVisibleIndex, mutate, onToast, orderJobs, refetch],
   );
 
   const onDragEnd = useCallback(

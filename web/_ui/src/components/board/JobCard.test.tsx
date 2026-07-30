@@ -67,6 +67,7 @@ const BAND_OF: Array<[string, number]> = [
   ["err", 3],
   ["last-sent", 3],
   ["detail", 3],
+  ["match-why", 3],
   ["wakeup-row", 3],
   ["wakeup-reason", 3],
   ["question", 4],
@@ -163,6 +164,77 @@ describe("the six bands", () => {
   it("offers reactivate on a done (or cell-gone) job that allows it", () => {
     const { card } = renderCard(job({ state: "done", reactivatable: true }));
     expect(card.querySelector(".card-actions .reactivate")).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The search-match marker.
+//
+// A card kept by its NAME needs no explanation. A card kept by its STATUS TEXT
+// has a name with nothing to do with what was typed, so without a marker it
+// reads as the filter being broken — and the marker goes in band 3 because it
+// is a fact about right now, not part of the job's inventory.
+// ---------------------------------------------------------------------------
+
+describe("the search-match marker", () => {
+  const SEARCHED = job({
+    state: "done",
+    slug: "dream-2026-07-29",
+    detail: "research pass over yesterday's transcripts",
+  });
+
+  const renderMatched = (
+    matchReason?: "name" | "text",
+    matchTerms: readonly string[] = ["search"],
+  ) => {
+    const { container } = render(
+      <JobCard
+        job={SEARCHED}
+        col="done"
+        actions={stubActions()}
+        matchReason={matchReason}
+        matchTerms={matchTerms}
+      />,
+    );
+    return container.querySelector(".card")!;
+  };
+
+  it("renders nothing at all with no query running", () => {
+    const card = renderMatched(undefined, []);
+    expect(card.querySelector(".match-why")).toBeNull();
+    expect(card.querySelector("mark")).toBeNull();
+    expect(card.querySelector(".detail")).toHaveTextContent("research pass");
+  });
+
+  it("renders nothing for a card the query matched by NAME", () => {
+    const card = renderMatched("name");
+    expect(card.querySelector(".match-why")).toBeNull();
+    expect(card.querySelector("mark")).toBeNull();
+  });
+
+  it("labels a text match and marks the words that made it", () => {
+    const card = renderMatched("text");
+    expect(card.querySelector(".match-why")).toHaveTextContent("matched in status text");
+    expect(card.querySelector(".detail mark")).toHaveTextContent("search");
+    // the line is otherwise intact — marking splits it, it does not rewrite it
+    expect(card.querySelector(".detail")).toHaveTextContent(
+      "research pass over yesterday's transcripts",
+    );
+  });
+
+  it("keeps the marker in band 3, with the bands still in order", () => {
+    const card = renderMatched("text");
+    const seen = bands(card);
+    expect(seen).toEqual([...seen].sort((a, b) => a - b));
+    const marker = card.querySelector(".match-why")!;
+    // a DIRECT child of the card root, like every other band member
+    expect(marker.parentElement).toBe(card);
+    // and it follows the lines it is about, rather than leading them: the
+    // matched words are read first, then what they mean
+    const kids = [...card.children];
+    expect(kids.indexOf(marker)).toBeGreaterThan(
+      kids.indexOf(card.querySelector(".detail")!),
+    );
   });
 });
 

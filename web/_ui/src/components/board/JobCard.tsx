@@ -1,9 +1,10 @@
-import { Fragment, type CSSProperties } from "react";
+import { Fragment, type CSSProperties, type ReactNode } from "react";
 
 import type { WebJob } from "../../api/types.ts";
 import type { Column } from "../../lib/columns.ts";
 import { age, jobColorVar, stateColor } from "../../lib/format.ts";
 import { jobKey } from "../../lib/jobKey.ts";
+import { highlightSegments, type JobMatch } from "../../lib/jobSearch.ts";
 import { ArtifactCountChip, artifactCountVisible } from "./chips/ArtifactChips.tsx";
 import { CrewChips, crewChipsVisible } from "./chips/CrewPills.tsx";
 import { DocQuestionChip, docQuestionChipVisible } from "./chips/DocQuestionChip.tsx";
@@ -16,10 +17,39 @@ import { WakeupChip } from "./chips/WakeupChip.tsx";
 import type { BoardActions } from "./BoardView.tsx";
 import { useSortableCard } from "./DragProvider.tsx";
 
+/**
+ * One status line with the query's matched substrings wrapped in `<mark>`.
+ *
+ * Returns the bare string when nothing in it matched, so a line the search
+ * never touched renders the single text node it always did. The segment keys
+ * are indices because a segment's identity IS its position in the line —
+ * there is nothing else to key on, and the list is rebuilt whole per render.
+ */
+function markMatches(line: string, terms: readonly string[]): ReactNode {
+  const segments = highlightSegments(line, terms);
+  if (segments.length === 1 && !segments[0]!.hit) return line;
+  return segments.map((seg, i) =>
+    seg.hit ? <mark key={i}>{seg.text}</mark> : <Fragment key={i}>{seg.text}</Fragment>,
+  );
+}
+
 export interface JobCardProps {
   job: WebJob;
   col: Column;
   actions: BoardActions;
+  /**
+   * Why the search kept this card, when a search is running at all. Only
+   * `"text"` renders anything: a card kept by its NAME needs no explanation,
+   * and a card kept by its status text has a name with nothing to do with what
+   * carl typed, so without the marker it reads as the filter being broken.
+   */
+  matchReason?: JobMatch["reason"];
+  /**
+   * The query's terms, for marking the substrings that did the matching.
+   * Read only when `matchReason === "text"`; the card renders exactly its
+   * usual status lines otherwise.
+   */
+  matchTerms?: readonly string[];
   /**
    * @deprecated Dead, and accepted only so App.tsx keeps compiling until the
    * lead drops the two call sites. The card no longer LISTS artifacts — band 2
@@ -61,7 +91,10 @@ export interface JobCardProps {
  *      column and can be compared without reading the cards around them.
  *   3. STATUS — what is true right now, worst-first: outcome, err/health, then
  *      the me→zeus/zeus conversation pair (chronological, so it reads as a
- *      transcript), then the poll countdown WITH its stated reason.
+ *      transcript), then the poll countdown WITH its stated reason. The search
+ *      marker belongs here rather than in band 2 for that same reason: "this
+ *      card is on screen because of what its status text says right now" is a
+ *      fact about the moment, not part of the job's inventory.
  *   4. NEEDS YOU — the pending AskUserQuestion. Above the PR row, not below it:
  *      it is the one block on a card carrying buttons you must press.
  *   5. PRS — their own row, deliberately NOT folded into band 2. A PR is the
@@ -81,7 +114,7 @@ export interface JobCardProps {
  * order WAS the precedence; here each control stops propagation instead, which
  * is the same precedence expressed locally.
  */
-export function JobCard({ job, col, actions }: JobCardProps) {
+export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardProps) {
   const key = jobKey(job);
   // Keyed by jobKey, never the bare slug: an archived entry and an active job
   // that reused its freed slug would otherwise share one drag id.
@@ -104,6 +137,12 @@ export function JobCard({ job, col, actions }: JobCardProps) {
     docQuestionChipVisible(job) ||
     artifactCountVisible(job) ||
     feedbackChipVisible(job);
+
+  // band 3 — a card kept ONLY by its status text marks the words that kept it;
+  // every other card renders these lines exactly as it always has.
+  const textMatch = matchReason === "text";
+  const hi = (line: string): ReactNode =>
+    textMatch ? markMatches(line, matchTerms ?? []) : line;
 
   // band 6 — assembled first rather than inline, so the row can be dropped
   // whole when a card offers nothing to press (every draft/queued card).
@@ -231,8 +270,11 @@ export function JobCard({ job, col, actions }: JobCardProps) {
           <span className="start-error-msg">{job.start_error}</span>
         </div>
       ) : null}
-      {job.last_sent ? <div className="last-sent">me→zeus: {job.last_sent}</div> : null}
-      {job.detail ? <div className="detail">{job.detail}</div> : null}
+      {job.last_sent ? <div className="last-sent">me→zeus: {hi(job.last_sent)}</div> : null}
+      {job.detail ? <div className="detail">{hi(job.detail)}</div> : null}
+      {/* The marker sits UNDER the lines it is about, so the eye reads the
+          matched words first and then what they mean. */}
+      {textMatch ? <div className="match-why">matched in status text</div> : null}
       <WakeupChip job={job} />
       {job.wakeup?.reason && job.state === "working" ? (
         <div className="wakeup-reason">↻ {job.wakeup.reason}</div>

@@ -740,6 +740,12 @@ struct BoardView: View {
     @State private var jobSheetNav = SheetNavState()
     @State private var showingNewJob = false
     @State private var showingOverview = false
+    // Whether the overview sheet should come up with its search field already
+    // focused. The sheet is ONE sheet with three ways in — the strip's chevron,
+    // the kraken://overview deep link, and the toolbar's magnifier — and only
+    // the magnifier means "I am here to search", so every presenter sets this
+    // explicitly rather than letting the last one's value persist.
+    @State private var overviewSearchFocused = false
     // The DREAM screen hangs off this toolbar rather than a sixth tab — iOS
     // collapses a TabView past five items into a "More" list, which would
     // bury an existing tab behind a disclosure. See DreamView's header.
@@ -799,6 +805,22 @@ struct BoardView: View {
             .background(KTheme.ground)
             .navigationTitle("Board")
             .toolbar {
+                // Search presents the EXISTING overview sheet with its search
+                // field focused, rather than opening a screen of its own: that
+                // sheet already lists every job flat, sectioned by column, with
+                // a tap opening JobDetailView — which is the result list a
+                // search would have had to build anyway.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        overviewSearchFocused = true
+                        showingOverview = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(KTheme.accent)
+                    .accessibilityLabel("Search jobs")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingDream = true
@@ -914,7 +936,7 @@ struct BoardView: View {
             }
             .sheet(isPresented: $showingOverview) {
                 NavigationStack {
-                    BoardOverviewSheet(vm: vm, baseURL: serverURL) {
+                    BoardOverviewSheet(vm: vm, baseURL: serverURL, searchFocused: overviewSearchFocused) {
                         Task { await vm.refresh(baseURL: serverURL) }
                     }
                 }
@@ -986,6 +1008,7 @@ struct BoardView: View {
             router.pendingBoardColumn = nil
         }
         if router.pendingOverview {
+            overviewSearchFocused = false
             showingOverview = true
             router.pendingOverview = false
         }
@@ -1159,6 +1182,7 @@ struct BoardView: View {
                 overviewCell(column)
             }
             Button {
+                overviewSearchFocused = false
                 showingOverview = true
             } label: {
                 Image(systemName: "chevron.down")
@@ -1987,19 +2011,36 @@ private struct ArtifactCountChip: View {
     }
 }
 
-/// The "table of contents" reached from the overview strip's chevron: all
-/// six columns as sections, every job as a compact row, tapping one opens
-/// JobDetail. Reads `vm` (the shared @Observable board view model) directly
-/// rather than a snapshot, so it stays in sync as JobDetail actions refresh
-/// the board underneath it — no separate fetch of its own.
+/// The "table of contents" reached from the overview strip's chevron and from
+/// the board toolbar's magnifier: all six columns as sections, every job as a
+/// compact row, tapping one opens JobDetail. Reads `vm` (the shared
+/// @Observable board view model) directly rather than a snapshot, so it stays
+/// in sync as JobDetail actions refresh the board underneath it — no separate
+/// fetch of its own.
+///
+/// This is also the app's whole job-search surface. It filters its OWN rows
+/// and nothing else: `vm.jobs(in:)` keeps returning every job, because the
+/// paged board and the drag-reorder overlay both read it and a reorder inside
+/// a narrowed column would post a partial column order to the server (see
+/// BoardView's localOrder/commit path, and internal/jobs/order.go's
+/// ApplyColumnOrder, which puts every member absent from the posted list at
+/// the top). Search narrows what this sheet draws; the board is untouched.
 private struct BoardOverviewSheet: View {
     let vm: BoardViewModel
     let baseURL: String
+    /// Present with the search field already up and focused — true only from
+    /// the toolbar's magnifier, since only that entry point means "search".
+    var searchFocused: Bool = false
     var onUpdate: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(AppRouter.self) private var router
     @State private var selectedJob: WebJob?
+    @State private var query = ""
+    /// Whether the search field itself is showing. Bound rather than left to
+    /// the system so the magnifier can raise and focus it on appear; it is
+    /// also what the user's own dismissal of the field writes back to.
+    @State private var searchPresented = false
     // See BoardView's identically-named property + presentJob(_:) above —
     // same staleness-baseline pattern, duplicated here because this sheet
     // reads `vm` directly rather than owning its own selectedJob binding at
@@ -2010,32 +2051,81 @@ private struct BoardOverviewSheet: View {
     @State private var jobSheetNav = SheetNavState()
 
     var body: some View {
+        let terms = parseTerms(query)
+        // Matched once, read twice — by the sections below and by the
+        // no-results overlay — so a query is never run over the board twice in
+        // one body evaluation.
+        let sections = BoardColumn.allCases.map {
+            ColumnRows(column: $0, rows: matchedRows(in: $0, terms: terms))
+        }
         List {
-            ForEach(BoardColumn.allCases) { column in
-                let jobs = vm.jobs(in: column)
-                kSection(column.title) {
-                    if jobs.isEmpty {
-                        Text("empty")
-                            .font(.voice(12))
-                            .foregroundStyle(KTheme.text2.opacity(0.5))
-                    } else {
-                        ForEach(jobs) { job in
-                            Button {
-                                selectedJob = job
-                                presentedJobState = job.state
-                            } label: {
-                                overviewRow(job)
+            ForEach(sections) { section in
+                // With a query up, a column with no matches is dropped whole —
+                // header included. Six "empty" placeholders around one hit is
+                // the answer buried in its own scaffolding. With no query the
+                // sheet is exactly what it was: every section, placeholder and
+                // all.
+                if terms.isEmpty || !section.rows.isEmpty {
+                    kSection(section.column.title) {
+                        if section.rows.isEmpty {
+                            Text("empty")
+                                .font(.voice(12))
+                                .foregroundStyle(KTheme.text2.opacity(0.5))
+                        } else {
+                            ForEach(section.rows) { row in
+                                Button {
+                                    selectedJob = row.job
+                                    presentedJobState = row.job.state
+                                } label: {
+                                    overviewRow(row.job, reason: row.reason)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
+            }
+        }
+        // Dropping every empty section means a query that matches nothing
+        // leaves NOTHING — a blank sheet under the search field, which reads
+        // like a failed fetch rather than an answer. This says the search ran
+        // and came back empty, the same job the web board's "0 of 6 jobs"
+        // readout does, in the app's own voice rather than system chrome —
+        // `.voice(12)`/`KTheme.text2`, the same font and token as the "empty"
+        // placeholder above, at full opacity rather than its 0.5 (this one is
+        // the whole answer on screen; that one labels a section you can see).
+        //
+        // `vm.board != nil` is the load-bearing half of the condition, not
+        // belt and braces: `jobs(in:)` reads `board?.jobs ?? []`, and
+        // `refresh(baseURL:)` leaves `board` alone when the fetch throws, so
+        // until the first successful poll lands EVERY query matches nothing.
+        // Without this the sheet would answer "no jobs match" for a board it
+        // never fetched — a confident wrong answer, which is worse than the
+        // blank sheet this replaced. This sheet has no error surface of its
+        // own; the board's daemon bar behind it is what reports an unreachable
+        // server, so with no board at all the honest thing here is silence.
+        .overlay {
+            if vm.board != nil, !terms.isEmpty, sections.allSatisfy({ $0.rows.isEmpty }) {
+                Text("no jobs match \"\(query)\"")
+                    .font(.voice(12))
+                    .foregroundStyle(KTheme.text2)
+                    .padding()
             }
         }
         .listStyle(.plain)
         .kListStyle()
         .navigationTitle("Board Overview")
         .navigationBarTitleDisplayMode(.inline)
+        // The query is view state and nothing else — no defaults key, no route
+        // parameter, matching the web board. Every fresh presentation of this
+        // sheet starts from an unfiltered board.
+        .searchable(text: $query, isPresented: $searchPresented, prompt: "Search jobs")
+        // Raise the field for the magnifier's entry path. Presenting it is what
+        // focuses it, which is the whole reason `isPresented:` is bound rather
+        // than left to the system.
+        .onAppear {
+            if searchFocused { searchPresented = true }
+        }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 SheetCloseButton { dismiss() }
@@ -2065,7 +2155,36 @@ private struct BoardOverviewSheet: View {
         }
     }
 
-    private func overviewRow(_ job: WebJob) -> some View {
+    /// One rendered row: the job plus why it survived the query. A named type
+    /// rather than a pair so the reason travels with the job it belongs to,
+    /// and `id` mirrors WebJob's own (slug, archived) identity — an archived
+    /// job rides the same list under its numbered name, so the bare slug is
+    /// not unique across this sheet.
+    private struct OverviewRow: Identifiable {
+        let job: WebJob
+        let reason: MatchReason
+        var id: String { job.id }
+    }
+
+    /// One column's section, prepared before the List is built so the same
+    /// match pass answers both what to draw and whether anything matched at
+    /// all.
+    private struct ColumnRows: Identifiable {
+        let column: BoardColumn
+        let rows: [OverviewRow]
+        var id: String { column.id }
+    }
+
+    /// The rows this sheet draws for one column. This is the ONLY place the
+    /// search filters — `vm.jobs(in:)` is read whole, exactly as it is by the
+    /// paged board, and narrowed here for rendering alone.
+    private func matchedRows(in column: BoardColumn, terms: [String]) -> [OverviewRow] {
+        vm.jobs(in: column).compactMap { job in
+            matchJob(job, terms: terms).map { OverviewRow(job: job, reason: $0.reason) }
+        }
+    }
+
+    private func overviewRow(_ job: WebJob, reason: MatchReason) -> some View {
         let flagged = job.question != nil || !(job.health ?? "").isEmpty
         return HStack(spacing: 8) {
             Rectangle()
@@ -2074,6 +2193,17 @@ private struct BoardOverviewSheet: View {
             Text(job.title)
                 .font(.data(13))
                 .foregroundStyle(KTheme.text)
+            // Why this row is here at all, when its name says otherwise: the
+            // query only matched its status text (zeus' last message, or the
+            // last thing carl sent it). Without the marker a result that looks
+            // unrelated to what was typed reads as a broken search. An empty
+            // query can never produce it — every job matches by name then.
+            if reason == .text {
+                Text("in text")
+                    .font(.data(10))
+                    .foregroundStyle(KTheme.revealed)
+                    .accessibilityLabel("matched in status text")
+            }
             Spacer()
             if flagged {
                 Image(systemName: "flag.fill")

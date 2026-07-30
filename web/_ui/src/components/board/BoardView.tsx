@@ -1,8 +1,10 @@
 import type { BoardModel } from "../../hooks/useBoard.ts";
+import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { COLUMNS } from "../../lib/columns.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
 import { ArchiveDrawer } from "./ArchiveDrawer.tsx";
+import { BoardBar } from "./BoardBar.tsx";
 import { BoardColumn } from "./Column.tsx";
 import { JobCard } from "./JobCard.tsx";
 
@@ -66,8 +68,22 @@ export interface BoardActions {
 export interface BoardViewProps {
   board: BoardModel;
   actions: BoardActions;
+  /**
+   * The search state and its derived render lists. Owned by App.tsx rather
+   * than by this component, because DragProvider — which sits ABOVE the board
+   * — needs `visibleKeys` from the same instance; two useJobSearch calls would
+   * be two query states, and the drag layer would read the one nobody typed
+   * into.
+   */
+  search: JobSearchModel;
   /** The view router hides the board rather than unmounting it, as today. */
   hidden?: boolean;
+  /**
+   * True while any modal overlay is open, straight from App.tsx's per-overlay
+   * state. Only the search bar reads it, and only to keep cmd+K from pulling
+   * focus out of a composer — see BoardBar.
+   */
+  overlayOpen?: boolean;
   /**
    * @deprecated Dead, and accepted only so App.tsx keeps compiling until the
    * lead drops the call site. Band 2 carries a bare artifact COUNT now
@@ -103,27 +119,66 @@ export interface BoardViewProps {
  * (useColumnDrop / useSortableCard), and those hooks fall back to an inert
  * identity when no `<DragProvider>` is above them — so a board rendered
  * without one still lists every card in server order.
+ *
+ * The search bar sits above the columns and narrows what is RENDERED, nothing
+ * else. Every list below comes from the `search` model App hands in; `board` is
+ * passed on untouched, which is what keeps the drag layer — reading
+ * `board.byColumn` for both its drop table and its reorder body — seeing whole
+ * columns while the screen shows a subset. All five columns still render under
+ * any query: there is no status filter, so the grid template never changes.
  */
-export function BoardView({ board, actions, hidden }: BoardViewProps) {
-  const { byColumn, archived } = board;
-
+export function BoardView({
+  board,
+  actions,
+  search,
+  hidden,
+  overlayOpen,
+}: BoardViewProps) {
   return (
-    <main className="board" id="board" hidden={hidden}>
-      {COLUMNS.map((col) => {
-        const jobs = byColumn[col];
-        return (
-          <BoardColumn
-            key={col}
-            col={col}
-            jobs={jobs}
-            onNewJob={() => actions.onOpenEditor(null)}
-            footer={
-              col === "done" ? <ArchiveDrawer archived={archived} actions={actions} /> : undefined
-            }
-            renderCard={(j) => <JobCard key={jobKey(j)} job={j} col={col} actions={actions} />}
-          />
-        );
-      })}
-    </main>
+    <>
+      <BoardBar search={search} overlayOpen={overlayOpen} hidden={hidden} />
+      <main className="board" id="board" hidden={hidden}>
+        {COLUMNS.map((col) => {
+          // The FILTERED list, so SortableColumn registers only cards that are
+          // actually in the DOM — a sortable id with no node measures as a null
+          // rect and the drop animation misbehaves. `total` is the unfiltered
+          // length, and passing it is what switches the head to `shown/total`;
+          // idle passes undefined and the head reads exactly as it does today.
+          const jobs = search.byColumn[col];
+          return (
+            <BoardColumn
+              key={col}
+              col={col}
+              jobs={jobs}
+              total={search.active ? board.byColumn[col].length : undefined}
+              onNewJob={() => actions.onOpenEditor(null)}
+              footer={
+                col === "done" ? (
+                  <ArchiveDrawer
+                    archived={search.archived}
+                    actions={actions}
+                    total={search.active ? board.archived.length : undefined}
+                    // A search reaches an archived job ONLY through this: with
+                    // no status filter, a match inside a collapsed drawer would
+                    // otherwise be counted in the readout and invisible.
+                    forceOpen={search.active && search.archived.length > 0}
+                  />
+                ) : undefined
+              }
+              renderCard={(j) => (
+                <JobCard
+                  key={jobKey(j)}
+                  job={j}
+                  col={col}
+                  actions={actions}
+                  matchReason={search.reasonByKey.get(jobKey(j))}
+                  matchTerms={search.terms}
+                />
+              )}
+            />
+          );
+        })}
+      </main>
+    </>
   );
 }

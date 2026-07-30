@@ -73,6 +73,14 @@ export interface DragProviderProps {
    * than imported here.
    */
   renderOverlay?: (job: WebJob | null, key: string) => ReactNode;
+  /**
+   * The jobKeys currently on screen while a search narrows the board;
+   * undefined when nothing is filtered. Passed straight through to
+   * useDragReorder, which reads it for ONE thing — where "the end of the
+   * column" is for a drop on empty space. The board itself stays whole: this
+   * provider is deliberately still given the UNFILTERED BoardModel.
+   */
+  visibleKeys?: ReadonlySet<string>;
   children: ReactNode;
 }
 
@@ -81,9 +89,10 @@ export function DragProvider({
   onOpenSteer,
   onToast,
   renderOverlay,
+  visibleKeys,
   children,
 }: DragProviderProps) {
-  const drag = useDragReorder({ board, onOpenSteer, onToast });
+  const drag = useDragReorder({ board, onOpenSteer, onToast, visibleKeys });
 
   const value = useMemo<DragContextValue>(
     () => ({

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0217AAC758C4A3A98D0C2945 /* DreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 162D4034983583092D366CD9 /* DreamView.swift */; };
+		07BFA6777FB09D0C7DCF2F95 /* JobSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */; };
 		09E5F95BB0684A3D285C72AD /* FeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7F3DC6663B9448C00D785C /* FeedbackTests.swift */; };
 		0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */; };
 		0EFEC88E51F813044F76BA6B /* UsageDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E28FB088DDAA43E812172C /* UsageDecodeTests.swift */; };
@@ -16,6 +17,7 @@
 		200A598DE7D246E25CF248F0 /* NewJobSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */; };
 		25E71118EA12AF32276973CB /* BoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30DCCDA162DA2E0C253F4EA3 /* BoardView.swift */; };
 		3C38197611F50EC43EE8E30E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FF9D9DA885804C0FEC0248E /* Assets.xcassets */; };
+		3E96D0AC7206FFE89D0113E6 /* JobSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */; };
 		44C27A0EC3914943FCF8A6D4 /* DraftStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58DEA929F5C3CDC02AD93B1 /* DraftStoreTests.swift */; };
 		4B8AC3B17AEE418F8CE1BB80 /* ShipIOSDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */; };
 		54994C7136E33E7D02D336C4 /* KrakenApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4936914ABA5DBD9E4D304398 /* KrakenApp.swift */; };
@@ -75,6 +77,7 @@
 		206A1135B73AB2755CE6925E /* ThreadDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailView.swift; sourceTree = "<group>"; };
 		210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightingTextEditorTests.swift; sourceTree = "<group>"; };
 		21990B7F0784450E2DF9B2F4 /* UpdateDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateDecodeTests.swift; sourceTree = "<group>"; };
+		260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobSearch.swift; sourceTree = "<group>"; };
 		30AD1C4AA4F495A6E7C94EC0 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		30DCCDA162DA2E0C253F4EA3 /* BoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardView.swift; sourceTree = "<group>"; };
 		32C2F4A42CBC2D123B55AC4E /* DraftPersistenceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftPersistenceUITests.swift; sourceTree = "<group>"; };
@@ -102,6 +105,7 @@
 		BA367B655DF24A06788B2CD3 /* AppRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouter.swift; sourceTree = "<group>"; };
 		C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
 		C5E28FB088DDAA43E812172C /* UsageDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDecodeTests.swift; sourceTree = "<group>"; };
+		C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobSearchTests.swift; sourceTree = "<group>"; };
 		C99F884263C78D3B9FD03D5D /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
 		CB3A1EB438C4B5849E436152 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
 		CC4FC03A0B554A14A50EF04A /* LoadEstimateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadEstimateTests.swift; sourceTree = "<group>"; };
@@ -146,6 +150,7 @@
 				36ABC2966905BF6437BFD422 /* DreamDecodeTests.swift */,
 				EF7F3DC6663B9448C00D785C /* FeedbackTests.swift */,
 				210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */,
+				C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */,
 				CC4FC03A0B554A14A50EF04A /* LoadEstimateTests.swift */,
 				AF39E397D495995DF61C69ED /* MarkdownHTMLParityTests.swift */,
 				8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */,
@@ -173,6 +178,7 @@
 				E6E02C2D34FE2896351B57CD /* JobColorStrip.swift */,
 				C99F884263C78D3B9FD03D5D /* JobDetailView.swift */,
 				D29F1852BBFA1274A0BFE991 /* JobFormView.swift */,
+				260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */,
 				4936914ABA5DBD9E4D304398 /* KrakenApp.swift */,
 				F6910162E5A6297105AD0E5B /* LogView.swift */,
 				88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */,
@@ -322,6 +328,7 @@
 				E149A36208DBCD99F3E07B86 /* DreamDecodeTests.swift in Sources */,
 				09E5F95BB0684A3D285C72AD /* FeedbackTests.swift in Sources */,
 				0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */,
+				3E96D0AC7206FFE89D0113E6 /* JobSearchTests.swift in Sources */,
 				CF68901B3F0A081B1A09DA21 /* LoadEstimateTests.swift in Sources */,
 				9A8EFAF4AA6DBDC088CF875F /* MarkdownHTMLParityTests.swift in Sources */,
 				AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */,
@@ -355,6 +362,7 @@
 				A1F01EC43FDA55C4FCF80C26 /* JobColorStrip.swift in Sources */,
 				F6A845FB71E25D9C0516DF8D /* JobDetailView.swift in Sources */,
 				15E03CF28FC165A2AC64ED88 /* JobFormView.swift in Sources */,
+				07BFA6777FB09D0C7DCF2F95 /* JobSearch.swift in Sources */,
 				54994C7136E33E7D02D336C4 /* KrakenApp.swift in Sources */,
 				9282F86F2CAE74267B89F9FE /* LogView.swift in Sources */,
 				7F53B4F4BE9C944368D05543 /* MarkdownHTML.swift in Sources */,
