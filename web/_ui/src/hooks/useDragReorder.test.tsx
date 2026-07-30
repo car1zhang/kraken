@@ -30,6 +30,7 @@ import { bucketJobs } from "../lib/format.ts";
 import { makeBoard as makeWebBoard, makeJob } from "../test/fixtures.ts";
 import type { BoardModel, Column } from "./useBoard.ts";
 import { COLUMNS } from "./useBoard.ts";
+import { useJobSearch } from "./useJobSearch.ts";
 import {
   MOUSE_ACTIVATION,
   TOUCH_ACTIVATION,
@@ -552,5 +553,158 @@ describe("column drop ids", () => {
     // `draft` is a perfectly legal slug — the prefix is why it stays a card
     expect(parseColumnDropId("draft")).toBeNull();
     expect(parseColumnDropId(undefined)).toBeNull();
+  });
+});
+
+// ------------------------------------------------------------ search + drag
+
+// A filtered board still posts WHOLE columns.
+//
+// The two hooks are wired here exactly as App.tsx wires them: useJobSearch
+// derives the render lists and publishes `visibleKeys`, useDragReorder gets the
+// UNFILTERED model. That arrangement is the guard. commitReorder builds its
+// body from `board.byColumn[column]`, so a filter pushed into that model (or a
+// commitReorder rewritten to read the rendered subset) posts only the visible
+// slugs — and `store.SetBoardColumn` replaces the stored order with exactly
+// what arrives while `jobs.ApplyColumnOrder` puts every member missing from it
+// FIRST, so the cards the query hid would move to the top of the column and
+// stay there with nothing on screen to show for it. The cheaper "the model is
+// not narrowed" guards live in useJobSearch.test.tsx and BoardView.test.tsx;
+// these cover what actually reaches the server.
+
+describe("a reorder inside a filtered column", () => {
+  // `re-` matches re-alpha and re-gamma; the repo is monolith because the
+  // default `kraken` holds an r and an e of its own and would match all four.
+  const BLOCKED_FOUR = [
+    job("re-alpha", "blocked", { repo: "monolith" }),
+    job("hidden-b", "blocked", { repo: "monolith" }),
+    job("re-gamma", "blocked", { repo: "monolith" }),
+    job("hidden-d", "blocked", { repo: "monolith" }),
+  ];
+
+  /** App's wiring: one model, the search over it, the drag layer beside it. */
+  function setupSearched(query: string) {
+    const spies = makeSpies();
+    const board = makeModel(BLOCKED_FOUR, spies);
+    const view = renderHook(() => {
+      const search = useJobSearch(board);
+      return {
+        search,
+        drag: useDragReorder({
+          board,
+          onOpenSteer: spies.onOpenSteer,
+          onToast: spies.onToast,
+          visibleKeys: search.active ? search.visibleKeys : undefined,
+        }),
+      };
+    });
+    if (query) {
+      act(() => {
+        view.result.current.search.setQuery(query);
+      });
+    }
+    return { view, spies, board };
+  }
+
+  async function dragTo(
+    view: ReturnType<typeof setupSearched>["view"],
+    key: string,
+    overId: string,
+  ) {
+    await act(async () => {
+      view.result.current.drag.onDragStart(startEvent(key));
+    });
+    await act(async () => {
+      view.result.current.drag.onDragOver(overEvent(key, overId));
+    });
+    await act(async () => {
+      view.result.current.drag.onDragEnd(endEvent(key, overId));
+    });
+  }
+
+  it("posts all four slugs while the query renders two", async () => {
+    const { view } = setupSearched("re-");
+    expect(view.result.current.search.byColumn.blocked.map((j) => j.slug)).toEqual([
+      "re-alpha",
+      "re-gamma",
+    ]);
+
+    // drop re-gamma onto re-alpha's slot: the two visible cards swap, and the
+    // two hidden ones must keep their places in the stored order
+    await dragTo(view, "re-gamma", "re-alpha");
+
+    expect(client.reorderColumn).toHaveBeenCalledTimes(1);
+    expect(client.reorderColumn).toHaveBeenCalledWith("blocked", [
+      "re-gamma",
+      "re-alpha",
+      "hidden-b",
+      "hidden-d",
+    ]);
+  });
+
+  // A drop on the column BODY means "the end", and under a filter the end the
+  // pointer is at is the end of what is RENDERED — the space under the last
+  // visible card. Taking the end of the whole column instead moves the card
+  // past cards that are not on screen, leaving the rendered order identical
+  // before and after: a write with nothing to show for it.
+  it("lands a body-drop after the last VISIBLE card, not the last card", async () => {
+    const { view } = setupSearched("re-");
+    await dragTo(view, "re-alpha", columnDropId("blocked"));
+    expect(client.reorderColumn).toHaveBeenCalledWith("blocked", [
+      "hidden-b",
+      "re-gamma",
+      "re-alpha",
+      "hidden-d",
+    ]);
+  });
+
+  it("posts nothing when the body-drop leaves the visible order alone", async () => {
+    const { view, spies } = setupSearched("re-");
+    // re-gamma is already the last visible card, so "drop at the end" is where
+    // it already is — the same no-op skip a drop back in its own slot takes.
+    await dragTo(view, "re-gamma", columnDropId("blocked"));
+    expect(client.reorderColumn).not.toHaveBeenCalled();
+    expect(spies.refetch).not.toHaveBeenCalled();
+  });
+
+  // `visibleKeys` is a snapshot of the current render, and the query can change
+  // while a card is in the air — nothing blocks cmd+K mid-drag. If the card
+  // being dragged is no longer in the set, the last VISIBLE index can sit above
+  // it, and "put this at the end" would move it UP. The clamp at oldIdx makes
+  // that impossible whatever the set says.
+  it("never moves a card UP when the query changes mid-drag", async () => {
+    const { view, spies } = setupSearched("re-");
+    await act(async () => {
+      view.result.current.drag.onDragStart(startEvent("re-gamma"));
+    });
+
+    // re-gamma is index 2 of the column; after this, the only visible card is
+    // re-alpha at index 0
+    act(() => {
+      view.result.current.search.setQuery("alpha");
+    });
+    expect(view.result.current.search.byColumn.blocked.map((j) => j.slug)).toEqual([
+      "re-alpha",
+    ]);
+
+    await act(async () => {
+      view.result.current.drag.onDragEnd(endEvent("re-gamma", columnDropId("blocked")));
+    });
+
+    // clamped to its own index, which is the no-op skip
+    expect(client.reorderColumn).not.toHaveBeenCalled();
+    expect(spies.mutate).not.toHaveBeenCalled();
+  });
+
+  it("still means the end of the whole column when nothing is filtered", async () => {
+    const { view } = setupSearched("");
+    expect(view.result.current.search.active).toBe(false);
+    await dragTo(view, "re-alpha", columnDropId("blocked"));
+    expect(client.reorderColumn).toHaveBeenCalledWith("blocked", [
+      "hidden-b",
+      "re-gamma",
+      "hidden-d",
+      "re-alpha",
+    ]);
   });
 });

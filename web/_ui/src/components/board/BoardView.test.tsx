@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WebBoard, WebJob } from "../../api/types.ts";
 import type { BoardModel } from "../../hooks/useBoard.ts";
+import { useJobSearch } from "../../hooks/useJobSearch.ts";
 import { COLUMNS } from "../../lib/columns.ts";
 import { bucketJobs } from "../../lib/format.ts";
 import { jobKey } from "../../lib/jobKey.ts";
@@ -53,10 +54,24 @@ function model(jobs: WebJob[]): BoardModel {
   };
 }
 
+/**
+ * The board as App.tsx assembles it: App owns the search (DragProvider needs
+ * the same instance) and hands BoardView the model plus that search. Rendering
+ * BoardView through this harness rather than bare is what lets these tests
+ * type into the bar and see the columns respond.
+ */
+function BoardHarness({ board, actions }: { board: BoardModel; actions: BoardActions }) {
+  const search = useJobSearch(board);
+  return <BoardView board={board} actions={actions} search={search} />;
+}
+
 function renderBoard(jobs: WebJob[]) {
   const actions = stubActions();
-  const { container } = render(<BoardView board={model(jobs)} actions={actions} />);
-  return { container, actions };
+  // The model is held rather than inlined: the search suite below asserts that
+  // BoardView never narrows it, which needs the same object the render got.
+  const board = model(jobs);
+  const { container } = render(<BoardHarness board={board} actions={actions} />);
+  return { container, actions, board };
 }
 
 const cols = (container: HTMLElement) => [...container.querySelectorAll("section.col")];
@@ -211,5 +226,219 @@ describe("a reused slug", () => {
     expect(actions.onOpenEditor).toHaveBeenCalledWith("archive:foo");
     await userEvent.click(liveCard);
     expect(actions.onOpenSteer).toHaveBeenCalledWith("foo", "unblock");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Search: the bar narrows what is RENDERED and nothing else.
+//
+// The rule itself is covered case-for-case in lib/jobSearch.test.ts against the
+// shared table; what these assert is the wiring — which cards survive, what the
+// heads and the drawer do about it, and the one thing that must NOT happen.
+// ---------------------------------------------------------------------------
+
+const searchFixture = (): WebJob[] => [
+  job({ slug: "search-jobs", repo: "kraken", state: "working", live: true }),
+  job({
+    slug: "dream-2026-07-29",
+    repo: "kraken",
+    state: "done",
+    detail: "research pass over yesterday's transcripts",
+  }),
+  job({ slug: "job-load-categorizing", repo: "kraken", state: "done" }),
+  job({ slug: "yelp-dedupe", repo: "monolith", state: "blocked", live: true }),
+  job({ slug: "asr-wer-metrics", repo: "monolith", state: "queued" }),
+  job({
+    slug: "search-index-2",
+    display_slug: "search-index",
+    repo: "monolith",
+    state: "archived",
+    archived: true,
+  }),
+];
+
+const searchInput = (container: HTMLElement) =>
+  container.querySelector<HTMLInputElement>("#job-search")!;
+
+const shownSlugs = (container: HTMLElement) =>
+  [...container.querySelectorAll(".card")].map((c) => c.getAttribute("data-slug"));
+
+describe("the search bar", () => {
+  it("renders above the columns, and leaves the board untouched at rest", () => {
+    const { container } = renderBoard(searchFixture());
+    const bar = container.querySelector(".boardbar")!;
+    expect(bar).not.toBeNull();
+    expect(bar.compareDocumentPosition(container.querySelector("#board")!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(container.querySelector(".bb-read")).toHaveTextContent("6 jobs");
+    // every head bare, exactly as before the feature existed
+    expect(colFor(container, "done").querySelector(".col-head .n")).toHaveTextContent("2");
+  });
+
+  it("keeps only the matching cards, and counts them", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "search");
+    // search-index-2 is here on its display_slug, "search-index" — case 3 of
+    // the shared table in lib/jobSearch.test.ts.
+    expect(shownSlugs(container)).toEqual([
+      "search-jobs",
+      "dream-2026-07-29",
+      "archive:search-index-2",
+    ]);
+    expect(container.querySelector(".bb-read")).toHaveTextContent("3 of 6 jobs");
+  });
+
+  it("still renders all five columns, with `shown/total` heads", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "search");
+    expect(cols(container).map((c) => c.getAttribute("data-col"))).toEqual([...COLUMNS]);
+    expect(colFor(container, "working").querySelector(".col-head .n")).toHaveTextContent("1/1");
+    expect(colFor(container, "done").querySelector(".col-head .n")).toHaveTextContent("1/2");
+    expect(colFor(container, "queued").querySelector(".col-head .n")).toHaveTextContent("0/1");
+    // an emptied column falls back to the board's own placeholder, and DRAFT
+    // keeps its button rather than gaining one
+    expect(colFor(container, "queued").querySelector(".empty")).not.toBeNull();
+    expect(colFor(container, "draft").querySelector(".empty")).toBeNull();
+    expect(colFor(container, "draft").querySelector("#new-job")).not.toBeNull();
+  });
+
+  it("marks the card that matched only through its status text", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "search");
+
+    const byText = colFor(container, "done").querySelector(".card")!;
+    expect(byText.querySelector(".match-why")).toHaveTextContent("matched in status text");
+    expect(byText.querySelector(".detail mark")).toHaveTextContent("search");
+    expect(byText.querySelector(".detail")).toHaveTextContent("research pass");
+
+    const byName = colFor(container, "working").querySelector(".card")!;
+    expect(byName.querySelector(".match-why")).toBeNull();
+  });
+
+  it("marks nothing at all with no query", () => {
+    const { container } = renderBoard(searchFixture());
+    expect(container.querySelector(".match-why")).toBeNull();
+    expect(container.querySelector("mark")).toBeNull();
+  });
+
+  it("opens the archive drawer for a match inside it, without storing the flag", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "index");
+
+    expect(container.querySelector(".archive-cards")).not.toHaveAttribute("hidden");
+    expect(shownSlugs(container)).toEqual(["archive:search-index-2"]);
+    expect(container.querySelector(".archive-head .n")).toHaveTextContent("1/1");
+    expect(localStorage.getItem("kraken-archive-open")).toBeNull();
+  });
+
+  // The header offers no collapse it cannot honour: while the query holds the
+  // drawer open the toggle is disabled, so it can neither fail to close it nor
+  // write the stored flag from a press that changes nothing on screen.
+  it("disables the drawer toggle while the query is what holds it open", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "index");
+
+    const head = container.querySelector("#archive-toggle")!;
+    expect(head).toBeDisabled();
+    await userEvent.click(head);
+    expect(localStorage.getItem("kraken-archive-open")).toBeNull();
+    expect(container.querySelector(".archive-cards")).not.toHaveAttribute("hidden");
+
+    // and it comes straight back once the query stops holding it
+    await userEvent.click(container.querySelector(".bb-clear")!);
+    expect(container.querySelector("#archive-toggle")).toBeEnabled();
+  });
+
+  // A bare `ARCHIVED 0` is what an EMPTY archive looks like, and the drawer
+  // opening is a search's only route into the archive — so a query matching
+  // nothing in it says `0/1` instead: there is a job here, and it is not this
+  // one. The head is disabled because a press could reveal nothing, and a
+  // press that reveals nothing would still write the stored flag.
+  it("says `0/N` rather than `0` when the query misses everything archived", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "zzz");
+
+    const head = container.querySelector("#archive-toggle")!;
+    expect(head.querySelector(".n")).toHaveTextContent("0/1");
+    expect(head).toBeDisabled();
+    expect(container.querySelector(".archive-cards")).toBeNull();
+
+    await userEvent.click(head);
+    expect(localStorage.getItem("kraken-archive-open")).toBeNull();
+  });
+
+  it("returns the drawer to its stored state when the query clears", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "index");
+    expect(container.querySelector(".archive-cards")).not.toHaveAttribute("hidden");
+
+    await userEvent.click(container.querySelector(".bb-clear")!);
+    expect(container.querySelector(".archive-cards")).toHaveAttribute("hidden");
+    expect(shownSlugs(container)).toHaveLength(6);
+  });
+
+  // The board repolls every 3s and BoardView is never unmounted for it, so the
+  // query outlives every payload — including one that adds a matching job.
+  it("re-applies the query to a payload that arrives while it is typed", async () => {
+    const actions = stubActions();
+    const { container, rerender } = render(
+      <BoardHarness board={model(searchFixture())} actions={actions} />,
+    );
+    await userEvent.type(searchInput(container), "search");
+    expect(shownSlugs(container)).toHaveLength(3);
+
+    const next = [
+      ...searchFixture(),
+      job({ slug: "search-rewrite", repo: "monolith", state: "queued" }),
+    ];
+    rerender(<BoardHarness board={model(next)} actions={actions} />);
+
+    expect(searchInput(container)).toHaveValue("search");
+    expect(shownSlugs(container)).toContain("search-rewrite");
+    expect(container.querySelector(".bb-read")).toHaveTextContent("4 of 7 jobs");
+  });
+
+  it("focuses and selects the input on cmd+K", async () => {
+    const { container } = renderBoard(searchFixture());
+    await userEvent.type(searchInput(container), "dre");
+    await userEvent.click(container.querySelector("#board")!);
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "k",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(ev);
+    expect(document.activeElement).toBe(searchInput(container));
+    expect(searchInput(container).selectionEnd).toBe(3);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  // THE guard. useDragReorder reads board.byColumn for its drop table and
+  // builds the POST /api/reorder body from the WHOLE column; store
+  // .SetBoardColumn replaces the stored order with exactly the ids posted and
+  // jobs.ApplyColumnOrder floats every absent member to the TOP. So a filter
+  // that reached the model would send the hidden cards to the top of their
+  // column, permanently, with nothing on screen saying so.
+  it("narrows the render without narrowing the model the drag layer reads", async () => {
+    const blocked = ["reindex-cache", "telecom-null-sid", "search-rewrite", "ui-polish"].map(
+      (slug) => job({ slug, repo: "monolith", state: "blocked", live: true }),
+    );
+    const { container, board } = renderBoard(blocked);
+    const before = board.byColumn.blocked;
+
+    await userEvent.type(searchInput(container), "re");
+    expect(shownSlugs(container)).toEqual(["reindex-cache", "search-rewrite"]);
+    expect(colFor(container, "blocked").querySelector(".col-head .n")).toHaveTextContent("2/4");
+
+    expect(board.byColumn.blocked).toBe(before);
+    expect(board.byColumn.blocked.map((j) => j.slug)).toEqual([
+      "reindex-cache",
+      "telecom-null-sid",
+      "search-rewrite",
+      "ui-polish",
+    ]);
   });
 });

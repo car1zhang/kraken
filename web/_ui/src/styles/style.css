@@ -285,6 +285,46 @@ body {
 }
 .update-banner button[data-act="dismiss"]:hover { opacity: 1; }
 
+/* ---- board search bar: one strip between the chrome and the columns, board
+   view only. Same surface and hairline as .chrome so the two read as one
+   header rather than as a floating control, and mono throughout because
+   everything it shows — a slug fragment, a count — is data. */
+.boardbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--mono); font-size: 11px;
+}
+.bb-search { position: relative; display: flex; align-items: center; flex: 0 1 340px; }
+/* the magnifier is drawn by the wrapper rather than placed in the markup: it
+   is decoration, and an inline glyph would be one more thing between the
+   label and the field for a screen reader to read out */
+.bb-search::before {
+  content: "⌕"; position: absolute; left: 6px;
+  color: var(--text-2); font-size: 13px; pointer-events: none;
+}
+/* same family as .dq-input — mono, surface fill, hairline border, accent on
+   focus — with room reserved left for the magnifier and right for the ✕ */
+.bb-input {
+  flex: 1 1 auto; min-width: 80px;
+  font: 11px var(--mono); color: var(--text);
+  background: var(--surface); border: 1px solid var(--hairline-2);
+  padding: 4px 22px 4px 20px;
+}
+.bb-input::placeholder { color: var(--text-2); opacity: 0.6; }
+.bb-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.bb-clear {
+  position: absolute; right: 4px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-2); font: 12px var(--mono); padding: 0 3px;
+}
+.bb-clear:hover { color: var(--text); }
+.bb-hint { color: var(--text-2); opacity: 0.5; font-size: 9.5px; }
+/* pushed to the far edge so the count sits where the chrome's own stats do */
+.bb-read { color: var(--text-2); margin-left: auto; }
+.bb-read b { color: var(--accent); font-weight: 400; }
+
 /* ---- board ---- */
 .board {
   display: grid;
@@ -309,7 +349,12 @@ body {
 /* pointer-events none: disabled form controls swallow drag events in
    Blink/WebKit, and with zero archived jobs the header IS the drawer's whole
    done→archived drop area — pass hit-testing through to .archive-drawer.
-   Also neutralizes :hover/cursor, which a disabled header shouldn't have. */
+   Also neutralizes :hover/cursor, which a disabled header shouldn't have.
+   The header is disabled in two further states now, both with a NON-empty
+   archive (a query holding the drawer open, and a query matching nothing
+   archived) — see ArchiveDrawer's docblock. Drops keep working in all three
+   for the same reason: hit-testing lands on .archive-drawer, which is where
+   useColumnDrop(ARCHIVED) puts its ref. */
 .archive-head:disabled { pointer-events: none; }
 .archive-head .tri { font-size: 9px; letter-spacing: 0; }
 .archive-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
@@ -544,6 +589,27 @@ body {
   font: 10px var(--mono); color: var(--text-2); opacity: 0.7;
   margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* why this card is on screen at all: rendered only when the search kept it by
+   its STATUS TEXT rather than its name, so the card whose slug has nothing to
+   do with the query explains itself instead of looking like a broken filter.
+   Amber, outlined, the quietest badge on the card — it is an aside about the
+   search, not a fact about the job. */
+.match-why {
+  display: inline-block; margin-top: 5px;
+  font: 9px var(--mono); letter-spacing: 0.6px;
+  color: var(--revealed); border: 1px solid var(--revealed);
+  opacity: 0.85; padding: 1px 5px;
+}
+/* the matched words inside those lines. No background — the card is dense
+   enough — so the amber alone carries it, matching the badge above.
+   Both lines are TRUNCATED above (.detail clamps to 2 lines, .last-sent to
+   one), and a mark past the cut is clipped with the text it sits in: on a long
+   detail the badge can be the only visible sign of the match. That is the
+   clamp doing its job — a card is not allowed to outgrow its column — and it
+   is why the badge says WHERE the match was rather than relying on the
+   highlight to show it. */
+.detail mark, .last-sent mark { background: none; color: var(--revealed); }
 
 /* no .roster block any more: the card used to render the crew chips AND a
    name-per-teammate list restating the same roster directly under them. The
