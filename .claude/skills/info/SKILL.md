@@ -166,8 +166,17 @@ short form, with /info's overrides:
    what depth is right, what is explicitly out of scope. Keep this in chat, not in an artifact.
 2. **Research until you could write the long version** — read the relevant `CLAUDE.md` / `AGENTS.md`,
    trace entrypoints with `rg`, read enough implementation to cite real paths, types, and behaviors,
-   and fan out parallel `Explore` agents for broad sweeps. Every codebase-answerable question gets
-   answered here; none of them become open questions.
+   and fan out parallel researcher subagents for broad sweeps. Every codebase-answerable question gets
+   answered here; none of them become open questions. **Give each researcher an agent type that can
+   write — `general-purpose`, never `Explore`, whose roster excludes `Write` and `Edit` — and name its
+   output file in its brief**, one exact scratch path outside the repo, with the chat reply a short
+   summary plus that path. Read-only means the REPO, not the filesystem: a researcher briefed
+   "write your findings to `<path>`" but spawned as `Explore` cannot satisfy that brief, and it does
+   not report the problem, it rationalises ("enforced read-only mode", "my configuration prohibits
+   creating files") while you wait on a file that is never coming. Add the line *if you have no
+   `Write` tool, write the file with a Bash heredoc (`cat > <path> <<'EOF'`)*. For how to WAIT on
+   those files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet and the
+   sub-bullets under it — it is the one specification of the protocol and it applies here unchanged.
 3. **Write the short version.** Create the set root and write `00-overview.md` per the table above,
    plus the one diagram card that carries its mental model. Skip the diagram only in the rare case
    above, and say in the "go deeper" menu that you did.

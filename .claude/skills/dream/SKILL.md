@@ -97,15 +97,85 @@ polls a pane four hundred times looks busy and costs little, while one that re-r
 figure three times looks quiet and costs a lot. Sort the digests by cost, and read the top of that
 list first — the expensive sessions are where the waste is, and the correlation is usually blunt
 enough to name the cell before a scout has read a line. Note `Truncated`: a partial scan makes every
-count, tokens included, a FLOOR rather than a total. Per-job totals are also on the board (each
+count, tokens included, a FLOOR rather than a total. And when a corpus measurement includes the cell
+you are running in, exclude it or label it as MOVING — your own session is being appended to while you
+read it, so its number is the one figure in the sweep that will not reproduce, and two passes have now
+headlined a ratio for a cell they were executing inside. Per-job totals are also on the board (each
 job's `tokens`), which is the same number aggregated the other way — by job rather than by night.
+
+**The reduction is a cost control, not an access control.** Say so in the scout brief, and hand over
+the raw transcript's path alongside the reduced one. Thinking, tool results and attachments are
+exactly what `reduce` drops, so a question about where output tokens went, what a command actually
+returned, or what carl steered mid-turn CANNOT be answered from the artifact the scout was given — and
+every scout worth reading last night was one that ignored a "sparingly" and went to the raw JSONL
+anyway. Seven of them, independently; four of the night's best findings exist only because of it.
+A brief must not send a subagent to an artifact that cannot contain the answer.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
-unnamed subagents, not teammates. Give each one a scratch path and require its findings there: a
-scout's report is long, and the reply channel truncates. Spawn them in waves rather than all at once; a few at a time, with the
-remainder running as slots free. Every transcript gets read; the pass simply takes as long as it
-takes.
+unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
+a worktree-relative path) and require its findings there: a scout's report is long, and the reply
+channel truncates. Spawn them in waves rather than all at once; a few at a time, with the remainder
+running as slots free. Every transcript gets read; the pass simply takes as long as it takes. For how
+to WAIT on that many report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet
+and the sub-bullets under it; it is the one specification of the protocol and it applies here
+unchanged. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor` and
+`SendMessage` in one `ToolSearch`, arm ONE background until-loop over every report path using `-s`
+not `-f`, end the turn, and treat an expiry as "one of them is missing" rather than as a reason to
+re-arm.)
+
+**A scout needs an agent type that can write, and it must not be able to write the repo.** Spawn it
+`general-purpose` — or any type whose roster includes `Write`; never `Explore`, which has no `Write`
+tool at all, so a brief naming a report path is unsatisfiable by construction and the agent
+rationalises ("enforced read-only mode", "my configuration prohibits creating files") rather than
+saying so, while you wait on a file that is never coming. But `general-purpose` can write anything,
+including this cell's worktree, and this pass's one hard rule is that findings never enter git — so
+the guarantee that used to be structural is now a sentence in the brief, and it has to actually be
+there: *write nothing under the repo; "read-only" bars the repo, not your own report, which goes at
+the scratch path above.*
+
+**Hand a scout an observation, never a conclusion — and never a number you have not checked.** This is
+the single most-measured defect in the loop's own history: ten scouts in one night were each briefed
+with a derived figure stated as established fact, phrased so the answer was presupposed ("session [3]
+made 94 near-identical repeated calls — work out what that repetition was doing"; "Out=1,682 — were 32
+Bash calls earned"). Every one of those premises was false, several of them artifacts of counters this
+very file warns scouts about, and each cost its scout calls to disprove before it could start. The
+authority is what makes it expensive: a scout distrusts the digest because the brief told it to, and
+trusts the BRIEF, which nothing told it to distrust. Two rules follow. Every counter you quote into a
+brief is a hypothesis — write it as "the digest reports X; verify before building on it". And phrase
+an anomaly as a question, not as a claim: "say what that shape means" got a scout to reject the
+implied reading and find the real cause, where "confirm that X" would have got X. The same sentence
+pasted into every brief is its own defect — when you suspect a cross-cutting cause, investigate it
+once yourself or name ONE scout its owner, rather than making N scouts rediscover it in parallel.
+
+**Require a per-transcript coverage line, as a filled slot rather than a habit.** A scout that
+`sed`-peeked twelve of seventeen files and closed with "17 sessions read" is not lying; it is
+answering a template that never asked. Put READ or SAMPLED per assigned transcript in the report
+format, and bar a "clean" verdict on a SAMPLED one — a template slot gets filled, a good intention
+does not. This costs one line and it is the difference between a quiet night and a blind one: the
+sharpest catch in the corpus was a scout that read the SOURCE rather than the relay and found a
+"138 tests, 0 failures" verdict that had dropped an explicit "but the UI tests fail, flagged so
+nobody records iOS green unqualified" — dropped once by a lead, then again by the pass whose whole
+job is catching exactly that.
+
+**Then read the reports.** The file contract is justified by "a report that exists only as a chat
+reply is one that gets lost" — and the writing half is the half that keeps getting enforced. One
+pass commissioned 385 KB of scout reports, `ls`'d the directory twice, opened nothing, and
+synthesized the night from the task-notification summaries alone: **18% of what it paid for**. A
+summary is a scout's own compression of its findings, made before it knew what the other scouts
+found; the corroboration this pass runs on lives in the parts it dropped. If the reports are too
+large to hold at once, that is itself a job for one more subagent under exactly the scout rules above
+— `general-purpose`, scratch path outside the repo, file written in one shot, and not at all under
+`solo: true` — handed the findings directory and asked for the cross-cutting matrix. But "I read the
+notifications" is not reading them.
+The checkable form of this rule lives in the report: **every finding cites its source, and a finding
+that came from a scout cites that scout's file and quotes one verbatim line out of it.** A finding
+from anywhere else cites what it actually came from — the digest metric, the feedback row and its
+snapshot, the watchlist id — and a `solo: true` night says so once at the top and cites what it read
+directly. A night synthesized from notifications cannot produce the scout citations, so it fails its
+own report format rather than merely disobeying a paragraph. Cite the source you HAVE; a citation
+invented to satisfy the format is worse than none, in the one document whose whole value is that its
+evidence is real.
 
 Scouts exist to find what counting cannot:
 
