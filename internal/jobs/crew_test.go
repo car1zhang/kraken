@@ -40,9 +40,13 @@ func TestZeusBrief(t *testing.T) {
 		"kraken feedback addressed x",
 		"kraken owns feedback entry creation and edits",
 		// three named single-dimension athena review variants, dispatched in
-		// parallel, with a targeted (not full) re-review on a blocking finding
+		// parallel, with a targeted (not full) re-review on a blocking finding.
+		// Two of them are already live from the authoring dispatch, so the
+		// round is one message but only ONE Agent call — spawning three would
+		// duplicate a bare name and hand the "fix your own assertion" brief to
+		// an agent that never wrote a test.
 		"athena-logic", "athena-edge", "athena-style",
-		"dispatched in parallel", "one message, three Agent calls",
+		"dispatched in parallel in one message", "ONE new Agent call, not three",
 		"re-review with only the flagging variant(s)",
 		// the crew are TEAMMATES: named Agent-tool spawns with real panes, not
 		// anonymous in-process subagents
@@ -143,6 +147,15 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			{"'go deeper' menu", "info"},
 			{"manual test ready", "do"},
 			{"90-build-report.md", "do"},
+			// the blind-authorship artifact and the test-file naming that goes
+			// with it. The brief says "the frozen contract" and stops there;
+			// naming the file, its columns, and the per-dimension filenames is
+			// procedure, and it lives in do/SKILL.md for the same reason
+			// 90-build-report.md's shape does.
+			{"50-contract.md", "do"},
+			{"symbol · signature · obligations · owner", "do"},
+			{"_contract_test.go", "do"},
+			{"_edge_test.go", "do"},
 			// PR mechanics — pr/SKILL.md
 			{"gh pr create", "pr"},
 			{"checkout -B", "pr"},
@@ -163,11 +176,11 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // TestZeusBriefDoesNotRestateSkills, catching bulk that arrives as prose the
 // token list does not happen to name.
 //
-// The ceiling moved 10,000 -> 12,000 to admit the load-estimate rule (the
-// `kraken load set` paragraph in zeusBrief, 1,017 bytes with its 1-10 scale,
-// measured for the "lean" slug below). That number is the ONLY thing this
-// test's failure message tells you not to touch, so the reasoning is spelled
-// out rather than left to the diff.
+// The ceiling has moved twice: 10,000 -> 12,000 to admit the load-estimate
+// rule (the `kraken load set` paragraph in zeusBrief, 1,017 bytes with its
+// 1-10 scale), and 12,000 -> 13,000 to admit blind test authorship. That
+// number is the ONLY thing this test's failure message tells you not to
+// touch, so both moves are reasoned out below rather than left to the diff.
 //
 // WHY IT BELONGS IN THE BRIEF. zeusBrief's own doc comment sets the split:
 // the brief carries what no skill can know. Every-turn enforcement is a
@@ -180,31 +193,58 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // copies of one 1-10 ruler is exactly the drift
 // TestZeusBriefDoesNotRestateSkills exists to prevent.
 //
-// WHY 12,000 RATHER THAN A TIGHTER NUMBER. The pre-change brief was 9,833
-// bytes against the old 10,000 — 167 bytes of headroom — so the ceiling was
-// already tracking the brief rather than bounding it. It also measures a
-// 4-character slug, and the brief carries the slug TEN times: seven direct
-// interpolations plus one each inside CellBranch, CellArtifacts and
-// docFragmentsDir. So this job's own `job-load-categorizing` renders 11,020
-// bytes where "lean" renders 10,850 — 170 bytes for 17 extra characters,
-// which is the ten showing up as arithmetic. A ceiling of 11,000 would
-// therefore have passed this test and still been exceeded in production.
-// 12,000 leaves room for both the longest plausible slug and a future
-// sentence.
+// WHY IT MEASURES A LONG SLUG. The brief carries the slug TEN times: seven
+// direct interpolations plus one each inside CellBranch, CellArtifacts and
+// docFragmentsDir. Every extra slug character therefore costs ten bytes, and
+// for its entire life until this change the input it measured was the 4-character
+// "lean" — which is the SHORTEST brief the function can emit, not a
+// representative one. Measured this session against ~/Documents/pluto: 25
+// live and archived job slugs exceed 23 characters and the longest is
+// `monitor-adaptive-capacity-cache-shadowing` at 41, which renders 370 bytes
+// more than "lean" does. A ceiling checked at the floor can be green while
+// every real cell is over it — which is the same defect the 10,000 -> 12,000
+// move rejected a tighter number FOR, so this test was failing its own
+// argument for as long as it measured "lean". The input is now a 48-character
+// slug — past the longest observed, and the arithmetic above makes any shorter
+// slug strictly cheaper, so one measurement bounds them all.
+//
+// WHY 13,000 RATHER THAN 12,000. Blind test authorship (hephaestus implements
+// and writes no spec tests; athena-logic and athena-edge author them from the
+// frozen contract; a failing blind test is arbitrated into one of three
+// verdicts) is a crew CONTRACT, and the brief is where the crew contract
+// lives — the procedure that carries it out is in do/SKILL.md, and
+// TestZeusBriefDoesNotRestateSkills pins that split by forbidding this brief
+// the artifact filename and the per-dimension test filenames. What is left
+// here is irreducible: who authors what, when they run, and how a failure is
+// classified, and in what ORDER — the arbitration has to finish before the
+// review round, because reviewing means reading the implementation and an
+// author cannot un-read it, so that sequencing is a contract clause and not a
+// procedure detail. It cost ~1,160 bytes (HEAD's brief renders 11,290 at this
+// slug length, this one 12,450), which the 12,000 ceiling could not absorb
+// once measured honestly at 48 characters rather than at 4. Raising it while
+// simultaneously fixing the input is the only combination that leaves a
+// number that actually bounds something: 13,000 against a measured 12,450 at
+// 48 characters is 550 bytes — a little under the 710 this ceiling actually
+// had at this slug length before the change, and well under the 980 it was
+// believed to have. The next crew change is a trim, not another raise.
 //
 // What the net still catches is unchanged, and the scale is worth stating
-// because it is what makes 12,000 a bound rather than a formality: the
+// because it is what makes 13,000 a bound rather than a formality: the
 // duplication that caused the original outage was the whole /aim pipeline,
 // ~10.6KB of it (zeusBrief measured 17,005 bytes at bf91ca5^ and 6,407 at
 // bf91ca5, the commit that staged the brief in a file and deduped it).
 // Anyone raising this number again should be able to write a paragraph like
 // this one first.
 func TestZeusBriefStaysLean(t *testing.T) {
-	const ceiling = 12_000
-	brief := zeusBrief(&Job{Slug: "lean"})
+	const ceiling = 13_000
+	// Longer than any slug observed on this machine (41), so the ten
+	// interpolations make every real brief cheaper than this one.
+	slug := strings.Repeat("s", 48)
+	brief := zeusBrief(&Job{Slug: slug})
 	if len(brief) > ceiling {
-		t.Errorf("brief is %d bytes, over the %d-byte ceiling — procedure has crept back in from "+
-			"the skills; move it to .claude/skills/ rather than raising this number", len(brief), ceiling)
+		t.Errorf("brief is %d bytes for a %d-char slug, over the %d-byte ceiling — procedure has "+
+			"crept back in from the skills; move it to .claude/skills/ rather than raising this number",
+			len(brief), len(slug), ceiling)
 	}
 }
 
@@ -423,7 +463,11 @@ func TestZeusBriefTeammatesNotSubagents(t *testing.T) {
 	for _, want := range []struct{ token, why string }{
 		// (a) the crew is named as teammates, not subagents
 		{"implementation slices to teammates you name hephaestus", "hephaestus is a teammate"},
-		{"review it with three teammates you name athena-logic, athena-edge, and athena-style", "the athena variants are teammates"},
+		// the authoring pair and the review-only third are introduced in two
+		// different sentences now, so the teammate-ness of each is pinned where
+		// it is actually claimed rather than in one merged phrase.
+		{"dispatch ONE athena-logic and ONE athena-edge", "the test-authoring variants are named agents"},
+		{"a third teammate you name athena-style", "the review-only variant is a teammate too"},
 		// (b) the mechanism: a `name` on the Agent tool, and what it buys
 		{"A teammate is an Agent-tool call that passes a `name`", "the teammate mechanism"},
 		{"its own tmux pane", "why naming matters to kraken: a real pane"},
@@ -454,6 +498,100 @@ func TestZeusBriefTeammatesNotSubagents(t *testing.T) {
 	} {
 		if strings.Contains(brief, stale) {
 			t.Errorf("brief still delegates real work to anonymous subagents: %q", stale)
+		}
+	}
+}
+
+// TestZeusBriefBlindTestAuthorship pins the separation between who implements a
+// slice and who decides what that slice was supposed to do.
+//
+// The anchors are kept to the shortest fragment that still identifies the rule
+// — a verdict name, a short distinctive phrase — rather than the sentences they
+// sit in. That is a deliberate limit rather than a preference: this file already
+// holds ~112 anchors, 39 of them five words or longer, and every one of those is
+// a build break waiting on a harmless reword. TestZeusBriefTeammatesNotSubagents
+// in this same change is the demonstration — its anchor had to be rewritten
+// because the sentence carrying it was restructured, while the claim it pins
+// (all three variants are teammates) never changed at all. Where a rule
+// only exists as a clause (the fix-brief citation rule below), the anchor takes
+// its distinctive noun phrase and leaves the rest of the sentence free to move.
+//
+// What each anchor protects is a distinct way the arrangement collapses back
+// into the old one —
+//
+//   - "never writes a test for the spec": the implementer writing the tests is
+//     the thing being removed; without this the rest is decoration.
+//   - the regression carve-out: hephaestus may still pin a defect it fixes, so
+//     the rule needs its boundary stated or it reads as "hephaestus never
+//     touches a test file" and a fixed bug ships unpinned.
+//   - "SAME message": the authors are blind because they start before there is
+//     an implementation to read, not because they promised not to look. A brief
+//     that drops this leaves a promise nobody can audit.
+//   - "do NOT run": tests written against absent code fail for uninteresting
+//     reasons; the barrier is what makes the first real run meaningful.
+//   - the three verdict names: a failing blind test is ambiguous by
+//     construction, and a brief without the trichotomy leaves zeus to invent one
+//     — the tempting invention being "the test must be wrong, weaken it".
+//   - "never send athena to read the implementation": the one resolution that
+//     silently converts every later round back to sighted authorship.
+func TestZeusBriefBlindTestAuthorship(t *testing.T) {
+	brief := zeusBrief(&Job{Slug: "blind"})
+	for _, want := range []struct{ token, why string }{
+		{"NO test list", "the slice brief stops enumerating cases"},
+		{"never writes a test for the spec", "the implementer does not author the requirement's tests"},
+		{"regression pin", "…but a defect it fixes may still be pinned"},
+		{"tests bugs, athena tests requirements", "the line between the two"},
+		{"SAME message", "authoring starts before there is code to read"},
+		{"ONE athena-logic and ONE athena-edge", "one authoring pair for the fan-out, not one per slice"},
+		{"no sight of the implementation", "the blindness is stated, not implied"},
+		{"do NOT run", "authoring and running are separate steps"},
+		{"EVERY hephaestus slice is done", "one barrier for the whole fan-out"},
+		{"ONE new Agent call, not three", "the live authors are resumed, not re-spawned"},
+		{"code bug", "verdict 1"},
+		{"test bug", "verdict 2"},
+		{"contract defect", "verdict 3"},
+		{"a requirement nobody set", "silence defaults to a test bug, not an amendment"},
+		{"a genuine product decision", "…and to a contract defect only when it is a real decision"},
+		{"read the implementation", "the resolution that would destroy the property"},
+		{"contract obligation, never the failing assertion", "the test must not become the requirement"},
+		{"BOTH gates have cleared its slice", "the implementer outlives both gates, not just the join"},
+		{"Arbitrate the join BEFORE any review", "an author must finish while still blind"},
+	} {
+		if !strings.Contains(brief, want.token) {
+			t.Errorf("brief missing %q (%s)", want.token, want.why)
+		}
+	}
+	// Solo has no crew at all, so every clause above is unactionable there and
+	// would be pure bulk in a brief already close to its ceiling.
+	// Checked here: every anchor above that names crew procedure. A clause moved
+	// out of the else arm into the shared prefix would otherwise leave this green
+	// while the solo brief carried procedure it cannot act on. Deliberately count-free:
+	// this comment has been wrong twice already, each time because an anchor was
+	// added and the number was not.
+	// The four omitted are the bare verdict names and "read the implementation":
+	// generic enough English that unrelated future prose could plausibly contain
+	// one, so asserting their ABSENCE would pin a coincidence rather than a rule.
+	solo := zeusBrief(&Job{Slug: "blind-solo", Solo: true})
+	for _, want := range []struct{ token, why string }{
+		{"NO test list", "the slice brief stops enumerating cases"},
+		{"never writes a test for the spec", "the implementer does not author the requirement's tests"},
+		{"regression pin", "…but a defect it fixes may still be pinned"},
+		{"tests bugs, athena tests requirements", "the line between the two"},
+		{"SAME message", "authoring starts before there is code to read"},
+		{"ONE athena-logic and ONE athena-edge", "one authoring pair for the fan-out, not one per slice"},
+		{"no sight of the implementation", "the blindness is stated, not implied"},
+		{"do NOT run", "authoring and running are separate steps"},
+		{"EVERY hephaestus slice is done", "one barrier for the whole fan-out"},
+		{"ONE new Agent call, not three", "the live authors are resumed, not re-spawned"},
+		{"a requirement nobody set", "silence defaults to a test bug, not an amendment"},
+		{"a genuine product decision", "…and to a contract defect only when it is a real decision"},
+		{"contract obligation, never the failing assertion", "the test must not become the requirement"},
+		{"BOTH gates have cleared its slice", "the implementer outlives both gates, not just the join"},
+		{"Arbitrate the join BEFORE any review", "an author must finish while still blind"},
+	} {
+		if strings.Contains(solo, want.token) {
+			t.Errorf("solo brief carries the blind-authorship contract (%q — %s) despite having no crew",
+				want.token, want.why)
 		}
 	}
 }

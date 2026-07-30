@@ -149,6 +149,23 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// is what would freeze a duplicate the brief later drifts from
 			"The crew is the brief's crew, and the crew are TEAMMATES",
 			"read it there rather than re-deriving it here",
+			// The blind-authorship split, anchored on both sides of the line.
+			// The first four are skill-ONLY: crew_test.go's forbidden-token
+			// list pins the brief not to name the artifact, its columns, or
+			// the per-dimension filenames, so if they vanish from here they
+			// exist nowhere. The three verdict names are deliberately in BOTH
+			// — the brief has to be able to classify a failure without
+			// re-reading a skill, and this file owns how the classification is
+			// applied — so these three anchor the procedure, not the naming.
+			// The last two pin the parts a wrong edit could delete while every
+			// noun above still matched: the barrier, and author-without-running.
+			"50-contract.md", "symbol · signature · obligations · owner",
+			"_contract_test.go", "_edge_test.go",
+			"code bug", "test bug", "contract defect",
+			// crew-neutral wording on purpose: this half of the file is what a
+			// standalone /do reads, where hephaestus and athena do not exist.
+			// The cell section below binds the roles to the names.
+			"author but do not run", "EVERY implementation slice is done",
 			"stop each still-running teammate with `TaskStop`", "There is no team-delete step",
 			"read-only exploration only",
 			"manual test ready:", "`.claude/skills/pr/SKILL.md`", "do NOT invoke `/pr` by name",
