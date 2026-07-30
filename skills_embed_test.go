@@ -102,6 +102,13 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"hermes-<diagram-id>", "an Agent-tool call that passes a **`name`**",
 			"`SendMessage` the line-numbered violations as a fix-round brief",
 			"box → kind", "kind → shape table", "never dictate coordinates, markup, or a shape class",
+			// the researcher spawn rule. It is stated in aim, info AND dream
+			// because each is read INSTEAD of the others, so each copy is the
+			// only one its own path ever sees — which is exactly why all three
+			// are pinned: deleting it from any one file is otherwise silent,
+			// and the symptom is a lead waiting forever on a report an
+			// `Explore` agent had no tool to write.
+			"never `Explore`",
 			// the questions WRITE verbs (the brief keeps only the read verb
 			// and the silent-update rule)
 			"kraken questions set", "kraken questions add|update|remove",
@@ -128,6 +135,9 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// carry the same teammate naming — on the explanation path it
 			// is read INSTEAD of /aim's, so a drop here drops it entirely
 			"designed AND rendered by a TEAMMATE", "hermes-<diagram-id>",
+			// see the same token on aim above — /info's copy is the only one
+			// the explanation path reads
+			"never `Explore`",
 		}},
 		{"do", []string{
 			"90-build-report.md", "Discrepancies vs. the plan", "Complications",
@@ -162,6 +172,9 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"two independent sightings", "judgment calls",
 			"suggested_fix", "prompting",
 			"unnamed subagents", "solo: true",
+			// see the same token on aim above — the scouts are this skill's
+			// researchers and hit the same wall
+			"never `Explore`",
 		}},
 	} {
 		src := readEmbedded(t, c.skill+"/SKILL.md")
@@ -171,6 +184,43 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 					"this to the skill and keeps no copy, so dropping it here drops it everywhere",
 					c.skill, want)
 			}
+		}
+	}
+}
+
+// TestWaitProtocolPointersResolve pins the one cross-SKILL reference in the
+// bundle. `aim`, `info` and `dream` each fan agents out and none of them
+// states how to wait for the results; all three send the reader to `do`'s step
+// 4 instead, by heading and bullet title. That is deliberate — the protocol was
+// rewritten five commits running while it lived in one file, and a fourth copy
+// is a fourth thing to drift — but it makes those two strings load-bearing
+// text in a file whose own author has no reason to know they are quoted
+// elsewhere.
+//
+// The repo already tests brief-vs-skill drift in both directions
+// (TestZeusBriefDoesNotRestateSkills, TestSkillsOwnTheCellContract); this is
+// the same guard for skill-vs-skill. Without it, retitling do's bullet leaves
+// three skills pointing at a heading that no longer exists, and the failure is
+// silent: the reader Reads the file, does not find the words, and improvises
+// the wait — which is precisely the ls-in-a-loop the pointers exist to end.
+func TestWaitProtocolPointersResolve(t *testing.T) {
+	do := readEmbedded(t, "do/SKILL.md")
+	for _, anchor := range []string{
+		"### 4. Plan The Implementation", // the "step 4" every pointer names
+		"**How to wait:",                 // the bullet title they name inside it
+	} {
+		if !strings.Contains(do, anchor) {
+			t.Errorf(".claude/skills/do/SKILL.md no longer contains %q — aim, info and dream all send "+
+				"a reader to it by those exact words, and a pointer that misses fails silently: the "+
+				"agent improvises the wait instead", anchor)
+		}
+	}
+	for _, skill := range []string{"aim", "info", "dream"} {
+		src := readEmbedded(t, skill+"/SKILL.md")
+		if !strings.Contains(src, ".claude/skills/do/SKILL.md") {
+			t.Errorf(".claude/skills/%s/SKILL.md no longer points at do/SKILL.md for the wait protocol "+
+				"— it fans agents out and states no protocol of its own, so dropping the pointer leaves "+
+				"the reader with nothing", skill)
 		}
 	}
 }
