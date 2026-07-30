@@ -354,14 +354,18 @@ func jobTokensIndex(st *store.Store) map[int64]store.JobTokens {
 
 // webTokensFor looks one job's row out of jobTokensIndex' map and shapes it
 // for the wire. Keyed on the job's immutable id: the rows moved off the slug
-// in schema v11 precisely because two generations of one reused name shared a
-// single row, and both cards then showed the sum of both jobs' spend.
+// in schema v12 precisely because two generations of one reused name shared a
+// single row, and both cards then showed the sum of both jobs' spend. (v11 is
+// the zeus/subagent SPLIT of the same counters and left the slug keying alone —
+// two migrations one apart that both rewrote job_tokens, which is exactly why
+// naming the wrong one here would send a reader to the wrong doc comment.)
 //
 // A job with no row — the store's ErrNotFound case, and every job whose
 // transcripts have not been summed yet — returns nil, so webJob's omitempty
 // drops the key rather than synthesising a zero row that would claim the job
-// cost nothing. After the v11 migration that is EVERY job for a few minutes,
-// since the counters are cleared and re-summed by the daemon's throttled pass.
+// cost nothing. After a migration that WIPES the counters — v11, and v14 for
+// the streamed-output fix — that is EVERY job for a few minutes, since they are
+// cleared and re-summed from byte zero by the daemon's throttled pass.
 func webTokensFor(index map[int64]store.JobTokens, jobID int64) *webTokens {
 	t, ok := index[jobID]
 	if !ok {

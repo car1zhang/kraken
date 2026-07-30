@@ -71,9 +71,11 @@ const tokensIdleBatch = 8
 //     bare-slug path — Claude Code buckets by the agent's startup cwd and has
 //     no idea kraken renamed anything — so a scan that knew only the new name
 //     would report ZERO for every job's entire history. That is not a
-//     hypothetical: the v11 migration DROPS every token row and the daemon
-//     re-sums from scratch, so the legacy base is the only thing standing
-//     between the board and a wall of zeroes the morning after the cutover.
+//     hypothetical, and it is LIVE rather than historical: the v11 migration
+//     dropped every token row, and v14 drops them all again this release (the
+//     streamed-output fix — core.tokenGroup), so the daemon re-sums from
+//     scratch and the legacy base is the only thing standing between the board
+//     and a wall of zeroes the morning after.
 //
 // The legacy bare-slug base is the one place where two same-slug jobs still
 // collide, and it is not fixable here: their pre-cutover transcripts are
