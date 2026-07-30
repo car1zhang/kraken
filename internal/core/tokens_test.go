@@ -448,17 +448,28 @@ func TestSumTokensDeltaLargeFileIsStreamed(t *testing.T) {
 
 // TestSumTokensDeltaCountsOneMessageOnce is the first of the two rules that
 // separate this from a naive per-record sum. Claude Code writes one API
-// message as one record PER CONTENT BLOCK — thinking, text, each tool_use —
-// and stamps the SAME cumulative usage on every one of them. Counting each
-// record inflated real cell dirs by 1.98x; cache-read is per API call and
-// cannot legitimately be counted eight times.
+// message as one record PER CONTENT BLOCK — thinking, text, each tool_use.
+// Counting each record inflated real cell dirs by 1.98x; cache-read is per API
+// call and cannot legitimately be counted eight times.
+//
+// THIS FIXTURE IS THE ROOT-TRANSCRIPT SHAPE, and saying so is the point.
+// Repeating one usage object verbatim is exactly what a root transcript does
+// (0 of 35,374 root groups on this machine vary in any counter), and for years
+// it was the ONLY shape any fixture here had — which is how "the same
+// cumulative usage on every record" survived as a stated invariant while every
+// subagent sidecar ever written contradicted it. The sidecar shape, where
+// output_tokens rises across the group, is
+// TestSumTokensDeltaTakesTheLastOutputOfAStreamedGroup. Keep both: this one is
+// the guard that the fix is a no-op on root transcripts, which is what keeps
+// the 118/119 whole-corpus agreement intact.
 func TestSumTokensDeltaCountsOneMessageOnce(t *testing.T) {
 	projects := mineHome(t)
 	now := time.Now().UnixMilli()
 	dir := filepath.Join(projects, "-proj")
 	u := tokUsage{in: 2, out: 7479, cw: 309, cr: 430139}
 	mineWrite(t, projects, "-proj", "sess.jsonl",
-		// one message, four blocks, one usage object repeated verbatim
+		// one message, four blocks, one usage object repeated verbatim —
+		// the ROOT shape; a sidecar's output would rise across these four
 		tokAssistantFull(t, now, u, "msg_A", ""),
 		tokAssistantFull(t, now, u, "msg_A", ""),
 		tokAssistantFull(t, now, u, "msg_A", ""),
@@ -477,7 +488,7 @@ func TestSumTokensDeltaCountsOneMessageOnce(t *testing.T) {
 // SKIPS non-assistant records rather than being reset by them: a message's
 // blocks are routinely interleaved with the tool_result user records they
 // produced, and treating those as a boundary counts the message twice.
-// Measured on this machine: 9,385 same-id pairs separated by 1-5 non-assistant
+// Measured on this machine: 9,385 same-id GROUPS whose blocks are separated by 1-5 non-assistant
 // records.
 func TestSumTokensDeltaGroupSurvivesToolResults(t *testing.T) {
 	projects := mineHome(t)
@@ -547,7 +558,7 @@ func TestSumTokensDeltaSidecarsHaveNoSessionID(t *testing.T) {
 // TestSumTokensDeltaGroupSurvivesTheResumeBoundary is the interaction between
 // the group rule and incrementality, and it is the one that actually broke in
 // development: a message split across two passes must still be counted once.
-// The boundary is recovered from the file by precedingGroupID rather than
+// The boundary is recovered from the file by precedingGroup rather than
 // persisted, and the walk has to skip the tool_result records in between —
 // looking back exactly one record double-counted a real transcript.
 func TestSumTokensDeltaGroupSurvivesTheResumeBoundary(t *testing.T) {
@@ -711,13 +722,13 @@ func TestSumTokensDeltaUnstattableFileIsReported(t *testing.T) {
 	}
 }
 
-// TestPrecedingGroupIDReportsExhaustion pins the direction the lookback bounds
+// TestPrecedingGroupReportsExhaustion pins the direction the lookback bounds
 // fail in and that failing is never silent. Running out of lookback leaves the
 // seed unknown, so the group at the boundary is counted as new — and if it was
 // a continuation, that message is counted TWICE. An over-count is the one
 // direction nothing downstream can subtract back out, so it must be reported
 // rather than hidden behind an empty string that means five other things.
-func TestPrecedingGroupIDReportsExhaustion(t *testing.T) {
+func TestPrecedingGroupReportsExhaustion(t *testing.T) {
 	projects := mineHome(t)
 	now := time.Now().UnixMilli()
 	dir := filepath.Join(projects, "-proj")
@@ -760,6 +771,52 @@ func TestPrecedingGroupIDReportsExhaustion(t *testing.T) {
 	// tool_results and this repo records real lines at 8.3 MB.
 	fat := `{"type":"user","message":{"content":"` + strings.Repeat("x", 8<<20) + `"}}`
 	t.Run("past the byte bound", func(t *testing.T) { run(t, 8, fat, true) })
+}
+
+// TestSumTokensDeltaReportsSeedAndScanErrorsTogether pins that a file whose
+// scan ALSO stopped early does not lose its unresolved-seed warning. The two
+// describe different inexactness about one file — a floor (the scan stopped)
+// versus a possible double-count (the group at the resume boundary could not be
+// seeded) — and returning only the scan error left the one file that has both
+// reporting only half of what is wrong with it. The counters are unaffected:
+// every caller treats every error from here identically, so this is purely
+// about what the log says.
+func TestSumTokensDeltaReportsSeedAndScanErrorsTogether(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	u := tokUsage{out: 100}
+
+	// Enough intervening records to blow the lookback bound, so the resume
+	// cannot seed its group — the same construction as the exhaustion test.
+	lines := []string{tokAssistantFull(t, now, u, "msg_A", "sess")}
+	for i := 0; i < groupLookbackRecords+6; i++ {
+		lines = append(lines, `{"type":"user","message":{"content":"r"}}`)
+	}
+	path := mineWrite(t, projects, "-proj", "sess.jsonl", lines...)
+
+	_, offs, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	// After the boundary: the SAME message (so the seed matters), then a line
+	// over the scanner ceiling (so the scan also stops early).
+	tokAppend(t, path,
+		tokAssistantFull(t, now, u, "msg_A", "sess"),
+		`{"type":"assistant","message":{"content":"`+strings.Repeat("x", mineScanBufMax+1)+`"}}`,
+		tokAssistant(t, now, tokUsage{out: 7}),
+	)
+	_, _, err = SumTokensDelta(dir, offs)
+	if err == nil {
+		t.Fatal("both a truncated scan and an unresolved seed must be reported")
+	}
+	if !strings.Contains(err.Error(), "group seed") {
+		t.Errorf("error = %v\nwant it to still carry the unresolved-seed warning", err)
+	}
+	if !strings.Contains(err.Error(), "token too long") && !strings.Contains(err.Error(), "partial token scan") {
+		t.Errorf("error = %v\nwant it to also carry the scan failure", err)
+	}
 }
 
 // TestSidecarOwnershipUsesTheParentSession closes the one-sided ownership
@@ -1189,6 +1246,350 @@ func TestIsAgentTranscriptEdges(t *testing.T) {
 		}
 		if probe(t, p) {
 			t.Fatal("a head with nothing in it degrades to the lead, the conservative bucket")
+		}
+	})
+}
+
+// --- the streaming output_tokens rule ---
+
+// TestSumTokensDeltaTakesTheLastOutputOfAStreamedGroup is the sidecar shape
+// the first-wins collapse got wrong. Three of the four counters really are
+// stamped identically on every record of a message; `output_tokens` is not.
+// In a subagent sidecar the leading records carry a streaming PARTIAL and the
+// last carries the total — real groups on this machine read `[2, 10728]`,
+// `[3, 3241]`, `[5, 184]` — and keeping the first record took the 2. Measured
+// over every cell transcript here: 4,022 of 4,444 sidecar groups affected,
+// 31,832 output tokens counted where 4,621,522 were spent (6.57x on all
+// sidecar output). It falls entirely on delegated work, which is exactly the
+// half the board renders as total-minus-zeus.
+func TestSumTokensDeltaTakesTheLastOutputOfAStreamedGroup(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	// One message, three blocks: the other three counters repeat verbatim
+	// (which is what the corpus shows) while the output streams up.
+	mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 2, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 1204, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 10728, cw: 309, cr: 88000}, "msg_A", ""),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	// out is the LAST record's; the other three are the first's, counted once.
+	tokWant(t, got, 4, 10728, 309, 88000, 1)
+}
+
+// TestSumTokensDeltaRepeatRecordCountsOnlyItsOutput is the other side of the
+// same rule, and it is here to stop the fix being "simplified" into counting
+// every record. A repeat record contributes its output delta and NOTHING else:
+// `input_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`
+// are per API call, 0 of 39,818 multi-record groups on this machine vary in
+// any of them, and summing one eight times over-states a real cell by ~2x.
+// The fixture gives the repeat records deliberately non-zero values for those
+// three so that counting them would be visible rather than a silent no-op.
+func TestSumTokensDeltaRepeatRecordCountsOnlyItsOutput(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistantFull(t, now, tokUsage{in: 7, out: 3, cw: 11, cr: 5000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 900, out: 3241, cw: 900, cr: 900}, "msg_A", ""),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 7, 3241, 11, 5000, 1)
+}
+
+// TestSumTokensDeltaStreamedGroupSurvivesTheResumeBoundary is the interaction
+// the design had to be chosen for: a group whose streaming records straddle a
+// resume must end up counted once, at its LAST record's output.
+//
+// The seed carries the group's committed output as well as its id, recovered
+// from the one record precedingGroup already reads. That is exact rather than
+// conservative because the forward rule is last-wins: what a pass committed
+// for a group is always the output of the last record of it that pass read.
+// The two failure modes it rules out are both permanent — these counters only
+// accumulate, so nothing downstream can subtract an over-count back out:
+// seeding the output at zero would book the tail's full cumulative figure on
+// top of the head's, and not resuming the group at all would count the whole
+// message twice.
+func TestSumTokensDeltaStreamedGroupSurvivesTheResumeBoundary(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	path := mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 2, cw: 309, cr: 88000}, "msg_A", ""),
+		mineUser(t, now, []any{mineToolResult("t1", false, "ok")}),
+	)
+	first, offs, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	tokWant(t, first, 4, 2, 309, 88000, 1)
+
+	// the rest of the SAME message lands after the boundary, output still rising
+	tokAppend(t, path,
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 1204, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 10728, cw: 309, cr: 88000}, "msg_A", ""),
+	)
+	second, offs, err := SumTokensDelta(dir, offs)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	// only the OUTPUT the head had not already booked: 10728 - 2.
+	tokWant(t, second, 0, 10726, 0, 0, 1)
+
+	// and a genuinely new message after it still counts in full
+	tokAppend(t, path, tokAssistantFull(t, now, tokUsage{in: 1, out: 5, cw: 2, cr: 3}, "msg_B", ""))
+	third, _, err := SumTokensDelta(dir, offs)
+	if err != nil {
+		t.Fatalf("third: %v", err)
+	}
+	tokWant(t, third, 1, 5, 2, 3, 1)
+}
+
+// TestSumTokensDeltaBoundarySeedIgnoresAReplayedRecord pins the one place the
+// seed could disagree with the forward tracker. precedingGroup must apply the
+// ownership rule exactly as addTokenLine does: a replayed record advances the
+// id but commits NO output, so seeding the group's committed figure from its
+// usage would make the next pass subtract against a number the total never
+// contained — an under-count of a real message.
+func TestSumTokensDeltaBoundarySeedIgnoresAReplayedRecord(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	path := mineWrite(t, projects, "-proj", "fork.jsonl",
+		// a big replayed record from the parent: counted nowhere in this file
+		tokAssistantFull(t, now, tokUsage{out: 9000, cr: 90000}, "msg_P", "parent"),
+	)
+	first, offs, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	tokWant(t, first, 0, 0, 0, 0, 1)
+
+	// the fork's own next message resumes right after that replayed record
+	tokAppend(t, path, tokAssistantFull(t, now, tokUsage{out: 40, cr: 11}, "msg_F", "fork"))
+	second, _, err := SumTokensDelta(dir, offs)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	tokWant(t, second, 0, 40, 0, 11, 1)
+}
+
+// TestDigestTakesTheLastOutputOfAStreamedGroup is the mine.go half. The dream
+// loop ranks the night's sessions off this digest, and digestTranscript
+// carried the same first-wins rule inline — so a subagent-heavy session read
+// 6.5x low on output and sorted below sessions that had done less.
+func TestDigestTakesTheLastOutputOfAStreamedGroup(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+
+	mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 2, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 1204, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 10728, cw: 309, cr: 88000}, "msg_A", ""),
+	)
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "agent-1.jsonl")
+	if d.Out != 10728 {
+		t.Fatalf("digest Out = %d, want 10728 — a group's output is its LAST record's, not its first's", d.Out)
+	}
+	if d.In != 4 || d.CacheWrite != 309 || d.CacheRead != 88000 {
+		t.Fatalf("digest in/cw/cr = %d/%d/%d, want 4/309/88000 — the other three are counted once",
+			d.In, d.CacheWrite, d.CacheRead)
+	}
+	if res.Tokens.Out != 10728 {
+		t.Fatalf("MineResult.Tokens.Out = %d, want 10728", res.Tokens.Out)
+	}
+}
+
+// TestBothReadersShareOneGroupRule is a SHAPE test, not a counting one. The
+// first-wins rule used to be written out twice — once in addTokenLine, once
+// inline in mine.go's digestTranscript loop — and that is the whole reason a
+// premise contradicted by every subagent sidecar ever written read as ground
+// truth for as long as it did: the two readers agreed with each other, so any
+// test comparing them passed, and neither agreed with the transcripts.
+//
+// So this pins that the per-job sum and the per-session digest produce the
+// SAME four counters for the same streamed group. It would have passed before
+// the fix too (both were wrong identically), which is exactly why it is not
+// offered as a regression test — it is here to fail if someone re-inlines one
+// of the two call sites and then changes only that one.
+func TestBothReadersShareOneGroupRule(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	dir := filepath.Join(projects, "-proj")
+
+	mineWrite(t, projects, "-proj", filepath.Join("sess", "subagents", "agent-1.jsonl"),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 2, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 1204, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 4, out: 10728, cw: 309, cr: 88000}, "msg_A", ""),
+		tokAssistantFull(t, now, tokUsage{in: 1, out: 5, cw: 2, cr: 3}, "msg_B", ""),
+	)
+
+	sum, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "agent-1.jsonl")
+
+	if sum.In != d.In || sum.Out != d.Out || sum.CacheWrite != d.CacheWrite || sum.CacheRead != d.CacheRead {
+		t.Fatalf("the two readers disagree: sum=%d/%d/%d/%d digest=%d/%d/%d/%d — "+
+			"they must share tokenGroup.commit, not each carry a copy of the rule",
+			sum.In, sum.Out, sum.CacheWrite, sum.CacheRead, d.In, d.Out, d.CacheWrite, d.CacheRead)
+	}
+	// and the shared answer is the RIGHT one, so agreeing on a wrong rule
+	// cannot satisfy this test the way it could satisfy a bare comparison
+	tokWant(t, sum, 5, 10733, 311, 88003, 1)
+}
+
+// TestGroupCommitIsTheOneRule exercises tokenGroup.commit directly, because it
+// is now the single definition both readers depend on and the table is the
+// cheapest place to state its whole contract.
+func TestGroupCommitIsTheOneRule(t *testing.T) {
+	u := func(in, out, cw, cr int64) tokenUsage {
+		return tokenUsage{Input: in, Output: out, CacheCreation: cw, CacheRead: cr}
+	}
+
+	t.Run("a new group contributes all four", func(t *testing.T) {
+		var g tokenGroup
+		if got := g.commit("m1", u(1, 2, 3, 4), true); got != u(1, 2, 3, 4) {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("a repeat contributes only the output delta", func(t *testing.T) {
+		var g tokenGroup
+		g.commit("m1", u(4, 2, 309, 88000), true)
+		// the other three are a verbatim repeat and must not be counted again;
+		// deliberately non-zero here so counting them would be visible
+		if got := g.commit("m1", u(4, 10728, 309, 88000), true); got != u(0, 10726, 0, 0) {
+			t.Fatalf("got %+v, want output delta only", got)
+		}
+	})
+
+	t.Run("an ineligible record commits nothing but advances the id", func(t *testing.T) {
+		var g tokenGroup
+		if got := g.commit("m1", u(9, 9, 9, 9), false); got != (tokenUsage{}) {
+			t.Fatalf("got %+v, want zeros", got)
+		}
+		if g.id != "m1" {
+			t.Fatalf("id = %q — the tracker follows the file's record sequence, not the counted subset", g.id)
+		}
+		// and because nothing was committed, a same-id record after it must
+		// contribute its output in FULL rather than subtracting against a
+		// figure no total contains
+		if got := g.commit("m1", u(0, 40, 0, 0), true); got.Output != 40 {
+			t.Fatalf("got %+v, want the full 40", got)
+		}
+	})
+
+	// The three flip shapes, spelled out because the middle one is the defect
+	// both reviewers found latent in the first version of this helper and the
+	// other two are what an incautious fix for it would break.
+	t.Run("eligible then INELIGIBLE then eligible does not over-count", func(t *testing.T) {
+		var g tokenGroup
+		g.commit("m1", u(0, 2, 0, 0), true) // committed 2
+		// a replayed record of the SAME message: contributes nothing, and must
+		// leave the group's committed figure ALONE. Zeroing it here made the
+		// next record contribute its whole cumulative output on top of the 2 —
+		// a true 10,728 summed to 10,730, an over-count, which is the one
+		// direction accumulate-only counters can never recover from.
+		if got := g.commit("m1", u(0, 5000, 0, 0), false); got != (tokenUsage{}) {
+			t.Fatalf("got %+v, want zeros", got)
+		}
+		if got := g.commit("m1", u(0, 10728, 0, 0), true); got.Output != 10726 {
+			t.Fatalf("got output %d, want the delta 10726 (2 + 10726 = the true 10728, not 10730)", got.Output)
+		}
+	})
+
+	t.Run("an INELIGIBLE record starting a new group clears the old figure", func(t *testing.T) {
+		var g tokenGroup
+		g.commit("m1", u(0, 500, 0, 0), true) // a previous group committed 500
+		// this record opens a DIFFERENT message, so the 500 must not carry
+		// over: leaving it makes the next record subtract against it and
+		// contribute 30-500, summing a true 530 to 30.
+		g.commit("m2", u(0, 9, 0, 0), false)
+		if got := g.commit("m2", u(0, 30, 0, 0), true); got.Output != 30 {
+			t.Fatalf("got output %d, want the full 30 — a new group starts from nothing", got.Output)
+		}
+	})
+
+	t.Run("a group straddling the gate keeps its partial", func(t *testing.T) {
+		// eligible then INELIGIBLE: the digest's window gate closing partway
+		// through a message. The total keeps what the eligible records
+		// established and the trailing ones add nothing.
+		var g tokenGroup
+		total := g.commit("m1", u(0, 2, 0, 0), true).Output
+		total += g.commit("m1", u(0, 1204, 0, 0), true).Output
+		total += g.commit("m1", u(0, 10728, 0, 0), false).Output
+		if total != 1204 {
+			t.Fatalf("total = %d, want 1204", total)
+		}
+	})
+
+	t.Run("an INELIGIBLE record with an empty id still clears", func(t *testing.T) {
+		// The matrix cell the guard newly depends on. `repeat` is
+		// `id != "" && id == g.id`, and it is the FIRST conjunct that forces
+		// the clear here: an unidentifiable record can never be a continuation
+		// of anything, so it must end the group. Drop that conjunct — an
+		// inviting simplification, since the second looks sufficient — and two
+		// consecutive blank ids compare equal, the clear is skipped, and the
+		// next record deltas against a figure belonging to a different message.
+		var g tokenGroup
+		total := g.commit("", u(0, 500, 0, 0), true).Output
+		g.commit("", u(0, 9, 0, 0), false)
+		total += g.commit("", u(0, 30, 0, 0), true).Output
+		if total != 530 {
+			t.Fatalf("total = %d, want 530 — a blank id never groups, so the 30 is a fresh contribution "+
+				"(a repeat test without the id != \"\" conjunct yields 30: 500 + (30-500))", total)
+		}
+	})
+
+	t.Run("a decreasing tail walks the total back down", func(t *testing.T) {
+		// The one arithmetic path in commit with no live example: 0 groups in
+		// the corpus are non-monotonic. Under last-wins a group whose tail
+		// reports less than its head is still worth its TAIL, so the delta is
+		// negative and the running total comes back down to it. Clamping this
+		// at zero would quietly turn last-wins into max-wins for exactly the
+		// shape that distinguishes them.
+		var g tokenGroup
+		total := g.commit("m1", u(0, 900, 0, 0), true).Output
+		d := g.commit("m1", u(0, 400, 0, 0), true)
+		if d.Output != -500 {
+			t.Fatalf("delta = %d, want -500", d.Output)
+		}
+		if total += d.Output; total != 400 {
+			t.Fatalf("total = %d, want the tail's 400", total)
+		}
+		// and the group's committed figure follows the tail, so a further
+		// record deltas against 400 rather than against the high-water 900
+		if got := g.commit("m1", u(0, 450, 0, 0), true); got.Output != 50 {
+			t.Fatalf("got %d, want 50 — last-wins tracks the tail, not the maximum", got.Output)
+		}
+	})
+
+	t.Run("an empty id never groups", func(t *testing.T) {
+		var g tokenGroup
+		g.commit("", u(0, 7, 0, 0), true)
+		if got := g.commit("", u(0, 11, 0, 0), true); got != u(0, 11, 0, 0) {
+			t.Fatalf("got %+v — an unidentifiable record is counted on its own", got)
 		}
 	})
 }

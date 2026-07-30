@@ -39,8 +39,11 @@ import (
 // mutable slug onto the immutable id, events GAINS a job_id beside its
 // job_slug fossil, and the never-used drafts table is dropped. Version 13
 // adds the four job-load columns — zeus' unblock/scope estimate of what a
-// blocked job costs carl and buys him (see schemaV13).
-const schemaVersion = 13
+// blocked job costs carl and buys him (see schemaV13). Version 14 WIPES both
+// token tables again — the group-collapse rule was taking output_tokens from
+// the first record of a message where a subagent sidecar only reports the
+// total on the last (see schemaV14).
+const schemaVersion = 14
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -487,7 +490,10 @@ CREATE TABLE job_token_files (
 //
 // What that costs, said out loud rather than discovered later: a few minutes
 // of paced background work (jobs with a live cell are re-summed every tick,
-// everything else 8 jobs per 10 minutes — jobs/tokens.go), and every job's
+// everything else 8 idle jobs per 15-second tick with each job re-checked at
+// most every 10 minutes — jobs/tokens.go; the 10 minutes is a per-JOB floor,
+// not a batch rate, so a wipe drains in minutes rather than the hour and a
+// half the other reading implies), and every job's
 // `updated_at` is re-stamped as its re-scan lands, so the board's "measured Nh
 // ago" line resets once for every job. Both tables are pure derived state, so
 // the re-scan restores them in full for any job whose transcripts are still on
@@ -659,6 +665,74 @@ ALTER TABLE jobs ADD COLUMN load_note    TEXT    NOT NULL DEFAULT '';
 ALTER TABLE jobs ADD COLUMN load_at      INTEGER NOT NULL DEFAULT 0; -- unix millis; 0 means never estimated
 `
 
+// schemaV14 changes NO shape at all: it clears both token tables so the
+// daemon re-sums every job from byte zero. Every stored counter was measured
+// under a rule that is now known to be wrong for one of the four.
+//
+// The rule was: one API message is written as one record per content block,
+// all four counters stamped identically on each, so keep the FIRST record of a
+// group and skip the rest. Measured over every kraken cell transcript on this
+// machine as of 2026-07-30 (the counts below are that snapshot's and drift as
+// live cells append; the zeros and ratios do not), that is exactly true for
+// `input_tokens`,
+// `cache_creation_input_tokens` and `cache_read_input_tokens` — 0 of 39,818
+// multi-record groups vary in any of them — and it is true for
+// `output_tokens` in ROOT transcripts only. In a SUBAGENT SIDECAR the leading
+// records of a group carry a streaming PARTIAL and the last carries the
+// message's total, so first-wins kept the partial: 4,022 of 4,444 sidecar
+// groups affected, 31,832 output tokens recorded where 4,621,522 were spent.
+// core.addTokenLine now takes a group's output from its last record; this
+// migration is what lets that reach the numbers already stored.
+//
+// WHY A WIPE RATHER THAN A CORRECTION, which is the same argument schemaV11
+// makes and is repeated rather than cross-referenced because it is the whole
+// justification: the counters only ever accumulate FORWARD from the per-file
+// byte watermarks in job_token_files. A pass adds what it finds past each
+// offset and nothing ever re-reads what is behind one, so a wrong figure
+// already behind a watermark can never be revisited — there is no pass
+// anywhere that could correct it, and the error is not a scale factor that
+// could be divided out either (it lands entirely on delegated work, so it
+// ranges from nothing to several-fold PER JOB). Emptying both tables makes the
+// next daemon pass re-sum every job from byte zero under the fixed rule, which
+// is the only way the number is ever right.
+//
+// Costs, said out loud rather than discovered later, exactly as schemaV11's
+// wipe stated them: a few minutes of paced background work (jobs with a live
+// cell re-summed every tick, everything else 8 idle jobs per 15-second tick
+// with each job re-checked at most every 10 minutes — jobs/tokens.go), and one
+// reset of every job's `updated_at` as its re-scan lands, so each card's
+// "measured Nh ago" line restarts once.
+//
+// "A few minutes" is the arithmetic rather than a hedge, and it is worth
+// spelling out because this is the sentence someone reads to decide whether a
+// slow-looking recovery is a bug. tokensIdleBatch (8) is a per-TICK cap and
+// DaemonInterval is 15s, so idle jobs drain at 8 per 15 seconds;
+// tokensIdleInterval (10 minutes) is a per-JOB re-check floor, NOT a batch
+// rate. A wipe makes every job due at once, so ~74 jobs clear in ~10 ticks —
+// about 2.5 minutes. Reading the 10 minutes as the batch rate instead gives
+// ~92 minutes, 37x too slow, and would make a healthy recovery look wedged.
+//
+// Both tables are pure derived state and the re-scan restores them in full for
+// any job whose transcripts are still on disk. That qualifier is the whole truth:
+// ~/.claude/projects is not kraken's to keep, so a job whose transcripts have
+// since been pruned comes back from a wipe at zero rather than at its old
+// number. Anyone citing this as precedent for a future wipe should read that
+// sentence, not the shorter one.
+//
+// A clean one-time cutover with no dual-mode guard, per this repo's standing
+// ruling: one machine, one database, one move.
+//
+// Appended rather than folded into schemaV11's identical DELETEs for the
+// reason schemaV2's doc comment spells out — real kraken.db files already
+// exist at v13, long past the point where editing v11 would run again.
+const schemaV14 = `
+-- Not a cleanup: see the doc comment. Accumulate-forward counters cannot be
+-- corrected in place, so the mismeasured rows have to go along with the
+-- watermarks that would otherwise stop the re-sum from happening.
+DELETE FROM job_tokens;
+DELETE FROM job_token_files;
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -695,9 +769,14 @@ type migrationStep struct {
 // slug -> id mapping the SQL cannot express);
 // migrations[13] adds the four job-load columns (no hook — the DEFAULTs land
 // every pre-existing job on "never estimated", which is exactly the state
-// those jobs are in; see schemaV13).
+// those jobs are in; see schemaV13);
+// migrations[14] clears both token tables a second time (no hook — the wipe IS
+// the whole migration, and it is expressible in SQL: the group-collapse rule
+// took output_tokens from the first record of a message where a sidecar only
+// reports the total on the last, and accumulate-forward counters cannot be
+// corrected behind their watermarks).
 // Future schema changes append
-// migrations[14], migrations[15], ... rather than editing an existing
+// migrations[15], migrations[16], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -714,6 +793,7 @@ var migrations = map[int]migrationStep{
 	11: {sql: schemaV11},
 	12: {sql: schemaV12, hook: migrateV12JobIDs},
 	13: {sql: schemaV13},
+	14: {sql: schemaV14},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

@@ -116,11 +116,259 @@ type tokenRecord struct {
 	Message   struct {
 		// ID is the API message id. One assistant message is written as one
 		// JSONL record PER CONTENT BLOCK (thinking / text / each tool_use),
-		// and claude stamps the same cumulative usage on every one of them —
-		// so this is what collapses a group back to one contribution.
+		// all sharing this id — so this is what collapses a group back to one
+		// contribution. Three of the four counters are stamped identically on
+		// every record of a group; output_tokens is NOT, and tokenGroup is
+		// what handles the difference.
 		ID    string     `json:"id"`
 		Usage tokenUsage `json:"usage"`
 	} `json:"message"`
+}
+
+// tokenGroup is the state addTokenLine carries from one record to the next: a
+// message's id, and how much of its output_tokens has already been committed
+// to the running total.
+//
+// The id alone was the whole tracker once, on the premise that every record of
+// a group carries a byte-identical `usage` and so a group could be collapsed
+// by keeping the FIRST record and skipping the rest. That premise is true for
+// exactly three of the four counters. THE CORPUS, stated once so every number
+// below is unambiguous: every kraken cell transcript on this machine AS OF
+// 2026-07-30 — 2,016 files, 1,752 root and 264 sidecar — grouped by message.id
+// exactly as addTokenLine does, giving 59,047 groups, 39,818 of them
+// multi-record. Every absolute COUNT here is from that one snapshot and will
+// drift as live cells append; the RATIOS and the ZEROS are the load-bearing
+// parts and are stable. Which of the four counters actually varies within a
+// group:
+//
+//	                    multi-record   output_tokens   other three
+//	                          groups          varies          vary
+//	root transcripts          35,374               0             0
+//	subagent sidecars          4,444           4,022             0
+//
+// So `input_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`
+// really are repeated verbatim, everywhere, and first-wins is right for them.
+// `output_tokens` is repeated verbatim only in ROOT transcripts. In a subagent
+// sidecar the leading records of a group carry a STREAMING PARTIAL and the last
+// carries the message's total — real groups read `[2, 10728]`, `[3, 3241]`,
+// `[5, 184]` — so first-wins took the 2 and threw away the message. Over those
+// 4,444 sidecar groups that is 31,832 output tokens counted where 4,621,522
+// were spent, a 145x under-count on the groups themselves and 6.57x on all
+// sidecar output.
+//
+// The error is not a uniform scale factor and that is why it had to be fixed
+// rather than tolerated: it is EXCLUSIVE to sidecars, with no exceptions
+// anywhere in the corpus. Root output is 1.0000x — byte-identical before and
+// after — and the sidecars' OTHER three counters are byte-identical too, so
+// the whole of it lands on one counter of one file kind. 261 of 264 sidecars
+// are affected; the worst single file counted 13 output tokens against 36,326
+// actually spent (2,794x), and the largest absolute miss was 786 against
+// 64,436.
+//
+// A sidecar is always the subagent half of the split (isAgentTranscript's arm
+// 1 classifies it by path), so the direction is fixed: the DELEGATED half was
+// deflated and zeus' SHARE correspondingly inflated. Sidecar spend read as
+// 1.31% of all output where it is really 8.00%. That is the same failure
+// direction CLAUDE.md already records for the `agent-setting` arm-2 bug,
+// reached by an entirely separate route — worth knowing, because it means two
+// independent defects were both flattering the lead's number rather than
+// cancelling out.
+//
+// Note the vocabulary trap: "delegated" in kraken's split is sidecars PLUS
+// teammate root transcripts, and it is ~72.6% of output. Teammate roots are
+// root transcripts and were never affected. The 1.31%-to-8.00% figures are the
+// SIDECAR share specifically, not the delegated half.
+//
+// THE RULE IS LAST-WINS, not max-wins, and the two are not the same claim even
+// though they agree on every group ever measured here (0 of 59,047 groups have
+// last != max; 0 are non-monotonic). Last-wins is the SEMANTIC statement —
+// `usage` is cumulative for the message and the final record is the one that
+// reports it finished — while max-wins is an approximation that happens to
+// hold. The difference is load-bearing at the resume boundary: last-wins makes
+// the seed EXACT (see precedingGroup), because "committed so far" is then just
+// the preceding record's own value, whereas max-wins would need the running
+// maximum of records already consumed and thrown away.
+//
+// out is therefore "how much of this group's output_tokens is already in the
+// caller's total", and a repeat record contributes the DIFFERENCE.
+//
+// THAT DIFFERENCE MAY BE NEGATIVE, and that is correct rather than a bug: it
+// would be a group whose tail reports LESS than its head, and under last-wins
+// the right total is still the tail's, so the subtraction walks the running
+// total back down to it. It is the one arithmetic path here with no live
+// example — 0 of the snapshot's groups are non-monotonic — so it is stated and
+// tested rather than left to be rediscovered as an apparent corruption. Do not
+// "guard" it with a max() or a clamp at zero: that would silently convert the
+// only shape this rule handles differently from max-wins into agreement with
+// max-wins, which is the choice this comment argues against below. Under
+// last-wins that difference may be negative, which is correct rather than a
+// bug: it would be a group whose tail reports less than its head, and the right
+// total is still the tail's.
+type tokenGroup struct {
+	id  string
+	out int64
+}
+
+// commit folds one assistant record into the group and returns the four
+// counters the caller should ADD. It is the single definition of what "one
+// message contributes once" means, and every reader of a transcript in this
+// package goes through it: addTokenLine (the incremental per-job sum),
+// digestTranscript (mine.go's per-session digest), and assistantGroup (the
+// resume-boundary seed, which derives the state by replaying this very
+// function rather than by restating its rules).
+//
+// THAT SINGLE DEFINITION IS THE POINT, and it is the fix for how the bug
+// survived as long as it did. The rule used to be written out twice — once
+// here and once inline in digestTranscript's loop — so the two readers agreed
+// with each other and both disagreed with the transcripts, which is exactly
+// what makes a false premise read as ground truth. Do not re-inline it.
+//
+// THE RULE. `eligible` is the caller's own gate (ownership for the sum;
+// ownership AND the time window for the digest); an ineligible record commits
+// nothing and returns zeros. Otherwise:
+//
+//   - A NEW group contributes all four counters.
+//   - A REPEAT — same non-empty message.id as the previous assistant record —
+//     contributes ONLY the output DELTA against what the group has already
+//     committed. Its other three are a verbatim repeat of the first record's
+//     and counting them is the ~2x over-count this dedupe exists to prevent.
+//
+// The id advances on EVERY assistant record, eligible or not, because the
+// tracker follows the file's record sequence rather than the counted subset.
+//
+// THE CONTRACT A CALLER MUST SATISFY. These are preconditions, not remarks
+// about the three call sites that exist today: the helper is advertised as the
+// single definition of the rule, so the next caller will arrive with its own
+// loop, and every one of these is an unstated premise of the kind this whole
+// rule already got wrong once.
+//
+//	P1. ONE tokenGroup PER FILE. The tracker's lifetime is one transcript's
+//	    record sequence and nothing here bounds it, so a caller that summed a
+//	    whole DIRECTORY with one shared group would be wrong rather than
+//	    merely untidy: a forked transcript is SEEDED with its parent's records
+//	    (tokenRecordOwned), so one message.id genuinely appears in two files —
+//	    1,135 such ids across 6 cell dirs on this machine, 498 in the worst
+//	    one. A shared tracker reads file B's first record as a continuation of
+//	    file A's group and contributes a DELTA, frequently negative, where all
+//	    four counters were owed.
+//
+//	P2. ONLY `assistant` RECORDS MAY REACH commit, and this is the likelier
+//	    mistake because it looks like a simplification. `eligible == false`
+//	    means "contributes nothing"; it does NOT mean "changes nothing" — the
+//	    record still advances `g.id`, and being !repeat it also clears `g.out`
+//	    and thereby ENDS the group. So folding the type test into the
+//	    eligibility expression —
+//	        g.commit(rec.Message.ID, rec.Message.Usage, rec.Type == "assistant" && owned)
+//	    which reads exactly like the tidy-up this refactor invites — makes
+//	    every tool_result between two blocks of one message a group boundary,
+//	    and the second block then re-counts all four. That is 9,385 groups on
+//	    this machine, in the OVER-count direction. All three current call sites
+//	    return early on the type BEFORE calling: addTokenLine, assistantGroup,
+//	    and digestTranscript's `case "assistant"`.
+//
+//	P3. ONE GROUP, ONE DESTINATION. Every eligible record of a group must be
+//	    accumulated into the SAME total, and `eligible == false` must mean
+//	    "contributes nothing", never "goes somewhere else". `out` is a running
+//	    total of what THAT destination has already taken, so a gate ROUTING
+//	    part of a group elsewhere leaves every later delta measured against a
+//	    total its destination never received — silently, and in whichever
+//	    direction the split fell. A future caller wanting to split one group's
+//	    spend needs a tokenGroup per destination, not a cleverer gate.
+//
+// Both current gates satisfy P3 trivially: `tokenRecordOwned` and the digest's
+// window both mean "drop".
+//
+// A GATE MAY FLIP WITHIN A GROUP, and all three of those shapes are handled
+// WITHIN ONE PASS. The qualifier is not decoration: `repeat` is cross-record
+// state, and the resume-boundary seed cannot reconstruct it from the single
+// record it replays (see assistantGroup), so an INELIGIBLE record sitting
+// exactly on a boundary is the one place a flip is handled differently either
+// side of it. Two further limits on how to read this list: it is about the GATE
+// flipping, and the fourth shape below is not a gate flip at all.
+//
+//   - INELIGIBLE then eligible (a group straddling the digest's `since`, and
+//     the first record after a resume): `out` is 0 at the group's start, so
+//     the first eligible record contributes the message's cumulative figure in
+//     full. Right: nothing has been taken yet.
+//   - eligible then INELIGIBLE (the same straddle the other way): the total
+//     keeps the partial the eligible records established and the trailing
+//     records add nothing.
+//   - eligible then INELIGIBLE then eligible: the middle record must LEAVE
+//     `out` alone. Zeroing it there — which this code did until it was traced —
+//     makes the third record contribute its whole cumulative output on top of
+//     what the first already committed: `[out=2][unowned][out=10728]` summed to
+//     10,730 against a true 10,728. That is an OVER-count, the one direction
+//     these accumulate-only counters can never recover from, and the exact
+//     direction the truncation argument below exists to avoid. It is currently
+//     UNREACHABLE, and that was verified rather than assumed: NO multi-record
+//     group anywhere carries more than one distinct `session_id`, NO assistant
+//     record is undated, and NO group's timestamps run backwards — so neither
+//     gate can flip twice within one group. Latent, not live. Those are zeros
+//     rather than counts, which is why they are quoted without a date: a
+//     single counter-example would make this reachable, so the claim is
+//     exactly as strong as the next re-measurement.
+//
+// So `out` is cleared only when the ineligible record STARTS a new group, and
+// that clear is load-bearing in its own right: without it a new group inherits
+// the previous group's figure and its first eligible record subtracts against
+// it. Traced: `[A out=500][B ineligible][B out=30]` sums to 30 against a true
+// 530. The condition is exactly "not a repeat", which is why it is written as
+// the same `repeat` the eligible path uses rather than as a second test.
+//
+// THE FOURTH SHAPE, so the three above are not read as the complete account of
+// mid-group behaviour: the ID changing and then coming BACK —
+// `[m1 out=2][m2 or a blank id][m1 out=10728]`. The third record is !repeat, so
+// it opens a fresh group and re-counts all four. Nothing here defends against
+// that and nothing needs to: the records of one message are CONTIGUOUS within a
+// file (measured, zero non-contiguous reappearances across a whole cell dir),
+// which is what makes "count it when the id CHANGES" sufficient in the first
+// place. That fact lives in sumTokensFrom's GROUP DEDUPE paragraph, two
+// functions away, and is repeated here because this is where a reader now comes
+// to learn what a group tolerates. If it ever stops holding, `commit` is the
+// wrong place to fix it — the tracker would need memory of every id in the
+// file, not just the previous one.
+//
+// WHY LAST-WINS IS SAFE ON A GROUP TRUNCATED MID-WRITE, which is the question
+// to ask of any "take the terminal record" rule. A transcript is appended to
+// live, so a pass routinely sees a group's first records and not its last.
+// Last-wins always has an answer for that: the group's committed figure is
+// whatever the last COMPLETE record said — sumTokensFrom never counts a line
+// that isn't newline-terminated — so a half-written group reads as a FLOOR
+// that rises as the file grows, and the very next pass raises it via the delta
+// (see precedingGroup). Under-count that self-heals, never an over-count that
+// cannot. Two alternatives were measured and rejected on exactly this point:
+//
+//   - MAX-WINS agrees with last-wins on all 59,047 groups here (0 have
+//     last != max, 0 are non-monotonic) and has the same floor property, but
+//     it makes the resume seed inexact — "committed so far" becomes a running
+//     maximum over records the earlier pass discarded, rather than a value
+//     still on disk. Right for a whole-file scan, subtly wrong for this one.
+//   - "THE RECORD WHOSE stop_reason IS NON-NULL" sounds equivalent and is not:
+//     over the same 2026-07-30 snapshot of 59,047 groups, 35,400 carry MORE
+//     THAN ONE non-null stop_reason (so it identifies no single record) and 518
+//     (0.88%) carry none at all (so they would contribute nothing, forever).
+//     The weaker true statement — the LAST non-null one is the last record,
+//     58,529 of 58,529 — is just last-wins with an extra field to read and a
+//     518-group hole.
+func (g *tokenGroup) commit(id string, u tokenUsage, eligible bool) tokenUsage {
+	repeat := id != "" && id == g.id
+	g.id = id
+	if !eligible {
+		if !repeat {
+			// Only a record that STARTS a new group clears the figure — see
+			// the contract above. Clearing it mid-group over-counts; not
+			// clearing it here lets a new group inherit the previous one's.
+			g.out = 0
+		}
+		return tokenUsage{}
+	}
+	if repeat {
+		delta := tokenUsage{Output: u.Output - g.out}
+		g.out = u.Output
+		return delta
+	}
+	g.out = u.Output
+	return u
 }
 
 // tokenRecordOwned reports whether an assistant record represents an API call
@@ -447,10 +695,13 @@ func ProjectDirName(cwd string) string { return projectDirName(cwd) }
 // WHAT COUNTS AS ONE CONTRIBUTION. Two rules, both of which exist because the
 // naive reading of a transcript over-counts by about 2x on real data:
 //
-//   - One API message is written as N records, all carrying the SAME
-//     cumulative `usage`, so a message contributes exactly ONCE — see
-//     sumTokensFrom's group handling. Measured inflation without this:
-//     1.98x across every kraken cell dir on this machine.
+//   - One API message is written as N records, so a message contributes
+//     exactly ONCE — see sumTokensFrom's group handling. Measured inflation
+//     without this: 1.98x across every kraken cell dir on this machine.
+//     "Once" is not "the first record", though: three of the four counters
+//     are stamped identically on every record of the group and are taken from
+//     the first, while `output_tokens` GROWS across a sidecar's group and is
+//     taken from the last. See tokenGroup for the measurement.
 //   - A record replayed into a forked session's file is not that file's
 //     spend — see tokenRecordOwned. Measured inflation without this: a
 //     further 1.43x on a cell that used side threads.
@@ -517,7 +768,7 @@ func ProjectDirName(cwd string) string { return projectDirName(cwd) }
 //     (internal/jobs/tokens.go) is what carries the unseen ones forward.
 //   - LONG (possibly): the group seed at a resume boundary could not be
 //     resolved within the lookback bounds, so one message may be counted
-//     twice. See precedingGroupID.
+//     twice. See precedingGroup.
 //
 // The two are distinguished only by the message, deliberately: a caller's
 // correct response to both is the same — fold the result in, say out loud
@@ -631,24 +882,33 @@ func SumTokensDelta(projectDir string, priorOffsets map[string]int64) (Tokens, m
 // byte is in fact a newline.
 //
 // GROUP DEDUPE. One API assistant message is written as one record per
-// content block (thinking / text / each tool_use), and claude stamps the same
-// cumulative `usage` on every one — a real group seen here repeats eight
+// content block (thinking / text / each tool_use), and claude stamps the
+// cumulative `usage` on every one — a real ROOT group seen here repeats eight
 // times with byte-identical `out=7479 cache_read=430139`. Cache-read is per
 // API call and cannot legitimately be counted eight times, so a message
 // contributes exactly once. The records of a group are contiguous within a
 // file (measured: zero non-contiguous reappearances across a whole 53-file
-// cell dir), so "count it when the id CHANGES" is sufficient and needs no
-// memory beyond the previous id.
+// cell dir), so "count it when the id CHANGES" is sufficient.
+//
+// It needs a little more memory than the previous id, and only for one
+// counter: in a SUBAGENT SIDECAR the leading records of a group carry a
+// streaming PARTIAL `output_tokens` and the last carries the message's total
+// (`[2, 10728]` and the like), so the group's output is taken from the last
+// record while the other three stay taken from the first. tokenGroup carries
+// both halves of that and states the measurement.
 //
 // The one hazard in that is this function's own incrementality: if `from`
 // lands in the middle of a group, the first record read here would look like
 // a fresh group and the message would be counted a second time. Rather than
-// persisting the last-counted id (a schema column) or rewinding the offset to
-// the group's start (which would leave a settled file's final group
+// persisting the last-counted group (a schema column) or rewinding the offset
+// to the group's start (which would leave a settled file's final group
 // permanently uncounted AND re-read on every pass, defeating the one-stat
-// steady state), the previous id is RECOVERED from the file: precedingGroupID
+// steady state), the group state is RECOVERED from the file: precedingGroup
 // reads the single record immediately before `from`. That keeps the boundary
 // exact with no stored state, and costs one small read on files that grew.
+// It recovers the group's committed OUTPUT along with its id, which is what
+// lets the streaming-partial rule below survive a resume — see tokenGroup and
+// precedingGroup for why last-wins is what makes that seed exact.
 //
 // THE ZEUS HALF is filled in here too, once per file rather than per record,
 // because it is a property of the FILE (isAgentTranscript) and not of anything
@@ -687,7 +947,7 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 	// boundary is then counted as new, and if it was a continuation that one
 	// message is counted twice — an over-count, which nothing downstream can
 	// subtract back out.
-	lastID, seeded := precedingGroupID(f, from)
+	group, seeded := precedingGroup(f, from, own)
 	var seedErr error
 	if !seeded {
 		seedErr = fmt.Errorf("%s: group seed at byte %d unresolved (lookback exhausted); one message may be double-counted",
@@ -714,7 +974,7 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 	havePending := false
 	for sc.Scan() {
 		if havePending {
-			addTokenLine(&tk, pending, own, &lastID)
+			addTokenLine(&tk, pending, own, &group)
 			off += int64(len(pending)) + 1 // +1 for the newline that proved it complete
 		}
 		pending = append(pending[:0], sc.Bytes()...)
@@ -731,13 +991,24 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 		// cost, whereas skipping past it would under-count permanently and
 		// silently. The error is what says the total is only a floor.
 		if havePending {
-			addTokenLine(&tk, pending, own, &lastID)
+			addTokenLine(&tk, pending, own, &group)
 			off += int64(len(pending)) + 1
 		}
-		return withZeusHalf(tk, lead), off, fmt.Errorf("%s: %v", filepath.Base(path), err)
+		// Both failures can hold at once, and the scan error must not swallow
+		// the seed warning: they describe DIFFERENT inexactness (a floor vs a
+		// possible double-count) about the same file, and this package's rule
+		// is that every path seeing less than the whole truth says so. The
+		// counters are unaffected either way — callers treat every error
+		// identically — but a log that mentioned only the scan error would drop
+		// the double-count warning for the one file that has one.
+		scanErr := fmt.Errorf("%s: %v", filepath.Base(path), err)
+		if seedErr != nil {
+			scanErr = fmt.Errorf("%v; %v", scanErr, seedErr)
+		}
+		return withZeusHalf(tk, lead), off, scanErr
 	}
 	if havePending && complete {
-		addTokenLine(&tk, pending, own, &lastID)
+		addTokenLine(&tk, pending, own, &group)
 		off += int64(len(pending)) + 1
 	}
 	return withZeusHalf(tk, lead), off, seedErr
@@ -746,18 +1017,19 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 // addTokenLine folds one transcript line into tk, advancing the caller's
 // group tracker.
 //
-// Three gates, in order, and each drops the record for a different reason:
+// It owns exactly two decisions and delegates the third:
 //
 //  1. Not an `assistant` record — only those carry a usage object, and gating
 //     on the type keeps a future record shape that happens to echo one from
-//     being counted.
-//  2. Not owned by this file (tokenRecordOwned) — a record replayed in from a
-//     forked parent session. `lastID` still advances, because the tracker
-//     follows the file's actual record sequence rather than the counted
-//     subset.
-//  3. Same `message.id` as the previous assistant record — a further content
-//     block of a message already counted, carrying a duplicate of the same
-//     cumulative usage.
+//     being counted. The tracker is left completely alone, which is what makes
+//     a group survive the tool_result records interleaved through it.
+//  2. Owned by this file or not (tokenRecordOwned) — a record replayed in from
+//     a forked parent session is ineligible. That is this function's `eligible`
+//     argument and nothing more.
+//  3. What the record then CONTRIBUTES is tokenGroup.commit's, not this
+//     function's: mine.go's digest applies the identical rule through the
+//     identical helper, and the two used to have their own copies of it, which
+//     is how a premise false since the first sidecar went unnoticed.
 //
 // A record with no `message.id` at all cannot be grouped, so it is counted on
 // its own; that is the conservative direction (it can only over-count, and
@@ -768,7 +1040,7 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 // fills in every field it could and reports the type error at the end, so
 // throwing the record away would lose three good counters to one bad one.
 // Same treatment, and the same reasoning, as mineInputSummary's in mine.go.
-func addTokenLine(tk *Tokens, line []byte, own string, lastID *string) {
+func addTokenLine(tk *Tokens, line []byte, own string, g *tokenGroup) {
 	if len(bytes.TrimSpace(line)) == 0 {
 		return
 	}
@@ -782,22 +1054,14 @@ func addTokenLine(tk *Tokens, line []byte, own string, lastID *string) {
 	if rec.Type != "assistant" {
 		return
 	}
-	id := rec.Message.ID
-	defer func() { *lastID = id }()
-	if !tokenRecordOwned(rec, own) {
-		return
-	}
-	if id != "" && id == *lastID {
-		return // another content block of a message already counted
-	}
-	u := rec.Message.Usage
-	tk.In += u.Input
-	tk.Out += u.Output
-	tk.CacheWrite += u.CacheCreation
-	tk.CacheRead += u.CacheRead
+	d := g.commit(rec.Message.ID, rec.Message.Usage, tokenRecordOwned(rec, own))
+	tk.In += d.Input
+	tk.Out += d.Output
+	tk.CacheWrite += d.CacheCreation
+	tk.CacheRead += d.CacheRead
 }
 
-// groupLookbackRecords bounds how many records precedingGroupID will walk
+// groupLookbackRecords bounds how many records precedingGroup will walk
 // back over while looking for the previous ASSISTANT one. The effective
 // tolerance is groupLookbackRecords-1 INTERVENING records, since one
 // iteration is spent reading the assistant record itself.
@@ -805,46 +1069,105 @@ func addTokenLine(tk *Tokens, line []byte, own string, lastID *string) {
 // It has to walk at all — rather than read the single record before the
 // offset — because the forward tracker skips non-assistant records without
 // resetting, so a message whose blocks are interleaved with tool_result
-// records is still one group. That shape is not exotic: 9,385 occurrences
+// records is still one group. That shape is not exotic: 9,385 groups
 // across every cell transcript on this machine, with an observed maximum of
 // FIVE intervening records. 64 leaves an order of magnitude of headroom over
-// that, and exhaustion is REPORTED rather than silent (see precedingGroupID).
+// that, and exhaustion is REPORTED rather than silent (see precedingGroup).
 const groupLookbackRecords = 64
 
-// groupLookbackBytes bounds the same walk by volume, which is the bound that
-// actually binds: the records being skipped are tool_results, and this repo
-// records real single transcript lines at 8.3 MB, so a handful of fat ones
-// between the blocks of one message reaches a byte ceiling long before it
-// reaches a record count. Set well above the largest intervening run measured
-// on this machine (1.1 MB) with room for several 8 MB results on top, and
-// bounded at all only so a pathological transcript cannot turn one resume
-// into a whole-file backward read.
+// groupLookbackBytes bounds the same walk by volume. It is the SLACKER of the
+// two bounds in practice, and saying which one binds matters because an
+// exhausted lookback costs up to a whole message's output (see precedingGroup)
+// — so anyone widening the tolerance should widen the RECORD bound.
+//
+// The arithmetic: 64 records against 64 MB means bytes bind only if the
+// intervening records average over 1 MB EACH. The measured shape is nothing
+// like that — the largest intervening run on this machine is 5 records
+// totalling 1.1 MB — and even a pathological one would have to sustain a
+// megabyte per record for 64 consecutive records to reach here first. Single
+// transcript lines do hit 8.3 MB, which is why the ceiling is set this high
+// rather than at the measured 1.1 MB: a handful of fat tool_results in one gap
+// must not exhaust it. But it exists to stop a pathological transcript turning
+// one resume into a whole-file backward read, not to be the operative limit;
+// the record count is what actually stops the walk.
 const groupLookbackBytes = 64 << 20
 
-// precedingGroupID returns the `message.id` of the last assistant record
-// before byte offset `from`, skipping over any non-assistant records in
-// between, or "" when there is none within the lookback bound.
+// precedingGroup returns the group state left behind by the last assistant
+// record before byte offset `from` — its `message.id` and the output_tokens
+// already committed for that group — skipping over any non-assistant records
+// in between, or the zero group when there is none within the lookback bound.
 //
 // This is what makes the group dedupe survive the incremental resume
 // boundary, and it must mirror the forward tracker EXACTLY: addTokenLine
-// leaves lastID alone for blank, malformed and non-assistant lines, so this
-// walks past exactly those and stops at the first assistant record. Reading
-// the state back out of the file is cheaper and less stateful than persisting
-// the id in the store, and unlike rewinding the offset to the group's start
-// it leaves a settled file's offset equal to its size — which is what keeps
-// the steady-state cost at one stat per file.
+// leaves the tracker alone for blank, malformed and non-assistant lines, so
+// this walks past exactly those and stops at the first assistant record, and
+// it zeroes `out` for an unowned one for the same reason addTokenLine does.
+// Reading the state back out of the file is cheaper and less stateful than
+// persisting it in the store, and unlike rewinding the offset to the group's
+// start it leaves a settled file's offset equal to its size — which is what
+// keeps the steady-state cost at one stat per file.
+//
+// WHY THE SEED CAN CARRY `out` AT ALL, and why that is exact rather than a
+// guess: under last-wins (see tokenGroup) the amount a pass has committed for
+// a group is always the `output_tokens` of the LAST record of it that pass
+// read — each record sets the group's committed figure to its own value, and
+// the caller's total agrees by induction. So the single record this walk
+// already reads to recover the id carries the committed figure too, with no
+// extra read, no extra state, and no dependence on records that were consumed
+// and discarded. Max-wins would not have this property, which is the reason
+// the forward rule is last-wins.
+//
+// A group SPLIT ACROSS THE BOUNDARY therefore neither double-counts nor loses
+// its tail: the first record after the resume is recognised as a repeat (id
+// matches), and it contributes its output MINUS what the earlier pass already
+// booked. The safe direction is built into that subtraction — if the seed were
+// dropped to zero the tail would be counted in full on top of the head, and
+// these counters only ever accumulate, so an over-count here is permanent and
+// unrecoverable. Nothing downstream can subtract it back out.
 //
 // The bool distinguishes a CONCLUSIVE answer from a give-up, and that
 // distinction is the whole reason this returns two values. Reaching the start
 // of the file, or a record that is genuinely the previous assistant one, is
-// conclusive — ok=true, even when the id is "". Running out of lookback
+// conclusive — ok=true, even when the group is zero. Running out of lookback
 // (either bound) or failing to read is NOT: the seed is then unknown, the
 // group at the boundary gets counted as if it were new, and if it was in fact
 // a continuation that message is counted TWICE. That is an over-count, the
 // one direction this number can never recover from, so it must reach the
-// caller rather than hide behind an empty string that means five other
-// things.
-func precedingGroupID(f *os.File, from int64) (string, bool) {
+// caller rather than hide behind a zero value that means five other things.
+//
+// PRICE AN EXHAUSTION AT A WHOLE MESSAGE, not at a handful of tokens. An
+// unresolved seed is a zero group, so the boundary record reads as NEW and what
+// gets counted a second time is whatever the earlier pass had ALREADY COMMITTED
+// for that group — under last-wins that is the running cumulative figure, which
+// late in a group approaches the message's entire output. Same direction as
+// ever (this fails LONG, never short) and still reported, so nothing downstream
+// changes; but anyone re-tuning groupLookbackRecords or groupLookbackBytes
+// should budget for a message rather than for a few tokens.
+//
+// The penalty is nonetheless strictly SMALLER than it was under first-wins, and
+// this is worth stating precisely because the intuitive reading gets it exactly
+// backwards. With G the group's per-record cumulative outputs and the boundary
+// after index split-1:
+//
+//	post-fix  over-count = G[split-1]   (pass 1 committed it; pass 2 re-counts to G[-1])
+//	pre-fix   over-count = G[split]     (pass 1 committed G[0]; pass 2 counts G[split])
+//
+// G is non-decreasing, so G[split-1] <= G[split] — never larger, and strictly
+// smaller wherever the group streams. Simulated on the real sidecar group
+// [2, 1204, 10728]: splitting after record 1 costs 2 post-fix against 1,204
+// pre-fix; after record 2, 1,204 against 10,728. Equality holds only where
+// consecutive values are equal, i.e. root transcripts, where both rules
+// over-count identically (7,479 either way).
+//
+// THE TRAP, named because it cost a review round: it is true that the boundary
+// record's CONTRIBUTION grew — it now carries the cumulative total rather than
+// a streaming partial — but the CORRECT TOTAL it is measured against grew with
+// it, from 2 to 10,728. What is double-counted is the earlier pass's committed
+// figure, and last-wins made that figure more accurate, not larger relative to
+// the truth. Any future claim about this penalty should be simulated against
+// each rule's OWN correct total, never compared across rules in absolute
+// tokens.
+func precedingGroup(f *os.File, from int64, own string) (tokenGroup, bool) {
 	end := from
 	var scanned int64
 	for i := 0; i < groupLookbackRecords; i++ {
@@ -854,17 +1177,17 @@ func precedingGroupID(f *os.File, from int64) (string, bool) {
 			// is a real and correct answer — or a read failed. lineBefore
 			// reports the former by returning the first line; reaching this
 			// with end <= 1 is the start-of-file case.
-			return "", end <= 1
+			return tokenGroup{}, end <= 1
 		}
 		if scanned += end - start; scanned > groupLookbackBytes {
-			return "", false
+			return tokenGroup{}, false
 		}
-		if id, isAssistant := assistantMessageID(line); isAssistant {
-			return id, true
+		if g, isAssistant := assistantGroup(line, own); isAssistant {
+			return g, true
 		}
 		end = start
 	}
-	return "", false
+	return tokenGroup{}, false
 }
 
 // lineBefore returns the complete line whose terminating newline sits at
@@ -903,21 +1226,55 @@ func lineBefore(f *os.File, end int64) ([]byte, int64, bool) {
 	}
 }
 
-// assistantMessageID reports one line's `message.id` and whether the line was
-// an assistant record at all. The bool is what lets precedingGroupID tell
-// "this is a user record, keep walking" apart from "this is an assistant
-// record that happens to carry no id, stop here" — collapsing those two into
-// a bare "" would walk straight past a real group boundary.
-func assistantMessageID(line []byte) (string, bool) {
+// assistantGroup reports the group state one line leaves behind — the state
+// addTokenLine would have left had it read this record — and whether the line
+// was an assistant record at all.
+//
+// The bool is what lets precedingGroup tell "this is a user record, keep
+// walking" apart from "this is an assistant record that happens to carry no
+// id, stop here" — collapsing those two into a bare zero group would walk
+// straight past a real group boundary.
+//
+// Rather than restating the forward tracker's rules it REPLAYS them: commit is
+// run on a fresh group and the resulting state is the seed. That keeps the
+// mirror structural — an unowned record leaving the id but no output, an empty
+// id grouping with nothing — instead of a second hand-written copy that drifts.
+// The discarded return value is the point: this wants commit's effect on the
+// group, not its contribution, which belonged to the pass that already read
+// this record.
+//
+// ONE INPUT IT CANNOT MIRROR, stated as an exception because a named one is
+// worth more than a guarantee that is almost true. `repeat` is cross-record
+// state and this replay has exactly one record, so it always evaluates
+// repeat=false. For every input but one that is immaterial. The exception is an
+// INELIGIBLE record that is a repeat OF ITS OWN GROUP: the forward tracker
+// takes commit's `if !repeat` branch and PRESERVES the group's committed
+// output, while this replay takes the other branch and clears it. Executed on
+// `[X elig 100][X inelig 500][X elig 800]` split after the middle record: the
+// forward state carries out=100, the replayed seed says out=0, so the third
+// record deltas against 0 and the two passes total 900 where one whole-file
+// pass gives 800.
+//
+// It is not fixable here — one record cannot know whether it repeated the one
+// before it — and it is not worth fixing: it requires a gate that flips
+// mid-group, which is the same unreachable premise the third flip shape in
+// commit's contract rests on (no multi-record group carries two `session_id`s,
+// no assistant record is undated). Reaching it would need a NEW caller whose
+// gate flips within a group, and that caller's author is the reader this
+// paragraph is addressed to: seeding across a boundary would then need the
+// previous record's identity too, not just this one's.
+func assistantGroup(line []byte, own string) (tokenGroup, bool) {
 	var rec tokenRecord
 	if err := json.Unmarshal(line, &rec); err != nil {
 		var typeErr *json.UnmarshalTypeError
 		if !errors.As(err, &typeErr) {
-			return "", false
+			return tokenGroup{}, false
 		}
 	}
 	if rec.Type != "assistant" {
-		return "", false
+		return tokenGroup{}, false
 	}
-	return rec.Message.ID, true
+	var g tokenGroup
+	g.commit(rec.Message.ID, rec.Message.Usage, tokenRecordOwned(rec, own))
+	return g, true
 }

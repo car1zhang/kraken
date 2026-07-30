@@ -213,8 +213,10 @@ type mineRecord struct {
 	// record. See tokenRecordOwned (tokens.go).
 	SessionID string `json:"session_id"`
 	Message   struct {
-		// ID is the API message id — one message spans N records, all with
-		// the same usage, so this is what collapses them to one.
+		// ID is the API message id — one message spans N records, so this is
+		// what collapses them to one. NOT all with the same usage: three of
+		// the four counters repeat verbatim, `output_tokens` streams up across
+		// a sidecar's group. tokenGroup.commit (tokens.go) is the rule.
 		ID      string          `json:"id"`
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
@@ -283,10 +285,16 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// would otherwise lose its name.
 	pending := map[string]string{}
 
-	// lastMsgID is the group tracker for the token counters below: the
-	// message id of the previous assistant record, so the N records one API
-	// message is split across contribute their shared usage exactly once.
-	lastMsgID := ""
+	// group is the tracker for the token counters below — the same tokenGroup
+	// SumTokensDelta uses (tokens.go), and deliberately the same type rather
+	// than a second pair of locals, so the two readers of one file cannot
+	// drift on what "one message" contributes. It carries the previous
+	// assistant record's message id, so the N records one API message is split
+	// across contribute their shared usage exactly once, AND how much of that
+	// message's output_tokens has already been committed, because that one
+	// counter is a streaming partial on the early records of a sidecar's group
+	// rather than a verbatim repeat. tokenGroup states the measurement.
+	var group tokenGroup
 
 	// own is the session this FILE belongs to, which for a sidecar is its
 	// parent's rather than its `agent-<id>` stem — the same derivation
@@ -342,31 +350,39 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 				// an API failure the harness gave up retrying
 				dg.SyntheticErrors++
 			}
-			// Token counters, under the same two rules SumTokensDelta applies
-			// (tokens.go) — a naive per-record sum over-counts real
-			// transcripts by ~2x:
+			// Token counters, through tokenGroup.commit (tokens.go) — the ONE
+			// definition of what a message contributes, shared verbatim with
+			// the per-job sum. It used to be a second copy of the rule written
+			// inline right here, and that duplication is precisely why a
+			// premise false of every sidecar ever written read as ground
+			// truth: the two readers agreed with each other and both disagreed
+			// with the transcripts. A naive per-record sum over-counts by ~2x;
+			// a first-wins one under-counts a subagent-heavy session's output
+			// by 6.5x, which this digest then feeds to the dream loop as a
+			// session RANKING. Do not re-inline it.
 			//
-			//   - One API message is written as one record per content block,
-			//     each stamped with the SAME cumulative usage, so a message
-			//     contributes once. lastMsgID advances on every assistant
-			//     record — window-admitted or not — because it tracks the
-			//     file's record sequence, not the counted subset.
-			//   - A record replayed into this file from a forked parent
-			//     session is not this session's spend (tokenRecordOwned).
+			// This digest always reads a whole file, so unlike the incremental
+			// sum it needs no boundary seed.
 			//
-			// This digest always reads a whole file, so unlike the
-			// incremental sum it needs no boundary seed.
-			if newGroup := rec.Message.ID == "" || rec.Message.ID != lastMsgID; inWindow && newGroup &&
-				tokenRecordOwned(tokenRecord{SessionID: rec.SessionID}, own) {
-				// gated on the window like every other count here, so a
-				// digest's spend describes the same records its tool counts
-				// and its FirstTS/LastTS span do
-				dg.In += rec.Message.Usage.Input
-				dg.Out += rec.Message.Usage.Output
-				dg.CacheWrite += rec.Message.Usage.CacheCreation
-				dg.CacheRead += rec.Message.Usage.CacheRead
-			}
-			lastMsgID = rec.Message.ID
+			// The eligibility gate is the window AND ownership — the window
+			// because every other count here is gated on it, so a digest's
+			// spend describes the same records its tool counts and its
+			// FirstTS/LastTS span do; ownership because a record replayed in
+			// from a forked parent is not this session's spend. commit zeroes
+			// the group's committed output for an ineligible record, which is
+			// what makes a group STRADDLING `since` add up: it contributes its
+			// output (in the window its final record falls in, where a
+			// cumulative figure belongs) but not its other three. The
+			// alternative — the pre-fix behaviour — dropped all four, and half
+			// a straddling group is closer than none of it. Groups span
+			// milliseconds and `since` is a day boundary, so the shape
+			// essentially never occurs either way.
+			d := group.commit(rec.Message.ID, rec.Message.Usage,
+				inWindow && tokenRecordOwned(tokenRecord{SessionID: rec.SessionID}, own))
+			dg.In += d.Input
+			dg.Out += d.Output
+			dg.CacheWrite += d.CacheCreation
+			dg.CacheRead += d.CacheRead
 			for _, b := range mineBlocks(rec.Message.Content) {
 				if b.Type != "tool_use" || b.Name == "" {
 					continue
