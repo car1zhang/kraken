@@ -119,6 +119,18 @@ func TestMineTranscriptsDigestSignals(t *testing.T) {
 		mineUser(t, at(112), "[Request interrupted by user for tool use]"),
 		mineUser(t, at(111), []any{mineText("[Request interrupted by user]")}),
 		mineAssistant(t, at(110), "<synthetic>", mineText("API Error: overloaded")),
+		// output ceiling hit mid-thinking: no error, no interrupt, no synthetic
+		// record — only stop_reason says the message was cut. TWO records, ONE
+		// message.id: stop_reason is stamped on every record of a group, so
+		// this is the fixture shape a per-record count fails on (it would
+		// report 2) — the single-record form passes identically under the bug
+		// and the fix, which is what let the per-record version ship green.
+		mineJSON(t, map[string]any{"type": "assistant", "timestamp": mineISO(at(110)),
+			"message": map[string]any{"id": "msg-ceiling", "model": "claude-opus-5", "stop_reason": "max_tokens",
+				"content": []any{map[string]any{"type": "thinking", "thinking": "solving layout"}}}}),
+		mineJSON(t, map[string]any{"type": "assistant", "timestamp": mineISO(at(110)),
+			"message": map[string]any{"id": "msg-ceiling", "model": "claude-opus-5", "stop_reason": "max_tokens",
+				"content": []any{mineText("partial answer")}}}),
 		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration", "durationMs": 158600, "timestamp": mineISO(at(109))}),
 		mineJSON(t, map[string]any{"type": "system", "subtype": "compact_boundary", "timestamp": mineISO(at(108))}),
 	}
@@ -163,6 +175,9 @@ func TestMineTranscriptsDigestSignals(t *testing.T) {
 	if d.SyntheticErrors != 1 {
 		t.Errorf("SyntheticErrors = %d, want 1", d.SyntheticErrors)
 	}
+	if d.MaxTokensStops != 1 {
+		t.Errorf("MaxTokensStops = %d, want 1 (two records, one message.id — one ceiling stop)", d.MaxTokensStops)
+	}
 	if len(d.TurnDurations) != 1 || d.TurnDurations[0] != 158600 {
 		t.Errorf("TurnDurations = %v, want [158600]", d.TurnDurations)
 	}
@@ -172,10 +187,10 @@ func TestMineTranscriptsDigestSignals(t *testing.T) {
 	if len(d.RepeatedCalls) != 1 {
 		t.Errorf("RepeatedCalls = %v, want only the >1 entry", d.RepeatedCalls)
 	}
-	if d.Lines != 13 {
-		// the 13 timestamped records; the two undated bookkeeping lines
+	if d.Lines != 15 {
+		// the 15 timestamped records; the two undated bookkeeping lines
 		// stay eligible for signals but are not part of the dated window
-		t.Errorf("Lines = %d, want 13 (timestamped records only)", d.Lines)
+		t.Errorf("Lines = %d, want 15 (timestamped records only)", d.Lines)
 	}
 	if d.FirstTS != at(120) || d.LastTS != at(108) {
 		t.Errorf("window = [%d,%d], want [%d,%d]", d.FirstTS, d.LastTS, at(120), at(108))
@@ -197,6 +212,9 @@ func TestMineTranscriptsExcludesOldRecords(t *testing.T) {
 		mineUser(t, old, []any{mineToolResult("t0", true, "nope")}),
 		mineUser(t, old, "[Request interrupted by user]"),
 		mineAssistant(t, old, "<synthetic>", mineText("API Error")),
+		mineJSON(t, map[string]any{"type": "assistant", "timestamp": mineISO(old),
+			"message": map[string]any{"id": "msg-old", "model": "claude-opus-5", "stop_reason": "max_tokens",
+				"content": []any{mineText("cut off")}}}),
 		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration", "durationMs": 999, "timestamp": mineISO(old)}),
 		mineAssistant(t, now-1000, "claude-opus-5", mineToolUse("t1", "Bash", map[string]any{"command": "make build"})),
 	)
@@ -212,9 +230,10 @@ func TestMineTranscriptsExcludesOldRecords(t *testing.T) {
 	if d.ToolCounts["Bash"] != 1 {
 		t.Errorf("in-window tool missing: %v", d.ToolCounts)
 	}
-	if len(d.ErrorCounts) != 0 || d.Interrupts != 0 || d.SyntheticErrors != 0 || len(d.TurnDurations) != 0 {
-		t.Errorf("out-of-window signals leaked: errs=%v int=%d syn=%d durs=%v",
-			d.ErrorCounts, d.Interrupts, d.SyntheticErrors, d.TurnDurations)
+	if len(d.ErrorCounts) != 0 || d.Interrupts != 0 || d.SyntheticErrors != 0 ||
+		d.MaxTokensStops != 0 || len(d.TurnDurations) != 0 {
+		t.Errorf("out-of-window signals leaked: errs=%v int=%d syn=%d max=%d durs=%v",
+			d.ErrorCounts, d.Interrupts, d.SyntheticErrors, d.MaxTokensStops, d.TurnDurations)
 	}
 	if d.Lines != 1 {
 		t.Errorf("Lines = %d, want 1 (only the in-window record)", d.Lines)

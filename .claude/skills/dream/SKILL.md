@@ -115,7 +115,9 @@ Two passes, and the first is what makes the second affordable.
 
 **The mechanical pass** is `kraken mine digest --since <ts>`. It reads every transcript in the
 window and counts what is countable: tool calls, `is_error` clusters by tool, interrupts (carl
-pressing escape), `<synthetic>` API failures, turn durations, literally repeated calls, and the four
+pressing escape), `<synthetic>` API failures, output-ceiling deaths (`MaxTokensStops` — messages cut
+at stop_reason max_tokens, the failure that burns a whole budget while reading as a clean session),
+turn durations, literally repeated calls, and the four
 **token counters** (`In`, `Out`, `CacheWrite`, `CacheRead`) per session plus a roll-up across the
 whole sweep. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
 — user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
