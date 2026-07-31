@@ -1982,3 +1982,11 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 }
 #thread-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
 #thread-text::placeholder { color: var(--text-2); opacity: 1; }
+
+/* The graph header's physics toggle: same chk chrome as the rail's buttons,
+   pulled into the header row. The off state matches the rail's dimming so
+   "off" reads consistently across the view. */
+.graph-physics {
+  margin-left: 12px;
+  flex: none;
+}

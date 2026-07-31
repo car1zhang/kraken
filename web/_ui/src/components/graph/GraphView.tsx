@@ -43,6 +43,16 @@ import {
   type NodeAttrs,
   type Palette,
 } from "./graphModel.ts";
+import {
+  createPhysics,
+  isDragMovement,
+  physicsAllowed,
+  readPhysicsPref,
+  writePhysicsPref,
+  PHYSICS_NODE_CAP,
+  type PhysicsHandle,
+  type PhysicsPref,
+} from "./physics.ts";
 
 /** The slider's ceiling. A fact asserted by ten separate episodes is settled. */
 const MAX_SIGHTINGS = 10;
@@ -167,6 +177,25 @@ export function GraphView({ active }: GraphViewProps) {
   const [ready, setReady] = useState(false);
   const [renderError, setRenderError] = useState<string | null>(null);
 
+  // ------------------------------------------------------------ the physics
+  // Q12-Q14 (answered 2026-07-31): ephemeral, warm-started from the server
+  // layout, auto-off past PHYSICS_NODE_CAP with the toggle winning both ways.
+  const [physicsPref, setPhysicsPref] = useState<PhysicsPref>(() =>
+    readPhysicsPref(window.localStorage),
+  );
+  const reducedMotion = useMemo(
+    () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+    [],
+  );
+  const physicsRef = useRef<PhysicsHandle | null>(null);
+  const rafRef = useRef<number>(0);
+  // The press being tracked: sigma key + screen coords at downNode, and
+  // whether it has crossed DRAG_THRESHOLD_PX into a real drag.
+  const pressRef = useRef<{ key: string; sx: number; sy: number; dragging: boolean } | null>(null);
+  // One-shot latch: set when a mouseup ends a real drag, consumed by the next
+  // clickNode so a completed drag never doubles as a selection.
+  const dragLatchRef = useRef(false);
+
   // Keyed by the sigma KEY (the id as a string), so a reducer handed a key can
   // look its element up without converting.
   const byKey = useMemo(
@@ -266,7 +295,17 @@ export function GraphView({ active }: GraphViewProps) {
         minCameraRatio: 0.05,
         maxCameraRatio: 20,
       });
-      s.on("clickNode", ({ node }) => setSelected(node));
+      s.on("clickNode", ({ node }) => {
+        // sigma fires clickNode after mouseup, so a completed drag would
+        // ALSO select — the latch (set by the drag effect's mouseup) makes a
+        // drag and a click mutually exclusive, which is the 3px threshold's
+        // whole point.
+        if (dragLatchRef.current) {
+          dragLatchRef.current = false;
+          return;
+        }
+        setSelected(node);
+      });
       s.on("clickStage", () => setSelected(null));
       sigmaRef.current = s;
       setReady(true);
@@ -300,6 +339,101 @@ export function GraphView({ active }: GraphViewProps) {
       labelColor: { color: colorOf(LABEL_VAR, palette) },
     });
   }, [ready, hidden, selected, filters, edgeByKey, palette]);
+
+  // Filtered-out nodes leave the simulation ENTIRELY — a hidden node still
+  // exerting charge would push visible nodes around an invisible obstacle.
+  const visibleCount = nodes.length - hidden.size;
+  const physicsOn =
+    ready && renderError === null && physicsAllowed(visibleCount, physicsPref, reducedMotion);
+
+  // (Re)build the simulation when membership changes; tear down when off.
+  // Seeding: the CURRENT graphology positions, not `positions` — mid-session
+  // those carry any previous simulation's settle, so a filter toggle
+  // re-inserts a node where it last was rather than snapping it back to the
+  // server layout (the spec's re-insert-at-last-position obligation).
+  useEffect(() => {
+    physicsRef.current?.stop();
+    physicsRef.current = null;
+    const g = graphRef.current;
+    if (!physicsOn || !g || g.order === 0) return;
+    const simNodes: { id: string; x: number; y: number; size: number }[] = [];
+    g.forEachNode((key, attrs) => {
+      if (hidden.has(key)) return;
+      simNodes.push({ id: key, x: attrs.x, y: attrs.y, size: attrs.size });
+    });
+    const simLinks: { source: string; target: string; occurrences: number }[] = [];
+    g.forEachEdge((_key, attrs, src, dst) => {
+      if (hidden.has(src) || hidden.has(dst)) return;
+      simLinks.push({ source: src, target: dst, occurrences: attrs.occurrences });
+    });
+    const handle = createPhysics({ nodes: simNodes, links: simLinks });
+    physicsRef.current = handle;
+    // One rAF loop, alive only while the simulation is awake or a drag is
+    // pinned — an idle tab burns zero CPU (the sleep half of warm-not-hot),
+    // and `active` gates it so a hidden view never ticks.
+    const loop = () => {
+      const h = physicsRef.current;
+      if (h !== handle) return; // superseded by a rebuild
+      if (active && (h.awake() || pressRef.current?.dragging)) {
+        h.tick();
+        for (const n of h.nodes()) {
+          if (g.hasNode(n.id)) {
+            g.setNodeAttribute(n.id, "x", n.x ?? 0);
+            g.setNodeAttribute(n.id, "y", n.y ?? 0);
+          }
+        }
+        sigmaRef.current?.refresh();
+      }
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      handle.stop();
+    };
+  }, [physicsOn, hidden, active, positions, edges]);
+
+  // Drag wiring: downNode arms a press; crossing the threshold turns it into
+  // a drag that pins the node to the pointer; mouseup releases. While a drag
+  // is live the camera stays put (preventSigmaDefault) and the release
+  // suppresses the click that would otherwise open the inspector.
+  useEffect(() => {
+    const s = sigmaRef.current;
+    if (!s || !physicsOn) return;
+    const downNode = ({ node, event }: { node: string; event: { x: number; y: number; preventSigmaDefault: () => void } }) => {
+      pressRef.current = { key: node, sx: event.x, sy: event.y, dragging: false };
+      event.preventSigmaDefault(); // the camera must not pan under a press-on-node
+    };
+    const move = ({ x, y, preventSigmaDefault, original }: { x: number; y: number; preventSigmaDefault: () => void; original: Event }) => {
+      const press = pressRef.current;
+      if (!press) return;
+      if (!press.dragging) {
+        if (!isDragMovement(x - press.sx, y - press.sy)) return;
+        press.dragging = true;
+      }
+      preventSigmaDefault();
+      original.preventDefault();
+      const graphCoords = s.viewportToGraph({ x, y });
+      physicsRef.current?.drag(press.key, graphCoords.x, graphCoords.y);
+    };
+    const up = () => {
+      const press = pressRef.current;
+      if (!press) return;
+      if (press.dragging) {
+        physicsRef.current?.release(press.key);
+        dragLatchRef.current = true;
+      }
+      pressRef.current = null;
+    };
+    s.getMouseCaptor().on("mousemovebody", move);
+    s.getMouseCaptor().on("mouseup", up);
+    s.on("downNode", downNode);
+    return () => {
+      s.getMouseCaptor().off("mousemovebody", move);
+      s.getMouseCaptor().off("mouseup", up);
+      s.off("downNode", downNode);
+    };
+  }, [ready, physicsOn]);
 
   // --------------------------------------------------------------- derived
   // The detail read wins where it has an answer (it is the only source of
@@ -363,6 +497,27 @@ export function GraphView({ active }: GraphViewProps) {
         {error ? (
           <span className="graph-stat err">couldn&apos;t refresh: {error.message}</span>
         ) : null}
+        <button
+          className={"graph-chk graph-physics" + (physicsOn ? "" : " off")}
+          aria-pressed={physicsOn}
+          title={
+            physicsOn
+              ? "physics on — drag nodes; click to toggle off"
+              : visibleCount > PHYSICS_NODE_CAP && physicsPref !== "on"
+                ? `physics off — ${visibleCount.toLocaleString()} nodes exceeds the ${PHYSICS_NODE_CAP.toLocaleString()} cap; click to force on`
+                : "physics off — click to turn on"
+          }
+          onClick={() => {
+            // The toggle flips relative to the EFFECTIVE state, and writes an
+            // explicit pref both ways: auto is only ever reachable by never
+            // touching the button, which keeps its behaviour predictable.
+            const next: PhysicsPref = physicsOn ? "off" : "on";
+            writePhysicsPref(window.localStorage, next);
+            setPhysicsPref(next);
+          }}
+        >
+          {physicsOn ? "physics on" : "physics off"}
+        </button>
       </div>
 
       <div className="graph-stage">
