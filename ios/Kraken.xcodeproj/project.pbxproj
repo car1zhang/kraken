@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0217AAC758C4A3A98D0C2945 /* DreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 162D4034983583092D366CD9 /* DreamView.swift */; };
+		056A2E112A70BE3F084ADC87 /* GraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EB64CF007B6D1931AEA902 /* GraphView.swift */; };
 		07BFA6777FB09D0C7DCF2F95 /* JobSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */; };
 		09E5F95BB0684A3D285C72AD /* FeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7F3DC6663B9448C00D785C /* FeedbackTests.swift */; };
 		0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */; };
@@ -72,6 +73,7 @@
 
 /* Begin PBXFileReference section */
 		07DC03F331A02353F8207836 /* HighlightingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightingTextEditor.swift; sourceTree = "<group>"; };
+		13EB64CF007B6D1931AEA902 /* GraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphView.swift; sourceTree = "<group>"; };
 		153DA91C335FCC8EBFE26F95 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		162D4034983583092D366CD9 /* DreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamView.swift; sourceTree = "<group>"; };
 		206A1135B73AB2755CE6925E /* ThreadDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDetailView.swift; sourceTree = "<group>"; };
@@ -174,6 +176,7 @@
 				C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */,
 				162D4034983583092D366CD9 /* DreamView.swift */,
 				632BA67D0FE7BA5AA1E75BB6 /* FeedbackViews.swift */,
+				13EB64CF007B6D1931AEA902 /* GraphView.swift */,
 				07DC03F331A02353F8207836 /* HighlightingTextEditor.swift */,
 				E6E02C2D34FE2896351B57CD /* JobColorStrip.swift */,
 				C99F884263C78D3B9FD03D5D /* JobDetailView.swift */,
@@ -358,6 +361,7 @@
 				A1BC1C2D352EF2176BF263BB /* DraftStore.swift in Sources */,
 				0217AAC758C4A3A98D0C2945 /* DreamView.swift in Sources */,
 				BAA449326DFFF5BC1E65EC51 /* FeedbackViews.swift in Sources */,
+				056A2E112A70BE3F084ADC87 /* GraphView.swift in Sources */,
 				62092765D34198BD9F5C6968 /* HighlightingTextEditor.swift in Sources */,
 				A1F01EC43FDA55C4FCF80C26 /* JobColorStrip.swift in Sources */,
 				F6A845FB71E25D9C0516DF8D /* JobDetailView.swift in Sources */,

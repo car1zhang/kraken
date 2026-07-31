@@ -791,70 +791,98 @@ struct BoardView: View {
     @State private var dragSteerJob: WebJob?
     @State private var dragReactivateJob: WebJob?
 
+    // body is deliberately a composition of four small expressions, not one
+    // chain. It used to hang every modifier below — seven sheets, seven
+    // onChanges plus an onAppear, four tasks, the toolbar — off the VStack
+    // as a single expression, and Swift's constraint solver gave up on it
+    // ("unable to type-check this expression in reasonable time" at this
+    // declaration) once f01ce8f's graph additions landed, failing every
+    // build including the TestFlight archive. The split is load-bearing:
+    // each helper type-checks on its own, so hang a new sheet, task,
+    // onChange or toolbar item inside the matching helper below, never as a
+    // new link chained here. The composition applies innermost-first — withPolling
+    // runs against boardStack, withRouting is outermost — so a new helper's
+    // nesting position here IS its position in the modifier chain.
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                daemonBar
-                shipBanner
-                contractBanner
-                overviewStrip
-                TabView(selection: $selectedColumn) {
-                    ForEach(BoardColumn.allCases) { column in
-                        columnView(column)
-                            .tag(column)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .always))
-            }
-            .background(KTheme.ground)
-            .navigationTitle("Board")
-            .toolbar {
-                // Search presents the EXISTING overview sheet with its search
-                // field focused, rather than opening a screen of its own: that
-                // sheet already lists every job flat, sectioned by column, with
-                // a tap opening JobDetailView — which is the result list a
-                // search would have had to build anyway.
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        overviewSearchFocused = true
-                        showingOverview = true
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(KTheme.accent)
-                    .accessibilityLabel("Search jobs")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingDream = true
-                    } label: {
-                        Image(systemName: "moon.stars")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(KTheme.skillDream)
-                    .accessibilityLabel("Dream")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingGraph = true
-                    } label: {
-                        Image(systemName: "point.3.connected.trianglepath.dotted")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(KTheme.accent)
-                    .accessibilityLabel("Knowledge graph")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingNewJob = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(KTheme.accent)
+            withRouting(withSheets(withPolling(boardStack)))
+        }
+    }
+
+    // The visible board — the stack, its chrome, and the toolbar.
+    private var boardStack: some View {
+        VStack(spacing: 0) {
+            daemonBar
+            shipBanner
+            contractBanner
+            overviewStrip
+            TabView(selection: $selectedColumn) {
+                ForEach(BoardColumn.allCases) { column in
+                    columnView(column)
+                        .tag(column)
                 }
             }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+        }
+        .background(KTheme.ground)
+        .navigationTitle("Board")
+        .toolbar { boardToolbar }
+    }
+
+    // The board's trailing toolbar buttons.
+    @ToolbarContentBuilder
+    private var boardToolbar: some ToolbarContent {
+        // Search presents the EXISTING overview sheet with its search
+        // field focused, rather than opening a screen of its own: that
+        // sheet already lists every job flat, sectioned by column, with
+        // a tap opening JobDetailView — which is the result list a
+        // search would have had to build anyway.
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                overviewSearchFocused = true
+                showingOverview = true
+            } label: {
+                Image(systemName: "magnifyingglass")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KTheme.accent)
+            .accessibilityLabel("Search jobs")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                showingDream = true
+            } label: {
+                Image(systemName: "moon.stars")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KTheme.skillDream)
+            .accessibilityLabel("Dream")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                showingGraph = true
+            } label: {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KTheme.accent)
+            .accessibilityLabel("Knowledge graph")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                showingNewJob = true
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KTheme.accent)
+        }
+    }
+
+    // The board's three polling loops plus the drag-end backstop — everything
+    // keyed on scenePhase or a poll generation.
+    private func withPolling(_ content: some View) -> some View {
+        content
             .task(id: scenePhase) {
                 guard scenePhase == .active else { return }
                 await vm.refresh(baseURL: serverURL)
@@ -904,6 +932,12 @@ struct BoardView: View {
                 guard scenePhase == .active else { return }
                 await vm.resumeShipPoll(baseURL: serverURL)
             }
+    }
+
+    // Every sheet the board presents, plus the two onChanges that manage the
+    // job sheet's lifetime.
+    private func withSheets(_ content: some View) -> some View {
+        content
             .sheet(item: $selectedJob) { job in
                 NavigationStack {
                     JobDetailView(job: job, baseURL: serverURL) {
@@ -982,8 +1016,15 @@ struct BoardView: View {
                     }
                 }
             }
+    }
+
+    // Deep-link routing — consuming the pending values AppRouter stamps for
+    // the board.
+    private func withRouting(_ content: some View) -> some View {
+        content
             // Deep links (kraken://board/<column>, kraken://overview,
-            // kraken://job/<slug>) stamp a pending value on the shared
+            // kraken://dream, kraken://graph, kraken://job/<slug>) stamp a
+            // pending value on the shared
             // router; this view is the one that owns each destination, so
             // it's the one that consumes and clears it. onAppear covers a
             // route stamped before this view mounted (cold launch via the
@@ -1011,7 +1052,6 @@ struct BoardView: View {
                 }
                 router.pendingJobSlug = nil
             }
-        }
     }
 
     // Presents a job sheet and records its state as the staleness baseline
