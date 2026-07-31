@@ -157,7 +157,11 @@ func zeusBrief(j *Job) string {
 	// abstract; this is where those resolve, stated once instead of ~15 times.
 	fmt.Fprintf(&b, "Cell paths — the skills describe the artifact set in terms of these, and this brief is the only place their real values appear. SET ROOT (your artifacts dir): %s. Diagram fragments stage in: %s. The job slug every `kraken` CLI verb takes is: %s.\n",
 		CellArtifacts(j), docFragmentsDir(j), j.Slug)
-	b.WriteString("Every final deliverable — including anything published elsewhere (claude.ai artifacts, PRs, dashboards) — must land in the SET ROOT above: the file itself when it's a file, plus a short <name>.link.md with the URL when it lives elsewhere. It is the only board-visible directory; work that isn't there is invisible to carl.\n")
+	// PRs are the one carve-out from the link-artifact rule (carl's call): the
+	// daemon already tracks every PR from the cell branch into the job's prs:
+	// frontmatter and the board shows them as chips, so a pr-NNNN.link.md is a
+	// second copy of a thing the board renders better.
+	b.WriteString("Every final deliverable — including anything published elsewhere (claude.ai artifacts, dashboards) — must land in the SET ROOT above: the file itself when it's a file, plus a short <name>.link.md with the URL when it lives elsewhere. PRs are the one exception: kraken tracks the cell branch's PRs itself and the board chips them, so never write a link artifact for a PR. The SET ROOT is the only board-visible directory; work that isn't there is invisible to carl.\n")
 	// Both row families arrive silently, so the re-read-on-resume rule is the
 	// part zeus must never miss and the part the skills cannot enforce (they
 	// are read once per phase, this brief is in context every turn). The write
