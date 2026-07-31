@@ -1407,3 +1407,94 @@ struct LogReadResponse: Decodable {
     let prev: String
     let entries: [LogEntry]
 }
+
+// MARK: - knowledge graph
+
+// The two READ routes of the knowledge graph (internal/api/graph.go), which
+// the native GRAPH screen decodes directly — see ios/API.md § Knowledge graph.
+// Additive endpoints, `apiContract` stays 5.
+//
+// `Codable` rather than the file's usual `Decodable`: nothing here is ever
+// POSTed (both routes are GETs and the graph is corrected by a `/graph`
+// revision job, never by the phone), but the encode half is what lets a test
+// build a payload as values and round-trip it instead of hand-writing JSON
+// for every case. Equatable for the same reason.
+
+// One entity. `x`/`y` are the server's cached ForceAtlas2 layout, and `0,0`
+// means "not laid out yet" rather than "at the origin" — the API documents
+// that quirk and graphPositions() is what acts on it.
+struct GraphNode: Codable, Identifiable, Equatable {
+    let id: Int64
+    let name: String
+    let type: String
+    let description: String
+    let x: Double
+    let y: Double
+    // Present ONLY on GET /api/graph/node — the board payload omits aliases
+    // outright rather than sending empty arrays, since joining them would be
+    // one query per node on the hottest read the graph has. nil therefore
+    // means "this came from the viewer payload", not "this entity has none".
+    let aliases: [String]?
+}
+
+// One bi-temporal fact edge. Both time axes are unix millis and both are
+// ALWAYS on the wire (no omitempty on the Go side), so both are non-optional
+// per this file's rule atop — `0` is the recorded answer for "not set", never
+// an absent key.
+struct GraphEdge: Codable, Identifiable, Equatable {
+    let id: Int64
+    let src: Int64
+    let dst: Int64
+    let predicate: String
+    let fact: String
+    let strength: Int64
+    let occurrences: Int64
+    /// WORLD time: when the fact stopped holding. `0` = still true.
+    let validUntil: Int64
+    /// SYSTEM time: when the row was retired. `0` = live.
+    let expiredAt: Int64
+    let episode: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case id, src, dst, predicate, fact, strength, occurrences
+        case validUntil = "valid_until"
+        case expiredAt = "expired_at"
+        case episode
+    }
+}
+
+// The header line's counts. `liveEdges` is the SERVER's own liveness (system
+// time only, `expired_at = 0`); the screen's "current" figure is counted
+// client-side with graphIsInvalidated instead, which also retires facts whose
+// world validity has ended — quoting this one there put a bigger number in
+// the header than there were edges on the canvas.
+struct GraphStats: Codable, Equatable {
+    let nodes: Int64
+    let edges: Int64
+    let liveEdges: Int64
+    let episodes: Int64
+    let pending: Int64
+    let missingEmbeddings: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case nodes, edges
+        case liveEdges = "live_edges"
+        case episodes, pending
+        case missingEmbeddings = "missing_embeddings"
+    }
+}
+
+// GET /api/graph — the whole viewer payload in one response. `nodes` and
+// `edges` are always arrays, never null.
+struct GraphPayload: Codable, Equatable {
+    let nodes: [GraphNode]
+    let edges: [GraphEdge]
+    let stats: GraphStats
+}
+
+// GET /api/graph/node?id=N — one node (with its aliases) and EVERY edge
+// touching it, live and invalidated both.
+struct GraphNodeDetail: Codable, Equatable {
+    let node: GraphNode
+    let edges: [GraphEdge]
+}

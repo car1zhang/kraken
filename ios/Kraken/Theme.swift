@@ -120,6 +120,16 @@ enum KTheme {
     static let skillDream = Color(uiColor: skillDreamUI)
     static let skillDreamSoftUI = dyn(light: 0xF3E8FF, dark: 0x2A1440)
     static let skillDreamSoft = Color(uiColor: skillDreamSoftUI)
+    // /graph is the sixth skill hue, and it doubles as the GRAPH screen's own
+    // accent — the selection ring on the canvas. Both hexes are `--skill-graph`
+    // in web/_ui/src/styles/style.css (dark from `:root`, light from the
+    // `[data-theme="light"]` block), and web/graphpalette_contract_test.go
+    // PARSES the line below to hold the two files in step, exactly as
+    // TestJobPaletteMatchesSwift does for the eight job colors above. Keep it
+    // as one literal `dyn(light: 0x…, dark: 0x…)` line: a hex assembled from
+    // constants would read as a changed palette to that check.
+    static let skillGraphUI = dyn(light: 0x456F0B, dark: 0x87DF49)
+    static let skillGraph = Color(uiColor: skillGraphUI)
 
     // Per-job colors: the eight names Claude Code's own `/color` command
     // accepts, in `/color`'s order. The DARK values are Claude Code's exact
@@ -151,6 +161,46 @@ enum KTheme {
     static let jobPink = Color(uiColor: jobPinkUI)
     static let jobCyanUI = dyn(light: 0x06718B, dark: 0x0891B2)
     static let jobCyan = Color(uiColor: jobCyanUI)
+
+    /// A knowledge-graph node's fill, by entity type.
+    ///
+    /// The nine mappings are the port of web graphModel.ts's `TYPE_COLOR_VARS`
+    /// — the same palette TOKEN per type, which is the claim this makes: a
+    /// `component` takes `--polling` on both surfaces. Whether the two resolve
+    /// to the same pixel is a property of each token, and seven of the nine do
+    /// in both appearances; `--skill-do` (tool) and `--skill-info`
+    /// (external-system) are drifted in LIGHT only — style.css has #7B6505 /
+    /// #1866C4 where skillDoUI / skillInfoUI above have 0x8A7206 / 0x1A6FD4.
+    /// That drift predates this map, is not the graph's to fix, and no test
+    /// pins those two (TestJobPaletteMatchesSwift covers the eight job colors
+    /// only); it is written down here so the next reader does not take the
+    /// resemblance for a guarantee.
+    ///
+    /// All NINE seed types of the `/graph` skill's vocabulary are named: a
+    /// seed type falling through to the invented-type grey made three
+    /// documented types indistinguishable from unrecognised ones, which is a
+    /// review finding the web side already carries.
+    ///
+    /// UIColor rather than Color because the canvas resolves it against a
+    /// trait collection before drawing; the SwiftUI wrapper is one
+    /// `Color(uiColor:)` at the call site.
+    static func graphTypeColorUI(_ type: String) -> UIColor {
+        switch type {
+        case "convention": return accentUI
+        case "component": return pollingUI
+        case "failure-mode": return revealedUI
+        case "decision": return solvedUI
+        case "person": return counterUI
+        case "tool": return skillDoUI
+        case "external-system": return skillInfoUI
+        // file and job are structural context rather than knowledge, so they
+        // deliberately share the hairline grey instead of taking hues of their
+        // own — they should recede behind the concepts they carry.
+        case "file", "job": return hairline2UI
+        // Anything the extraction agent invented that the map does not name.
+        default: return text2UI
+        }
+    }
 
     // --- global chrome (nav bar / tab bar / page dots) ---
     // Configured once via UIKit appearance proxies rather than threading
