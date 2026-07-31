@@ -37,8 +37,12 @@ type Job struct {
 	// Model is the Claude model zeus runs on (`claude --model <value>`),
 	// hand-authored like solo. Consumed exactly once per cell start
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
-	// model can't change out from under it. Empty means core.DefaultModel,
-	// kraken's own default — never "whatever claude's config says".
+	// model can't change out from under it. Empty means core.ZeusModel,
+	// kraken's own default for zeus — never "whatever claude's config says".
+	// A cell's side threads read this same field (thread.go), so an override
+	// set here governs them too; what it does NOT reach is the crew, pinned
+	// to opus in zeus' brief. The two differ only in where they land when it
+	// is EMPTY: zeus on core.ZeusModel, a thread on core.DefaultModel.
 	Model string `json:"model,omitempty"`
 	// Color is the job's chosen colour — one of the eight names Claude
 	// Code's /color accepts (see color.go's Palette). Same ownership class
@@ -537,8 +541,8 @@ func JobTemplate(slug string) string {
 		"                          #   gated: true   → when it completes, you review its outcome\n" +
 		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no teammate crew at all, prose-only doc (no diagram agents)\n" +
-		"# model: sonnet           # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
-		"                          # applied once at cell start, default = " + core.DefaultModel + "\n" +
+		"# model: opus             # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
+		"                          # applied once at cell start, default = " + core.ZeusModel + "\n" +
 		"# color: purple           # optional: board/pane colour (red | blue | green | yellow | purple | orange | pink | cyan);\n" +
 		"                          # unset = no colour\n" +
 		"---\n"

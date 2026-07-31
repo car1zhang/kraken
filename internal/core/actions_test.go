@@ -11,12 +11,21 @@ func TestDetachedSessionSizeClearsTmuxDefault(t *testing.T) {
 	}
 }
 
-// The model kraken spawns on is a pinned id, not a tier alias: an alias would
+// Both models kraken spawns on are pinned ids, not tier aliases: an alias would
 // silently follow whatever claude ships next, which is exactly the drift the
-// constant exists to prevent.
-func TestDefaultModelIsPinnedID(t *testing.T) {
+// constants exist to prevent. They are also pinned to be DIFFERENT — the split
+// is the policy (zeus on the fast tier, everything else on the deep one), and a
+// ZeusModel edited back to DefaultModel's value would erase it while every
+// other test here still passed.
+func TestSpawnModelsArePinnedIDs(t *testing.T) {
 	if DefaultModel != "claude-opus-5" {
 		t.Fatalf("DefaultModel = %q; changing kraken's default model is a deliberate edit — update this test with it", DefaultModel)
+	}
+	if ZeusModel != "claude-fable-5" {
+		t.Fatalf("ZeusModel = %q; changing the model a cell's zeus runs on is a deliberate edit — update this test with it", ZeusModel)
+	}
+	if ZeusModel == DefaultModel {
+		t.Fatal("ZeusModel == DefaultModel: zeus runs on its own tier, and collapsing the two silently retires the split")
 	}
 }
 

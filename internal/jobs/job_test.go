@@ -591,7 +591,9 @@ func TestCellClaudeArgs(t *testing.T) {
 	if !strings.Contains(joined, "--dangerously-skip-permissions") || !strings.Contains(joined, "--rc") {
 		t.Fatalf("cc-alias flags missing: %v", args)
 	}
-	// no job model: kraken's own default rides along — never claude's config
+	// no resolved model: kraken's own default rides along — never claude's
+	// config. This is the SIDE-THREAD path; zeus resolves through zeusModel
+	// below and lands on core.ZeusModel instead.
 	if !strings.Contains(joined, "--model "+core.DefaultModel) {
 		t.Fatalf("empty model must fall back to core.DefaultModel: %v", args)
 	}
@@ -599,6 +601,50 @@ func TestCellClaudeArgs(t *testing.T) {
 	withModel := strings.Join(cellClaudeArgs("sonnet"), " ")
 	if !strings.Contains(withModel, "--model sonnet") {
 		t.Fatalf("model flag missing: %q", withModel)
+	}
+}
+
+// TestZeusModel pins the one place the zeus/everything-else split is decided,
+// and its FALLBACK is the whole of it: a job with no model: field puts zeus on
+// core.ZeusModel while cellClaudeArgs' own fallback (the side-thread path
+// above) stays on core.DefaultModel. A hand-authored model: still wins for
+// zeus, since it is the documented per-cell override — and it reaches a side
+// thread too, so the override is shared and only the fallback is split.
+func TestZeusModel(t *testing.T) {
+	if got := zeusModel(&Job{Slug: "x"}); got != core.ZeusModel {
+		t.Fatalf("zeusModel with no model: field = %q, want core.ZeusModel (%q)", got, core.ZeusModel)
+	}
+	if got := zeusModel(&Job{Slug: "x", Model: "sonnet"}); got != "sonnet" {
+		t.Fatalf("job model: override dropped: %q", got)
+	}
+}
+
+// TestZeusSpawnArgv pins the seam's own resolution — the value half of what
+// TestZeusSpawnPathsResolveTheModel (cell_test.go) holds structurally, and the
+// two are deliberately separate: that one asserts both spawn sites go through
+// zeusModel, this one asserts what comes out when they do. It also pins the
+// resume variadic — the `-r <session>` pair has to reach the argv and has to
+// stay ahead of the staged `--` prompt spawnCommand appends last.
+func TestZeusSpawnArgv(t *testing.T) {
+	fresh := strings.Join(zeusSpawnArgv(&Job{Slug: "x"}), " ")
+	if !strings.Contains(fresh, "--model "+core.ZeusModel) {
+		t.Fatalf("a fresh zeus must spawn on core.ZeusModel: %q", fresh)
+	}
+	if strings.Contains(fresh, "--model "+core.DefaultModel) {
+		t.Fatalf("zeus took core.DefaultModel — the spawn path skipped zeusModel: %q", fresh)
+	}
+	if !strings.Contains(fresh, "--name "+ZeusName(&Job{Slug: "x"})) {
+		t.Fatalf("zeus spawn missing --name: %q", fresh)
+	}
+	// reactivation resumes the same session and keeps the same resolution
+	resumed := strings.Join(zeusSpawnArgv(&Job{Slug: "x"}, "-r", "sess-1"), " ")
+	if !strings.Contains(resumed, "--model "+core.ZeusModel) || !strings.HasSuffix(resumed, "-r sess-1") {
+		t.Fatalf("reactivation argv wrong: %q", resumed)
+	}
+	// a hand-authored model: still wins on both paths
+	pinned := strings.Join(zeusSpawnArgv(&Job{Slug: "x", Model: "sonnet"}), " ")
+	if !strings.Contains(pinned, "--model sonnet") {
+		t.Fatalf("job model: override dropped on the spawn path: %q", pinned)
 	}
 }
 

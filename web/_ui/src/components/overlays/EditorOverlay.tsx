@@ -764,9 +764,9 @@ function EditorBody({
               <input
                 id="f-model"
                 list="model-list"
-                placeholder="claude-opus-5"
+                placeholder="claude-fable-5"
                 spellCheck={false}
-                title="claude model for zeus (--model value) — applied once at cell start; empty = kraken's default, claude-opus-5"
+                title="claude model for zeus (--model value) — applied once at cell start; empty = kraken's default for zeus, claude-fable-5 (the crew it spawns is opus regardless)"
                 disabled={readOnly}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
@@ -941,6 +941,7 @@ function EditorBody({
         ))}
       </datalist>
       <datalist id="model-list">
+        <option value="claude-fable-5" />
         <option value="claude-opus-5" />
         <option value="fable" />
         <option value="opus" />

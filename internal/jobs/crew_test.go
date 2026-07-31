@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kraken/internal/core"
 )
 
 // crew_test.go — zeus' brief content matrix. The brief carries only what no
@@ -262,26 +264,46 @@ func TestCrewAssetPathsAreWorktreeRelative(t *testing.T) {
 	}
 }
 
-// TestZeusBriefAllOpus pins the one-tier rule: every agent in a cell — zeus
-// itself (spawned with core.DefaultModel) and every subagent it names — runs
-// on Claude Opus 5. The Agent tool takes tier aliases rather than model ids,
-// so the brief must say `model: opus` and must never name a cheaper tier for
-// a crew role; hephaestus in particular used to be pinned to sonnet.
-func TestZeusBriefAllOpus(t *testing.T) {
+// TestZeusBriefModelSplit pins the two-tier rule the brief has to state,
+// because zeus cannot see its own --model flag and its crew's tier is a
+// separate axis it sets per Agent call: zeus itself is spawned on
+// core.ZeusModel (Fable), and every agent it names runs on Claude Opus 5. The
+// Agent tool takes tier aliases rather than model ids, so the brief must say
+// `model: opus` and must never name a cheaper tier for a crew role —
+// hephaestus in particular used to be pinned to sonnet, and zeus' own tier
+// being the fast one is exactly the pressure that would put it back.
+func TestZeusBriefModelSplit(t *testing.T) {
 	for _, j := range []*Job{
-		{Slug: "opus-plain"},
-		{Slug: "opus-solo", Solo: true},
+		{Slug: "model-plain"},
+		{Slug: "model-solo", Solo: true},
 	} {
 		brief := zeusBrief(j)
-		if !strings.Contains(brief, "EVERY agent in this cell runs on Claude Opus 5") ||
+		// the tier is stated as the RESOLVED id, so this assertion follows
+		// core.ZeusModel instead of pinning a spelling that goes stale with it
+		if !strings.Contains(brief, "kraken spawned you on `"+core.ZeusModel+"`") ||
+			!strings.Contains(brief, "EVERY OTHER agent in this cell runs on Claude Opus 5") ||
 			!strings.Contains(brief, "`model: opus`") {
-			t.Errorf("%s brief missing the all-Opus rule", j.Slug)
+			t.Errorf("%s brief missing the zeus-ZeusModel/crew-Opus split", j.Slug)
 		}
+		// Lowercased, because the brief now legitimately contains the word
+		// "fable" (zeus' own tier): a case-sensitive haystack would wave
+		// through a future "run hephaestus on Fable" or "model: Fable", which
+		// is the exact edit this guard exists to catch.
+		low := strings.ToLower(brief)
 		for _, tier := range []string{"sonnet model", "haiku model", "fable model", "model: sonnet", "model: haiku", "model: fable"} {
-			if strings.Contains(brief, tier) {
-				t.Errorf("%s brief pins a crew role to %q — every agent is Opus 5", j.Slug, tier)
+			if strings.Contains(low, tier) {
+				t.Errorf("%s brief pins a crew role to %q — every agent zeus spawns is Opus 5", j.Slug, tier)
 			}
 		}
+	}
+	// a job's model: override is what zeus is actually spawned on, so it is
+	// what the brief must state — a hardcoded tier name lies here
+	pinned := zeusBrief(&Job{Slug: "model-pinned", Model: "sonnet"})
+	if !strings.Contains(pinned, "kraken spawned you on `sonnet`") {
+		t.Error("a job with model: set must have its own tier stated in the brief, not core.ZeusModel")
+	}
+	if !strings.Contains(pinned, "EVERY OTHER agent in this cell runs on Claude Opus 5") {
+		t.Error("the crew stays Opus regardless of zeus' own tier")
 	}
 }
 

@@ -824,7 +824,7 @@ export function specMetaHTML(d: JobForm): string {
   const rows: [string, string, string?][] = [
     ["repo", esc(d.repo || "—")],
     ["base", esc(d.base || "origin/main")],
-    ["model", esc(d.model || "claude-opus-5")],
+    ["model", esc(d.model || "claude-fable-5")],
     ["solo", d.solo ? "✓" : "✗"],
   ];
   const prereqs = d.prereqs || [];

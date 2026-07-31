@@ -3,6 +3,9 @@ package jobs
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -545,6 +548,126 @@ func TestAllArtifactPathsNoReservedNames(t *testing.T) {
 		if !found {
 			t.Fatalf("want %q to appear in AllArtifactPaths, got %+v", want, paths)
 		}
+	}
+}
+
+// --- the zeus model seam ---
+
+// TestZeusSpawnPathsResolveTheModel holds the WIRING of the zeus/everything-else
+// model split, which no value-level test can reach. zeusModel and both model
+// constants are pinned by their own tests, but the line CONNECTING them was
+// not: reverting cell.go's two spawn sites to `cellClaudeArgs(j.Model)` leaves
+// zeusSpawnArgv referenced by nothing but its own test — dead code, since an
+// unreferenced func is not a compile error — while every cell's zeus silently
+// spawns on core.DefaultModel again. Measured BEFORE this test existed: with
+// both call sites reverted and nothing else changed, `go test ./internal/jobs/
+// ./internal/core/` passed. This is the test that makes that revert fail, so
+// the measurement describes the suite as it stood without it.
+//
+// So the invariant is stated where it can be checked — over cell.go's own
+// syntax, from this file. It is FILE-scoped where its sibling below is
+// package-scoped, and that asymmetry is deliberate: thread.go's
+// cellClaudeArgs(j.Model) is legal, so a package walk would need a by-name skip
+// for it, and a by-name skip is the mechanism that would exempt the very file a
+// future zeus spawn got added to. cell.go is where zeus is spawned and NOWHERE
+// else, so a raw j.Model reaching cellClaudeArgs HERE is by definition a zeus
+// spawn that skipped the Fable fallback.
+func TestZeusSpawnPathsResolveTheModel(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "cell.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cell.go: %v", err)
+	}
+	calls := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn, ok := call.Fun.(*ast.Ident)
+		if !ok || fn.Name != "cellClaudeArgs" || len(call.Args) != 1 {
+			return true
+		}
+		calls++
+		// the one legal shape in this file: cellClaudeArgs(zeusModel(j))
+		arg, ok := call.Args[0].(*ast.CallExpr)
+		if !ok {
+			t.Errorf("%s: cellClaudeArgs called with something other than zeusModel(...) — zeus must resolve through zeusModel; if you introduced a local for it, inline it or re-aim this test",
+				fset.Position(call.Pos()))
+			return true
+		}
+		if inner, ok := arg.Fun.(*ast.Ident); !ok || inner.Name != "zeusModel" {
+			t.Errorf("%s: cellClaudeArgs argument is not zeusModel(...) — zeus would skip core.ZeusModel",
+				fset.Position(call.Pos()))
+		}
+		return true
+	})
+	// exactly one, inside zeusSpawnArgv: zero means the guard no longer guards
+	// anything, and a second means a direct call that bypasses the seam —
+	// legal to the per-call assertion above, yet defeating the seam's purpose
+	if calls != 1 {
+		t.Fatalf("found %d cellClaudeArgs calls in cell.go, want 1 (inside zeusSpawnArgv) — zeus' argv must be built in one place, so route a new caller through the seam rather than re-aiming this guard", calls)
+	}
+}
+
+// TestZeusSpawnPathsStageTheBrief is the sibling guard, for the same reason —
+// measured the same way, and likewise before it existed:
+// reverting ReactivateJob's brief argument back to "" changed nothing the suite
+// could see. It is the wider of the two, because the brief is not one flag: it
+// carries the crew's `model: opus`, the cell's resolved paths, the
+// skill-per-phase pointers, the guardrails, and the never-prompt rule. A
+// resumed session does not retain an earlier run's --append-system-prompt
+// (thread.go measured that), so a "" here hands back a plain claude holding
+// zeus' history, whose teammates can then inherit zeus' own tier — and a system
+// prompt that was never delivered shows up neither on the board nor in the
+// roll-call, nowhere short of reading the pane's own command line for a missing
+// --append-system-prompt.
+//
+// Unlike its sibling this one walks the WHOLE package, not just cell.go, and
+// the asymmetry is the point: spawnCommand is zeus-only (a thread reaches
+// stagedCommand directly), so there is no legal briefless caller to exempt, and
+// a package walk needs no by-name skip — which is the mechanism that would
+// otherwise exempt the very file a future spawn got added to. The model guard
+// cannot have this, since thread.go's cellClaudeArgs(j.Model) IS legal.
+func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse package: %v", err)
+	}
+	calls := 0
+	inspect := func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn, ok := call.Fun.(*ast.Ident)
+		if !ok || fn.Name != "spawnCommand" || len(call.Args) != 4 {
+			return true
+		}
+		calls++
+		brief, ok := call.Args[2].(*ast.CallExpr)
+		if !ok {
+			t.Errorf("%s: spawnCommand's brief argument is not zeusBrief(j) — a briefless zeus can leave its whole crew inheriting zeus' own tier instead of Opus",
+				fset.Position(call.Pos()))
+			return true
+		}
+		if inner, ok := brief.Fun.(*ast.Ident); !ok || inner.Name != "zeusBrief" {
+			t.Errorf("%s: spawnCommand's brief argument is not zeusBrief(...)", fset.Position(call.Pos()))
+		}
+		return true
+	}
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			ast.Inspect(file, inspect)
+		}
+	}
+	// package-wide, so this is also the tripwire for a third zeus spawn path
+	// appearing anywhere in the package rather than only in cell.go
+	if calls != 2 {
+		t.Fatalf("found %d spawnCommand calls in package jobs, want 2 (StartCell, ReactivateJob) — a new zeus spawn path must stage the brief too, so cover it here rather than re-aiming this guard", calls)
 	}
 }
 
