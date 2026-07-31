@@ -88,8 +88,22 @@ type SessionDigest struct {
 	ErrorCounts                    map[string]int // tool name -> tool_results with is_error true
 	Interrupts                     int            // "[Request interrupted" user turns
 	SyntheticErrors                int            // "<synthetic>" assistant records
-	TurnDurations                  []int64        // system/turn_duration durationMs
-	RepeatedCalls                  map[string]int // identical tool-call signature -> count, only entries > 1
+	// MaxTokensStops counts MESSAGES stopped at stop_reason "max_tokens":
+	// the agent hit its own output ceiling mid-message. It is the one failure
+	// mode invisible to every other counter here — not an is_error, not an
+	// interrupt, not a <synthetic> record — so a ceiling stop inside a
+	// thinking block leaves no deliverable behind while its lead waits on a
+	// file that is never coming, and the most expensive failure of a night
+	// otherwise reads as a perfectly clean session. Messages, never records:
+	// stop_reason is stamped on EVERY record of a message's group exactly
+	// like the three verbatim usage counters (measured 2026-07-31: 126
+	// max_tokens records on this machine collapse to 45 distinct messages,
+	// with single messages spanning up to 9 records — a per-record count
+	// inflates 2.80x overall and lands hardest on the messages that emitted
+	// the most tool_use blocks, inverting the ranking this digest feeds).
+	MaxTokensStops int
+	TurnDurations  []int64        // system/turn_duration durationMs
+	RepeatedCalls  map[string]int // identical tool-call signature -> count, only entries > 1
 }
 
 // MineResult is one night's mechanical sweep.
@@ -196,7 +210,8 @@ func MineTranscripts(since int64) (*MineResult, error) {
 func digestEmpty(dg SessionDigest) bool {
 	return dg.Lines == 0 && !dg.Truncated &&
 		len(dg.ToolCounts) == 0 && len(dg.ErrorCounts) == 0 &&
-		dg.Interrupts == 0 && dg.SyntheticErrors == 0 && len(dg.TurnDurations) == 0
+		dg.Interrupts == 0 && dg.SyntheticErrors == 0 && dg.MaxTokensStops == 0 &&
+		len(dg.TurnDurations) == 0
 }
 
 // mineRecord is the slice of a transcript line the digest cares about.
@@ -217,9 +232,12 @@ type mineRecord struct {
 		// what collapses them to one. NOT all with the same usage: three of
 		// the four counters repeat verbatim, `output_tokens` streams up across
 		// a sidecar's group. tokenGroup.commit (tokens.go) is the rule.
-		ID      string          `json:"id"`
-		Model   string          `json:"model"`
-		Content json.RawMessage `json:"content"`
+		ID    string `json:"id"`
+		Model string `json:"model"`
+		// StopReason is why the API stopped emitting: "max_tokens" here means
+		// the message was cut at the output ceiling, counted as MaxTokensStops.
+		StopReason string          `json:"stop_reason"`
+		Content    json.RawMessage `json:"content"`
 		// Usage is claude's own per-assistant-record token report. Shared
 		// verbatim with tokens.go's sum (same type, one transcription of
 		// the four wire names) so the digest and the per-job total can
@@ -302,6 +320,14 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// records are replayed.
 	own := fileSessionID(path, filepath.Base(path))
 
+	// lastMaxTokID dedupes MaxTokensStops to one count per message: every
+	// record of a ceiling-stopped group carries the same stop_reason, and
+	// counting each would be the per-record over-count tokenGroup exists to
+	// prevent. Updated only inside the window so a group straddling `since`
+	// still counts once (in the window its later records fall in) rather
+	// than zero.
+	var lastMaxTokID string
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
 	for sc.Scan() {
@@ -349,6 +375,12 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			if inWindow && rec.Message.Model == "<synthetic>" {
 				// an API failure the harness gave up retrying
 				dg.SyntheticErrors++
+			}
+			if inWindow && rec.Message.StopReason == "max_tokens" &&
+				(rec.Message.ID == "" || rec.Message.ID != lastMaxTokID) {
+				// output ceiling hit — once per message, see MaxTokensStops
+				dg.MaxTokensStops++
+				lastMaxTokID = rec.Message.ID
 			}
 			// Token counters, through tokenGroup.commit (tokens.go) — the ONE
 			// definition of what a message contributes, shared verbatim with
