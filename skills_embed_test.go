@@ -113,6 +113,13 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// and the silent-update rule)
 			"kraken questions set", "kraken questions add|update|remove",
 			"P0", "answer", "answered-at",
+			// the never-hard-wrap rule. Stated in aim, info, do AND dream for
+			// the same reason as `never Explore` above: each file is read
+			// INSTEAD of the others, so each copy is the only one its own
+			// path ever sees. The pinned substring is the operative clause
+			// all four copies share, not the rule's title, which dream's
+			// scoped copy does not carry.
+			"ONE source line",
 			// the cell section: paths in <cellDir> terms, the stop line, the gate
 			"Inside A Kraken Cell", "<cellDir>/artifacts/", "<cellDir>/doc/fragments/",
 			"doc ready for review:", "Use `0` where a count is zero",
@@ -143,6 +150,8 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// see the same token on aim above — /info's copy is the only one
 			// the explanation path reads
 			"never `Explore`",
+			// the never-hard-wrap rule; see the same token on aim above
+			"ONE source line",
 		}},
 		{"do", []string{
 			"90-build-report.md", "Discrepancies vs. the plan", "Complications",
@@ -175,6 +184,11 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"read-only exploration only",
 			"manual test ready:", "`.claude/skills/pr/SKILL.md`", "do NOT invoke `/pr` by name",
 			"JOB SPEC is the contract", "Never declare the job done",
+			// the never-hard-wrap rule; see the same token on aim above. /do's
+			// copy binds 90-build-report.md, the one artifact a job that skips
+			// Phase 1 still ships — on that path neither aim nor info is read,
+			// so without this copy that report is bound by nothing.
+			"ONE source line",
 		}},
 		{"pr", []string{
 			"Inside A Kraken Cell", "carl/", "gh pr create",
@@ -213,6 +227,8 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// see the same token on aim above — the scouts are this skill's
 			// researchers and hit the same wall
 			"never `Explore`",
+			// the never-hard-wrap rule; see the same token on aim above
+			"ONE source line",
 		}},
 	} {
 		src := readEmbedded(t, c.skill+"/SKILL.md")

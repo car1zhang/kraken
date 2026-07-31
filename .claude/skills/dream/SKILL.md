@@ -263,8 +263,7 @@ about prompting still produced something worth reading.
 
 ## The report
 
-Write `00-dream-report.md` into the artifacts dir. Keep it to a page. Sections, in order, with
-"None" spelled out rather than a section dropped:
+Write `00-dream-report.md` into the artifacts dir. Keep it to a page, and never hard-wrap its prose: one paragraph — and one bullet, and one table row — is ONE source line, however long, since a mid-sentence line break renders as a broken paragraph on the board (a repeat carl complaint). Sections, in order, with "None" spelled out rather than a section dropped:
 
 | Section | Content |
 |---|---|
