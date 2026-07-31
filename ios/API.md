@@ -912,7 +912,7 @@ for a doc/spec/explanation in words) — never a stored flag on the job.
 | `base` | string | always | |
 | `ready` | bool | always | |
 | `solo` | bool | always | |
-| `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default (`claude-opus-5`); applied once at cell start |
+| `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default for zeus (`claude-fable-5`); applied once at cell start. Governs the cell's own claudes — zeus and its side threads; the teammates zeus spawns are opus regardless |
 | `color` | string | always | the job's color — one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan`, or `""` for no color. Read-only here: it is written by `POST /api/job/color`, never by `saveform` |
 | `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
@@ -926,7 +926,7 @@ for a doc/spec/explanation in words) — never a stored flag on the job.
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default, `claude-opus-5`), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) — see the form-GET note above.
+Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default for zeus, `claude-fable-5`), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) — see the form-GET note above.
 
 **`color` is NOT part of this request and must never be added to it.** This
 endpoint is a FULL REPLACE: a field a client omits is written as its zero

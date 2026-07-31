@@ -374,12 +374,41 @@ func LiveSessions() map[string]bool {
 // --rc): cell agents work unattended in their own worktree, so they run with
 // bypass permissions from birth. tmux commands never see shell aliases, so the
 // flags are spelled out here. The model always rides along as --model: the
-// job's model: field when it set one, else core.DefaultModel. Both spawn paths
-// (StartCell, ReactivateJob) share this, so a job's model choice survives
-// reactivation.
+// caller's resolved model when it has one, else core.DefaultModel. Two call
+// sites share this — zeusSpawnArgv below (both zeus paths, resolved through
+// zeusModel, so a job's model choice survives reactivation) and
+// threadSpawnCommand (a thread's branch and revive alike), which passes j.Model
+// directly and so lands on core.DefaultModel when the job set none.
 func cellClaudeArgs(model string) []string {
 	args := []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
 	return append(args, core.ModelArgs(model)...)
+}
+
+// zeusModel resolves the model a cell's zeus is spawned on: the job's model:
+// field when it set one, else core.ZeusModel — Fable, not the core.DefaultModel
+// everything else in the binary starts on. The FALLBACK is what is zeus-only: a
+// side thread passes j.Model to cellClaudeArgs unresolved (thread.go), so it
+// honours the same override but falls back to DefaultModel, since a thread is
+// carl asking about the work rather than doing it. Zeus' teammates are a third
+// mechanism again and take neither (`model: opus`, pinned in its brief —
+// crew.go).
+func zeusModel(j *Job) string {
+	if j.Model != "" {
+		return j.Model
+	}
+	return core.ZeusModel
+}
+
+// zeusSpawnArgv is the argv both zeus spawn paths build — StartCell with no
+// resume args, ReactivateJob with `-r <session>`. They were two hand-written
+// lines that nothing pinned: zeusModel and both model constants have their own
+// tests, but the line WIRING them had none, and an unreferenced func is not a
+// compile error — so reverting the two call sites would have left this helper
+// as dead code with nothing failing. One seam both paths go through is a seam a
+// test can hold; TestZeusSpawnPathsResolveTheModel (cell_test.go) holds it.
+func zeusSpawnArgv(j *Job, resume ...string) []string {
+	argv := append(cellClaudeArgs(zeusModel(j)), "--name", ZeusName(j))
+	return append(argv, resume...)
 }
 
 // zeusBriefPath and spawnPromptPath name the two spawn inputs that are staged
@@ -549,8 +578,7 @@ func StartCell(j *Job, repo string) error {
 	// half-built cell is cleanable by hand
 	installHookSettings(wt, j)
 	installSkills(wt, j)
-	launch, err := spawnCommand(j, append(cellClaudeArgs(j.Model), "--name", ZeusName(j)),
-		zeusBrief(j), jobPrompt(j))
+	launch, err := spawnCommand(j, zeusSpawnArgv(j), zeusBrief(j), jobPrompt(j))
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
@@ -1588,10 +1616,25 @@ func ReactivateJob(j *Job, session, message string) error {
 		prompt = "" // spawnCommand omits an empty prompt entirely
 	}
 	// the job's model rides along on reactivation too (Q2): a resumed zeus
-	// keeps the model its job file specifies at reactivate time. No brief
-	// here: -r resumes a session that already carries the one it was born
-	// with, so only the steering prompt gets staged.
-	launch, err := spawnCommand(j, append(cellClaudeArgs(j.Model), "--name", ZeusName(j), "-r", session), "", prompt)
+	// keeps the model its job file specifies at reactivate time, and falls
+	// back to the same core.ZeusModel a fresh cell would.
+	//
+	// The brief is staged HERE TOO, and this used to pass "" on the premise
+	// that -r resumes a session already carrying the one it was born with.
+	// thread.go:threadSpawnCommand is the one that actually measured it, and
+	// it records the opposite: a resumed session does NOT retain an earlier
+	// run's --append-system-prompt, so a briefless reactivation came back as a
+	// plain claude holding zeus' history. The repo-owned skills also carry the
+	// crew's `model: opus`, so the brief is not its only statement — it is the
+	// only one in context on EVERY turn, where a skill is read once per phase.
+	// That gap was survivable while every spawn in the binary was Opus, since
+	// an Agent call with no model can inherit its parent's tier and the parent
+	// was Opus anyway. With zeus on core.ZeusModel the two part company: no
+	// brief means a crew that inherits zeus' tier rather than Opus, the
+	// roll-call does not look at tiers at all, and the one surface that does —
+	// the board's crew chip, which renders each teammate's model — is not
+	// something anyone reads as an alarm.
+	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j), prompt)
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}

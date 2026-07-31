@@ -145,7 +145,13 @@ func zeusBrief(j *Job) string {
 	// and zeus would wait on it, message it, or clean it up.
 	b.WriteString("A second claude may show up in another window of your tmux session, forked from your own session and reading this same worktree: that is carl's side thread asking questions about your work — not your teammate and not yours to manage. Ignore it completely: never message it, wait on it, kill it, or count it as part of your crew.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path yourself if it somehow wasn't ingested).\n")
-	b.WriteString("EVERY agent in this cell runs on Claude Opus 5 — you, and every teammate or subagent you ever spawn, with no exceptions: always pass `model: opus` on the Agent tool (it takes tier aliases, not model ids — `opus` IS Claude Opus 5), never sonnet, haiku, or fable, and never leave the model unset.\n")
+	// The tier is RESOLVED rather than named: zeus is spawned on zeusModel(j),
+	// which a job's model: field overrides, so a hardcoded "you run on Fable"
+	// asserts a model zeus is not on for exactly the jobs that set one — and
+	// then forbids working around a tier it never had. JobTemplate advertises
+	// that override, so the false case is the documented one.
+	fmt.Fprintf(&b, "kraken spawned you on `%s` — zeus' tier is kraken's deliberate choice (the lead plans, briefs, arbitrates and integrates, so its turnaround is the cell's latency), not something to work around. EVERY OTHER agent in this cell runs on Claude Opus 5: every teammate and every subagent you ever spawn, with no exceptions, always passing `model: opus` on the Agent tool (it takes tier aliases, not model ids — `opus` IS Claude Opus 5). Never drop one to a cheaper tier, and never leave the model unset — an Agent call with no model can inherit YOURS, which is the one way the crew stops being Opus without anyone noticing. The deep work is what you delegate, so that is where the deep tier goes.\n",
+		zeusModel(j))
 	// The one block of facts a skill genuinely cannot derive. Every skill
 	// below writes "<cellDir>/artifacts" and "<cellDir>/doc/fragments" in the
 	// abstract; this is where those resolve, stated once instead of ~15 times.

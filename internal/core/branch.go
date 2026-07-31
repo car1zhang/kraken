@@ -23,16 +23,28 @@ func ClaudeLauncher() string {
 	return "claude"
 }
 
-// DefaultModel is the claude model every claude kraken STARTS runs on — a
-// cell's zeus, `k c`, and the board's spawn action all route through ModelArgs
-// below (`k b` doesn't: a fork resumes a session rather than starting a new
-// agent — see ForkCmdString). It is an exact model id rather than the `opus`
-// alias so the tier kraken runs on only ever moves when someone edits this
-// line; the alias would silently follow whatever claude ships next. Subagent
-// models (hephaestus, athena, hermes) are a separate axis, pinned in
+// DefaultModel is the claude model kraken STARTS a general-purpose claude on —
+// `k c`, the board's spawn action, and a cell's side threads all route through
+// ModelArgs below (`k b` doesn't: a fork resumes a session rather than starting
+// a new agent — see ForkCmdString). It is an exact model id rather than the
+// `opus` alias so the tier kraken runs on only ever moves when someone edits
+// this line; the alias would silently follow whatever claude ships next.
+// Subagent models (hephaestus, athena, hermes) are a separate axis, pinned in
 // zeus' brief (jobs/crew.go), since the Agent tool takes tier aliases, not ids —
-// they land on the same tier (`model: opus`), so every agent in a cell is Opus 5.
+// they land on this same tier (`model: opus`), so every agent zeus spawns is
+// Opus 5.
 const DefaultModel = "claude-opus-5"
+
+// ZeusModel is the one exception to DefaultModel: a cell's zeus runs on Fable,
+// which is the fast tier, while the crew it dispatches stays on Opus. Zeus is
+// the pane carl steers and the agent that plans, briefs and integrates —
+// turnaround there is what the cell's latency is made of, and the work that
+// wants the deeper tier is the slices and reviews, which are delegated. A job's
+// `model:` field overrides it for that cell. `jobs.zeusModel` is the only
+// reader that puts it on a command line (`jobs.JobTemplate` also reads it, but
+// only to print a new job file's documented default), so `k c` and the board's
+// spawn action never see it.
+const ZeusModel = "claude-fable-5"
 
 // ModelArgs is the `--model` flag pair for a spawn: the caller's explicit model
 // (a job's `model:` field) when it has one, else DefaultModel. Always returns a
@@ -163,9 +175,12 @@ func BranchGuard(p *Peer) error {
 // ForkCmdString builds the shell command that reopens p's session as a fork,
 // replaying the permission mode it was running under.
 //
-// Deliberately NOT a DefaultModel spawn site: a fork continues an existing
-// conversation rather than starting a new agent, so it inherits whatever the
-// resumed session runs on — and p.Model can't stand in either, since discovery
+// Deliberately not a model-spawn site at all — neither DefaultModel nor
+// ZeusModel: a fork continues an existing conversation rather than starting a
+// new agent, so it inherits whatever the resumed session runs on (which is why
+// `k b` off a cell's zeus stays on zeus' tier, whatever that resolved to, while
+// a kraken side thread — a different agent reading the same worktree — does
+// pass an explicit --model). p.Model can't stand in either, since discovery
 // stores it display-shortened (claude-opus-5 → opus-5), which is not a value
 // `--model` accepts.
 func ForkCmdString(p *Peer) string {
