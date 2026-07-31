@@ -92,6 +92,7 @@ generated spec.
 - **Uncertainty is content, not a question.** Say what you could not confirm, in place, and move on.
 - **Answer the question that was asked.** Scope creep into neighboring subsystems is what makes
   explanations unreadable; mention the neighbor in one line and put it on the "go deeper" menu.
+- **Never hard-wrap prose in an artifact.** One paragraph — and one bullet, and one table row — is ONE source line, however long; wrapping is the renderer's job, never the author's. A mid-sentence line break renders as a broken paragraph on the board, and it is a repeat complaint from carl ("please get rid of them and remember not to do"). This binds every markdown artifact the job ships, and every teammate brief that asks for one.
 
 ## Diagrams, when a round calls for one
 
