@@ -260,10 +260,12 @@ func TestGraphContextKeepsTheBriefUnderItsCeiling(t *testing.T) {
 	}
 	withFacts(t, edges)
 	j := &Job{ID: 1, Slug: "lean", Body: spec}
-	// 12,000 is TestZeusBriefStaysLean's ceiling for the brief alone; the
-	// injection's own cap is what keeps the sum bounded, so state the sum
-	// explicitly rather than trusting two independent numbers to stay in step.
-	const ceiling = 12_000 + graphContextBytes
+	// The first term mirrors TestZeusBriefStaysLean's ceiling for the brief
+	// alone (13,500 — raised for the blind-test-authorship policy text); the
+	// injection's own cap is what keeps the sum bounded. Stated as a sum so a
+	// future brief-ceiling bump shows up HERE as one number to update, with
+	// the crew test named as its source of truth.
+	const ceiling = 13_500 + graphContextBytes
 	if n := len(zeusBrief(j) + graphContext(j)); n > ceiling {
 		t.Errorf("staged brief is %d bytes, over the %d-byte combined ceiling", n, ceiling)
 	}

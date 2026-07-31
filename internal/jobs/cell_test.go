@@ -648,7 +648,22 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 			return true
 		}
 		calls++
-		brief, ok := call.Args[2].(*ast.CallExpr)
+		// The sanctioned shapes are zeusBrief(...) alone or exactly
+		// zeusBrief(...) + graphContext(...): the graph injection is
+		// deliberately OUTSIDE zeusBrief (its two pinning tests measure
+		// static policy text), so the concatenation is part of the spawn
+		// contract this guard protects — the brief half must still lead,
+		// and the only sanctioned addition is graphContext, whose ""-on-
+		// any-failure guarantee is what keeps a briefless spawn impossible.
+		arg := call.Args[2]
+		if bin, ok := arg.(*ast.BinaryExpr); ok && bin.Op == token.ADD {
+			y, ok := bin.Y.(*ast.CallExpr)
+			if fn, ok2 := y.Fun.(*ast.Ident); !ok || !ok2 || fn.Name != "graphContext" {
+				t.Errorf("%s: spawnCommand's brief concatenates something other than graphContext(...)", fset.Position(call.Pos()))
+			}
+			arg = bin.X
+		}
+		brief, ok := arg.(*ast.CallExpr)
 		if !ok {
 			t.Errorf("%s: spawnCommand's brief argument is not zeusBrief(j) — a briefless zeus can leave its whole crew inheriting zeus' own tier instead of Opus",
 				fset.Position(call.Pos()))

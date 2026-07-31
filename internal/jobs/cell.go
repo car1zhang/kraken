@@ -1642,7 +1642,11 @@ func ReactivateJob(j *Job, session, message string) error {
 	// roll-call does not look at tiers at all, and the one surface that does —
 	// the board's crew chip, which renders each teammate's model — is not
 	// something anyone reads as an alarm.
-	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j), prompt)
+	// Same graphContext append as StartCell's, and for a sharper reason: a
+	// REACTIVATED job is by definition returning after time passed, which is
+	// exactly when the graph is most likely to know something its zeus does
+	// not. Same ""-on-no-match guarantee.
+	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j)+graphContext(j), prompt)
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
