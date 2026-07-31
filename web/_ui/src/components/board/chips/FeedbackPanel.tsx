@@ -12,7 +12,8 @@ export interface FeedbackPanelProps {
 /**
  * One feedback entry. Port of feedbackRowHTML (app.js:316).
  *
- * An addressed entry (zeus posted its own addressed/addressed_at) is dimmed
+ * An addressed entry (the nightly dream pass posted addressed/addressed_at for
+ * a durable fix it shipped — no other agent writes that column) is dimmed
  * and terminal — carl can still edit or delete it, same as an open one, since
  * a note staying accurate is more useful than freezing it the moment zeus
  * reacts to it.

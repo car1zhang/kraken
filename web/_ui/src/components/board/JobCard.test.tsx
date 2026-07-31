@@ -279,8 +279,11 @@ describe("band 2 carries counts, not lists", () => {
         ],
       }),
     );
-    expect(card.querySelector(".chips .fb-chip")).toHaveTextContent("2 feedback · 1 open");
-    expect(card.querySelector(".fb-chip")!.classList.contains("open")).toBe(true);
+    expect(card.querySelector(".chips .fb-chip")).toHaveTextContent("2 feedback · 1 no durable fix");
+    // no `.open` emphasis any more: `addressed` is the dream pass' column
+    // alone, so an un-addressed note is a corroboration backlog rather than
+    // work owed, and the state would now fire on nearly every job with feedback
+    expect(card.querySelector(".fb-chip")!.classList.contains("open")).toBe(false);
     // the answerable panel is one click in, never on the card
     expect(card.querySelector(".job-feedback")).toBeNull();
     expect(card.querySelector(".fb-row")).toBeNull();

@@ -18,8 +18,19 @@ export function feedbackChipVisible(job: WebJob): boolean {
  * itself (FeedbackPanel, now rendered only by the steer modal and the job
  * editor).
  *
- * Both counts ride it: the total is what the job accumulated, the open count
- * (notes zeus has not posted an `addressed` line for) is what is still owed.
+ * Both counts ride it: the total is what the job accumulated, and the second
+ * count is how many notes carry no `addressed` line.
+ *
+ * That second count is NOT "what is still owed", and the wording here is the
+ * whole of the difference. `addressed` is written by the nightly dream pass
+ * alone — an ordinary cell acts on its feedback and deliberately leaves the
+ * column empty (internal/jobs/crew.go's brief) — so a note with no line is a
+ * note no DURABLE fix has shipped for, which is the common case even for notes
+ * the owning cell fixed within the hour. It is a corroboration backlog, not a
+ * to-do list, which is why it no longer takes the `.open` highlight: styling it
+ * as work owed would now fire on nearly every job with feedback, and an
+ * emphasis that fires on nearly everything means nothing.
+ *
  * Unlike a question, a note is never "settled" by the job being done — carl
  * leaves most of them ON done work — so there is deliberately no settledJob()
  * suppression here, and an ARCHIVED card carries this chip too.
@@ -27,14 +38,18 @@ export function feedbackChipVisible(job: WebJob): boolean {
 export function FeedbackChip({ job }: { job: WebJob }) {
   const list = job.feedback ?? [];
   if (!list.length) return null;
-  const open = list.filter((f) => !f.addressed).length;
-  const label = open ? `${list.length} feedback · ${open} open` : `${list.length} feedback`;
+  const unfixed = list.filter((f) => !f.addressed).length;
+  const label = unfixed
+    ? `${list.length} feedback · ${unfixed} no durable fix`
+    : `${list.length} feedback`;
   const title =
     `${list.length} feedback note${list.length === 1 ? "" : "s"}` +
-    (open ? `, ${open} not yet addressed` : ", all addressed") +
+    (unfixed
+      ? `, ${unfixed} with no durable fix shipped yet (the nightly pass writes that, not the cell)`
+      : ", all have a durable fix recorded") +
     " — click the card to read them";
   return (
-    <span className={"fb-chip" + (open ? " open" : "")} title={title}>
+    <span className="fb-chip" title={title}>
       ✎ {label}
     </span>
   );

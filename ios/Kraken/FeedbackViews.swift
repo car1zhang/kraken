@@ -138,11 +138,13 @@ extension WebFeedback {
 // MARK: - read rows
 
 /// One feedback note: the artifact it hangs off, the note itself, and — when
-/// zeus has responded — its own free-text account of how it addressed it.
+/// the nightly dream pass has shipped a durable fix for it — that pass' own
+/// free-text account of the fix. No other agent writes that column, so a row
+/// without one is not a row nobody handled; see WebFeedback in Models.swift.
 ///
 /// An addressed row dims but KEEPS its edit and delete affordances, matching
 /// the web board's deliberate call: a note staying accurate is worth more
-/// than freezing it the moment zeus reacts to it.
+/// than freezing it the moment something reacts to it.
 struct FeedbackRow: View {
     let item: WebFeedback
     var onEdit: (() -> Void)?
@@ -195,25 +197,34 @@ struct FeedbackRow: View {
 
 // MARK: - count chip
 
-/// "✎ <total> · <open> open" — the board card's passive feedback summary.
+/// "✎ <total> · <n> no durable fix" — the board card's passive feedback
+/// summary, and the exact counterpart of the web board's FeedbackChip.
 /// Passive on purpose: a long-press context menu would contend with the
 /// card's own drag-to-reorder gesture, so the chip only ever displays.
 /// Renders nothing when the job has no notes.
+///
+/// The second count is notes with no `addressed` line, and it is NOT a count
+/// of work owed — see WebFeedback in Models.swift. `addressed` is written by
+/// the nightly dream pass alone and an ordinary cell acts on its feedback
+/// while deliberately leaving the column empty, so this is a corroboration
+/// backlog and it is non-zero on nearly every job carrying feedback. That is
+/// why the chip is muted rather than carrying skillDream's filled treatment:
+/// an emphasis that fires on nearly everything is one nobody reads, which is
+/// the same call the web board made when it dropped `.fb-chip.open`.
 struct FeedbackCountChip: View {
     let feedback: [WebFeedback]
 
     var body: some View {
         if !feedback.isEmpty {
-            let open = feedback.filter { !$0.isAddressed }.count
-            Text(open > 0 ? "✎ \(feedback.count) · \(open) open" : "✎ \(feedback.count)")
+            let unfixed = feedback.filter { !$0.isAddressed }.count
+            Text(unfixed > 0 ? "✎ \(feedback.count) · \(unfixed) no durable fix" : "✎ \(feedback.count)")
                 .font(.data(10, weight: .semibold))
-                .foregroundStyle(KTheme.skillDream)
+                .foregroundStyle(KTheme.text2)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(KTheme.skillDreamSoft)
-                .overlay(Rectangle().stroke(KTheme.skillDream, lineWidth: 1))
+                .overlay(Rectangle().stroke(KTheme.text2, lineWidth: 1))
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(feedback.count) feedback notes, \(open) open")
+                .accessibilityLabel("\(feedback.count) feedback notes, \(unfixed) with no durable fix")
         }
     }
 }

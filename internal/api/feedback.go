@@ -31,33 +31,34 @@ import (
 const feedbackNoteMaxLen = 8000
 
 // feedbackReq is every carl-facing form of POST /api/feedback (create,
-// edit, delete) plus zeus' addressed form, distinguished by which fields are
-// set — see feedbackPost's dispatch.
+// edit, delete) plus the nightly dream pass' addressed form, distinguished
+// by which fields are set — see feedbackPost's dispatch.
 type feedbackReq struct {
 	Slug string `json:"slug"`
 	// Home/Name identify the artifact for a create, exactly like the
 	// artifact route's own URL (/api/artifact/<slug>/<home>/<name>).
 	Home string `json:"home,omitempty"`
 	Name string `json:"name,omitempty"`
-	// ID targets an existing row: edit, delete, or zeus' addressed form.
+	// ID targets an existing row: edit, delete, or the dream pass' addressed form.
 	ID int64 `json:"id,omitempty"`
 	// Feedback is the note text for create/edit.
 	Feedback string `json:"feedback,omitempty"`
 	// Delete set true is the delete form.
 	Delete bool `json:"delete,omitempty"`
-	// Addressed is zeus' own free-text account of how it addressed the
-	// note — never sent by the iOS app/web UI (see ios/API.md's "not
-	// modeled" note on this form). A pointer, not a plain string: the
-	// dispatch below must tell "key absent" from "key present with an
-	// empty value" apart, since an explicitly empty addressed is zeus
-	// clearing a prior note, not a typo'd edit request.
+	// Addressed is the nightly dream pass' free-text account of the
+	// durable fix it shipped for the note — never sent by the iOS app/web
+	// UI (see ios/API.md's "not modeled" note on this form). A pointer, not
+	// a plain string: the dispatch below must tell "key absent" from "key
+	// present with an empty value" apart, since an explicitly empty
+	// addressed is that pass clearing a prior note, not a typo'd edit
+	// request.
 	Addressed *string `json:"addressed,omitempty"`
 }
 
 // feedbackHandler serves GET (zeus' read) and POST (carl's create/edit/
-// delete, zeus' addressed) /api/feedback. POST is mirror-gated: a mirror
-// process runs a read-only board against a sandbox DB, and this is a write
-// like any other webAction, even though nothing here drives a real tmux
+// delete, the dream pass' addressed) /api/feedback. POST is mirror-gated:
+// a mirror process runs a read-only board against a sandbox DB, and this is
+// a write like any other webAction, even though nothing here drives a real tmux
 // pane (see actions.go's mirrorGatedActions doc comment). The gate uses the
 // same plain-text http.Error(...) shape every webAction-wrapped gate uses
 // (actions.go's webAction, mirror.go), not a JSON body — mirror_test.go
@@ -135,8 +136,9 @@ type webSweepFeedback struct {
 	Artifact string `json:"artifact"`
 	Note     string `json:"note"`
 	At       int64  `json:"at"`
-	// Addressed/AddressedAt are zeus' own account of how it handled the note
-	// — omitempty, exactly as on webFeedback: an open note simply has neither.
+	// Addressed/AddressedAt are the dream pass' account of the durable fix
+	// it shipped — omitempty, exactly as on webFeedback: a note it has not
+	// closed simply has neither.
 	Addressed   string `json:"addressed,omitempty"`
 	AddressedAt string `json:"addressed_at,omitempty"`
 	// SnapshotURL always rides, even for a row whose blob happens to be empty:
@@ -347,7 +349,7 @@ func feedbackPost(w http.ResponseWriter, r *http.Request) {
 		feedbackDelete(w, st, existing)
 	case req.ID != 0 && req.Addressed != nil:
 		// {id, addressed, feedback} names two different forms at once: the
-		// addressed branch wins the dispatch and writes ONLY the zeus-owned
+		// addressed branch wins the dispatch and writes ONLY the dream-pass-owned
 		// columns, so honoring it would silently drop the note edit the same
 		// request also asked for. Refuse the whole request instead — a
 		// caller that means both must send two requests.
@@ -603,8 +605,11 @@ func feedbackDelete(w http.ResponseWriter, st *store.Store, existing *store.Feed
 	webJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// feedbackAddressed is zeus' `kraken feedback addressed` form: UPDATEs only
-// the zeus-owned addressed/addressed_at columns — never touches note/
+// feedbackAddressed is the `kraken feedback addressed` form, which ONLY the
+// nightly dream pass runs — an ordinary cell reads its feedback, acts on it,
+// and leaves this column empty by design (internal/jobs/crew.go's brief), so
+// an empty Addressed means "no durable fix has shipped" rather than "nobody
+// handled it". UPDATEs only those two columns — never touches note/
 // snapshot/session. req.Addressed is a pointer (see feedbackReq's doc
 // comment): an explicitly empty value ({id, addressed:""}) CLEARS the note
 // (both addressed and addressed_at reset to ""), rather than 400ing as

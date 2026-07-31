@@ -67,17 +67,47 @@ with the artifact it was left on and a URL for the **snapshot** — the artifact
 Read the snapshot when the note is about something visual or structural: "edges run through boxes" is
 unresolvable against an artifact that has since been fixed, or whose cell is long gone.
 
-**Mark a note addressed only when you shipped a change for it**, and name the PR when you do. A note
-you merely READ stays open — it belongs to its own job's zeus, and closing it would tell carl it was
-handled when nobody handled it.
+**You are the only writer of `addressed` anywhere in kraken.** Every other cell is told to act on its
+feedback, fix what the note asks for, and leave the column alone — so an OPEN note does not mean nobody
+handled it. The owning job's zeus very probably did, in place, the same day. Read every note as evidence
+on its own terms; the column tells you nothing about whether the artifact got fixed, and it is not meant
+to.
 
-But the reverse is worse and is the case this rule exists for. A note you acted on will otherwise sit
-open **forever**: the job that owns it is usually done, blocked, or torn down by the time you read it,
-so its zeus may never run again, and carl is left looking at a note whose fix has already merged. He
-has no way to tell that from a note nobody touched.
+That is the whole meaning the column now carries: **`addressed` says a DURABLE fix shipped** — a skill
+sentence, a brief, real code — never that one artifact was patched. Which is exactly the distinction this
+pass exists to draw, and the reason the write belongs here: a per-artifact fix is invisible to the next
+job that hits the same problem, and the recurrence is the finding.
 
-So the test is authorship of the FIX, not of the note: if this pass shipped something because of it,
-close it and say which PR. Otherwise leave it alone.
+**So mark a note addressed only when you shipped a change for it**, and name the PR when you do. A note
+you merely READ stays open.
+
+The case that rule exists for is the reverse one. A note you acted on would otherwise sit open
+**forever**: the job that owns it is usually done, blocked, or torn down by the time you read it, so
+carl is left looking at a note whose fix has already merged, with no way to tell it from one nobody
+touched.
+
+The test is authorship of the FIX, not of the note: if this pass shipped something because of it, close it
+and say which PR. Otherwise leave it alone.
+
+Three properties of the window are worth holding onto while you read the sweep, because each changes what
+a row in front of you means.
+
+**A row reaches you ONCE — plan as if this is your only look at it.** The window keys on each row's
+immutable CREATION time and the floor only moves forwards, so a note you leave open is not deferred to
+tomorrow: it is out of the evidence stream, still visible to carl on the board but never re-read here.
+There is no second look to defer a judgment to.
+
+**"Once" is the rule, not a guarantee, and it fails in both directions.** After a long `kraken serve`
+outage the window CLAMPS (7 days) and everything older is swept zero times — the night's job body says so
+when it happens, and those rows can now never be closed by anyone, so name them in the report's coverage
+section. At the other seam, the floor is stamped when the night's job is CREATED and you run the sweep
+some time after that, so a note carl writes in between falls in both tonight's window and tomorrow's.
+That is the one case where a row comes back. **A row you have seen before is the SAME sighting, never a
+second one** — corroboration means two different sources, and one row read twice is one source.
+
+**Which is why an `addressed` note naming a PR is worth reading rather than ignoring.** On a re-swept row
+that text is *yours*, from a previous night — the one reliable "already shipped for this" signal you get.
+No other cell writes this column, so it cannot be anyone else's.
 
 ## Evidence 2 — transcripts
 
@@ -255,8 +285,13 @@ specific, and it is the only place the cell's real paths appear:
   board's `DREAM` view renders, so a pass that ships changes but writes no report is invisible.
 - **Read and write watchlist rows with `kraken watchlist get|add|update|remove`**; sweep feedback with
   `kraken feedback sweep --since <ts>`. Run `kraken feedback addressed <slug> <id> <text>` **only for
-  a note you shipped a change for**, naming the PR in the text — see Evidence 1. Note the slug is the
-  OTHER job's, not this dream job's.
+  a note you shipped a change for**, naming the PR in the text — see Evidence 1. **No other cell runs
+  that verb at all**, so nothing closes a note if you do not. The slug is the one the note was left on,
+  which is usually another job's — though not always, since carl leaves notes on dream reports too. Two
+  failures to expect rather than debug: the write 404s on a note whose owning job was hard-deleted (the
+  row survives its job and the sweep still hands it to you, but there is nothing left to scope it to) —
+  record that in the report instead. And `--clear` reopens an entry: use it if you closed one in error
+  while it is still in front of you, since once the window passes nobody can reach that row again.
 - **Scouts are unnamed subagents**, never teammates: they read and report, and change nothing in the
   repo — they still write their own findings to the scratch path you give them. The crew rules in
   the brief govern any agent that changes the repo.

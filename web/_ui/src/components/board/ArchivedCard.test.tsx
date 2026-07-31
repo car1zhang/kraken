@@ -97,7 +97,7 @@ describe("the archived card's bands", () => {
     );
     const chips = card.querySelector(".chips")!;
     expect(chips.querySelector(".ct-chip")).toHaveTextContent("▤ 4");
-    expect(chips.querySelector(".fb-chip")).toHaveTextContent("1 feedback · 1 open");
+    expect(chips.querySelector(".fb-chip")).toHaveTextContent("1 feedback · 1 no durable fix");
     expect(card.querySelector(".chip")).toBeNull();
     expect(card.querySelector(".chip-more")).toBeNull();
     expect(card.querySelector(".job-feedback")).toBeNull();

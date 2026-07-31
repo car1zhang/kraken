@@ -738,8 +738,10 @@ body {
    of the three count chips, and the same plain span rather than a .chip for
    the same reason as the two below — .chip is the artifact-overlay click
    target, and this one must fall through to the card's open-the-drilldown
-   handler instead. Muted always: unlike an open question or an unaddressed
-   note, a pile of artifacts is never something owed. */
+   handler instead. Muted always: unlike an open question, a pile of artifacts
+   is never something owed. (This used to contrast with an unaddressed note
+   too — that stopped being an example of something owed when `addressed`
+   became the dream pass' column; see .fb-chip below.) */
 .ct-chip {
   font: 10px var(--mono);
   color: var(--text-2); border: 1px solid var(--hairline-2);
@@ -773,20 +775,19 @@ body {
 /* the board's whole feedback surface, exactly parallel to .dq-chip above:
    a count in the card's chip row, the notes themselves one click into the job
    (feedbackChipHTML). Also a plain span, not a .chip, for the same
-   fall-through reason. Amber rather than counter-pink when notes are still
-   unaddressed: an open note is work owed, not a job blocked on a human —
-   which is the distinction --revealed already carries elsewhere. The :not()
-   on the hover rule is load-bearing for the same specificity reason
-   .dq-chip's is. */
+   fall-through reason. It carries NO emphasis state: the amber it used to take
+   when a note had no `addressed` line said "work owed", and that stopped being
+   true when `addressed` became the nightly dream pass' column alone — an
+   ordinary cell now leaves it empty by design, so the count is non-zero on
+   nearly every job with feedback, and an emphasis that fires on nearly
+   everything is one carl stops reading. */
 .fb-chip {
   font: 10px var(--mono);
   color: var(--text-2); border: 1px solid var(--hairline-2);
   padding: 2px 7px; cursor: pointer;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
-.card:hover .fb-chip:not(.open) { color: var(--text); border-color: var(--text-2); }
-.fb-chip.open { color: var(--revealed); border-color: var(--revealed-soft); }
-.card:hover .fb-chip.open { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.card:hover .fb-chip { color: var(--text); border-color: var(--text-2); }
 
 .prereq span { font: 10px var(--mono); }
 .prereq .ok { color: var(--solved); }

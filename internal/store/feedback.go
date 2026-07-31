@@ -24,9 +24,19 @@ import (
 // scoped read (real job ids are AUTOINCREMENT from 1), only the unscoped
 // full sweep. Session is zeus' Claude session id at submit time (j.Session,
 // stamped by the API layer, not this package); Addressed/AddressedAt are
-// zeus-owned — only AddressFeedback ever writes them — and hold zeus' own
-// free-text account of how it addressed the note plus a server-stamped
-// RFC3339 timestamp, not a boolean.
+// owned by the NIGHTLY DREAM PASS — only AddressFeedback ever writes them —
+// and hold that pass' free-text account of the durable fix it shipped for the
+// note plus a server-stamped RFC3339 timestamp, not a boolean. An ordinary
+// cell's zeus reads its feedback and acts on it but never writes this column
+// (internal/jobs/crew.go's brief states the prohibition), so an empty
+// Addressed means "no durable fix has shipped for this note" rather than
+// "nobody handled it" — the two came apart deliberately, and every reader that
+// renders a count off this column has to say the first thing, not the second.
+// Rows predating that split are the exception and cannot be migrated: most
+// carry an OWNING CELL's first-person account written under the retired rule
+// (on this machine, 5 of the 7 non-empty ones), and a wipe would take the
+// genuine durable-fix closures with them. So the column reads honestly going
+// forward and approximately backwards, which is the trade a wipe would invert.
 type Feedback struct {
 	ID          int64
 	JobID       int64
@@ -263,9 +273,10 @@ func (s *Store) UpdateFeedbackNote(id int64, note string, snapshot []byte, snaps
 	return nil
 }
 
-// AddressFeedback updates the zeus-owned addressed/addressed_at columns
-// only (zeus' `kraken feedback addressed` verb) — note/snapshot/session/ts
-// are left untouched. Errors with ErrNotFound when id doesn't exist.
+// AddressFeedback updates the addressed/addressed_at columns only (the
+// `kraken feedback addressed` verb, which ONLY the nightly dream pass runs —
+// see Feedback's doc comment) — note/snapshot/session/ts are left untouched.
+// Errors with ErrNotFound when id doesn't exist.
 func (s *Store) AddressFeedback(id int64, addressed, addressedAt string) error {
 	res, err := s.db.Exec(
 		`UPDATE feedback SET addressed = ?, addressed_at = ? WHERE id = ?`,

@@ -1992,8 +1992,10 @@ private struct LoadBadge: View {
 
 /// "▤ N" — the board card's entire artifact surface, mirroring web's
 /// `.ct-chip`. A count and nothing else: the names live one tap in, in the job
-/// sheet. Always muted, because unlike an open question or an unaddressed note
-/// a pile of artifacts is never something owed.
+/// sheet. Always muted, because unlike an open question a pile of artifacts is
+/// never something owed. (This used to contrast with an unaddressed note too —
+/// that stopped being an example of something owed when `addressed` became the
+/// dream pass' column, and FeedbackCountChip is muted now for the same reason.)
 private struct ArtifactCountChip: View {
     let count: Int
 

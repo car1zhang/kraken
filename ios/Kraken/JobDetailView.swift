@@ -1022,8 +1022,9 @@ struct JobDetailView: View {
                 // questions above: `feedback` IS served for archived jobs
                 // (rows outlive the cell — see webJob's `feedback` key),
                 // so copying that gate would hide exactly the notes worth
-                // keeping. Open notes first, then addressed ones, both in
-                // server order — same shape as sortedDocQuestions.
+                // keeping. Un-addressed notes first, then closed ones, both in
+                // server order — see sortedFeedback for why that is no longer
+                // the same "needs you first" claim sortedDocQuestions makes.
                 if !mergedFeedback.isEmpty {
                     kSection("Feedback · \(mergedFeedback.count)") {
                         ForEach(sortedFeedback) { f in
@@ -1560,9 +1561,14 @@ struct JobDetailView: View {
         feedbackOverlay.apply(to: job.feedback ?? [])
     }
 
-    // Open notes first, addressed ones after, each keeping server order —
-    // the same "still needs you first" shape sortedDocQuestions uses. The
-    // explicit offset tiebreak is load-bearing for the same reason it is
+    // Notes with no `addressed` line first, closed ones after, each keeping
+    // server order. The ordering survives but its JUSTIFICATION changed: this
+    // is no longer "still needs you first", because `addressed` is written by
+    // the nightly dream pass alone and an ordinary cell acts on a note while
+    // deliberately leaving the column empty. What sorts to the top is now
+    // simply the notes no durable fix has shipped for, which is most of them —
+    // still the more useful half to read first, but not a queue of work owed.
+    // The explicit offset tiebreak is load-bearing for the same reason it is
     // there: Swift's sorted(by:) is documented as NOT stable.
     private var sortedFeedback: [WebFeedback] {
         let indexed = Array(mergedFeedback.enumerated())
