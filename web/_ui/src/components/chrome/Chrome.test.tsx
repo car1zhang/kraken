@@ -355,7 +355,12 @@ describe("the view tabs", () => {
     const onNavigate = vi.fn();
     const { container } = renderChrome(model({}), { view: "dream", onNavigate });
     const tabs = [...container.querySelectorAll(".viewtab")];
-    expect(tabs.map((t) => t.textContent)).toEqual(["BOARD", "LOG", "DREAM"]);
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      "BOARD",
+      "LOG",
+      "DREAM",
+      "GRAPH",
+    ]);
     expect(tabs.find((t) => t.classList.contains("active"))).toHaveTextContent(
       "DREAM",
     );

@@ -42,8 +42,9 @@ import (
 // blocked job costs carl and buys him (see schemaV13). Version 14 WIPES both
 // token tables again — the group-collapse rule was taking output_tokens from
 // the first record of a message where a subagent sidecar only reports the
-// total on the last (see schemaV14).
-const schemaVersion = 14
+// total on the last (see schemaV14). Version 15 adds the knowledge graph's
+// seven tables (see schemaV15).
+const schemaVersion = 15
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -733,6 +734,124 @@ DELETE FROM job_tokens;
 DELETE FROM job_token_files;
 `
 
+// schemaV15 adds the knowledge graph: seven brand-new tables, no hook (there
+// is nothing anywhere to migrate forward — the graph starts empty and the
+// nightly ingest job backfills it from transcripts that were never in this
+// database).
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - kg_episodes is the provenance root: one row per ingested unit, keyed by
+//     a content hash so a re-scan of the same span is a no-op rather than a
+//     duplicate. Every edge traces to exactly one episode; nothing else does.
+//   - kg_edges carries the fact as a natural-language SENTENCE (`fact`) plus
+//     the bi-temporal quartet: valid_from/valid_until are world time (when the
+//     fact was/stopped being true; 0 = unknown/open), created_at/expired_at
+//     are system time (when kraken learned/unlearned it). Contradiction sets
+//     valid_until and expired_at on the old row and inserts the new one —
+//     UPDATE of those two columns is the ONLY sanctioned mutation of a stored
+//     edge; nothing is ever deleted (retention is Q10's "no pruning, measure").
+//   - embedding BLOBs are little-endian float32, written by the daemon's
+//     graphPass AFTER the row exists (async — an OpenAI outage degrades
+//     retrieval to BM25-only, it never blocks a write). Zero-length means
+//     "not embedded yet", which is also every row's state if no API key is
+//     ever configured.
+//   - kg_edges_fts is an external-content FTS5 table over kg_edges.fact with
+//     the three standard sync triggers, so BM25 search cannot drift from the
+//     base table. FTS5 exists only under the sqlite_fts5 build tag — the
+//     Makefile carries it, and a binary built without it fails HERE, loudly,
+//     at open ("no such module: fts5"), which is the web-assets stance: better
+//     than silently serving a graph whose search returns nothing.
+//   - kg_ingest_cursor is SumTokensDelta's watermark idea with a different
+//     payload: one row per source (a transcript file path, or a named row
+//     source like "feedback"), cursor = bytes for files / last-seen id for
+//     row sources. Carried forward on errors by the caller, exactly as
+//     job_token_files' comment prescribes.
+//   - kg_layout caches the server-computed ForceAtlas2 positions per node,
+//     stamped with the graph revision they were computed for (rev = max edge
+//     id at compute time), so both clients draw the same picture and a
+//     layout pass only reruns when the graph actually moved.
+//   - NO foreign keys and NO cascades anywhere in kg_*, same reasoning as
+//     job_tokens: the graph outlives the jobs/feedback/transcripts it was
+//     extracted from — an archived or deleted source must not take facts
+//     with it (the episode row IS the surviving provenance).
+const schemaV15 = `
+CREATE TABLE kg_episodes (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind       TEXT    NOT NULL CHECK(kind IN ('transcript','feedback','watchlist','artifact','job')),
+	ref        TEXT    NOT NULL DEFAULT '',  -- source pointer: file path + byte span, or row id
+	content    TEXT    NOT NULL DEFAULT '',  -- the reduced text handed to the extractor
+	hash       TEXT    NOT NULL,             -- content hash; the dedupe key for re-scans
+	ts         INTEGER NOT NULL DEFAULT 0,   -- unix millis: when the source material was written
+	state      TEXT    NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','done')),
+	created_at INTEGER NOT NULL DEFAULT 0    -- unix millis
+);
+CREATE UNIQUE INDEX kg_episodes_hash ON kg_episodes(hash);
+CREATE INDEX kg_episodes_state ON kg_episodes(state, id);
+
+CREATE TABLE kg_nodes (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	name        TEXT    NOT NULL,            -- canonical name
+	type        TEXT    NOT NULL DEFAULT '', -- seed vocabulary + open extension (Q8)
+	description TEXT    NOT NULL DEFAULT '', -- short natural-language gloss of the concept
+	embedding   BLOB    NOT NULL DEFAULT x'', -- little-endian float32; empty = not embedded yet
+	created_at  INTEGER NOT NULL DEFAULT 0,  -- unix millis
+	updated_at  INTEGER NOT NULL DEFAULT 0   -- unix millis
+);
+CREATE UNIQUE INDEX kg_nodes_name ON kg_nodes(LOWER(name));
+
+CREATE TABLE kg_node_aliases (
+	node_id INTEGER NOT NULL,
+	alias   TEXT    NOT NULL,
+	PRIMARY KEY (node_id, alias)
+);
+CREATE INDEX kg_node_aliases_alias ON kg_node_aliases(LOWER(alias));
+
+CREATE TABLE kg_edges (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	src_id      INTEGER NOT NULL,
+	dst_id      INTEGER NOT NULL,
+	predicate   TEXT    NOT NULL DEFAULT '',
+	fact        TEXT    NOT NULL,            -- the fact as one natural-language sentence
+	episode_id  INTEGER NOT NULL DEFAULT 0,  -- provenance; 0 only for hand-planted rows
+	strength    INTEGER NOT NULL DEFAULT 0,  -- extractor's 1-10 confidence
+	occurrences INTEGER NOT NULL DEFAULT 1,  -- distinct episodes independently stating this
+	valid_from  INTEGER NOT NULL DEFAULT 0,  -- unix millis world time; 0 = unknown
+	valid_until INTEGER NOT NULL DEFAULT 0,  -- unix millis world time; 0 = still true
+	embedding   BLOB    NOT NULL DEFAULT x'', -- little-endian float32; empty = not embedded yet
+	created_at  INTEGER NOT NULL DEFAULT 0,  -- unix millis system time
+	expired_at  INTEGER NOT NULL DEFAULT 0   -- unix millis system time; 0 = live
+);
+CREATE INDEX kg_edges_src ON kg_edges(src_id, expired_at);
+CREATE INDEX kg_edges_dst ON kg_edges(dst_id, expired_at);
+CREATE INDEX kg_edges_episode ON kg_edges(episode_id);
+
+CREATE VIRTUAL TABLE kg_edges_fts USING fts5(fact, content='kg_edges', content_rowid='id');
+CREATE TRIGGER kg_edges_ai AFTER INSERT ON kg_edges BEGIN
+	INSERT INTO kg_edges_fts(rowid, fact) VALUES (new.id, new.fact);
+END;
+CREATE TRIGGER kg_edges_ad AFTER DELETE ON kg_edges BEGIN
+	INSERT INTO kg_edges_fts(kg_edges_fts, rowid, fact) VALUES ('delete', old.id, old.fact);
+END;
+CREATE TRIGGER kg_edges_au AFTER UPDATE ON kg_edges BEGIN
+	INSERT INTO kg_edges_fts(kg_edges_fts, rowid, fact) VALUES ('delete', old.id, old.fact);
+	INSERT INTO kg_edges_fts(rowid, fact) VALUES (new.id, new.fact);
+END;
+
+CREATE TABLE kg_ingest_cursor (
+	source     TEXT    PRIMARY KEY,          -- transcript file path, or a named row source
+	cursor     INTEGER NOT NULL DEFAULT 0,   -- byte offset for files; last-seen row id otherwise
+	updated_at INTEGER NOT NULL DEFAULT 0    -- unix millis
+);
+
+CREATE TABLE kg_layout (
+	node_id    INTEGER PRIMARY KEY,
+	x          REAL    NOT NULL DEFAULT 0,
+	y          REAL    NOT NULL DEFAULT 0,
+	rev        INTEGER NOT NULL DEFAULT 0    -- max kg_edges.id at compute time
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -775,8 +894,10 @@ type migrationStep struct {
 // took output_tokens from the first record of a message where a sidecar only
 // reports the total on the last, and accumulate-forward counters cannot be
 // corrected behind their watermarks).
+// migrations[15] adds the knowledge graph's seven tables (no hook — brand-new
+// tables, nothing to migrate forward; see schemaV15).
 // Future schema changes append
-// migrations[15], migrations[16], ... rather than editing an existing
+// migrations[16], migrations[17], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -794,6 +915,7 @@ var migrations = map[int]migrationStep{
 	12: {sql: schemaV12, hook: migrateV12JobIDs},
 	13: {sql: schemaV13},
 	14: {sql: schemaV14},
+	15: {sql: schemaV15},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

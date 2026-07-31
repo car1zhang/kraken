@@ -17,6 +17,7 @@ _k() {
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'watchlist:cell-side verb — read/write the dream loop'"'"'s global watchlist via kraken serve'
         'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
+        'graph:cell-side verb — read/write the knowledge graph via kraken serve'
         'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
@@ -164,6 +165,43 @@ _k() {
             # <slug> completion is intentionally not offered, for the reason
             # spelled out under questions) above: job identity lives only in
             # kraken.db, with no cheap store-backed completion source.
+            ;;
+        graph)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'pending:print the episodes still awaiting extraction, as JSON'
+                    'add:write one extraction turn (--json <path>, or stdin)'
+                    'done:close one episode, including one nothing was extracted from'
+                    'search:print the facts matching a query, as triples'
+                    'stats:print the node/edge/episode counts, as JSON'
+                )
+                _describe -t ops 'op' ops
+            elif (( CURRENT >= 4 )) && [[ $words[3] == add ]]; then
+                local -a gflags
+                gflags=(
+                    '--episode:the episode id this extraction turn came from'
+                    '--json:path to the add payload (stdin when omitted)'
+                )
+                _describe -t flags 'flag' gflags
+                # --json's value is a real path, so offer files alongside.
+                [[ $words[CURRENT-1] == --json ]] && _files
+            elif (( CURRENT == 4 )) && [[ $words[3] == pending ]]; then
+                # search's word 4 is its <query> positional and done's is an
+                # episode id — so --limit is only offered where it is
+                # actually the next word.
+                local -a gflags
+                gflags=(
+                    '--limit:how many episodes to print (default 20, capped at 200)'
+                )
+                _describe -t flags 'flag' gflags
+            elif (( CURRENT == 5 )) && [[ $words[3] == search ]]; then
+                local -a gflags
+                gflags=(
+                    '--limit:how many facts to return (default 20, capped at 200)'
+                )
+                _describe -t flags 'flag' gflags
+            fi
             ;;
         mine)
             if (( CURRENT == 3 )); then

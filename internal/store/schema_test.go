@@ -27,9 +27,32 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	// Reverse v13: drop the four job-load columns (added at v13, absent
 	// through v12). Pure shape, no rows to carry back — the values only ever
 	// come from a live write.
+	// Reverse v15: drop the knowledge graph's seven tables (all added at
+	// v15, absent through v14). kg_edges' three FTS-sync triggers go with
+	// their table — SQLite drops a table's triggers along with it — and
+	// dropping the fts5 virtual table removes its shadow tables. v14 itself
+	// needs no reversal: it changed no shape, only deleted rows, and this
+	// helper's job is to reproduce an older SHAPE (the same ruling the v11
+	// comment below states for its row-deleting half).
 	//
 	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
 	// migrate() applies them.
+	if target < 15 {
+		for _, stmt := range []string{
+			`DROP TABLE kg_layout`,
+			`DROP TABLE kg_ingest_cursor`,
+			`DROP TABLE kg_edges_fts`,
+			`DROP TABLE kg_edges`,
+			`DROP TABLE kg_node_aliases`,
+			`DROP TABLE kg_nodes`,
+			`DROP TABLE kg_episodes`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v15) %q: %v", target, stmt, err)
+			}
+		}
+	}
+
 	if target < 13 {
 		for _, stmt := range []string{
 			`ALTER TABLE jobs DROP COLUMN load_unblock`,

@@ -69,6 +69,8 @@ func main() {
 		cmdWatchlist(rest)
 	case "load":
 		cmdLoad(rest)
+	case "graph":
+		cmdGraph(rest)
 	case "mine":
 		cmdMine(rest)
 	case "_complete":
@@ -196,6 +198,19 @@ Commands:
                       Both numbers or neither — a half estimate has no ratio,
                       and 'clear' is how an estimate is removed. get prints
                       the pair as JSON ({"load": null} when unestimated).
+  k graph pending|add|done|search|stats ...
+                      cell-side verbs for the knowledge graph, proxied the
+                      same way as 'k questions'. pending [--limit N] prints
+                      the episodes still awaiting extraction as JSON, oldest
+                      first; add [--episode <id>] [--json <path>] posts one
+                      extraction turn's whole output ({nodes[], edges[],
+                      invalidate[]}, on stdin when --json is omitted) and
+                      prints the resulting node/edge ids as JSON; done
+                      <episode id> closes one episode, including one nothing
+                      was extracted from; search "<query>" [--limit N] prints
+                      the matching facts as triples ready to paste into
+                      context; stats prints the node/edge/episode counts as
+                      JSON.
   k watchlist get|add|update|remove ...
                       cell-side verb the nightly dream pass uses to track
                       recurring observations, proxied the same way. The

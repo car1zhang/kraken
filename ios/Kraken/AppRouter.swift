@@ -13,6 +13,8 @@ import Observation
 ///   kraken://overview              → Board tab, open the overview sheet
 ///   kraken://dream                 → Board tab, open the DREAM sheet
 ///                                     (the nightly loop's reports + watchlist)
+///   kraken://graph                 → Board tab, open the GRAPH sheet
+///                                     (the knowledge graph viewer)
 ///   kraken://job/<slug>            → Board tab, open that job's detail
 ///                                     (waits for the board to load if needed)
 ///   kraken://job/<slug>/answer     → …and open the answer sheet
@@ -44,6 +46,11 @@ final class AppRouter {
     // The DREAM screen is a sheet over the Board (not a tab — see DreamView),
     // so it routes exactly the way the overview sheet does.
     var pendingDream = false
+    // The GRAPH screen is a sheet over the Board for exactly the reason DREAM
+    // is one: `Tab` already holds five cases, and iOS collapses a TabView past
+    // five items into a "More" list, which would bury an existing tab behind a
+    // disclosure. So this is a pending flag, not a sixth `Tab` case.
+    var pendingGraph = false
     var pendingJobSlug: String?
     var pendingJobAction: JobAction?
     var pendingSessionPane: String?
@@ -68,6 +75,9 @@ final class AppRouter {
         case "dream":
             selectedTab = .board
             pendingDream = true
+        case "graph":
+            selectedTab = .board
+            pendingGraph = true
         case "job":
             selectedTab = .board
             if let slug = components.first, !slug.isEmpty {

@@ -874,6 +874,245 @@ GET/POST).
 
 ---
 
+## Knowledge graph
+
+Six routes over the `kg_*` tables (internal/api/graph.go). **All additive —
+`apiContract` stays 5.** Every one is a NEW PATH, never a key added to,
+retyped in, or removed from an existing shape, so a client that predates them
+decodes nothing differently.
+
+**Not modeled in Models.swift or APIClient.swift, on purpose.** The iOS graph
+screen (`ios/Kraken/GraphView.swift`) is a `WKWebView` onto the web board's
+own `#/graph` route — the same page, same server-computed layout, so both
+clients draw the same picture (50-components.md #8). It therefore decodes
+none of these shapes natively, and adding Swift models for them would be
+untested code pinning a wire the app never reads. The web UI and the
+`k graph` cell verb are the only consumers.
+
+The `stats` object's keys are snake_case (`live_edges`,
+`missing_embeddings`) like the rest of this API. (They were briefly camelCase
+during the parallel build; renamed before anything shipped, so no client ever
+saw the old spelling.)
+
+**Mirror mode**: the four reads plus `POST /api/graph/search` stay reachable
+under `--mirror` (search is a POST only because a query is arbitrary user
+text, not because it writes). `POST /api/graph/add` and
+`POST /api/graph/episode-done` are gated with the usual 403
+`disabled in mirror mode`.
+
+### `GET /api/graph`
+
+The viewer payload in one response: every node with its cached position,
+every edge — **live and invalidated both**, so the viewer strikes retired
+facts through rather than hiding history — and the stats block.
+
+Response: `{"nodes": [webGraphNode], "edges": [webGraphEdge], "stats": webGraphStats}`.
+`nodes` and `edges` are always arrays, never `null`.
+
+`webGraphNode`:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | |
+| `name` | string | always | the canonical name |
+| `type` | string | always | the extractor's entity type |
+| `description` | string | always | the short gloss of what the concept IS, independent of any edge |
+| `x` | number | always | server-computed layout position; **`0` when layout has not run for this node yet**, which the client places itself |
+| `y` | number | always | as `x` |
+| `aliases` | array of string | omitempty | **never present on this route** — aliases are an inspector detail, and joining them would be one query per node on the hottest read here. Populated only by `GET /api/graph/node` |
+
+`webGraphEdge`:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | |
+| `src` | number | always | source node id |
+| `dst` | number | always | destination node id |
+| `predicate` | string | always | |
+| `fact` | string | always | the natural-language sentence — the edge's short description IS its name |
+| `strength` | number | always | the extractor's 1-10 confidence |
+| `occurrences` | number | always | distinct episodes independently stating this fact |
+| `valid_until` | number | always | **world** time, unix millis; `0` = still true |
+| `expired_at` | number | always | **system** time, unix millis; `0` = live |
+| `episode` | number | always | the episode this fact was extracted from |
+
+`webGraphStats`:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `nodes` | number | always | |
+| `edges` | number | always | every edge, live or not |
+| `live_edges` | number | always | `expired_at = 0` only |
+| `episodes` | number | always | |
+| `pending` | number | always | episodes still awaiting extraction |
+| `missing_embeddings` | number | always | nodes + live edges with no vector yet; sits non-zero forever if no embedder is configured, which is a normal state, not an error |
+
+Errors: 405 (non-GET), 500 (no store wired, or a read failed).
+
+### `GET /api/graph/stats`
+
+The same stats block on its own: `{"stats": webGraphStats}`, built by the
+same function `GET /api/graph` uses so the two cannot drift. Its own route
+because the one caller that wants stats alone is `k graph stats` inside a
+cell, and making it pull every node and edge to print six integers would be
+the most expensive read here for the cheapest answer.
+
+Errors: 405 (non-GET), 500.
+
+### `GET /api/graph/node?id=N`
+
+The inspector's read: one node, its aliases, and **every** edge touching it,
+live and invalidated both.
+
+Response: `{"node": webGraphNode, "edges": [webGraphEdge]}`. The node's
+`aliases` key is present here whenever the node has any. `edges` is always an
+array, never `null`.
+
+Errors: 400 (missing or non-positive-integer `id`), 404 (no node with that
+id — a named node that does not exist is an answer, not an empty result),
+405, 500.
+
+### `POST /api/graph/search`
+
+Retrieval: embeds the query, fuses vector and BM25 candidates, expands one
+hop, and returns both the structured facts and the triple text an agent
+pastes into its context.
+
+A missing or failing embedder degrades **silently** to BM25-only — a fresh
+install with no `OPENAI_API_KEY` gets keyword search, never a 500.
+
+Request: `{"query": string, "limit": number}`. `query` is required (blank →
+400). `limit` is optional; absent or `0` means the default 20, and anything
+over 200 is capped rather than refused. `DisallowUnknownFields`: any other
+key is a 400.
+
+Response: `{"nodes": [webGraphNode], "facts": [webGraphFact], "triples": string}`.
+`nodes` and `facts` are always arrays, never `null`; `triples` is the same
+facts serialized for an LLM context block.
+
+`nodes` is the set of entities the matched facts touch, sorted by id (so the
+response is deterministic for a fixed corpus). It is here because
+`.claude/skills/graph/SKILL.md`'s canonicalization step resolves an incoming
+name against what already exists via `k graph search "<name>"` — a judgement
+about *entities*, which facts answer only indirectly. Elements are
+`webGraphNode`, the same type `GET /api/graph` serves, except that `x`/`y`
+are always `0` here: a search result is a list to read, not a canvas to draw,
+so the layout table is not joined.
+
+`webGraphFact`:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | the edge id |
+| `src` | string | always | endpoint **name**, not id — a search's reader is a human or an agent, neither of which can resolve an integer. Falls back to `"#<id>"` if the node is missing from the result set, so a fact is never dropped over a missing gloss |
+| `dst` | string | always | as `src` |
+| `predicate` | string | always | |
+| `fact` | string | always | |
+| `strength` | number | always | |
+| `occurrences` | number | always | |
+| `valid_until` | number | always | world time; `0` = still true |
+
+There is deliberately **no `score` key**: array order already expresses the
+ranking, and publishing a fusion score would invite clients to threshold on a
+number whose scale is an implementation detail — the same argument
+`webJobLoad` makes for keeping the derived `roi` off the wire.
+
+Errors: 400 (bad JSON, unknown field, blank query), 405, 413 (body over 1MB),
+500.
+
+### `POST /api/graph/add`
+
+The extraction agent's write — one turn's whole output in one request, since
+an edge names endpoints the same body creates and an invalidation is only
+meaningful beside the edge that replaced it.
+
+Request:
+
+```json
+{
+  "episode_id": 12,
+  "nodes":      [{"name": "...", "type": "...", "description": "...", "aliases": ["..."]}],
+  "edges":      [{"src": "...", "dst": "...", "predicate": "...", "fact": "...", "strength": 7, "valid_from": 0, "valid_until": 0}],
+  "invalidate": [{"edge_id": 44, "valid_until": 1769040000000}]
+}
+```
+
+All three lists are optional individually; a body with none of them is a 400
+(`nothing to add`). Edge endpoints are named by **name**, never by id: a name
+that resolves to nothing creates a bare node, because a fact is worth keeping
+and an entity mentioned only as an endpoint is still an entity.
+
+Validation is total and runs **before any write** — there is no transaction
+spanning the three lists, so anything refusable is refused first. Refusals
+(all 400, each naming the offending index): blank node name, blank alias,
+blank `src`/`dst`/`predicate`/`fact`, `strength` outside 1..10 **including an
+absent one** (an omitted strength is not a default, it is an unstated
+confidence), `edge_id` ≤ 0, and `valid_until` ≤ 0 on an **invalidation** (`0`
+means "still true" on that column, which is the opposite of invalidating).
+`DisallowUnknownFields` applies.
+
+An **edge** may carry `valid_until` too, and it means something different from
+an invalidation's: an episode can state a fact already known to have ended
+("we used X until March"), which is one edge with both world-time bounds — not
+a live edge plus an invalidation of something that was never live. Such a row
+keeps `expired_at = 0`: kraken still believes the claim, the world simply
+moved on. Only `invalidate` stamps system time, because only it records
+kraken **unlearning** something it had asserted.
+
+Response: `{"nodes": [{"name", "id", "added"}], "edges": [{"src", "dst", "id", "added"}], "invalidated": [number]}`.
+`added` is `false` for a merge into an existing row — the only way a caller
+can tell its "new" entity was already known under an alias, or that its fact
+was a repeat sighting rather than a new edge.
+
+A store failure partway through returns **500 with the same three result
+lists filled in as far as they got**, plus `error`. That is deliberate: the
+writes that landed cannot be rolled back, so the caller is told what to skip
+on a retry. Every write on this path is idempotent under a retry anyway
+(`UpsertNode` merges, `AddAlias` is `ON CONFLICT DO NOTHING`, `InsertEdge`
+counts a repeat as a sighting).
+
+Errors: 400, 405, 413, 500. Gated under `--mirror`.
+
+### `GET /api/graph/pending?limit=`
+
+The extraction queue read, oldest first so the backlog drains in ingest
+order. `limit` is optional (default 20, capped at 200); a non-positive or
+unparseable value is a 400.
+
+Response: `{"episodes": [webGraphEpisode]}` — always an array, never `null`.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | |
+| `kind` | string | always | `transcript` \| `feedback` \| `watchlist` \| `artifact` \| `job` |
+| `ref` | string | always | source pointer: `path#start-end` for files, row id otherwise |
+| `content` | string | always | the reduced text handed to the extractor — inline, since it IS this route's payload; a URL per episode would be N round trips for nothing |
+| `ts` | number | always | unix millis — when the SOURCE material was written, not when it was ingested |
+
+The row's `hash` and `state` are deliberately absent: hash is the store's
+internal dedupe key, and every row this route can serve is `pending`.
+
+Errors: 400 (bad `limit`), 405, 500.
+
+### `POST /api/graph/episode-done`
+
+Flips one episode out of the pending queue. Request `{"id": number}`,
+response `{"ok": true}`. Reached from a cell as `k graph done <episode id>`.
+
+Its own route rather than a field of `/api/graph/add` because an episode can
+legitimately yield **nothing** — a span with no facts in it has still been
+read, and folding "done" into the write would leave it pending forever,
+re-extracted on every pass.
+
+An unknown id is a **404, not a silent 200**: the underlying `UPDATE` matches
+nothing and reports no error, so without the lookup a typo'd id would be
+acknowledged as done while the real episode sat pending forever.
+
+Errors: 400 (bad JSON, unknown field, missing/non-positive id), 404, 405,
+413, 500. Gated under `--mirror`.
+
+---
+
 ## Job editor
 
 Note: `POST /api/job/save` is web-UI-only (used by `web/app.js`'s raw
