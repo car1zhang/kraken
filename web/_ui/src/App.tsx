@@ -7,6 +7,7 @@ import { JobCard } from "./components/board/JobCard.tsx";
 import { DragProvider } from "./components/board/DragProvider.tsx";
 import { Chrome } from "./components/chrome/Chrome.tsx";
 import { DreamView } from "./components/dream/DreamView.tsx";
+import { GraphView } from "./components/graph/GraphView.tsx";
 import { LogView } from "./components/log/LogView.tsx";
 import { ArtifactOverlay } from "./components/overlays/ArtifactOverlay.tsx";
 import { EditorOverlay } from "./components/overlays/EditorOverlay.tsx";
@@ -250,14 +251,17 @@ export function App() {
         />
       </DragProvider>
 
-      {/* Both stay MOUNTED across view switches, hidden rather than
-          unmounted: LogView keeps its paged history and scroll position, and
+      {/* All three stay MOUNTED across view switches, hidden rather than
+          unmounted: LogView keeps its paged history and scroll position,
           DreamView keeps which report dates are expanded plus any half-typed
-          watchlist comment. Unmounting would throw all of that away on every
-          tab switch — the vanilla board kept them in module state for the same
+          watchlist comment, and GraphView keeps its filter rail, its selection
+          and — the expensive one — its sigma WebGL context and camera
+          position. Unmounting would throw all of that away on every tab
+          switch — the vanilla board kept them in module state for the same
           reason. */}
       <LogView active={view === "log"} />
       <DreamView active={view === "dream"} mutate={mutate} onToast={showToast} />
+      <GraphView active={view === "graph"} />
 
       <SteerOverlay
         open={steer !== null}

@@ -750,6 +750,10 @@ struct BoardView: View {
     // collapses a TabView past five items into a "More" list, which would
     // bury an existing tab behind a disclosure. See DreamView's header.
     @State private var showingDream = false
+    // The GRAPH screen hangs off this toolbar for the same reason DREAM does
+    // — five tabs is the ceiling before iOS collapses the TabView into a
+    // "More" list. See GraphView's header.
+    @State private var showingGraph = false
     @State private var selectedColumn: BoardColumn = .draft
 
     // MARK: - drag reorder / cross-column drag state
@@ -830,6 +834,16 @@ struct BoardView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(KTheme.skillDream)
                     .accessibilityLabel("Dream")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingGraph = true
+                    } label: {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(KTheme.accent)
+                    .accessibilityLabel("Knowledge graph")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -934,6 +948,11 @@ struct BoardView: View {
                     DreamView(baseURL: serverURL)
                 }
             }
+            .sheet(isPresented: $showingGraph) {
+                NavigationStack {
+                    GraphView(baseURL: serverURL)
+                }
+            }
             .sheet(isPresented: $showingOverview) {
                 NavigationStack {
                     BoardOverviewSheet(vm: vm, baseURL: serverURL, searchFocused: overviewSearchFocused) {
@@ -974,6 +993,7 @@ struct BoardView: View {
             .onChange(of: router.pendingBoardColumn) { consumePendingBoardRoutes() }
             .onChange(of: router.pendingOverview) { consumePendingBoardRoutes() }
             .onChange(of: router.pendingDream) { consumePendingBoardRoutes() }
+            .onChange(of: router.pendingGraph) { consumePendingBoardRoutes() }
             .task(id: router.pendingJobSlug) {
                 guard let slug = router.pendingJobSlug else { return }
                 // The board may not have loaded yet (e.g. a cold launch
@@ -1015,6 +1035,10 @@ struct BoardView: View {
         if router.pendingDream {
             showingDream = true
             router.pendingDream = false
+        }
+        if router.pendingGraph {
+            showingGraph = true
+            router.pendingGraph = false
         }
     }
 

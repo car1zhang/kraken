@@ -38,6 +38,19 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/watchlist", watchlistHandler)
 	mux.HandleFunc("/api/watchlist/item", watchItemHandler)
 	mux.HandleFunc("/api/dream", dreamHandler)
+	// The knowledge graph. Every one of these is an exact pattern, so none
+	// shadows another and none is a subtree — the same property that lets
+	// "/api/feedback" and "/api/feedback/sweep" coexist above. The four reads
+	// stay open under --mirror (a read is a read; search is a POST only
+	// because a query is arbitrary user text, and it writes nothing); the two
+	// writes are gated with the same 403 every other agent-side write gets.
+	mux.HandleFunc("/api/graph", graphHandler)
+	mux.HandleFunc("/api/graph/stats", graphStatsHandler)
+	mux.HandleFunc("/api/graph/node", graphNodeHandler)
+	mux.HandleFunc("/api/graph/pending", graphPendingHandler)
+	mux.HandleFunc("/api/graph/search", graphSearchHandler)
+	mux.HandleFunc("/api/graph/add", mirrorGated(graphAddHandler))
+	mux.HandleFunc("/api/graph/episode-done", mirrorGated(graphEpisodeDoneHandler))
 	mux.HandleFunc("/api/questions", questionsHandler)
 	mux.HandleFunc("/api/threads", threadsHandler)
 	mux.HandleFunc("/api/thread/read", threadReadHandler)

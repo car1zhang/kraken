@@ -578,7 +578,15 @@ func StartCell(j *Job, repo string) error {
 	// half-built cell is cleanable by hand
 	installHookSettings(wt, j)
 	installSkills(wt, j)
-	launch, err := spawnCommand(j, zeusSpawnArgv(j), zeusBrief(j), jobPrompt(j))
+	// graphContext appends what the knowledge graph already knows about this
+	// job, or "" — which is the common case and the one that matters: a job
+	// with no match gets a byte-identical brief. It is concatenated HERE
+	// rather than inside zeusBrief because two tests pin that function
+	// (TestZeusBriefDoesNotRestateSkills, TestZeusBriefStaysLean's 12,000-byte
+	// ceiling), and retrieved facts are variable-length and job-dependent:
+	// folding them in would make the lean ceiling start failing on graph
+	// content rather than on the policy creep it exists to catch.
+	launch, err := spawnCommand(j, zeusSpawnArgv(j), zeusBrief(j)+graphContext(j), jobPrompt(j))
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
@@ -1634,7 +1642,11 @@ func ReactivateJob(j *Job, session, message string) error {
 	// roll-call does not look at tiers at all, and the one surface that does —
 	// the board's crew chip, which renders each teammate's model — is not
 	// something anyone reads as an alarm.
-	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j), prompt)
+	// Same graphContext append as StartCell's, and for a sharper reason: a
+	// REACTIVATED job is by definition returning after time passed, which is
+	// exactly when the graph is most likely to know something its zeus does
+	// not. Same ""-on-no-match guarantee.
+	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j)+graphContext(j), prompt)
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}

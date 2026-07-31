@@ -16,6 +16,7 @@ function ViewHarness() {
       <main id="board" hidden={view !== "board"} />
       <main className="logview" id="log" hidden={view !== "log"} />
       <main className="dreamview" id="dream" hidden={view !== "dream"} />
+      <main className="graphview" id="graph" hidden={view !== "graph"} />
     </>
   );
 }
@@ -28,8 +29,8 @@ beforeEach(() => {
 });
 
 describe("VIEWS", () => {
-  it("is board · log · dream, with no dag", () => {
-    expect([...VIEWS]).toEqual(["board", "log", "dream"]);
+  it("is board · log · dream · graph, with no dag", () => {
+    expect([...VIEWS]).toEqual(["board", "log", "dream", "graph"]);
     expect(VIEWS as readonly string[]).not.toContain("dag");
   });
 });

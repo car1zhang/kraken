@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readLS, writeLS } from "./useLocalStorage.ts";
 
-export const VIEWS = ["board", "log", "dream"] as const;
+export const VIEWS = ["board", "log", "dream", "graph"] as const;
 export type View = (typeof VIEWS)[number];
 
 const LEGACY_KEY = "kraken-view";
@@ -18,7 +18,7 @@ function parseHash(): View | null {
 }
 
 /**
- * The three views as real URLs (#/board, #/log, #/dream) — Q6.
+ * The four views as real URLs (#/board, #/log, #/dream, #/graph) — Q6.
  *
  * The vanilla board had no router at all: the active view was a localStorage
  * string toggling `hidden` attributes, so there was no back button and no

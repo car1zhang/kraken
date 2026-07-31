@@ -902,6 +902,16 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		d.tokensPass(jobs, live, now)
 	}
 
+	// graph pass (self-paced internally — see graphPass): advance the
+	// knowledge graph's ingest cursors, fill in missing embeddings, and
+	// refresh the cached layout. Beside the token pass because it shares its
+	// shape — local reads, store writes, no pane and no tmux — and skipped
+	// under mirror for the sharper of the usual two reasons: it both writes
+	// the database and spends money on an embeddings API.
+	if !mirror {
+		graphPass(ActiveStore(), now)
+	}
+
 	// usage poll (throttled, first-tick eager so UIs have data right after
 	// daemon start): KickUsagePass's own usagePassRunning atomic
 	// single-flights this into its own goroutine (network I/O up to ~10s,
@@ -952,6 +962,14 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// that slice by hand to avoid waiting out a whole DaemonInterval.
 	if !mirror {
 		if created := kickDream(now); created != nil {
+			jobs = append(jobs, created)
+			bySlug[created.Slug] = created
+		}
+		// graph ingest: same once-per-local-day cadence and same fold-into-
+		// this-tick's-slice reason as the dream job above; kickGraph itself
+		// declines when the pending queue is empty or a graph job is already
+		// active.
+		if created := kickGraph(ActiveStore(), now); created != nil {
 			jobs = append(jobs, created)
 			bySlug[created.Slug] = created
 		}

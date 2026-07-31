@@ -616,6 +616,66 @@ func mineInputSummary(input json.RawMessage) string {
 // extra shrink is the since filter dropping the pre-window history a
 // long-lived session's file carries.
 //
+// reduceLine applies the reduction rules to ONE JSONL line. It is the single
+// implementation those rules have: ReduceTranscript (whole file) and
+// ReduceJSONLBytes (a span the graph ingest already holds in memory) both
+// call it, so the two readers cannot drift — the same one-copy rule
+// core.tokenGroup.commit exists to enforce for the token counters.
+func reduceLine(out *bytes.Buffer, line []byte, since int64) {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return
+	}
+	var rec mineRecord
+	if json.Unmarshal(line, &rec) != nil {
+		return
+	}
+	if rec.Type != "assistant" && rec.Type != "user" {
+		return // mode, attachment, file-history, system bookkeeping
+	}
+	if ts := isoMillis(rec.Timestamp); ts > 0 && ts < since {
+		return
+	}
+	if rec.Type == "user" {
+		if text, ok := mineUserString(rec.Message.Content); ok {
+			writeUserish(out, text)
+			return
+		}
+		for _, b := range mineBlocks(rec.Message.Content) {
+			if b.Type == "text" {
+				writeUserish(out, b.Text)
+			}
+			// tool_result blocks are the dropped mass — the call above
+			// already named what was attempted.
+		}
+		return
+	}
+	for _, b := range mineBlocks(rec.Message.Content) {
+		switch b.Type {
+		case "text":
+			writeReduced(out, "[assistant]", b.Text)
+		case "tool_use":
+			if b.Name != "" {
+				out.WriteString("[tool] " + callSignature(b.Name, b.Input) + "\n\n")
+			}
+		}
+		// "thinking" falls through: dropped.
+	}
+}
+
+// ReduceJSONLBytes reduces a JSONL span already in memory, per reduceLine's
+// rules with no since filter (the caller chose the span). The graph ingest
+// uses it so kg_episodes stores decision-relevant text rather than raw
+// records — storing raw would have written the tool-result and attachment
+// mass (the large majority of transcript bytes) into kraken.db at the full
+// drain rate, unboundedly (review finding).
+func ReduceJSONLBytes(data []byte) []byte {
+	var out bytes.Buffer
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		reduceLine(&out, line, 0)
+	}
+	return bytes.TrimSpace(out.Bytes())
+}
+
 // Records older than since (unix millis) are excluded, on the same
 // per-record-timestamp rule MineTranscripts applies. Errors only when the
 // file can't be opened; malformed lines are skipped.
@@ -630,45 +690,7 @@ func ReduceTranscript(path string, since int64) ([]byte, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
 	for sc.Scan() {
-		line := sc.Bytes()
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var rec mineRecord
-		if json.Unmarshal(line, &rec) != nil {
-			continue
-		}
-		if rec.Type != "assistant" && rec.Type != "user" {
-			continue // mode, attachment, file-history, system bookkeeping
-		}
-		if ts := isoMillis(rec.Timestamp); ts > 0 && ts < since {
-			continue
-		}
-		if rec.Type == "user" {
-			if text, ok := mineUserString(rec.Message.Content); ok {
-				writeUserish(&out, text)
-				continue
-			}
-			for _, b := range mineBlocks(rec.Message.Content) {
-				if b.Type == "text" {
-					writeUserish(&out, b.Text)
-				}
-				// tool_result blocks are the dropped mass — the call above
-				// already named what was attempted.
-			}
-			continue
-		}
-		for _, b := range mineBlocks(rec.Message.Content) {
-			switch b.Type {
-			case "text":
-				writeReduced(&out, "[assistant]", b.Text)
-			case "tool_use":
-				if b.Name != "" {
-					out.WriteString("[tool] " + callSignature(b.Name, b.Input) + "\n\n")
-				}
-			}
-			// "thinking" falls through: dropped.
-		}
+		reduceLine(&out, sc.Bytes(), since)
 	}
 	// Fail closed on a truncated scan. A scout handed the first 3% of a
 	// session with no error would reason about it as if it were the whole

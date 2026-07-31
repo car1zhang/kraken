@@ -28,8 +28,16 @@ web-assets:
 
 # the -X path is the FULL package path (module `kraken` + package dir): a
 # wrong one is silently ignored by the linker, leaving Build() == "dev".
+#
+# -tags sqlite_fts5 compiles FTS5 into mattn/go-sqlite3 (its
+# sqlite3_opt_fts5.go is behind `//go:build sqlite_fts5 || fts5`), which the
+# knowledge graph's kg_edges_fts virtual table needs at migration time. A
+# binary built without the tag fails LOUDLY on open ("no such module: fts5")
+# rather than serving a database with broken search — same deliberate-failure
+# stance as web-assets above. `go test ./...` needs the tag for the same
+# reason; the commands in CLAUDE.md carry it.
 build: web-assets
-	CGO_ENABLED=1 go build -ldflags "-X kraken/internal/util.BuildSHA=$(SHA)" -o kraken ./cmd/kraken
+	CGO_ENABLED=1 go build -tags sqlite_fts5 -ldflags "-X kraken/internal/util.BuildSHA=$(SHA)" -o kraken ./cmd/kraken
 
 # kraken runs on exactly one personal machine, so install always deploys
 # `kraken serve` — the only runtime. `kraken import` (a separate, human-run

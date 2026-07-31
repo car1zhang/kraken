@@ -35,6 +35,15 @@
   --skill-do: #F5D34D; --skill-do-soft: #332B0E;
   --skill-pr: #4ADE80; --skill-pr-soft: #0F2E1D;
   --skill-dream: #C084FC; --skill-dream-soft: #2A1440;
+  /* /graph, the sixth chip and the GRAPH view's accent. The UI mockup drew it
+     in cyan #22D3EE and flagged the problem in the same breath: that is
+     --polling's exact value, so a graph chip and a polling status pip would be
+     the same pixel colour. Lime is what is left. Measuring hue distance from
+     the five chips (info 213°, aim 0°, do 51°, pr 142°, dream 279°) and from
+     the status hues they sit beside (polling 187°, counter 333°, accent 258°,
+     revealed 40°), 95° is the angle with the widest MINIMUM separation from
+     all of them — 44°, against 15° for the mockup's cyan. */
+  --skill-graph: #87DF49; --skill-graph-soft: #1E3010;
   --glow-skill-info: 0 0 12px rgba(94, 168, 255, 0.30), 0 0 2px rgba(94, 168, 255, 0.7);
   --text-glow-skill-info: 0 0 1px var(--skill-info), 0 0 9px var(--skill-info);
   --glow-skill-aim: 0 0 12px rgba(255, 107, 107, 0.30), 0 0 2px rgba(255, 107, 107, 0.7);
@@ -45,6 +54,8 @@
   --text-glow-skill-pr: 0 0 1px var(--skill-pr), 0 0 9px var(--skill-pr);
   --glow-skill-dream: 0 0 12px rgba(192, 132, 252, 0.30), 0 0 2px rgba(192, 132, 252, 0.7);
   --text-glow-skill-dream: 0 0 1px var(--skill-dream), 0 0 9px var(--skill-dream);
+  --glow-skill-graph: 0 0 12px rgba(135, 223, 73, 0.30), 0 0 2px rgba(135, 223, 73, 0.7);
+  --text-glow-skill-graph: 0 0 1px var(--skill-graph), 0 0 9px var(--skill-graph);
   /* job palette: the eight names Claude Code's own /color command accepts,
      in /color's order, at Claude Code's exact RGB — so a board swatch is the
      same pixel colour as the prompt bar of the pane that job opens. A solid
@@ -96,6 +107,11 @@
   --skill-do: #7B6505; --skill-do-soft: #F7F0D4;
   --skill-pr: #14773B; --skill-pr-soft: #DCF3E4;
   --skill-dream: #7E22CE; --skill-dream-soft: #F3E8FF;
+  /* graph's light sibling is darkened past its naive lime for the same reason
+     info/do/pr are: a 95° hue is at its brightest where white is, so the dark
+     hex is unreadable here. #456F0B measures 4.87 against --raised (#E3E9F1)
+     and 5.29 against its own -soft, both clearing WCAG AA. */
+  --skill-graph: #456F0B; --skill-graph-soft: #EAF6D8;
   --glow-skill-info: 0 1px 6px rgba(24, 102, 196, 0.25);
   --text-glow-skill-info: none;
   --glow-skill-aim: 0 1px 6px rgba(196, 43, 43, 0.25);
@@ -106,6 +122,8 @@
   --text-glow-skill-pr: none;
   --glow-skill-dream: 0 1px 6px rgba(126, 34, 206, 0.25);
   --text-glow-skill-dream: none;
+  --glow-skill-graph: 0 1px 6px rgba(69, 111, 11, 0.25);
+  --text-glow-skill-graph: none;
   /* job palette, light siblings — darkened per the same rule as the skill
      block above: each clears WCAG AA 4.5:1 against both --raised (#E3E9F1)
      and white, so the editor's 20px swatches and the card's 8px one stay
@@ -1731,6 +1749,110 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 }
 
 @media (max-width: 900px) { .dreamview { grid-template-columns: 1fr; height: auto; } }
+
+/* ---- GRAPH view (see 40-ui-graph-view.html) ----
+   A filter rail, the sigma canvas, and an inspector, at the log/dream view's
+   height. --skill-graph is the accent throughout, tying the view to its
+   /graph chip and tab exactly as --skill-dream ties the DREAM view to its own.
+   Everything here is namespaced `graph-`: the mockup's own class names (.rail,
+   .stat, .fact, .pill, .desc, .canvas) are generic enough to collide with the
+   board's. */
+
+.graphview {
+  height: calc(100vh - 64px);
+  display: flex; flex-direction: column;
+  padding: 12px 16px 16px; gap: 8px;
+}
+.graph-hdr { display: flex; align-items: baseline; gap: 12px; }
+.graph-title {
+  font: 10px var(--mono); letter-spacing: 2px; text-transform: uppercase;
+  color: var(--skill-graph); text-shadow: var(--text-glow-skill-graph);
+}
+.graph-stat { font: 10.5px var(--mono); color: var(--text-2); letter-spacing: 0.4px; }
+.graph-stat b { color: var(--text); font-weight: 600; }
+.graph-stat.err { color: var(--counter); }
+
+.graph-stage {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 190px minmax(0, 1fr) 250px;
+  background: var(--surface); border: 1px solid var(--hairline);
+}
+.graph-rail {
+  border-right: 1px solid var(--hairline);
+  padding: 12px 11px; overflow-y: auto; min-width: 0;
+}
+.graph-rail.r { border-right: 0; border-left: 1px solid var(--hairline); }
+.graph-lbl {
+  font: 700 9.5px var(--mono); letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--text-2); margin: 0 0 8px;
+}
+.graph-lbl + .graph-lbl, .graph-chk + .graph-lbl, .graph-stat + .graph-lbl,
+.graph-meta + .graph-lbl { margin-top: 18px; }
+
+/* A filter row is a button, not a checkbox: the whole row is the target, and
+   `off` is the only state that needs styling since on is the default. */
+.graph-chk {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 3px 2px; background: none; border: 0; cursor: pointer;
+  font: 12px var(--sans); color: var(--text); text-align: left;
+}
+.graph-chk.off { color: var(--text-2); }
+.graph-chk:hover { color: var(--skill-graph); }
+.graph-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.graph-chk.off .graph-dot { opacity: 0.45; }
+.graph-slider { width: 100%; margin: 4px 0 6px; accent-color: var(--accent); }
+.graph-railempty { font: 11px var(--sans); color: var(--text-2); line-height: 1.5; }
+
+.graph-canvas { position: relative; overflow: hidden; background: var(--ground); }
+/* sigma owns this element's children — the overlays below are its siblings */
+.graph-gl { position: absolute; inset: 0; }
+.graph-overlay {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  padding: 20px; text-align: center;
+  font: 11.5px var(--mono); color: var(--text-2);
+  background: var(--ground); pointer-events: none;
+}
+.graph-hint {
+  position: absolute; left: 12px; bottom: 10px; pointer-events: none;
+  font: 10.5px var(--mono); color: var(--text-2); letter-spacing: 0.4px;
+}
+.graph-zoom { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 5px; }
+.graph-zbtn {
+  width: 23px; height: 23px; display: grid; place-items: center; cursor: pointer;
+  border: 1px solid var(--hairline-2); background: var(--surface);
+  color: var(--text-2); font-size: 13px; line-height: 1;
+}
+.graph-zbtn:hover { color: var(--skill-graph); border-color: var(--skill-graph); }
+
+.graph-name { margin: 0 0 5px; font: 600 14px var(--sans); color: var(--text); }
+.graph-pill {
+  display: inline-block; padding: 1.5px 7px; border-radius: 20px;
+  font: 700 9.5px var(--mono); letter-spacing: 0.8px; text-transform: uppercase;
+  background: var(--skill-graph-soft); color: var(--skill-graph);
+}
+.graph-desc {
+  margin: 10px 0 0; padding: 8px 10px;
+  background: var(--raised); border-left: 2px solid var(--skill-graph);
+  font: 12px/1.5 var(--sans); color: var(--text); overflow-wrap: anywhere;
+}
+.graph-meta { margin-top: 11px; font: 11px/1.8 var(--sans); color: var(--text-2); }
+.graph-meta b { color: var(--text); font-weight: 600; }
+.graph-fact {
+  padding: 7px 0; border-top: 1px solid var(--hairline);
+  font: 12px/1.45 var(--sans); color: var(--text); overflow-wrap: anywhere;
+}
+.graph-src { display: block; margin-top: 3px; font: 10px var(--mono); color: var(--text-2); }
+/* an invalidated fact — still stored, still queryable, visibly superseded */
+.graph-fact.stale { opacity: 0.45; text-decoration: line-through; }
+.graph-fact.stale .graph-src { text-decoration: none; }
+.graph-empty-facts { font: 11px var(--sans); color: var(--text-2); }
+
+@media (max-width: 900px) {
+  .graphview { height: auto; }
+  .graph-stage { grid-template-columns: 1fr; }
+  .graph-rail, .graph-rail.r { border: 0; border-bottom: 1px solid var(--hairline); }
+  .graph-canvas { min-height: 60vh; }
+}
 
 /* ---- side-thread overlay (#thread-overlay — see openThread in app.js) ----
    Two modes in one panel: the branch dialog (#thread-new) and the thread
