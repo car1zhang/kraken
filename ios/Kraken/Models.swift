@@ -663,10 +663,14 @@ struct WebDocQuestion: Decodable, Identifiable {
 }
 
 // WebFeedback mirrors one `feedback` row (board.go's webFeedback /
-// store.Feedback) — a note carl left on an artifact, plus zeus' addressed
-// state. `addressed` is zeus' own free-text account of how it addressed the
-// note (prose, not a boolean) — an empty/absent value means still open,
-// same absence-is-the-signal convention as WebDocQuestion.answer above.
+// store.Feedback) — a note carl left on an artifact, plus its addressed
+// state. `addressed` is the nightly dream pass' free-text account of the
+// DURABLE fix it shipped for the note (prose, not a boolean). That pass is
+// its only writer — an ordinary cell acts on its feedback and leaves the
+// column empty by design — so an empty/absent value means "no durable fix
+// has shipped", NOT "nobody handled it", and a count taken off it is a
+// corroboration backlog rather than work owed. Same absence-is-the-signal
+// convention as WebDocQuestion.answer above, but a different question.
 struct WebFeedback: Decodable, Identifiable {
     let id: Int
     let artifact: String

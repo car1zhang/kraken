@@ -155,9 +155,41 @@ func zeusBrief(j *Job) string {
 	// Both row families arrive silently, so the re-read-on-resume rule is the
 	// part zeus must never miss and the part the skills cannot enforce (they
 	// are read once per phase, this brief is in context every turn). The write
-	// verbs and the when-may-a-question-exist policy live in the aim skill.
-	fmt.Fprintf(&b, "Open questions and carl's per-artifact feedback are rows in kraken.db, not files, and both arrive as SILENT row updates — never a pane message — so re-read `kraken questions get %s` and `kraken feedback get %s` on EVERY resume. Address every open feedback entry as part of that working session and record how with `kraken feedback addressed %s <id> <text>`; kraken owns feedback entry creation and edits, and owns `answer`/`answered-at` on questions — you never write those. The question write verbs, and the rule for when a job may open questions at all, are in `.claude/skills/aim/SKILL.md`.\n",
-		j.Slug, j.Slug, j.Slug)
+	// question write verbs and the when-may-a-question-exist policy live in the
+	// aim skill; the feedback WRITE verb lives in the dream skill, for the
+	// reason the next paragraph gives.
+	//
+	// The ADDRESSED column is deliberately not an ordinary cell's to write, and
+	// the reason is what the column is FOR rather than who is entitled to it.
+	// The nightly pass' whole job is corroboration — the same complaint
+	// arriving from several jobs is the signal that a skill sentence, not an
+	// artifact, is what needs fixing — and it reads its feedback through one
+	// sweep (`WHERE ts >= ?`, internal/store/feedback.go) whose window keys on
+	// the row's immutable CREATION time. No QUERY anywhere filters on
+	// `addressed` — only the clients' open-count render reads it — so the pass
+	// is handed every row in the window, normally once each. (Normally, not at
+	// most: the windows are contiguous by FLOOR, but the floor is stamped when
+	// the night's job is created and the sweep runs some time after that, so
+	// consecutive windows overlap by exactly that gap and a note written into
+	// it comes back. A clamped window is the other direction, and sweeps what
+	// it skips zero times. dream/SKILL.md states both seams and what to do
+	// about them.) Whatever the column says when the pass reads it is what the
+	// pass sees forever. Cells closing their own notes made that
+	// almost always a same-day "handled": of the 5 rows in one night's window
+	// on this machine, 4 were stamped hours before the sweep (2026-07-30; the
+	// ratio is the load-bearing part, the totals drift as carl leaves notes).
+	// That is a fix to ONE artifact wearing the word the pass uses for a
+	// durable one.
+	//
+	// The cost is real and lands on the reader rather than on the cell: the
+	// `addressed` text was the only durable per-note record of what was done
+	// about a note, and the replacement is the cell's final message, which the
+	// board keeps only as the current detail line. What it buys is that
+	// `addressed` carries a single meaning — a durable fix shipped, written by
+	// the only agent positioned to ship one — and that the recurrence a
+	// per-artifact fix hides stays visible to the pass whose job is spotting it.
+	fmt.Fprintf(&b, "Open questions and carl's per-artifact feedback are rows in kraken.db, not files, and both arrive as SILENT row updates — never a pane message — so re-read `kraken questions get %s` and `kraken feedback get %s` on EVERY resume. ACT on each feedback entry you have not already handled, and say in your final message what you changed for it: the row will not record it, and an entry does NOT stop reading as open once you have handled it. So never decide from the LIST — read the artifact against the note, act if the fix is not there, say so if it is. When in doubt, redo it: a redundant fix costs a minute, a skipped note costs the note. Never mark an entry ADDRESSED unless the skill you are following for this job says that column is yours — only `.claude/skills/dream/SKILL.md` does, and only for a DURABLE fix. Kraken owns feedback entry creation and edits, and owns `answer`/`answered-at` on questions — you never write those. The question write verbs, and the rule for when a job may open questions at all, are in `.claude/skills/aim/SKILL.md`.\n",
+		j.Slug, j.Slug)
 	if j.Solo {
 		b.WriteString("Work entirely alone: no teammates and no subagents at all — not even a read-only exploration subagent, no implementation crew and no diagram agents; when Phase 1 applies, write every artifact by hand, prose only, with no diagram cards.\n")
 	} else {

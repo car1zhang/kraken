@@ -17,10 +17,16 @@ import (
 // sweep`: zeus' own read/write surface for carl's per-artifact feedback,
 // proxying to kraken serve's GET /api/feedback, POST /api/feedback and GET
 // /api/feedback/sweep (internal/api/feedback.go).
-// Exact spellings match the "Open questions and carl's per-artifact
-// feedback are rows" paragraph in crew.go's zeusBrief, which is where zeus
-// learns these verbs. zeus only ever reads entries and marks them addressed; creation/edit/delete are carl-facing board actions this verb
-// deliberately does NOT expose.
+// The READ verb's spelling matches the "Open questions and carl's
+// per-artifact feedback are rows" paragraph in crew.go's zeusBrief, which is
+// where every cell's zeus learns it. The WRITE verb's spelling is deliberately
+// NOT there — `addressed` belongs to the nightly dream pass alone, so
+// `.claude/skills/dream/SKILL.md` is the only place it is spelled out, and
+// crew_test.go's forbidden-token list actively keeps it out of the brief (a
+// brief naming the verb teaches every cell the call it is being told not to
+// make). So: an ordinary cell reads entries and acts on them, the dream pass
+// alone marks them addressed, and creation/edit/delete are carl-facing board
+// actions this verb deliberately does NOT expose.
 //
 // `sweep` is the odd one out and takes no slug at all: it is the nightly
 // dream pass' CROSS-JOB read (.claude/skills/dream/SKILL.md), every note in
@@ -128,7 +134,7 @@ func runFeedbackSweep(args []string) ([]byte, error) {
 const feedbackAddressedUsage = "usage: k feedback addressed [--clear] <slug> <id> <text...> (text read from stdin if omitted; --clear takes no text and reopens the entry)"
 
 // runFeedbackAddressed is `kraken feedback addressed <slug> <id> <text...>`:
-// posts {slug, id, addressed} — updates only the zeus-owned addressed/
+// posts {slug, id, addressed} — updates only the dream-pass-owned addressed/
 // addressed_at columns (feedbackAddressed in internal/api/feedback.go).
 // text is every arg after <id> joined with spaces when present; when
 // omitted entirely (just `addressed <slug> <id>`) it's read from stdin

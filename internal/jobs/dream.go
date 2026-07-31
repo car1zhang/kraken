@@ -394,8 +394,11 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		"- Transcripts: every claude session touched in that window.\n" +
 		"\n" +
 		"Both edges are unix millis in kraken's own watermark (`dream_last_run.swept_to`);\n" +
-		"the floor is where the last pass stopped, so nothing is read twice and nothing is\n" +
-		"missed. Do not widen the window on your own initiative.\n" +
+		"the floor is where the last pass stopped, so a row is normally read exactly\n" +
+		"once. The skill names the two seams where it is not, and what to do about\n" +
+		"each: a long enough gap between passes drops the oldest evidence entirely,\n" +
+		"and a note written between this job's creation and your sweep comes back\n" +
+		"tomorrow. Do not widen the window on your own initiative.\n" +
 		clampNote(clamped) +
 		"\n" +
 		"Findings never enter git. The PR carries the hardened diff and nothing else; the\n" +

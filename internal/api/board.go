@@ -467,7 +467,7 @@ type webJob struct {
 	// file, no parse step, so there is no more malformed-file case (see
 	// jobQuestions). Never set for archived jobs.
 	DocQuestions []webDocQuestion `json:"doc_questions,omitempty"`
-	// Feedback mirrors this job's open+addressed feedback entries, served
+	// Feedback mirrors this job's feedback entries, closed and not, served
 	// straight from `feedback` rows in kraken.db (see jobFeedback) — works
 	// for live, done, and archived jobs alike (Q2).
 	Feedback []webFeedback `json:"feedback,omitempty"`

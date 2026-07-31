@@ -376,10 +376,11 @@ function docQuestionsChipHTML(j) {
 // share one, so there's nothing for the slug to disambiguate.
 const fbEditing = new Set();
 
-// feedbackRowHTML renders one feedback entry. An addressed entry (zeus posted
-// its own addressed/addressed_at) is dimmed and terminal — carl can still
-// edit or delete it, same as an open one, since a note staying accurate is
-// more useful than freezing it the moment zeus reacts to it. An open entry in
+// feedbackRowHTML renders one feedback entry. An addressed entry (the nightly
+// dream pass posted addressed/addressed_at for a durable fix it shipped — no
+// other agent writes that column) is dimmed and terminal — carl can still edit
+// or delete it, same as one without, since a note staying accurate is more
+// useful than freezing it the moment something reacts to it. An open entry in
 // fbEditing shows an inline textarea (pre-filled with the current note)
 // instead of the note + edit/delete controls.
 function feedbackRowHTML(j, f) {
@@ -435,18 +436,22 @@ function feedbackHTML(j) {
 // .chip (that class opens an artifact) and not a button, so a click falls
 // through to the card-open fallback that reaches the panel itself.
 //
-// Both counts ride it: the total is what the job accumulated, the open count
-// (notes zeus hasn't posted an `addressed` line for) is what is still owed.
+// Both counts ride it: the total is what the job accumulated, and the second
+// count is how many notes carry no `addressed` line. That is NOT "what is
+// still owed" — `addressed` is the nightly dream pass' column alone, and an
+// ordinary cell acts on its feedback and leaves it empty by design, so the
+// count is a corroboration backlog rather than a to-do and takes no emphasis
+// state. See FeedbackChip.tsx, which owns this surface now.
 // Unlike a question, a note is never "settled" by the job being done — carl
 // leaves most of them ON done work — so there is no settledJob() suppression
 // here.
 function feedbackChipHTML(j) {
   const list = j.feedback || [];
   if (!list.length) return "";
-  const open = list.filter((f) => !f.addressed).length;
-  const label = open ? `${list.length} feedback · ${open} open` : `${list.length} feedback`;
-  const title = `${list.length} feedback note${list.length === 1 ? "" : "s"}${open ? `, ${open} not yet addressed` : ", all addressed"} — click the card to read them`;
-  return `<span class="fb-chip${open ? " open" : ""}" title="${esc(title)}">✎ ${esc(label)}</span>`;
+  const unfixed = list.filter((f) => !f.addressed).length;
+  const label = unfixed ? `${list.length} feedback · ${unfixed} no durable fix` : `${list.length} feedback`;
+  const title = `${list.length} feedback note${list.length === 1 ? "" : "s"}${unfixed ? `, ${unfixed} with no durable fix shipped yet (the nightly pass writes that, not the cell)` : ", all have a durable fix recorded"} — click the card to read them`;
+  return `<span class="fb-chip" title="${esc(title)}">✎ ${esc(label)}</span>`;
 }
 
 // wakeupChipHTML renders a live cell's poll-timer chip: a countdown to its

@@ -197,8 +197,13 @@ the cell's brief wins wherever it is more specific:
   the deliverable.
 - **Never run `kraken questions` write verbs on an /info job** — no `add`, `set`, `update`, or
   `remove`. An /info job's questions list stays empty. (`kraken feedback get <slug>` still applies:
-  carl's per-artifact feedback arrives as rows, and each open entry gets addressed and marked with
-  `kraken feedback addressed <slug> <id> <text>`.)
+  carl's per-artifact feedback arrives as rows, each entry you have not already handled gets acted on
+  in that round, and you say what you changed for it in the same final message, BEFORE the closing line
+  below — but it is never MARKED addressed. That column is the nightly `/dream` pass' alone, so a note
+  you fixed in place keeps reading as open, both to that pass and on your next resume. Never decide from
+  the LIST, then: the artifact is what records the fix, so read it against the note — act if the fix is
+  not there, say so if it is. Re-doing a fix costs a minute; skipping a note carl is waiting on costs
+  the note.)
 - Never run `open` (no browser in a cell); the board renders the artifacts.
 - **Each round ends with one line, then you stop.** Say exactly:
 

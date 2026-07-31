@@ -221,7 +221,7 @@ field set, same json tags as the old `questions.yaml` record it replaces):
 | `artifact` | string | always | artifact path/name the feedback is attached to |
 | `note` | string | always | latest note text — note is latest-only, an edit overwrites rather than appending |
 | `at` | number | always | unix millis the feedback was submitted (`ts` column) |
-| `addressed` | string | omitempty | zeus' own free-text account of how it addressed the note; absent means still open (this is prose, not a boolean) |
+| `addressed` | string | omitempty | the nightly dream pass' free-text account of the DURABLE fix it shipped for this note, naming the PR (prose, not a boolean). Written by that pass alone — an ordinary cell acts on its feedback and leaves this empty by design — so absent means "no durable fix has shipped", NOT "nobody handled it" |
 | `addressed_at` | string | omitempty | RFC3339 timestamp, server-stamped alongside `addressed` |
 
 `webThread` (one `threads` row, `store.Thread`'s board-facing subset — a side
@@ -425,13 +425,16 @@ Response: `{"ok": true}` on success — no row echoed back; the board's next
 `{"error": string}` on failure (404 for an unknown or not-yours row, 413 for
 an oversize request body).
 
-Not modeled: the zeus-facing fourth form, `{slug, id, addressed}` (UPDATEs
-only the zeus-owned `addressed`/`addressed_at` columns), is reached by zeus
-through the `kraken feedback addressed` cell verb, never by the iOS app —
+Not modeled: the fourth form, `{slug, id, addressed}` (UPDATEs only the
+`addressed`/`addressed_at` columns), is reached through the `kraken feedback
+addressed` cell verb by the NIGHTLY DREAM PASS alone — an ordinary cell reads
+its feedback and acts on it while deliberately leaving the column empty — and
+never by the iOS app —
 same convention as `/api/pr-attach`/`/api/logevent` above, so it is not in
 Models.swift/APIClient.swift. A non-empty `addressed` is capped at the same
 8000 **runes** after trim as `feedback` (refused 400 over that — `addressed`
-also rides every `/api/board` poll, and its writer is zeus, not a human). An
+also rides every `/api/board` poll, and its writer is an agent, not a human).
+An
 explicitly empty `addressed` (`{slug, id, addressed: ""}`, as opposed to the
 key being absent) clears a prior addressed note back to open; the cell verb
 reaches that form as `kraken feedback addressed --clear <slug> <id>`.
@@ -441,7 +444,7 @@ request would silently drop the note edit.
 
 ### `GET /api/feedback?slug=`
 
-zeus-side read: open + addressed feedback entries for a job, re-read on
+zeus-side read: every feedback entry for a job, closed and not, re-read on
 every resume via the `kraken feedback get` cell verb. Not modeled in
 Models.swift/APIClient.swift — the iOS app reads feedback from the per-job
 `feedback` array on `/api/board` instead, never this endpoint directly.
@@ -474,7 +477,7 @@ Response: `{"feedback": [webSweepFeedback]}` — always an array, never `null`.
 | `artifact` | string | always | artifact name/path the note was left on |
 | `note` | string | always | carl's note text |
 | `at` | number | always | unix millis, submit time (immutable — an edit does not restamp it) |
-| `addressed` | string | omitempty | zeus' own account of how it handled the note |
+| `addressed` | string | omitempty | the nightly dream pass' account of the durable fix it shipped for the note — that pass is its only writer, so absent means "no durable fix has shipped", not "nobody handled it" |
 | `addressed_at` | string | omitempty | RFC3339 |
 | `snapshot_url` | string | always | `/api/feedback/snapshot?id=<id>` — always present; a row whose frozen blob is empty 404s when fetched (the sweep excludes blobs, so it cannot know which) |
 

@@ -124,7 +124,12 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// /info's defining constraint: lighter than /aim, and never any questions
 			"No open questions. Ever.", "never gets a `/do`", "never opens a PR",
 			"Never run `kraken questions` write verbs",
-			"kraken feedback addressed",
+			// /info acts on its feedback and never closes it. The token is the
+			// PROHIBITION rather than the verb: the verb belongs to dream alone,
+			// which TestOnlyDreamNamesTheFeedbackWriteVerb below enforces for the
+			// four non-dream skills and crew_test.go's forbidden-token list
+			// enforces for the brief.
+			"never MARKED addressed",
 			// the fix round is /info's own copy of the rule — anchor the
 			// sentence, not just the naming, or deleting the whole bullet
 			// leaves the spawn rule matching and the rule itself gone from
@@ -186,6 +191,22 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"Use `0` where a count is zero", "Never declare the job done",
 			"Findings never enter git", "00-dream-report.md",
 			"kraken watchlist get|add|update|remove", "kraken feedback sweep --since",
+			// this pass is the SOLE writer of `addressed`, which is why the
+			// verb appears in no other skill and in no brief. Three tokens
+			// because three separate claims carry the rule: who may write it,
+			// what it now means, and that an open note is not an unhandled one
+			// — a reader that loses the middle claim starts closing notes for
+			// artifact-local fixes again, which is the state this replaced.
+			"kraken feedback addressed", "only writer of `addressed`",
+			"a DURABLE fix shipped", "does not mean nobody",
+			// the three window properties, one token each. They sit in their own
+			// passage well below the Evidence 1 paragraphs the four tokens above
+			// pin, so without these the whole seam correction — once-only, the
+			// clamp that sweeps zero, and what an `addressed` note MEANS on a
+			// re-swept row — deletes cleanly with every test still green. The
+			// third is the one whose loss is silent: the pass simply stops
+			// trusting its own previous verdict, which looks like nothing.
+			"the floor only moves forwards", "swept zero times", "from a previous night",
 			"two independent sightings", "judgment calls",
 			"suggested_fix", "prompting",
 			"unnamed subagents", "solo: true",
@@ -202,6 +223,49 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 					c.skill, want)
 			}
 		}
+	}
+}
+
+// TestOnlyDreamNamesTheFeedbackWriteVerb is the ABSENT half of the rule above,
+// and it is the direction that table cannot express: TestSkillsOwnTheCellContract
+// only ever asserts a token is present, so an invariant of the form "exactly one
+// file may say this" is half-pinned by it at best.
+//
+// The invariant: `addressed` is written by the nightly corroboration pass and by
+// nothing else. An ordinary cell reads its feedback and acts on it, deliberately
+// leaving the column empty, so that a note reaches the pass saying what carl
+// asked for rather than saying one artifact was patched. crew_test.go's
+// forbidden-token list keeps the verb out of zeus' brief; this keeps it out of
+// the four skills an ordinary cell actually reads.
+//
+// Without it the regression is silent and the reversal is one plausible edit:
+// `info/SKILL.md` DID name this verb until the change that added this test
+// removed it, so a later hand re-adding "close it with `kraken feedback
+// addressed <slug> <id>`" to `aim` — the skill every spec-path cell reads — is
+// exactly the shape to expect, and every existing test stays green while every
+// /aim cell resumes closing its own notes.
+//
+// The token deliberately omits the binary name. `k` is a first-class spelling
+// of the same verb and is the one kraken's OWN usage strings use
+// (cmd/kraken/cmd_feedback.go's feedbackAddressedUsage, cmd/kraken/main.go's
+// help), so it is the spelling a future editor is most likely to copy — and a
+// test matching only `kraken feedback addressed` would wave through
+// "close it with `k feedback addressed <slug> <id>`" in aim/SKILL.md, which is
+// the same silent partial reversal one spelling over. The bare substring
+// appears in no non-dream skill today, so the looser match costs nothing.
+func TestOnlyDreamNamesTheFeedbackWriteVerb(t *testing.T) {
+	const verb = "feedback addressed"
+	for _, skill := range []string{"aim", "info", "do", "pr"} {
+		if strings.Contains(readEmbedded(t, skill+"/SKILL.md"), verb) {
+			t.Errorf(".claude/skills/%s/SKILL.md names %q — only dream/SKILL.md may. "+
+				"That column is the nightly pass' alone; a skill an ordinary cell reads "+
+				"must state the prohibition, never the call", skill, verb)
+		}
+	}
+	// the other side, so this test fails if the verb is moved rather than copied
+	if !strings.Contains(readEmbedded(t, "dream/SKILL.md"), verb) {
+		t.Errorf("dream/SKILL.md no longer names %q — it is the only writer, so the verb "+
+			"now exists in no skill at all and nothing closes a feedback note", verb)
 	}
 }
 

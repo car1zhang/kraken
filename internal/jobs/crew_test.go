@@ -37,8 +37,23 @@ func TestZeusBrief(t *testing.T) {
 		// (read once per phase)
 		"SILENT row updates", "EVERY resume",
 		"kraken questions get x", "kraken feedback get x",
-		"kraken feedback addressed x",
-		"kraken owns feedback entry creation and edits",
+		// capital K: the clause now opens a sentence, where before it followed
+		// a semicolon
+		"Kraken owns feedback entry creation and edits",
+		// zeus ACTS on feedback but never closes it: `addressed` is the
+		// nightly pass' column alone, and it means a durable fix shipped
+		// rather than one artifact patched. Four separate tokens because four
+		// separate deletions each break it differently — dropping "ACT on"
+		// leaves a cell that ignores its feedback; dropping the prohibition
+		// leaves every note closed before the sweep can read it; dropping the
+		// "unless the skill" carve-out binds the DREAM cell's own zeus, which
+		// would leave the column with no writer anywhere; and dropping the
+		// re-read warning leaves a cell re-acting on every note it has already
+		// handled on every resume, since the row no longer records that.
+		"ACT on each feedback entry you have not already handled",
+		"Never mark an entry ADDRESSED unless the skill you are following for this job",
+		"does NOT stop reading as open once you have handled it",
+		".claude/skills/dream/SKILL.md",
 		// three named single-dimension athena review variants, dispatched in
 		// parallel, with a targeted (not full) re-review on a blocking finding.
 		// Two of them are already live from the authoring dispatch, so the
@@ -160,6 +175,18 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			{"gh pr create", "pr"},
 			{"checkout -B", "pr"},
 			{"git fetch origin", "pr"},
+			// the feedback WRITE verb — dream/SKILL.md. Same split as the
+			// questions verbs above: the brief keeps the read verb and the
+			// silent-update rule and states the PROHIBITION in prose, while
+			// the one skill allowed to run it owns its spelling. A brief that
+			// names the verb is a brief teaching every cell the call it is
+			// being told not to make. The binary name is left off for the
+			// reason TestOnlyDreamNamesTheFeedbackWriteVerb gives: `k` is a
+			// first-class spelling and is the one kraken's own usage strings
+			// use, so matching only `kraken ...` leaves the likelier reversal
+			// through. (threadBrief does contain this substring, correctly and
+			// as a prohibition — this test reads zeusBrief only.)
+			{"feedback addressed", "dream"},
 		} {
 			if strings.Contains(brief, owned.token) {
 				t.Errorf("%s brief restates %q, which .claude/skills/%s/SKILL.md owns — "+
@@ -176,11 +203,22 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // TestZeusBriefDoesNotRestateSkills, catching bulk that arrives as prose the
 // token list does not happen to name.
 //
-// The ceiling has moved twice: 10,000 -> 12,000 to admit the load-estimate
-// rule (the `kraken load set` paragraph in zeusBrief, 1,017 bytes with its
-// 1-10 scale), and 12,000 -> 13,000 to admit blind test authorship. That
+// The ceiling has moved more than once: 10,000 -> 12,000 to admit the
+// load-estimate rule (the `kraken load set` paragraph in zeusBrief, 1,017
+// bytes with its 1-10 scale), 12,000 -> 13,000 to admit blind test
+// authorship, and 13,000 -> 13,500 for the feedback-ownership contract. That
 // number is the ONLY thing this test's failure message tells you not to
-// touch, so both moves are reasoned out below rather than left to the diff.
+// touch, so EACH move is reasoned out below rather than left to the diff.
+//
+// Deliberately no literal ceiling value appears in the prose from here on as
+// a statement of the CURRENT limit: `const ceiling` is the one place the live
+// number lives. Section headings and the history list below do name specific
+// values, and they should — they describe a MOVE, which a later raise cannot
+// falsify, rather than a state that goes stale the moment one happens. Three separate figures
+// in this block went stale across the reviews of one change, which is what
+// a restated constant does — so the sections below say "the ceiling" and
+// leave the arithmetic to the measured byte counts, which are dated
+// observations rather than duplicates of a value the code already holds.
 //
 // WHY IT BELONGS IN THE BRIEF. zeusBrief's own doc comment sets the split:
 // the brief carries what no skill can know. Every-turn enforcement is a
@@ -193,9 +231,12 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // copies of one 1-10 ruler is exactly the drift
 // TestZeusBriefDoesNotRestateSkills exists to prevent.
 //
-// WHY IT MEASURES A LONG SLUG. The brief carries the slug TEN times: seven
+// WHY IT MEASURES A LONG SLUG. The brief carries the slug NINE times: six
 // direct interpolations plus one each inside CellBranch, CellArtifacts and
-// docFragmentsDir. Every extra slug character therefore costs ten bytes, and
+// docFragmentsDir. (It was ten until the feedback paragraph stopped naming
+// the `kraken feedback addressed <slug>` call — that verb is the nightly
+// pass' alone now, so the brief states the prohibition and never the call.)
+// Every extra slug character therefore costs nine bytes, and
 // for its entire life until this change the input it measured was the 4-character
 // "lean" — which is the SHORTEST brief the function can emit, not a
 // representative one. Measured this session against ~/Documents/pluto: 25
@@ -224,20 +265,68 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // once measured honestly at 48 characters rather than at 4. Raising it while
 // simultaneously fixing the input is the only combination that leaves a
 // number that actually bounds something: 13,000 against a measured 12,450 at
-// 48 characters is 550 bytes — a little under the 710 this ceiling actually
+// 48 characters left 550 bytes at the time — a little under the 710 this ceiling actually
 // had at this slug length before the change, and well under the 980 it was
 // believed to have. The next crew change is a trim, not another raise.
 //
+// WHY 13,500 RATHER THAN 13,000, AND WHY THIS RAISE DISOBEYS THE LINE ABOVE.
+// The paragraph above ends "the next crew change is a trim, not another
+// raise", and this is a raise. That deserves the argument it asked for.
+//
+// The feedback-ownership change (an ordinary cell reads its feedback, acts on
+// it, and never marks a row `addressed` — the column is the nightly pass' and
+// means a durable fix shipped) grew one paragraph and added no section. It
+// also removed a slug interpolation on the way, which
+// is why the count above is NINE and not ten. Measured on one basis — the
+// paragraph's changed tail, rendered at a 48-character slug — it went from
+// **413** bytes to **828**. Every clause it gained was put there by a DEFECT
+// rather than by an author with something to say (not all by a review
+// finding: the carve-out below was caught while fixing a different one):
+// the "unless the skill you are following" carve-out, without which the
+// unified brief binds the DREAM cell's own zeus and the column ends up with no
+// writer anywhere; and the read-the-artifact tie-break, without which a cell
+// that cannot remember whether it handled a note has a one-directional
+// incentive to skip it, silently, which loses carl's input outright. Those are
+// contract clauses, and the brief is where the contract lives.
+//
+// The measurement: **12,865** bytes at a 48-character slug, 12,802 at the
+// longest real one (41), 12,469 at "lean". Against the PREVIOUS ceiling that
+// left 135 bytes — and 135 is not a bound, it is one sentence away from red,
+// which is the exact defect the paragraph above rejected a tighter number FOR.
+// I trimmed first and it is in that figure (12,956 before the trim), so this
+// is a raise on top of a trim rather than instead of one. The ceiling now in
+// `const ceiling` leaves 635, a little over the 550 the previous author sized
+// and reasoned about.
+//
+// AND THE CONDITION FOR THE NEXT ONE, because a gate that has never once
+// answered no is a ratchet with good prose attached. This number has gone
+// 10,000 -> 12,000 -> 13,000 -> 13,500 with three raises and zero refusals,
+// and "write a paragraph like this one first" is a bar any competent author
+// clears. So: at 14,000 the answer is NOT another raise. It is either a
+// second brief-level test that bounds what this one only proxies for
+// (procedure creeping back out of the skills — paragraph count, or a budget
+// per section), or the accepted conclusion that per-turn contract has
+// outgrown a single system prompt and needs somewhere else to live.
+//
+// One practice note, because it cost real confusion here. THREE figures in
+// this block had silently drifted before anyone re-measured — TEN
+// interpolations when the answer was nine, a 12,450 that was 12,682 by then,
+// and a line calling 13,000 the bound after the constant had moved past it —
+// all in the safe direction, all invisible. The third was found by a reviewer
+// one round AFTER this note was written, which is the strongest evidence the
+// note has for itself. Restate the measurement on every change that touches
+// the brief; do not trust the last one written down, including this one.
+//
 // What the net still catches is unchanged, and the scale is worth stating
-// because it is what makes 13,000 a bound rather than a formality: the
+// because it is what makes the ceiling a bound rather than a formality: the
 // duplication that caused the original outage was the whole /aim pipeline,
 // ~10.6KB of it (zeusBrief measured 17,005 bytes at bf91ca5^ and 6,407 at
 // bf91ca5, the commit that staged the brief in a file and deduped it).
 // Anyone raising this number again should be able to write a paragraph like
 // this one first.
 func TestZeusBriefStaysLean(t *testing.T) {
-	const ceiling = 13_000
-	// Longer than any slug observed on this machine (41), so the ten
+	const ceiling = 13_500
+	// Longer than any slug observed on this machine (41), so the nine
 	// interpolations make every real brief cheaper than this one.
 	slug := strings.Repeat("s", 48)
 	brief := zeusBrief(&Job{Slug: slug})

@@ -379,7 +379,7 @@ func TestFeedbackDeleteUnknownID(t *testing.T) {
 	}
 }
 
-// --- addressed (zeus' form) ---
+// --- addressed (the nightly dream pass' form) ---
 
 func TestFeedbackAddressedSetsAndClears(t *testing.T) {
 	useTestStore(t)
