@@ -317,6 +317,17 @@ struct GraphCamera: Equatable {
 let graphMinScale: CGFloat = 0.05
 let graphMaxScale: CGFloat = 20
 
+/// Screen-space tap reach. A node is 4-16pt of ink, well under the 44pt
+/// minimum target, so the hit test is what makes a leaf tappable — see
+/// `graphHitTest` for why the node's own radius deliberately does not add to
+/// this.
+///
+/// It lives out here rather than beside the canvas that uses it because the
+/// gesture fork below is defined in terms of it: what a press LANDS on and
+/// what a tap SELECTS have to agree exactly, or a press could grab a node the
+/// same press would not have selected.
+let graphTapReach: CGFloat = 24
+
 /// The node under a tap, or nil.
 ///
 /// Nearest-in-SCREEN-space within `maxDistance`, and the node's own radius
@@ -340,4 +351,39 @@ func graphHitTest(
     }
     guard let bestID, bestDistance <= maxDistance else { return nil }
     return bestID
+}
+
+// MARK: - the gesture fork
+
+/// What a press that has started to travel is doing.
+///
+/// One press can mean two things on this canvas and the choice is made ONCE,
+/// at the gesture's start location, never re-evaluated mid-drag: a node the
+/// simulation pulls out from under a finger must not hand the gesture back to
+/// the camera halfway through, and a pan that happens to sweep over a node
+/// must not snatch it.
+enum GraphDragTarget: Equatable {
+    case node(Int64)
+    case camera
+}
+
+/// Node-drag or camera-pan, decided from where the press began.
+///
+/// The same hit test the tap path uses, at the same reach, so the two agree by
+/// construction — see `graphTapReach`. `positions` must be the VISIBLE nodes
+/// only: a chip-hidden node draws nothing, and letting one win a press would
+/// drag something the reader cannot see.
+func graphDragTarget(
+    start: CGPoint,
+    positions: [Int64: CGPoint],
+    camera: GraphCamera,
+    maxDistance: CGFloat = graphTapReach
+) -> GraphDragTarget {
+    if let id = graphHitTest(
+        screenPoint: start, positions: positions,
+        camera: camera, maxDistance: maxDistance
+    ) {
+        return .node(id)
+    }
+    return .camera
 }

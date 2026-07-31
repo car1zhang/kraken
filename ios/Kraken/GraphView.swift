@@ -22,11 +22,25 @@ import SwiftUI
 // decides between the graph and the "No server URL set" message — it stays
 // here because it reads this view's one stored property).
 
-/// Screen-space tap reach. A node is 4-16pt of ink, well under the 44pt
-/// minimum target, so the hit test is what makes a leaf tappable — see
-/// `graphHitTest` for why the node's own radius deliberately does not add to
-/// this.
-private let graphTapReach: CGFloat = 24
+// `graphTapReach` moved to GraphModel.swift when the drag gesture arrived: the
+// press-vs-pan fork is defined in terms of it, and that decision has to be
+// reachable from a test.
+
+/// A live node grab, as the gesture system holds it.
+///
+/// It exists to give `@GestureState`'s reset closure everything it needs to
+/// end the pin, since that closure is written before the view exists and can
+/// capture nothing from it. Holding the view model in gesture state is sound
+/// rather than merely convenient: SwiftUI already retains the same object for
+/// the life of the screen through `@StateObject`, this reference lives only
+/// for the duration of one gesture, and it is only ever touched on the main
+/// actor — the same actor the model is confined to.
+private struct GraphGrab {
+    let id: Int64
+    let vm: GraphViewModel
+}
+
+//
 /// A node draws its label once its own screen radius reaches this many points.
 ///
 /// Node ink here is drawn at a FIXED screen size — the camera moves nodes, it
@@ -92,6 +106,38 @@ struct GraphView: View {
     @State private var appliedPan: CGSize = .zero
     @State private var pinchSequence: CGPoint?
     @State private var appliedMagnification: CGFloat = 1
+    /// What the live press is doing, decided ONCE at its start location and
+    /// held for the whole sequence — see `GraphDragTarget`. nil between
+    /// gestures.
+    @State private var grabbed: GraphDragTarget?
+    /// The pin's LIFETIME, held by SwiftUI rather than by this view.
+    ///
+    /// `onEnded` is not guaranteed to run when a gesture is CANCELLED — the
+    /// drawer takes the touch, a screen-edge swipe wins it, the app is
+    /// backgrounded mid-drag — and a pin nobody releases holds a 60 fps
+    /// simulation up for the life of the screen. `@GestureState`'s reset is
+    /// the hook that IS guaranteed: SwiftUI documents it to run when the
+    /// gesture ends *or is cancelled*, and reverting this to nil is what
+    /// releases the node.
+    ///
+    /// It carries the view model because a `reset` closure is supplied at
+    /// property-initialisation time, before `self` exists — it cannot capture
+    /// the view, so everything the release needs has to ride in the VALUE. See
+    /// `GraphGrab` for why holding the model here is sound.
+    @GestureState(reset: { grab, _ in
+        guard let grab else { return }
+        // Synchronous, deliberately. `Task { @MainActor in … }` would compile
+        // just as well and cannot trap, but it defers the release past the
+        // start of whatever gesture comes next — and if that gesture grabs the
+        // SAME node, the deferred release lands on the new pin and kills it.
+        // A reset fires during view update on the main thread, so the
+        // assumption is the one SwiftUI already guarantees.
+        MainActor.assumeIsolated { grab.vm.releaseNode(id: grab.id) }
+    }) private var grabPin: GraphGrab?
+    /// The system's reduce-motion setting, which is one half of whether
+    /// physics runs at all. Read here rather than in the view model because
+    /// this is the half of the screen with an `@Environment` to read it from.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The server base to talk to, or nil when there is none to talk to.
     ///
@@ -143,6 +189,12 @@ struct GraphView: View {
             filterBar
             canvasStage
         }
+        .onAppear {
+            vm.reduceMotion = reduceMotion
+            vm.startDisplayLoop()
+        }
+        .onChange(of: reduceMotion) { _, on in vm.reduceMotion = on }
+        .onDisappear { vm.stopDisplayLoop() }
     }
 
     private func withDrawer<Content: View>(_ content: Content) -> some View {
@@ -378,17 +430,52 @@ struct GraphView: View {
 
     // MARK: - gestures
 
+    /// One gesture, two jobs: a press that begins ON a node drags that node,
+    /// one that begins on empty canvas pans the camera exactly as it always
+    /// did. The fork is `vm.grabTarget`, evaluated once at the sequence's
+    /// start location and then held — see `GraphDragTarget` for why it is
+    /// never re-asked mid-drag.
     private var panGesture: some Gesture {
         // A non-zero minimum distance is what lets a tap through to
         // `onTapGesture`: at 0 the drag claims every touch and nothing on this
-        // canvas is ever selectable.
+        // canvas is ever selectable. It is also what keeps a completed
+        // node-drag from selecting — the drag gesture wins the sequence, so
+        // the tap handler never runs.
         DragGesture(minimumDistance: 4)
+            // Mirrors the fork's decision into gesture-owned state purely for
+            // its LIFETIME — nothing reads this value, the reset closure above
+            // is the whole point of it. The decision itself stays in
+            // `onChanged` so there is one hit-test and one source of truth.
+            //
+            // `state == nil` makes this write-once per sequence: SwiftUI does
+            // not document whether this body or `onChanged` runs first, so on
+            // the very first event `grabbed` may still be nil and the pin is
+            // captured on the second one instead. That leaves exactly one
+            // uncovered case — a gesture cancelled after a single event — and
+            // the view model's watchdog is the backstop for it.
+            .updating($grabPin) { _, state, _ in
+                guard state == nil, case .node(let id) = grabbed else { return }
+                state = GraphGrab(id: id, vm: vm)
+            }
             .onChanged { value in
                 // A start location this accumulator has not seen is a NEW
                 // sequence, whatever happened to the last one.
                 if panSequence != value.startLocation {
+                    // A pin still held here belongs to a sequence that was
+                    // CANCELLED — `onEnded` is not guaranteed to run, per the
+                    // accumulator comment above — and a pin nobody releases
+                    // holds the simulation awake forever. Releasing it as the
+                    // next press starts is the same recovery the accumulators
+                    // use, applied to the one piece of state that does not
+                    // heal itself a frame later.
+                    if case .node(let stale) = grabbed { vm.releaseNode(id: stale) }
                     panSequence = value.startLocation
                     appliedPan = .zero
+                    grabbed = vm.grabTarget(at: value.startLocation, camera: camera)
+                }
+                if case .node(let id) = grabbed {
+                    vm.dragNode(id: id, toScreen: value.location, camera: camera)
+                    return
                 }
                 camera.pan(by: CGSize(
                     width: value.translation.width - appliedPan.width,
@@ -397,6 +484,11 @@ struct GraphView: View {
                 appliedPan = value.translation
             }
             .onEnded { _ in
+                // Released here rather than on the next gesture's start: a
+                // node left pinned holds the whole simulation awake, which is
+                // the one state that never settles on its own.
+                if case .node(let id) = grabbed { vm.releaseNode(id: id) }
+                grabbed = nil
                 panSequence = nil
                 appliedPan = .zero
             }

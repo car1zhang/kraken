@@ -1796,6 +1796,18 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   padding: 3px 2px; background: none; border: 0; cursor: pointer;
   font: 12px var(--sans); color: var(--text); text-align: left;
 }
+
+/* The header's physics toggle: .graph-chk chrome, but the rail authors that
+   class full-width for its rows. Both selectors are one class, so the
+   cascade is SOURCE ORDER — this block must sit after .graph-chk or its
+   width: auto silently loses to the rail's width: 100% (review finding, r2:
+   the first placement did exactly that). The auto margin pushes it to the
+   header's right edge; the header's own gap covers spacing. */
+.graph-chk.graph-physics {
+  width: auto;
+  flex: none;
+  margin-left: auto;
+}
 .graph-chk.off { color: var(--text-2); }
 .graph-chk:hover { color: var(--skill-graph); }
 .graph-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
@@ -1982,11 +1994,3 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 }
 #thread-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
 #thread-text::placeholder { color: var(--text-2); opacity: 1; }
-
-/* The graph header's physics toggle: same chk chrome as the rail's buttons,
-   pulled into the header row. The off state matches the rail's dimming so
-   "off" reads consistently across the view. */
-.graph-physics {
-  margin-left: 12px;
-  flex: none;
-}

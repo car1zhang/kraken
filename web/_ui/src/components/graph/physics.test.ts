@@ -163,14 +163,59 @@ describe("createPhysics", () => {
     h.tick();
   });
 
-  it("reheat wakes a sleeping simulation without pinning anything", () => {
+  it("stop() kills the handle: tick, drag and awake are all no-ops after", () => {
     const h = fixture();
-    for (let i = 0; i < 300 && h.awake(); i++) h.tick();
+    h.stop();
+    const before = h.nodes().map((n) => ({ x: n.x, y: n.y }));
+    h.drag("b", 999, 999);
+    h.tick();
+    const after = h.nodes();
     expect(h.awake()).toBe(false);
-    h.reheat();
-    expect(h.awake()).toBe(true);
-    for (const n of h.nodes()) {
-      expect(n.fx ?? null).toBeNull();
+    for (let i = 0; i < before.length; i++) {
+      expect(after[i]!.x).toBe(before[i]!.x);
+      expect(after[i]!.y).toBe(before[i]!.y);
     }
+    expect(after.find((n) => n.id === "b")?.fx ?? null).toBeNull();
+  });
+
+  it("release of an unknown id does not end a live drag's wake", () => {
+    const h = fixture();
+    h.drag("b", 150, 50);
+    expect(h.awake()).toBe(true);
+    h.release("nope");
+    // b's pin and the raised alphaTarget both survive — only releasing the
+    // pinned node itself may end the wake.
+    expect(h.awake()).toBe(true);
+    expect(h.nodes().find((n) => n.id === "b")?.fx).toBe(150);
+  });
+
+  it("release settles to sleep inside the spec's ~1 s budget", () => {
+    const h = fixture();
+    h.drag("b", 100, 400);
+    for (let i = 0; i < 30; i++) h.tick();
+    h.release("b");
+    // 90 ticks = 1.5 s of frames; the tuned alphaDecay makes it in ~60.
+    let ticks = 0;
+    while (h.awake() && ticks < 90) {
+      h.tick();
+      ticks++;
+    }
+    expect(h.awake()).toBe(false);
+  });
+
+  it("a throwing storage reads as auto and a denied write does not throw", () => {
+    const throwing = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => {
+        throw new Error("denied");
+      },
+    };
+    expect(readPhysicsPref(throwing as unknown as Storage)).toBe("auto");
+    expect(() => writePhysicsPref(throwing as unknown as Storage, "on")).not.toThrow();
   });
 });

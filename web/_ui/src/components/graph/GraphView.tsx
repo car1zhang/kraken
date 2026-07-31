@@ -11,11 +11,16 @@
 // opinion about which sigma this board is allowed to be on, for a view that
 // creates exactly one instance and never unmounts it.
 //
-// Layout comes from the SERVER (node x/y) and there is no client-side force
-// simulation, which is not an optimisation: a client simulation stops being
-// interactive past ~10k nodes and has no chance on a phone, and computing it
-// once in Go is what makes the web board and the iOS WKWebView draw the same
-// picture. See 50-components.md #8.
+// Layout is a COLLABORATION between the server and a client simulation
+// (Q14, answered 2026-07-31): the server's kg_layout positions are the WARM
+// START — the map opens in its remembered shape, and both clients open on
+// the same picture — and a d3-force simulation (physics.ts) then settles the
+// delta and gives nodes Obsidian-style dragging. Drags are ephemeral (Q12):
+// nothing writes back, and a reload reseeds from the server layout. Above
+// PHYSICS_NODE_CAP visible nodes the simulation never constructs and this
+// view falls back to the static server positions (Q13). The iOS app draws
+// its own native Canvas over the same server layout (ios/Kraken/GraphView.swift)
+// and carries its own physics. See 57-physics-drag.md.
 
 import { MultiDirectedGraph } from "graphology";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -25,6 +30,7 @@ import { useGraph, useGraphNode, type GraphEdge } from "../../hooks/useGraph.ts"
 import {
   colorOf,
   DEFAULT_FILTERS,
+  edgeVisible,
   hiddenNodeIds,
   invalidatedAt,
   isInvalidated,
@@ -156,7 +162,57 @@ function Facts({
 }
 
 export function GraphView({ active }: GraphViewProps) {
-  const { nodes, edges, stats, error, loaded } = useGraph(active);
+  const { nodes: polledNodes, edges: polledEdges, stats, error, loaded } = useGraph(active);
+
+  // Identity-STABLE node/edge arrays. usePoll hands back freshly-parsed
+  // arrays every 30 s even when the payload is byte-identical — which for a
+  // nightly-written graph is the normal case — and letting those identities
+  // flow into the memos below re-cleared the graph to server positions and
+  // rebuilt the simulation twice a minute, forever: the map visibly crept
+  // ~11 px per tick and never truly slept, and a poll landing mid-drag
+  // unpinned the held node (review findings, measured). The signature is
+  // structural: it covers exactly the fields the graph build and the
+  // simulation read, so an unchanged payload keeps the PREVIOUS arrays and
+  // nothing downstream stirs.
+  // The signatures carry every field ANY reader of the memoized arrays
+  // consumes — the graph build, the simulation, AND the inspector (fact,
+  // strength, description…) — plus the array length, which closes the
+  // delimiter-collision hole a name containing "|"+":" could open (review
+  // findings, r2). The time term exists only when some edge carries a
+  // FUTURE valid_until: isInvalidated is clock-dependent for those, and a
+  // time-invariant signature kept an edge drawing as current after its
+  // window closed while the header (computed per render) said otherwise —
+  // a 5-minute bucket re-keys the arrays just often enough to retire it.
+  const nodesSig = useMemo(
+    () =>
+      polledNodes.length +
+      "#" +
+      polledNodes
+        .map((n) => `${n.id}:${n.type}:${n.name}:${n.x}:${n.y}:${n.description}`)
+        .join("|"),
+    [polledNodes],
+  );
+  const edgesSig = useMemo(() => {
+    const horizon = polledEdges.some((e) => e.valid_until > Date.now())
+      ? `~${Math.floor(Date.now() / 300_000)}`
+      : "";
+    return (
+      polledEdges.length +
+      horizon +
+      "#" +
+      polledEdges
+        .map(
+          (e) =>
+            `${e.id}:${e.src}:${e.dst}:${e.occurrences}:${e.valid_until}:${e.expired_at}:${e.strength}:${e.predicate}:${e.fact}:${e.episode}`,
+        )
+        .join("|")
+    );
+  }, [polledEdges]);
+  // Deliberately keyed on the SIGNATURE, not the polled array (the repo has
+  // no eslint, so no suppression to carry): same signature must return the
+  // same identity, which is the entire mechanism.
+  const nodes = useMemo(() => polledNodes, [nodesSig]);
+  const edges = useMemo(() => polledEdges, [edgesSig]);
   const themeTick = useThemeTick();
 
   const [filters, setFilters] = useState<GraphFilters>(DEFAULT_FILTERS);
@@ -183,12 +239,43 @@ export function GraphView({ active }: GraphViewProps) {
   const [physicsPref, setPhysicsPref] = useState<PhysicsPref>(() =>
     readPhysicsPref(window.localStorage),
   );
-  const reducedMotion = useMemo(
+  // Live, not a mount-time snapshot: the board is a session-length SPA and
+  // a mid-session System Settings change would otherwise not land until a
+  // reload (review finding). matchMedia absent (older WebKit) degrades to
+  // false via the optional chain.
+  const [reducedMotion, setReducedMotion] = useState(
     () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
-    [],
   );
+  useEffect(() => {
+    const mql = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mql) return;
+    const onChange = () => setReducedMotion(mql.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
   const physicsRef = useRef<PhysicsHandle | null>(null);
   const rafRef = useRef<number>(0);
+  // Re-arms the (stopped-when-asleep) rAF loop; set by the physics effect,
+  // called by the drag handlers when they wake the simulation.
+  const wakeLoopRef = useRef<(() => void) | null>(null);
+  // The current simulation's membership string — the guard that keeps a
+  // same-membership effect re-run from rebuilding a settled simulation.
+  const membershipRef = useRef<string>("");
+  // Whether a frame is scheduled. A REF, not a per-effect local: the
+  // membership-guard bail keeps the previous run's loop closure alive after
+  // cleanup has cancelled its frame, and a local flag stranded there would
+  // read "armed" forever while nothing was scheduled — wake would no-op and
+  // the kept simulation would freeze mid-settle.
+  const rafLiveRef = useRef(false);
+  // `active`, ref-borne for the same retained-closure reason: the loop
+  // closure survives effect re-runs via the membership bail, so every value
+  // it reads must come through a ref or it is stale by construction. A
+  // handle built while the view was hidden (an in-flight poll resolving
+  // after a tab switch) captured active === false and froze the simulation
+  // AND dragging for the whole session (review finding, r3 — the effect's
+  // dep re-ran on the change but bailed without rebuilding the closure).
+  const activeRef = useRef(active);
+  activeRef.current = active;
   // The press being tracked: sigma key + screen coords at downNode, and
   // whether it has crossed DRAG_THRESHOLD_PX into a real drag.
   const pressRef = useRef<{ key: string; sx: number; sy: number; dragging: boolean } | null>(null);
@@ -236,16 +323,24 @@ export function GraphView({ active }: GraphViewProps) {
   useEffect(() => {
     const g = graphRef.current;
     if (!g) return;
+    // A REAL data change (the signature memos above gate identity) rebuilds
+    // the graph — but existing nodes keep their CURRENT positions, which by
+    // now carry the simulation's settle and any drags. Snapping them back to
+    // server coordinates on every ingest tick would undo the arrangement the
+    // reader just made; only genuinely new nodes enter at the server layout.
+    const keep = new Map<string, { x: number; y: number }>();
+    g.forEachNode((key, attrs) => keep.set(key, { x: attrs.x, y: attrs.y }));
     g.clear();
     for (const p of positions) {
       const n = byKey.get(nodeKey(p.id));
       if (!n) continue;
       const degree = degrees.get(n.id) ?? 0;
+      const prev = keep.get(nodeKey(n.id));
       // merge rather than add: a duplicate id in the payload is a server bug,
       // not a reason for the whole view to throw.
       g.mergeNode(nodeKey(n.id), {
-        x: p.x,
-        y: p.y,
+        x: prev?.x ?? p.x,
+        y: prev?.y ?? p.y,
         size: nodeSize(degree),
         label: n.name,
         kind: n.type,
@@ -352,69 +447,187 @@ export function GraphView({ active }: GraphViewProps) {
   // re-inserts a node where it last was rather than snapping it back to the
   // server layout (the spec's re-insert-at-last-position obligation).
   useEffect(() => {
-    physicsRef.current?.stop();
-    physicsRef.current = null;
     const g = graphRef.current;
-    if (!physicsOn || !g || g.order === 0) return;
+    if (!physicsOn || !g) {
+      physicsRef.current?.stop();
+      physicsRef.current = null;
+      membershipRef.current = "";
+      return;
+    }
     const simNodes: { id: string; x: number; y: number; size: number }[] = [];
     g.forEachNode((key, attrs) => {
       if (hidden.has(key)) return;
       simNodes.push({ id: key, x: attrs.x, y: attrs.y, size: attrs.size });
     });
+    // Membership honours EVERYTHING the canvas hides, not just node types:
+    // an invalidated fact under current-only (the shipped default) or an
+    // edge under the sightings floor is invisible, and an invisible spring
+    // hauling two visible nodes together is the same defect the spec calls
+    // out for hidden nodes' charge (review finding). edgeVisible is the
+    // exact predicate the edge reducer draws with.
     const simLinks: { source: string; target: string; occurrences: number }[] = [];
-    g.forEachEdge((_key, attrs, src, dst) => {
+    g.forEachEdge((key, attrs, src, dst) => {
       if (hidden.has(src) || hidden.has(dst)) return;
+      const wire = edgeByKey.get(key);
+      if (!wire || !edgeVisible(wire, filters)) return;
       simLinks.push({ source: src, target: dst, occurrences: attrs.occurrences });
     });
+    // All-filtered-out builds nothing: g.order alone cannot see it, and an
+    // empty simulation still spun the rAF loop for two seconds of no-op
+    // refreshes (review finding).
+    if (simNodes.length === 0) {
+      membershipRef.current = "";
+      return;
+    }
+    // MEMBERSHIP guard, the Swift structure ported (GraphViewModel's
+    // syncPhysics early-return): the deps above include `filters`, and a
+    // redundant rail click — selecting "current only" when it already is —
+    // produces a fresh filters object, a fresh effect run, and a rebuild
+    // that visibly shuffled a settled map by up to 95 px (review finding,
+    // r2; the faster alphaDecay made "settled" further from equilibrium, so
+    // rebuilds got MORE disruptive as release-settle got better). Same
+    // members, same links → same simulation, untouched.
+    const membership =
+      simNodes.map((n) => n.id).join(",") +
+      ";" +
+      simLinks.map((l) => `${l.source}>${l.target}@${l.occurrences}`).join(",");
+    if (membership === membershipRef.current && physicsRef.current) {
+      // Same members: keep the simulation AND re-arm its loop — cleanup
+      // cancelled the frame before this re-run, and the kept closure cannot
+      // know that. The loop stops itself next frame if nothing is moving.
+      rafLiveRef.current = false;
+      wakeLoopRef.current?.();
+      return;
+    }
+    membershipRef.current = membership;
+    physicsRef.current?.stop();
     const handle = createPhysics({ nodes: simNodes, links: simLinks });
     physicsRef.current = handle;
-    // One rAF loop, alive only while the simulation is awake or a drag is
-    // pinned — an idle tab burns zero CPU (the sleep half of warm-not-hot),
-    // and `active` gates it so a hidden view never ticks.
+    // The rAF loop STOPS when there is nothing to animate — it does not
+    // reschedule and merely skip the body, which kept a 60 Hz callback live
+    // for the life of the page (review finding). wakeLoop re-arms it; the
+    // drag handlers and the rebuild below are the only wake sources, which
+    // is exactly the warm-not-hot lifecycle physics.ts documents.
     const loop = () => {
       const h = physicsRef.current;
       if (h !== handle) return; // superseded by a rebuild
-      if (active && (h.awake() || pressRef.current?.dragging)) {
-        h.tick();
-        for (const n of h.nodes()) {
-          if (g.hasNode(n.id)) {
-            g.setNodeAttribute(n.id, "x", n.x ?? 0);
-            g.setNodeAttribute(n.id, "y", n.y ?? 0);
-          }
-        }
-        sigmaRef.current?.refresh();
+      if (!activeRef.current || (!h.awake() && !pressRef.current?.dragging)) {
+        rafLiveRef.current = false;
+        return;
       }
+      h.tick();
+      // One batched attribute pass, and NO explicit refresh: graphology
+      // emits a single eachNodeAttributesUpdated for the batch, and sigma's
+      // own handler for that event processes the nodes and calls
+      // refresh({schedule:true}) — one debounced render on the next frame
+      // (sigma.esm.js:1698-1706, read this session). The naive shape (two
+      // setNodeAttribute calls per node, then a bare refresh()) emitted 2N
+      // per-node events plus a full synchronous re-index per frame — the
+      // cost that actually bounded the node cap (review finding). An
+      // explicit refresh({skipIndexation:true}) here would be a no-op
+      // dressed as an optimisation: without partialGraph the flag is never
+      // read and the call is a second full refresh (review finding, r2).
+      const moved = new Map(h.nodes().map((n) => [n.id, n]));
+      g.updateEachNodeAttributes((key, attrs) => {
+        const n = moved.get(key);
+        if (!n) return attrs;
+        return { ...attrs, x: n.x ?? attrs.x, y: n.y ?? attrs.y };
+      });
       rafRef.current = requestAnimationFrame(loop);
     };
-    rafRef.current = requestAnimationFrame(loop);
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      handle.stop();
+    const wakeLoop = () => {
+      if (rafLiveRef.current) return;
+      rafLiveRef.current = true;
+      rafRef.current = requestAnimationFrame(loop);
     };
-  }, [physicsOn, hidden, active, positions, edges]);
+    wakeLoopRef.current = wakeLoop;
+    wakeLoop(); // a fresh build is awake (settling the seed delta)
+    return () => {
+      // Cleanup cancels the FRAME, never the handle: this runs before every
+      // re-run of the effect, and most re-runs bail on the membership guard
+      // and keep the simulation — the handle is stopped only when a real
+      // membership change (above) or unmount (below) replaces it.
+      cancelAnimationFrame(rafRef.current);
+      rafLiveRef.current = false;
+    };
+  }, [physicsOn, hidden, active, positions, edges, filters, edgeByKey]);
 
-  // Drag wiring: downNode arms a press; crossing the threshold turns it into
-  // a drag that pins the node to the pointer; mouseup releases. While a drag
-  // is live the camera stays put (preventSigmaDefault) and the release
-  // suppresses the click that would otherwise open the inspector.
+  // The handle's real teardown: unmount only.
+  useEffect(
+    () => () => {
+      physicsRef.current?.stop();
+      physicsRef.current = null;
+    },
+    [],
+  );
+
+  // Drag wiring. Gated on `ready` alone — NOT on physicsOn: the spec's
+  // reduced-motion row requires drag to keep working with the simulation
+  // off (it moves the one node, no cascade), and gating the listeners on
+  // physicsOn removed dragging exactly for the audience that setting exists
+  // for (review finding). With a live simulation the drag pins through it;
+  // without one the handlers write the node's position directly.
+  //
+  // Wired to BOTH captors: mousemovebody/mouseup are MouseCaptor-only
+  // emissions, and touch devices browsing the board (iPad, phone Safari)
+  // otherwise got downNode and then nothing — pressRef armed forever and no
+  // drag at all (review finding). The touch payloads carry touches[0] in
+  // the same client-coordinate space.
   useEffect(() => {
     const s = sigmaRef.current;
-    if (!s || !physicsOn) return;
-    const downNode = ({ node, event }: { node: string; event: { x: number; y: number; preventSigmaDefault: () => void } }) => {
+    if (!s) return;
+    const g = graphRef.current;
+    const dragTo = (key: string, sx: number, sy: number) => {
+      const graphCoords = s.viewportToGraph({ x: sx, y: sy });
+      const h = physicsRef.current;
+      if (h) {
+        h.drag(key, graphCoords.x, graphCoords.y);
+        wakeLoopRef.current?.();
+      } else if (g?.hasNode(key)) {
+        // Physics off (reduced motion / over-cap / no sim built): the drag
+        // still moves this one node — no forces, no neighbours. No explicit
+        // refresh: setNodeAttribute's own event makes sigma schedule one.
+        g.setNodeAttribute(key, "x", graphCoords.x);
+        g.setNodeAttribute(key, "y", graphCoords.y);
+      }
+    };
+    const down = ({ node, event }: { node: string; event: { x: number; y: number; original: Event } }) => {
+      // Left button only: sigma emits downNode for every button, but its
+      // captor never sets isMouseDown for a non-left press, so no mouseup
+      // would ever clear a press armed here — a right-click then any mouse
+      // movement dragged the node with no button held (review finding).
+      const orig = event.original;
+      if (orig instanceof MouseEvent && orig.button !== 0) return;
+      // A fresh press invalidates any stale latch: a drag that ended
+      // outside the canvas never got the click that consumes it, and the
+      // leftover latch swallowed the NEXT legitimate selection (review
+      // finding).
+      dragLatchRef.current = false;
       pressRef.current = { key: node, sx: event.x, sy: event.y, dragging: false };
-      event.preventSigmaDefault(); // the camera must not pan under a press-on-node
     };
     const move = ({ x, y, preventSigmaDefault, original }: { x: number; y: number; preventSigmaDefault: () => void; original: Event }) => {
       const press = pressRef.current;
       if (!press) return;
+      // A move with no button down means the mouseup was lost (released
+      // outside the window) — disarm rather than drag a node under a bare
+      // cursor.
+      if (original instanceof MouseEvent && original.buttons === 0) {
+        if (press.dragging) physicsRef.current?.release(press.key);
+        pressRef.current = null;
+        return;
+      }
+      // Suppressed from the first armed move, not from the threshold: the
+      // camera panned for the first <3 px of every drag, and those
+      // sub-threshold moves also counted toward sigma's own
+      // draggedEventsTolerance, which then ate the CLICK a slow press was
+      // (review findings). While a press is armed, the camera never moves.
+      preventSigmaDefault();
+      if (original.cancelable) original.preventDefault();
       if (!press.dragging) {
         if (!isDragMovement(x - press.sx, y - press.sy)) return;
         press.dragging = true;
       }
-      preventSigmaDefault();
-      original.preventDefault();
-      const graphCoords = s.viewportToGraph({ x, y });
-      physicsRef.current?.drag(press.key, graphCoords.x, graphCoords.y);
+      dragTo(press.key, x, y);
     };
     const up = () => {
       const press = pressRef.current;
@@ -425,15 +638,47 @@ export function GraphView({ active }: GraphViewProps) {
       }
       pressRef.current = null;
     };
-    s.getMouseCaptor().on("mousemovebody", move);
-    s.getMouseCaptor().on("mouseup", up);
-    s.on("downNode", downNode);
-    return () => {
-      s.getMouseCaptor().off("mousemovebody", move);
-      s.getMouseCaptor().off("mouseup", up);
-      s.off("downNode", downNode);
+    const mouse = s.getMouseCaptor();
+    const touch = s.getTouchCaptor();
+    // Touch payloads: touchmove carries `touches` (already viewport-relative
+    // per sigma's getTouchCoords); a one-finger move maps onto the same
+    // handler, two-finger stays the captor's own pinch.
+    const touchMove = (e: {
+      touches: { x: number; y: number }[];
+      original: TouchEvent;
+      preventSigmaDefault: () => void;
+    }) => {
+      if (!pressRef.current || e.touches.length !== 1) return;
+      const t0 = e.touches[0];
+      if (!t0) return;
+      const press = pressRef.current;
+      // BOTH suppressions, from the first armed move: preventDefault stops
+      // the page scroll, and preventSigmaDefault stops TouchCaptor's own
+      // one-finger camera pan — without it the map slid under the dragged
+      // node at finger speed for the whole gesture (review finding, r2:
+      // the mouse path had this fix and the touch path did not).
+      e.preventSigmaDefault();
+      if (e.original.cancelable) e.original.preventDefault();
+      if (!press.dragging && !isDragMovement(t0.x - press.sx, t0.y - press.sy)) return;
+      press.dragging = true;
+      dragTo(press.key, t0.x, t0.y);
     };
-  }, [ready, physicsOn]);
+    s.on("downNode", down);
+    mouse.on("mousemovebody", move);
+    mouse.on("mouseup", up);
+    touch.on("touchmove", touchMove);
+    touch.on("touchup", up);
+    return () => {
+      s.off("downNode", down);
+      mouse.off("mousemovebody", move);
+      mouse.off("mouseup", up);
+      touch.off("touchmove", touchMove);
+      touch.off("touchup", up);
+      // A teardown mid-drag (physics flipping, unmount) must not leave the
+      // press armed for the next incarnation of the listeners.
+      pressRef.current = null;
+    };
+  }, [ready]);
 
   // --------------------------------------------------------------- derived
   // The detail read wins where it has an answer (it is the only source of
@@ -503,20 +748,29 @@ export function GraphView({ active }: GraphViewProps) {
           title={
             physicsOn
               ? "physics on — drag nodes; click to toggle off"
-              : visibleCount > PHYSICS_NODE_CAP && physicsPref !== "on"
-                ? `physics off — ${visibleCount.toLocaleString()} nodes exceeds the ${PHYSICS_NODE_CAP.toLocaleString()} cap; click to force on`
-                : "physics off — click to turn on"
+              : "physics off — click to turn on"
           }
           onClick={() => {
-            // The toggle flips relative to the EFFECTIVE state, and writes an
-            // explicit pref both ways: auto is only ever reachable by never
-            // touching the button, which keeps its behaviour predictable.
-            const next: PhysicsPref = physicsOn ? "off" : "on";
+            // The next pref is derived from the PREF AXIS (what would
+            // physicsAllowed say), never from the composite physicsOn:
+            // that composite also encodes renderError/!ready, so on a
+            // machine with no WebGL the old derivation flipped the STORED
+            // pref back and forth under a button that looked dead — and the
+            // parity it happened to stop at then governed the next machine
+            // (review finding). Explicit both ways: auto is reachable only
+            // by never touching the button.
+            const next: PhysicsPref = physicsAllowed(visibleCount, physicsPref, reducedMotion)
+              ? "off"
+              : "on";
             writePhysicsPref(window.localStorage, next);
             setPhysicsPref(next);
           }}
         >
-          {physicsOn ? "physics on" : "physics off"}
+          {physicsOn
+            ? "physics on"
+            : visibleCount > PHYSICS_NODE_CAP && physicsPref !== "on"
+              ? `physics off — ${visibleCount.toLocaleString()} nodes`
+              : "physics off"}
         </button>
       </div>
 

@@ -34,11 +34,14 @@ import {
 /**
  * Above this many VISIBLE nodes the simulation is never constructed and the
  * view falls back to the static server layout. d3-force is O(n log n) per
- * tick via its internal Barnes-Hut, but the tick runs on the main thread and
- * the binding client is the phone's WKWebView — 3,000 nodes / ~6,000 edges is
- * where the round-1 research put comfortable 60 fps headroom for that. The
- * header toggle can force physics on anyway (carl's explicit choice beats the
- * guard); this constant is only the automatic default.
+ * tick via its internal Barnes-Hut, but the tick and the per-frame sigma
+ * processing share the main thread — 3,000 nodes / ~6,000 edges is where the
+ * round-1 research put comfortable 60 fps headroom. This module's client is
+ * desktop-only now: the phone runs its own native engine
+ * (ios/Kraken/GraphPhysics.swift), which mirrors this number deliberately
+ * and enforces it separately via graphPhysicsAllowed. The header toggle can
+ * force physics on anyway (carl's explicit choice beats the guard); this
+ * constant is only the automatic default.
  */
 export const PHYSICS_NODE_CAP = 3000;
 
@@ -60,13 +63,21 @@ export function isDragMovement(dx: number, dy: number): boolean {
 }
 
 /** localStorage key for the header toggle: "on" | "off" | absent = auto. */
-export const PHYSICS_PREF_KEY = "kraken.graph.physics";
+export const PHYSICS_PREF_KEY = "kraken-graph-physics";
 
 export type PhysicsPref = "on" | "off" | "auto";
 
 export function readPhysicsPref(storage: Pick<Storage, "getItem">): PhysicsPref {
-  const v = storage.getItem(PHYSICS_PREF_KEY);
-  return v === "on" || v === "off" ? v : "auto";
+  // try/catch because this is the board's one RENDER-path storage read, and
+  // Safari's block-all-cookies mode throws on localStorage ACCESS — an
+  // uncaught throw here unmounts the whole React root, not just the canvas
+  // (review finding). Garbage and denial both read as "auto".
+  try {
+    const v = storage.getItem(PHYSICS_PREF_KEY);
+    return v === "on" || v === "off" ? v : "auto";
+  } catch {
+    return "auto";
+  }
 }
 
 export function writePhysicsPref(
@@ -74,9 +85,14 @@ export function writePhysicsPref(
   pref: PhysicsPref,
 ): void {
   // "auto" is stored as absence, so a cleared pref and a never-set pref are
-  // the same state — there is no third value to migrate later.
-  if (pref === "auto") storage.removeItem(PHYSICS_PREF_KEY);
-  else storage.setItem(PHYSICS_PREF_KEY, pref);
+  // the same state — there is no third value to migrate later. Denied
+  // storage degrades to a session-only pref rather than a dead button.
+  try {
+    if (pref === "auto") storage.removeItem(PHYSICS_PREF_KEY);
+    else storage.setItem(PHYSICS_PREF_KEY, pref);
+  } catch {
+    // the in-memory state still flips; only persistence is lost
+  }
 }
 
 /**
@@ -123,9 +139,7 @@ export interface PhysicsHandle {
   drag(id: string, x: number, y: number): void;
   /** Release the pinned node, keeping its velocity — the glide. */
   release(id: string): void;
-  /** Wake without a pin (a filter change moved membership). */
-  reheat(): void;
-  /** Permanently stop; the handle is dead afterwards. */
+  /** Permanently stop: every later tick/drag/release/awake is a no-op. */
   stop(): void;
 }
 
@@ -143,17 +157,21 @@ export interface PhysicsHandle {
 //     elsewhere. Per-node springs toward where the map already was keep
 //     components from wandering off-canvas and move nothing else.
 //   - collide at node size + 2 stops label-on-label pileups at rest.
-//   - alphaMin 0.005 / alphaDecay default: at rest the simulation SLEEPS
-//     (awake() false, rAF loop stops, zero CPU on an idle tab) — the "warm"
-//     half of warm-not-hot is alphaTarget on interaction, not a hot loop.
+//   - alphaDecay 0.066 rather than d3's 0.0228 default: the spec budgets
+//     "settle ≤ ~1 s after release", and the default measured 2.95 s from
+//     release to sleep (review finding). 0.066 puts release→sleep at ~60
+//     ticks and the initial seed-settle at ~44 — both inside a second —
+//     while the raised alphaTarget on drag keeps the wake lively.
+//   - at rest the simulation SLEEPS (awake() false, the caller's loop
+//     stops) — the "warm" half of warm-not-hot is alphaTarget on
+//     interaction, not a hot loop.
 const chargeStrength = -60;
 const centerStrength = 0.02;
 const linkBaseDistance = 70;
 const alphaSettleFloor = 0.005;
+const settleAlphaDecay = 0.066;
 /** alphaTarget while a node is pinned — the neighbourhood-wakes level. */
 const dragAlphaTarget = 0.3;
-/** A gentler wake for membership changes, enough to absorb re-inserted nodes. */
-const reheatAlpha = 0.2;
 
 export function createPhysics(input: PhysicsInput): PhysicsHandle {
   const nodes: PhysicsNode[] = input.nodes.map((n) => ({
@@ -191,6 +209,7 @@ export function createPhysics(input: PhysicsInput): PhysicsHandle {
       "collide",
       forceCollide<PhysicsNode>((n) => (sizes.get(n.id) ?? 4) + 2),
     )
+    .alphaDecay(settleAlphaDecay)
     // The caller drives ticks from its own rAF so sigma refreshes exactly
     // once per drawn frame; d3's internal timer would tick unwatched.
     .stop();
@@ -202,14 +221,21 @@ export function createPhysics(input: PhysicsInput): PhysicsHandle {
   sim.alpha(0.1);
 
   const byID = new Map(nodes.map((n) => [n.id, n]));
+  // stop() promises "the handle is dead", and sim.stop() alone cannot keep
+  // it: it only clears d3's internal timer, which this module never starts
+  // (ticks are the caller's), so a stopped handle still ticked and pinned
+  // (review finding, probed). The flag is what makes the promise true.
+  let dead = false;
 
   return {
     nodes: () => nodes,
     tick: () => {
+      if (dead) return;
       sim.tick();
     },
-    awake: () => sim.alpha() > alphaSettleFloor || sim.alphaTarget() > 0,
+    awake: () => !dead && (sim.alpha() > alphaSettleFloor || sim.alphaTarget() > 0),
     drag: (id, x, y) => {
+      if (dead) return;
       const n = byID.get(id);
       if (!n) return;
       n.fx = x;
@@ -222,19 +248,22 @@ export function createPhysics(input: PhysicsInput): PhysicsHandle {
       }
     },
     release: (id) => {
+      if (dead) return;
       const n = byID.get(id);
-      if (n) {
-        // Clearing fx/fy (not zeroing vx/vy) is the glide: the node keeps
-        // the velocity the drag gave it and decelerates naturally.
-        n.fx = null;
-        n.fy = null;
-      }
+      // Only a node that is actually PINNED may be released — an unknown id,
+      // or a known-but-unpinned one, must not zero alphaTarget out from
+      // under a different node's live drag. This matches the Swift twin's
+      // guard exactly (GraphPhysics.release checks pinned[i]); the two
+      // engines diverging here was an r2 review finding.
+      if (!n || n.fx == null) return;
+      // Clearing fx/fy (not zeroing vx/vy) is the glide: the node keeps
+      // the velocity the drag gave it and decelerates naturally.
+      n.fx = null;
+      n.fy = null;
       sim.alphaTarget(0);
     },
-    reheat: () => {
-      if (sim.alpha() < reheatAlpha) sim.alpha(reheatAlpha);
-    },
     stop: () => {
+      dead = true;
       sim.stop();
     },
   };
