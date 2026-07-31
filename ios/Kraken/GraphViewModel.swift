@@ -1,6 +1,8 @@
 import CoreGraphics
 import Foundation
+import QuartzCore
 import SwiftUI
+import UIKit
 
 // The GRAPH screen's state: the payload, the filters, the selection, the two
 // network reads that feed them, and the derived render model the canvas draws.
@@ -70,6 +72,22 @@ struct GraphRender: Equatable {
         nodesByID: [:], typeColors: [:], types: [], currentEdges: 0, now: 0
     )
 
+    /// The same render with a new position map.
+    ///
+    /// The simulation moves nodes sixty times a second and nothing else about
+    /// the render changes while it does — not the filters, not the colours,
+    /// not the degrees. Rebuilding the whole thing per frame would redo two
+    /// filter passes and a colour resolve for a graph heading for thousands of
+    /// nodes; this copies the eight fields that did not move and swaps the one
+    /// that did.
+    func withPositions(_ positions: [Int64: CGPoint]) -> GraphRender {
+        GraphRender(
+            nodes: nodes, edges: edges, positions: positions, degrees: degrees,
+            names: names, nodesByID: nodesByID, typeColors: typeColors, types: types,
+            currentEdges: currentEdges, now: now
+        )
+    }
+
     /// The world rectangle enclosing every drawable node — what a fit-reset
     /// frames. nil when there is nothing to frame.
     var worldBounds: CGRect? {
@@ -103,8 +121,65 @@ final class GraphViewModel: ObservableObject {
     /// false = current facts only, which is what the canvas opens on.
     @Published var includeInvalidated = false { didSet { rebuildRender() } }
     /// The derived draw model. Rebuilt from the payload, the two filters above
-    /// and the clock — those four and nothing else; see `GraphRender`.
+    /// and the clock — those four and nothing else; see `GraphRender`. Its
+    /// POSITIONS are the one part the simulation writes between rebuilds.
     @Published private(set) var render = GraphRender.empty
+    /// The accessibility setting. Seeded from `UIAccessibility` at
+    /// construction so the FIRST payload is already governed by it, then kept
+    /// live by the view, which is the only half of this screen with an
+    /// `@Environment` to watch it through. Turning it on tears the simulation
+    /// down; turning it off builds one.
+    @Published var reduceMotion: Bool {
+        didSet { if oldValue != reduceMotion { syncPhysics() } }
+    }
+
+    /// The live simulation, or nil when physics is off — over the node cap, or
+    /// reduce-motion. Readable so a test can drive it and assert on it
+    /// directly; only this class ever calls its mutating half.
+    private(set) var physics: GraphPhysics?
+    /// What the current `physics` was built for. A poll that changes nothing
+    /// about the visible node set or the visible edges must leave the
+    /// simulation exactly where it is, so the rebuild is keyed on this rather
+    /// than on the payload: an unchanged poll would otherwise restart a
+    /// settled graph thirty seconds after it went to sleep, every time.
+    private var membership: GraphPhysicsMembership?
+    /// Positions the SIMULATION owns, id → world point.
+    ///
+    /// It survives every poll and every filter toggle, which is what makes two
+    /// separate obligations hold: a reload keeps dragged nodes where the
+    /// reader left them rather than snapping back to the server layout, and a
+    /// type switched back on re-enters at its last simulated position rather
+    /// than at the origin.
+    private var simPositions: [Int64: CGPoint] = [:]
+    /// The server layout, straight from `graphPositions` — the seed the map
+    /// above is laid over.
+    private var serverPositions: [Int64: CGPoint] = [:]
+    /// server ∪ simulated: what the canvas draws, kept as one map so a frame
+    /// is one dictionary write per moved node rather than a re-merge.
+    private var livePositions: [Int64: CGPoint] = [:]
+
+    private var displayLink: CADisplayLink?
+    private var tickProxy: GraphTickProxy?
+    /// Whether the screen is up and wants frames — see `startDisplayLoop`.
+    private var wantsFrames = false
+
+    /// A pin the gesture layer has taken and not yet given back.
+    private struct HeldPin {
+        /// Where it is pinned, in world coordinates. Kept so a simulation
+        /// rebuilt mid-drag can be handed the pin again.
+        var point: CGPoint
+        /// Frames since the gesture last said anything about it.
+        var idleFrames: Int
+    }
+
+    /// Live pins, keyed by node id. The view model's own record of what the
+    /// gesture layer is holding — the engine knows a node is pinned but not
+    /// which gesture put it there, and neither knows when a gesture dies.
+    private var heldPins: [Int64: HeldPin] = [:]
+
+    /// Frames a pin may go unrefreshed before it is assumed abandoned. See
+    /// `expireAbandonedPins` for why it is this loose rather than tighter.
+    private static let abandonedPinFrames = 300
 
     private let fetchGraph: (String) async throws -> GraphPayload
     private let fetchNode: (String, Int64) async throws -> GraphNodeDetail
@@ -123,10 +198,12 @@ final class GraphViewModel: ObservableObject {
 
     init(
         fetchGraph: @escaping (String) async throws -> GraphPayload,
-        fetchNode: @escaping (String, Int64) async throws -> GraphNodeDetail
+        fetchNode: @escaping (String, Int64) async throws -> GraphNodeDetail,
+        reduceMotion: Bool = false
     ) {
         self.fetchGraph = fetchGraph
         self.fetchNode = fetchNode
+        self.reduceMotion = reduceMotion
     }
 
     /// The production wiring. Separate from the designated init so the app has
@@ -134,7 +211,16 @@ final class GraphViewModel: ObservableObject {
     convenience init() {
         self.init(
             fetchGraph: { try await APIClient.shared.fetchGraph(baseURL: $0) },
-            fetchNode: { try await APIClient.shared.fetchGraphNode(baseURL: $0, id: $1) }
+            fetchNode: { try await APIClient.shared.fetchGraphNode(baseURL: $0, id: $1) },
+            // Read HERE rather than left to the view's `onAppear`, which is
+            // the difference between honouring reduce-motion and honouring it
+            // a beat late. The first payload can land before that callback
+            // runs, and it is the first payload that builds the simulation —
+            // so a reader who asked the system for no motion got a graph that
+            // settled in front of them once, on entry, every time. The view
+            // still pushes the value on appear and on change; this is only
+            // about the state the model starts in.
+            reduceMotion: UIAccessibility.isReduceMotionEnabled
         )
     }
 
@@ -270,6 +356,16 @@ final class GraphViewModel: ObservableObject {
         let types = graphTypeList(nodes: allNodes)
         var colors: [String: Color] = [:]
         for t in types { colors[t] = Color(uiColor: KTheme.graphTypeColorUI(t)) }
+        // The server layout is the SEED; wherever the simulation has since
+        // moved a node, its position wins. Simulated positions for entities
+        // the payload no longer carries are dropped here and nowhere else —
+        // this map is otherwise append-only, and a `/graph` revision job
+        // retiring entities all week would grow it without bound.
+        serverPositions = graphPositions(nodes: allNodes)
+        simPositions = simPositions.filter { serverPositions[$0.key] != nil }
+        var live = serverPositions
+        for (id, p) in simPositions { live[id] = p }
+        livePositions = live
         render = GraphRender(
             nodes: allNodes.filter { !hidden.contains($0.id) },
             edges: allEdges.filter {
@@ -278,7 +374,7 @@ final class GraphViewModel: ObservableObject {
                     includeInvalidated: includeInvalidated, now: now
                 )
             },
-            positions: graphPositions(nodes: allNodes),
+            positions: livePositions,
             degrees: graphDegrees(edges: allEdges),
             names: names,
             nodesByID: byID,
@@ -287,6 +383,287 @@ final class GraphViewModel: ObservableObject {
             currentEdges: allEdges.filter { !graphIsInvalidated($0, now: now) }.count,
             now: now
         )
+        syncPhysics()
+    }
+
+    // MARK: - physics
+
+    /// Should the per-frame loop run another frame?
+    ///
+    /// The single predicate the display link is started and stopped from: an
+    /// idle screen — settled, nothing pinned, or physics off entirely —
+    /// schedules no per-frame work at all.
+    var physicsShouldTick: Bool { physics?.isAwake ?? false }
+
+    /// Builds, rebuilds or tears down the simulation to match what the canvas
+    /// currently draws. Called at the end of every render rebuild, which is
+    /// the only thing that can change any of its inputs.
+    private func syncPhysics() {
+        guard graphPhysicsAllowed(visibleNodes: render.nodes.count, reduceMotion: reduceMotion) else {
+            physics = nil
+            membership = nil
+            stopTicking()
+            return
+        }
+        let wanted = currentMembership()
+        // The early return is the whole of "an unchanged poll does not restart
+        // the simulation": same visible nodes, same visible edges, same
+        // engine, untouched — so a settled graph stays asleep across a poll.
+        if wanted == membership, physics != nil { return }
+        membership = wanted
+        // Seeded from the LIVE positions rather than the payload's, so a
+        // rebuild — a new node arriving, a type chip toggled — carries every
+        // existing node forward from where the simulation had already put it.
+        // A node the map has never seen enters at its server position, which
+        // is the only place it can honestly start.
+        //
+        // Deduplicated for the reason `nodes` below is: a repeated id would
+        // put two rows in the engine under one name, and every lookup — the
+        // pin, the position write-back — would reach a different one of them
+        // than the reader is looking at.
+        var seen: Set<Int64> = []
+        var seeds: [(id: Int64, x: CGFloat, y: CGFloat, radius: CGFloat)] = []
+        seeds.reserveCapacity(render.nodes.count)
+        for n in render.nodes where seen.insert(n.id).inserted {
+            let p = livePositions[n.id] ?? .zero
+            seeds.append((
+                id: n.id, x: p.x, y: p.y,
+                radius: graphNodeRadius(degree: render.degrees[n.id] ?? 0)
+            ))
+        }
+        physics = GraphPhysics(
+            nodes: seeds,
+            links: wanted.links.map { (src: $0.src, dst: $0.dst, occurrences: $0.occurrences) }
+        )
+        // A rebuild must not drop a finger. Membership changes for reasons
+        // that have nothing to do with the gesture — a poll delivering one new
+        // node, a chip toggled with the other hand — and the fresh engine
+        // knows nothing about the pin, so the node it was holding would be
+        // handed straight back to the forces and walk out from under a
+        // stationary finger. Re-pinning at the point the pin is still at costs
+        // nothing when there is no drag, since the map is then empty.
+        for id in heldPins.keys.sorted() {
+            if let pin = heldPins[id] { physics?.drag(id: id, to: pin.point) }
+        }
+        startTicking()
+    }
+
+    /// The visible nodes and the visible edges — what the simulation is built
+    /// from, and therefore exactly what a change to it must be detected on.
+    /// Filtered-out nodes and edges are ABSENT rather than hidden: a node
+    /// nobody can see exerting charge would push the visible ones around an
+    /// invisible obstacle.
+    ///
+    /// Both lists are SORTED, which is the difference between a membership
+    /// test and an accident. Equality here is over sequences, so an unsorted
+    /// comparison says "this changed" whenever the server merely returns the
+    /// same graph in a different order — and the only reason it does not today
+    /// is that `internal/store/graph.go` happens to `ORDER BY`. That is an
+    /// undeclared dependency three layers down on the other side of a wire
+    /// protocol, and the failure it would cause is silent: the simulation
+    /// would go back to restarting on every 30 s poll with nothing logged and
+    /// nothing to see but a graph that never quite settles.
+    private func currentMembership() -> GraphPhysicsMembership {
+        var seen: Set<Int64> = []
+        var ids: [Int64] = []
+        ids.reserveCapacity(render.nodes.count)
+        for n in render.nodes where seen.insert(n.id).inserted { ids.append(n.id) }
+        let links = render.edges
+            .map { GraphPhysicsLink(src: $0.src, dst: $0.dst, occurrences: $0.occurrences) }
+            // Endpoints are NOT normalised into a canonical order along with
+            // this, and the reason is that there is nothing to normalise
+            // AGAINST. Sorting exists to absorb a change in ROW order; `src`
+            // and `dst` are two stored columns of one row, so they cannot
+            // reorder — a row that comes back flipped is the server saying the
+            // fact points the other way, which is a content change and ought
+            // to rebuild.
+            //
+            // Normalising would be harmless, just pointless: an endpoint swap
+            // is invisible to the engine. d3's link force negates the impulse
+            // when the pair is swapped and turns the degree bias `b` into
+            // `1 - b`, and the two write-backs cancel both changes exactly —
+            // measured here at 200 ticks on a degree-6 hub joined to a
+            // degree-1 leaf, whose positions came out bit-identical in either
+            // orientation.
+            .sorted {
+                ($0.src, $0.dst, $0.occurrences) < ($1.src, $1.dst, $1.occurrences)
+            }
+        return GraphPhysicsMembership(nodes: ids.sorted(), links: links)
+    }
+
+    /// One frame: advance the simulation and publish what it moved.
+    ///
+    /// Public because the display link is not the only caller that matters —
+    /// it is also the seam a test drives the engine through, since the render
+    /// only learns about a tick from here.
+    func tickPhysics() {
+        guard let physics else { return }
+        expireAbandonedPins()
+        physics.tick()
+        for n in physics.nodes() {
+            let p = CGPoint(x: n.x, y: n.y)
+            simPositions[n.id] = p
+            livePositions[n.id] = p
+        }
+        render = render.withPositions(livePositions)
+        if !physicsShouldTick { stopTicking() }
+    }
+
+    /// Moves a node to a WORLD point under the reader's finger.
+    ///
+    /// With physics on this pins it in the simulation, so its linked
+    /// neighbours follow. With physics off it is a plain position override on
+    /// that one node: the reduced-motion reader still gets to move a node out
+    /// of the way, they just get no cascade and nothing wakes.
+    ///
+    /// Nothing here writes anywhere. Drags are ephemeral per Q12 — `kg_layout`
+    /// stays daemon-owned and a relaunch reseeds from the server.
+    func dragNode(id: Int64, to point: CGPoint) {
+        if let physics {
+            physics.drag(id: id, to: point)
+            heldPins[id] = HeldPin(point: point, idleFrames: 0)
+            startTicking()
+            return
+        }
+        guard livePositions[id] != nil else { return }
+        simPositions[id] = point
+        livePositions[id] = point
+        render = render.withPositions(livePositions)
+    }
+
+    /// The gesture layer's spelling of the same call: it has a screen point
+    /// and the camera, and this is the one place the two become a world point.
+    func dragNode(id: Int64, toScreen point: CGPoint, camera: GraphCamera) {
+        dragNode(id: id, to: camera.screenToWorld(point))
+    }
+
+    /// Ends a node drag. The node keeps the velocity the finger gave it and
+    /// glides into its new equilibrium; with physics off there is no pin to
+    /// end and this does nothing.
+    func releaseNode(id: Int64) {
+        physics?.release(id: id)
+        heldPins.removeValue(forKey: id)
+        startTicking()
+    }
+
+    /// Drops a pin the gesture layer has stopped talking about. A BACKSTOP,
+    /// and nothing more.
+    ///
+    /// The primary release is the gesture's own: GraphView hangs a
+    /// `@GestureState` off the drag whose reset closure ends the pin, and that
+    /// hook is documented to run when a gesture ends OR IS CANCELLED — unlike
+    /// `onEnded`, which SwiftUI only promises for the ordinary path. So a
+    /// cancelled drag is handled where it happens, at the moment it happens,
+    /// and this pass is only for a pin that escaped even that: a lifecycle
+    /// path SwiftUI does not guarantee, a view torn down between two frames.
+    ///
+    /// Which is why the threshold is FIVE SECONDS rather than the fraction of
+    /// one it used to be. A finger genuinely held still emits no `onChanged`,
+    /// so a live hold is indistinguishable here from a dead gesture, and at
+    /// three-quarters of a second this cut real ones: an ordinary pick-up,
+    /// hold, decide, keep-dragging motion crosses that in one pause, and the
+    /// node drifted ~90 units away over the following second before the next
+    /// `onChanged` teleported it back under the finger. Now that the reset
+    /// closure catches the case this was written for, the number costs nothing
+    /// to make large, and large is what keeps it off legitimate holds. Five
+    /// seconds of a simulation nobody asked for is a rounding error; a
+    /// visible teleport is not.
+    private func expireAbandonedPins() {
+        guard !heldPins.isEmpty else { return }
+        for id in heldPins.keys.sorted() {
+            guard var pin = heldPins[id] else { continue }
+            pin.idleFrames += 1
+            if pin.idleFrames > GraphViewModel.abandonedPinFrames {
+                physics?.release(id: id)
+                heldPins.removeValue(forKey: id)
+            } else {
+                heldPins[id] = pin
+            }
+        }
+    }
+
+    /// What a press starting at `point` is doing — dragging a node, or panning
+    /// the camera. Decided against the VISIBLE nodes only, at the same reach
+    /// the tap path uses.
+    func grabTarget(at point: CGPoint, camera: GraphCamera) -> GraphDragTarget {
+        var visible: [Int64: CGPoint] = [:]
+        for n in render.nodes {
+            if let p = render.positions[n.id] { visible[n.id] = p }
+        }
+        return graphDragTarget(start: point, positions: visible, camera: camera)
+    }
+
+    /// The screen's physics gate, said the way a caller who just wants it off
+    /// says it.
+    ///
+    /// One stored bit under two names, and deliberately so: `reduceMotion` is
+    /// how the SETTING arrives (the view reads it from the environment and
+    /// pushes it), while this is how the DECISION reads at a call site that
+    /// does not care where the setting came from. There is no third source —
+    /// the phone has no physics toggle of its own, so `false` here means
+    /// exactly "this screen may not simulate", whatever the reason.
+    ///
+    /// No production call site, and that is correct rather than dead weight:
+    /// the view has the environment value and writes `reduceMotion` directly,
+    /// while this is the spelling the frozen contract's physics-off
+    /// obligations are stated through, so the blind test suite is its only
+    /// caller. It is contract surface, not an unused convenience.
+    func setPhysicsEnabled(_ enabled: Bool) {
+        reduceMotion = !enabled
+    }
+
+    /// The view saying it is on screen and wants frames.
+    ///
+    /// The per-frame loop is OPT-IN rather than started wherever the
+    /// simulation happens to wake, and the reason is not only that a display
+    /// link is a view-lifetime resource. Without this gate a view model
+    /// standing on its own — which is exactly how every test drives it —
+    /// creates a real `CADisplayLink` the moment a payload lands, and that
+    /// link fires from the main run loop the next time the caller awaits
+    /// anything. The simulation would then advance a nondeterministic number
+    /// of frames between two lines of a test that never asked for one.
+    func startDisplayLoop() {
+        wantsFrames = true
+        startTicking()
+    }
+
+    /// The view going away. Ends the loop and refuses to start another until
+    /// the screen comes back — a simulation ticking behind a screen nobody is
+    /// looking at is the one cost this feature must not have.
+    func stopDisplayLoop() {
+        wantsFrames = false
+        // Every pin goes with the screen. Leaving one held would mean the loop
+        // is asleep only because nobody is asking it to run, so the next
+        // `startDisplayLoop` — the reader coming back to a screen they left
+        // half a second ago — would find `isAwake` still true and resurrect a
+        // 60 fps simulation around a finger that is long gone.
+        for id in heldPins.keys.sorted() { physics?.release(id: id) }
+        heldPins.removeAll()
+        stopTicking()
+    }
+
+    private func startTicking() {
+        guard wantsFrames, physicsShouldTick, displayLink == nil else { return }
+        let proxy = GraphTickProxy()
+        proxy.vm = self
+        let link = CADisplayLink(target: proxy, selector: #selector(GraphTickProxy.step))
+        proxy.link = link
+        // `.common` so a drawer detent drag or a chip-row scroll does not
+        // freeze the simulation for the duration of the tracking run loop.
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+        tickProxy = proxy
+    }
+
+    /// Tears the link down. Called when the simulation settles and when
+    /// physics is switched off — a display link nobody invalidates goes on
+    /// firing for the life of the app. It leaves `wantsFrames` alone: settling
+    /// is not the screen going away, and the next drag must be able to start
+    /// the loop again without the view saying anything.
+    private func stopTicking() {
+        displayLink?.invalidate()
+        displayLink = nil
+        tickProxy = nil
     }
 
     /// Closes the drawer when the poll it just finished no longer knows the
@@ -310,6 +687,31 @@ final class GraphViewModel: ObservableObject {
         guard let id = selectedID, !detailPending else { return }
         if payload?.nodes.contains(where: { $0.id == id }) == true { return }
         select(nil)
+    }
+}
+
+/// What the display link actually retains.
+///
+/// `CADisplayLink` holds its target STRONGLY and there is no version of that
+/// which does not leak when the target is the view model: the link keeps the
+/// screen's whole model — payload, render, simulation — alive after the screen
+/// is gone, and the model's `deinit` can never run to invalidate it. So the
+/// link retains this instead, and this holds the model weakly.
+@MainActor
+private final class GraphTickProxy: NSObject {
+    weak var vm: GraphViewModel?
+    /// Weak because the link retains this proxy; the run loop and the view
+    /// model are what keep the link itself alive.
+    weak var link: CADisplayLink?
+
+    @objc func step() {
+        guard let vm else {
+            // The model went away without stopping the loop. Nothing is left
+            // to tick and nobody else holds this link, so it ends here.
+            link?.invalidate()
+            return
+        }
+        vm.tickPhysics()
     }
 }
 
