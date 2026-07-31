@@ -876,18 +876,26 @@ GET/POST).
 
 ## Knowledge graph
 
-Six routes over the `kg_*` tables (internal/api/graph.go). **All additive —
-`apiContract` stays 5.** Every one is a NEW PATH, never a key added to,
-retyped in, or removed from an existing shape, so a client that predates them
-decodes nothing differently.
+Seven routes over the `kg_*` tables (internal/api/graph.go), in the order
+register.go wires them: `graph`, `graph/stats`, `graph/node`,
+`graph/pending`, `graph/search`, `graph/add`, `graph/episode-done`.
+**All additive — `apiContract` stays 5.** Every one is a NEW PATH, never a
+key added to, retyped in, or removed from an existing shape, so a client that
+predates them decodes nothing differently.
 
-**Not modeled in Models.swift or APIClient.swift, on purpose.** The iOS graph
-screen (`ios/Kraken/GraphView.swift`) is a `WKWebView` onto the web board's
-own `#/graph` route — the same page, same server-computed layout, so both
-clients draw the same picture (50-components.md #8). It therefore decodes
-none of these shapes natively, and adding Swift models for them would be
-untested code pinning a wire the app never reads. The web UI and the
-`k graph` cell verb are the only consumers.
+**`GET /api/graph` and `GET /api/graph/node` ARE modeled in Models.swift and
+APIClient.swift** (the first and third routes above). The iOS graph screen
+(`ios/Kraken/GraphView.swift`) is a native SwiftUI `Canvas` that consumes both
+directly, via `GraphPayload`/`GraphNodeDetail` (`APIClient.fetchGraph` and
+`fetchGraphNode`). It previously wrapped the web board's own `#/graph` page
+in a `WKWebView`, on the argument that one server-computed layout should mean
+one implementation; the layout half of that still holds — positions come from
+`core.ComputeLayout` and both clients draw the same shape, there is no
+client-side force simulation on either — but WebGL inside a sheet fights the
+sheet's gestures, sigma's labels are sized for a desktop, and the
+rail/canvas/rail layout does not fit a phone. The remaining five routes
+(`stats`, `pending`, `search`, `add`, `episode-done`) stay web- and
+`k graph`-only.
 
 The `stats` object's keys are snake_case (`live_edges`,
 `missing_embeddings`) like the rest of this API. (They were briefly camelCase
