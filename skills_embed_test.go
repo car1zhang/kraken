@@ -13,8 +13,9 @@ import (
 )
 
 // skills_embed_test.go verifies the go:embed directive actually captured
-// the four kraken-owned skills and that each SKILL.md's renamed frontmatter
-// took: this can only be checked from package main, since the embed.FS
+// every kraken-owned skill — the six pipeline skills plus the reference skill
+// `load` — and that each SKILL.md's renamed frontmatter took: this can only
+// be checked from package main, since the embed.FS
 // itself (skillsFS) lives here, not in jobs (jobs only sees the fs.Sub'd
 // jobs.SkillsFS assigned by init()). It also pins the three worktree-relative
 // path helpers the aim skill depends on — jobs.HermesContractPath,
@@ -29,6 +30,10 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		"pr":    "pr",
 		"dream": "dream",
 		"graph": "graph",
+		// `load` governs no phase — it is the ladders zeus looks a rung up in
+		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
+		// it and this is the only test that would notice it failing to embed.
+		"load": "load",
 	}
 	for dir, wantName := range want {
 		data, err := fs.ReadFile(skillsFS, ".claude/skills/"+dir+"/SKILL.md")
@@ -399,7 +404,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "pr", "dream", "graph"} {
+	for _, want := range []string{"info", "aim", "do", "pr", "dream", "graph", "load"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}

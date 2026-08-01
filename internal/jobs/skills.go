@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 )
 
-// SkillsFS holds kraken's kraken-owned skill bundle (info, aim, do, pr,
-// dream, graph),
+// SkillsFS holds kraken's kraken-owned skill bundle — the six pipeline skills
+// (info, aim, do, pr, dream, graph), each governing a phase, plus the
+// reference skill load, which governs none and is consulted mid-phase —
 // embedded into the binary at build time. Root's skills_embed.go assigns
 // this during init(), sub-FS'd to the .claude/skills root so each top-level
 // entry here is one skill's own directory. Left nil when the jobs package is

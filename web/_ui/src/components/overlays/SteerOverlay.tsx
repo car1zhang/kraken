@@ -19,8 +19,16 @@ import {
   steerJob,
   uploadImage,
 } from "../../api/client.ts";
-import type { JobForm, WebJob } from "../../api/types.ts";
-import { JOB_COLORS } from "../../lib/format.ts";
+import type { JobForm, WebJob, WebJobLoad } from "../../api/types.ts";
+import {
+  JOB_COLORS,
+  SCOPE_ANCHORS,
+  UNBLOCK_ANCHORS,
+  age,
+  loadRatioText,
+  loadROI,
+  type LoadBand,
+} from "../../lib/format.ts";
 import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useDebouncedDraft } from "../../hooks/useDebouncedDraft.ts";
@@ -419,6 +427,21 @@ function SteerBody({
   const hasFeedback = (job?.feedback ?? []).length > 0;
   const detail = job?.detail;
   const lastSent = job?.last_sent;
+  // Zeus' triage estimate, spelled out. The CARD carries the same numbers as a
+  // bare `⚡ 4.0× 2→8` badge — a chip has room for a ratio and not for two
+  // sentences — so this modal is the only surface where the two rungs are
+  // NAMED, which is the half that makes them mean anything to a reader who is
+  // not the agent that wrote them.
+  //
+  // Unlike the chip (LoadChip), no column check: `loadChipVisible` demands the
+  // card read as blocked because a stale estimate sitting in the blocked column
+  // reads as a current fact about a job that has since started running. That
+  // argument is about a card being SCANNED, not about a drilldown being opened
+  // deliberately — and this modal opens in unblock mode on exactly the jobs
+  // that have one. The estimate stays whatever loadROI accepts: an absent key,
+  // the cleared both-zero state and a half-estimate all render nothing at all.
+  const load = job?.load;
+  const loadDerived = loadROI(load);
   const hasDocq = !!job?.doc_questions?.length;
   // Token spend is job history in the strongest sense — summed from
   // transcripts that outlive the cell dir — so like PRs it shows in EVERY
@@ -449,6 +472,7 @@ function SteerBody({
     showThreads ||
     !!detail ||
     !!lastSent ||
+    (!!load && !!loadDerived) ||
     showArtifacts ||
     hasDocq ||
     hasFeedback ||
@@ -590,6 +614,17 @@ function SteerBody({
           <div className="last-sent" id="steer-lastsent" hidden={!lastSent}>
             {lastSent ? `me→zeus: ${lastSent}` : ""}
           </div>
+          {/* Conditional rather than a `hidden={…}` wrapper like its siblings
+              above, and deliberately so: "no estimate" is the absence of the
+              element, not an element with nothing in it. A hidden wrapper keeps
+              its children in the DOM, so a job with no load would still answer
+              a [data-testid="load-drill"] query — the shared contract says it
+              must not. Placed under the detail/last-sent pair because that is
+              the sequence a reader is deciding on: what zeus says it is stuck
+              on, what was last said to it, and what unsticking it costs. */}
+          {load && loadDerived ? (
+            <LoadDrill load={load} roi={loadDerived.roi} band={loadDerived.band} />
+          ) : null}
           {/* artifactListHTML (app.js) — EVERY artifact as an openable chip,
               no cap and no "+N more": the card's band-2 surface is now a bare
               COUNT and a modal scrolls, so the drilldown just shows the list
@@ -748,6 +783,101 @@ function SteerBody({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * The load estimate with its rungs NAMED: a `roi 4.0×` headline over one row
+ * per half — `unblock 2/10` beside "Read one page, pick", `next step 8/10`
+ * beside "Full phase-2 of a substantial spec" — then the note.
+ *
+ * The labels come from the two anchor ladders in lib/format.ts, which are the
+ * board's copy of `.claude/skills/load/SKILL.md` and are pinned byte-identical
+ * against it and against the iOS app by a Go test. Rendering the label rather
+ * than restating the ladder here is what keeps that pin meaningful: a fourth
+ * spelling of "what does 4 mean" is a fourth thing to drift.
+ *
+ * Both raw numbers stay on screen beside their labels. The label alone would be
+ * the friendlier read, but the number is what zeus wrote, what `kraken load
+ * set` takes and what the card's badge shows — dropping it would leave no
+ * surface where the two representations can be checked against each other.
+ *
+ * The AGE line is the same clause loadBadgeTitle carries and for the same
+ * reason: nothing ever refreshes or clears an estimate, so a job that blocked,
+ * was answered, and was filed back under blocked hours later still shows the
+ * estimate written for the FIRST block. Without the age there is nothing here
+ * that separates that from a fresh one. It is dropped rather than rendered as
+ * "estimated  ago" when the stamp is absent, which a present `load` never is
+ * (WebJobLoad) — the same defensive-only category as loadROI's zero arms.
+ */
+function LoadDrill({
+  load,
+  roi,
+  band,
+}: {
+  load: WebJobLoad;
+  roi: number;
+  band: LoadBand;
+}) {
+  // The wire promises 1..10 whenever the object is present, and loadROI has
+  // already refused anything at or below 0 — the fallback is for the number
+  // that is neither: an out-of-range rung from some later server would
+  // otherwise print the literal "undefined" as that rung's MEANING, which is a
+  // worse answer than the bare number with no label beside it.
+  const unblockAnchor = UNBLOCK_ANCHORS[load.unblock - 1] ?? "";
+  const scopeAnchor = SCOPE_ANCHORS[load.scope - 1] ?? "";
+  // `at` is unix MILLIS and age() takes SECONDS — the same divide, and the same
+  // hazard, that loadBadgeTitle's header spells out at length.
+  const when = age(load.at ? Math.floor(load.at / 1000) : 0);
+  // What the two numbers MEAN, said once rather than as two more visible lines:
+  // the panel is read while deciding whether to answer this job next, and the
+  // definitions are the part you need exactly once.
+  //
+  // It rides on BOTH `title` and `aria-label`, which are not two spellings of
+  // one thing here: `title` is the pointer's tooltip and reaches nothing else —
+  // touch has no hover at all, and screen readers announce a title
+  // inconsistently and only as a fallback when no better name exists. So the
+  // sentence is also the element's accessible NAME.
+  //
+  // `role="group"` is what makes that name exist. A bare <div> is role=generic,
+  // which PROHIBITS naming — an aria-label on one is dropped, silently, which
+  // is the same shape of failure as a title on a touch device. group is also
+  // the right role rather than the cheapest one: it names a container without
+  // replacing it, so the rows below are still read individually. Putting the
+  // label on a leaf element instead would have SWALLOWED them — the numbers and
+  // their rungs are the payload, and an accessible name that hides them is
+  // worse than none. Contrast the card's badge (LoadChip), where aria-label
+  // deliberately does replace the visible text, because there the visible text
+  // is `⚡ 4.0× 2→8` and has no spoken form worth hearing.
+  const summary =
+    "zeus' triage estimate for this block. unblock is what answering costs CARL — reading, context, decisions. " +
+    "next step is how big the claude work that answer buys is likely to be. roi is the second over the first, " +
+    "so a cheap answer buying a long session ranks above an expensive one buying a message.";
+  return (
+    <div
+      className={"ld-drill " + band}
+      data-testid="load-drill"
+      role="group"
+      aria-label={summary}
+      title={summary}
+    >
+      <div className="ld-drill-head">
+        <span className="ld-drill-roi">roi {loadRatioText(roi)}</span>
+        {when ? <span className="ld-drill-age">estimated {when} ago</span> : null}
+      </div>
+      <div className="ld-drill-row">
+        <span className="ld-drill-k">unblock {load.unblock}/10</span>
+        <span className="ld-drill-v">{unblockAnchor}</span>
+      </div>
+      <div className="ld-drill-row">
+        <span className="ld-drill-k">next step {load.scope}/10</span>
+        <span className="ld-drill-v">{scopeAnchor}</span>
+      </div>
+      {/* dropped entirely when empty rather than left as a blank line: `note`
+          may legitimately be "", exactly as loadBadgeTitle's trailing clause is
+          omitted rather than rendered as a dangling " — ". */}
+      {load.note ? <div className="ld-drill-note">{load.note}</div> : null}
+    </div>
   );
 }
 

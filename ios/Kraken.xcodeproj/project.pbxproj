@@ -12,6 +12,7 @@
 		062381EF9532F9F524FFF7DD /* GraphPhysicsEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 144A1F208B506C42ADD0894A /* GraphPhysicsEdgeTests.swift */; };
 		07BFA6777FB09D0C7DCF2F95 /* JobSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */; };
 		09E5F95BB0684A3D285C72AD /* FeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7F3DC6663B9448C00D785C /* FeedbackTests.swift */; };
+		0A06A7F4222255504BED7606 /* LoadScaleContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC93070711163F66A743C086 /* LoadScaleContractTests.swift */; };
 		0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */; };
 		0EFEC88E51F813044F76BA6B /* UsageDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E28FB088DDAA43E812172C /* UsageDecodeTests.swift */; };
 		15E03CF28FC165A2AC64ED88 /* JobFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29F1852BBFA1274A0BFE991 /* JobFormView.swift */; };
@@ -19,6 +20,7 @@
 		200A598DE7D246E25CF248F0 /* NewJobSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */; };
 		24941F0DB10A9FF299BE8A1D /* GraphModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE08B75F6A8ADA3E9AB3E64 /* GraphModel.swift */; };
 		25E71118EA12AF32276973CB /* BoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30DCCDA162DA2E0C253F4EA3 /* BoardView.swift */; };
+		2C3EE0868D401528E49F016E /* LoadScaleEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC262B7E759627F240CDC193 /* LoadScaleEdgeTests.swift */; };
 		2ECFF1480A0CB4AB0E726CC4 /* GraphEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FF4F5DDD93D7F61A6937F4F /* GraphEdgeTests.swift */; };
 		3C38197611F50EC43EE8E30E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FF9D9DA885804C0FEC0248E /* Assets.xcassets */; };
 		3E96D0AC7206FFE89D0113E6 /* JobSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */; };
@@ -127,11 +129,13 @@
 		CAE08B75F6A8ADA3E9AB3E64 /* GraphModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphModel.swift; sourceTree = "<group>"; };
 		CB3A1EB438C4B5849E436152 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
 		CC4FC03A0B554A14A50EF04A /* LoadEstimateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadEstimateTests.swift; sourceTree = "<group>"; };
+		CC93070711163F66A743C086 /* LoadScaleContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadScaleContractTests.swift; sourceTree = "<group>"; };
 		D29F1852BBFA1274A0BFE991 /* JobFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobFormView.swift; sourceTree = "<group>"; };
 		D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		D5214B278157C359E0F22C13 /* BoardDragStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardDragStateTests.swift; sourceTree = "<group>"; };
 		D58DEA929F5C3CDC02AD93B1 /* DraftStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStoreTests.swift; sourceTree = "<group>"; };
 		E6E02C2D34FE2896351B57CD /* JobColorStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobColorStrip.swift; sourceTree = "<group>"; };
+		EC262B7E759627F240CDC193 /* LoadScaleEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadScaleEdgeTests.swift; sourceTree = "<group>"; };
 		EF7F3DC6663B9448C00D785C /* FeedbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackTests.swift; sourceTree = "<group>"; };
 		F6910162E5A6297105AD0E5B /* LogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogView.swift; sourceTree = "<group>"; };
 		FA8587CFE1F0023DA53E96B2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -175,6 +179,8 @@
 				210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */,
 				C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */,
 				CC4FC03A0B554A14A50EF04A /* LoadEstimateTests.swift */,
+				CC93070711163F66A743C086 /* LoadScaleContractTests.swift */,
+				EC262B7E759627F240CDC193 /* LoadScaleEdgeTests.swift */,
 				AF39E397D495995DF61C69ED /* MarkdownHTMLParityTests.swift */,
 				8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */,
 				6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */,
@@ -362,6 +368,8 @@
 				0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */,
 				3E96D0AC7206FFE89D0113E6 /* JobSearchTests.swift in Sources */,
 				CF68901B3F0A081B1A09DA21 /* LoadEstimateTests.swift in Sources */,
+				0A06A7F4222255504BED7606 /* LoadScaleContractTests.swift in Sources */,
+				2C3EE0868D401528E49F016E /* LoadScaleEdgeTests.swift in Sources */,
 				9A8EFAF4AA6DBDC088CF875F /* MarkdownHTMLParityTests.swift in Sources */,
 				AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */,
 				4B8AC3B17AEE418F8CE1BB80 /* ShipIOSDecodeTests.swift in Sources */,

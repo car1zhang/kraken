@@ -1095,6 +1095,47 @@ body {
    place a nested opacity could quietly desynchronise them. */
 .tok-cell i { font-style: normal; opacity: 0.7; margin-right: 5px; }
 .tok-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
+
+/* zeus' load estimate with its rungs named, in the steer modal's context block
+   (LoadDrill in SteerOverlay.tsx).
+
+   Same raised / border-left box as .tok, .doc-questions and .job-feedback: the
+   modal's drilldown panels are one family and this is another member of it,
+   not a new kind of thing.
+
+   The band rides as a second class exactly as it does on the card's .ld-chip,
+   and here it colours the left rule and the ratio ONLY. The chip's fill and
+   hover glow exist to be scanned down a column of cards, which is not a job
+   this panel has — but one estimate rendered in two unrelated colours on two
+   surfaces would read as two different facts, so the hue is shared even where
+   the treatment is not. even/cold take the neutral resting look and so need no
+   rule, as .ld-chip.even does not. */
+.ld-drill {
+  margin-top: 7px; padding: 6px 8px;
+  background: var(--raised);
+  border-left: 2px solid var(--hairline-2);
+  font: 11px var(--mono); line-height: 1.45;
+  color: var(--text-2);
+}
+.ld-drill.hot { border-left-color: var(--counter); }
+.ld-drill.warm { border-left-color: var(--revealed); }
+.ld-drill-head { display: flex; align-items: baseline; gap: 8px; }
+.ld-drill-roi { font: 600 15px var(--mono); letter-spacing: 0.5px; }
+.ld-drill.hot .ld-drill-roi { color: var(--counter); }
+.ld-drill.warm .ld-drill-roi { color: var(--revealed); }
+.ld-drill-age { font-size: 9px; opacity: 0.55; }
+/* the rung rows: number left, anchor label right. The label is the brighter of
+   the two — the number is the machine's spelling of it and stays quiet. */
+.ld-drill-row {
+  display: flex; gap: 10px; margin-top: 3px;
+  font-size: 10px; opacity: 0.85;
+}
+.ld-drill-k { min-width: 96px; opacity: 0.7; }
+.ld-drill-v { color: var(--text); }
+.ld-drill-note {
+  margin-top: 5px; font-size: 10px; opacity: 0.7;
+  white-space: pre-wrap; word-break: break-word;
+}
 .spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
 .spec-meta-row .v { color: var(--text); }
 .panel {

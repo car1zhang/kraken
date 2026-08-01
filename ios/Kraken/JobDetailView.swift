@@ -847,6 +847,34 @@ struct JobDetailView: View {
                     }
                 }
 
+                // zeus' triage estimate, spelled out. The board card carries
+                // the same estimate as a one-line badge ("⚡ 4.0× 2→8"), which
+                // is enough to RANK a column of blocked cards but not enough
+                // to act on: it says a 2 and an 8 without saying what a 2 is.
+                // This is where the two numbers get their words back, so it
+                // sits above Tokens — a fact to act on outranks a fact about
+                // the past.
+                //
+                // `load` being nil is what hides the whole section, and nil
+                // has three meanings that all render the same way (never
+                // estimated, cleared, archived — see WebJob.load). None of
+                // them is an estimate of zero, so nothing here draws a 0 in
+                // its place.
+                //
+                // A present but UNUSABLE pair hides it too, and for the same
+                // reason rather than a second one: a zero on either side has
+                // no ratio, and printing "unblock 0/10" under a Triage heading
+                // asserts an estimate of zero — a thing this system says does
+                // not exist. `badgeText` is nil on exactly that shape (see
+                // WebJobLoad.roi), so it is the gate. Neither client can be
+                // sent one by this server — a clear drops the key, a half
+                // estimate is a 400 — so this is defence against a hand-edited
+                // row, and web's drilldown hides on the same test, which is
+                // what keeps the two boards drilling down on the same jobs.
+                if let load = job.load, load.badgeText != nil {
+                    kSection("Triage") { loadRows(load) }
+                }
+
                 // Token spend sits this high — beside Repo rather than down
                 // with Artifacts — because it is one glanceable fact about
                 // the job as a whole, and the artifact tree below can run
@@ -1325,6 +1353,170 @@ struct JobDetailView: View {
         .background(KTheme.surface)
         .overlay(alignment: .bottom) {
             Rectangle().fill(KTheme.hairline).frame(height: 1)
+        }
+    }
+
+    // MARK: - triage estimate
+
+    /// zeus' two 1–10 estimates with their anchor labels, the ratio between
+    /// them, and zeus' one-line rationale.
+    ///
+    /// The ladders come from `LoadAnchors`, which carries the same twenty
+    /// strings the skill zeus estimates from and the web board's drilldown
+    /// render (ten rungs per ladder, two ladders) — a
+    /// Go test pins all three byte-identical, so the words here are the words
+    /// zeus was reading when it picked the number. A rung off the ladder (a
+    /// hand-edited row; the API refuses one) simply loses its label rather
+    /// than printing a placeholder beside a real-looking digit.
+    ///
+    /// The ratio is drawn as the BADGE rather than re-derived here. It is the
+    /// app's one rendering of `scope / unblock` (`WebJobLoad.badgeText`, with
+    /// the rounding rule and the band both living on the model), and going
+    /// through it is what keeps this sheet and the card from ever printing two
+    /// different ratios for one estimate — the rounding is half-away-from-zero
+    /// to agree with web's `toFixed(1)`, which is exactly the kind of detail a
+    /// second copy loses. It repeats `u→s` after the ratio; that repetition is
+    /// the badge's own text, pinned identical across both boards, and this
+    /// view is not free to trim it.
+    ///
+    /// Both the badge and the band are nil for the same single reason — an
+    /// unusable pair (a zero on either side, which no server serves) — and the
+    /// section's gate already refuses exactly that shape, so the unwrap below
+    /// is the defence the card's badge keeps, not a case to expect here.
+    ///
+    /// The AGE is required rather than decoration, for the reason the card and
+    /// web's drilldown both carry one: nothing ever refreshes an estimate.
+    /// zeus writes it, carl answers, the cell later dies, the daemon's
+    /// `health` files the card back under BLOCKED — and with zeus gone a
+    /// three-day-old estimate of a situation that has moved on reads exactly
+    /// like a current fact. `WebJobLoad.age(nowMillis:)` is the one formatter;
+    /// the clock is read at this call site so the model stays pure.
+    @ViewBuilder
+    private func loadRows(_ load: WebJobLoad) -> some View {
+        // Read here rather than inside the model — the same split `tokensNote`
+        // and the card's LoadBadge use. Recomputed each render, which this
+        // sheet's own refresh already drives; the age is one coarse unit, so
+        // it needs no ticker.
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        VStack(alignment: .leading, spacing: 6) {
+            loadRungRow("unblock", rung: load.unblock, anchor: LoadAnchors.label(unblock: load.unblock))
+            loadRungRow("next step", rung: load.scope, anchor: LoadAnchors.label(scope: load.scope))
+            if let text = load.badgeText, let band = load.band {
+                let style = BoardTheme.style(forLoadBand: band)
+                HStack(spacing: 5) {
+                    // one line, for the badge's own reason: the string carries
+                    // two internal spaces and breaking at either splits the
+                    // ratio from the pair it came from
+                    Text(text)
+                        .lineLimit(1)
+                        .font(.data(10, weight: .semibold))
+                        .foregroundStyle(style.text)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(style.fill ?? .clear)
+                        .overlay(
+                            Rectangle().stroke(
+                                style.border,
+                                style: StrokeStyle(lineWidth: 1, dash: style.dashed ? [3, 2] : [])
+                            )
+                        )
+                        // on the badge alone, never the age beside it: `cold`'s
+                        // dim is part of that band's treatment, and carrying it
+                        // onto the age would make the freshest information
+                        // hardest to read on exactly the estimates worth doing
+                        // last. The card splits it the same way.
+                        .opacity(style.opacity)
+                    if let age = load.age(nowMillis: now) {
+                        // "3h ago", never a bare "3h": an unqualified duration
+                        // sitting beside a ratio invites being read as part of
+                        // it — the same reason the token note spells it out.
+                        // Muted and a size down, so it annotates the badge
+                        // rather than reading as a second chip.
+                        Text("\(age) ago")
+                            .lineLimit(1)
+                            .font(.data(9))
+                            .foregroundStyle(KTheme.text2)
+                            .opacity(0.7)
+                    }
+                    Spacer()
+                }
+            }
+            // `note` is legitimately "" — the estimate is the payload and the
+            // server keeps a numbers-only write rather than refusing it — so
+            // an empty one drops the row instead of leaving a blank line where
+            // a rationale should be.
+            if !load.note.isEmpty {
+                Text(load.note)
+                    .font(.voice(12))
+                    .foregroundStyle(KTheme.text2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 2)
+        // ONE a11y element for the whole section: read row by row, VoiceOver
+        // gives "unblock, 2/10, Read one page, pick" and then says the same
+        // numbers again inside the badge and once more in the age, which is
+        // three passes over one estimate. The sentence replaces all of it.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(loadA11yLabel(load, nowMillis: now))
+    }
+
+    /// The section's spoken form: `WebJobLoad.summary(nowMillis:)` — the same
+    /// sentence the card's badge speaks and web's tooltip shows — with the two
+    /// anchor labels appended.
+    ///
+    /// Appended rather than spliced in beside each number, because that
+    /// sentence is a pinned shared string: its clause order is fixed and this
+    /// view is not free to rewrite it. So the words ride after it, which is
+    /// also the reading order that matters — the numbers are what carl answers
+    /// zeus in, and the anchors are the gloss on them.
+    ///
+    /// They are appended at all because `children: .ignore` above means this
+    /// label is the section's ONLY spoken content: the anchors are on screen
+    /// and a VoiceOver user has no other route to them, so dropping them here
+    /// would make the ladder sighted-only. `summary` is nil exactly when the
+    /// pair is unusable, which the section's gate has already refused; the
+    /// fallback keeps this total rather than speaking an empty label.
+    private func loadA11yLabel(_ load: WebJobLoad, nowMillis: Int64) -> String {
+        var parts: [String] = []
+        if let summary = load.summary(nowMillis: nowMillis) {
+            parts.append(summary)
+        } else {
+            parts.append("unblock effort \(load.unblock)/10 · next step \(load.scope)/10")
+        }
+        if let anchor = LoadAnchors.label(unblock: load.unblock) {
+            parts.append("unblock: " + anchor)
+        }
+        if let anchor = LoadAnchors.label(scope: load.scope) {
+            parts.append("next step: " + anchor)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// One rung: its caption, the raw `n/10` the wire carried, and what that
+    /// rung means. The number is kept verbatim beside the words because the
+    /// words are a reading of it, not a replacement — carl answers zeus in
+    /// numbers.
+    ///
+    /// The label takes the trailing space and wraps rather than truncating:
+    /// the longest anchors run past a phone's width, and half of "Decision
+    /// batch needing new…" is worse than two lines.
+    private func loadRungRow(_ caption: String, rung: Int, anchor: String?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(caption).font(.data(10)).foregroundStyle(KTheme.text2)
+                .lineLimit(1).fixedSize()
+            Text("\(rung)/10").font(.data(11, weight: .semibold)).foregroundStyle(KTheme.text)
+                .lineLimit(1).fixedSize()
+            if let anchor {
+                Text(anchor)
+                    .font(.voice(12))
+                    .foregroundStyle(KTheme.text2)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                Spacer()
+            }
         }
     }
 

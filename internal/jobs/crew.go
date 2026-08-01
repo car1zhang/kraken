@@ -134,10 +134,15 @@ func zeusBrief(j *Job) string {
 	// the same act: the last thing zeus does before going idle. It is in the
 	// BRIEF rather than in a skill for the reason the questions/feedback
 	// paragraph below is — a skill is read once per phase, this brief is in
-	// context every turn, and this has to happen on every turn. The scale's
-	// anchor points are spelled out because the number is only comparable
-	// across jobs if every cell reads the same ruler.
-	fmt.Fprintf(&b, "In that same beat, EVERY time you go idle, record what unblocking you will cost: `kraken load set %s --unblock N --scope M --note \"<one line>\"`. `--unblock` 1-10 is the effort CARL spends to unblock you — reading, explaining, context gathering, decisions: 1 nothing to consider, just a mechanical action; 3 one small thing to answer, or basic testing; 5 moderate thought — some questions, some review, some decision; 8 a deep decision or quite a bit of context to absorb; 10 deep thought over many important decisions and lots of context. `--scope` 1-10 is how big the claude work that reply buys: 1 a one-message reply; 5 a moderate implementation slice; 10 many subagents, a massive scoped implementation, lots of revision and review. Carl triages the blocked column by scope-over-unblock, cheap-unblock-buying-long-work first, so estimate honestly rather than flatteringly — an inflated scope takes his attention from a cell that earned it. `kraken load clear %s` when you are not blocked on him at all.\n",
+	// context every turn, and this has to happen on every turn. What stays
+	// resident is what every idle turn actually APPLIES: the two
+	// disambiguation rules (price carl's real move, price only the work ahead)
+	// and a one-line lookup for the recurring block states, which between them
+	// decide almost every estimate without consulting a ladder at all. The full
+	// 1-10 ladders — twenty anchored rungs — are in .claude/skills/load/SKILL.md,
+	// read when a state the map does not name comes up: they are the bulk, they
+	// are needed rarely, and this brief has a byte ceiling the map does not.
+	fmt.Fprintf(&b, "In that same beat, EVERY time you go idle, record what unblocking you will cost: `kraken load set %s --unblock N --scope M --note \"<one line>\"`. `--unblock` 1-10 is the effort CARL spends to unblock you; `--scope` 1-10 is how big the claude work that reply buys — 1 a one-message reply. Two rules: (1) unblock prices carl's ACTUAL move, not the nominal ask — he ships PRs on trust, so a review-only gate costs him a one-word reply; only a live environment, a credential, or a real decision costs more. (2) scope prices only the work the reply BUYS — what is still ahead, never the work under review. And estimate honestly: an inflated scope takes carl's attention from a cell that earned it. State map (unblock/scope): review-only gate 1/1 · local install-and-drive gate 4/1 · live E2E gate 5/2 · PR awaiting checks 1/1 · info go-deeper pick 2/3 · spec gate 3/6-8 · credential 4/whatever it unblocks · working or nothing needed → `kraken load clear %s`: an estimate exists only when carl is the blocker. Full ladders: `.claude/skills/load/SKILL.md`.\n",
 		j.Slug, j.Slug)
 	// the other half of threadBrief's invariant: the thread is told it is not
 	// zeus, and zeus is told the thread is not its own. Without this, a second

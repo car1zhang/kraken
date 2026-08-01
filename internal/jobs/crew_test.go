@@ -206,9 +206,11 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // token list does not happen to name.
 //
 // The ceiling has moved more than once: 10,000 -> 12,000 to admit the
-// load-estimate rule (the `kraken load set` paragraph in zeusBrief, 1,017
-// bytes with its 1-10 scale), 12,000 -> 13,000 to admit blind test
-// authorship, and 13,000 -> 13,500 for the feedback-ownership contract. That
+// load-estimate rule (the `kraken load set` paragraph in zeusBrief, which
+// measured 1,017 bytes AT THAT TIME, when it spelled its 1-10 scale out inline
+// — see the 2026-07-31 restatement below for what it measures now), 12,000 ->
+// 13,000 to admit blind test authorship, and 13,000 -> 13,500 for the
+// feedback-ownership contract. That
 // number is the ONLY thing this test's failure message tells you not to
 // touch, so EACH move is reasoned out below rather than left to the diff.
 //
@@ -300,6 +302,24 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // `const ceiling` leaves 635, a little over the 550 the previous author sized
 // and reasoned about.
 //
+// RESTATED 2026-07-31 for the anchored load scale, under the standing
+// instruction below — every figure in the paragraph above is now history. The
+// load-estimate paragraph was rewritten to carry the two pricing rules (price
+// carl's ACTUAL move; price only the work the reply buys), a one-line
+// `unblock/scope` state map for the recurring block states, the anti-inflation
+// line, and a pointer to `.claude/skills/load/SKILL.md`; the twenty anchored
+// ladder rungs it would otherwise have had to spell out live in that skill
+// file, and three canary strings from them are BANNED here by the contract
+// tests, so this paragraph cannot grow back into a ladder. Measured on the same
+// basis as above — the paragraph rendered at a 48-character slug — it went from
+// **1,105** bytes to **1,157**, and the whole brief from 13,417 to **13,469**,
+// with 13,406 at the longest real slug (41) and 13,073 at "lean". That leaves
+// **31** bytes under the ceiling. Thirty-one is not a bound in any useful
+// sense, and it is deliberate: the ceiling was NOT raised for this change, so
+// the paragraph was trimmed twice — once to fit the state map, once again to
+// fit the legend and the anti-inflation line a review round added — rather than
+// the constant being moved a fourth time.
+//
 // AND THE CONDITION FOR THE NEXT ONE, because a gate that has never once
 // answered no is a ratchet with good prose attached. This number has gone
 // 10,000 -> 12,000 -> 13,000 -> 13,500 with three raises and zero refusals,
@@ -318,6 +338,12 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // one round AFTER this note was written, which is the strongest evidence the
 // note has for itself. Restate the measurement on every change that touches
 // the brief; do not trust the last one written down, including this one.
+//
+// And at the headroom the restatement above records, "the next brief change is
+// a trim" stops being advice and becomes arithmetic: 31 bytes is a short
+// sentence. Any clause added anywhere in zeusBrief has to be paid for by a
+// deletion somewhere in it, and the paragraph the clause belongs to is where
+// to look first — that is how both of this change's own trims were found.
 //
 // What the net still catches is unchanged, and the scale is worth stating
 // because it is what makes the ceiling a bound rather than a formality: the
@@ -424,12 +450,22 @@ func TestZeusBriefImageHandling(t *testing.T) {
 // the brief, already holding the value, substitutes it. Asserting the bare verb
 // would pass on either spelling.
 //
-// The scale anchors are asserted too, and that is the load-bearing half: they
-// are ~600 of the paragraph's 1,017 bytes and they are the entire reason
-// TestZeusBriefStaysLean's ceiling had to move, yet every anchor could be
-// deleted with a verbs-only assertion still green. One phrase per axis is
-// enough to make the test fail if the ruler goes — and the ruler going is what
-// makes two cells' numbers incomparable, which is the whole feature.
+// Two phrases from the ruler are asserted alongside the verbs, and that is the
+// load-bearing half: a verbs-only assertion stays green while the paragraph
+// says nothing about what the numbers MEAN, and numbers with no shared ruler
+// behind them are incomparable between cells, which is the whole feature.
+//
+// What the paragraph carries has changed, so what these two phrases stand for
+// has too (2026-07-31). It used to spell a 1-10 scale out inline, ~600 bytes of
+// anchor text; it now carries the verbs, the two pricing rules, the compact
+// `unblock/scope` state map, the anti-inflation line and a pointer to
+// `.claude/skills/load/SKILL.md`, and the twenty anchored rungs live in that
+// skill file instead. So these phrases no longer proxy for a ladder that is
+// present — they pin the two AXES still being named here, and the ladder's
+// absence is enforced from the other side by the contract tests
+// (TestEdgeBriefCarriesNoLadderRow, TestContractZeusBriefLoadScale), which fail
+// if a rung label reappears in the brief. Adding an anchor back here would be
+// caught there, not by this test.
 func TestZeusBriefLoadEstimate(t *testing.T) {
 	for _, j := range []*Job{
 		{Slug: "load-plain"},
