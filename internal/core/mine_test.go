@@ -197,6 +197,134 @@ func TestMineTranscriptsDigestSignals(t *testing.T) {
 	}
 }
 
+// TestMineTranscriptsReplayedRecordsNotCounted: a forked side thread's
+// transcript is seeded with its parent's records wholesale — session_id
+// (snake case) survives the fork and is the only usable marker. The token
+// counters were ownership-gated from the start; the MECHANICAL counters were
+// not, so a resume replay doubled every tool count, error, interrupt and
+// duration while its spend stayed correct (one real cell read 26 errors
+// where 16 exist). Every signal must ignore a record another session made.
+func TestMineTranscriptsReplayedRecordsNotCounted(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	at := func(minsAgo int64) int64 { return now - minsAgo*60_000 }
+
+	withSession := func(line, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["session_id"] = sid
+		return mineJSON(t, m)
+	}
+
+	lines := []string{
+		// replayed from the parent: every signal type, none may count. The
+		// turn_duration record and one interrupt deliberately carry NO
+		// session_id — the REAL shapes (0 of ~1,700 system records in the
+		// corpus carry one, and ~13% of interrupt records drop it) — so they
+		// are gated only by lastSID inheritance from the foreign records
+		// around them; a fixture that stamped session_id on a system record
+		// certified a record shape the producer never emits.
+		withSession(mineAssistant(t, at(120), "claude-opus-5",
+			mineToolUse("p1", "Bash", map[string]any{"command": "go vet ./..."})), "parent-session"),
+		withSession(mineUser(t, at(119), []any{mineToolResult("p1", true, "boom")}), "parent-session"),
+		withSession(mineUser(t, at(118), "[Request interrupted by user]"), "parent-session"),
+		mineUser(t, at(118), "[Request interrupted by user]"), // no session_id: inherits parent
+		withSession(mineAssistant(t, at(117), "<synthetic>", mineText("API Error")), "parent-session"),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 99_000, "timestamp": mineISO(at(116))}), // no session_id: inherits parent
+		withSession(mineJSON(t, map[string]any{"type": "assistant", "timestamp": mineISO(at(115)),
+			"message": map[string]any{"id": "msg-p", "model": "claude-opus-5", "stop_reason": "max_tokens",
+				"content": []any{map[string]any{"type": "thinking", "thinking": "x"}}}}), "parent-session"),
+		// the fork's own records: all counted — including a turn_duration
+		// with no session_id, owned by inheritance from the fork's records
+		withSession(mineAssistant(t, at(60), "claude-opus-5",
+			mineToolUse("f1", "Read", map[string]any{"file_path": "/tmp/a.go"})), "fork-session"),
+		withSession(mineUser(t, at(59), []any{mineToolResult("f1", true, "gone")}), "fork-session"),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 1_000, "timestamp": mineISO(at(58))}), // no session_id: inherits fork
+	}
+	mineWrite(t, projects, "-Users-carl-Developer-monolith", "fork-session.jsonl", lines...)
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "fork-session.jsonl")
+
+	if d.ToolCounts["Bash"] != 0 || d.ToolCounts["Read"] != 1 {
+		t.Errorf("ToolCounts = %v, want only the fork's own Read:1", d.ToolCounts)
+	}
+	if d.ErrorCounts["Bash"] != 0 || d.ErrorCounts["Read"] != 1 {
+		t.Errorf("ErrorCounts = %v, want only the fork's own Read:1", d.ErrorCounts)
+	}
+	if d.Interrupts != 0 {
+		t.Errorf("Interrupts = %d, want 0 (both are the parent's, one via lastSID inheritance)", d.Interrupts)
+	}
+	if d.SyntheticErrors != 0 {
+		t.Errorf("SyntheticErrors = %d, want 0 (replayed)", d.SyntheticErrors)
+	}
+	if d.MaxTokensStops != 0 {
+		t.Errorf("MaxTokensStops = %d, want 0 (replayed)", d.MaxTokensStops)
+	}
+	if len(d.TurnDurations) != 1 || d.TurnDurations[0] != 1_000 {
+		t.Errorf("TurnDurations = %v, want [1000] — the fork's own; the parent's 99000 carries no session_id and is owned by inheritance", d.TurnDurations)
+	}
+}
+
+// TestMineInputSummaryStripsShellBoilerplate: a command opening with
+// `VAR=<cell scratchpad path>; ` or `cd <worktree> && ` used to spend the
+// whole 100-rune signature window on the prefix, so 19 DISTINCT analysis
+// commands sharing one scratchpad assignment digested as one call repeated
+// 19 times — a loop-shaped false positive. The signature must land on the
+// command; a command that is ONLY boilerplate keeps its original text.
+func TestMineInputSummaryStripsShellBoilerplate(t *testing.T) {
+	long := "/private/tmp/claude-501/-Users-carl--kraken-cells-some-cell-142-wt-monolith/0123456789abcdef-0123-4567-89ab-cdef01234567/scratchpad"
+	sig := func(cmd string) string {
+		return callSignature("Bash", json.RawMessage(mineJSON(t, map[string]any{"command": cmd})))
+	}
+	a := sig("S=" + long + "; python3 $S/rs_reachable.py 2>&1 | tail -50")
+	b := sig("S=" + long + "; sed -n '1,45p' $S/fetch_matrices.py")
+	if a == b {
+		t.Errorf("two distinct commands behind one boilerplate prefix share a signature: %q", a)
+	}
+	if !strings.Contains(a, "python3") || !strings.Contains(b, "sed -n") {
+		t.Errorf("signatures did not reach the command: %q / %q", a, b)
+	}
+	if got := sig("cd /Users/carl/dev/wt-monolith && go test ./..."); !strings.Contains(got, "go test") {
+		t.Errorf("cd prefix not stripped: %q", got)
+	}
+	if got := sig("FOO=1; cd /tmp; BAR=2; rg pattern"); !strings.Contains(got, "rg pattern") {
+		t.Errorf("mixed assignment/cd run not stripped: %q", got)
+	}
+	if got := sig("cd /Users/carl/dev/wt-monolith"); got != "Bash(cd /Users/carl/dev/wt-monolith)" {
+		t.Errorf("boilerplate-only command lost its signature: %q", got)
+	}
+	// The strip is bounded by WHITESPACE inside values/paths: an env-prefix
+	// form is one command and must survive whole, or the isolated-HOME
+	// smoke-test shape would collapse to the signature of whatever follows
+	// the first `;` — a first draft did exactly that to 591 real commands.
+	if got := sig("HOME=/tmp/x go test -tags sqlite_fts5 ./internal/core ; echo done"); !strings.Contains(got, "HOME=/tmp/x go test") {
+		t.Errorf("env-prefix command was mis-stripped: %q", got)
+	}
+	// Newline-terminated boilerplate is the dominant real multi-line shape;
+	// the strip must stop at ITS OWN line, never eat through a later `;`.
+	if got := sig("cd /Users/carl/repo\npython3 script.py; echo done"); !strings.Contains(got, "python3 script.py") {
+		t.Errorf("newline-terminated cd not stripped to the command: %q", got)
+	}
+	a2 := sig("S=/tmp/scratch\npython3 $S/a.py; python3 $S/b.py")
+	b2 := sig("S=/tmp/scratch\npython3 $S/OTHER.py; python3 $S/b.py")
+	if a2 == b2 {
+		t.Errorf("two distinct multi-line commands share a signature: %q", a2)
+	}
+	// The empty-after-strip fallback needs an input the regex fully consumes.
+	if got := sig("cd /tmp;"); got != "Bash(cd /tmp;)" {
+		t.Errorf("fully-stripped command lost its signature: %q", got)
+	}
+}
+
 // TestMineTranscriptsExcludesOldRecords: file mtime selects the candidate,
 // the per-record timestamp bounds the window. A session whose turn ran for
 // 92 minutes has a fresh mtime and stale records; the stale ones must not
@@ -531,6 +659,78 @@ func TestReduceTranscript(t *testing.T) {
 		t.Errorf("reduction ratio %.3f, want a materially smaller output", ratio)
 	}
 	t.Logf("reduction: %d -> %d bytes (%.1f%%)", len(raw), len(out), 100*float64(len(out))/float64(len(raw)))
+}
+
+// TestReduceTranscriptEmitsMidTurnSteers: a message typed while a turn runs
+// never becomes a `user` record — it is stored as a `queue-operation`
+// (enqueue) or an `attachment` carrying a `queued_command` — and the reducer
+// used to drop both, so a scout reading the reduced view saw the agent pivot
+// with no visible prompt. These are course corrections, the exact messages
+// the dream loop's prompting-feedback output exists to collect. Both storage
+// shapes emit as [user mid-turn]; a non-enqueue queue-operation and a
+// non-queued_command attachment stay dropped, and the since filter applies.
+// Two more rules, both measured: task-notifications queue through this same
+// channel in bulk (92 in one real session) and are dropped by prefix; and
+// one real message is stored as BOTH records (82 of 83 on this machine), so
+// an immediate repeat of the same text collapses to one section.
+func TestReduceTranscriptEmitsMidTurnSteers(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	path := mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess.jsonl",
+		mineUser(t, now-5000, "the opening ask"),
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 4000), "operation": "enqueue", "content": "STEER-VIA-QUEUE-OP"}),
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 3900), "operation": "dequeue", "content": "DEQUEUE-NOISE"}),
+		mineJSON(t, map[string]any{"type": "attachment", "timestamp": mineISO(now - 3800), "attachment": map[string]any{"type": "queued_command", "prompt": "STEER-VIA-QUEUED-COMMAND", "origin": map[string]any{"kind": "human"}}}),
+		mineJSON(t, map[string]any{"type": "attachment", "timestamp": mineISO(now - 3700), "attachment": map[string]any{"type": "file", "content": "ATTACHMENT-NOISE"}}),
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(since - 60_000), "operation": "enqueue", "content": "STALE-STEER"}),
+		// one message, double-written: enqueue + queued_command, same text —
+		// INTERLEAVED with a second message's enqueue, the observed real
+		// ordering (enq1, enq2, qc1), which adjacency-dedupe missed
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 3000), "operation": "enqueue", "content": "DOUBLE-WRITTEN-STEER"}),
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 2950), "operation": "enqueue", "content": "SECOND-INTERLEAVED-STEER"}),
+		mineJSON(t, map[string]any{"type": "attachment", "timestamp": mineISO(now - 3000), "attachment": map[string]any{"type": "queued_command", "prompt": "DOUBLE-WRITTEN-STEER", "origin": map[string]any{"kind": "human"}}}),
+		// task-notifications queue through the same channel and stay dropped
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 2900), "operation": "enqueue", "content": "<task-notification>\n<task-id>a1</task-id>\nNOTIFICATION-NOISE"}),
+		// so does the harness's stopped-agents notice — a user ACTION in the
+		// harness's prose, which must not enter prompting feedback as carl's
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 2800), "operation": "enqueue", "content": "3 background agents were stopped by the user: \"AGENTS-STOPPED-NOISE\""}),
+		// a queued teammate envelope routes to the teammate label, not [user]
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 2700), "operation": "enqueue", "content": "<teammate-message teammate_id=\"athena-logic\">QUEUED-TEAMMATE-TEXT</teammate-message>"}),
+	)
+
+	out, err := ReduceTranscript(path, since)
+	if err != nil {
+		t.Fatalf("ReduceTranscript: %v", err)
+	}
+	got := string(out)
+
+	for _, want := range []string{
+		"[user mid-turn]\nSTEER-VIA-QUEUE-OP",
+		"[user mid-turn]\nSTEER-VIA-QUEUED-COMMAND",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reduced output missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"DEQUEUE-NOISE", "ATTACHMENT-NOISE", "STALE-STEER", "NOTIFICATION-NOISE", "AGENTS-STOPPED-NOISE"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("reduced output leaked %q:\n%s", unwanted, got)
+		}
+	}
+	if n := strings.Count(got, "DOUBLE-WRITTEN-STEER"); n != 1 {
+		t.Errorf("double-written steer emitted %d times, want exactly 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "SECOND-INTERLEAVED-STEER") {
+		t.Errorf("interleaved second steer missing:\n%s", got)
+	}
+	if !strings.Contains(got, "[teammate athena-logic mid-turn]\nQUEUED-TEAMMATE-TEXT") {
+		t.Errorf("queued teammate envelope not routed to the teammate label:\n%s", got)
+	}
+	if strings.Contains(got, "[user mid-turn]\n<teammate-message") {
+		t.Errorf("queued teammate envelope attributed to carl:\n%s", got)
+	}
 }
 
 // TestReduceTranscriptSeparatesTeammateFromUser is the label that matters
