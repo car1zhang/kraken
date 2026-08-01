@@ -205,6 +205,50 @@ export function docQuestionsOpenP0(j: WebJob): number {
 // ---------------------------------------------------------------- load / roi
 
 /**
+ * The human-readable rungs of the 1-10 unblock scale — index `n-1` is rung n.
+ *
+ * The numbers alone are a private vocabulary: "unblock 4" means nothing to a
+ * reader who is not zeus, which is what the anchor ladder in
+ * `.claude/skills/load/SKILL.md` exists to fix. That ladder is the definition;
+ * this array is the board's copy of it, rendered in the steer modal's
+ * drilldown (Q3's decision — the CARD keeps the bare `⚡ 4.0× 2→8` badge, since
+ * a label per rung is a sentence and the card has a chip's worth of room).
+ *
+ * This job's frozen contract pins the labels byte-identical across three
+ * sources — the skill file, this file, and `ios/Kraken/Models.swift` — with one
+ * Go test parsing all three. That is why each label is a plain double-quoted
+ * literal here rather than composed, interpolated or built from a shorter
+ * token: the pin can only read what it can parse, and a label it cannot see is
+ * a drift it cannot catch.
+ */
+export const UNBLOCK_ANCHORS: readonly string[] = [
+  "Mechanical",
+  "Read one page, pick",
+  "Answer a few concrete questions",
+  "Local smoke, or a credential",
+  "Live E2E drive",
+  "Genuine review",
+  "Decision batch needing new context",
+  "Deep decision, real consequences",
+  "Many deep decisions in one sitting",
+  "A day's thought",
+];
+
+/** The same ladder for the scope half — what the reply BUYS. See above. */
+export const SCOPE_ANCHORS: readonly string[] = [
+  "One-message close-out",
+  "One small round",
+  "One focused artifact or round",
+  "A single-slice implementation",
+  "A moderate slice",
+  "A full /aim set draft",
+  "A delegated build",
+  "Full phase-2 of a substantial spec",
+  "A multi-PR program",
+  "The largest coordinated effort",
+];
+
+/**
  * The four ROI bands, best-first. Shared vocabulary with the CSS (`.ld-chip.hot`
  * and friends in styles/style.css) and with the iOS card, which bands the same
  * ratio — so a name added or renamed here has to move there too.
@@ -254,16 +298,28 @@ export function loadROI(
 }
 
 /**
+ * The ratio's one rendering: `4.0×`. Extracted so the badge, the tooltip and
+ * the steer modal's drilldown cannot print the same number three ways — the
+ * precision is a shared-contract requirement (`toFixed(1)` rounds half away
+ * from zero, so 0.25 reads "0.3"), and a surface that rounded differently
+ * would look like a different estimate rather than like a formatting bug.
+ *
+ * Behaviour is unchanged from the two call sites it was lifted out of.
+ */
+export function loadRatioText(roi: number): string {
+  return `${roi.toFixed(1)}×`;
+}
+
+/**
  * loadBadgeText is the badge's exact label: `⚡ 4.0× 2→8`. The ratio carries ONE
- * decimal — `toFixed(1)` rounds half away from zero, so 0.25 reads "0.3" as the
- * shared contract's worked example requires.
+ * decimal — see loadRatioText.
  *
  * Separate from loadROI so the number and its rendering can be tested apart,
  * and because the tooltip below needs the same ratio at the same precision
  * without the arrow half.
  */
 export function loadBadgeText(load: { unblock: number; scope: number }, roi: number): string {
-  return `⚡ ${roi.toFixed(1)}× ${load.unblock}→${load.scope}`;
+  return `⚡ ${loadRatioText(roi)} ${load.unblock}→${load.scope}`;
 }
 
 /**
@@ -303,7 +359,7 @@ export function loadBadgeTitle(
   load: { unblock: number; scope: number; note?: string; at?: number },
   roi: number,
 ): string {
-  let s = `unblock effort ${load.unblock}/10 · next step ${load.scope}/10 · roi ${roi.toFixed(1)}×`;
+  let s = `unblock effort ${load.unblock}/10 · next step ${load.scope}/10 · roi ${loadRatioText(roi)}`;
   const ago = age(load.at ? Math.floor(load.at / 1000) : 0);
   if (ago) s += ` · estimated ${ago} ago`;
   if (load.note) s += ` — ${load.note}`;

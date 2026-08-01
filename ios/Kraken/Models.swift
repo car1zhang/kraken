@@ -497,6 +497,73 @@ enum LoadBand: String {
     }
 }
 
+/// The anchor ladders — what each rung of `unblock` and `scope` MEANS, in
+/// words. The two numbers a `WebJobLoad` carries are 1..10 with nothing on the
+/// wire to say what a 4 is, so every reader (zeus writing one, carl reading
+/// one) has to share a vocabulary or the ratio is two people's private scales
+/// divided by each other. These ten-entry ladders are that vocabulary.
+///
+/// The SAME twenty strings are carried in three places — `.claude/skills/load/SKILL.md`
+/// (what zeus reads when it estimates), `web/_ui/src/lib/format.ts` (the web
+/// board's drilldown) and here — and a Go test parses all three and asserts
+/// they are byte-identical, which is why the entries below are written as
+/// plain string literals in a bracketed array literal rather than assembled,
+/// interpolated or reordered: that test reads this source, not a running app.
+/// Editing one label means editing all three in the same commit.
+///
+/// Index n-1 is rung n. `label(unblock:)`/`label(scope:)` are the safe way in
+/// — they take the rung NUMBER and answer nil for anything off the ladder, so
+/// no caller does its own off-by-one arithmetic against a fixed-size array.
+enum LoadAnchors {
+    /// Rungs 1-10 of `unblock`: what unblocking the job costs CARL.
+    static let unblock: [String] = [
+        "Mechanical",
+        "Read one page, pick",
+        "Answer a few concrete questions",
+        "Local smoke, or a credential",
+        "Live E2E drive",
+        "Genuine review",
+        "Decision batch needing new context",
+        "Deep decision, real consequences",
+        "Many deep decisions in one sitting",
+        "A day's thought",
+    ]
+
+    /// Rungs 1-10 of `scope`: how big the claude work that reply releases is.
+    static let scope: [String] = [
+        "One-message close-out",
+        "One small round",
+        "One focused artifact or round",
+        "A single-slice implementation",
+        "A moderate slice",
+        "A full /aim set draft",
+        "A delegated build",
+        "Full phase-2 of a substantial spec",
+        "A multi-PR program",
+        "The largest coordinated effort",
+    ]
+
+    /// The unblock ladder's label for rung `n`, or nil when `n` is off the
+    /// ladder (0, 11, negative). nil rather than a placeholder string: a rung
+    /// nobody defined is a number the server should never have served, and a
+    /// view that omits the label says that more honestly than one printing
+    /// "unknown" beside a real-looking digit.
+    static func label(unblock n: Int) -> String? { rung(n, in: unblock) }
+
+    /// The scope ladder's label for rung `n`, nil off the ladder — same rule.
+    static func label(scope n: Int) -> String? { rung(n, in: scope) }
+
+    /// The one bounds check both accessors share. Written against the array's
+    /// actual `count` rather than a literal 10 so it cannot disagree with the
+    /// ladder it is indexing, and the guard comes BEFORE the subscript because
+    /// a Swift array subscript out of range traps the process — this is asked
+    /// with numbers straight off the wire.
+    private static func rung(_ n: Int, in ladder: [String]) -> String? {
+        guard n >= 1, n <= ladder.count else { return nil }
+        return ladder[n - 1]
+    }
+}
+
 // WebJobLoad mirrors board.go's webJobLoad: zeus' two triage estimates for a
 // job — `unblock`, what it costs carl to unblock it (reading, deciding,
 // explaining, gathering context), and `scope`, how big the claude work that
