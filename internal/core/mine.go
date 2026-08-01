@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -227,7 +228,17 @@ type mineRecord struct {
 	// the API call. Not `sessionId`, which a fork rewrites on every replayed
 	// record. See tokenRecordOwned (tokens.go).
 	SessionID string `json:"session_id"`
-	Message   struct {
+	// Operation/Content are the `queue-operation` record's fields, and
+	// Attachment is the `attachment` record's payload: the two shapes a
+	// message typed MID-TURN is stored as (it never becomes a `user` record).
+	// reducer.line reads them; everything else ignores them.
+	Operation  string `json:"operation"`
+	Content    string `json:"content"`
+	Attachment struct {
+		Type   string `json:"type"`
+		Prompt string `json:"prompt"`
+	} `json:"attachment"`
+	Message struct {
 		// ID is the API message id — one message spans N records, so this is
 		// what collapses them to one. NOT all with the same usage: three of
 		// the four counters repeat verbatim, `output_tokens` streams up across
@@ -328,6 +339,20 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// than zero.
 	var lastMaxTokID string
 
+	// lastSID carries the most recent non-empty session_id forward, because
+	// ownership is stamped unevenly by record TYPE: system/turn_duration
+	// records carry NO session_id at all (0 of ~1,700 measured), and a small
+	// share of interrupt-bearing user records drop it too — so testing each
+	// record's own field left exactly those signals ungated on a fork, while
+	// the fixture that "covered" them stamped a session_id real records never
+	// have. A record with no session_id inherits its neighborhood's owner.
+	// Replay regions are contiguous runs of foreign-session_id records
+	// (though not always a prefix — both FFF…OOO and OOO…FFF occur), so
+	// positional inheritance assigns each undated-owner record correctly;
+	// a sidecar carries no session_id anywhere, lastSID stays "", and
+	// tokenRecordOwned treats absent as own — unchanged.
+	var lastSID string
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
 	for sc.Scan() {
@@ -360,6 +385,25 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 		// file with nothing in the window reads Lines == 0 rather than
 		// "Lines > 0 with a zero timespan".
 		inWindow := ts == 0 || ts >= since
+		// counted gates every COUNTED signal, mechanical and token alike, on
+		// the window AND ownership. A forked side thread's transcript is
+		// seeded with its parent's records wholesale — tool calls, errors,
+		// interrupts, durations, all of it — and gating only the token
+		// counters (the pre-fix state) made a resume replay double every
+		// mechanical count while its spend stayed correct: one real cell's
+		// digest reported 26 tool errors where 16 exist, the other 10 being
+		// the parent's errors counted a second time through the replay.
+		// Lines/FirstTS/LastTS deliberately stay window-only: they bound the
+		// FILE's dated window, not the session's own work, which also means
+		// digestEmpty can read a fork's all-replayed window as non-empty —
+		// the honest shape, since the file does hold dated records.
+		sid := rec.SessionID
+		if sid == "" {
+			sid = lastSID
+		} else {
+			lastSID = sid
+		}
+		counted := inWindow && tokenRecordOwned(tokenRecord{SessionID: sid}, own)
 		if ts > 0 && inWindow {
 			dg.Lines++
 			if dg.FirstTS == 0 || ts < dg.FirstTS {
@@ -372,11 +416,11 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 
 		switch rec.Type {
 		case "assistant":
-			if inWindow && rec.Message.Model == "<synthetic>" {
+			if counted && rec.Message.Model == "<synthetic>" {
 				// an API failure the harness gave up retrying
 				dg.SyntheticErrors++
 			}
-			if inWindow && rec.Message.StopReason == "max_tokens" &&
+			if counted && rec.Message.StopReason == "max_tokens" &&
 				(rec.Message.ID == "" || rec.Message.ID != lastMaxTokID) {
 				// output ceiling hit — once per message, see MaxTokensStops
 				dg.MaxTokensStops++
@@ -396,11 +440,12 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			// This digest always reads a whole file, so unlike the incremental
 			// sum it needs no boundary seed.
 			//
-			// The eligibility gate is the window AND ownership — the window
-			// because every other count here is gated on it, so a digest's
-			// spend describes the same records its tool counts and its
-			// FirstTS/LastTS span do; ownership because a record replayed in
-			// from a forked parent is not this session's spend. commit zeroes
+			// The eligibility gate is `counted` — the window because every
+			// other count here shares it, so a digest's spend describes the
+			// same records its tool counts do (the FirstTS/LastTS span stays
+			// window-only; see the counted comment above); ownership because
+			// a record replayed in from a forked parent is not this
+			// session's spend. commit zeroes
 			// the group's committed output for an ineligible record, which is
 			// what makes a group STRADDLING `since` add up: it contributes its
 			// output (in the window its final record falls in, where a
@@ -409,8 +454,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			// a straddling group is closer than none of it. Groups span
 			// milliseconds and `since` is a day boundary, so the shape
 			// essentially never occurs either way.
-			d := group.commit(rec.Message.ID, rec.Message.Usage,
-				inWindow && tokenRecordOwned(tokenRecord{SessionID: rec.SessionID}, own))
+			d := group.commit(rec.Message.ID, rec.Message.Usage, counted)
 			dg.In += d.Input
 			dg.Out += d.Output
 			dg.CacheWrite += d.CacheCreation
@@ -422,7 +466,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 				if b.ID != "" {
 					pending[b.ID] = b.Name
 				}
-				if !inWindow {
+				if !counted {
 					continue
 				}
 				dg.ToolCounts[b.Name]++
@@ -430,7 +474,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			}
 		case "user":
 			if text, ok := mineUserString(rec.Message.Content); ok {
-				if inWindow && strings.HasPrefix(strings.TrimSpace(text), interruptPrefix) {
+				if counted && strings.HasPrefix(strings.TrimSpace(text), interruptPrefix) {
 					dg.Interrupts++
 				}
 				continue
@@ -438,13 +482,13 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			for _, b := range mineBlocks(rec.Message.Content) {
 				switch b.Type {
 				case "text":
-					if inWindow && strings.HasPrefix(strings.TrimSpace(b.Text), interruptPrefix) {
+					if counted && strings.HasPrefix(strings.TrimSpace(b.Text), interruptPrefix) {
 						dg.Interrupts++
 					}
 				case "tool_result":
 					name, known := pending[b.ToolUseID]
 					delete(pending, b.ToolUseID)
-					if !inWindow || !b.IsError {
+					if !counted || !b.IsError {
 						continue
 					}
 					if !known {
@@ -457,7 +501,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 				}
 			}
 		case "system":
-			if inWindow && rec.Subtype == "turn_duration" && rec.DurationMs > 0 {
+			if counted && rec.Subtype == "turn_duration" && rec.DurationMs > 0 {
 				dg.TurnDurations = append(dg.TurnDurations, rec.DurationMs)
 			}
 		}
@@ -540,6 +584,22 @@ type mineSummaryKeys struct {
 	Skill       string `json:"skill"`
 }
 
+// shellBoilerplateRE matches the boilerplate a Bash command can open with —
+// any run of `VAR=value;` assignments and `cd <path>` fragments terminated by
+// `;`, `&&` or a NEWLINE — which mineInputSummary strips so the signature's
+// 100-rune window lands on the command itself rather than on a path prefix
+// longer than the window. Three deliberate bounds, each measured against the
+// full command corpus: the value/path classes exclude WHITESPACE, so an
+// env-prefix form (`HOME=/tmp/x go test …`) is one command and never
+// stripped; the newline is a terminator, because `cd <path>\n<cmd>` is the
+// dominant real shape and has no other separator; and a first draft whose
+// classes admitted whitespace ate through 591 real commands to whatever
+// followed the first `;` — collapsing distinct commands into one signature,
+// the exact false positive this strip exists to remove. A quoted separator
+// in a value (`S="a;b"; cmd`) still mangles the head cosmetically; distinct
+// values stay distinct, so nothing collapses.
+var shellBoilerplateRE = regexp.MustCompile(`^(?:[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|]*[ \t]*(?:;|\n)|cd[ \t]+[^\s;&|]+[ \t]*(?:;|&&|\n))\s*)+`)
+
 // mineRawSummaryCap bounds the bytes a key-less input contributes to a
 // signature. TruncateOneLine cuts to 100 runes anyway, so anything past this
 // could only ever be thrown away — but converting the raw first would copy
@@ -565,7 +625,26 @@ func mineInputSummary(input json.RawMessage) string {
 	}
 	var k mineSummaryKeys
 	_ = json.Unmarshal(input, &k)
-	for _, s := range []string{k.Command, k.FilePath, k.Path, k.Pattern, k.Description, k.Prompt, k.Query, k.URL, k.Skill} {
+	if k.Command != "" {
+		// Strip leading shell boilerplate before the truncation window. Cell
+		// scratchpad paths run well past the 100-rune window, so a command
+		// opening with `S=<scratchpad>; ` or `cd <worktree> && ` spends the
+		// WHOLE signature on the prefix — zero command bytes reach it, and
+		// every such call collapses into one bucket: one real session's 19
+		// distinct analysis commands digested as one call "repeated" 19
+		// times, which is exactly the loop-shaped false positive this
+		// signature feeds the dream loop. This is also where the digest's
+		// Bash signature deliberately diverges from summarizeInput's tool
+		// line (`k r` shows the command as typed; the digest signature wants
+		// distinct commands distinct). Stripping reveals the command; if the
+		// command WAS only boilerplate, keep the original rather than an
+		// empty signature.
+		if cmd := shellBoilerplateRE.ReplaceAllString(k.Command, ""); strings.TrimSpace(cmd) != "" {
+			return TruncateOneLine(cmd, 100)
+		}
+		return TruncateOneLine(k.Command, 100)
+	}
+	for _, s := range []string{k.FilePath, k.Path, k.Pattern, k.Description, k.Prompt, k.Query, k.URL, k.Skill} {
 		if s != "" {
 			return TruncateOneLine(s, 100)
 		}
@@ -577,14 +656,167 @@ func mineInputSummary(input json.RawMessage) string {
 	return TruncateOneLine(string(raw), 100)
 }
 
+// reducer applies the reduction rules, one JSONL line at a time. Its line
+// method is the single implementation those rules have: ReduceTranscript
+// (whole file) and ReduceJSONLBytes (a span the graph ingest already holds
+// in memory) both call it, so the two readers cannot drift — the same
+// one-copy rule core.tokenGroup.commit exists to enforce for the token
+// counters. The one piece of cross-line state is midTurnSeen: one mid-turn
+// message is routinely stored as BOTH a queue-operation and a
+// queued_command attachment (measured corpus-wide: 516 of 935 distinct
+// queued texts carry both records, 305 enqueue-only, 114 attachment-only),
+// so emitting both unconditionally would print most steers twice. The
+// dedupe is per-reducer, so a graph-ingest span boundary that splits a
+// message's two records can still store one steer as two episodes — a
+// duplicate, never a loss.
+type reducer struct {
+	// midTurnSeen holds every mid-turn text already emitted, for collapsing
+	// the enqueue/attachment double-write of one message to one section. A
+	// set rather than a last-emitted string because two messages sent
+	// seconds apart INTERLEAVE their records (enq1, enq2, qc1, qc2 —
+	// observed on real steers), which adjacency cannot catch. The cost is
+	// that a verbatim repeat of an earlier steer is shown once; measured
+	// zero intra-file duplicate steer texts across 500 real transcripts, so
+	// the cost is currently theoretical and bounded by the handful of real
+	// mid-turn messages a session ever carries.
+	midTurnSeen map[string]struct{}
+}
+
+func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return
+	}
+	var rec mineRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		// Same tolerance digestTranscript applies: a wrongly-TYPED field is
+		// not a malformed line — encoding/json fills every good field and
+		// reports the type error at the end, and the struct now carries
+		// top-level content/attachment fields whose types other record
+		// kinds could plausibly collide with. Dropping the whole record
+		// would silently shorten the reduced view, the failure class this
+		// file's error rules exist to prevent.
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return
+		}
+	}
+	if ts := isoMillis(rec.Timestamp); ts > 0 && ts < since {
+		return
+	}
+	// A message typed while a turn is RUNNING never becomes a `user` record:
+	// it is stored as a `queue-operation` (enqueue) and/or an `attachment`
+	// carrying a `queued_command`, and dropping those silenced exactly the
+	// messages a mid-turn send is — course corrections. A reader of the
+	// reduced view saw the agent pivot with no visible prompt. The label is
+	// distinct from [user] because kraken's own daemon bumps (PR-watch and
+	// colour sends into a busy pane) queue through this same channel with
+	// nothing in the record to tell them apart — the text itself says which.
+	switch rec.Type {
+	case "queue-operation":
+		if rec.Operation == "enqueue" {
+			r.midTurn(out, rec.Content)
+		}
+		return
+	case "attachment":
+		if rec.Attachment.Type == "queued_command" {
+			r.midTurn(out, rec.Attachment.Prompt)
+		}
+		return
+	case "assistant", "user":
+	default:
+		return // mode, file-history, system bookkeeping
+	}
+	if rec.Type == "user" {
+		if text, ok := mineUserString(rec.Message.Content); ok {
+			writeUserish(out, text)
+			return
+		}
+		for _, b := range mineBlocks(rec.Message.Content) {
+			if b.Type == "text" {
+				writeUserish(out, b.Text)
+			}
+			// tool_result blocks are the dropped mass — the call above
+			// already named what was attempted.
+		}
+		return
+	}
+	for _, b := range mineBlocks(rec.Message.Content) {
+		switch b.Type {
+		case "text":
+			writeReduced(out, "[assistant]", b.Text)
+		case "tool_use":
+			if b.Name != "" {
+				out.WriteString("[tool] " + callSignature(b.Name, b.Input) + "\n\n")
+			}
+		}
+		// "thinking" falls through: dropped.
+	}
+}
+
+// backgroundAgentsNoticeRE matches the harness's own "N background agents
+// were stopped by the user" notice, which arrives through the queue channel
+// beside real steers. It records a user ACTION but its prose is the
+// harness's — quoted as [user mid-turn] it would enter the dream loop's
+// prompting feedback as words carl never typed.
+var backgroundAgentsNoticeRE = regexp.MustCompile(`^\d+ background agents? (?:was|were) stopped by the user`)
+
+// midTurn emits one queued mid-turn message as [user mid-turn] — or as
+// [teammate <id> mid-turn] when it carries a teammate envelope, the same
+// routing writeUserish gives ordinary user records, since mislabelling
+// another agent's words as carl's is the one thing the reduction must never
+// do. Dropped: blanks, the task-notifications that queue through the same
+// channel in bulk (system bookkeeping, exactly the mass the reduction
+// exists to drop), the harness's stopped-agents notice, and ANY text
+// already emitted (the enqueue/attachment double-write of one message —
+// see midTurnSeen for why a set rather than adjacency).
+func (r *reducer) midTurn(out *bytes.Buffer, text string) {
+	t := strings.TrimSpace(text)
+	if t == "" || strings.HasPrefix(t, "<task-notification>") || backgroundAgentsNoticeRE.MatchString(t) {
+		return
+	}
+	if r.midTurnSeen == nil {
+		r.midTurnSeen = make(map[string]struct{})
+	}
+	if _, dup := r.midTurnSeen[t]; dup {
+		return
+	}
+	r.midTurnSeen[t] = struct{}{}
+	if b, ok := teammateBlock(t); ok {
+		writeReduced(out, "[teammate "+b.From+" mid-turn]", b.Text)
+		return
+	}
+	writeReduced(out, "[user mid-turn]", t)
+}
+
+// ReduceJSONLBytes reduces a JSONL span already in memory, per reducer.line's
+// rules with no since filter (the caller chose the span). The graph ingest
+// uses it so kg_episodes stores decision-relevant text rather than raw
+// records — storing raw would have written the tool-result and attachment
+// mass (the large majority of transcript bytes) into kraken.db at the full
+// drain rate, unboundedly (review finding).
+func ReduceJSONLBytes(data []byte) []byte {
+	var out bytes.Buffer
+	var r reducer
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		r.line(&out, line, 0)
+	}
+	return bytes.TrimSpace(out.Bytes())
+}
+
 // ReduceTranscript returns the decision-relevant view of one transcript:
 // user prose, tool calls and assistant text, with thinking, tool results
-// and attachments dropped. This is what a per-transcript scout reads.
+// and attachments dropped — except a queued mid-turn message, which rides
+// in a `queue-operation` or `attachment` record and is emitted as
+// `[user mid-turn]` (see reducer.line). This is what a per-transcript scout
+// reads.
 //
 // Output is line-oriented and turn-ordered, one labelled section per block:
 //
 //	[user]
 //	go fix the flaky test
+//
+//	[user mid-turn]
+//	actually scope it to the parser only
 //
 //	[assistant]
 //	Found it — the fixture races on mtime.
@@ -616,66 +848,6 @@ func mineInputSummary(input json.RawMessage) string {
 // extra shrink is the since filter dropping the pre-window history a
 // long-lived session's file carries.
 //
-// reduceLine applies the reduction rules to ONE JSONL line. It is the single
-// implementation those rules have: ReduceTranscript (whole file) and
-// ReduceJSONLBytes (a span the graph ingest already holds in memory) both
-// call it, so the two readers cannot drift — the same one-copy rule
-// core.tokenGroup.commit exists to enforce for the token counters.
-func reduceLine(out *bytes.Buffer, line []byte, since int64) {
-	if len(bytes.TrimSpace(line)) == 0 {
-		return
-	}
-	var rec mineRecord
-	if json.Unmarshal(line, &rec) != nil {
-		return
-	}
-	if rec.Type != "assistant" && rec.Type != "user" {
-		return // mode, attachment, file-history, system bookkeeping
-	}
-	if ts := isoMillis(rec.Timestamp); ts > 0 && ts < since {
-		return
-	}
-	if rec.Type == "user" {
-		if text, ok := mineUserString(rec.Message.Content); ok {
-			writeUserish(out, text)
-			return
-		}
-		for _, b := range mineBlocks(rec.Message.Content) {
-			if b.Type == "text" {
-				writeUserish(out, b.Text)
-			}
-			// tool_result blocks are the dropped mass — the call above
-			// already named what was attempted.
-		}
-		return
-	}
-	for _, b := range mineBlocks(rec.Message.Content) {
-		switch b.Type {
-		case "text":
-			writeReduced(out, "[assistant]", b.Text)
-		case "tool_use":
-			if b.Name != "" {
-				out.WriteString("[tool] " + callSignature(b.Name, b.Input) + "\n\n")
-			}
-		}
-		// "thinking" falls through: dropped.
-	}
-}
-
-// ReduceJSONLBytes reduces a JSONL span already in memory, per reduceLine's
-// rules with no since filter (the caller chose the span). The graph ingest
-// uses it so kg_episodes stores decision-relevant text rather than raw
-// records — storing raw would have written the tool-result and attachment
-// mass (the large majority of transcript bytes) into kraken.db at the full
-// drain rate, unboundedly (review finding).
-func ReduceJSONLBytes(data []byte) []byte {
-	var out bytes.Buffer
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		reduceLine(&out, line, 0)
-	}
-	return bytes.TrimSpace(out.Bytes())
-}
-
 // Records older than since (unix millis) are excluded, on the same
 // per-record-timestamp rule MineTranscripts applies. Errors only when the
 // file can't be opened; malformed lines are skipped.
@@ -687,10 +859,11 @@ func ReduceTranscript(path string, since int64) ([]byte, error) {
 	defer f.Close()
 
 	var out bytes.Buffer
+	var r reducer
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
 	for sc.Scan() {
-		reduceLine(&out, sc.Bytes(), since)
+		r.line(&out, sc.Bytes(), since)
 	}
 	// Fail closed on a truncated scan. A scout handed the first 3% of a
 	// session with no error would reason about it as if it were the whole

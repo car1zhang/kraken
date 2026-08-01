@@ -592,8 +592,10 @@ func sweepTranscripts(st *store.Store, cursors map[string]int64) error {
 		n++
 		// The episode stores the REDUCED span — user prose, tool calls,
 		// assistant text; thinking, tool results and attachments dropped —
-		// via the one implementation of that rule (core's reduceLine, shared
-		// with k mine reduce). Storing raw spans measured as ~177 MB/day of
+		// via the one implementation of that rule (core's reducer.line,
+		// shared with k mine reduce; a queued mid-turn steer whose two
+		// records straddle a span boundary can enter twice — a duplicate
+		// episode, never a loss). Storing raw spans measured as ~177 MB/day of
 		// mostly tool-result bytes into kraken.db (review finding). The
 		// CURSOR still advances over the raw bytes, and the ref records the
 		// raw span, so nothing is lost: the extraction agent can reach the

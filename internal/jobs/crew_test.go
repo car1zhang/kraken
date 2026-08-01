@@ -358,6 +358,15 @@ func TestZeusBriefStaysLean(t *testing.T) {
 	// interpolations make every real brief cheaper than this one.
 	slug := strings.Repeat("s", 48)
 	brief := zeusBrief(&Job{Slug: slug})
+	// Always log the measurement: this line is the ONLY sanctioned way to read
+	// the current size
+	// (`go test -tags sqlite_fts5 -run TestZeusBriefStaysLean -v ./internal/jobs`).
+	// When it printed only inside t.Errorf, five agents in one job independently
+	// injected 23 throwaway probe tests into the shared worktree to learn a
+	// number this test already computes, and a stale prose copy of it misled a
+	// review — so never quote a written-down figure; run this and read the log.
+	t.Logf("zeusBrief: %d bytes for a %d-char slug (ceiling %d, headroom %d)",
+		len(brief), len(slug), ceiling, ceiling-len(brief))
 	if len(brief) > ceiling {
 		t.Errorf("brief is %d bytes for a %d-char slug, over the %d-byte ceiling — procedure has "+
 			"crept back in from the skills; move it to .claude/skills/ rather than raising this number",
