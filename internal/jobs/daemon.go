@@ -1220,9 +1220,16 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 		case firstSight:
 			newLastCommentAt = f.LastCommentAt // seed silently — no history flood
 		case f.LastCommentAt > lastCommentAt:
+			// The suggested command matters: `gh pr view --comments` shows
+			// ISSUE comments only, and the comment that triggered this bump
+			// is routinely an INLINE review comment it cannot show — two
+			// cells have chased "left a comment" through the wrong command,
+			// one finding only a bot notice where carl's review sat inline.
+			// The PR number is substituted from the url ({owner}/{repo} gh
+			// expands itself; a bare N it does not).
 			parts = append(parts, fmt.Sprintf(
-				"%s got a new comment or review — read it with `gh pr view %s --comments`, address it (reply or fix), and continue",
-				url, url))
+				"%s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
+				url, url, url[strings.LastIndex(url, "/")+1:]))
 			newLastCommentAt = f.LastCommentAt
 		}
 	}
