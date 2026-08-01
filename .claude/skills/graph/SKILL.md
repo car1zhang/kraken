@@ -166,6 +166,52 @@ re-send the rest rather than treating the batch as unwritten.
 from** — an episode with no durable facts in it is a processed episode, and leaving it pending means
 the next run pays for it again. Say how many you skipped and why in the report.
 
+### 7. Sweep for connectivity
+
+Extraction produces spokes. Each episode's facts point at the entities that episode mentions —
+usually a hub plus a handful of leaves — and nothing ties one batch's leaves to another's. Left
+alone the graph converges on hub-and-spoke: the first sweep (2026-08-01) found the whole
+pre-existing kraken cluster — zeus, athena, the web board, the pipeline skills — connected to carl
+and never to the `kraken` node itself, and `ServiceTitan` sitting at degree zero. Sweep once per
+run, after the batch is written and its episodes closed — and a run with no pending episodes still
+sweeps, because the sweep walks the graph, not the batch.
+
+- Pull the whole graph in one read:
+  `ADDR="${KRAKEN_SERVE_ADDR:-127.0.0.1:7777}"; curl -sf --max-time 10
+  "http://${ADDR#http*://}/api/graph"` — the board's own read route, on the same address knob
+  every `k` verb resolves through (the knob may carry a scheme, so strip one rather than double
+  it; and still never kraken.db directly). Empty output is a failed read, never an empty graph. The route returns
+  invalidated edges too (the viewer draws history struck through), so compute each node's degree
+  over `expired_at == 0` edges only — count a dead fact and the freshly-orphaned node it left
+  behind is exactly the one the walk skips. Do the counting in `python3` (the interpreter a cell
+  is guaranteed to have); read prose only for the nodes you actually walk.
+- Walk the lowest-degree nodes first (0, then 1), plus the nodes this batch created, capped at
+  about one batch's worth (~25 nodes, batch nodes included) — the walk otherwise grows with the
+  graph while the batch stays fixed. A node a previous report already recorded as refused gives
+  its slot to one not yet considered, so a standing backlog cannot pin the head of the queue. For each, ask what existing node it is genuinely related to, and whether that
+  relation stands alone as a fact sentence supported by a node's description, one of this batch's
+  episodes, or a live fact the graph already holds. A world-closed edge (`valid_until` set, still
+  live) counts toward degree, but is not evidence for a new fact — the world moved past it.
+- Write the passing edges through `k graph add`, strengths by the same rules as extraction, with
+  **one call per distinct provenance**: `episode_id` is a field of the whole request, so edges
+  evidenced by a batch episode go in a call carrying `--episode <that id>`, while edges supported
+  only by what the graph already holds go in a call that OMITS `--episode` entirely — the flag
+  takes positive ids only, and the payload's absent `episode_id` writes the store's 0, its marker
+  for a row with no source episode. That is a real exception to the data model's
+  every-fact-points-back rule, tolerable here because the sweep's evidence IS the graph; keep it
+  the minority and say in the report how many edges carry it.
+- **A sweep adds edges, never nodes** — and the server will not hold that line for you: an edge
+  endpoint that resolves to nothing silently creates a bare node with no type and no description,
+  and the response's `nodes` list does not mention it. So endpoint names are copied verbatim from
+  the `/api/graph` payload's `name` field, the sweep payload sends no `nodes` array at all, and a
+  name missing from that node list is a bug in the sweep, never a new entity.
+- **One pass, same rule as gleaning: sweep once and stop.** Connectivity is a shape, not a quota —
+  an edge invented to raise a degree number is exactly the wrong-fact-in-a-brief failure this
+  skill exists to prevent. An edge whose result comes back `added: false` folded into a fact
+  already there — report it as already known, not as a new link, and never restate a fact whose
+  only evidence is that same fact, which counts the graph as its own witness. And like
+  canonicalization, the sweep needs the whole graph at once: never hand slices of it to a crew.
+
 ---
 
 ## Revision mode
@@ -212,8 +258,12 @@ specific, and it is the only place the cell's real paths appear:
 
 - **The report goes in the brief's SET ROOT** (`<cellDir>/artifacts/`) as `00-graph-report.md`. Keep
   it to a page: what was ingested (or revised), the judgment calls, what you refused to add and why,
-  and any episode you closed without extracting from. That last section is the one that tells carl
-  whether a quiet run was a clean one or a blind one.
+  what the connectivity sweep linked and what it walked but refused (ingest mode only; sweep edges
+  count toward the closing line's fact count), and any episode you closed without extracting from.
+  That last section is the one that tells carl whether a quiet run was a clean one or a blind one.
+  Previous nights' reports survive as flat copies at `~/Documents/pluto/<slug>-<id>.00-graph-report.md`
+  (moved into `archive/` when their job is archived); the sweep reads the most recent few for the
+  nodes already recorded as refused — the only cross-run state it has.
 - **Read and write the graph with `k graph pending|search|add|done|stats`.** Never open `kraken.db`
   directly — `kraken serve` is its single writer, and a second handle would run migrations.
 - **This job opens no PR.** The graph lives in `kraken.db`; nothing here belongs in git. If you find a
