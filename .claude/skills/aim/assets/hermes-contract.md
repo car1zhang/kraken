@@ -461,7 +461,7 @@ right column is the class you put on the `<g>`. Kind synonyms live here and nowh
 | Kind | Shape class | Silhouette |
 |---|---|---|
 | Go package, module, library, npm package, embedded FS, skill bundle | `pkg` | rect with two tabs protruding left (UML component) |
-| machine, host, VM, device, Mac, phone | `machine` | 3D box (front + top + right faces) |
+| machine, host, VM, device, Mac, phone | `machine` | 3D box (front + top + right faces) — a component, so it consumes a nesting level; a machine acting only as a BOUNDARY around other components is a `group` labeled `— machine` instead (containment tool #2 below), which is what keeps `machine > store > table` from tripping `NEST_DEPTH` |
 | external third-party service (GitHub API, Anthropic API, ngrok, Supabase) | `cloud` | cloud outline |
 | ownership / process / network / package / file-ownership boundary | `group` | dashed container, labeled `<name> — <boundary type>` |
 | sequence participant | `lane` | header rect + dashed lifeline |
@@ -1191,7 +1191,11 @@ second copy of this vocabulary (edit both together). Do not do them even once:
 - any color literal — hex (`#fff`), `rgb(...)`, `hsl(...)`, or a named color (`steelblue`, …).
   A named color can only reach the page through a `fill=`/`stroke=` or a `style=`, and both of
   those are banned outright above. Note `class="node red"` is not a color literal: `red` there
-  is a treatment class, and the stylesheet — not you — decides what it paints.
+  is a treatment class, and the stylesheet — not you — decides what it paints. The linter scans
+  raw source lines for these, so a literal `#` in visible TEXT whose digits read as hex — a PR
+  or issue number like `PR #8832` — trips the same check: write it `PR &#35;8832` (the entity
+  renders as `#` and the scan skips `&`-prefixed matches). Never silently drop the `#` — that
+  mutates content to satisfy a style rule.
 - `width=` / `height=` attributes on the root `<svg>`
 - any class outside this catalog — 47 tokens, grouped by the element each one must sit on:
   - **on a `<g>`** (the box family): `node`, `proc`, `cli`, `thread`, `fn`, `agent`, `llm`,

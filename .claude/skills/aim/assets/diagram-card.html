@@ -248,3 +248,13 @@
   <!-- DIAGRAM: {{DIAGRAM_ID}} -->
   <figcaption>{{CAPTION}}</figcaption>
 </figure>
+
+<script>
+  /* The reduced-motion CSS above stops CSS animations only: SMIL (<animate>,
+     <animateMotion> — the stage pulses and flow dots the contract sanctions) ignores
+     `animation: none`, and pauseAnimations() is the one lever that reaches it. The
+     no-JS rule is the FRAGMENT's (aim's animate bullet); the host card is where the
+     pause has to live, so do not delete this to enforce that rule. */
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches)
+    document.querySelectorAll('svg').forEach(function (s) { if (s.pauseAnimations) s.pauseAnimations(); });
+</script>

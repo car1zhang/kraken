@@ -113,17 +113,27 @@ No other cell writes this column, so it cannot be anyone else's.
 
 Two passes, and the first is what makes the second affordable.
 
-**The mechanical pass** is `kraken mine digest --since <ts>`. It reads every transcript in the
-window and counts what is countable: tool calls, `is_error` clusters by tool, interrupts (carl
+**The mechanical pass** is `kraken mine digest --since <ts>`. Its JSON goes to stdout and its
+human summary to STDERR, so stage it as `> digest.json 2>digest.err` — never `2>&1`, which
+interleaves the summary into the JSON and hands every downstream reader a corrupt file. It reads
+every transcript in the window and counts what is countable: tool calls, `is_error` clusters by
+tool, interrupts (carl
 pressing escape), `<synthetic>` API failures, output-ceiling deaths (`MaxTokensStops` — messages cut
 at stop_reason max_tokens, the failure that burns a whole budget while reading as a clean session),
 turn durations, literally repeated calls, and the four
 **token counters** (`In`, `Out`, `CacheWrite`, `CacheRead`) per session plus a roll-up across the
 whole sweep. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
 — user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
-which is about an eighth of the bytes.
+which is about an eighth of the bytes. Carl's MID-TURN messages — typed while a turn was running,
+the course corrections that matter most to the prompting-feedback output — are stored as queue
+records rather than user records and emit as `[user mid-turn]`; kraken's own daemon bumps queue
+through the same channel and read the same way, so judge by the text.
 
-**Rank by spend, not by tool-call count.** The token roll-up is the cheapest correct answer to
+**Rank by spend, not by tool-call count — and rank CELLS, scouting each one whole.** A per-session
+ranking selects agent SHAPE rather than anomaly: a diagram renderer whose brief forbids emitting
+SVG into its reply structurally tops output-per-line, and a subagent sidecar structurally bottoms
+it, so session-ranked scout slots go to agent kinds, not problems. Group each cell's sessions into
+one scout assignment and rank the cells. The token roll-up is the cheapest correct answer to
 "where did last night actually go", and it does not agree with the tool-call counts: a session that
 polls a pane four hundred times looks busy and costs little, while one that re-renders the same
 figure three times looks quiet and costs a lot. Sort the digests by cost, and read the top of that
@@ -141,14 +151,30 @@ exactly what `reduce` drops, so a question about where output tokens went, what 
 returned, or what carl steered mid-turn CANNOT be answered from the artifact the scout was given — and
 every scout worth reading last night was one that ignored a "sparingly" and went to the raw JSONL
 anyway. Seven of them, independently; four of the night's best findings exist only because of it.
-A brief must not send a subagent to an artifact that cannot contain the answer.
+A brief must not send a subagent to an artifact that cannot contain the answer. One more thing the
+raw file cannot show a scout: an inbound `SendMessage` leaves ZERO trace in a subagent sidecar —
+the sidecar records the effect and never the cause — so a sidecar-heavy assignment's brief says to
+cross-check the parent session's `SendMessage`/`Agent` calls before attributing a mid-run pivot to
+the agent's own judgment.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
 unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
-channel truncates. Spawn them in waves rather than all at once; a few at a time, with the remainder
-running as slots free. Every transcript gets read; the pass simply takes as long as it takes. For how
+channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
+(staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
+and the collision recovery costs more than the namespace would have. And carry the shell-dialect
+rule from `.claude/skills/do/SKILL.md` step 4 into every scout brief — scouts hit the same zsh
+aborts every other agent does, on their first command. Spawn them in waves rather than all at
+once; a few at a time, with the remainder
+running as slots free. Every transcript gets read; the pass simply takes as long as it takes. **A
+respawn after a kill gets a FRESH report path** (`<name>-B.md`, then `-C` and so on), and you check
+the original path first — a killed scout may have finished its report before dying, and a respawn's
+heredoc fallback overwrites without the Write tool's read-first guard, so handing it the same path
+destroys the one copy of a finished report (a finished 22 KB report survived exactly this only
+because `Write` happened to refuse). "Finished" means it ends with its Coverage section — a scout
+killed mid-write leaves a non-empty, truncated report, the same on-disk shape as a complete one,
+so non-empty is not the test. For how
 to WAIT on that many report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet
 and the sub-bullets under it; it is the one specification of the protocol and it applies here
 unchanged. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor` and
@@ -180,7 +206,9 @@ implied reading and find the real cause, where "confirm that X" would have got X
 pasted into every brief is its own defect — when you suspect a cross-cutting cause, investigate it
 once yourself or name ONE scout its owner, rather than making N scouts rediscover it in parallel.
 
-**Require a per-transcript coverage line, as a filled slot rather than a habit.** A scout that
+**Require a per-transcript coverage line, as a filled slot rather than a habit — and Coverage is
+the report's FINAL section**, which is what makes "a finished report ends with its Coverage
+section" a checkable test on a killed scout's file. A scout that
 `sed`-peeked twelve of seventeen files and closed with "17 sessions read" is not lying; it is
 answering a template that never asked. Put READ or SAMPLED per assigned transcript in the report
 format, and bar a "clean" verdict on a SAMPLED one — a template slot gets filled, a good intention
@@ -200,8 +228,17 @@ large to hold at once, that is itself a job for one more subagent under exactly 
 — `general-purpose`, scratch path outside the repo, file written in one shot, and not at all under
 `solo: true` — handed the findings directory and asked for the cross-cutting matrix. But "I read the
 notifications" is not reading them.
-The checkable form of this rule lives in the report: **every finding cites its source, and a finding
-that came from a scout cites that scout's file and quotes one verbatim line out of it.** A finding
+The checkable form of this rule lives in the report's COVERAGE section, as a filled slot rather
+than a promise — a citation format alone is satisfiable by grepping a closed report for quotable
+lines, and one pass did exactly that: wrote the report first, then back-filled its citations with
+nine `grep | head` calls in 27 seconds, three reports never opened. So Coverage lists **every scout
+report file by name with its size and READ IN FULL or PARTIAL (saying what was skipped)** — and a
+finding may only cite a report listed READ IN FULL, or a PARTIAL one when the finding comes from a
+section the skipped-note names as read (a legitimately partial read of an oversized report must not
+push the pass into mislabelling it FULL). List the reports as you finish reading them,
+before any finding is written; the order is the honest part. Alongside it: **every finding cites
+its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
+line out of it.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
 snapshot, the watchlist id — and a `solo: true` night says so once at the top and cites what it read
 directly. A night synthesized from notifications cannot produce the scout citations, so it fails its
@@ -274,7 +311,7 @@ Write `00-dream-report.md` into the artifacts dir. Keep it to a page, and never 
 | Watching | New rows, and what changed on existing ones — the watchlist is not committed, so this is the only place its movement is visible. |
 | Your prompting | The prompting feedback, quoted. |
 | Seen, not actionable | One line each, capped around ten. It is what distinguishes a quiet night from a blind one. |
-| Coverage | Transcripts read, feedback notes swept, and anything skipped. |
+| Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. |
 
 ## Inside A Kraken Cell
 
