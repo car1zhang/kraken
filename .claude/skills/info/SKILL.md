@@ -112,7 +112,18 @@ short form, with /info's overrides:
   contents pasted inline, which is /aim's rule and not an /info override: a re-typed contract
   silently diverges from the file and from the other teammates' copies, and the file is already
   materialized in the teammate's own cwd. Then the diagram's exact content, a card-unique
-  `arrow-<id>` marker id and path-id prefix, the fragment output path, and the anti-artifact rules:
+  `arrow-<id>` marker id and path-id prefix, the fragment output path — with /aim's two
+  fragment-write clauses: **Read an existing output file before writing it** (Write refuses
+  otherwise), and on first authorship **write incrementally** (`Write` the opening section, `Edit`
+  the rest in; composing a whole SVG in extended thinking has died at the output ceiling
+  repeatedly, invisibly) — **its own scratch report
+  path** (`/tmp/<slug>-hermes-<diagram-id>-r<N>.md`) and **the exact lint command with both flags
+  already filled in** — hermes runs it and writes its report with the argv and the linter's complete
+  output verbatim, and that report file, never the fragment, is what you wait on (per /aim's
+  done-test bullet: a lead that waits on the fragment wakes before the lint has run, lints
+  concurrently with the teammate's own run, and — measured in an /info round — gets an UNFLAGGED
+  `clean` from a hermes whose brief never carried the flags, then TaskStops it mid-turn) — and the
+  anti-artifact rules:
   no overlapping elements, text measured against its box (~7px/char at 13px) and wrapped with
   tspans before it can overflow, edges attached to box borders and routed around (never through)
   other boxes, every coordinate inside the viewBox, generous whitespace between groups.
@@ -137,12 +148,14 @@ short form, with /info's overrides:
   decision procedure live in `.claude/skills/aim/assets/hermes-contract.md` § Colour Semantics; read
   that before assigning, and LOOK at `.claude/skills/aim/assets/palette-reference.html` whenever a
   call is not obvious.
-- Lint before wrapping: `python3 .claude/skills/aim/assets/lint_svg.py <fragment> --marker-id
-  arrow-<id> --prefix <prefix>`. `SendMessage` line-numbered violations back to that same
-  `hermes-<diagram-id>` teammate — it still holds its fragment's context, so never spawn a fresh
-  agent for a fix round (max 2 rounds, then debug the fragment source directly). A hermes is done
-  when its fragment lints CLEAN, not when it reports the fragment written — stop it (TaskStop, bare
-  name) only then. Only lint-clean fragments get wrapped.
+- The done-test is /aim's, not a lighter one: read hermes' REPORT (argv + verbatim linter output),
+  then lint once yourself to confirm — with the same two flags — only AFTER that report arrives,
+  never concurrently. `SendMessage` line-numbered violations back to that same `hermes-<diagram-id>`
+  teammate — it still holds its fragment's context, so never spawn a fresh agent for a fix round
+  (max 2 rounds, then debug the fragment source directly). A hermes is done when every fragment it
+  owns lints CLEAN under the flagged command, or carries an accepted warning per /aim's done-test
+  bullet — not when it reports the fragment written — and is stopped (TaskStop, bare name) only
+  then. Only settled fragments get wrapped.
 - Wrap per /aim's "Wrap, don't flatten" rule: copy `.claude/skills/aim/assets/diagram-card.html`
   to `<set-root>/10-<id>.html` (next free number in `10-49`, assigned sequentially; never 3-digit
   prefixes) and substitute all three placeholders with a python one-liner using `str.replace`

@@ -231,6 +231,13 @@ STATUS_CLASSES = set(TREATMENT_GLYPHS)
 
 # (?<!&) keeps XML numeric character references (&#8594; etc.) from matching as hex colors.
 COLOR_LITERAL_RE = re.compile(r"(?<!&)#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
+# Reference ids are DATA, not paint: href="#..."/url(#...) forms carry a leading # and
+# an id that CAN be all hex-alphabet characters (#fade, #face — #arrow-x cannot match,
+# 'r' is not hex), so references are scrubbed from a line before the color scan or every
+# marker/gradient reference with an unlucky id fails COLOR_LITERAL. Both quote styles
+# and inner whitespace are covered; the classes stop at the closing delimiter, so a real
+# literal elsewhere on the line still fails.
+COLOR_LITERAL_REF_RE = re.compile(r'''(?:xlink:)?href\s*=\s*["']#[^"']*["']|url\(\s*["']?#[^)]*\)''')
 
 _NUM = r"-?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _PATH_TOKEN_RE = re.compile(r"[MmLlHhVvCcSsQqTtAaZz]|" + _NUM)
@@ -661,7 +668,7 @@ def lint(path, marker_id=None, prefix=None):
     # COLOR_LITERAL — scan raw source lines (also catches literals inside a
     # style="" value or a <style> block, on top of their own rule failures)
     for lineno, line_text in enumerate(text.splitlines(), start=1):
-        if COLOR_LITERAL_RE.search(line_text):
+        if COLOR_LITERAL_RE.search(COLOR_LITERAL_REF_RE.sub("", line_text)):
             failures.append((lineno, "COLOR_LITERAL",
                               "hex/rgb/hsl color literal found; use a sanctioned class instead"))
 
