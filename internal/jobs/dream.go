@@ -393,10 +393,15 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		"- Feedback: `kraken feedback sweep --since " + fmt.Sprint(since) + "`\n" +
 		"- Transcripts: every claude session touched in that window.\n" +
 		"\n" +
-		"Both edges are unix millis in kraken's own watermark (`dream_last_run.swept_to`);\n" +
-		"the floor is where the last pass stopped, so a row is normally read exactly\n" +
-		"once. The skill names the two seams where it is not, and what to do about\n" +
-		"each: a long enough gap between passes drops the oldest evidence entirely,\n" +
+		"Both edges are unix millis in kraken's own watermark (`dream_last_run.swept_to`),\n" +
+		"but only the FLOOR is a tool argument: `kraken mine digest`/`reduce` take `--since`\n" +
+		"alone, so apply the ceiling yourself: skip sessions whose records all postdate it —\n" +
+		"they are tomorrow's evidence — while a session that STRADDLES the ceiling is read\n" +
+		"whole and its post-ceiling tail comes back tomorrow, expected rather than a bug\n" +
+		"(two earlier passes, 2026-08-01 and 2026-08-02, each had to rediscover the\n" +
+		"ceiling). The floor is where the last pass stopped, so a row is normally\n" +
+		"read exactly once. The skill names the two seams where it is not, and what to do\n" +
+		"about each: a long enough gap between passes drops the oldest evidence entirely,\n" +
 		"and a note written between this job's creation and your sweep comes back\n" +
 		"tomorrow. Do not widen the window on your own initiative.\n" +
 		clampNote(clamped) +
