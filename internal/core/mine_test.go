@@ -671,8 +671,11 @@ func TestReduceTranscript(t *testing.T) {
 // non-queued_command attachment stay dropped, and the since filter applies.
 // Two more rules, both measured: task-notifications queue through this same
 // channel in bulk (92 in one real session) and are dropped by prefix; and
-// one real message is stored as BOTH records (82 of 83 on this machine), so
-// an immediate repeat of the same text collapses to one section.
+// one real message is routinely stored as BOTH records (516 of 935 distinct
+// queued texts corpus-wide — the measurement the reducer doc comment
+// carries), so a repeat of an already-emitted text collapses to one section
+// even when a second message's records interleave between the pair — a
+// seen-set, not adjacency, which the interleaved fixture below exercises.
 func TestReduceTranscriptEmitsMidTurnSteers(t *testing.T) {
 	projects := mineHome(t)
 	now := time.Now().UnixMilli()
