@@ -507,13 +507,31 @@ blob is empty — "no frozen copy" is not "an empty frozen copy"), 405
 ### `GET /api/watchlist[?state=]`
 
 The dream loop's watchlist: observations the nightly pass is tracking, newest
-observation first (`last_seen` DESC, `id` DESC). **Additive, no contract
-bump.** Unlike questions and feedback, watchlist rows are GLOBAL — they
-belong to no job, so there is no `slug` on this route or either of its
-writes.
+observation first (`last_seen` DESC, id DESC). **Additive, no contract bump.**
+Unlike questions and feedback, watch items are GLOBAL — they belong to no job,
+so there is no `slug` on this route or either of its writes.
+
+**A watch item is a knowledge-graph edge.** The observation IS the edge's fact
+sentence (`kg_edges.fact`); a thin overlay row in `kg_watch`, keyed by edge id,
+carries the dream-loop workflow and carl's judgement. Two consequences for a
+client:
+
+- **`id` is an EDGE id** — the same id `GET /api/graph` and
+  `POST /api/graph/search` print for that fact. It is still opaque to the app,
+  and still the id both writes below take.
+- **An invalidated fact leaves the list.** The join is against LIVE edges only,
+  so the graph's revision pass striking a fact through is also the DREAM view
+  dropping it. To a client that reads as an item disappearing — the same thing
+  a removal has always looked like.
+
+Nothing else moved: the keys, their json names, their types and their
+optionality are byte-for-byte what they were before the move, so the DREAM view
+and the iOS app decode this unchanged. `src`/`dst`/`predicate` are deliberately
+NOT on this wire — adding a key to an existing shape is a contract bump, and
+the graph routes already expose linkage.
 
 `state` narrows to one of `watching`|`shipped`|`declined`; omitted or empty
-means every row. An unrecognized state is a 400, not an empty list — a typo'd
+means every item. An unrecognized state is a 400, not an empty list — a typo'd
 filter and an empty watchlist are different answers.
 
 Response: `{"watchlist": [webWatchItem]}` — always an array, never `null`.
@@ -524,11 +542,11 @@ property is `watchClass` behind an explicit CodingKey.
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `id` | number | always | |
-| `observation` | string | always | what the pass noticed |
+| `id` | number | always | the watched edge's id |
+| `observation` | string | always | what the pass noticed — the edge's fact sentence, whitespace-collapsed to one line |
 | `class` | string | always | `feedback`\|`correction`\|`repetition`\|`waste`\|`prompting` |
 | `state` | string | always | `watching`\|`shipped`\|`declined` |
-| `sightings` | number | always | a repeat folds into the existing row and increments this, rather than adding a second row |
+| `sightings` | number | always | a repeat folds into the existing item and increments this, rather than adding a second one. Distinct from the edge's own `occurrences` (episode corroboration) — the two are deliberately not kept in sync |
 | `first_seen` | number | always | unix millis |
 | `last_seen` | number | always | unix millis |
 | `evidence` | string | omitempty | JSON sample of the most recent occurrence, replaced wholesale on each sighting. Local-only — it never enters git |
@@ -539,31 +557,33 @@ property is `watchClass` behind an explicit CodingKey.
 | `comment` | string | omitempty | carl-owned |
 | `commented_at` | string | omitempty | carl-owned, RFC3339, stamped server-side |
 
-The row's columns have two owners, and the two writes below are split to
+The overlay's columns have two owners, and the two writes below are split to
 match — the store enforces it column by column (`UpdateWatchItem` never
 writes carl's trio; `SetWatchVerdict` never writes anything else).
 
 ### `POST /api/watchlist`
 
-**Carl's write** — the board's DREAM view judging a row. Web-UI/iOS-facing.
+**Carl's write** — the board's DREAM view judging an item. Web-UI/iOS-facing.
 Nothing else: it cannot express an observation edit, and a request that even
 MENTIONS an agent-owned key (`observation`, `class`, `state`, `sightings`,
 `first_seen`, `last_seen`, `evidence`, `suggested_fix`, `pr_url`,
-`updated_at`) is refused with a 400 rather than having it silently dropped.
+`updated_at`, `src`, `dst`, `predicate`, `strength`) is refused with a 400
+rather than having it silently dropped.
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `id` | number | required | the watchlist row id |
+| `id` | number | required | the watched edge's id |
 | `verdict` | string | required | `fine`\|`fix`, or `""` to CLEAR the judgement |
 | `comment` | string | omitempty | trimmed |
 
 `commented_at` is stamped server-side in RFC3339 and is never accepted from
 the client. An empty `verdict` **and** an empty `comment` clears all three
-columns (reopening the row) — the documented undo.
+columns (reopening the item) — the documented undo.
 
 Response: `{"ok": true}`. Errors: 400 (missing/zero `id`, a verdict outside
-the set, an agent-owned key), 404 (unknown id), 413 (body over 1MB), 500.
-Gated under `--mirror` with the standard plain-text 403.
+the set, an agent-owned key), 404 (unknown item — no overlay row, **or** an
+overlay whose edge has been invalidated), 413 (body over 1MB), 500. Gated
+under `--mirror` with the standard plain-text 403.
 
 Modeled in the iOS app (`WatchVerdictRequest` in Models.swift,
 `setWatchVerdict` in APIClient.swift) — the DREAM screen's fine/fix control
@@ -587,26 +607,61 @@ that echoed a whole row back from the GET needs to be told.
 |---|---|---|---|
 | `op` | string | required | `add`\|`update`\|`remove` |
 | `item` | object | required for add/update | a `watchItemWire` (below) |
-| `id` | number | required for remove | the row id |
+| `id` | number | required for remove | the watched edge's id |
 
-`watchItemWire` — every key optional on the wire; the handler validates:
+`watchItemWire` — every key optional on the wire; the handler validates per op:
 
 | key | type | notes |
 |---|---|---|
 | `id` | number | required on `update`, ignored on `add` |
-| `observation` | string | required, non-blank after trim |
-| `class` | string | required, one of the five classes above |
-| `state` | string | one of the three states; blank defaults to `watching` on add, and PRESERVES the row's current state on update |
-| `sightings` | number | blank/zero on update preserves the row's current count |
-| `first_seen` / `last_seen` | number | unix millis; blank/zero on update preserves the row's current values — an update is a full-row restatement, so these are back-filled rather than zeroed |
+| `observation` | string | `add` only, required, non-blank after whitespace collapse. **Refused on `update`** |
+| `class` | string | required on `add`, one of the five classes above; optional on `update` |
+| `src` / `dst` | string | `add` only, required when the observation is genuinely new. Entity NAMES — a name that resolves merges into the existing node, a new one creates a bare node. **Refused on `update`**, ignored on a fold |
+| `predicate` | string | `add` only, optional, defaults to `concerns`. **Refused on `update`** |
+| `strength` | number | `add` only, 1-10, required when the observation is genuinely new — an absent strength is an unstated confidence, not a default. **Refused on `update`**, ignored on a fold |
+| `state` | string | one of the three states; blank defaults to `watching` on add, and leaves the current state alone on update |
+| `sightings` | number | blank/zero on update leaves the current count alone |
+| `first_seen` / `last_seen` | number | unix millis; blank/zero leaves the current values alone — the store's update is partial per column, so a restatement of one field never zeroes the rest |
 | `evidence` | string | JSON sample, replaced wholesale |
 | `suggested_fix` | string | |
 | `pr_url` | string | |
 
-Response: `{"ok": true, "id": number}` — the id is why this isn't the
-standard `{"ok": true}`: a caller that just created a row has no other way to
-learn it. Errors: 400 (unknown op, missing item, blank observation, bad class
-or state, missing id on update/remove, a carl-owned key), 404 (unknown id on
+**`add` is find-or-create, in three steps.** (1) If a WATCHED live edge already
+states this observation — matched case-insensitively on the whitespace-collapsed
+sentence — the add FOLDS: `sightings` increments, `evidence` is replaced, and
+`class`/`state`/`suggested_fix`/`pr_url` are applied when sent. `src`/`dst`/
+`predicate`/`strength` are ignored: the observation already has endpoints.
+(2) Else if an UNWATCHED live edge states it — a fact some transcript or
+feedback note already contributed — that edge is PROMOTED: the overlay attaches
+to it rather than minting a second copy of the sentence. (3) Else the endpoints
+are upserted, an episode is created (kind `watchlist`, marked done immediately —
+extracting it later would only mint a near-duplicate of the edge just written),
+the edge is inserted, and the overlay attaches.
+
+**`update` writes the overlay only.** The fact sentence and its endpoints are
+refused with a 400 rather than ignored: `kg_edges` is insert-only, so no verb
+could honor a reword — remove and re-add to reword.
+
+**`remove` UNWATCHES.** The overlay row goes; the edge and its episode survive
+untouched, and the fact stays searchable. Unlearning the fact itself is
+`POST /api/graph/add`'s `invalidate` list.
+
+Responses:
+
+| op | body |
+|---|---|
+| `add` | `{"ok": true, "id": number, "folded": bool}` — `id` is the edge id, whether created, promoted or folded into; `folded` tells the caller its observation was a repeat |
+| `update` | `{"ok": true, "id": number}` |
+| `remove` | `{"ok": true, "unwatched": true}` — spelled out because "remove" is narrower than it reads: the fact survives |
+
+The id on `add`/`update` is why those aren't the standard `{"ok": true}`: a
+caller that just watched something has no other way to learn its id. These
+three shapes are CLI-facing only (the iOS app never calls this route), so the
+added keys are not a contract bump.
+
+Errors: 400 (unknown op, missing item, blank observation, bad class or state,
+missing `src`/`dst` or an out-of-range `strength` on a create, an immutable key
+on update, missing id on update/remove, a carl-owned key), 404 (unknown id on
 update/remove), 413 (body over 1MB), 500. Gated under `--mirror`.
 
 ### `GET /api/dream`

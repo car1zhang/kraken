@@ -17,6 +17,10 @@ import (
 // observation) as the thing most of these tests are actually pinning: the
 // store enforces it column by column, and these assert the HTTP layer refuses
 // a wrong-side write loudly instead of silently dropping it.
+//
+// A watch item is now a LIVE GRAPH EDGE plus a kg_watch overlay, so every id
+// here is an edge id and seeding one means writing a real edge. The wire shape
+// is unchanged, which is what these tests keep asserting.
 
 func postWatchVerdict(t *testing.T, body any) *httptest.ResponseRecorder {
 	t.Helper()
@@ -42,11 +46,37 @@ func getWatchlist(t *testing.T, query string) *httptest.ResponseRecorder {
 	return rec
 }
 
-func seedWatchItem(t *testing.T, st *store.Store, w store.WatchItem) int64 {
+// seedWatchEdge writes one live edge stating `observation` and returns its id.
+// The endpoints are the same pair the migration's fallback uses, so a test
+// that seeds several observations gets several edges between two stable nodes
+// rather than a node explosion.
+func seedWatchEdge(t *testing.T, st *store.Store, observation string) int64 {
 	t.Helper()
-	id, err := st.AddWatchItem(w)
+	src, err := st.UpsertNode(store.GraphNode{Name: "dream pass"})
 	if err != nil {
-		t.Fatalf("AddWatchItem: %v", err)
+		t.Fatalf("UpsertNode src: %v", err)
+	}
+	dst, err := st.UpsertNode(store.GraphNode{Name: "kraken"})
+	if err != nil {
+		t.Fatalf("UpsertNode dst: %v", err)
+	}
+	id, _, err := st.InsertEdge(store.GraphEdge{
+		SrcID: src, DstID: dst, Predicate: "concerns", Fact: observation,
+		Strength: 5, ValidFrom: 1,
+	})
+	if err != nil {
+		t.Fatalf("InsertEdge: %v", err)
+	}
+	return id
+}
+
+// seedWatchItem writes the edge AND its overlay, returning the edge id — the
+// id every route in this file takes.
+func seedWatchItem(t *testing.T, st *store.Store, observation string, w store.WatchItem) int64 {
+	t.Helper()
+	id := seedWatchEdge(t, st, observation)
+	if err := st.WatchEdge(id, w); err != nil {
+		t.Fatalf("WatchEdge: %v", err)
 	}
 	return id
 }
@@ -71,8 +101,8 @@ func TestWatchlistGetNeverNull(t *testing.T) {
 func TestWatchlistGetFiltersByState(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	seedWatchItem(t, st, store.WatchItem{Observation: "a", Class: "waste", State: "watching"})
-	seedWatchItem(t, st, store.WatchItem{Observation: "b", Class: "waste", State: "shipped"})
+	seedWatchItem(t, st, "a", store.WatchItem{Class: "waste", State: "watching"})
+	seedWatchItem(t, st, "b", store.WatchItem{Class: "waste", State: "shipped"})
 
 	rec := getWatchlist(t, "?state=shipped")
 	if rec.Code != http.StatusOK {
@@ -85,7 +115,7 @@ func TestWatchlistGetFiltersByState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(resp.Watchlist) != 1 || resp.Watchlist[0].Observation != "b" {
-		t.Fatalf("filtered list = %+v, want only the shipped row", resp.Watchlist)
+		t.Fatalf("filtered list = %+v, want only the shipped item", resp.Watchlist)
 	}
 
 	all := getWatchlist(t, "")
@@ -96,7 +126,25 @@ func TestWatchlistGetFiltersByState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(allResp.Watchlist) != 2 {
-		t.Fatalf("unfiltered list = %+v, want both rows (empty state means all)", allResp.Watchlist)
+		t.Fatalf("unfiltered list = %+v, want both items (empty state means all)", allResp.Watchlist)
+	}
+}
+
+// TestWatchlistGetOmitsInvalidatedEdges pins the coupling the move buys: the
+// overlay rides the edge, so the graph's revision pass striking a fact through
+// is also the DREAM view dropping it — with no second bookkeeping step that
+// could be forgotten.
+func TestWatchlistGetOmitsInvalidatedEdges(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	id := seedWatchItem(t, st, "a fact that stops being true", store.WatchItem{Class: "waste"})
+
+	if err := st.InvalidateEdge(id, 5); err != nil {
+		t.Fatal(err)
+	}
+	rec := getWatchlist(t, "")
+	if got := rec.Body.String(); !bytes.Contains([]byte(got), []byte(`"watchlist":[]`)) {
+		t.Fatalf("body = %s, want the invalidated item gone", got)
 	}
 }
 
@@ -133,7 +181,7 @@ func TestWatchlistMethodNotAllowed(t *testing.T) {
 func TestWatchVerdictStampsCommentedAt(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{Observation: "a", Class: "correction"})
+	id := seedWatchItem(t, st, "a", store.WatchItem{Class: "correction"})
 
 	rec := postWatchVerdict(t, map[string]any{"id": id, "verdict": "fix", "comment": "  yes, do this  "})
 	if rec.Code != http.StatusOK {
@@ -152,13 +200,13 @@ func TestWatchVerdictStampsCommentedAt(t *testing.T) {
 }
 
 // TestWatchVerdictEmptyClears pins store.SetWatchVerdict's documented undo
-// reaching the wire: an empty verdict AND comment reopens the row, wiping
+// reaching the wire: an empty verdict AND comment reopens the item, wiping
 // commented_at with it rather than leaving a timestamp for a judgement that
 // no longer exists.
 func TestWatchVerdictEmptyClears(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{Observation: "a", Class: "waste"})
+	id := seedWatchItem(t, st, "a", store.WatchItem{Class: "waste"})
 	if rec := postWatchVerdict(t, map[string]any{"id": id, "verdict": "fine"}); rec.Code != http.StatusOK {
 		t.Fatalf("seed verdict: status %d", rec.Code)
 	}
@@ -171,14 +219,14 @@ func TestWatchVerdictEmptyClears(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Verdict != "" || got.Comment != "" || got.CommentedAt != "" {
-		t.Fatalf("row not cleared: %+v", got)
+		t.Fatalf("item not cleared: %+v", got)
 	}
 }
 
 func TestWatchVerdictValidation(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{Observation: "a", Class: "waste"})
+	id := seedWatchItem(t, st, "a", store.WatchItem{Class: "waste"})
 
 	cases := []struct {
 		name string
@@ -200,13 +248,15 @@ func TestWatchVerdictValidation(t *testing.T) {
 }
 
 // TestWatchVerdictRefusesAgentOwnedKeys pins the split from carl's side: the
-// verdict route models none of the agent-owned columns, and a request that
-// mentions one is refused rather than having it quietly dropped — a caller
-// that believed it edited the observation would never find out otherwise.
+// verdict route models none of the agent-owned columns — nor any of the edge's
+// own fields, which joined the list when `add` gained src/dst/predicate/
+// strength — and a request that mentions one is refused rather than having it
+// quietly dropped. A caller that believed it edited the observation would
+// never find out otherwise.
 func TestWatchVerdictRefusesAgentOwnedKeys(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{Observation: "original", Class: "waste"})
+	id := seedWatchItem(t, st, "original", store.WatchItem{Class: "waste"})
 
 	for _, key := range agentOwnedWatchKeys {
 		t.Run(key, func(t *testing.T) {
@@ -227,36 +277,135 @@ func TestWatchVerdictRefusesAgentOwnedKeys(t *testing.T) {
 
 // --- the agent's observation write ---
 
+// watchAddItem is the minimal well-formed add payload: an observation, its
+// class, the endpoints the new fact runs between and the extractor's
+// confidence in it.
+func watchAddItem(observation string, extra map[string]any) map[string]any {
+	item := map[string]any{
+		"observation": observation, "class": "waste",
+		"src": "dream pass", "dst": "kraken", "strength": 5,
+	}
+	for k, v := range extra {
+		item[k] = v
+	}
+	return item
+}
+
 func TestWatchItemAddReturnsID(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
 
-	rec := postWatchItem(t, map[string]any{"op": "add", "item": map[string]any{
-		"observation": "zeus keeps re-reading the same file", "class": "waste",
-		"evidence": `{"n":3}`, "suggested_fix": "cache it",
-	}})
+	rec := postWatchItem(t, map[string]any{"op": "add", "item": watchAddItem(
+		"zeus keeps re-reading the same file",
+		map[string]any{"evidence": `{"n":3}`, "suggested_fix": "cache it"},
+	)})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		OK bool  `json:"ok"`
-		ID int64 `json:"id"`
+		OK     bool  `json:"ok"`
+		ID     int64 `json:"id"`
+		Folded bool  `json:"folded"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.OK || resp.ID == 0 {
-		t.Fatalf("resp = %+v, want ok plus the new row id", resp)
+	if !resp.OK || resp.ID == 0 || resp.Folded {
+		t.Fatalf("resp = %+v, want ok plus the new edge id, unfolded", resp)
 	}
 	got, err := st.GetWatchItem(resp.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Observation != "zeus keeps re-reading the same file" || got.Class != "waste" {
-		t.Fatalf("row = %+v", got)
+		t.Fatalf("item = %+v", got)
 	}
 	if got.State != "watching" || got.Sightings != 1 {
 		t.Fatalf("defaults not applied: state %q sightings %d", got.State, got.Sightings)
+	}
+	// The id is an EDGE id, and the edge is a real, searchable fact — the whole
+	// reason for the move.
+	edge, err := st.FindLiveEdgeByFact("zeus keeps re-reading the same file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edge == nil || edge.ID != resp.ID {
+		t.Fatalf("edge = %+v, want the live fact this add minted", edge)
+	}
+}
+
+// TestWatchItemAddFolds pins the behaviour that replaced the skill's old
+// find-then-bump dance: re-stating an observation the graph already carries
+// (differing only in case and wrapping) increments the sighting count on the
+// EXISTING item rather than minting a near-duplicate fact.
+func TestWatchItemAddFolds(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+
+	first := postWatchItem(t, map[string]any{"op": "add", "item": watchAddItem("hermes agents re-read the contract", nil)})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first add: status %d, body %s", first.Code, first.Body.String())
+	}
+	var one struct {
+		ID     int64 `json:"id"`
+		Folded bool  `json:"folded"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &one); err != nil {
+		t.Fatal(err)
+	}
+
+	second := postWatchItem(t, map[string]any{"op": "add", "item": watchAddItem(
+		"Hermes agents\n  re-read the   contract",
+		map[string]any{"suggested_fix": "cache the contract"},
+	)})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second add: status %d, body %s", second.Code, second.Body.String())
+	}
+	var two struct {
+		ID     int64 `json:"id"`
+		Folded bool  `json:"folded"`
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &two); err != nil {
+		t.Fatal(err)
+	}
+	if two.ID != one.ID || !two.Folded {
+		t.Fatalf("second add = %+v, want a fold onto %d", two, one.ID)
+	}
+	got, err := st.GetWatchItem(one.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Sightings != 2 {
+		t.Fatalf("sightings = %d, want the fold to have bumped it", got.Sightings)
+	}
+	if got.SuggestedFix != "cache the contract" {
+		t.Fatalf("suggested_fix = %q, want the fold to have applied it", got.SuggestedFix)
+	}
+}
+
+// TestWatchItemAddPromotesExistingFact: a fact some transcript already
+// contributed is ADOPTED, not duplicated — the dream loop noticing it is a
+// reason to watch it, never a reason to write the same sentence twice.
+func TestWatchItemAddPromotesExistingFact(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	edgeID := seedWatchEdge(t, st, "the nightly pass re-reads yesterday's transcripts")
+
+	rec := postWatchItem(t, map[string]any{"op": "add", "item": watchAddItem(
+		"the nightly pass re-reads yesterday's transcripts", nil,
+	)})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		ID     int64 `json:"id"`
+		Folded bool  `json:"folded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ID != edgeID || resp.Folded {
+		t.Fatalf("resp = %+v, want the existing edge %d promoted (not folded, not duplicated)", resp, edgeID)
 	}
 }
 
@@ -267,10 +416,22 @@ func TestWatchItemAddValidation(t *testing.T) {
 		name string
 		body map[string]any
 	}{
-		{"empty observation", map[string]any{"op": "add", "item": map[string]any{"observation": "   ", "class": "waste"}}},
-		{"bad class", map[string]any{"op": "add", "item": map[string]any{"observation": "x", "class": "vibes"}}},
-		{"missing class", map[string]any{"op": "add", "item": map[string]any{"observation": "x"}}},
-		{"bad state", map[string]any{"op": "add", "item": map[string]any{"observation": "x", "class": "waste", "state": "maybe"}}},
+		{"empty observation", map[string]any{"op": "add", "item": watchAddItem("   ", nil)}},
+		{"bad class", map[string]any{"op": "add", "item": watchAddItem("x", map[string]any{"class": "vibes"})}},
+		{"missing class", map[string]any{"op": "add", "item": map[string]any{
+			"observation": "x", "src": "dream pass", "dst": "kraken", "strength": 5,
+		}}},
+		{"bad state", map[string]any{"op": "add", "item": watchAddItem("x", map[string]any{"state": "maybe"})}},
+		{"missing src", map[string]any{"op": "add", "item": map[string]any{
+			"observation": "x", "class": "waste", "dst": "kraken", "strength": 5,
+		}}},
+		{"missing dst", map[string]any{"op": "add", "item": map[string]any{
+			"observation": "x", "class": "waste", "src": "dream pass", "strength": 5,
+		}}},
+		{"missing strength", map[string]any{"op": "add", "item": map[string]any{
+			"observation": "x", "class": "waste", "src": "dream pass", "dst": "kraken",
+		}}},
+		{"strength out of range", map[string]any{"op": "add", "item": watchAddItem("x", map[string]any{"strength": 11})}},
 		{"missing item", map[string]any{"op": "add"}},
 		{"unknown op", map[string]any{"op": "bump", "id": 1}},
 	}
@@ -284,21 +445,21 @@ func TestWatchItemAddValidation(t *testing.T) {
 	}
 }
 
-// TestWatchItemUpdatePreservesHistory pins the reason watchItemUpsert re-reads
-// the row before writing: UpdateWatchItem is a full-row restatement, so a
-// partial update (the normal case for an agent that only wants to revise its
-// suggested fix) must not zero first_seen/last_seen/sightings — the two facts
-// the table exists to record.
+// TestWatchItemUpdatePreservesHistory pins what the store's partial update
+// buys the handler: a request that restates only suggested_fix must not zero
+// first_seen/last_seen/sightings — the two facts the overlay exists to record.
+// The old GET-then-backfill dance is gone; the COALESCE(NULLIF(...)) columns
+// do it in one statement.
 func TestWatchItemUpdatePreservesHistory(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{
-		Observation: "a", Class: "repetition", State: "watching",
+	id := seedWatchItem(t, st, "a", store.WatchItem{
+		Class: "repetition", State: "watching",
 		Sightings: 7, FirstSeen: 1000, LastSeen: 2000,
 	})
 
 	rec := postWatchItem(t, map[string]any{"op": "update", "item": map[string]any{
-		"id": id, "observation": "a, restated", "class": "repetition", "suggested_fix": "do X",
+		"id": id, "suggested_fix": "do X",
 	}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
@@ -310,28 +471,55 @@ func TestWatchItemUpdatePreservesHistory(t *testing.T) {
 	if got.Sightings != 7 || got.FirstSeen != 1000 || got.LastSeen != 2000 {
 		t.Fatalf("history clobbered by a partial update: sightings %d first %d last %d", got.Sightings, got.FirstSeen, got.LastSeen)
 	}
-	if got.State != "watching" {
-		t.Fatalf("state clobbered: %q", got.State)
+	if got.State != "watching" || got.Class != "repetition" {
+		t.Fatalf("class/state clobbered: %q/%q", got.Class, got.State)
 	}
-	if got.Observation != "a, restated" || got.SuggestedFix != "do X" {
+	if got.SuggestedFix != "do X" {
 		t.Fatalf("update did not land: %+v", got)
+	}
+}
+
+// TestWatchItemUpdateRefusesTheFact: the observation and its endpoints ARE the
+// edge, and edges are insert-only — so those keys are refused rather than
+// accepted-and-ignored, which would tell a caller its reword landed.
+func TestWatchItemUpdateRefusesTheFact(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	id := seedWatchItem(t, st, "original wording", store.WatchItem{Class: "waste"})
+
+	for _, key := range immutableWatchKeys {
+		t.Run(key, func(t *testing.T) {
+			rec := postWatchItem(t, map[string]any{"op": "update", "item": map[string]any{
+				"id": id, key: "reworded",
+			}})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status %d, want 400, body %s", key, rec.Code, rec.Body.String())
+			}
+		})
+	}
+	got, err := st.GetWatchItem(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Observation != "original wording" {
+		t.Fatalf("observation = %q, want the fact untouched", got.Observation)
 	}
 }
 
 // TestWatchItemUpdatePreservesCarlsVerdict is the end-to-end version of
 // store.UpdateWatchItem's single most important behaviour: an agent's
-// restatement of an observation carl has already judged must leave that
-// judgement completely alone.
+// restatement of an item carl has already judged must leave that judgement
+// completely alone.
 func TestWatchItemUpdatePreservesCarlsVerdict(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{Observation: "a", Class: "prompting"})
+	id := seedWatchItem(t, st, "a", store.WatchItem{Class: "prompting"})
 	if rec := postWatchVerdict(t, map[string]any{"id": id, "verdict": "fix", "comment": "agreed"}); rec.Code != http.StatusOK {
 		t.Fatalf("seed verdict: status %d", rec.Code)
 	}
 
 	rec := postWatchItem(t, map[string]any{"op": "update", "item": map[string]any{
-		"id": id, "observation": "a, seen again", "class": "prompting",
+		"id": id, "class": "prompting", "state": "shipped",
 	}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
@@ -347,18 +535,18 @@ func TestWatchItemUpdatePreservesCarlsVerdict(t *testing.T) {
 
 // TestWatchItemRefusesCarlOwnedKeys covers both levels the check runs at: the
 // request root and inside `item` — the latter matters most, since an agent
-// that just read a whole row back from GET /api/watchlist is exactly the
+// that just read a whole item back from GET /api/watchlist is exactly the
 // caller likeliest to echo verdict/comment straight back in.
 func TestWatchItemRefusesCarlOwnedKeys(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{Observation: "a", Class: "feedback"})
+	id := seedWatchItem(t, st, "a", store.WatchItem{Class: "feedback"})
 
 	for _, key := range carlOwnedWatchKeys {
 		t.Run("root/"+key, func(t *testing.T) {
 			rec := postWatchItem(t, map[string]any{
 				"op": "update", key: "x",
-				"item": map[string]any{"id": id, "observation": "a", "class": "feedback"},
+				"item": map[string]any{"id": id, "class": "feedback"},
 			})
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status %d, want 400, body %s", rec.Code, rec.Body.String())
@@ -366,7 +554,7 @@ func TestWatchItemRefusesCarlOwnedKeys(t *testing.T) {
 		})
 		t.Run("item/"+key, func(t *testing.T) {
 			rec := postWatchItem(t, map[string]any{"op": "update", "item": map[string]any{
-				"id": id, "observation": "a", "class": "feedback", key: "x",
+				"id": id, "class": "feedback", key: "x",
 			}})
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status %d, want 400, body %s", rec.Code, rec.Body.String())
@@ -382,10 +570,67 @@ func TestWatchItemRefusesCarlOwnedKeys(t *testing.T) {
 	}
 }
 
+// TestWatchItemUpdateOnInvalidatedEdgeIs404 pins the other half of "unknown
+// watch item": an overlay whose edge kraken has unlearned is not a watch item
+// any more. Without the handler's liveness probe the store's UPDATE still
+// matches the orphaned overlay row and answers 200 — a write into something no
+// reader can see, which is the worst shape a 200 can have.
+func TestWatchItemUpdateOnInvalidatedEdgeIs404(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	id := seedWatchItem(t, st, "a fact that stops being true", store.WatchItem{Class: "waste"})
+	if err := st.InvalidateEdge(id, 5); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := postWatchItem(t, map[string]any{"op": "update", "item": map[string]any{
+		"id": id, "suggested_fix": "do X",
+	}})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestWatchItemRejectsMixedCaseKeys: encoding/json matches struct fields
+// case-insensitively, so a capitalized key POPULATES the field it names. Every
+// guard on this surface therefore has to fold case too, or the one spelling
+// that gets past it is also the one that gets silently discarded.
+func TestWatchItemRejectsMixedCaseKeys(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	id := seedWatchItem(t, st, "original wording", store.WatchItem{Class: "waste"})
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"immutable", map[string]any{"op": "update", "item": map[string]any{"id": id, "Observation": "reworded"}}},
+		{"carl/item", map[string]any{"op": "update", "item": map[string]any{"id": id, "Verdict": "fine"}}},
+		{"carl/root", map[string]any{"op": "update", "Comment": "x", "item": map[string]any{"id": id}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if rec := postWatchItem(t, c.body); rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400, body %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if rec := postWatchVerdict(t, map[string]any{"id": id, "verdict": "fine", "Suggested_Fix": "x"}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("verdict route: status %d, want 400, body %s", rec.Code, rec.Body.String())
+	}
+	got, err := st.GetWatchItem(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Observation != "original wording" || got.Verdict != "" {
+		t.Fatalf("a refused request still wrote something: %+v", got)
+	}
+}
+
 func TestWatchItemUpdateUnknownIDIs404(t *testing.T) {
 	useTestStore(t)
 	rec := postWatchItem(t, map[string]any{"op": "update", "item": map[string]any{
-		"id": 4242, "observation": "a", "class": "waste",
+		"id": 4242, "class": "waste",
 	}})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status %d, want 404, body %s", rec.Code, rec.Body.String())
@@ -395,23 +640,44 @@ func TestWatchItemUpdateUnknownIDIs404(t *testing.T) {
 func TestWatchItemUpdateMissingIDIs400(t *testing.T) {
 	useTestStore(t)
 	rec := postWatchItem(t, map[string]any{"op": "update", "item": map[string]any{
-		"observation": "a", "class": "waste",
+		"class": "waste",
 	}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400, body %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestWatchItemRemove(t *testing.T) {
+// TestWatchItemRemoveUnwatches pins the narrowed meaning of `remove`: the
+// overlay goes, the FACT stays. Unlearning a fact is the graph's invalidate
+// path, which is a much louder act than the dream loop losing interest.
+func TestWatchItemRemoveUnwatches(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	id := seedWatchItem(t, st, store.WatchItem{Observation: "a", Class: "waste"})
+	id := seedWatchItem(t, st, "a", store.WatchItem{Class: "waste"})
 
-	if rec := postWatchItem(t, map[string]any{"op": "remove", "id": id}); rec.Code != http.StatusOK {
+	rec := postWatchItem(t, map[string]any{"op": "remove", "id": id})
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
+	var resp struct {
+		OK        bool `json:"ok"`
+		Unwatched bool `json:"unwatched"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK || !resp.Unwatched {
+		t.Fatalf("resp = %+v, want the unwatched acknowledgement", resp)
+	}
 	if _, err := st.GetWatchItem(id); err == nil {
-		t.Fatal("row still present after remove")
+		t.Fatal("overlay still present after remove")
+	}
+	edge, err := st.FindLiveEdgeByFact("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edge == nil || edge.ID != id {
+		t.Fatalf("edge = %+v, want the fact itself to have survived unwatching", edge)
 	}
 
 	if rec := postWatchItem(t, map[string]any{"op": "remove", "id": id}); rec.Code != http.StatusNotFound {

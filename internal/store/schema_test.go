@@ -24,9 +24,47 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
-	// Reverse v13: drop the four job-load columns (added at v13, absent
-	// through v12). Pure shape, no rows to carry back — the values only ever
-	// come from a live write.
+	// Reverse v16: drop kg_watch and put the flat watchlist table back, in the
+	// exact v9 shape (both indexes included) — a real database at any version
+	// from 9 to 15 HAS that table, so a downgrade that only dropped kg_watch
+	// would hand migrate() a shape that was never real and v16's hook would
+	// fail on the missing table.
+	//
+	// The rows v16 promoted into the graph are NOT carried back, the same
+	// ruling the v11 comment below states for its row-deleting half: this
+	// helper reproduces an older SHAPE, and a test that wants pre-migration
+	// rows seeds them after this call.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 16 {
+		for _, stmt := range []string{
+			`DROP TABLE kg_watch`,
+			`CREATE TABLE watchlist (
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				observation   TEXT NOT NULL DEFAULT '',
+				class         TEXT NOT NULL DEFAULT '',
+				state         TEXT NOT NULL DEFAULT 'watching',
+				sightings     INTEGER NOT NULL DEFAULT 1,
+				first_seen    INTEGER NOT NULL DEFAULT 0,
+				last_seen     INTEGER NOT NULL DEFAULT 0,
+				evidence      TEXT NOT NULL DEFAULT '',
+				suggested_fix TEXT NOT NULL DEFAULT '',
+				pr_url        TEXT NOT NULL DEFAULT '',
+				updated_at    INTEGER NOT NULL DEFAULT 0,
+				verdict       TEXT NOT NULL DEFAULT '',
+				comment       TEXT NOT NULL DEFAULT '',
+				commented_at  TEXT NOT NULL DEFAULT ''
+			)`,
+			`CREATE INDEX watchlist_state_last_seen ON watchlist(state, last_seen)`,
+			`CREATE INDEX watchlist_observation_key ON watchlist(LOWER(TRIM(observation, char(32,9,10,13))))`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v16) %q: %v", target, stmt, err)
+			}
+		}
+	}
+
 	// Reverse v15: drop the knowledge graph's seven tables (all added at
 	// v15, absent through v14). kg_edges' three FTS-sync triggers go with
 	// their table — SQLite drops a table's triggers along with it — and
@@ -34,9 +72,6 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	// needs no reversal: it changed no shape, only deleted rows, and this
 	// helper's job is to reproduce an older SHAPE (the same ruling the v11
 	// comment below states for its row-deleting half).
-	//
-	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
-	// migrate() applies them.
 	if target < 15 {
 		for _, stmt := range []string{
 			`DROP TABLE kg_layout`,
@@ -53,6 +88,9 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 		}
 	}
 
+	// Reverse v13: drop the four job-load columns (added at v13, absent
+	// through v12). Pure shape, no rows to carry back — the values only ever
+	// come from a live write.
 	if target < 13 {
 		for _, stmt := range []string{
 			`ALTER TABLE jobs DROP COLUMN load_unblock`,
@@ -882,9 +920,17 @@ func TestSchemaV6ToV7AddsThreads(t *testing.T) {
 // TestSchemaV8ToV9AddsWatchlistAndFeedbackTSIndex covers the v9 migration: a
 // real kraken.db can exist at PRAGMA user_version = 8 (no watchlist table, no
 // feedback(ts) index) from before the dream loop shipped. Reopening such a
-// database must create both — usable immediately — while leaving every
-// pre-existing row untouched, since v9 is a pure add with no data to move
-// forward (migrations[9] carries no hook).
+// database must create both, while leaving every pre-existing row untouched,
+// since v9 is a pure add with no data to move forward (migrations[9] carries
+// no hook).
+//
+// What it can assert about the watchlist changed at v16, and the test is
+// written for the chain rather than for v9 alone: migrate() always walks to
+// the CURRENT schemaVersion, so a v8-shaped database now ends up past v16 —
+// where the flat table v9 created has been promoted into the graph and
+// DROPPED. The v9 half is therefore checked through its end state (kg_watch
+// present, watchlist gone, and v9's other half — the feedback(ts) index — still
+// there), which is what "reopening a v8 database works" actually means today.
 func TestSchemaV8ToV9AddsWatchlistAndFeedbackTSIndex(t *testing.T) {
 	// Opened directly (not via openTest) so the path is in hand for the real
 	// re-Open below, mirroring the migration tests above.
@@ -929,17 +975,24 @@ func TestSchemaV8ToV9AddsWatchlistAndFeedbackTSIndex(t *testing.T) {
 		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 	}
 
-	// the new table is usable end to end.
-	wid, err := s.AddWatchItem(WatchItem{Observation: "post-migrate", Class: "waste"})
-	if err != nil {
-		t.Fatalf("AddWatchItem after migration: %v", err)
+	// v9 created the flat table and v16 promoted it into the graph, so at head
+	// the overlay exists and the flat table does not — the whole chain ran,
+	// not just its first half.
+	if err := s.db.QueryRow(
+		`SELECT 1 FROM sqlite_master WHERE type='table' AND name='kg_watch'`,
+	).Scan(&exists); err != nil {
+		t.Fatalf("kg_watch missing after migration: %v", err)
+	}
+	err = s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist'`).Scan(&exists)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("flat watchlist table survived v16: err=%v", err)
 	}
 	list, err := s.ListWatchItems("")
 	if err != nil {
 		t.Fatalf("ListWatchItems after migration: %v", err)
 	}
-	if len(list) != 1 || list[0].ID != wid || list[0].Observation != "post-migrate" {
-		t.Fatalf("unexpected watchlist rows after migration: %+v", list)
+	if len(list) != 0 {
+		t.Fatalf("a v8-shaped db has nothing to promote, got %+v", list)
 	}
 
 	// ...and the index the sweep read depends on exists by name.
@@ -987,9 +1040,9 @@ func TestSchemaV8ToV9AddsWatchlistAndFeedbackTSIndex(t *testing.T) {
 	if version2 != schemaVersion {
 		t.Fatalf("user_version after re-Open = %d, want %d", version2, schemaVersion)
 	}
-	// The 2nd downgrade dropped the (seeded) watchlist table, so the
-	// re-created one starts empty — enough to prove it survives a real Open()
-	// round-trip.
+	// The 2nd downgrade rebuilt an empty flat table, so the overlay the whole
+	// chain lands on is empty too — enough to prove the v9 -> v16 path survives
+	// a real Open() round-trip rather than only an in-process migrate().
 	list2, err := s2.ListWatchItems("")
 	if err != nil {
 		t.Fatalf("ListWatchItems after re-Open: %v", err)
@@ -1184,7 +1237,12 @@ func TestMigratedSchemaMatchesFreshSchema(t *testing.T) {
 	fresh := openTest(t)
 	want := schemaDump(t, fresh)
 
-	for _, from := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10} {
+	// 15 is included because v16 is the first migration since v12 to change
+	// shape by REMOVING something (the flat watchlist table and its two
+	// indexes): a hook that created kg_watch but forgot the drop would leave a
+	// migrated database carrying a table a fresh one has never had, and only a
+	// full-dump comparison from v15 catches that.
+	for _, from := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15} {
 		dbPath := filepath.Join(t.TempDir(), "kraken.db")
 		s, err := Open(dbPath)
 		if err != nil {
@@ -1207,14 +1265,13 @@ func TestMigratedSchemaMatchesFreshSchema(t *testing.T) {
 }
 
 // TestSchemaMigrateTwiceIsNoOp pins migrate()'s idempotence directly at the
-// current schemaVersion: v9's step is pure CREATE (no IF NOT EXISTS), so a
-// second application would fail loudly on "table watchlist already exists" if
-// the user_version guard ever stopped holding it back.
+// current schemaVersion: v16's step is pure CREATE (no IF NOT EXISTS) followed
+// by a hook that ends in `DROP TABLE watchlist`, so a second application would
+// fail loudly — on "table kg_watch already exists", or on the dropped table —
+// if the user_version guard ever stopped holding it back.
 func TestSchemaMigrateTwiceIsNoOp(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.AddWatchItem(WatchItem{Observation: "survivor"}); err != nil {
-		t.Fatalf("AddWatchItem: %v", err)
-	}
+	edgeID := seedWatchedEdge(t, s, "survivor")
 	if err := s.migrate(); err != nil {
 		t.Fatalf("re-running migrate() on an already-current db: %v", err)
 	}
@@ -1222,9 +1279,32 @@ func TestSchemaMigrateTwiceIsNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWatchItems: %v", err)
 	}
-	if len(list) != 1 || list[0].Observation != "survivor" {
+	if len(list) != 1 || list[0].EdgeID != edgeID || list[0].Observation != "survivor" {
 		t.Fatalf("a no-op migrate must not touch data: %+v", list)
 	}
+}
+
+// seedWatchedEdge creates a live edge carrying `fact` and starts watching it,
+// returning the edge id — the minimum a watch item needs now that the
+// observation lives on the edge rather than in a column of its own.
+func seedWatchedEdge(t *testing.T, s *Store, fact string) int64 {
+	t.Helper()
+	src, err := s.UpsertNode(GraphNode{Name: "seed src"})
+	if err != nil {
+		t.Fatalf("UpsertNode src: %v", err)
+	}
+	dst, err := s.UpsertNode(GraphNode{Name: "seed dst"})
+	if err != nil {
+		t.Fatalf("UpsertNode dst: %v", err)
+	}
+	edgeID, _, err := s.InsertEdge(GraphEdge{SrcID: src, DstID: dst, Predicate: "observed", Fact: fact, Strength: 5})
+	if err != nil {
+		t.Fatalf("InsertEdge: %v", err)
+	}
+	if err := s.WatchEdge(edgeID, WatchItem{Class: "waste"}); err != nil {
+		t.Fatalf("WatchEdge: %v", err)
+	}
+	return edgeID
 }
 
 // TestSchemaV5ToV6AmbiguousSlugLeavesJobIDNull is the sibling case

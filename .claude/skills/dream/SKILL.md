@@ -1,6 +1,6 @@
 ---
 name: dream
-description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). Nightly corroboration pass: read the day's artifact feedback and Claude session transcripts, turn recurring signals into durable improvements to kraken's skills and code, park the rest on the watchlist, and report back. Reads carl's verdicts on watchlist rows and obeys them. Use when a job spec invokes /dream, or when a kraken dream job brief sends you here."
+description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). Nightly corroboration pass: read the day's artifact feedback and Claude session transcripts, turn recurring signals into durable improvements to kraken's skills and code, park the rest as watched facts in the knowledge graph, and report back. Reads carl's verdicts on watched observations and obeys them. Use when a job spec invokes /dream, or when a kraken dream job brief sends you here."
 ---
 
 # Dream — The Nightly Corroboration Pass
@@ -22,14 +22,14 @@ Three outputs, three destinations. Getting this wrong is the only mistake here t
 | Output | Destination | May contain |
 |---|---|---|
 | A hardened change | a PR carl reviews | **the diff only** — never findings, evidence, quotes, or transcript excerpts |
-| An observation not yet worth acting on | the `watchlist` table | anything useful; it is local and never committed |
+| An observation not yet worth acting on | the knowledge graph's watch overlay (`kraken watchlist` verbs) | anything useful; it is local and never committed |
 | The night's report | `00-dream-report.md` in the artifacts dir | anything, including carl's own words quoted back to him |
 
 **Findings never enter git.** Not in a commit, not in a PR body, not in a file. The repo gets the
 change; the machine keeps the reasoning. This is structural rather than a redaction rule, which is
 why it is reliable: a commit contains a diff, and that is all it ever contains.
 
-The corollary is freeing — because the local side never travels, the report and the watchlist can
+The corollary is freeing — because the local side never travels, the report and a watched fact can
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
 the report worth reading.
 
@@ -38,14 +38,14 @@ the report worth reading.
 Read in this order. It is not a preference — proposing something carl already settled wastes the
 night and teaches him the loop does not listen.
 
-1. **Carl's verdicts and comments** on watchlist rows, and **open dream PRs**. Both are suppression:
-   a rule already in flight must not be re-proposed, and a row he has ruled on is already decided.
-2. **The rest of the watchlist** — what previous nights are still watching.
+1. **Carl's verdicts and comments** on watched observations, and **open dream PRs**. Both are suppression:
+   a rule already in flight must not be re-proposed, and an observation he has ruled on is already decided.
+2. **The rest of the watch overlay** — what previous nights are still watching.
 3. **The evidence**: the feedback sweep, then the transcripts.
 
 ## Reading carl's verdicts
 
-Each watchlist row can carry a verdict from carl and, optionally, a comment.
+Each watched observation can carry a verdict from carl and, optionally, a comment.
 
 | Verdict | What it means | What you do |
 |---|---|---|
@@ -53,9 +53,9 @@ Each watchlist row can carry a verdict from carl and, optionally, a comment.
 | `fix`, no comment | He wants it done | His asking **is** the explicit instruction — act on it now, no further corroboration needed. |
 | `fix` + comment | He wants it done a particular way | **The comment is the specification.** Follow it rather than re-deriving an approach, and say so in the PR body. |
 
-You may also put a **suggested fix** on a row you are not acting on — a concrete proposal for carl to
-approve or push back on. Write it into the row's `suggested_fix`; do not act on your own suggestion
-until he has turned it into a `fix`.
+You may also put a **suggested fix** on an observation you are not acting on — a concrete proposal for
+carl to approve or push back on. Write it into the item's `suggested_fix`; do not act on your own
+suggestion until he has turned it into a `fix`.
 
 Never write `verdict`, `comment`, or `commented_at` yourself. Those are carl's, exactly as
 `answer`/`answered-at` are on questions.
@@ -240,7 +240,7 @@ before any finding is written; the order is the honest part. Alongside it: **eve
 its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
 line out of it.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
-snapshot, the watchlist id — and a `solo: true` night says so once at the top and cites what it read
+snapshot, the watched fact's edge id — and a `solo: true` night says so once at the top and cites what it read
 directly. A night synthesized from notifications cannot produce the scout citations, so it fails its
 own report format rather than merely disobeying a paragraph. Cite the source you HAVE; a citation
 invented to satisfy the format is worse than none, in the one document whose whole value is that its
@@ -268,8 +268,11 @@ You may go below it on judgment, but only in two cases, and you must name it whe
 Anything touching Go, orchestration, or a brief needs the full bar regardless of how obvious it
 feels. Every sub-default ship goes in the report's **judgment calls** section, saying why.
 
-Everything else becomes a watchlist row. A repeat of an existing observation **folds into that row**
-— bump its sighting count and update it — rather than adding a second row for the same thing.
+Everything else becomes a **watched fact in the knowledge graph**: a live graph edge whose fact sentence IS the observation, carrying a thin watch overlay for this loop's bookkeeping (class, state, sightings, evidence, suggested fix, and carl's verdict). Add it with `kraken watchlist add`, whose item is `observation`, `class`, `src`, `dst` and `strength` (1–10, how confident the fact is — an absent strength is an unstated confidence, so it is required), plus an optional `predicate` (default `concerns`) and the optional `state`, `evidence`, `suggested_fix`, `pr_url`. **Folding is automatic**: re-adding the same wording bumps the existing item's sighting count server-side and replaces its evidence with what you sent, so there is no find-then-bump dance and never a second item for the same thing (the endpoints are ignored on a fold — the observation already has them). To REWORD an observation, remove it and add it again — `update` changes overlay fields only, never the fact sentence.
+
+`src` and `dst` name the two real entities the observation is ABOUT — a component, an agent, a tool, a convention, a failure mode — not a restatement of the sentence. "Scouts keep going to the raw transcript after being handed the reduced view" concerns `dream scout` and `kraken mine reduce`; it does not concern `observation 1` and `the loop`. Run `k graph search "<name>"` when you are unsure whether an entity already exists, and reuse the name it comes back with: a name that resolves merges into the existing node, a new one creates a bare node, and two spellings of the same thing are two nodes nobody can traverse between.
+
+That endpoint discipline is the whole point of the move. A watched fact is an ordinary graph fact — searchable by FTS and vector retrieval, injected into future cells' `graphContext` where a job touching those entities will actually meet it, and visible in the graph viewer alongside everything else the graph knows. `kraken watchlist remove` **unwatches**: it drops the overlay so this loop stops tracking the observation, while the fact itself survives in the graph.
 
 ## What you may change
 
@@ -294,7 +297,7 @@ to issue twice.
 
 This goes in the report, where it may quote him verbatim — advice like "one of your prompts was
 unclear" is worthless without the prompt. It also accumulates: each distinct observation is a
-watchlist row with class `prompting`, folded on repeat like any other, because one ambiguous prompt
+watched fact with class `prompting`, folded on repeat like any other, because one ambiguous prompt
 is noise and the same one three weeks running is a habit worth naming.
 
 It is what makes a quiet night productive. A night with no corroborated rule and three honest notes
@@ -308,7 +311,7 @@ Write `00-dream-report.md` into the artifacts dir. Keep it to a page, and never 
 |---|---|
 | Shipped | Each change, the evidence behind it, and its PR. |
 | Judgment calls | Everything shipped below the two-sighting default, and why. An empty section on a night that shipped several changes means you are not naming your own judgment. |
-| Watching | New rows, and what changed on existing ones — the watchlist is not committed, so this is the only place its movement is visible. |
+| Watching | Newly watched facts, and what changed on existing ones — the watch overlay is not committed, so this is the only place its movement is visible. |
 | Your prompting | The prompting feedback, quoted. |
 | Seen, not actionable | One line each, capped around ten. It is what distinguishes a quiet night from a blind one. |
 | Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. |
@@ -321,7 +324,9 @@ specific, and it is the only place the cell's real paths appear:
 - **The report goes in the brief's SET ROOT** (`<cellDir>/artifacts/`) as `00-dream-report.md`. That
   directory is the only board-visible one, and the report is the deliverable; it is also what the
   board's `DREAM` view renders, so a pass that ships changes but writes no report is invisible.
-- **Read and write watchlist rows with `kraken watchlist get|add|update|remove`**; sweep feedback with
+- **Read and write watched observations with `kraken watchlist get|add|update|remove`** — the same four
+  verbs, now backed by graph edges: an item's `id` IS its edge id, `add` folds server-side on a repeat
+  wording, and `remove` unwatches without deleting the fact. Sweep feedback with
   `kraken feedback sweep --since <ts>`. Run `kraken feedback addressed <slug> <id> <text>` **only for
   a note you shipped a change for**, naming the PR in the text — see Evidence 1. **No other cell runs
   that verb at all**, so nothing closes a note if you do not. The slug is the one the note was left on,
