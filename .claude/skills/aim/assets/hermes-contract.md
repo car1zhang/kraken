@@ -1249,6 +1249,13 @@ component boundary maps, lone grids/cards) stay static — no dots, no motion.
 - `begin="0s"` or a **negative** `begin` (for staggering several dots) — a positive delay
   parks the dot at the SVG's origin `(0,0)` for that long, which reads as a stray dot in the
   corner. Never use a positive `begin`.
+- Every animated element must BEGIN at its own resting state — whatever it should show when
+  paused. The host card pauses SMIL at t≈0 for reduced-motion readers, so an element that
+  ramps up from `opacity="0"`, or (for an element with a static position) animates into
+  position from off-canvas, is permanently invisible to them: content loss, not motion
+  suppression. Animate from the resting state, never toward it — a flow-dot with `begin="0s"`
+  or negative `begin` already complies (it sits on its path at t≈0), and a `dim` element's
+  resting state is its dimmed opacity, not full visibility.
 - No JavaScript, ever.
 
 ## Worked-Example Diagrams
