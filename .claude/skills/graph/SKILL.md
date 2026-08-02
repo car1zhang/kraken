@@ -9,8 +9,8 @@ description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). 
 > header above says `Base directory ... ~/.claude/skills/graph`, a personal copy shadowed this one
 > (personal beats project on a name collision).
 
-Kraken remembers what it did. The daemon does the mechanical half — it sweeps transcripts, feedback,
-watchlist rows, job specs and artifacts into **episodes**, and it fills in embeddings and layout.
+Kraken remembers what it did. The daemon does the mechanical half — it sweeps transcripts, feedback
+rows, job specs and artifacts into **episodes**, and it fills in embeddings and layout.
 It does not understand any of it. That is this job: turn episodes into a graph of **entities** and
 **facts**, or correct the graph when it has learned something wrong.
 
@@ -22,7 +22,7 @@ beats recall here, always. **A fact you are not confident in is a fact you do no
 
 | Thing | Is | Key property |
 |---|---|---|
-| **Episode** | one span of evidence: a transcript span, a feedback row, a job spec, an artifact, a watchlist row | it is provenance — every fact points back at the episode that produced it |
+| **Episode** | one span of evidence: a transcript span, a feedback row, a job spec, an artifact — or the already-done episode a `kraken watchlist add` mints for itself, which is why watch observations never reach the pending queue | it is provenance — every fact points back at the episode that produced it |
 | **Node** | one entity: a name, a type, and a **description** | the description is a short natural-language gloss of what the thing IS, independent of any edge |
 | **Edge** | one fact: two endpoints, a predicate, and a **fact sentence** | the sentence IS the fact; the predicate is only how it is indexed |
 
@@ -254,7 +254,7 @@ sweeps, because the sweep walks the graph, not the batch.
 ## Revision mode
 
 The job spec carries carl's instruction verbatim. It is the specification; follow it rather than
-re-deriving an approach, exactly as a watchlist `fix` comment is followed. Four shapes:
+re-deriving an approach, exactly as carl's `fix` comment on a watched observation is followed. Four shapes:
 
 | Instruction | What you do |
 |---|---|
@@ -262,6 +262,8 @@ re-deriving an approach, exactly as a watchlist `fix` comment is followed. Four 
 | **Split** one node that is two things | Create the second node with its own `description`; then, for each fact that belongs to it, add the fact against the new node and invalidate the misattributed original. Each moved fact restarts at 1 sighting — the corroboration belonged to the conflated node, and carrying it over would launder it. Facts that genuinely described the original stay untouched. |
 | **Re-describe** a node whose gloss is wrong or thin | Rewrite the `description`. It re-embeds automatically — the stored vector is cleared when the description changes. |
 | **Invalidate** a fact that is wrong or stale | Close its window. **Never delete.** If it was wrong from the start rather than newly false, say so in the report; the row still stands as a record of what kraken believed. |
+
+**Some edges are watched, and the overlay rides the edge.** The dream loop's observations are ordinary facts wearing a thin watch overlay, so revising one reaches past the graph: invalidating a watched edge takes that observation out of the board's DREAM view entirely, and folding two near-duplicate watch facts into one keeps only the surviving edge's overlay. The agent-owned half of the retired overlay — sighting count, evidence, suggested fix — you can re-supply by hand with `kraken watchlist add|update` against the survivor; **carl's verdict cannot be carried across**, because no verb you can reach writes it (a fresh overlay always starts unjudged, and the verdict route is his alone). So a merge that retires a JUDGED watch fact silently discards a human ruling: name it in the report so carl can re-judge the survivor, and never perform one as a side effect of a cleanup.
 
 Change only what the instruction reaches. A revision job is not an excuse for a general cleanup —
 carl asked about one thing, and a diff he did not ask for is a diff he has no way to review.

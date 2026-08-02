@@ -15,8 +15,11 @@ import (
 // viewer's hot read (GraphSnapshot) never touches kg_ingest_cursor, which
 // only the daemon's graphPass sweeps. Writers are `kraken serve`'s handlers
 // (k graph add arrives over HTTP) and the daemon's graphPass (cursors,
-// embeddings, layout); there is no carl-owned column in any kg_* table, so
-// none of watchlist.go's preserve-the-other-side splitting applies here.
+// embeddings, layout); none of the six tables above carries a carl-owned
+// column, so none of watch.go's preserve-the-other-side splitting applies in
+// this file. kg_watch (schemaV16) is the one kg_* table that DOES carry
+// carl's trio, and it lives in watch.go precisely so that splitting stays
+// where the columns are.
 //
 // Edges are never deleted. InvalidateEdge closes an edge's validity window
 // (valid_until + expired_at); the fixed set of columns it may touch is the

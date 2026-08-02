@@ -143,9 +143,8 @@ var graphLastLayout atomic.Int64
 // for a transcript it is a byte offset that only ever lands just past a
 // newline.
 const (
-	graphSrcFeedback  = "rows:feedback"
-	graphSrcWatchlist = "rows:watchlist"
-	graphSrcJobs      = "rows:jobs"
+	graphSrcFeedback = "rows:feedback"
+	graphSrcJobs     = "rows:jobs"
 )
 
 func graphSrcArtifacts(jobID int64) string  { return fmt.Sprintf("artifacts:%d", jobID) }
@@ -228,17 +227,16 @@ func graphPass(st *store.Store, now time.Time) {
 //
 // Every source is read through an EXISTING store accessor and filtered in Go
 // rather than in SQL, which is the deliberate trade: these tables hold
-// hundreds of rows (149 jobs, 56 watchlist, 8 feedback on this machine at the
-// time of writing), so a full read costs less than the accessor this package
+// hundreds of rows (149 jobs, 8 feedback on this machine at the time of
+// writing), so a full read costs less than the accessor this package
 // would otherwise have to add to internal/store — and internal/store is not
 // this slice's to grow.
 //
-// Two of the three sources track a MUTABLE watermark rather than an id
-// (watchlist rows are bumped on a repeat sighting; a job spec is edited), so
-// a row can come back around. That is safe and intended: store.AddEpisode
-// dedupes on the content hash, so an unchanged row that crosses the cursor
-// again writes nothing, while a genuinely changed one enqueues a new episode
-// carrying the new text.
+// Two of the three sources track a MUTABLE watermark rather than an id (a job
+// spec is edited; an artifact is rewritten), so a row can come back around.
+// That is safe and intended: store.AddEpisode dedupes on the content hash, so
+// an unchanged row that crosses the cursor again writes nothing, while a
+// genuinely changed one enqueues a new episode carrying the new text.
 //
 // The comparison is `< cursor`, NOT `<= cursor`, and the difference is a real
 // bug rather than a stylistic one. Two of the three watermarks are
@@ -250,9 +248,6 @@ func graphPass(st *store.Store, now time.Time) {
 // and closes the gap outright.
 func sweepRows(st *store.Store, cursors map[string]int64) error {
 	if err := sweepFeedback(st, cursors[graphSrcFeedback]); err != nil {
-		return err
-	}
-	if err := sweepWatchlist(st, cursors[graphSrcWatchlist]); err != nil {
 		return err
 	}
 	if err := sweepJobSpecs(st, cursors[graphSrcJobs]); err != nil {
@@ -293,66 +288,6 @@ func sweepFeedback(st *store.Store, cursor int64) error {
 	return advanceCursor(st, graphSrcFeedback, cursor, high)
 }
 
-func sweepWatchlist(st *store.Store, cursor int64) error {
-	// state "" is ListWatchItems' documented every-row read. The watermark is
-	// last_seen rather than id because BumpWatchSighting mutates a row in
-	// place: a sighting count that moved is new evidence, and the hash dedupe
-	// absorbs the case where nothing about the text actually changed.
-	//
-	// Carl's verdict/comment ride along deliberately. They are the strongest
-	// signal in the table — a human ruling on an observation — and the graph
-	// is the one place that ruling can be reached from an unrelated job.
-	rows, err := st.ListWatchItems("")
-	if err != nil {
-		return err
-	}
-	// Tiebroken by id so equal watermarks iterate deterministically — the
-	// dream cell stamps one last_seen per run, so 13+ rows sharing a
-	// millisecond is the OBSERVED shape of this table, not a hypothetical.
-	sort.Slice(rows, func(a, b int) bool {
-		if rows[a].LastSeen != rows[b].LastSeen {
-			return rows[a].LastSeen < rows[b].LastSeen
-		}
-		return rows[a].ID < rows[b].ID
-	})
-	high := cursor
-	n := 0
-	for _, w := range rows {
-		if w.LastSeen < cursor {
-			continue
-		}
-		// The batch cap must never SPLIT a group of rows sharing one
-		// watermark: with 17+ rows at one value, capping mid-group leaves
-		// `high == cursor`, the cursor never advances, and every row after
-		// the group is permanently unreachable (review finding — the table
-		// is 13 deep at one millisecond today, four rows from tripping).
-		// Rows AT the boundary watermark process past the cap; the first row
-		// beyond it stops the pass cleanly.
-		if n >= graphRowBatch && w.LastSeen > high {
-			break
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "watchlist observation (%s, %s, seen %dx): %s", w.Class, w.State, w.Sightings, w.Observation)
-		if w.SuggestedFix != "" {
-			b.WriteString("\nsuggested fix: " + w.SuggestedFix)
-		}
-		if w.Verdict != "" {
-			b.WriteString("\ncarl's verdict: " + w.Verdict)
-			if w.Comment != "" {
-				b.WriteString(" — " + w.Comment)
-			}
-		}
-		if err := addEpisode(st, "watchlist", fmt.Sprintf("watchlist:%d", w.ID), b.String(), w.LastSeen); err != nil {
-			return err
-		}
-		n++
-		if w.LastSeen > high {
-			high = w.LastSeen
-		}
-	}
-	return advanceCursor(st, graphSrcWatchlist, cursor, high)
-}
-
 func sweepJobSpecs(st *store.Store, cursor int64) error {
 	// updated_at rather than id, so an EDITED spec is re-ingested. A job's
 	// spec is the single densest statement of what a piece of work was for,
@@ -373,8 +308,12 @@ func sweepJobSpecs(st *store.Store, cursor int64) error {
 		if j.UpdatedAt < cursor || strings.TrimSpace(j.Body) == "" {
 			continue
 		}
-		// Never split a shared-watermark group across the cap — see
-		// sweepWatchlist for why (a split group parks the cursor forever).
+		// The batch cap must never SPLIT a group of rows sharing one
+		// watermark: with 17+ rows at one value, capping mid-group leaves
+		// `high == cursor`, the cursor never advances, and every row after
+		// the group is permanently unreachable (review finding). Rows AT the
+		// boundary watermark process past the cap; the first row beyond it
+		// stops the pass cleanly.
 		if n >= graphRowBatch && j.UpdatedAt > high {
 			break
 		}
@@ -447,8 +386,9 @@ func sweepArtifacts(st *store.Store, cursors map[string]int64) error {
 				continue
 			}
 			// Never split a shared-watermark group across the cap — see
-			// sweepWatchlist. Artifact sets are written in bursts, so equal
-			// mtimes are the common case here, not the edge.
+			// sweepJobSpecs for why (a split group parks the cursor forever).
+			// Artifact sets are written in bursts, so equal mtimes are the
+			// common case here, not the edge.
 			if n >= graphRowBatch && m.Mtime > high {
 				break
 			}

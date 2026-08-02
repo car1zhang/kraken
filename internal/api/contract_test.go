@@ -1809,9 +1809,9 @@ var webWatchItemSpec = map[string]fieldSpec{
 func TestWatchlistGetWireShape(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	if _, err := st.AddWatchItem(store.WatchItem{Observation: "o", Class: "waste"}); err != nil {
-		t.Fatal(err)
-	}
+	// A watch item is an edge plus an overlay now; the WIRE shape below is
+	// unchanged, which is exactly what this test exists to pin.
+	seedWatchItem(t, st, "o", store.WatchItem{Class: "waste"})
 
 	rec := httptest.NewRecorder()
 	watchlistHandler(rec, httptest.NewRequest(http.MethodGet, "/api/watchlist", nil))
@@ -1860,6 +1860,11 @@ var watchItemReqSpec = map[string]fieldSpec{
 	"id":   {kind: wireNumber, required: false},
 }
 
+// watchItemWireSpec carries src/dst/predicate/strength alongside the overlay
+// fields: a watch item is a graph edge, so an `add` that mints a new one has
+// to name its endpoints and state the extractor's confidence. This is a
+// REQUEST shape on the agent's CLI-facing route — never decoded by the iOS app
+// or the web UI — so the added keys are not an apiContract bump.
 var watchItemWireSpec = map[string]fieldSpec{
 	"id":            {kind: wireNumber, required: false},
 	"observation":   {kind: wireString, required: false},
@@ -1871,14 +1876,33 @@ var watchItemWireSpec = map[string]fieldSpec{
 	"evidence":      {kind: wireString, required: false},
 	"suggested_fix": {kind: wireString, required: false},
 	"pr_url":        {kind: wireString, required: false},
+	"src":           {kind: wireString, required: false},
+	"dst":           {kind: wireString, required: false},
+	"predicate":     {kind: wireString, required: false},
+	"strength":      {kind: wireNumber, required: false},
 }
 
-// watchItemRespSpec is the agent write's 200: {"ok":true,"id":N}. The id is
-// the only reason this isn't the standard {"ok":true} — a caller that just
-// created a row has no other way to learn its id.
+// watchItemRespSpec is the agent write's 200: {"ok":true,"id":N} plus
+// `folded` on an add. The id is the reason this isn't the standard
+// {"ok":true} — a caller that just watched something has no other way to
+// learn its edge id — and `folded` is the reason it isn't only the id: an add
+// that landed on an EXISTING observation is a repeat sighting, and the caller
+// is told rather than left to infer it from an id it didn't recognise. Both
+// are CLI-facing only, so neither is an apiContract bump.
 var watchItemRespSpec = map[string]fieldSpec{
-	"ok": {kind: wireBool, required: true},
-	"id": {kind: wireNumber, required: true},
+	"ok":     {kind: wireBool, required: true},
+	"id":     {kind: wireNumber, required: true},
+	"folded": {kind: wireBool, required: false},
+}
+
+// watchRemoveRespSpec is op `remove`'s own 200, and its own spec because it
+// carries NO id: the caller named the item, so echoing it back says nothing,
+// whereas `unwatched` says the thing that is easy to get wrong — the overlay
+// is gone and the FACT survives in the graph. Unlearning a fact is
+// /api/graph/add's invalidate list, a different and much louder act.
+var watchRemoveRespSpec = map[string]fieldSpec{
+	"ok":        {kind: wireBool, required: true},
+	"unwatched": {kind: wireBool, required: true},
 }
 
 func TestWatchlistWriteWireShapes(t *testing.T) {
@@ -1888,7 +1912,7 @@ func TestWatchlistWriteWireShapes(t *testing.T) {
 	}
 	assertShape(t, "watchVerdictReq", verdictReq, watchVerdictReqSpec)
 
-	itemReq, err := json.Marshal(watchItemReq{Op: "update", Item: &watchItemWire{ID: 1, Observation: "o", Class: "waste"}, ID: 0})
+	itemReq, err := json.Marshal(watchItemReq{Op: "update", Item: &watchItemWire{ID: 1, Class: "waste"}, ID: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1897,6 +1921,7 @@ func TestWatchlistWriteWireShapes(t *testing.T) {
 	itemWire, err := json.Marshal(watchItemWire{
 		ID: 1, Observation: "o", Class: "waste", State: "watching", Sightings: 2,
 		FirstSeen: 1, LastSeen: 2, Evidence: `{"n":1}`, SuggestedFix: "fix", PRURL: "u",
+		Src: "dream pass", Dst: "kraken", Predicate: "concerns", Strength: 5,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1905,12 +1930,31 @@ func TestWatchlistWriteWireShapes(t *testing.T) {
 
 	useTestStore(t)
 	rec := httptest.NewRecorder()
-	body := mustJSON(t, map[string]any{"op": "add", "item": map[string]any{"observation": "o", "class": "waste"}})
+	body := mustJSON(t, map[string]any{"op": "add", "item": map[string]any{
+		"observation": "o", "class": "waste", "src": "dream pass", "dst": "kraken", "strength": 5,
+	}})
 	watchItemHandler(rec, httptest.NewRequest(http.MethodPost, "/api/watchlist/item", bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
-	assertShape(t, "POST /api/watchlist/item", rec.Body.Bytes(), watchItemRespSpec)
+	assertShape(t, "POST /api/watchlist/item (add)", rec.Body.Bytes(), watchItemRespSpec)
+
+	// remove's 200 is a different shape from add's and gets its own assertion:
+	// it drops `id` and carries `unwatched`, and an unpinned response body is
+	// exactly how a key goes missing without a test noticing.
+	var added struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &added); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	body = mustJSON(t, map[string]any{"op": "remove", "id": added.ID})
+	watchItemHandler(rec, httptest.NewRequest(http.MethodPost, "/api/watchlist/item", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remove: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/watchlist/item (remove)", rec.Body.Bytes(), watchRemoveRespSpec)
 }
 
 var dreamGetSpec = map[string]fieldSpec{

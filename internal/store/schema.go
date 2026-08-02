@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -29,8 +31,8 @@ import (
 // forked claude sessions branched off a job's zeus and living in a second
 // tmux window of the same cell (threads.go). Version 8 adds jobs.color.
 // Version 9 adds the dream loop's watchlist table plus a feedback(ts) index
-// for its unscoped time-window sweep (watchlist.go, feedback.go's
-// FeedbackSince). Version 10 adds the per-job token counters and their
+// for its unscoped time-window sweep (the flat table version 16 retires;
+// feedback.go's FeedbackSince). Version 10 adds the per-job token counters and their
 // per-file byte watermarks (tokens.go). Version 11 splits those counters into
 // a zeus half and a subagent half, and WIPES both token tables so the daemon
 // re-sums every job with the split in place (see schemaV11). Version 12
@@ -43,8 +45,11 @@ import (
 // token tables again — the group-collapse rule was taking output_tokens from
 // the first record of a message where a subagent sidecar only reports the
 // total on the last (see schemaV14). Version 15 adds the knowledge graph's
-// seven tables (see schemaV15).
-const schemaVersion = 15
+// seven tables (see schemaV15). Version 16 moves the watchlist INTO that
+// graph: every observation becomes a live kg_edges fact carrying a thin
+// kg_watch overlay, and the flat watchlist table is migrated forward and
+// dropped (see schemaV16 and migrateV16Watchlist).
+const schemaVersion = 16
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -334,39 +339,50 @@ ALTER TABLE jobs ADD COLUMN color TEXT NOT NULL DEFAULT '';
 // feedback.go) can't use it at all and degrades to a full table scan. A
 // second index with ts leading is what makes that read a seek.
 //
-// watchlist deliberately has NO job_id, no FK, and no cascade — the one
-// table here that isn't scoped to a job. A watchlist row is an observation
-// the nightly pass is TRACKING (a recurring correction, a wasted step, a
-// prompting pattern), and its whole point is that it OUTLIVES the job that
+// EVERYTHING BELOW IS HISTORY AS OF v16: this whole table, both its indexes
+// and the retired lookup they served are dropped by migrateV16Watchlist, which
+// promotes each row to a kg_edges fact with a kg_watch overlay (schemaV16,
+// watch.go). The paragraphs are kept because this step still RUNS — a v8
+// database migrating forward creates this table before v16 empties and drops
+// it — and because the reasoning is the argument watch.go's own matching rule
+// inherited.
+//
+// watchlist deliberately had NO job_id, no FK, and no cascade — the one
+// table here that wasn't scoped to a job. A watchlist row was an observation
+// the nightly pass was TRACKING (a recurring correction, a wasted step, a
+// prompting pattern), and its whole point was that it OUTLIVES the job that
 // happened to surface it: the same observation recurs across many jobs, and
 // a row must survive its originating job's teardown, archive, and even
-// hard-delete. Attaching it to a job would make it cascade away exactly when
-// it has finally been seen often enough to matter.
+// hard-delete. Attaching it to a job would have made it cascade away exactly
+// when it had finally been seen often enough to matter. (The property
+// survived the move: kg_watch is likewise global and job-free.)
 //
-// The (state, last_seen) index serves the only listing this table has:
-// ListWatchItems filters on state and orders by last_seen DESC, so both
-// columns are covered in the order the query uses them.
+// The (state, last_seen) index served the only listing the table had: the
+// v9-era ListWatchItems filtered on state and ordered by last_seen DESC, so
+// both columns were covered in the order the query used them — the same
+// argument kg_watch_state_last_seen makes for today's read (schemaV16).
 //
-// watchlist_observation_key is an EXPRESSION index, not a plain column one,
-// and it is deliberately written as the exact expression FindWatchItem
-// (watchlist.go) puts in its WHERE clause. That coupling is the point — the
+// watchlist_observation_key was an EXPRESSION index, not a plain column one,
+// and it was deliberately written as the exact expression the v9-era
+// FindWatchItem put in its WHERE clause. That coupling was the point — the
 // normalisation rule is one expression, so the lookup and the index cannot
-// drift into disagreeing about which rows are "the same observation"; the
-// EXPLAIN QUERY PLAN assertion in watchlist_test.go fails loudly if they do,
-// since a drifted pair still returns correct answers and merely stops using
-// the index.
+// drift into disagreeing about which rows are "the same observation"; a
+// drifted pair still returns correct answers and merely stops using the
+// index, which is why the retired watchlist tests asserted on EXPLAIN QUERY
+// PLAN rather than on results.
 //
 // char(32,9,10,13) is the trim set — space, tab, newline, carriage return.
-// Bare TRIM() strips SPACES ONLY, which is not enough here: the caller is an
+// Bare TRIM() strips SPACES ONLY, which was not enough here: the caller is an
 // LLM and a trailing newline on a generated string is entirely ordinary, so
 // the default would miss the repeat and insert a duplicate — the exact
-// failure FindWatchItem exists to prevent. char() and TRIM() are both
-// deterministic, which is what lets the expression be indexed at all. It is
-// not UNIQUE: rows
-// predating the lookup (or written by a caller that never looked first) may
-// already collide, and a UNIQUE index would turn that into a failed INSERT
-// on the nightly pass rather than the duplicate FindWatchItem is there to
-// prevent in the first place.
+// failure that lookup existed to prevent. char() and TRIM() are both
+// deterministic, which is what let the expression be indexed at all. It is
+// not UNIQUE: rows predating the lookup (or written by a caller that never
+// looked first) may already collide, and a UNIQUE index would turn that into
+// a failed INSERT on the nightly pass rather than the duplicate the lookup was
+// there to prevent in the first place. Those collisions are real, and v16
+// inherits them — migrateV16Watchlist's fold (v16Overlay) is what merges the
+// pair this index deliberately allowed.
 const schemaV9 = `
 CREATE INDEX feedback_ts ON feedback(ts);
 
@@ -852,6 +868,72 @@ CREATE TABLE kg_layout (
 );
 `
 
+// schemaV16 moves the dream loop's watchlist INTO the knowledge graph. The
+// DDL below is only half the migration — migrateV16Watchlist (the hook) is
+// what carries the existing rows across, and schemaV16's own statements run
+// FIRST so the hook has somewhere to write.
+//
+// THE SHAPE CHANGE, stated once: an observation stops being a row in the flat
+// `watchlist` table and becomes a live kg_edges FACT — a natural-language
+// sentence between two entities — with kg_watch holding only what the graph
+// deliberately has no verbs for. The overlay is keyed by edge_id, so there is
+// exactly one watch record per watched fact and no way for the two to drift.
+//
+// Why the observation belongs in kg_edges rather than in a column here: the
+// graph already indexes facts for FTS and vector retrieval and already injects
+// them into a cell's graphContext. Leaving the observation in a flat column
+// meant the single most useful sentence the dream loop produces — "this
+// pattern recurs, here is the fix" — was the one thing a future job could not
+// retrieve. Moving it buys that for free, and costs the flat table.
+//
+// What STAYS in the overlay is the workflow the graph has no opinion about:
+// the dream-loop bookkeeping (class, state, sightings, first/last seen,
+// evidence, suggested_fix, pr_url, updated_at) and carl's judgement trio
+// (verdict, comment, commented_at), whose agent/carl ownership split survives
+// the move unchanged — see watch.go's header.
+//
+// NO FOREIGN KEY on edge_id, same rule as every other kg_* table
+// (schemaV15's last bullet): the graph carries no FKs and no cascades. An
+// overlay whose edge is invalidated is not deleted, it simply stops being
+// listed — every read in watch.go INNER JOINs `expired_at = 0`, which is what
+// makes "retire the fact in the graph viewer" and "take it off the DREAM
+// board" one action instead of two.
+//
+// The (state, last_seen) index serves the only listing this table has:
+// ListWatchItems filters on state and orders by last_seen DESC, so both
+// columns are covered in the order the query uses them. There is deliberately
+// NO observation index here to replace v9's watchlist_observation_key —
+// the observation now lives on kg_edges, and the lookups that used it
+// (FindWatchItem, FindLiveEdgeByFact) match LOWER(kg_edges.fact) instead. That
+// is a full scan of live edges today, which is the honest trade: the corpus is
+// thousands of rows on one machine, and an expression index on
+// kg_edges(LOWER(fact)) would be a change to the GRAPH's schema — made when
+// the graph's own reads need it, not smuggled in by the watchlist.
+//
+// Appended rather than folded into schemaV9 (or v15) for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v15, long past
+// the point where editing an earlier step would ever run again.
+const schemaV16 = `
+CREATE TABLE kg_watch (
+	edge_id       INTEGER PRIMARY KEY,               -- the watched fact (kg_edges.id); no FK, per the kg_* no-FK rule
+	class         TEXT    NOT NULL DEFAULT '',
+	state         TEXT    NOT NULL DEFAULT 'watching',
+	sightings     INTEGER NOT NULL DEFAULT 1,
+	first_seen    INTEGER NOT NULL DEFAULT 0,        -- unix millis
+	last_seen     INTEGER NOT NULL DEFAULT 0,        -- unix millis
+	evidence      TEXT    NOT NULL DEFAULT '',
+	suggested_fix TEXT    NOT NULL DEFAULT '',
+	pr_url        TEXT    NOT NULL DEFAULT '',
+	updated_at    INTEGER NOT NULL DEFAULT 0,        -- unix millis
+	-- carl-owned trio: only SetWatchVerdict ever writes these, exactly as
+	-- questions.answer/answered_at are kraken-owned (questions.go).
+	verdict       TEXT    NOT NULL DEFAULT '',
+	comment       TEXT    NOT NULL DEFAULT '',
+	commented_at  TEXT    NOT NULL DEFAULT ''        -- RFC3339
+);
+CREATE INDEX kg_watch_state_last_seen ON kg_watch(state, last_seen);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -895,9 +977,13 @@ type migrationStep struct {
 // reports the total on the last, and accumulate-forward counters cannot be
 // corrected behind their watermarks).
 // migrations[15] adds the knowledge graph's seven tables (no hook — brand-new
-// tables, nothing to migrate forward; see schemaV15).
+// tables, nothing to migrate forward; see schemaV15);
+// migrations[16] adds kg_watch and moves every watchlist row into the graph as
+// a live fact + overlay, then DROPS the flat table (migrateV16Watchlist below
+// does the promotion, which SQL alone cannot express — it has to find-or-create
+// an episode by content hash and resolve endpoint nodes case-insensitively).
 // Future schema changes append
-// migrations[16], migrations[17], ... rather than editing an existing
+// migrations[17], migrations[18], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -916,6 +1002,7 @@ var migrations = map[int]migrationStep{
 	13: {sql: schemaV13},
 	14: {sql: schemaV14},
 	15: {sql: schemaV15},
+	16: {sql: schemaV16, hook: migrateV16Watchlist},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
@@ -1272,6 +1359,417 @@ func v12DistinctEventSlugs(tx *sql.Tx) ([]string, error) {
 		return nil, fmt.Errorf("read event slugs: %w", err)
 	}
 	return out, nil
+}
+
+// --- v15 -> v16: the watchlist becomes graph facts ---
+
+// v16WatchRow is one flat `watchlist` row, read whole before any writing
+// starts. Deliberately its own type rather than a reuse of WatchItem: that
+// type no longer HAS an Observation column or a plain id, and migration code
+// is frozen at what the v16 cutover needed — the same ruling legacyQuestion's
+// comment states, so a future WatchItem field change can never silently alter
+// how a v15 database migrates.
+type v16WatchRow struct {
+	id           int64
+	observation  string
+	class        string
+	state        string
+	sightings    int64
+	firstSeen    int64
+	lastSeen     int64
+	evidence     string
+	suggestedFix string
+	prURL        string
+	updatedAt    int64
+	verdict      string
+	comment      string
+	commentedAt  string
+}
+
+// The endpoints a promoted observation hangs off when its sentence isn't
+// already a fact in the graph. "dream pass observed <the observation>" is the
+// literal truth about a watchlist row: the nightly pass is what saw it, and
+// kraken is what it is about. Both nodes are resolved case-insensitively
+// against existing names AND aliases before being created, so a graph that
+// already knows either one gains no duplicate — that matters most for
+// `kraken`, which any real database already has and which must never become
+// two nodes.
+const (
+	v16SrcNode     = "dream pass"
+	v16SrcNodeDesc = "The nightly corroboration pass that reads the previous day's feedback and transcripts."
+	v16DstNode     = "kraken"
+	v16DstNodeDesc = "The kraken orchestrator this graph describes."
+	v16NodeType    = "component"
+	v16Predicate   = "observed"
+	// A promoted observation is a fact carl's dream loop already vetted, so it
+	// lands mid-scale rather than at either extreme: 5 of 10 says "recorded and
+	// believed", without claiming the corroboration an extractor's high score
+	// means.
+	v16EdgeStrength = 5
+)
+
+// migrateV16Watchlist is migrations[16]'s Go hook: schemaV16's SQL has already
+// created kg_watch by the time this runs. What is left is the promotion of
+// every existing watchlist row into a graph fact plus an overlay, which SQL
+// alone cannot express — it has to hash episode content, resolve endpoint
+// nodes through two case-insensitive lookups, and fold rows that collide onto
+// one edge.
+//
+// The order per row is: normalize → episode → edge → overlay. Each step is
+// find-or-create rather than blind-insert, because the graph may ALREADY
+// contain the fact this row is about (an extraction agent read the same
+// observation out of a transcript months ago), and minting a second edge
+// saying the same sentence is exactly the near-duplicate the graph's revision
+// pass then has to clean up by hand.
+//
+// STRICT, unlike migrateV5Questions' log-and-continue: any SQL error fails the
+// whole migration. That difference is not inconsistency — v5 was PARSING
+// hand-written YAML, where one malformed blob is a data defect that must not
+// block the other blobs. Nothing here parses anything, so a failure is a
+// broken database rather than a broken row, and the only per-row skip is S2.2's
+// empty observation (below), which is a row with no content to promote.
+//
+// ALL states migrate, including shipped and declined. Those are suppression
+// signals: the dream loop reads them to learn an observation has been ruled on
+// and must not be re-proposed, so dropping them would make every declined
+// observation come back as fresh the first night after the migration.
+func migrateV16Watchlist(tx *sql.Tx) error {
+	rows, err := v16WatchlistRows(tx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	// One resolve per endpoint across the whole migration: the two fallback
+	// nodes are the same for every row, and re-resolving them per row would be
+	// two queries times the table's length for an answer that cannot change.
+	nodes := map[string]int64{}
+	for _, r := range rows {
+		// The stored observation is normalized the way normalizeGraphAdd
+		// normalizes a fact on its way in (watch.go's oneLine), because that is
+		// what makes the match below meaningful: the edges this compares
+		// against were all stored through that same rule. A row that is empty
+		// once collapsed carries no observation at all — there is no sentence
+		// to make a fact out of — so it is skipped rather than promoted into a
+		// blank fact nothing can ever match or read.
+		obs := oneLine(r.observation)
+		if obs == "" {
+			continue
+		}
+		episodeID, err := v16Episode(tx, r, now)
+		if err != nil {
+			return err
+		}
+		edgeID, err := v16Edge(tx, r, obs, episodeID, now, nodes)
+		if err != nil {
+			return err
+		}
+		if err := v16Overlay(tx, edgeID, r); err != nil {
+			return err
+		}
+	}
+
+	// Every watchlist-kind episode is marked done, not just the ones this hook
+	// created. A PENDING watchlist episode is one the v15 sweep enqueued and
+	// the extraction agent never drained; the row it describes has just been
+	// promoted to a first-class fact by this very migration, so extracting it
+	// later would only mint a near-duplicate edge of something the graph now
+	// states directly.
+	if _, err := tx.Exec(`UPDATE kg_episodes SET state = 'done' WHERE kind = 'watchlist'`); err != nil {
+		return fmt.Errorf("mark watchlist episodes done: %w", err)
+	}
+	// The flat table goes, per this repo's clean-cutover ruling: one machine,
+	// one database, one move — no dual-mode read path, no dormant copy to drift
+	// out of sync with the overlay. Its indexes go with it.
+	if _, err := tx.Exec(`DROP TABLE watchlist`); err != nil {
+		return fmt.Errorf("drop watchlist: %w", err)
+	}
+	// ...and so does the sweep watermark that pointed at it (internal/jobs'
+	// graphSrcWatchlist). Leaving the cursor row behind would strand a
+	// watermark for a source no pass reads any more, which is the kind of thing
+	// that reads as live configuration years later.
+	if _, err := tx.Exec(`DELETE FROM kg_ingest_cursor WHERE source = 'rows:watchlist'`); err != nil {
+		return fmt.Errorf("drop watchlist ingest cursor: %w", err)
+	}
+	return nil
+}
+
+// v16WatchlistRows reads the whole flat table, ordered by id, split out only so
+// the rows cursor is closed before this hook's writes run against the same
+// transaction — the same reason v12DistinctEventSlugs exists.
+//
+// Ordered by id, and the order is load-bearing rather than tidy: when two rows
+// fold onto one edge (S2.5), the fold's tiebreak on equal last_seen is "the
+// row processed first wins", so a deterministic input order is what makes the
+// migration reproducible.
+func v16WatchlistRows(tx *sql.Tx) ([]v16WatchRow, error) {
+	rows, err := tx.Query(`SELECT id, COALESCE(observation,''), COALESCE(class,''), COALESCE(state,''),
+		COALESCE(sightings,0), COALESCE(first_seen,0), COALESCE(last_seen,0),
+		COALESCE(evidence,''), COALESCE(suggested_fix,''), COALESCE(pr_url,''),
+		COALESCE(updated_at,0), COALESCE(verdict,''), COALESCE(comment,''),
+		COALESCE(commented_at,'') FROM watchlist ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("read watchlist: %w", err)
+	}
+	defer rows.Close()
+	var out []v16WatchRow
+	for rows.Next() {
+		var r v16WatchRow
+		if err := rows.Scan(&r.id, &r.observation, &r.class, &r.state, &r.sightings,
+			&r.firstSeen, &r.lastSeen, &r.evidence, &r.suggestedFix, &r.prURL,
+			&r.updatedAt, &r.verdict, &r.comment, &r.commentedAt); err != nil {
+			return nil, fmt.Errorf("scan watchlist row: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read watchlist rows: %w", err)
+	}
+	return out, nil
+}
+
+// v16Episode finds-or-creates the provenance episode for one migrated row,
+// rendering its content in EXACTLY the format the retiring sweepWatchlist used
+// (internal/jobs/graph.go) and hashing it with addEpisode's rule
+// (sha256 over kind, ref and content, NUL-separated).
+//
+// Reproducing both verbatim is the entire point: a v15 database whose sweep
+// already ingested this row holds an episode with precisely that hash, so
+// find-or-create REUSES it instead of storing the same text twice under two
+// ids. Change either the template or the hash rule and the migration silently
+// doubles every already-swept row's provenance.
+//
+// The row's raw observation goes into the content (the sweep's own behaviour),
+// while the FACT gets the normalized form — the two differ only for an
+// observation carrying odd whitespace, and the content is a provenance record
+// of what the table actually held.
+//
+// The episode is created `done`: it describes a row this migration has already
+// turned into a fact, so handing it to the extraction agent later would ask it
+// to re-derive an edge that exists.
+func v16Episode(tx *sql.Tx, r v16WatchRow, now int64) (int64, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "watchlist observation (%s, %s, seen %dx): %s", r.class, r.state, r.sightings, r.observation)
+	if r.suggestedFix != "" {
+		b.WriteString("\nsuggested fix: " + r.suggestedFix)
+	}
+	if r.verdict != "" {
+		b.WriteString("\ncarl's verdict: " + r.verdict)
+		if r.comment != "" {
+			b.WriteString(" — " + r.comment)
+		}
+	}
+	content := b.String()
+	ref := fmt.Sprintf("watchlist:%d", r.id)
+	sum := sha256.Sum256([]byte("watchlist" + "\x00" + ref + "\x00" + content))
+	hash := hex.EncodeToString(sum[:])
+
+	var id int64
+	err := tx.QueryRow(`SELECT id FROM kg_episodes WHERE hash = ?`, hash).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("find watchlist episode for row %d: %w", r.id, err)
+	}
+	res, err := tx.Exec(`INSERT INTO kg_episodes (kind, ref, content, hash, ts, state, created_at)
+		VALUES ('watchlist', ?, ?, ?, ?, 'done', ?)`, ref, content, hash, r.lastSeen, now)
+	if err != nil {
+		return 0, fmt.Errorf("insert watchlist episode for row %d: %w", r.id, err)
+	}
+	id, err = res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("insert watchlist episode for row %d: %w", r.id, err)
+	}
+	return id, nil
+}
+
+// v16Edge returns the edge this observation becomes: the live edge whose fact
+// already says it, or a freshly inserted fallback edge.
+//
+// MATCH (lowest live edge id whose LOWER(fact) equals the normalized
+// observation): that edge IS the watch edge, and nothing about it is rewritten
+// — its endpoints, predicate and strength are whatever the graph decided, which
+// is better information than this migration has. The ONE exception is a
+// provenance backfill: an edge with episode_id = 0 was hand-planted with no
+// source, and this row is a real source for it, so the episode id lands there.
+// That is a sanctioned one-time mutation of an otherwise insert-only table,
+// called out here because W5 (edges are insert-only outside
+// valid_until/expired_at) is a standing invariant and this is its only
+// exception.
+//
+// Lowest id wins among several matches for the same reason FindLiveEdgeByFact
+// picks it: the oldest edge is the one the rest of the graph already points at.
+//
+// NO MATCH: a fallback edge is inserted mechanically.
+//
+// occurrences is 1, NOT the row's sightings, and the distinction is the whole
+// reason the two counters exist separately (S3.10). occurrences counts
+// DISTINCT EPISODES independently stating the fact — the graph's corroboration
+// measure — and a flat watchlist row is exactly ONE episode however many times
+// the dream loop sighted the pattern. The recurrence count is not lost by
+// this: it lands verbatim in kg_watch.sightings, where the DREAM view reads it.
+//
+// Seeding occurrences from sightings instead would hand every migrated fact an
+// unearned rerank advantage, and the size of it is measurable rather than
+// theoretical: core's fuseScore (graphsearch.go) multiplies an edge's fused
+// rank by 1 + occBoostScale*log1p(occurrences), and on this machine's database
+// at v15 the highest occurrences on any live edge is 2 while watchlist
+// sightings reach 19. Every promoted row would have outranked the graph's
+// genuinely best-corroborated facts on a number that measures something else
+// entirely. This also matches the runtime add path, which floors occurrences
+// at 1 (InsertEdge).
+//
+// valid_from is the row's first_seen (when the fact started being true in the
+// world), while created_at is now (when kraken learned it) — the bi-temporal
+// split schemaV15 describes. FTS stays in sync automatically through kg_edges'
+// insert trigger.
+func v16Edge(tx *sql.Tx, r v16WatchRow, obs string, episodeID, now int64, nodes map[string]int64) (int64, error) {
+	var edgeID, edgeEpisode int64
+	err := tx.QueryRow(`SELECT id, episode_id FROM kg_edges
+		WHERE expired_at = 0 AND LOWER(fact) = LOWER(?) ORDER BY id LIMIT 1`, obs).Scan(&edgeID, &edgeEpisode)
+	if err == nil {
+		if edgeEpisode == 0 {
+			if _, err := tx.Exec(`UPDATE kg_edges SET episode_id = ? WHERE id = ?`, episodeID, edgeID); err != nil {
+				return 0, fmt.Errorf("backfill episode on edge %d: %w", edgeID, err)
+			}
+		}
+		return edgeID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("find edge for watchlist row %d: %w", r.id, err)
+	}
+
+	srcID, err := v16Node(tx, nodes, v16SrcNode, v16SrcNodeDesc, now)
+	if err != nil {
+		return 0, err
+	}
+	dstID, err := v16Node(tx, nodes, v16DstNode, v16DstNodeDesc, now)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`INSERT INTO kg_edges
+		(src_id, dst_id, predicate, fact, episode_id, strength, occurrences, valid_from, valid_until, embedding, created_at, expired_at)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0, x'', ?, 0)`,
+		srcID, dstID, v16Predicate, obs, episodeID, v16EdgeStrength, r.firstSeen, now)
+	if err != nil {
+		return 0, fmt.Errorf("insert edge for watchlist row %d: %w", r.id, err)
+	}
+	edgeID, err = res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("insert edge for watchlist row %d: %w", r.id, err)
+	}
+	return edgeID, nil
+}
+
+// v16Node resolves an endpoint by canonical name then by alias, both
+// case-insensitively, and creates the node only when neither matches — the
+// same precedence ResolveNode/UpsertNode use, re-implemented against this
+// hook's *sql.Tx because those methods query s.db, OUTSIDE the migration's
+// transaction, and so cannot see the rows this hook has already written. A
+// call through them would miss the `dream pass` node created for the first
+// promoted row and insert a second one on the next.
+//
+// An EXISTING node's description is left exactly as it is. This migration
+// knows less about `kraken` than whatever wrote the node did, and overwriting
+// a richer gloss with a one-liner is the failure UpsertNode's
+// "an extractor that saw less detail must not blank a richer gloss" rule
+// exists to prevent. The descriptions above are therefore create-time seeds,
+// not assertions.
+//
+// The alias arm is ordered by node id for the reason ResolveNode states:
+// kg_node_aliases' primary key is (node_id, alias), so two nodes CAN carry the
+// same alias, and without an order the winner would be whichever row SQLite
+// handed back first.
+func v16Node(tx *sql.Tx, nodes map[string]int64, name, desc string, now int64) (int64, error) {
+	if id, ok := nodes[name]; ok {
+		return id, nil
+	}
+	var id int64
+	err := tx.QueryRow(`SELECT id FROM kg_nodes WHERE LOWER(name) = LOWER(?)`, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRow(`SELECT n.id FROM kg_node_aliases a JOIN kg_nodes n ON n.id = a.node_id
+			WHERE LOWER(a.alias) = LOWER(?) ORDER BY n.id LIMIT 1`, name).Scan(&id)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("resolve node %q: %w", name, err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		res, insErr := tx.Exec(`INSERT INTO kg_nodes (name, type, description, embedding, created_at, updated_at)
+			VALUES (?, ?, ?, x'', ?, ?)`, name, v16NodeType, desc, now, now)
+		if insErr != nil {
+			return 0, fmt.Errorf("insert node %q: %w", name, insErr)
+		}
+		id, insErr = res.LastInsertId()
+		if insErr != nil {
+			return 0, fmt.Errorf("insert node %q: %w", name, insErr)
+		}
+	}
+	nodes[name] = id
+	return id, nil
+}
+
+// v16Overlay writes one row's twelve overlay columns onto its edge, FOLDING
+// when a previous row already claimed the same edge.
+//
+// The fold is not a hypothetical. The flat table's lookup normalized only
+// surrounding whitespace and case, while an edge fact is matched on the fully
+// collapsed form, so two rows differing in INTERNAL whitespace — which the old
+// FindWatchItem treated as distinct observations and happily stored twice —
+// land on one edge here. Something has to decide what the merged overlay says,
+// and "last writer wins outright" would silently drop the older row's
+// recurrence count, which is the one number the whole feature turns on.
+//
+// So: the row with the greater last_seen wins every field (it is the more
+// recent statement of class/state/evidence/fix/pr and of carl's judgement),
+// EXCEPT the two where both rows genuinely carry information — sightings sums
+// (the pattern really was seen that many times in total) and first_seen takes
+// the min (the earliest either row saw it is when it was first seen). Ties on
+// last_seen keep the earlier-processed row's fields, which by
+// v16WatchlistRows' id ordering means the lower row id.
+//
+// first_seen takes a literal min, including of a zero: a 0 first_seen is a row
+// the flat table never stamped, and inventing a later timestamp for it would
+// claim knowledge this migration does not have.
+func v16Overlay(tx *sql.Tx, edgeID int64, r v16WatchRow) error {
+	var exLast, exSightings, exFirst int64
+	err := tx.QueryRow(`SELECT last_seen, sightings, first_seen FROM kg_watch WHERE edge_id = ?`, edgeID).
+		Scan(&exLast, &exSightings, &exFirst)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := tx.Exec(`INSERT INTO kg_watch (edge_id, class, state, sightings, first_seen, last_seen,
+			evidence, suggested_fix, pr_url, updated_at, verdict, comment, commented_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			edgeID, r.class, r.state, r.sightings, r.firstSeen, r.lastSeen, r.evidence,
+			r.suggestedFix, r.prURL, r.updatedAt, r.verdict, r.comment, r.commentedAt); err != nil {
+			return fmt.Errorf("insert watch overlay for row %d: %w", r.id, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read watch overlay for edge %d: %w", edgeID, err)
+	}
+
+	sightings := exSightings + r.sightings
+	firstSeen := exFirst
+	if r.firstSeen < firstSeen {
+		firstSeen = r.firstSeen
+	}
+	if r.lastSeen <= exLast {
+		// The stored row is the more recent one: only the two accumulating
+		// columns move.
+		if _, err := tx.Exec(`UPDATE kg_watch SET sightings = ?, first_seen = ? WHERE edge_id = ?`,
+			sightings, firstSeen, edgeID); err != nil {
+			return fmt.Errorf("fold watch overlay for row %d: %w", r.id, err)
+		}
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE kg_watch SET class = ?, state = ?, sightings = ?, first_seen = ?,
+		last_seen = ?, evidence = ?, suggested_fix = ?, pr_url = ?, updated_at = ?,
+		verdict = ?, comment = ?, commented_at = ? WHERE edge_id = ?`,
+		r.class, r.state, sightings, firstSeen, r.lastSeen, r.evidence, r.suggestedFix,
+		r.prURL, r.updatedAt, r.verdict, r.comment, r.commentedAt, edgeID); err != nil {
+		return fmt.Errorf("fold watch overlay for row %d: %w", r.id, err)
+	}
+	return nil
 }
 
 // legacyQuestion is parseLegacyQuestions' output shape — field-for-field the

@@ -32,7 +32,7 @@ import (
 //
 // Ownership is simple and total: every column of both tables is written by
 // the daemon's refresh pass and by nothing else. There is no carl-owned
-// column here, so none of watchlist.go's careful preserve-the-other-side
+// column here, so none of watch.go's careful preserve-the-other-side
 // splitting applies.
 
 // JobTokens is one job's summed token spend. Deliberately tag-free like
@@ -72,7 +72,7 @@ type JobTokens struct {
 }
 
 // jobTokensColumns COALESCEs every scanned column defensively, same
-// belt-and-suspenders reasoning as jobColumns/watchItemColumns: the schema
+// belt-and-suspenders reasoning as jobColumns/feedbackColumns: the schema
 // already declares all of these NOT NULL with a same-typed default, but a
 // NULL that sneaks in anyway (schema drift, a hand-edited row) must degrade
 // to a zero field rather than error the whole query.

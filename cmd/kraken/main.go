@@ -213,13 +213,21 @@ Commands:
                       JSON.
   k watchlist get|add|update|remove ...
                       cell-side verb the nightly dream pass uses to track
-                      recurring observations, proxied the same way. The
+                      recurring observations, proxied the same way. A watch
+                      item IS a knowledge-graph edge (the observation is its
+                      fact sentence), so every id here is an EDGE id, and the
                       watchlist is GLOBAL — no slug on any op. get [state]
-                      prints the rows as JSON (state filter optional:
-                      watching|shipped|declined); add/update read one watch-
-                      item object from stdin; remove takes a bare row id.
-                      verdict/comment are carl's, set from the board — sending
-                      either here is a 400, not a silent drop.
+                      prints the items as JSON (state filter optional:
+                      watching|shipped|declined); add reads one watch-item
+                      object from stdin (observation, class, src, dst,
+                      strength 1-10, optional predicate) and FOLDS into the
+                      existing item when the graph already states it; update
+                      reads {id, ...overlay fields} and refuses the fact's own
+                      fields — edges are insert-only, so reword by removing
+                      and re-adding; remove takes a bare edge id and UNWATCHES
+                      it, leaving the fact in the graph. verdict/comment are
+                      carl's, set from the board — sending either here is a
+                      400, not a silent drop.
   k mine digest|reduce [--since <unix-millis>] ...
                       the nightly dream pass' mechanical read of claude's own
                       transcripts under ~/.claude/projects — a pure local file

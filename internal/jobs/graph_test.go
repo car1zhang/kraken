@@ -202,10 +202,6 @@ func TestSweepRowsIngestsOnceThenSettles(t *testing.T) {
 	if _, err := st.AddFeedback(store.Feedback{Artifact: "50-components.md", Note: "edges run through boxes", TS: 100}); err != nil {
 		t.Fatalf("add feedback: %v", err)
 	}
-	if _, err := st.AddWatchItem(store.WatchItem{Observation: "agents rediscover the PATH workaround",
-		Class: "repetition", State: "watching", Sightings: 2, FirstSeen: 90, LastSeen: 110}); err != nil {
-		t.Fatalf("add watch item: %v", err)
-	}
 	if _, err := st.CreateJob(&store.Job{Slug: "demo", Repo: "kraken", Body: "do the thing"}); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -225,8 +221,8 @@ func TestSweepRowsIngestsOnceThenSettles(t *testing.T) {
 		return len(eps)
 	}
 	first := sweep()
-	if first != 3 {
-		t.Fatalf("first sweep enqueued %d episodes, want 3 (feedback, watchlist, job)", first)
+	if first != 2 {
+		t.Fatalf("first sweep enqueued %d episodes, want 2 (feedback, job)", first)
 	}
 	if second := sweep(); second != first {
 		t.Errorf("second sweep enqueued %d more episodes — a settled source must cost nothing", second-first)

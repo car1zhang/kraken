@@ -15,7 +15,7 @@ _k() {
         'account:rotation status, or switch/pin the main Claude login (auto|<slug>)'
         'questions:cell-side verb — read/write a job'"'"'s open doc questions via kraken serve'
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
-        'watchlist:cell-side verb — read/write the dream loop'"'"'s global watchlist via kraken serve'
+        'watchlist:cell-side verb — read/write the dream loop'"'"'s watch overlay on the knowledge graph, via kraken serve'
         'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
         'graph:cell-side verb — read/write the knowledge graph via kraken serve'
         'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
@@ -123,15 +123,15 @@ _k() {
             if (( CURRENT == 3 )); then
                 local -a ops
                 ops=(
-                    'get:print watchlist rows as JSON (optional state filter)'
-                    'add:add one observation from a JSON object on stdin'
-                    'update:update one observation from a JSON object on stdin'
-                    'remove:remove one row by id'
+                    'get:print watch items as JSON (optional state filter)'
+                    'add:watch one observation from a JSON object on stdin (folds when the graph already states it)'
+                    'update:update one item'"'"'s overlay fields from a JSON object on stdin'
+                    'remove:unwatch one item by edge id (the fact stays in the graph)'
                 )
                 _describe -t ops 'op' ops
             elif [[ $words[3] == get && CURRENT == 4 ]]; then
                 # the state filter's whole value set — the same three
-                # store/watchlist.go documents; omitting it means every row.
+                # store/watch.go documents; omitting it means every item.
                 local -a states
                 states=(
                     'watching:still being tracked'
