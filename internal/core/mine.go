@@ -570,8 +570,12 @@ func callSignature(name string, input json.RawMessage) string {
 }
 
 // mineSummaryKeys are the input keys that identify a call, in the priority
-// order summarizeInput uses — same list, same order, so a signature here
-// reads identically to the tool line `k r` prints.
+// order summarizeInput uses — same list, same order, so a signature that
+// lands on one of these keys reads identically to the tool line `k r`
+// prints, with one deliberate exception: Bash, where mineInputSummary
+// strips leading shell boilerplate that `k r` shows as typed (the comment
+// inside it says why). The key-less raw fallback can also differ — raw
+// transcript bytes here, a re-marshalled map there.
 type mineSummaryKeys struct {
 	Command     string `json:"command"`
 	FilePath    string `json:"file_path"`

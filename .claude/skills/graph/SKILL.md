@@ -74,7 +74,7 @@ The list is **open**. When something genuinely is not one of these, name a new t
 lowercase-hyphenated style and use it consistently across the batch — a type invented once and never
 reused is noise, so prefer the closest seed type unless the new one will recur.
 
-Four rules about what a good tuple looks like:
+Five rules about what a good tuple looks like:
 
 - **The fact sentence must stand alone.** "It is skipped under mirror" is unreadable a month later;
   "tokensPass is skipped under --mirror because mirror runs only state derivation and the block-event
@@ -87,6 +87,14 @@ Four rules about what a good tuple looks like:
   is a 3, and a 3 is usually a sign you should not add it at all. It is **required** on every edge:
   an absent or out-of-range strength is a 400, deliberately, because a default invented on your
   behalf would record a confidence nobody asserted. Omitting it fails the whole batch, not one edge.
+- **A description states only what the source states — the refusal filter covers node glosses, not
+  just edges.** This bites hardest on personal material (the corpus now includes carl's own notes):
+  one ingest correctly refused every speculative EDGE and then shipped a node description carrying
+  the exact inference its own report said the notes never make ("likely his partner"), which
+  `/api/graph` then serves to the board and iOS graph views and `k graph search` returns. A
+  relationship, diagnosis, or private circumstance the source does not state does not go in a
+  gloss either — describe the person by what the notes actually say, and when the honest gloss
+  feels thin, thin is correct.
 - **One gleaning pass.** After the first pass over an episode, ask once: what did I miss? Then stop.
   There is no second gleaning and no community-summary layer; both cost far more than they return at
   this graph's scale.
@@ -94,9 +102,22 @@ Four rules about what a good tuple looks like:
 ### 3. Canonicalize AFTER extraction, never during
 
 Extract with the names the episode actually uses. Only once the batch is extracted, resolve those
-names against what already exists — `k graph search "<name>"` and the resolve that `k graph add`
-performs for you. Canonicalizing while reading makes you bend the evidence toward names you already
-know, which is how a graph converges on its own first guesses.
+names against what already exists. **The existing vocabulary comes from ONE full-graph read** — the
+same `/api/graph` pull the sweep below spells out — whose `nodes` list is the complete inventory of
+canonical NAMES. Aliases are deliberately not joined on that route (they are visible one node at a
+time via `/api/graph/node?id=N`), so a name absent from the inventory may still be an alias of an
+existing node: let the resolve that `k graph add` performs catch those, and send a `description`
+only for a node you are confident is genuinely new — an alias-resolved write OVERWRITES the
+existing node's gloss and re-queues its embedding. `k graph search` cannot supply the vocabulary:
+it is ranked retrieval with no way to enumerate (a degree-zero node is structurally absent from its
+results, since the route builds its node list from returned edges) — two extraction teammates
+briefed with only `search` burned ~80 probe calls rebuilding the node list by union, recovered two
+DIFFERENT partial vocabularies, and canonicalized the two halves of one batch against different
+worlds. That incident is the Delegation rule broken, not a capability to brief out: canonicalization
+is the LEAD's step, done once across the whole batch against one inventory pull — teammates extract
+with source names, never receive the inventory, and never resolve their own slices, because
+canonicalizing while reading makes you bend the evidence toward names you already know, which is
+how a graph converges on its own first guesses.
 
 Resolution is **resolve-then-add**: an incoming name that matches an existing node's name or alias
 merges into it, and a genuinely new name creates a node. When two names are the same thing, add the
@@ -166,6 +187,68 @@ re-send the rest rather than treating the batch as unwritten.
 from** — an episode with no durable facts in it is a processed episode, and leaving it pending means
 the next run pays for it again. Say how many you skipped and why in the report.
 
+### 7. Sweep for connectivity
+
+Extraction produces spokes. Each episode's facts point at the entities that episode mentions —
+usually a hub plus a handful of leaves — and nothing ties one batch's leaves to another's. Left
+alone the graph converges on hub-and-spoke: the first sweep (2026-08-01) found the whole
+pre-existing kraken cluster — zeus, athena, the web board, the pipeline skills — connected to carl
+and never to the `kraken` node itself, and `ServiceTitan` sitting at degree zero. Sweep once per
+run, after the batch is written and its episodes closed — and a run with no pending episodes still
+sweeps, because the sweep walks the graph, not the batch.
+
+- Pull the whole graph in one read, with this command exactly (kept on ONE line because it is
+  copied verbatim, and a wrapped copy runs `curl` with no URL — both halves measured):
+
+  ```
+  ADDR="${KRAKEN_SERVE_ADDR:-127.0.0.1:7777}"; curl -sf --max-time 10 "http://${ADDR#http*://}/api/graph"
+  ```
+
+  That is the board's own read route, on the same address knob
+  every `k` verb resolves through (the knob may carry a scheme, so strip one rather than double
+  it; and still never kraken.db directly). Empty output is a failed read, never an empty graph —
+  and output that does not parse as JSON is a failed read too (a trailing slash on the knob
+  builds `//api/graph`, which answers 301 with a small HTML body that `curl -sf` does not treat
+  as failure). The route returns
+  invalidated edges too (the viewer draws history struck through), so compute each node's degree
+  over `expired_at == 0` edges only — count a dead fact and the freshly-orphaned node it left
+  behind is exactly the one the walk skips. Do the counting in `python3` (the interpreter a cell
+  is guaranteed to have); read prose only for the nodes you actually walk.
+- Walk the lowest-degree nodes first (0, then 1), plus the nodes this batch created, capped at
+  about one batch's worth (~25 nodes, batch nodes included) — the walk otherwise grows with the
+  graph while the batch stays fixed. A node a previous report already recorded as refused (its
+  `## Sweep refusals` section — the format the cell section below specifies) gives
+  its slot to one not yet considered, so a standing backlog cannot pin the head of the queue. For each, ask what existing node it is genuinely related to, and whether that
+  relation stands alone as a fact sentence supported by a node's description, one of this batch's
+  episodes, or a live fact the graph already holds. A world-closed edge (`valid_until` set, still
+  live) counts toward degree, but is not evidence for a new fact — the world moved past it.
+- Write the passing edges through `k graph add`, strengths by the same rules as extraction, with
+  **one call per distinct provenance**: `episode_id` is a field of the whole request, so edges
+  evidenced by a batch episode go in a call carrying `--episode <that id>`, while edges supported
+  only by what the graph already holds go in a call that OMITS `--episode` entirely — the flag
+  takes positive ids only, and the payload's absent `episode_id` writes the store's 0, its marker
+  for a row with no source episode. That is a real exception to the data model's
+  every-fact-points-back rule, tolerable here because the sweep's evidence IS the graph. Say in
+  the report how many edges carry it — and derive the count from the `/api/graph` payload you
+  already hold rather than trusting a stamped figure, because it moves nightly: the hand-planted
+  backfills (the pluto-notes ingest and the watchlist migration) wrote episode-0 edges wholesale,
+  making provenance-free edges the MAJORITY of the graph at last measurement (181 of 298 live
+  edges, 2026-08-02), with episode-backed ingest closing the gap each night. The operative rule is
+  therefore not "keep it the minority" — the graph is not in that state — but the per-edge one
+  above: an edge a batch episode DOES evidence always carries that episode's id, and episode 0 is
+  only ever the honest marker for an edge whose evidence is the graph itself.
+- **A sweep adds edges, never nodes** — and the server will not hold that line for you: an edge
+  endpoint that resolves to nothing silently creates a bare node with no type and no description,
+  and the response's `nodes` list does not mention it. So endpoint names are copied verbatim from
+  the `/api/graph` payload's `name` field, the sweep payload sends no `nodes` array at all, and a
+  name missing from that node list is a bug in the sweep, never a new entity.
+- **One pass, same rule as gleaning: sweep once and stop.** Connectivity is a shape, not a quota —
+  an edge invented to raise a degree number is exactly the wrong-fact-in-a-brief failure this
+  skill exists to prevent. An edge whose result comes back `added: false` folded into a fact
+  already there — report it as already known, not as a new link, and never restate a fact whose
+  only evidence is that same fact, which counts the graph as its own witness. And like
+  canonicalization, the sweep needs the whole graph at once: never hand slices of it to a crew.
+
 ---
 
 ## Revision mode
@@ -214,12 +297,30 @@ specific, and it is the only place the cell's real paths appear:
 
 - **The report goes in the brief's SET ROOT** (`<cellDir>/artifacts/`) as `00-graph-report.md`. Keep
   it to a page: what was ingested (or revised), the judgment calls, what you refused to add and why,
-  and any episode you closed without extracting from. That last section is the one that tells carl
-  whether a quiet run was a clean one or a blind one.
+  what the connectivity sweep linked and what it walked but refused (ingest mode only; sweep edges
+  count toward the closing line's fact count), and any episode you closed without extracting from.
+  That last section is the one that tells carl whether a quiet run was a clean one or a blind one.
+  Previous nights' reports survive as flat copies at `~/Documents/pluto/<slug>-<id>.00-graph-report.md`
+  (moved into `archive/` when their job is archived); the sweep reads the most recent few for the
+  nodes already recorded as refused — the only cross-run state it has. So the sweep's refusals are
+  written machine-readably: a `## Sweep refusals` section — heading always present, bare node
+  names exactly as `/api/graph` spells them, one per line, no bullets and no prose; a run with
+  zero refusals leaves the heading with no lines under it (never `None`, which a later run would
+  read as a node name). It is distinct from the prose "what you refused to add" section above,
+  whose subject is extraction content and whose category headings ("ephemeral work state") a
+  later run globbing for refused nodes would mis-parse; reports from before this format simply
+  lack the section, which reads as zero recorded refusals, not as an error.
 - **Read and write the graph with `k graph pending|search|add|done|stats`.** Never open `kraken.db`
   directly — `kraken serve` is its single writer, and a second handle would run migrations.
 - **This job opens no PR.** The graph lives in `kraken.db`; nothing here belongs in git. If you find a
   real bug in kraken while doing this, say so in the report and leave it — that is a job of its own.
+  The one exception is carl steering this job into a repo change ("bake that into the skill"): his
+  steer overrides the no-PR default, but it does not override the procedure — a repo change is
+  phase-2 work and `.claude/skills/do/SKILL.md` governs it end to end (contract, review round,
+  build report, the manual-test gate, and only then `pr/SKILL.md`), whatever skill the job
+  started under. One job took the side door here:
+  it read only the pr skill, so a merged PR shipped with no contract, no review-round close
+  discipline, and no build report, and nothing anywhere noticed the gates were skipped.
 - **Never `open`** (there is no browser in a cell).
 - **The phase ends with one line, then you stop.** Say exactly:
 
