@@ -80,9 +80,13 @@ func edgeCounts(t *testing.T, s *Store) (total, undelivered, unacked int) {
 // TestEdgeSlackSchemaIsV17 pins the version bump and its registration. A DDL
 // string added without a migrations entry applies to a FRESH database and to
 // no existing one — the failure mode is invisible on the machine that wrote it.
+// A floor rather than an exact pin: this contract needs v17 REACHED and its
+// step registered, not the ladder frozen — an exact == has now broken on
+// every later migration it met (v17 over the watch contract's == 16, v18
+// linear_issues over this test's own == 17).
 func TestEdgeSlackSchemaIsV17(t *testing.T) {
-	if schemaVersion != 17 {
-		t.Fatalf("schemaVersion = %d, want 17", schemaVersion)
+	if schemaVersion < 17 {
+		t.Fatalf("schemaVersion = %d, want >= 17", schemaVersion)
 	}
 	if _, ok := migrations[17]; !ok {
 		t.Fatal("migrations[17] is not registered — a fresh db would have the tables and an upgraded one would not")

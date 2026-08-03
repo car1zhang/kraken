@@ -17,7 +17,8 @@ import (
 )
 
 // embed.go — text -> vector via the OpenAI embeddings API. This is kraken's
-// first (and only) outbound API client, and the seam is deliberately one
+// first outbound API client (slack.go and linear.go followed its shape), and
+// the seam is deliberately one
 // small interface so the Q2 decision stays reversible: everything above it
 // asks an Embedder for vectors and never knows which model, which dims, or
 // whether a network was involved.

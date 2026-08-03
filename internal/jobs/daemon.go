@@ -937,6 +937,20 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		deliverSlack(ActiveStore(), all)
 	}
 
+	// linear pass (self-paced internally — see LinearPass): poll Linear for
+	// issues newly assigned to carl, create a draft job per qualifying one,
+	// and keep the ones that already have a job in step. Beside the graph
+	// pass because it shares its shape — a free function owning its own
+	// throttle and single-flight, so this stays one line, the one difference
+	// being that LinearPass reaches for ActiveStore() itself where graphPass
+	// is handed the store, since its first gate is the config rather than
+	// the store — and skipped under mirror for the sharpest reasons on the
+	// list at once: it creates real job rows, downloads real files, and
+	// TYPES INTO A LIVE PANE.
+	if !mirror {
+		LinearPass(now)
+	}
+
 	// usage poll (throttled, first-tick eager so UIs have data right after
 	// daemon start): KickUsagePass's own usagePassRunning atomic
 	// single-flights this into its own goroutine (network I/O up to ~10s,

@@ -234,13 +234,16 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 		t.Fatalf("GetJobByID: %v", err)
 	}
 
-	// Roll the shape back to a genuine v16: the two v17 tables gone, the
-	// version stamp lowered. Done inline rather than through
-	// downgradeFreshDB so this test measures v17 alone and stays green
-	// whether or not that helper has grown a v17 arm.
+	// Roll the shape back to a genuine v16: every table added at or after
+	// v17 gone, the version stamp lowered. Done inline rather than through
+	// downgradeFreshDB so this test measures the v16→current walk on its own
+	// terms — which is also why the list must name LATER migrations' tables
+	// too (linear_issues, v18): migrate() from 16 replays every step above
+	// it, and a leftover table fails that step's bare CREATE.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS slack_inbox`,
 		`DROP TABLE IF EXISTS slack_marks`,
+		`DROP TABLE IF EXISTS linear_issues`,
 		`PRAGMA user_version = 16`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {

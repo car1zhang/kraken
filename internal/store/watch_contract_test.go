@@ -280,11 +280,14 @@ func TestContractSchemaV16Lands(t *testing.T) {
 	}
 	s := contractMigrate(t, db, path)
 
-	// S1: schemaVersion = 17. (Was 16 when this contract was frozen; the Slack
-	// intake bot's slack_inbox/slack_marks migration bumped it — an
-	// append-only step that leaves every assertion below this one intact.)
-	if schemaVersion != 17 {
-		t.Fatalf("schemaVersion = %d, want 17 (S1)", schemaVersion)
+	// S1: schemaVersion reached 16. A floor rather than an exact pin: the
+	// watchlist contract needs v16's effects present (kg_watch, the flat
+	// table gone — asserted below), not the ladder frozen forever, and an
+	// exact pin has now broken on two consecutive later migrations (v17
+	// slack_inbox, v18 linear_issues) — each bump re-editing this line for a
+	// contract it does not touch.
+	if schemaVersion < 16 {
+		t.Fatalf("schemaVersion = %d, want >= 16 (S1)", schemaVersion)
 	}
 	var version int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
