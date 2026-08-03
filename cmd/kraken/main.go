@@ -71,6 +71,10 @@ func main() {
 		cmdLoad(rest)
 	case "graph":
 		cmdGraph(rest)
+	case "slack":
+		cmdSlack(rest)
+	case "job":
+		cmdJob(rest)
 	case "mine":
 		cmdMine(rest)
 	case "_complete":
@@ -228,6 +232,28 @@ Commands:
                       it, leaving the fact in the graph. verdict/comment are
                       carl's, set from the board — sending either here is a
                       400, not a silent drop.
+  k slack inbox|status|ack ...
+                      iris-side verbs for the Slack intake inbox, proxied the
+                      same way as 'k questions'. inbox prints every unacked
+                      message as JSON, arrival order — one row per DM, group
+                      DM or direct @-mention the daemon's poll pass has seen;
+                      ack --ids 42,43 --disposition "<what happened>" retires
+                      a batch (all-or-nothing: an unknown or already-acked id
+                      fails the whole call), and the disposition is the only
+                      record of WHY a message left, so it is required;
+                      status prints whether Slack is configured, when the poll
+                      last ran, and how deep the backlog is. Reading Slack
+                      itself is the daemon's job — no token is reachable here.
+  k job list|raw|draft <slug> ...
+                      iris-side verbs for the job board, proxied the same way.
+                      list prints every active job's slug, state and one-line
+                      summary as JSON; raw <slug> prints one job's whole text
+                      plus the mtime lock token; draft <slug> [--mtime N]
+                      reads the full job text from stdin and creates or amends
+                      a DRAFT. The route is guarded server-side: it refuses
+                      ready: true, any state:, an unparseable body, and any
+                      job past draft/queued — iris drafts, and queueing stays
+                      carl's move on the board.
   k mine digest|reduce [--since <unix-millis>] ...
                       the nightly dream pass' mechanical read of claude's own
                       transcripts under ~/.claude/projects — a pure local file

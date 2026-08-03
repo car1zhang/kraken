@@ -462,6 +462,208 @@ func TestJobLoadEndpointWireShape(t *testing.T) {
 	assertShape(t, "GET /api/job/load .load", envelope.Load, webJobLoadSpec)
 }
 
+// --- Slack intake bot: /api/slack/inbox, /api/slack/ack, /api/slack/status
+// (slack.go) and /api/job/list, /api/job/draft (jobdraft.go). Five new PATHS,
+// no existing shape touched, so apiContract stays 5 — these specs are here
+// because assertShape rejects any key ios/API.md hasn't documented, which is
+// what makes an addition that skips this file fail the suite rather than
+// slide through undocumented. ---
+
+// webSlackMsgSpec covers slack.go's webSlackMsg, the elements of
+// /api/slack/inbox's "messages" array. Every key is required: the type
+// carries no omitempty anywhere, because an empty channel_name (a DM) and an
+// empty thread_ts (a top-level message) are real answers iris must be able
+// to read unconditionally. delivered_at, acked_at and disposition have no
+// entry on purpose — they are kraken's delivery bookkeeping, and a spec entry
+// for one would be the first sign the route had started serving its own
+// records back to the agent as if they were the message.
+var webSlackMsgSpec = map[string]fieldSpec{
+	"id":           {kind: wireNumber, required: true},
+	"channel_id":   {kind: wireString, required: true},
+	"channel_name": {kind: wireString, required: true},
+	"ts":           {kind: wireString, required: true},
+	"thread_ts":    {kind: wireString, required: true},
+	"author_id":    {kind: wireString, required: true},
+	"author_name":  {kind: wireString, required: true},
+	"source":       {kind: wireString, required: true},
+	"text":         {kind: wireString, required: true},
+	"seen_at":      {kind: wireNumber, required: true},
+}
+
+// slackInboxSpec is GET /api/slack/inbox's envelope. "messages" is required
+// and is always an ARRAY, never null — an empty inbox is `[]`, so a client
+// iterates it without a nil check.
+var slackInboxSpec = map[string]fieldSpec{
+	"messages": {kind: wireArray, required: true},
+}
+
+// slackAckReqSpec / slackAckRespSpec cover POST /api/slack/ack's request and
+// its ack. Both request keys are literally required rather than merely
+// non-omitempty: an empty/absent `ids` is a 400 and so is an empty
+// `disposition`, because "acked, reason unknown" is indistinguishable from a
+// bug that acks everything. The body is decoded with unknown fields
+// rejected, so there is deliberately no third key to document.
+var slackAckReqSpec = map[string]fieldSpec{
+	"ids":         {kind: wireArray, required: true},
+	"disposition": {kind: wireString, required: true},
+}
+
+var slackAckRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+// webSlackStatusSpec covers slack.go's webSlackStatus, the whole body of GET
+// /api/slack/status. Every key is required for the reason webUpdate's are: a
+// zero is a real answer (an empty inbox, a poll that has never run) and an
+// absent key would be indistinguishable from it. `configured` false with
+// three zeroes is exactly what an unconfigured machine reports — the route
+// answers rather than erroring, which is what makes it usable for telling
+// "nothing arrived" apart from "the feature is off".
+var webSlackStatusSpec = map[string]fieldSpec{
+	"configured":   {kind: wireBool, required: true},
+	"last_poll_at": {kind: wireNumber, required: true},
+	"total":        {kind: wireNumber, required: true},
+	"undelivered":  {kind: wireNumber, required: true},
+	"unacked":      {kind: wireNumber, required: true},
+}
+
+// webJobListItemSpec covers jobdraft.go's webJobListItem, the elements of
+// GET /api/job/list's "jobs" array — the three fields iris needs to decide
+// "is there already a job about this, and may I edit it?". Every key is
+// required: an empty summary (a job with an empty body) is a real answer.
+var webJobListItemSpec = map[string]fieldSpec{
+	"slug":    {kind: wireString, required: true},
+	"state":   {kind: wireString, required: true},
+	"summary": {kind: wireString, required: true},
+}
+
+var jobListSpec = map[string]fieldSpec{
+	"jobs": {kind: wireArray, required: true},
+}
+
+// jobDraftReqSpec / jobDraftRespSpec cover POST /api/job/draft. `mtime` is
+// the only optional key — absent or 0 skips the optimistic-lock check, the
+// same contract the raw save's mtime has — while slug and content are
+// required, an empty either way being a 400. The response echoes the slug and
+// the NEW lock token because iris makes a follow-up edit on the same job
+// within one turn often enough that another /api/job/raw round trip just to
+// re-read the rev would be pure latency; that is the one place this route
+// differs from /api/job/load's bare ack.
+var jobDraftReqSpec = map[string]fieldSpec{
+	"slug":    {kind: wireString, required: true},
+	"content": {kind: wireString, required: true},
+	"mtime":   {kind: wireNumber, required: false},
+}
+
+var jobDraftRespSpec = map[string]fieldSpec{
+	"ok":    {kind: wireBool, required: true},
+	"slug":  {kind: wireString, required: true},
+	"mtime": {kind: wireNumber, required: true},
+}
+
+func TestWebSlackMsgWireShape(t *testing.T) {
+	// a DM: no channel_name, no thread_ts — every key must still be present,
+	// which is the difference between "there is no thread" and a key the
+	// client has to guess about
+	data, err := json.Marshal(webSlackMsg{
+		ID: 1, ChannelID: "D0123", TS: "1769040000.000100",
+		AuthorID: "U0456", AuthorName: "dana", Source: "dm",
+		Text: "csv export times out for big orgs", SeenAt: 1769040001000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webSlackMsg (dm)", data, webSlackMsgSpec)
+
+	data, err = json.Marshal(webSlackMsg{
+		ID: 2, ChannelID: "C0789", ChannelName: "eng", TS: "1769040100.000200",
+		ThreadTS: "1769040000.000100", AuthorID: "U0456", AuthorName: "dana",
+		Source: "mention", Text: "<@U0001> can you look at this?", SeenAt: 1769040101000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webSlackMsg (threaded mention)", data, webSlackMsgSpec)
+
+	reqData, err := json.Marshal(slackAckReq{IDs: []int64{42, 43}, Disposition: "drafted:csv-export-timeout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "slackAckReq", reqData, slackAckReqSpec)
+}
+
+// TestSlackEndpointWireShapes drives the two Slack reads through their real
+// handlers, so the envelopes above are pinned as SERVED rather than as
+// marshaled structs. useTestStore sandboxes HOME, so LoadSlackConfig reads a
+// throwaway dir and `configured` is whatever an unconfigured machine reports
+// — the SHAPE is the subject here either way.
+func TestSlackEndpointWireShapes(t *testing.T) {
+	useTestStore(t)
+
+	rec := httptest.NewRecorder()
+	slackInboxHandler(rec, httptest.NewRequest(http.MethodGet, "/api/slack/inbox", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/slack/inbox: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/slack/inbox (empty)", rec.Body.Bytes(), slackInboxSpec)
+
+	rec = httptest.NewRecorder()
+	slackStatusHandler(rec, httptest.NewRequest(http.MethodGet, "/api/slack/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/slack/status: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/slack/status", rec.Body.Bytes(), webSlackStatusSpec)
+}
+
+// TestJobDraftEndpointWireShapes drives the create path and the list read,
+// which together cover every wire shape jobdraft.go serves on success. The
+// refusal matrix itself is behavior rather than shape and is covered by the
+// package's own draft tests; what is pinned here is that a successful draft
+// answers with all three documented keys, since iris reuses the returned
+// mtime as the lock token for its next edit.
+func TestJobDraftEndpointWireShapes(t *testing.T) {
+	useTestStore(t)
+
+	content := "---\njob: contract-draft\nrepo: kraken\nready: false\nprereqs: []\nsolo: false\n---\n\ncsv export times out for big orgs\n"
+	body := mustJSON(t, map[string]any{"slug": "contract-draft", "content": content})
+	rec := httptest.NewRecorder()
+	jobDraftHandler(rec, httptest.NewRequest(http.MethodPost, "/api/job/draft", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/job/draft (create): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/job/draft (create)", rec.Body.Bytes(), jobDraftRespSpec)
+
+	reqData, err := json.Marshal(jobDraftReq{Slug: "contract-draft", Content: content, MTime: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "jobDraftReq", reqData, jobDraftReqSpec)
+
+	rec = httptest.NewRecorder()
+	jobListHandler(rec, httptest.NewRequest(http.MethodGet, "/api/job/list", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/job/list: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/job/list", rec.Body.Bytes(), jobListSpec)
+
+	var envelope struct {
+		Jobs []json.RawMessage `json:"jobs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Jobs) != 1 {
+		t.Fatalf("jobs = %d entries, want 1", len(envelope.Jobs))
+	}
+	assertShape(t, "GET /api/job/list .jobs[0]", envelope.Jobs[0], webJobListItemSpec)
+
+	ackData, err := json.Marshal(map[string]any{"ok": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "POST /api/slack/ack", ackData, slackAckRespSpec)
+}
+
 func TestDaemonStatusWireShape(t *testing.T) {
 	data, err := json.Marshal(jobs.DaemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4})
 	if err != nil {

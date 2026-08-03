@@ -374,11 +374,13 @@ func LiveSessions() map[string]bool {
 // --rc): cell agents work unattended in their own worktree, so they run with
 // bypass permissions from birth. tmux commands never see shell aliases, so the
 // flags are spelled out here. The model always rides along as --model: the
-// caller's resolved model when it has one, else core.DefaultModel. Two call
+// caller's resolved model when it has one, else core.DefaultModel. Three call
 // sites share this — zeusSpawnArgv below (both zeus paths, resolved through
-// zeusModel, so a job's model choice survives reactivation) and
+// zeusModel, so a job's model choice survives reactivation),
 // threadSpawnCommand (a thread's branch and revive alike), which passes j.Model
-// directly and so lands on core.DefaultModel when the job set none.
+// directly and so lands on core.DefaultModel when the job set none, and
+// irisSpawnCommand, which passes core.IrisModel directly — the one caller with
+// no fallback resolution at all, since iris belongs to no job.
 func cellClaudeArgs(model string) []string {
 	args := []string{core.ClaudeLauncher(), "--dangerously-skip-permissions", "--rc"}
 	return append(args, core.ModelArgs(model)...)

@@ -48,8 +48,12 @@ import (
 // seven tables (see schemaV15). Version 16 moves the watchlist INTO that
 // graph: every observation becomes a live kg_edges fact carrying a thin
 // kg_watch overlay, and the flat watchlist table is migrated forward and
-// dropped (see schemaV16 and migrateV16Watchlist).
-const schemaVersion = 16
+// dropped (see schemaV16 and migrateV16Watchlist). Version 17 adds the Slack
+// intake bot's two tables — slack_inbox (one row per seen message, carrying
+// the whole seen → delivered → acked lifecycle) and slack_marks (the
+// per-conversation `ts` watermarks that make polling incremental) — and
+// touches nothing else (see schemaV17).
+const schemaVersion = 17
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -934,6 +938,93 @@ CREATE TABLE kg_watch (
 CREATE INDEX kg_watch_state_last_seen ON kg_watch(state, last_seen);
 `
 
+// schemaV17 adds the Slack intake bot's two tables. Both are brand new and
+// there is no hook: nothing anywhere holds Slack state today, so there is
+// nothing to migrate forward — the same situation schemaV7/V15 were in.
+// Appended rather than folded into an earlier schemaV<N> for the reason
+// schemaV2's doc comment spells out: real kraken.db files already exist at
+// v16.
+//
+// slack_inbox is one row per message the poller has SEEN, and the row carries
+// the whole lifecycle in three timestamps rather than a state column:
+// seen_at (slackPass wrote it), delivered_at (iris' pane was bumped about it),
+// acked_at + disposition (iris said what it did with it). Three stamps rather
+// than one enum because each transition has a different writer and each
+// "not yet" is a real query the daemon runs every tick — `delivered_at = 0
+// AND acked_at = 0` is the delivery pass' worklist, `acked_at = 0` is what the
+// inbox route serves — and a stamp answers both "did it happen" and "when",
+// which an enum alone cannot.
+//
+// UNIQUE(channel_id, ts) is the dedupe that makes the whole pipeline
+// at-least-once safe rather than at-most-once. Slack's `oldest` parameter is
+// EXCLUSIVE, and the mention search's `after:` is only day-grained, so the
+// poller deliberately re-fetches overlapping spans and re-offers messages it
+// has already stored; AddSlackBatch's INSERT OR IGNORE turns each of those
+// into a skip. A (channel_id, ts) pair identifies a Slack message exactly —
+// `ts` is unique per channel and is the message's identity in every Slack API
+// — so the constraint is the message's true key, not a heuristic.
+//
+// `ts` and `thread_ts` are TEXT, never REAL, and that is the one shape
+// decision here that is easy to get wrong later: a Slack timestamp is a
+// "seconds.micros" STRING and round-tripping it through a float loses the
+// digits that distinguish two messages in the same second. The whole feature
+// keeps them as strings end to end (core.SlackTSLess compares them as integer
+// pairs), and this column is where that promise would silently break.
+//
+// source is CHECKed rather than left free-form because it names which POLLING
+// LOOP found the message ('dm' and 'mpim' from the history sweep, 'mention'
+// from the search query), a closed set the poller owns entirely — the same
+// treatment jobs.state and kg_episodes.kind get.
+//
+// NO FOREIGN KEY and no cascade anywhere, for the reason job_tokens and the
+// kg_* tables state: an inbox row is global state belonging to no job. It
+// records that a message arrived, which stays true whatever iris later did
+// about it — including drafting a job that is subsequently archived or hard
+// deleted. Q6 keeps these rows forever.
+//
+// NO SECONDARY INDEX, deliberately, and this is the paragraph to revisit if
+// the reads ever get slow rather than a defect to fix now. Both listings scan
+// the whole table (`acked_at = 0` and the delivered pair), and both run at most
+// once per 15-second daemon tick. The row source is carl's own Slack traffic —
+// DMs, group DMs and direct mentions, hundreds of rows a year even at the high
+// end — so the table stays orders of magnitude below the point where a scan of
+// it costs more than maintaining an index on every insert. If it ever does, the
+// index to add is (acked_at, id), which covers both queries' filter and their
+// shared ORDER BY id.
+//
+// slack_marks is the watermark table, keyed by a caller-composed string
+// (`dm:<channel_id>`, `thread:<channel_id>:<thread_ts>`, `mentions`) rather
+// than by a channel column, because the three polling loops watermark
+// different things and only the first is per-channel. It is deliberately NOT
+// folded into the existing kv table even though the shape matches: a mark is
+// advanced in the SAME transaction that commits the rows it covers
+// (AddSlackBatch), and kv's SetKV is a standalone statement with no way to
+// join one. Marks and rows moving together is the invariant that makes a
+// crashed pass re-fetch rather than skip.
+const schemaV17 = `
+CREATE TABLE slack_inbox (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	channel_id   TEXT NOT NULL,
+	channel_name TEXT NOT NULL DEFAULT '',
+	ts           TEXT NOT NULL,             -- Slack "seconds.micros"; a STRING, never a float
+	thread_ts    TEXT NOT NULL DEFAULT '',  -- parent's ts when this is a thread reply
+	author_id    TEXT NOT NULL DEFAULT '',
+	author_name  TEXT NOT NULL DEFAULT '',
+	source       TEXT NOT NULL CHECK(source IN ('dm','mpim','mention')),
+	text         TEXT NOT NULL DEFAULT '',
+	seen_at      INTEGER NOT NULL DEFAULT 0, -- unix millis: the poller stored it
+	delivered_at INTEGER NOT NULL DEFAULT 0, -- unix millis: iris' pane was bumped; 0 = pending
+	acked_at     INTEGER NOT NULL DEFAULT 0, -- unix millis: iris acted on it; 0 = unacked
+	disposition  TEXT NOT NULL DEFAULT '',   -- iris' one-line account of what it did
+	UNIQUE(channel_id, ts)
+);
+
+CREATE TABLE slack_marks (
+	key TEXT PRIMARY KEY NOT NULL,          -- dm:<channel>, thread:<channel>:<thread_ts>, mentions
+	ts  TEXT NOT NULL DEFAULT ''            -- newest ts already stored for that key
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -981,9 +1072,13 @@ type migrationStep struct {
 // migrations[16] adds kg_watch and moves every watchlist row into the graph as
 // a live fact + overlay, then DROPS the flat table (migrateV16Watchlist below
 // does the promotion, which SQL alone cannot express — it has to find-or-create
-// an episode by content hash and resolve endpoint nodes case-insensitively).
+// an episode by content hash and resolve endpoint nodes case-insensitively);
+// migrations[17] adds the Slack intake bot's slack_inbox and slack_marks
+// tables (no hook — two brand-new tables with no prior home for their data,
+// and an empty inbox is exactly the state a database that predates the
+// feature is in; see schemaV17).
 // Future schema changes append
-// migrations[17], migrations[18], ... rather than editing an existing
+// migrations[18], migrations[19], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1003,6 +1098,7 @@ var migrations = map[int]migrationStep{
 	14: {sql: schemaV14},
 	15: {sql: schemaV15},
 	16: {sql: schemaV16, hook: migrateV16Watchlist},
+	17: {sql: schemaV17},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

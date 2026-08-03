@@ -24,6 +24,25 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v17: drop the Slack intake bot's two tables. Both are brand new
+	// at v17 (schemaV17 adds them and touches nothing else), so there is
+	// nothing to put back in their place and no rows to carry — the same
+	// situation as the v15 arm below, and the same ruling: this helper
+	// reproduces an older SHAPE.
+	//
+	// Reversed FIRST, before the v16 arm, because downgrades unwind
+	// newest-first, mirroring the order migrate() applies them.
+	if target < 17 {
+		for _, stmt := range []string{
+			`DROP TABLE slack_inbox`,
+			`DROP TABLE slack_marks`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v17) %q: %v", target, stmt, err)
+			}
+		}
+	}
+
 	// Reverse v16: drop kg_watch and put the flat watchlist table back, in the
 	// exact v9 shape (both indexes included) — a real database at any version
 	// from 9 to 15 HAS that table, so a downgrade that only dropped kg_watch
