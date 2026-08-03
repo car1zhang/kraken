@@ -289,6 +289,14 @@ const graphSearchUsage = "usage: k graph search \"<query>\" [--limit N]"
 //
 // Unknown keys are ignored on the way in (encoding/json's default), so a
 // server that grows a field never breaks this verb.
+//
+// `strong` is a *int rather than an int, and the pointer is the whole point:
+// this binary and kraken serve are separate processes that are not upgraded
+// together, so a nil here means "an older server that never sent the key" and
+// must render exactly as it always did — whereas a decoded 0 is a live claim
+// that nothing in the answer is actually about the query. An int would collapse
+// those two into the same zero and put a warning on every response from a
+// server that predates it.
 type graphSearchResp struct {
 	Nodes []struct {
 		Name        string `json:"name"`
@@ -296,6 +304,7 @@ type graphSearchResp struct {
 		Description string `json:"description"`
 	} `json:"nodes"`
 	Triples string `json:"triples"`
+	Strong  *int   `json:"strong"`
 }
 
 // runGraphSearch is `k graph search "<query>" [--limit N]`: POSTs the query
@@ -363,6 +372,18 @@ func runGraphSearch(args []string) (string, error) {
 	// agent about to decide this name is new.
 	if b.Len() == 0 {
 		return fmt.Sprintf("nothing matched %q\n", query), nil
+	}
+	// A non-empty answer with zero strong facts is the case this line exists
+	// for, and it is the DANGEROUS one: the server did return entities and
+	// facts, so the output looks exactly like a hit, and a caller deciding
+	// whether an entity is already known would merge on it. Saying so FIRST —
+	// above the rendering rather than below it — is deliberate: the reader is
+	// usually a model that acts on what it reads, and a caveat under twenty
+	// facts is a caveat read after the decision was made. The facts still print
+	// in full underneath, because the near-misses are exactly what a human
+	// canonicalizing a name needs to look at.
+	if resp.Strong != nil && *resp.Strong == 0 {
+		return fmt.Sprintf("nothing strongly matched %q\n", query) + b.String(), nil
 	}
 	return b.String(), nil
 }

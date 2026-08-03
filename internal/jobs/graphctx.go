@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"kraken/internal/core"
 	"kraken/internal/store"
@@ -48,38 +47,18 @@ const graphContextBytes = 600
 // list.
 const graphFactRunes = 180
 
-// graphCosineFloor is the vector leg's relevance gate, and it is the ONLY
-// place the spec's 0.72 (Q5) is applied — deliberately not as
-// core.GraphSearchOpts.Floor.
+// graphCosineFloor is this package's name for core.GraphCosineFloor — an
+// alias, not a second number. The gate itself (the cosine leg, the lexical
+// fallback and the two thresholds behind them) moved to
+// core/relevance.go once POST /api/graph/search needed to reach the same
+// verdict: the spawn path DROPS a fact that fails and the search route MARKS
+// it, and two consequences of one judgment must not become two judgments.
 //
-// The reason is that the two numbers are not the same kind of number. Q5's
-// 0.72 is a COSINE: a similarity between two unit vectors, on [-1, 1], where
-// 0.72 means "these two sentences are about the same thing". What GraphSearch
-// ranks by is a FUSED RRF score — a sum of 1/(k+rank) terms, which for k=60
-// lives around 0.016 for a top-ranked fact and has no scale in common with a
-// cosine at all. Handing 0.72 to a fused score would reject every fact ever
-// retrieved, silently, and the symptom would be the feature simply never
-// appearing to work. So the search runs unfloored and the gate is applied
-// here, against the leg the number actually describes.
-const graphCosineFloor = 0.72
-
-// graphMinTermOverlap is the BM25-only fallback gate: how many distinct
-// content words a fact must share with the job spec when no vector comparison
-// is possible (no embedder configured, no cached spec vector, or a fact
-// embedded under a different model's dimensions).
-//
-// Two rather than one, because one shared word is not evidence: FTS5 matches
-// on an OR of terms (store.SearchEdgesFTS), so a fact that merely contains
-// "kraken" ranks against a spec that mentions kraken once. Two distinct
-// content words is the cheapest thing that is not a coincidence, and being
-// wrong in this direction costs a real fact, while being wrong in the other
-// costs zeus' trust in every fact after it.
-const graphMinTermOverlap = 2
-
-// graphTermMinRunes is the shortest word the overlap gate counts. Short
-// tokens are overwhelmingly grammar; requiring four runes removes the need
-// for a stopword list this package would then have to maintain.
-const graphTermMinRunes = 4
+// Kept as a local name because this package's own regression pin
+// (TestGraphContextCosineGate) reports the floor it is testing against, and
+// because "the number the spawn path gates on" is a fact about this file
+// worth being able to read here.
+const graphCosineFloor = core.GraphCosineFloor
 
 // graphSearchCandidates / graphSearchExpand / graphSearchLimit are the
 // retrieval budget handed to core.GraphSearch. The limit is larger than
@@ -115,12 +94,12 @@ var graphFacts = searchFacts
 //
 // So above this many live edges the spawn path passes a nil vector and lets
 // BM25 carry retrieval. The degradation is small and bounded, because the
-// COSINE GATE DOES NOT DEGRADE WITH IT: relevant() re-derives the cosine
-// itself over the ≤20 returned edges (twenty decodes, not fifty thousand), so
-// what changes is only which candidates were nominated, never how strictly
-// they are judged. What is lost is a fact worded so differently that BM25
-// never surfaced it; what is kept is the guarantee that a spawn is bounded no
-// matter how large the corpus grows.
+// COSINE GATE DOES NOT DEGRADE WITH IT: core.RelevantEdge re-derives the
+// cosine itself over the ≤20 returned edges (twenty decodes, not fifty
+// thousand), so what changes is only which candidates were nominated, never
+// how strictly they are judged. What is lost is a fact worded so differently
+// that BM25 never surfaced it; what is kept is the guarantee that a spawn is
+// bounded no matter how large the corpus grows.
 //
 // 10,000 is where the transient allocation crosses ~80 MB. If the graph
 // outgrows this and vector-only recall turns out to matter at spawn time, the
@@ -177,7 +156,7 @@ func graphContext(j *Job) string {
 	if len(edges) == 0 {
 		return ""
 	}
-	terms := contentTerms(spec)
+	terms := core.ContentTerms(spec)
 	now := time.Now().UnixMilli()
 	var kept []store.GraphEdge
 	seen := map[string]bool{}
@@ -200,7 +179,7 @@ func graphContext(j *Job) string {
 		if fact == "" || seen[strings.ToLower(fact)] {
 			continue
 		}
-		if !relevant(e, vec, terms) {
+		if !core.RelevantEdge(e, vec, terms) {
 			continue
 		}
 		seen[strings.ToLower(fact)] = true
@@ -231,62 +210,6 @@ func cachedSpecVector(st *store.Store, jobID int64) []float32 {
 		return nil
 	}
 	return vec
-}
-
-// relevant is the gate. A fact is emitted only if it independently clears one
-// of two thresholds — not merely because retrieval ranked it, which it would
-// do for the best of a bad set.
-//
-// Per-fact rather than "gate the top one and take the rest": the block is
-// read as a list of claims, and a reader given four good facts and one
-// unrelated one learns to distrust all five.
-func relevant(e store.GraphEdge, vec []float32, terms map[string]bool) bool {
-	if len(vec) > 0 && len(e.Embedding) > 0 {
-		if cand, err := core.DecodeVector(e.Embedding); err == nil && len(cand) == len(vec) {
-			// Both sides are unit-norm on write (core.Normalize), so the dot
-			// product IS the cosine and graphCosineFloor applies directly.
-			if score, err := core.Dot(vec, cand); err == nil {
-				return score >= graphCosineFloor
-			}
-		}
-		// A dimension mismatch means this row was embedded under a different
-		// model or dims setting and graphPass has not re-embedded it yet.
-		// Fall through to the lexical gate rather than dropping the fact: the
-		// vector is stale, the sentence is not.
-	}
-	return overlap(e.Fact, terms) >= graphMinTermOverlap
-}
-
-// contentTerms reduces text to the set of distinct lowercase words long
-// enough to carry meaning. Deliberately not a stemmer and not a stopword
-// list: this is a coincidence filter, and the failure it guards against
-// (one shared common word) is answered by length alone.
-func contentTerms(s string) map[string]bool {
-	out := map[string]bool{}
-	for _, f := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	}) {
-		if len([]rune(f)) >= graphTermMinRunes {
-			out[f] = true
-		}
-	}
-	return out
-}
-
-// overlap counts how many DISTINCT content words a fact shares with the spec.
-// Distinct, so a fact repeating one word five times does not clear a gate
-// meant to measure breadth of agreement.
-func overlap(fact string, terms map[string]bool) int {
-	if len(terms) == 0 {
-		return 0
-	}
-	hit := map[string]bool{}
-	for t := range contentTerms(fact) {
-		if terms[t] {
-			hit[t] = true
-		}
-	}
-	return len(hit)
 }
 
 // graphContextHeader opens the block. It is hedged on purpose: the graph is

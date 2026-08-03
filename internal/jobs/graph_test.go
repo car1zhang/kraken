@@ -391,7 +391,7 @@ func TestCreateGraphJobBothModes(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := graphTestStore(t)
-			j, err := CreateGraphJob(st, "graph-"+c.name, c.mode, c.instruction)
+			j, err := CreateGraphJob(st, "graph-"+c.name, c.mode, c.instruction, 0)
 			if err != nil {
 				t.Fatalf("CreateGraphJob: %v", err)
 			}
@@ -427,13 +427,13 @@ func TestCreateGraphJobBothModes(t *testing.T) {
 // with no instructions at all. Both are cheaper to refuse than to explain.
 func TestCreateGraphJobRefusesBadInput(t *testing.T) {
 	st := graphTestStore(t)
-	if _, err := CreateGraphJob(st, "graph-x", GraphModeRevision, "   "); err == nil {
+	if _, err := CreateGraphJob(st, "graph-x", GraphModeRevision, "   ", 0); err == nil {
 		t.Error("a revision job with a blank instruction was created")
 	}
-	if _, err := CreateGraphJob(st, "graph-y", "somethingelse", "x"); err == nil {
+	if _, err := CreateGraphJob(st, "graph-y", "somethingelse", "x", 0); err == nil {
 		t.Error("a job with an unknown mode was created")
 	}
-	if _, err := CreateGraphJob(nil, "graph-z", GraphModeIngest, ""); err == nil {
+	if _, err := CreateGraphJob(nil, "graph-z", GraphModeIngest, "", 0); err == nil {
 		t.Error("a job was created against a nil store")
 	}
 }

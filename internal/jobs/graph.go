@@ -935,7 +935,14 @@ const (
 // instruction is carl's revision brief and is required in revision mode
 // (a revision job with nothing to revise would spawn a cell to do nothing)
 // and ignored in ingest mode.
-func CreateGraphJob(st *store.Store, slug, mode, instruction string) (*Job, error) {
+//
+// ingestCap is how many episodes the run may drain, written into the ingest
+// spec as the `Per-run episode cap:` line the skill reads. It is a PARAMETER
+// rather than a constant because the only caller that can size it — kickGraph,
+// via graphIngestCap — is the only one holding the queue depth; a hand-made
+// job that passes 0 gets the skill's own default of 25. Revision mode ignores
+// it entirely: a revision run drains nothing.
+func CreateGraphJob(st *store.Store, slug, mode, instruction string, ingestCap int) (*Job, error) {
 	if st == nil {
 		return nil, fmt.Errorf("graph job %s: no store", slug)
 	}
@@ -948,7 +955,7 @@ func CreateGraphJob(st *store.Store, slug, mode, instruction string) (*Job, erro
 	default:
 		return nil, fmt.Errorf("graph job %s: unknown mode %q", slug, mode)
 	}
-	content := graphJobContent(slug, mode, instruction)
+	content := graphJobContent(slug, mode, instruction, ingestCap)
 	parsed := ParseJob(slug+JobSuffix, []byte(content))
 	if parsed.Err != "" {
 		return nil, fmt.Errorf("graph job %s does not parse: %s", slug, parsed.Err)
@@ -983,7 +990,12 @@ func CreateGraphJob(st *store.Store, slug, mode, instruction string) (*Job, erro
 // carl asked for. It is read BY PATH because a personal ~/.claude/skills/graph
 // would otherwise shadow the repo-owned copy materialized into the cell's
 // worktree — the same hazard dreamJobContent spells out.
-func graphJobContent(slug, mode, instruction string) string {
+//
+// The one thing the body does carry beyond the mode is the ingest cap, and it
+// is carried as SPEC TEXT rather than as a flag the skill would have to be
+// taught to read from somewhere else: the spec is the only channel between the
+// daemon that knows the queue depth and the cell that drains it.
+func graphJobContent(slug, mode, instruction string, ingestCap int) string {
 	head := "---\n" +
 		"job: " + slug + "\n" +
 		"repo: kraken\n" +
@@ -1008,12 +1020,23 @@ func graphJobContent(slug, mode, instruction string) string {
 			"Change only what the instruction reaches. A revision job opens no PR — the\n" +
 			"graph lives in `kraken.db`, not in git.\n"
 	}
+	// 0 means "no caller sized this" (a hand-made job, or a caller written
+	// before the parameter existed), and the floor — which is also the value
+	// the skill defaults to when the spec carries no cap line at all — is the
+	// honest answer to that, not a cap of zero, which would spawn a cell to
+	// drain nothing.
+	perRun := ingestCap
+	if perRun <= 0 {
+		perRun = graphIngestCapMin
+	}
 	return head +
 		"## Mode: ingest\n" +
 		"\n" +
+		fmt.Sprintf("Per-run episode cap: %d\n", perRun) +
+		"\n" +
 		"Follow the skill's **Ingest mode** section: drain `k graph pending`, extract, resolve\n" +
 		"against what already exists, and write with `k graph add`. Stop when the queue is\n" +
-		"empty or the skill's per-run cap is reached, whichever comes first.\n" +
+		"empty or the cap above is reached, whichever comes first.\n" +
 		"\n" +
 		"An ingest job opens no PR — nothing it produces belongs in git.\n"
 }
@@ -1027,6 +1050,52 @@ func graphJobContent(slug, mode, instruction string) string {
 // an elapsed duration for kickDream's stated reason: a Mac asleep at midnight
 // fires on the first tick after it wakes instead of skipping the night.
 const graphIngestKVKey = "graph_ingest_last"
+
+// The nightly batch's shape. A cap that scales with the BACKLOG rather than a
+// constant, because a constant is what the queue outran: measured on this
+// machine 2026-08-03, 1,997 episodes sat pending against graphPendingHighWater's
+// 2,000, with 86 and 85 new episodes arriving on each of the two days before —
+// and on 2026-08-01 not one of them was a transcript, since the sweep was
+// already backpressured off. A fixed 25 a night against ~85 a day is a drain
+// that loses ground every night, not a slow one.
+//
+// The floor keeps a quiet week cheap (an empty-ish queue still gets exactly one
+// batch, and 25 is what the skill has always defaulted to), and the divisor is
+// picked so the high-water mark itself asks for 100 — comfortably past that
+// measured arrival rate, so the queue moves backwards instead of forwards.
+//
+// graphIngestCapMin has a THIRD site that must agree with it and that Go cannot
+// see: the skill's "when the spec carries no such line, use 25" fallback in
+// .claude/skills/graph/SKILL.md. Raising this floor silently changes the
+// hand-made-job default (graphJobContent's <= 0 branch) while leaving that
+// fallback behind, so a cell reading a capless spec would drain a different
+// number than the same cell reading a spec the daemon wrote. Move both.
+//
+// The ceiling exists because pending is not bounded by the high-water mark:
+// backpressure gates only the transcript sweep, and the row sources stay
+// ungated by design (see sweepRows and graphPendingHighWater), so a backfill
+// can push pending well past 2,000. Without the ceiling one night's cell would
+// be handed a batch it cannot finish in one run, which costs the spend and
+// produces a partially-drained queue either way.
+const (
+	graphIngestCapDivisor = 20
+	graphIngestCapMin     = 25
+	graphIngestCapMax     = 150
+)
+
+// graphIngestCap sizes one nightly run's batch from the pending queue's depth:
+// clamp(pending/20, 25, 150). Integer division, so the cap only steps up once
+// the backlog has actually grown by a whole batch-twentieth.
+func graphIngestCap(pending int64) int {
+	n := pending / graphIngestCapDivisor
+	if n < graphIngestCapMin {
+		return graphIngestCapMin
+	}
+	if n > graphIngestCapMax {
+		return graphIngestCapMax
+	}
+	return int(n)
+}
 
 // kickGraph creates at most one nightly ingest job per local calendar day,
 // and only when there is actually something to drain. It is what makes the
@@ -1070,7 +1139,10 @@ func kickGraph(st *store.Store, now time.Time) *Job {
 			return nil
 		}
 	}
-	created, err := CreateGraphJob(st, slug, GraphModeIngest, "")
+	// The stats read above is the only place the queue depth is in hand, so it
+	// is where the batch gets sized — see graphIngestCap for why a constant is
+	// not enough.
+	created, err := CreateGraphJob(st, slug, GraphModeIngest, "", graphIngestCap(stats.PendingEpisodes))
 	if err != nil {
 		dlogErr("kick graph: %v", err)
 		return nil

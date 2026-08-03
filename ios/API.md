@@ -1049,9 +1049,14 @@ Request: `{"query": string, "limit": number}`. `query` is required (blank →
 over 200 is capped rather than refused. `DisallowUnknownFields`: any other
 key is a 400.
 
-Response: `{"nodes": [webGraphNode], "facts": [webGraphFact], "triples": string}`.
+Response: `{"nodes": [webGraphNode], "facts": [webGraphFact], "triples": string, "strong": number}`.
 `nodes` and `facts` are always arrays, never `null`; `triples` is the same
-facts serialized for an LLM context block.
+facts serialized for an LLM context block — facts that clear the relevance
+gate first, then (only when at least one fact fails it) a literal
+`weakly related:` line and the rest. `strong` counts the facts that cleared
+the gate; `0` with a non-empty `facts` means the graph had nothing on-topic
+and the entries are nearest-neighbour context, not answers. Additive keys on
+a route no iOS client decodes — `apiContract` stays 5.
 
 `nodes` is the set of entities the matched facts touch, sorted by id (so the
 response is deterministic for a fixed corpus). It is here because
@@ -1074,6 +1079,7 @@ so the layout table is not joined.
 | `strength` | number | always | |
 | `occurrences` | number | always | |
 | `valid_until` | number | always | world time; `0` = still true |
+| `weak` | bool | always | `true` when the fact failed the relevance gate — which passes at cosine ≥ 0.72 against the query, or on ≥2 shared content words when no usable vector exists (no query embedding, no stored embedding, or a dimension mismatch). Marked, never dropped, so the caller decides what nearest-neighbour context is worth |
 
 There is deliberately **no `score` key**: array order already expresses the
 ranking, and publishing a fusion score would invite clients to threshold on a
