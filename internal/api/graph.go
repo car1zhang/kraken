@@ -122,6 +122,15 @@ type webGraphEpisode struct {
 // scale is an implementation detail of the fusion would invite clients to
 // threshold on it — the same argument webJobLoad makes for not putting the
 // derived roi on the wire.
+//
+// `weak` is the one exception to that, and it is not a score: it is the
+// BOOLEAN core.RelevantEdge already computes for the spawn path, published
+// because the two readers of a search want opposite things from it. An agent
+// wants to know which facts to actually rely on; a human canonicalizing an
+// entity name wants to see the near-misses too. Dropping the weak ones would
+// serve the first and break the second, so every fact still rides and each
+// one says which it is. Not omitempty: `false` is the answer that matters
+// most, and an absent key would be indistinguishable from an older server.
 type webGraphFact struct {
 	ID          int64  `json:"id"`
 	Src         string `json:"src"`
@@ -131,6 +140,7 @@ type webGraphFact struct {
 	Strength    int64  `json:"strength"`
 	Occurrences int64  `json:"occurrences"`
 	ValidUntil  int64  `json:"valid_until"`
+	Weak        bool   `json:"weak"`
 }
 
 // graphStore is the one place every handler here reaches for the store, so
@@ -362,6 +372,23 @@ const (
 	// they are properties of how well the fusion works, not of what a caller
 	// wants, and a client tuning them would be tuning something it cannot
 	// observe.
+	//
+	// graphSearchExpandCap is a CEILING on the value handed to
+	// core.GraphSearch, which is min(50, limit). Read what it bounds
+	// carefully: it is a NEW-NODE budget (core.GraphSearchOpts calls it the
+	// "1-hop expansion NODE cap"), so it limits how far OUT of the ranked
+	// result the expansion may reach, not how many facts come back. An edge
+	// whose endpoints are BOTH already named by a ranked fact costs zero nodes
+	// and rides for free at any cap — so ten parallel edges between one
+	// already-known pair arrive whether the cap is 50 or 1.
+	//
+	// Scaling it with the limit is therefore about reach, and expansion facts
+	// ride ABOVE Limit: a flat 50 let `limit: 1` walk fifty distinct nodes away
+	// from a single ranked fact, so the caller that asked for one fact got a
+	// neighbourhood, and every fact in it was one it had no reason to trust.
+	// Tying the reach to what the caller asked for keeps a small ask small on
+	// the fixtures where expansion is node-bound; it is not a bound on the
+	// response size, and nothing here should be read as promising one.
 	graphSearchCandidates = 100
 	graphSearchExpandCap  = 50
 
@@ -373,10 +400,22 @@ const (
 	// results. What 0.01 actually does is truncate the fused list around
 	// rank 65, bounding the response. An off-topic query therefore returns
 	// its least-bad matches rather than nothing — the caller reading this
-	// response weighs facts by their content, not by their presence. The
-	// spawn-path injection (jobs' graphContext) has the real relevance gate,
-	// applied against a true cosine.
+	// response weighs facts by their content, not by their presence. The real
+	// relevance gate is core.RelevantEdge below — a true cosine when a query
+	// vector and a stored one are both available, and a shared-content-word
+	// count when either is missing (no embedder, no blob, wrong dimension).
+	// Here it LABELS rather than filters, since a search that answered
+	// "nothing" would strand the one caller (the graph skill's canonicalization
+	// step) that needs to see near-misses.
 	graphSearchFloor = 0.01
+
+	// graphWeakDivider separates the strong run of `triples` from the weak one.
+	// It is a plain line rather than a key because `triples` is TEXT that an
+	// agent pastes into its context: whatever marks the boundary has to survive
+	// being read as prose, and a bare sentence does while a sigil or a per-line
+	// suffix does not. The trailing newline is part of it — every other line in
+	// this blob carries its own.
+	graphWeakDivider = "weakly related:\n"
 )
 
 // graphSearchHandler serves POST /api/graph/search: embed the query, fuse
@@ -430,9 +469,15 @@ func graphSearchHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Expansion scales with what the caller asked for; see graphSearchExpandCap.
+	expandCap := graphSearchExpandCap
+	if limit < expandCap {
+		expandCap = limit
+	}
+
 	res, err := core.GraphSearch(st, vec, query, core.GraphSearchOpts{
 		CandidateLimit: graphSearchCandidates,
-		ExpandCap:      graphSearchExpandCap,
+		ExpandCap:      expandCap,
 		Floor:          graphSearchFloor,
 		Limit:          limit,
 	})
@@ -441,8 +486,104 @@ func graphSearchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The expansion arm of the pipeline hands back edges with NO embedding:
+	// store.NeighborEdges selects a literal x'' for that column on purpose,
+	// because a hub node with 10k edges would otherwise hydrate ~40 MB of blobs
+	// so core could keep twelve of them. Every earlier consumer read only
+	// names, facts and counts, so the elision was invisible — this gate is the
+	// first one that reads the blob, and left alone it would silently ask a
+	// DIFFERENT QUESTION of expansion facts than of ranked ones: cosine for the
+	// ranked list, a two-shared-words coincidence for everything expanded in.
+	// That is exactly how an unrelated neighbour gets called strong and
+	// suppresses the "nothing strongly matched" headline this feature exists to
+	// print. One gate, one notion of relevance — so the dropped blobs are read
+	// back here, in one call, for the edges that lack them and nothing else.
+	//
+	// Only when there is a query vector to compare them against. With `vec` nil
+	// — a keyless install, or an embedder that just failed — RelevantEdge
+	// short-circuits to its lexical arm without ever reading a blob, so the
+	// fetch could not change a single verdict; skipping it means the install
+	// that has no vectors at all also never pays for the query, and never meets
+	// the failure path below.
+	//
+	// The honest bound on the work: `missing` is at most the WHOLE returned
+	// result. Ranked edges are not guaranteed to carry vectors either —
+	// embedding is asynchronous (store.GraphStats counts the backlog as
+	// MissingEmbeddings), so a freshly extracted fact can rank before it is
+	// embedded — and the expansion run is capped in NODES, not edges. So the
+	// ceiling is the ranked list (≤ the clamped limit, ≤ 200) plus however many
+	// facts the expansion appended, in ONE GetEdges call; that call chunks its
+	// IN-list at 500 ids, so an ordinary result is a single query.
+	var hydrated map[int64][]byte
+	if len(vec) > 0 {
+		var missing []int64
+		for _, e := range res.Edges {
+			if len(e.Embedding) == 0 {
+				missing = append(missing, e.ID)
+			}
+		}
+		if len(missing) > 0 {
+			// A 500 rather than a shrug, matching every other store error on
+			// this route: the same handle answered GraphSearch a line ago, so a
+			// failure now is a real fault, and the alternative is serving
+			// confidently mislabeled facts — the one outcome `weak` exists to
+			// prevent.
+			rows, err := st.GetEdges(missing)
+			if err != nil {
+				webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			hydrated = make(map[int64][]byte, len(rows))
+			for _, e := range rows {
+				hydrated[e.ID] = e.Embedding
+			}
+		}
+	}
+
+	// The same judgment the spawn path applies, on the same query vector the
+	// legs above ran with — so a fact called weak here is a fact graphContext
+	// would have refused to inject. With no embedder `vec` is nil and
+	// core.RelevantEdge falls to its lexical gate, which is the same
+	// degradation the retrieval itself already took.
+	//
+	// One MANDATED divergence — the asymmetry is in the INPUTS, not the
+	// judgment: graphContext does NOT re-hydrate, so an expansion fact this
+	// route cosine-judges the spawn path still judges lexically. The verdicts
+	// can then disagree either way: the spawn path may inject a fact this
+	// route calls weak (a two-word coincidence), or drop one this route calls
+	// strong (a paraphrase sharing too few words). That asymmetry is
+	// deliberate and pinned — the spawn path's gate
+	// behavior is frozen byte-identical by the jobs regression suite, and it is
+	// a path that must never grow a query it can fail on. Do not "restore
+	// consistency" by teaching graphctx.go to hydrate; that breaks the pin.
+	// The shared thing is the JUDGMENT (core.RelevantEdge), not the inputs each
+	// caller can afford to feed it.
+	terms := core.ContentTerms(query)
 	facts := make([]webGraphFact, 0, len(res.Edges))
+	// Split for `triples` only. `facts` keeps PIPELINE order — ranked facts
+	// then expansion — because that order is the ranking, and a client reading
+	// the structured list has the `weak` flag to group by itself.
+	strong := make([]store.GraphEdge, 0, len(res.Edges))
+	var weak []store.GraphEdge
 	for _, e := range res.Edges {
+		// Judged on the edge's REAL vector: the hydrated copy where the
+		// pipeline elided one, the edge as returned otherwise. A row that has
+		// never been embedded hydrates to an empty blob and falls to the
+		// lexical gate — which is the correct verdict for it rather than a
+		// fallback, since there is no vector to disagree with.
+		//
+		// Judged ONCE per edge, too: RelevantEdge decodes the blob, and the
+		// verdict feeds both `facts` and the `triples` split below.
+		judged := e
+		if blob, ok := hydrated[e.ID]; ok {
+			judged.Embedding = blob
+		}
+		isWeak := !core.RelevantEdge(judged, vec, terms)
+		if isWeak {
+			weak = append(weak, e)
+		} else {
+			strong = append(strong, e)
+		}
 		// An endpoint missing from the result's node map degrades to a
 		// rendered id rather than dropping the fact: the fact IS the answer,
 		// and losing it because one gloss didn't come back would be the worse
@@ -455,6 +596,7 @@ func graphSearchHandler(w http.ResponseWriter, r *http.Request) {
 			Predicate: e.Predicate, Fact: e.Fact,
 			Strength: e.Strength, Occurrences: e.Occurrences,
 			ValidUntil: e.ValidUntil,
+			Weak:       isWeak,
 		})
 	}
 	// The entities touched by those facts ride alongside, sorted by id for a
@@ -481,10 +623,31 @@ func graphSearchHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// `triples` is regrouped: everything that cleared the gate, then the
+	// divider, then everything that did not. Both runs keep their pipeline
+	// order, so the ranking survives inside each. Rendered through core.Triples
+	// over two sub-results sharing res.Nodes rather than by formatting lines
+	// here — the `(src, predicate, dst) :: fact` spelling stays owned by the one
+	// function that has always owned it, and this route cannot drift from it.
+	//
+	// Grouped rather than annotated per line because the reader is a model
+	// filling its context: a run of facts under a heading is skippable in one
+	// glance, whereas a suffix on every line has to be parsed on every line.
+	triples := core.Triples(core.GraphResult{Nodes: res.Nodes, Edges: strong})
+	if len(weak) > 0 {
+		triples += graphWeakDivider + core.Triples(core.GraphResult{Nodes: res.Nodes, Edges: weak})
+	}
+
 	webJSON(w, http.StatusOK, map[string]any{
-		"nodes":   nodes,
-		"facts":   facts,
-		"triples": core.Triples(res),
+		"nodes": nodes,
+		"facts": facts,
+		// `strong` is the count a caller checks before trusting anything: zero
+		// means the graph answered, but with nothing that is actually about the
+		// query. Derivable from `facts` — but the CLI renders `triples` and
+		// never decodes `facts` (see cmd_graph.go), so making it re-derive this
+		// would mean modeling the whole fact schema to count a boolean.
+		"strong":  len(strong),
+		"triples": triples,
 	})
 }
 

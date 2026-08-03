@@ -43,9 +43,15 @@ graph is not in git.
 
 ### 1. Take a batch
 
-`k graph pending --limit 25` returns pending episodes as JSON: id, kind, ref, ts, and the reduced
-content. Drain in the order given (oldest first) and stop at the end of one batch — the queue is
-long by design and the nightly job is a drain, not a race.
+**The batch size is in the job spec**, on a line reading `Per-run episode cap: N`. Use that N:
+`k graph pending --limit N` returns pending episodes as JSON: id, kind, ref, ts, and the reduced
+content. The daemon sizes N from how deep the pending queue actually is, so a night with a backlog
+gets a bigger batch than a quiet one — do not substitute a number of your own. The one exception is
+`solo: true`, whose smaller-batch rule below still applies. **When the spec carries no such line,
+use 25.**
+
+Drain in the order given (oldest first) and stop at the end of one batch — the queue is long by
+design and the nightly job is a drain, not a race.
 
 For a `transcript` episode the content is a raw JSONL span and the ref is `path#start-end`. The span
 is the evidence; when you need more than the span carries, `k mine reduce --since <ts> <path>` gives
@@ -236,14 +242,17 @@ sweeps, because the sweep walks the graph, not the batch.
   behind is exactly the one the walk skips. Do the counting in `python3` (the interpreter a cell
   is guaranteed to have); read prose only for the nodes you actually walk.
 - Walk the lowest-degree nodes first (0, then 1), plus the nodes this batch created, capped at
-  about one batch's worth (~25 nodes, batch nodes included) — the walk otherwise grows with the
-  graph while the batch stays fixed. **Reserve at least a third of the cap for nodes the batch did
-  NOT create**: a typical batch mints ~20 nodes and would otherwise consume nearly every slot
-  itself while replenishing the low-degree pool it was meant to drain (measured: one run walked 21
-  of its own nodes and 4 of a 46-deep standing backlog — the backlog can only grow under that
-  split). When the batch overflows its two-thirds share, its YOUNGEST nodes wait — they arrive
-  carrying their batch edges, so next night's walk sees them as ordinary low-degree nodes; nothing
-  is lost, only deferred. A node a previous report already recorded as refused (its
+  ~25 nodes including this batch's — the walk otherwise grows with the graph, and it is bounded
+  independently of the episode cap for that reason: a big-backlog night drains more episodes
+  without buying a proportionally longer walk. **Reserve at least a third of the cap for nodes the
+  batch did NOT create**: a typical batch mints ~20 nodes and would otherwise consume nearly every
+  slot itself while replenishing the low-degree pool it was meant to drain (measured: one run
+  walked 21 of its own nodes and 4 of a 46-deep standing backlog — the backlog can only grow under
+  that split), and a backlog-scaled batch (up to 150 episodes) mints proportionally more, so the
+  share rule binds hardest on exactly the nights the queue is deepest. When the batch overflows its
+  two-thirds share, its YOUNGEST nodes wait — they arrive carrying their batch edges, so next
+  night's walk sees them as ordinary low-degree nodes; nothing is lost, only deferred. A node a
+  previous report already recorded as refused (its
   `## Sweep refusals` section — the format the cell section below specifies) gives
   its slot to one not yet considered, so a standing backlog cannot pin the head of the queue. For each, ask what existing node it is genuinely related to, and whether that
   relation stands alone as a fact sentence supported by a node's description, one of this batch's

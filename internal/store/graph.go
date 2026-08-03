@@ -446,7 +446,9 @@ func (s *Store) NeighborEdges(nodeIDs []int64) ([]GraphEdge, error) {
 	// edge reads names/fact/counts (expansion, the inspector, factLine) and a
 	// hub node with 10k edges would otherwise hydrate ~40 MB of blobs at 1024
 	// dims so the caller could keep 12 of them (review finding). The Embedding
-	// field stays zero — callers needing vectors go through AllEdges.
+	// field stays zero — a caller needing vectors goes through AllEdges, or
+	// reads the specific rows back with GetEdges as the search route's
+	// weak-marking does.
 	rows, err := s.db.Query(`SELECT id, src_id, dst_id, predicate, fact, episode_id, strength, occurrences,
 		valid_from, valid_until, x'' , created_at, expired_at
 		FROM kg_edges WHERE expired_at = 0 AND (src_id IN (`+ph+`) OR dst_id IN (`+ph+`))

@@ -2132,6 +2132,7 @@ var graphSearchRespSpec = map[string]fieldSpec{
 	"nodes":   {kind: wireArray, required: true},
 	"facts":   {kind: wireArray, required: true},
 	"triples": {kind: wireString, required: true},
+	"strong":  {kind: wireNumber, required: true},
 }
 
 var webGraphFactSpec = map[string]fieldSpec{
@@ -2143,6 +2144,7 @@ var webGraphFactSpec = map[string]fieldSpec{
 	"strength":    {kind: wireNumber, required: true},
 	"occurrences": {kind: wireNumber, required: true},
 	"valid_until": {kind: wireNumber, required: true},
+	"weak":        {kind: wireBool, required: true},
 }
 
 // TestGraphWireShapesMarshaled pins the element types directly. The envelope
