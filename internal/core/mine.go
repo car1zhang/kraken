@@ -104,7 +104,7 @@ type SessionDigest struct {
 	// the most tool_use blocks, inverting the ranking this digest feeds).
 	MaxTokensStops int
 	TurnDurations  []int64        // system/turn_duration durationMs
-	RepeatedCalls  map[string]int // identical tool-call signature -> count, only entries > 1
+	RepeatedCalls  map[string]int // re-issued tool calls, grouped by callIdentity (see its residuals) -> count, only entries > 1
 }
 
 // MineResult is one night's mechanical sweep.
@@ -470,7 +470,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 					continue
 				}
 				dg.ToolCounts[b.Name]++
-				dg.RepeatedCalls[callSignature(b.Name, b.Input)]++
+				dg.RepeatedCalls[callIdentity(b.Name, b.Input)]++
 			}
 		case "user":
 			if text, ok := mineUserString(rec.Message.Content); ok {
@@ -558,15 +558,45 @@ func mineUserString(content json.RawMessage) (string, bool) {
 	return s, true
 }
 
-// callSignature is the identity a RepeatedCalls entry counts: the tool name
-// plus the same short input summary `k r` renders a tool block with
-// (summarizeInput's first-present-key rule, truncated). Two calls with the
-// same signature are the same call as far as a reader is concerned — the
-// same command re-run, the same file re-read — which is the signal, and the
-// truncation deliberately makes near-identical long inputs collapse together
-// rather than each looking unique.
+// mineDisplayWindow is the display truncation `k r` uses for a tool line;
+// callSignature and the reduced view's [tool] lines keep to it.
+const mineDisplayWindow = 100
+
+// callSignature is the DISPLAY form of a tool call: the tool name plus the
+// same short input summary `k r` renders a tool block with (summarizeInput's
+// first-present-key rule, truncated to mineDisplayWindow runes). The reduced
+// view's [tool] lines use it; RepeatedCalls does NOT — grouping on the
+// display window collapsed distinct calls whenever their inputs shared a
+// 100-rune prefix, which cell work makes routine (scratchpad paths and
+// staged-transcript paths run past 100 runes before they differ, and
+// analysis heredocs share their import preamble), so the counter reported
+// clusters of 9-11 where zero literal repeats existed. That false positive
+// was measured independently by three separate readers before the grouping
+// moved to callIdentity below.
 func callSignature(name string, input json.RawMessage) string {
 	return name + "(" + mineInputSummary(input) + ")"
+}
+
+// mineIdentityWindow bounds a RepeatedCalls grouping key. It exists to keep
+// map keys and digest JSON bounded, not to collapse anything: every measured
+// false-positive cluster came from prefixes shared for 100-200 runes, so a
+// 1000-rune window is an order of magnitude past where real distinct inputs
+// diverge, while a genuinely identical re-run still matches whole.
+const mineIdentityWindow = 1000
+
+// callIdentity is the identity a RepeatedCalls entry counts: the same
+// first-present-key rule as callSignature, but over a window wide enough
+// that a cluster nearly always means the same call re-issued — the same
+// command re-run, the same file re-read. Two deliberate residuals keep
+// "nearly": commands differing ONLY in stripped boilerplate (a cd prefix,
+// an env assignment) still fold, which is the strip working as intended;
+// and the first-present-key rule keys some tools on a field that never
+// distinguishes them at any width — Grep's `path` precedes `pattern`, so N
+// different searches under one directory read as one entry, and Agent's
+// short `description` precedes `prompt` — so a cluster on those tools says
+// "same key", not "same call".
+func callIdentity(name string, input json.RawMessage) string {
+	return name + "(" + mineInputSummaryN(input, mineIdentityWindow) + ")"
 }
 
 // mineSummaryKeys are the input keys that identify a call, in the priority
@@ -590,9 +620,10 @@ type mineSummaryKeys struct {
 
 // shellBoilerplateRE matches the boilerplate a Bash command can open with —
 // any run of `VAR=value;` assignments and `cd <path>` fragments terminated by
-// `;`, `&&` or a NEWLINE — which mineInputSummary strips so the signature's
-// 100-rune window lands on the command itself rather than on a path prefix
-// longer than the window. Three deliberate bounds, each measured against the
+// `;`, `&&` or a NEWLINE — which mineInputSummaryN strips so a signature
+// window (mineDisplayWindow for display, mineIdentityWindow for grouping)
+// lands on the command itself rather than on a path prefix longer than the
+// display window. Three deliberate bounds, each measured against the
 // full command corpus: the value/path classes exclude WHITESPACE, so an
 // env-prefix form (`HOME=/tmp/x go test …`) is one command and never
 // stripped; the newline is a terminator, because `cd <path>\n<cmd>` is the
@@ -605,25 +636,38 @@ type mineSummaryKeys struct {
 var shellBoilerplateRE = regexp.MustCompile(`^(?:[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|]*[ \t]*(?:;|\n)|cd[ \t]+[^\s;&|]+[ \t]*(?:;|&&|\n))\s*)+`)
 
 // mineRawSummaryCap bounds the bytes a key-less input contributes to a
-// signature. TruncateOneLine cuts to 100 runes anyway, so anything past this
-// could only ever be thrown away — but converting the raw first would copy
-// the whole thing to get there.
-const mineRawSummaryCap = 4096
+// signature, so converting the raw never copies a multi-megabyte input to
+// keep a window of it. It must stay comfortably above the WIDEST caller's
+// window in worst-case UTF-8 (mineIdentityWindow runes at up to 4 bytes
+// each, and TruncateOneLine collapses whitespace runs before counting, so
+// bytes overestimate runes): 8192 bytes leaves a 2x margin where 4096 left
+// 1.02x, and below the margin two distinct key-less inputs could collide
+// again — the exact defect callIdentity exists to remove.
+const mineRawSummaryCap = 8192
 
-// mineInputSummary is summarizeInput's rule applied to a still-encoded tool
-// input, deliberately WITHOUT materialising it. summarizeInput takes a
-// map[string]any, and the digest is the one caller that would have to build
-// one per tool call: a single Write carries its whole file body in `content`,
-// so decoding into a map allocates megabytes to read a `file_path` beside it
-// — ~11.7k times over a night's corpus, the digest's dominant cost.
-// Decoding into a narrow struct skips every unrecognised key without
-// allocating it.
+// mineInputSummary is the display-window form of mineInputSummaryN — the
+// one callers use for anything a person reads.
+func mineInputSummary(input json.RawMessage) string {
+	return mineInputSummaryN(input, mineDisplayWindow)
+}
+
+// mineInputSummaryN is summarizeInput's rule applied to a still-encoded tool
+// input, deliberately WITHOUT materialising it, with the truncation window
+// as a parameter (mineDisplayWindow for display, mineIdentityWindow for
+// RepeatedCalls grouping — one rule, two windows, so the display form and
+// the grouping identity cannot drift apart in WHAT they summarize, only in
+// how much of it they keep). summarizeInput takes a map[string]any, and the
+// digest is the one caller that would have to build one per tool call: a
+// single Write carries its whole file body in `content`, so decoding into a
+// map allocates megabytes to read a `file_path` beside it — ~11.7k times
+// over a night's corpus, the digest's dominant cost. Decoding into a narrow
+// struct skips every unrecognised key without allocating it.
 //
 // A key present with a non-string value yields an UnmarshalTypeError, which
 // encoding/json returns only AFTER decoding the rest — so the error is
 // deliberately ignored and the fields that did decode are used, matching
 // summarizeInput's type-assertion skip.
-func mineInputSummary(input json.RawMessage) string {
+func mineInputSummaryN(input json.RawMessage, window int) string {
 	if len(input) == 0 {
 		return ""
 	}
@@ -631,33 +675,34 @@ func mineInputSummary(input json.RawMessage) string {
 	_ = json.Unmarshal(input, &k)
 	if k.Command != "" {
 		// Strip leading shell boilerplate before the truncation window. Cell
-		// scratchpad paths run well past the 100-rune window, so a command
+		// scratchpad paths run well past the display window, so a command
 		// opening with `S=<scratchpad>; ` or `cd <worktree> && ` spends the
 		// WHOLE signature on the prefix — zero command bytes reach it, and
 		// every such call collapses into one bucket: one real session's 19
 		// distinct analysis commands digested as one call "repeated" 19
-		// times, which is exactly the loop-shaped false positive this
-		// signature feeds the dream loop. This is also where the digest's
+		// times — the loop-shaped false positive callIdentity's wider window
+		// now removes for prefixes under it; the strip is what removes it at
+		// the display width and past the window. This is also where the digest's
 		// Bash signature deliberately diverges from summarizeInput's tool
 		// line (`k r` shows the command as typed; the digest signature wants
 		// distinct commands distinct). Stripping reveals the command; if the
 		// command WAS only boilerplate, keep the original rather than an
 		// empty signature.
 		if cmd := shellBoilerplateRE.ReplaceAllString(k.Command, ""); strings.TrimSpace(cmd) != "" {
-			return TruncateOneLine(cmd, 100)
+			return TruncateOneLine(cmd, window)
 		}
-		return TruncateOneLine(k.Command, 100)
+		return TruncateOneLine(k.Command, window)
 	}
 	for _, s := range []string{k.FilePath, k.Path, k.Pattern, k.Description, k.Prompt, k.Query, k.URL, k.Skill} {
 		if s != "" {
-			return TruncateOneLine(s, 100)
+			return TruncateOneLine(s, window)
 		}
 	}
 	raw := input
 	if len(raw) > mineRawSummaryCap {
-		raw = raw[:mineRawSummaryCap] // TruncateOneLine keeps only 100 runes of it
+		raw = raw[:mineRawSummaryCap] // TruncateOneLine keeps only the window of it
 	}
-	return TruncateOneLine(string(raw), 100)
+	return TruncateOneLine(string(raw), window)
 }
 
 // reducer applies the reduction rules, one JSONL line at a time. Its line
