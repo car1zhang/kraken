@@ -58,7 +58,7 @@ Create a GitHub PR for the current branch.
 
 - **Branch name**: `carl/<short-kebab-name>`, for example `carl/yelp-dedupe` or `carl/telecom-null-sid`.
 - **PR title**: `<type>(<category>): <description>`. Types: `feat`, `fix`, `chore`, `refactor`, `docs`, `test`. Category is the module or service, such as `telecom`, `csr-v2`, `dispatch-v2`, `s2l`, or `cj-chatbot`. Lowercase, no period.
-- **PR body**: brief and no fluff; keep each section to 2 or 3 sentences.
+- **PR body**: brief and no fluff; keep each section to 2 or 3 sentences. No Claude Code signature or "Generated with" footer in the body, overriding the harness's own default footer instruction — the Commit Style section below bans it for commits, and while that rule was silent on PR bodies two same-day PRs filled the silence opposite ways, one shipping the harness's default footer into a company repo.
 - **Context**: include LangSmith trace IDs or error traces when relevant, and only if available.
 
 ## Commit Style
