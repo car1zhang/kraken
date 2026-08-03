@@ -40,7 +40,18 @@ night and teaches him the loop does not listen.
 
 1. **Carl's verdicts and comments** on watched observations, and **open dream PRs**. Both are suppression:
    a rule already in flight must not be re-proposed, and an observation he has ruled on is already decided.
-2. **The rest of the watch overlay** — what previous nights are still watching.
+2. **The rest of the watch overlay** — what previous nights are still watching. A row whose state
+   reads `shipped` is a CLAIM, not a settled fact: before letting it suppress a fresh sighting,
+   verify the fix actually landed — a `pr_url` that points at a MERGED change covering the
+   observation, or the change visible in the tree; an empty url fails the check and so does one
+   whose PR closed unmerged. A shipped row with an EMPTY `pr_url` has covered a still-live defect
+   while two scouts re-measured it the same night, because "shipped" read as closed and the
+   residual went unrecorded. When scouts re-measure a shipped observation on evidence from AFTER
+   its fix landed, that is a new sighting of a fix that did not take: re-add it with the SAME
+   wording (folding keys on the wording — see the watch section below), and say so. Evidence that
+   predates the fix proves nothing either way — the mining window always reaches back past a fix
+   that landed inside it, so pre-fix sightings of a genuinely-fixed defect are expected, not a
+   reopening.
 3. **The evidence**: the feedback sweep, then the transcripts.
 
 ## Reading carl's verdicts
@@ -163,11 +174,13 @@ unnamed subagents, not teammates. Give each one a scratch path **outside the rep
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
 channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
 (staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
-and the collision recovery costs more than the namespace would have. And carry the shell-dialect
-rule from `.claude/skills/do/SKILL.md` step 4 into every scout brief — scouts hit the same zsh
-aborts every other agent does, on their first command. Spawn them in waves rather than all at
-once; a few at a time, with the remainder
-running as slots free. Every transcript gets read; the pass simply takes as long as it takes. **A
+and the collision recovery costs more than the namespace would have. And the shell-dialect rule from
+`.claude/skills/do/SKILL.md` step 4 binds YOU from your own first command, then goes into every
+scout brief — framed only as brief material, it was broken by the pass's own lead (a bare `===`
+echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
+by the next night's lead again; scouts hit the same aborts on their first command. Spawn them in
+waves rather than all at once; a few at a time, with the remainder running as slots free. Every
+transcript gets read; the pass simply takes as long as it takes. **A
 respawn after a kill gets a FRESH report path** (`<name>-B.md`, then `-C` and so on), and you check
 the original path first — a killed scout may have finished its report before dying, and a respawn's
 heredoc fallback overwrites without the Write tool's read-first guard, so handing it the same path
@@ -190,7 +203,14 @@ saying so, while you wait on a file that is never coming. But `general-purpose` 
 including this cell's worktree, and this pass's one hard rule is that findings never enter git — so
 the guarantee that used to be structural is now a sentence in the brief, and it has to actually be
 there: *write nothing under the repo; "read-only" bars the repo, not your own report, which goes at
-the scratch path above.*
+the scratch path above.* When the brief mentions the heredoc report fallback, it says FALLBACK —
+"if `Write` is refused" and nothing wider: briefed with "or any other refusal, use a heredoc",
+scouts with a working `Write` tool have shipped 20 KB reports through `cat <<EOF` (three of five in
+one measured wave), and a heredoc routes report PROSE through Bash, where a text-matching guardrail
+hook can block the whole write because the findings quote a banned command. `do/SKILL.md` names the
+same failure for review fleets; it applies to scout briefs identically. And the brief says what to
+do when BOTH paths are closed — `Write` refused and the heredoc blocked by a hook: report the
+refusal in the reply and stop, never trim or reword the findings until the hook passes.
 
 **Hand a scout an observation, never a conclusion — and never a number you have not checked.** This is
 the single most-measured defect in the loop's own history: ten scouts in one night were each briefed
