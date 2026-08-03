@@ -325,6 +325,89 @@ func TestMineInputSummaryStripsShellBoilerplate(t *testing.T) {
 	}
 }
 
+// TestCallIdentityKeepsDistinctLongInputsDistinct: RepeatedCalls groups on
+// callIdentity, not the 100-rune display signature. Grouping on the display
+// window collapsed DISTINCT calls whenever their inputs shared a 100-rune
+// prefix — python heredocs sharing an import preamble plus one long
+// absolute path, and Read calls on staged transcripts whose 218-char paths
+// share a 105-char scratchpad prefix — so the digest reported clusters of
+// 9-11 in sessions with zero literal repeats, and three independent readers
+// each re-measured the false positive before the grouping was widened.
+func TestCallIdentityKeepsDistinctLongInputsDistinct(t *testing.T) {
+	prefix := "/private/tmp/claude-501/-Users-carl--kraken-cells-some-cell-142-wt-kraken/01234567-89ab-cdef-0123-456789abcdef/scratchpad/scout-one/"
+	readA := json.RawMessage(mineJSON(t, map[string]any{"file_path": prefix + "agent-aaaaaaaaaaaaaaaaa.reduced.txt"}))
+	readB := json.RawMessage(mineJSON(t, map[string]any{"file_path": prefix + "agent-bbbbbbbbbbbbbbbbb.reduced.txt"}))
+	if callSignature("Read", readA) != callSignature("Read", readB) {
+		t.Fatalf("test premise broken: the two paths no longer collide in the display window")
+	}
+	if callIdentity("Read", readA) == callIdentity("Read", readB) {
+		t.Errorf("distinct paths behind a shared >100-rune prefix share an identity: %q", callIdentity("Read", readA))
+	}
+
+	heredoc := "python3 - <<'PYEOF'\nimport json\np = \"/Users/carl/.claude/projects/-Users-carl--kraken-cells-some-cell-142-wt-kraken/"
+	cmdA := json.RawMessage(mineJSON(t, map[string]any{"command": heredoc + "a.jsonl\"\nprint(1)\nPYEOF"}))
+	cmdB := json.RawMessage(mineJSON(t, map[string]any{"command": heredoc + "b.jsonl\"\nprint(2)\nPYEOF"}))
+	if callIdentity("Bash", cmdA) == callIdentity("Bash", cmdB) {
+		t.Errorf("distinct heredocs behind a shared preamble share an identity")
+	}
+
+	// An identical re-run is still one identity — the signal the counter
+	// exists for — including when only ignorable boilerplate differs. The
+	// re-run is constructed independently so this cannot degenerate into
+	// x != x on one value.
+	cmdA2 := json.RawMessage(mineJSON(t, map[string]any{"command": heredoc + "a.jsonl\"\nprint(1)\nPYEOF"}))
+	if callIdentity("Bash", cmdA) != callIdentity("Bash", cmdA2) {
+		t.Errorf("identical commands do not share an identity")
+	}
+	again := json.RawMessage(mineJSON(t, map[string]any{"command": "cd /Users/carl/other && " + heredoc + "a.jsonl\"\nprint(1)\nPYEOF"}))
+	if callIdentity("Bash", cmdA) != callIdentity("Bash", again) {
+		t.Errorf("boilerplate-only difference split one identity in two")
+	}
+}
+
+// TestDigestRepeatedCallsGroupsOnIdentity pins the fix at the DIGEST level,
+// not just on the helper: the counting line must key on callIdentity, and a
+// revert to callSignature there keeps every unit test above green while the
+// digest quietly resumes reporting false clusters (a one-token mutation the
+// review round demonstrated). Two distinct Reads sharing a >100-rune prefix
+// must produce NO RepeatedCalls entry while a literal Bash re-run still
+// counts — the value assertion, not just helper agreement.
+func TestDigestRepeatedCallsGroupsOnIdentity(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+	at := func(minsAgo int64) int64 { return now - minsAgo*60_000 }
+
+	prefix := "/private/tmp/claude-501/-Users-carl--kraken-cells-some-cell-142-wt-kraken/01234567-89ab-cdef-0123-456789abcdef/scratchpad/scout-one/"
+	lines := []string{
+		mineUser(t, at(50), "read the staged views"),
+		mineAssistant(t, at(49), "claude-opus-5", mineToolUse("r1", "Read", map[string]any{"file_path": prefix + "agent-aaaaaaaaaaaaaaaaa.reduced.txt"})),
+		mineUser(t, at(48), []any{mineToolResult("r1", false, "ok")}),
+		mineAssistant(t, at(47), "claude-opus-5", mineToolUse("r2", "Read", map[string]any{"file_path": prefix + "agent-bbbbbbbbbbbbbbbbb.reduced.txt"})),
+		mineUser(t, at(46), []any{mineToolResult("r2", false, "ok")}),
+		mineAssistant(t, at(45), "claude-opus-5", mineToolUse("b1", "Bash", map[string]any{"command": "go test ./..."})),
+		mineUser(t, at(44), []any{mineToolResult("b1", false, "ok")}),
+		mineAssistant(t, at(43), "claude-opus-5", mineToolUse("b2", "Bash", map[string]any{"command": "go test ./..."})),
+		mineUser(t, at(42), []any{mineToolResult("b2", false, "ok")}),
+	}
+	mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess-ident.jsonl", lines...)
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	if len(res.Digests) != 1 {
+		t.Fatalf("digests = %d, want 1", len(res.Digests))
+	}
+	d := mineFindDigest(t, res, "sess-ident.jsonl")
+	if got := d.RepeatedCalls["Bash(go test ./...)"]; got != 2 {
+		t.Errorf("RepeatedCalls[Bash(go test ./...)] = %d, want 2 (have %v)", got, d.RepeatedCalls)
+	}
+	if len(d.RepeatedCalls) != 1 {
+		t.Errorf("RepeatedCalls = %v, want ONLY the literal Bash repeat — a Read entry here means the digest is grouping on the display window again", d.RepeatedCalls)
+	}
+}
+
 // TestMineTranscriptsExcludesOldRecords: file mtime selects the candidate,
 // the per-record timestamp bounds the window. A session whose turn ran for
 // 92 minutes has a fresh mtime and stale records; the stale ones must not
