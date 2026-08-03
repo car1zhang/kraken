@@ -22,7 +22,7 @@ beats recall here, always. **A fact you are not confident in is a fact you do no
 
 | Thing | Is | Key property |
 |---|---|---|
-| **Episode** | one span of evidence: a transcript span, a feedback row, a job spec, an artifact — or the already-done episode a `kraken watchlist add` mints for itself, which is why watch observations never reach the pending queue | it is provenance — every fact points back at the episode that produced it |
+| **Episode** | one span of evidence: a transcript span, a feedback row, a job spec, an artifact — or the already-done episode a `kraken watchlist add` mints for itself, which is why watch observations never reach the pending queue | it is provenance — a fact SHOULD point back at the episode that produced it, but sweep edges may omit it and roughly one live edge in four currently does (measured 2026-08-03: 72 of 315), so a missing episode is a known state, never proof the fact is baseless |
 | **Node** | one entity: a name, a type, and a **description** | the description is a short natural-language gloss of what the thing IS, independent of any edge |
 | **Edge** | one fact: two endpoints, a predicate, and a **fact sentence** | the sentence IS the fact; the predicate is only how it is indexed |
 
@@ -158,7 +158,20 @@ The payload names entities by NAME; the server resolves them:
 A repeat of a fact that already exists is **not** a duplicate row: the store folds it into the
 existing edge, bumping its `occurrences`. That count is what `graphContext` renders as `seen Nx`, and
 it is the whole reason independent corroboration is worth recording — so state a fact you have seen
-again rather than skipping it because it is already there.
+again rather than skipping it because it is already there. **But the fold keys on the EXACT
+sentence** — `InsertEdge` matches `src + predicate + dst + fact`, whitespace runs collapsed on the
+way in and everything else exact to the byte, case included — and a "fuller" restatement lands as a
+second live edge beside the original, not a fold (the store's own comment calls near-duplicate
+merging the revision job's call, not its own). So a re-sighting you want counted is sent with the
+existing edge's `fact` field VERBATIM — the full-graph pull you already hold has the text — and a
+wording you genuinely want improved is an `invalidate` of the old edge plus the reworded fact as a
+new one, never a better sentence beside the old; note in the report that the fresh edge restarts
+`occurrences` at 1, so the old corroboration count is not silently lost. This is the rule the
+"must stand alone" bullet above pushes against, and obeying that bullet on a re-sighting is how one
+night's ingest turned 7 corroborations into 6 duplicate live edges: measured 2026-08-03, the graph
+held 32 (src, predicate, dst) groups with more than one live edge — 36 redundant edges, 11.4% of the
+graph — while the occurrences histogram read `{1: 313, 2: 2}`, the corroboration signal dead
+precisely because every sighting arrived freshly worded.
 
 ### 5. Contradictions close windows; they do not overwrite
 
@@ -175,6 +188,14 @@ not a correction.
 cutover" is one edge kraken still believes; the world moved on. An `invalidate` entry additionally
 stamps system time, because it records kraken *unlearning* something it had asserted. Reach for the
 edge's own `valid_until` when the world changed, and for `invalidate` when the graph was wrong.
+And when ONE batch carries both a design and the evidence that superseded it, the superseded fact is
+written with its `valid_until` already set — to the past millis the world moved on, since a future
+value deliberately stays live to `graphContext` — keeping the history a bi-temporal graph exists to
+hold rather than dropping the superseded fact entirely. "Nothing prior to invalidate" does not
+license shipping the stale design open-ended: an ingest that reasoned exactly that way handed
+`graphContext` a superseded read-path design as currently true, in the same batch as its own
+supersession edge. (The world-time filter is `graphContext`'s; search and the board still show a
+world-closed edge as live, which is correct — it is history, not error.)
 
 **Re-invalidating an already-closed edge is an error, not a no-op** — `invalidate` matches live rows
 only, so a re-run of a partially-completed batch will fail on the edges the first run already closed.
@@ -216,7 +237,13 @@ sweeps, because the sweep walks the graph, not the batch.
   is guaranteed to have); read prose only for the nodes you actually walk.
 - Walk the lowest-degree nodes first (0, then 1), plus the nodes this batch created, capped at
   about one batch's worth (~25 nodes, batch nodes included) — the walk otherwise grows with the
-  graph while the batch stays fixed. A node a previous report already recorded as refused (its
+  graph while the batch stays fixed. **Reserve at least a third of the cap for nodes the batch did
+  NOT create**: a typical batch mints ~20 nodes and would otherwise consume nearly every slot
+  itself while replenishing the low-degree pool it was meant to drain (measured: one run walked 21
+  of its own nodes and 4 of a 46-deep standing backlog — the backlog can only grow under that
+  split). When the batch overflows its two-thirds share, its YOUNGEST nodes wait — they arrive
+  carrying their batch edges, so next night's walk sees them as ordinary low-degree nodes; nothing
+  is lost, only deferred. A node a previous report already recorded as refused (its
   `## Sweep refusals` section — the format the cell section below specifies) gives
   its slot to one not yet considered, so a standing backlog cannot pin the head of the queue. For each, ask what existing node it is genuinely related to, and whether that
   relation stands alone as a fact sentence supported by a node's description, one of this batch's
