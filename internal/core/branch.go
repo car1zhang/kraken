@@ -46,6 +46,16 @@ const DefaultModel = "claude-opus-5"
 // spawn action never see it.
 const ZeusModel = "claude-fable-5"
 
+// IrisModel is the tier the Slack intake agent runs on. Iris is a triage loop
+// — read a bumped inbox batch, decide ignore / draft / edit, write a short job
+// body — which is exactly the shape ZeusModel exists for: it is the pane that
+// has to keep up with carl's Slack rather than the one doing deep work, and it
+// delegates nothing. It is its own constant rather than an alias of ZeusModel
+// because the two answer different questions, and pinning them separately is
+// what lets either move without dragging the other. Like both of its
+// neighbours it is an exact model id, never the `fable` alias.
+const IrisModel = "claude-fable-5"
+
 // ModelArgs is the `--model` flag pair for a spawn: the caller's explicit model
 // (a job's `model:` field) when it has one, else DefaultModel. Always returns a
 // flag — kraken never leaves the model to claude's own config, so the model a

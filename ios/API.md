@@ -1339,6 +1339,129 @@ Errors: 400 `missing slug` (the query parameter absent or empty), 404 for an
 unknown slug. A GET is a read, so it stays reachable under `--mirror`.
 **Additive, no contract bump.**
 
+### `GET /api/job/list`
+
+The Slack intake bot's read of what jobs exist right now — iris polls it to answer "is there already a job about this?" before drafting a new one. Not consumed by the iOS app or the web UI, both of which read the whole job objects from `/api/board`; this route exists because an agent's context cannot afford that payload for a question one line per job answers.
+
+Response: `{"jobs": [webJobListItem]}`. The array is always present and never null.
+
+`webJobListItem` (jobdraft.go):
+
+| key | type | optionality |
+|---|---|---|
+| `slug` | string | always |
+| `state` | string | always |
+| `summary` | string | always |
+
+- `state` is `jobs.DisplayState` — the same string the board renders (`draft`, `queued`, `working`, `blocked`, `done`), not the stored `state` column, which is empty for a queued job.
+- `summary` is the job body's **first non-empty line**, one-lined and capped at **120 runes** (a leading markdown `#` is dropped). Empty for a job with no body — a real answer, so the key still rides.
+- ARCHIVED jobs are absent entirely: they are out of the active namespace, and iris has no business resurrecting one.
+
+Errors: 405 (non-GET), 500 (no store wired). A GET is a read, so it stays reachable under `--mirror`. **Additive, no contract bump.**
+
+### `POST /api/job/draft`
+
+The Slack intake bot's only write on a job — it creates a draft, or amends an existing draft/queued one. Not called by the iOS app or the web UI (carl uses `/api/job/saveform` and `/api/job/save`); its client is the `kraken job draft` cell verb.
+
+This route is the **safety surface** of the whole Slack feature, so its refusals are the specification rather than validation niceties: iris is a claude turning arbitrary Slack text into kraken jobs, and the property that makes that safe is that it can only ever produce a DRAFT. **Nothing is written on any refusal.**
+
+Request: `{"slug": string, "content": string, "mtime"?: number}`.
+
+- `content` is the whole job text (frontmatter + spec), exactly what `/api/job/raw` prints. It is parsed with the strict job parser, so what is stored is exactly what those bytes mean.
+- `mtime` is the optimistic-lock token from `/api/job/raw`, and is optional: absent or `0` skips the conflict check, the same contract the raw save's `mtime` has.
+- Unknown envelope keys are **not** rejected (unlike `/api/slack/ack`): everything that can hurt this route is inside `content`, where the parser is the gate.
+
+Response: `{"ok": true, "slug": string, "mtime": number}` — `mtime` is the row's NEW rev, so a follow-up edit in the same turn needs no re-read.
+
+Refusal matrix (every row writes nothing):
+
+| condition | status |
+|---|---|
+| `slug` empty after slugify | 400 |
+| `content` empty | 400 |
+| the job text does not parse | 400, carrying the parser's own error text (no salvage write — this route never does the raw editor's body+err save) |
+| **create** (no active job with the slug): `ready: true` | 400 — iris drafts stay `ready: false`; queueing is carl's move |
+| **create**: any non-empty `state:` | 400 — `state` is kraken's |
+| **create**: empty body | 400 |
+| **create**, all guards passed | row created from the parsed fields + its prereqs |
+| **edit** (the job exists): stored state is `working`, `blocked` or `done` | 409 — stricter than the editor's own `editableJob` gate, which lets a done job through for a respec |
+| **edit**: submitted `ready` differs from the stored value | 400, loudly — never silently rewritten, since a silent rewrite would let iris believe it queued something |
+| **edit**: any non-empty `state:` | 400 |
+| **edit**: empty body | 400 |
+| **edit**: `mtime` present, non-zero, and not the row's rev | 409 conflict |
+| **edit**, all guards passed | writes ONLY `{repo, base, solo, model, body}`; `ready`, `state`, every kraken-owned field (`session`, `run`, `prs`, `color`, `outcome`, `teardown`) **and the stored prereqs** keep their stored values, and the slug never changes |
+
+An edit **never syncs prereqs** — the one place this route is narrower than the field list alone suggests. A prereq, especially a gated one, is the board's human-release gate: it is what parks a ready job until carl lets it go. An edit here is a whole-text replace, so a submitted body that merely omits the `prereqs:` line would clear that gate and make a queued job auto-startable on the daemon's next pass — iris starting a job by another route, which is the single outcome this endpoint exists to prevent. Prereqs are still set on the **create** path, where there is no stored gate to erase.
+
+Other errors: 405 (non-POST), 409 (slug taken by a concurrent create), 413 (body over 1 MiB), 500 (no store wired; the write failed; or — on the create path only — the job WAS created and then its reload or prereq write failed, in which case the error text says so explicitly and a retry must NOT be sent as a create: it would land on the edit path, which never sets prereqs). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
+
+---
+
+## Slack intake
+
+The Slack intake bot's three routes. Their client is **iris** — a long-running claude outside any cell — through the `kraken slack inbox|status|ack` verbs; neither the iOS app nor the web UI calls any of them, and none is modeled in Models.swift/APIClient.swift. No Slack token, and nothing derived from one, ever appears in any of these responses.
+
+### `GET /api/slack/inbox`
+
+Every **unacked** inbox row, in `id` order (which is arrival order). This is iris' whole working set: a message stays here until iris explicitly acks it, so a crash, a compaction or a respawn loses nothing — the row is the durable state, iris' context is not.
+
+Response: `{"messages": [webSlackMsg]}`. The array is always present and never null.
+
+`webSlackMsg` (slack.go):
+
+| key | type | optionality |
+|---|---|---|
+| `id` | number | always |
+| `channel_id` | string | always |
+| `channel_name` | string | always (empty for a DM — Slack only names channels in search results) |
+| `ts` | string | always |
+| `thread_ts` | string | always (empty for a top-level message) |
+| `author_id` | string | always |
+| `author_name` | string | always |
+| `source` | string | always — `dm`, `mpim` or `mention` |
+| `text` | string | always |
+| `seen_at` | number | always (unix millis) |
+
+`ts` and `thread_ts` are Slack's `"seconds.micros"` **strings** end to end and are never parsed through a float, here or anywhere else in the binary. The row's `delivered_at`, `acked_at` and `disposition` columns are deliberately absent: they are kraken's delivery bookkeeping, and this route serves only unacked rows anyway.
+
+Errors: 405 (non-GET), 500 (no store wired, or the read failed). A GET is a read, so it stays reachable under `--mirror`. **Additive, no contract bump.**
+
+### `POST /api/slack/ack`
+
+Iris retiring a batch of messages, with one line saying what it did with them. This is the only thing that removes a message from the inbox read above — explicit rather than implied by the read, so a message iris looked at and never resolved comes back on the next call.
+
+Request: `{"ids": [number], "disposition": string}`.
+
+- `ids` are inbox row ids. The store call is **all-or-nothing**: an unknown id, or one already acked, fails the whole batch and applies nothing.
+- `disposition` is a free string carrying what happened (`drafted:<slug>`, `edited:<slug>`, `ignored:<reason>`) — a plain string rather than an enum because it names the job it produced. It is one-lined and truncated to **200 runes** server-side rather than refused, the same treatment `/api/job/load`'s `note` gets. An EMPTY one (after trim) IS refused: "acked, reason unknown" is indistinguishable from a bug that acks everything.
+- The body is decoded with **unknown fields rejected**: `ids`, `disposition`, and nothing else.
+
+Response: `{"ok": true}`.
+
+Errors: 405 (non-POST), 400 (bad json; an unrecognized field; empty or absent `ids`; empty `disposition`), 409 carrying the store's own sentence — which names the offending id — for an unknown or already-acked id, 413 (body over 1 MiB), 500 (no store wired). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
+
+### `GET /api/slack/status`
+
+Whether the feature is configured at all, when the poll last ran, and how deep the backlog is — the one place to look when "iris said nothing all day" needs to be told apart from "nothing arrived".
+
+Response (`webSlackStatus`, slack.go):
+
+| key | type | optionality |
+|---|---|---|
+| `configured` | bool | always |
+| `config_error` | string | omitted unless the credential is half-configured |
+| `last_poll_at` | number | always (unix millis; `0` when the poll has never run) |
+| `total` | number | always |
+| `undelivered` | number | always |
+| `unacked` | number | always |
+
+- `configured` is `core.LoadSlackConfig` succeeding. A failure is otherwise reported ONLY as this `false` — the config error is dropped rather than echoed, since the token value must never reach a response body.
+- `config_error` is the ONE exception, and it is about a fixed sentence rather than about errors generally: a session (`xoxc-`) token configured without its `SLACK_D_COOKIE` cannot authenticate any call, so that state carries `core.ErrSlackHalfConfigured`'s constant text — which names the missing key and contains no credential. It distinguishes the two ways `configured` can be false: nothing set up (key absent, the normal fresh state) versus set up wrong (key present) — opposites in practice, identical without it.
+- `undelivered` counts rows never bumped into iris' pane (`delivered_at == 0 AND acked_at == 0`); `unacked` counts every row iris has not resolved (`acked_at == 0`), so `unacked >= undelivered` always.
+- An unconfigured machine answers `false` with zeroes rather than erroring — that is the answer, not a fault.
+
+Errors: 405 (non-GET), 500 (no store wired, or the counts query failed). A GET is a read, so it stays reachable under `--mirror`. **Additive, no contract bump.**
+
 ---
 
 ## Peers

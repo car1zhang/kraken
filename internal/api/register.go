@@ -79,6 +79,23 @@ func Register(mux *http.ServeMux) {
 	// reach on exactly the blocked, live-celled jobs it exists for. Its POST
 	// gates itself inline so the GET stays reachable under --mirror.
 	mux.HandleFunc("/api/job/load", jobLoadHandler)
+	// The Slack intake bot (slack.go, jobdraft.go). Every one of these is an
+	// exact pattern, so none shadows another and none is a subtree — the same
+	// property that lets "/api/job/raw" and "/api/job/load" coexist above.
+	// The three reads stay open under --mirror (a read is a read); the two
+	// WRITES are gated via mirrorGated at registration rather than inline,
+	// which is available here for the reason it is on /api/graph/add: both
+	// are POST-ONLY paths, so there is no GET on the same path that a route
+	// wrapper would take down with them.
+	//
+	// /api/job/draft is iris' only write surface on a job, and its gate list
+	// is the safety property of the whole feature rather than a validation
+	// nicety — see jobdraft.go's header.
+	mux.HandleFunc("/api/slack/inbox", slackInboxHandler)
+	mux.HandleFunc("/api/slack/status", slackStatusHandler)
+	mux.HandleFunc("/api/slack/ack", mirrorGated(slackAckHandler))
+	mux.HandleFunc("/api/job/list", jobListHandler)
+	mux.HandleFunc("/api/job/draft", mirrorGated(jobDraftHandler))
 	mux.HandleFunc("/api/upload", uploadHandler)
 	mux.HandleFunc("/api/logs/files", webLogFiles)
 	mux.HandleFunc("/api/logs", webLogRead)

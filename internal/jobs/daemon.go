@@ -912,6 +912,31 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		graphPass(ActiveStore(), now)
 	}
 
+	// Slack intake (slack.go, iris.go): keep iris alive while Slack is
+	// configured, poll carl's DMs/mentions into the inbox, and bump iris'
+	// pane when rows are waiting. Each takes a snapshot THIS tick already
+	// holds rather than running its own — EnsureIris the `live` session map,
+	// deliverSlack the discovered `all` peers — since a discovery sweep costs
+	// a `ps` plus a `tmux list-panes` and one per tick is already the budget.
+	//
+	// Skipped under mirror for all three of the usual reasons at once: real
+	// network I/O against Slack, real store writes, and typing into a pane
+	// that belongs to the live deployment.
+	if !mirror {
+		if err := EnsureIris(ActiveStore(), live); err != nil {
+			// Deduped like tokensfail: a spawn that fails because tmux or
+			// claude is unavailable will fail identically four times a minute.
+			if d.Notified["irisfail"] == 0 {
+				dlogErr("iris: %v", err)
+				d.Notified["irisfail"] = now.Unix()
+			}
+		} else {
+			delete(d.Notified, "irisfail")
+		}
+		slackPass(ActiveStore(), all, now)
+		deliverSlack(ActiveStore(), all)
+	}
+
 	// usage poll (throttled, first-tick eager so UIs have data right after
 	// daemon start): KickUsagePass's own usagePassRunning atomic
 	// single-flights this into its own goroutine (network I/O up to ~10s,

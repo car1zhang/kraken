@@ -280,9 +280,11 @@ func TestContractSchemaV16Lands(t *testing.T) {
 	}
 	s := contractMigrate(t, db, path)
 
-	// S1: schemaVersion = 16.
-	if schemaVersion != 16 {
-		t.Fatalf("schemaVersion = %d, want 16 (S1)", schemaVersion)
+	// S1: schemaVersion = 17. (Was 16 when this contract was frozen; the Slack
+	// intake bot's slack_inbox/slack_marks migration bumped it — an
+	// append-only step that leaves every assertion below this one intact.)
+	if schemaVersion != 17 {
+		t.Fatalf("schemaVersion = %d, want 17 (S1)", schemaVersion)
 	}
 	var version int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {

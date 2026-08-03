@@ -18,6 +18,8 @@ _k() {
         'watchlist:cell-side verb — read/write the dream loop'"'"'s watch overlay on the knowledge graph, via kraken serve'
         'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
         'graph:cell-side verb — read/write the knowledge graph via kraken serve'
+        'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
+        'job:iris-side verb — list/read jobs and write a draft via kraken serve'
         'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
@@ -202,6 +204,50 @@ _k() {
                 )
                 _describe -t flags 'flag' gflags
             fi
+            ;;
+        slack)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'inbox:print every unacked Slack message as JSON (arrival order)'
+                    'status:print whether Slack is configured, the last poll, and the backlog'
+                    'ack:retire a batch of messages with a disposition'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == ack ]]; then
+                # both flags are REQUIRED, so both are offered from word 4 on
+                # — unlike `load set`, this op takes no positional at all, and
+                # withholding them until word 5 would suggest one exists.
+                local -a ackflags
+                ackflags=(
+                    '--ids:comma-separated inbox ids from `k slack inbox`'
+                    '--disposition:what happened — drafted:<slug>, edited:<slug>, ignored:<reason>'
+                )
+                _describe -t flags 'flag' ackflags
+            fi
+            ;;
+        job)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'list:print every active job'"'"'s slug, state and one-line summary as JSON'
+                    'raw:print one job'"'"'s whole text plus its mtime lock token'
+                    'draft:create or amend a DRAFT from the job text on stdin'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == draft ]] && (( CURRENT > 4 )); then
+                # CURRENT > 4, not just the `draft` test: word 4 is the <slug>
+                # positional, and offering the flag there would suggest a slug
+                # is optional when it is not.
+                local -a draftflags
+                draftflags=(
+                    '--mtime:the lock token `k job raw <slug>` printed (omit on a create)'
+                )
+                _describe -t flags 'flag' draftflags
+            fi
+            # <slug> completion is intentionally not offered, for the reason
+            # spelled out under questions) above: job identity lives only in
+            # kraken.db, with no cheap store-backed completion source.
             ;;
         mine)
             if (( CURRENT == 3 )); then
