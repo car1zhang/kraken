@@ -93,6 +93,8 @@ generated spec.
 - **Answer the question that was asked.** Scope creep into neighboring subsystems is what makes
   explanations unreadable; mention the neighbor in one line and put it on the "go deeper" menu.
 - **Never hard-wrap prose in an artifact.** One paragraph — and one bullet, and one table row — is ONE source line, however long; wrapping is the renderer's job, never the author's. A mid-sentence line break renders as a broken paragraph on the board, and it is a repeat complaint from carl ("please get rid of them and remember not to do"). This binds every markdown artifact the job ships, and every teammate brief that asks for one.
+- **Every md artifact opens with a one-liner stating its main message.** The first line after the title, before any section: one sentence saying what the artifact TELLS carl — the thing it adds to or confirms in his mental model — never a description of what it contains. A reader who stops after that line should still leave with the point; if no such sentence exists, the artifact does not know what it is for yet. This binds every markdown artifact the job ships (carl's standing steering: most generated text goes unread, so every generation must be impactful).
+- **The set root is carl-facing ONLY.** Internal reference material — working notes, agent reports, scratch data, anything outside the numbered set (the numbered files themselves are set members) — never lands in the set root; scratch paths own those. An internal file there is noise on the board wearing an artifact's clothes.
 
 ## Diagrams, when a round calls for one
 
