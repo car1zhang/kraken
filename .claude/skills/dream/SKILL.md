@@ -133,7 +133,12 @@ pressing escape), `<synthetic>` API failures, output-ceiling deaths (`MaxTokensS
 at stop_reason max_tokens, the failure that burns a whole budget while reading as a clean session),
 turn durations, literally repeated calls, and the four
 **token counters** (`In`, `Out`, `CacheWrite`, `CacheRead`) per session plus a roll-up across the
-whole sweep. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
+whole sweep. Two counter caveats, both measured, for anything you build on those numbers:
+`ErrorCounts` includes the benign tail-exit-1 shape (a `;`-compound whose last command is a grep
+that matched nothing — every wanted byte arrived, exit 1 anyway) while missing aborts that exit 0,
+so read an error cluster as a hypothesis about command SHAPES rather than as N failures; and
+`RepeatedCalls` keys `Read`/`Edit` on file path alone, so careful paged reads of one large file and
+distinct edits to one file both present as repetition. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
 — user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
 which is about an eighth of the bytes. Carl's MID-TURN messages — typed while a turn was running,
 the course corrections that matter most to the prompting-feedback output — are stored as queue
