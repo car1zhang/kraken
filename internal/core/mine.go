@@ -667,6 +667,11 @@ func mineInputSummary(input json.RawMessage) string {
 // encoding/json returns only AFTER decoding the rest — so the error is
 // deliberately ignored and the fields that did decode are used, matching
 // summarizeInput's type-assertion skip.
+//
+// Redaction runs BEFORE truncation on every return path: truncating first
+// can cut a credential to a fragment below its shape's minimum length, and
+// the fragment then walks through the redactor — the exact case is a Slack
+// cookie sitting past rune 100 of a `printf … >> slack.env` command.
 func mineInputSummaryN(input json.RawMessage, window int) string {
 	if len(input) == 0 {
 		return ""
@@ -689,20 +694,20 @@ func mineInputSummaryN(input json.RawMessage, window int) string {
 		// command WAS only boilerplate, keep the original rather than an
 		// empty signature.
 		if cmd := shellBoilerplateRE.ReplaceAllString(k.Command, ""); strings.TrimSpace(cmd) != "" {
-			return TruncateOneLine(cmd, window)
+			return TruncateOneLine(redactSecrets(cmd), window)
 		}
-		return TruncateOneLine(k.Command, window)
+		return TruncateOneLine(redactSecrets(k.Command), window)
 	}
 	for _, s := range []string{k.FilePath, k.Path, k.Pattern, k.Description, k.Prompt, k.Query, k.URL, k.Skill} {
 		if s != "" {
-			return TruncateOneLine(s, window)
+			return TruncateOneLine(redactSecrets(s), window)
 		}
 	}
 	raw := input
 	if len(raw) > mineRawSummaryCap {
 		raw = raw[:mineRawSummaryCap] // TruncateOneLine keeps only the window of it
 	}
-	return TruncateOneLine(string(raw), window)
+	return TruncateOneLine(redactSecrets(string(raw)), window)
 }
 
 // reducer applies the reduction rules, one JSONL line at a time. Its line
@@ -946,11 +951,55 @@ func writeUserish(out *bytes.Buffer, text string) {
 // silently handed a fragment.
 const mineTextCap = 64 * 1024
 
+// secretRE matches the token shapes that are unambiguous at a glance —
+// vendor-prefixed credentials (Slack xox*, OpenAI/Anthropic sk-*, GitHub
+// gh?_/github_pat_, AWS AKIA) plus JWTs (two or more dot-separated base64url
+// parts; the header arm's floor is 10 so a compact `{"alg":"HS256"}` header
+// still matches). Deliberately prefix-keyed and nothing looser: a generic
+// `key=<long value>` rule would redact code and prose that merely talk about
+// tokens, and a reader of the reduced view needs those discussions intact.
+// The Slack charset carries the full base64 alphabet plus `%`: a `d` cookie
+// pasted from DevTools arrives DECODED, so `+`, `/` and `=` appear literally
+// in the body — with them outside the class, the match stopped at the first
+// one and the cookie's high-entropy tail was emitted verbatim (or, with one
+// inside the first 8 chars, the cookie never matched at all). None of the
+// three can START a match, so admitting them only extends redaction.
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+
+// mineRedactKeep is how many runes of a matched credential the marker keeps:
+// long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough
+// that no shape's value bytes survive — every arm's minimum match is 13+
+// runes, so the slice is always in bounds. (For the longer prefixes —
+// `github_pat_`, `sk-ant-` — five runes keeps less than the full kind; the
+// marker identifies that a credential was here, not which kind.)
+const mineRedactKeep = 5
+
+// redactSecrets replaces each credential-shaped token with its leading
+// mineRedactKeep runes plus a redaction marker. It runs at both readers'
+// emission points — writeReduced and callSignature (via mineInputSummaryN)
+// for the reduced view, and callIdentity (same path) for the digest's
+// RepeatedCalls keys, the only transcript-derived free text SessionDigest
+// carries — because those outputs are what every dream reader and the graph
+// ingest copy out of a transcript: a secret pasted into a pane once would
+// otherwise be re-copied into a fresh transcript, and from there into
+// kraken.db, on every later sweep that touches the session. Redacting at
+// emission cannot claw back the original transcript — Claude Code owns that
+// file — but it ends the propagation.
+func redactSecrets(s string) string {
+	return secretRE.ReplaceAllStringFunc(s, func(m string) string {
+		r := []rune(m)
+		if len(r) > mineRedactKeep {
+			r = r[:mineRedactKeep]
+		}
+		return string(r) + "…[redacted]"
+	})
+}
+
 // writeReduced appends one labelled section, skipping blanks and the
 // harness-injected <system-reminder> parts that ride along in user records
 // but are not the user speaking.
 func writeReduced(out *bytes.Buffer, label, text string) {
-	t := strings.TrimSpace(text)
+	t := redactSecrets(strings.TrimSpace(text))
 	if t == "" || strings.HasPrefix(t, "<system-reminder>") {
 		return
 	}

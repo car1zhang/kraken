@@ -936,3 +936,86 @@ func TestReduceTranscriptMissingFile(t *testing.T) {
 		t.Error("want error for a missing transcript")
 	}
 }
+
+// TestReduceTranscriptRedactsSecrets: the reduced view is what every dream
+// reader and the graph ingest copy OUT of a transcript, so a credential
+// pasted into a pane once would be re-copied into a fresh transcript on
+// every later sweep that touches the session. Emission redacts
+// vendor-prefixed token shapes in prose and in tool-call summaries, keeping
+// a short identifying prefix; prose that merely talks about tokens, and
+// names that share a prefix with one (sk-learn), pass through untouched.
+func TestReduceTranscriptRedactsSecrets(t *testing.T) {
+	const slackTok = "xoxc-1111111111111-2222222222222-3333333333333-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const cookie = "xoxd-HYd6B4%2Fabcdefghijklmnop"
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	path := mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess.jsonl",
+		mineUser(t, now-5000, "here you go: "+slackTok),
+		mineAssistant(t, now-4000, "claude-opus-5",
+			mineText("adding the cookie line now; sk-learn stays, and the docs say ghp_ tokens rotate"),
+			mineToolUse("t1", "Bash", map[string]any{"command": "printf 'SLACK_D_COOKIE=" + cookie + "' >> ~/.kraken/slack.env"}),
+		),
+	)
+
+	out, err := ReduceTranscript(path, since)
+	if err != nil {
+		t.Fatalf("ReduceTranscript: %v", err)
+	}
+	got := string(out)
+	for _, leaked := range []string{slackTok, cookie} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("reduced output leaked a credential with prefix %q", leaked[:8])
+		}
+	}
+	for _, want := range []string{"xoxc-…[redacted]", "xoxd-…[redacted]", "sk-learn", "ghp_ tokens"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reduced output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestRedactSecretsSurvivesSummaryTruncation: redaction must run before the
+// call-summary truncation windows, not after — a credential sitting past
+// rune 100 of a Bash command would otherwise be CUT to a fragment too short
+// to match any shape, and the fragment would walk through the redactor into
+// both callSignature and callIdentity output (the review probe that found
+// it: `printf 'SLACK_D_COOKIE=xoxd-HYd` — truncated, unmatched, emitted).
+func TestRedactSecretsSurvivesSummaryTruncation(t *testing.T) {
+	pad := strings.Repeat("x", 90)
+	input := json.RawMessage(`{"command":"echo ` + pad + ` && printf 'SLACK_D_COOKIE=xoxd-HYd6B4%2Fabcdefghijklmnopqrstuvwxyz' >> ~/.kraken/slack.env"}`)
+	for _, got := range []string{callSignature("Bash", input), callIdentity("Bash", input)} {
+		if strings.Contains(got, "xoxd-H") {
+			t.Errorf("summary leaked a credential fragment: %q", got)
+		}
+	}
+	if got := callIdentity("Bash", input); !strings.Contains(got, "xoxd-…[redacted]") {
+		t.Errorf("identity summary missing redaction marker: %q", got)
+	}
+}
+
+// TestRedactSecrets: the prefix rule must redact every vendor shape whole —
+// including a compact-header JWT (`{"alg":"HS256"}` is 17 chars after eyJ,
+// which a 20-char floor silently missed) — while leaving prose that merely
+// talks about tokens, and prefix-sharing names like sk-learn, untouched.
+func TestRedactSecrets(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaa done", "sk-an…[redacted] done"},
+		{"github_pat_11AAAAAAA0aaaaaaaaaaaaaa", "githu…[redacted]"},
+		{"key AKIAIOSFODNN7EXAMPLE end", "key AKIAI…[redacted] end"},
+		{"jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0", "jwt eyJhb…[redacted]"},
+		{"compact eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig", "compact eyJhb…[redacted]"},
+		{"d=xoxd-9Aa1Bb2C/c3Dd4Ee+5Ff6Gg7Hh8Ii9Jj0Kk=", "d=xoxd-…[redacted]"},
+		{"d=xoxd-AA+BBBBBBBBBBBBBBBBBBBBBBBBBB", "d=xoxd-…[redacted]"},
+		{"plain prose about a session token and a cookie", "plain prose about a session token and a cookie"},
+		{"use sk-learn and deriveState()", "use sk-learn and deriveState()"},
+		{"branch sk-abcdefghijklmno stays", "branch sk-abcdefghijklmno stays"},
+		{"key sk-abcdefghijklmnop goes", "key sk-ab…[redacted] goes"},
+	}
+	for _, c := range cases {
+		if got := redactSecrets(c.in); got != c.want {
+			t.Errorf("redactSecrets(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
