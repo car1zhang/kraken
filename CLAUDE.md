@@ -185,6 +185,17 @@ the `core.ErrNoEmbedder` posture. The key's VALUE must never reach a log, an
 event, a status file, an error message, a job body, or a notification — only
 its name, and only to say it is missing, exactly the OPENAI and ASC rules
 above.
+The value-never-logged rule has a conversational half, and it binds every
+agent for every credential in this table: never INVITE a secret's value into
+the pane. When a credential file needs writing, hand carl the
+`printf '…' >> ~/.kraken/<file>.env && chmod 600 …` line to run himself —
+"paste it here and I'll write the file" puts the value into a Claude
+transcript, which later readers of that session (the dream sweep, the graph
+ingest) then copy forward into new transcripts and kraken.db indefinitely.
+`core.redactSecrets` scrubs known token shapes from both readers' emission
+points — the reduced view's prose and tool lines, and the digest's
+`RepeatedCalls` keys — as a backstop, but the invitation is the defect: a
+transcript, once written, is Claude-owned and cannot be clawed back.
 
 ## Conventions
 
