@@ -87,6 +87,11 @@ func TestZeusBrief(t *testing.T) {
 		"do NOT invoke /pr by name",
 		// no self-polling, and a merge is not completion
 		"bumps your pane", "never ends the job",
+		// carl's steering (2026-08-04): most generated text goes unread, so
+		// the final message's FIRST sentence must be the whole TLDR — the
+		// board's detail line is all he reads, and a message whose point sits
+		// in paragraph two is a message that never reached him
+		"FIRST sentence as the whole TLDR",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("brief missing %q", want)
@@ -320,6 +325,25 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // fit the legend and the anti-inflation line a review round added — rather than
 // the constant being moved a fourth time.
 //
+// RESTATED 2026-08-04 for the TLDR-first rule, under the same standing
+// instruction. carl's steering: most generated text goes unread, so the final
+// message's FIRST sentence must be the whole TLDR — an every-turn rule, which
+// is what earns it brief residency. The clause cost 98 bytes and was paid for
+// by trims rather than a raise: "whatever you write as"/"by"/"plainly"/
+// "automatically" dropped from its own paragraph plus "which the job board
+// shows as" shortened to "shown on the job board as", "directly" from the
+// first clause, "yourself"/"somehow" from the image line, "own" from the
+// side-thread line — the ceiling did NOT move. Measured: the brief went from
+// 13,469 to **13,487** at the 48-char slug, leaving **13** under the ceiling
+// (48-char basis only; the interpolation count is unchanged at nine, so other
+// bases follow at 9 bytes per slug character). Thirteen bytes means the
+// trim-first rule below is now literal: nothing lands anywhere in zeusBrief
+// without a same-size deletion. The artifact half of the same steering (every
+// md artifact opens with a one-liner stating its main message) lives in the
+// five artifact-shipping skills, pinned by TestSkillsCarryTldrRule — it is
+// per-artifact procedure, not per-turn contract, so it takes no brief bytes
+// at all.
+//
 // AND THE CONDITION FOR THE NEXT ONE, because a gate that has never once
 // answered no is a ratchet with good prose attached. This number has gone
 // 10,000 -> 12,000 -> 13,000 -> 13,500 with three raises and zero refusals,
@@ -340,10 +364,10 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // the brief; do not trust the last one written down, including this one.
 //
 // And at the headroom the restatement above records, "the next brief change is
-// a trim" stops being advice and becomes arithmetic: 31 bytes is a short
-// sentence. Any clause added anywhere in zeusBrief has to be paid for by a
+// a trim" stops being advice and becomes arithmetic: 13 bytes is a couple of
+// words. Any clause added anywhere in zeusBrief has to be paid for by a
 // deletion somewhere in it, and the paragraph the clause belongs to is where
-// to look first — that is how both of this change's own trims were found.
+// to look first — that is how the 2026-07-31 change's own trims were found.
 //
 // What the net still catches is unchanged, and the scale is worth stating
 // because it is what makes the ceiling a bound rather than a formality: the
@@ -984,6 +1008,30 @@ func TestSkillsCarryColourRule(t *testing.T) {
 					"exemptions and the decision procedure live in the contract and are deliberately not "+
 					"copied here, so dropping the pointer drops them from this path entirely", skill, pointer)
 			}
+		}
+	}
+}
+
+// TestSkillsCarryTldrRule pins carl's impactful-generation steering
+// (2026-08-04) in every skill that ships a markdown artifact: each md artifact
+// opens with a one-liner stating its main message — what it TELLS carl, never
+// what it contains — so a reader who stops at line one still leaves with the
+// point. The phrase is asserted verbatim in all five because the rule is the
+// same rule everywhere, and five paraphrases would drift into five different
+// bars (the hard-wrap rule already reads three different ways across the four
+// skills that carry it). The match runs on whitespace-normalized text because
+// graph/SKILL.md hard-wraps its bullets — a reflow that splits the phrase
+// across a line break would otherwise fail this test while the rule is still
+// fully present. The brief's half of the same steering (FIRST sentence of the
+// final message = the whole TLDR) is pinned in TestZeusBrief; this test owns
+// the artifact half.
+func TestSkillsCarryTldrRule(t *testing.T) {
+	for _, skill := range []string{"aim", "info", "do", "dream", "graph"} {
+		src := strings.Join(strings.Fields(readRepoSkill(t, skill)), " ")
+		if !strings.Contains(src, "opens with a one-liner stating its main message") {
+			t.Errorf(".claude/skills/%s/SKILL.md dropped the artifact TLDR rule — every md artifact "+
+				"must open with a one-liner stating its main message (carl reads that line and often "+
+				"nothing else; an artifact without it is one that never reached him)", skill)
 		}
 	}
 }

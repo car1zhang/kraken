@@ -120,7 +120,7 @@ Take the artifact set produced by [[aim]] earlier in this conversation — `00-o
 ### 7. Write The Build Report
 
 Always write **one brief artifact** recording what actually happened: `90-build-report.md` in the
-set root (in a kraken cell: `<cellDir>/artifacts/90-build-report.md`). Never hard-wrap its prose: one paragraph — and one bullet, and one table row — is ONE source line, however long; a mid-sentence line break renders as a broken paragraph on the board, and it is a repeat complaint from carl. The `90` band sorts it last,
+set root (in a kraken cell: `<cellDir>/artifacts/90-build-report.md`). Like every md artifact, it opens with a one-liner stating its main message — the headline delta between plan and reality, or "shipped as planned" when that is the truth — before any section, so a reader who stops there still has the point. Never hard-wrap its prose: one paragraph — and one bullet, and one table row — is ONE source line, however long; a mid-sentence line break renders as a broken paragraph on the board, and it is a repeat complaint from carl. The `90` band sorts it last,
 after the overview, the cards, and the section docs. Write it even when the implementation went
 exactly to plan, and even when there was no `/aim` set to begin with (a job spec implemented
 directly is still a plan reality can diverge from).

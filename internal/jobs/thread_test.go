@@ -1101,6 +1101,7 @@ func TestThreadBriefStatesTheContract(t *testing.T) {
 		{"unrestricted", "it should not ask for permissions it already has"},
 		{"no subagents", "one agent, one pane"},
 		{"own pane", "there is no other channel to carl"},
+		{"lead every answer with its tldr", "carl's steering: the first sentence alone must carry the answer"},
 	} {
 		if !strings.Contains(lower, strings.ToLower(want.token)) {
 			t.Errorf("thread brief is missing %q (%s):\n%s", want.token, want.why, brief)

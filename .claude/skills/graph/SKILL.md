@@ -331,7 +331,8 @@ unchanged.
 When a kraken job brief sends you here, these deltas apply — the brief wins wherever it is more
 specific, and it is the only place the cell's real paths appear:
 
-- **The report goes in the brief's SET ROOT** (`<cellDir>/artifacts/`) as `00-graph-report.md`. Keep
+- **The report goes in the brief's SET ROOT** (`<cellDir>/artifacts/`) as `00-graph-report.md`. Like
+  every md artifact, it opens with a one-liner stating its main message — the run's headline. Keep
   it to a page: what was ingested (or revised), the judgment calls, what you refused to add and why,
   what the connectivity sweep linked and what it walked but refused (ingest mode only; sweep edges
   count toward the closing line's fact count), and any episode you closed without extracting from.
