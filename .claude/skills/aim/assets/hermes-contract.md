@@ -513,6 +513,8 @@ lines with it. Where the line goes:
 | a large box whose name already wraps | may move the kind into an adjacent `pill` (Parts Catalog → Pill / tag), just outside the box's top edge or corner, never overlapping the name |
 | `pill`, `decision`, `lane`, `region`, `cell`, `actor` | nowhere — parts, not components |
 
+**Function names carry their parens.** Wherever a diagram names a function or method — a `fn` box's name line, another box's label, an edge label, a note — the name ends in `()`: `deriveState()`, `get_appointments()`, never a bare `deriveState`. The parens are what let a reader tell a callable from a value, a field, or a table at a glance; the kind line saying `function` does not travel with the name when it is mentioned elsewhere. A name that wraps across tspans keeps the `()` on its final fragment, and a label naming several functions suffixes each one.
+
 ### Silhouette snippets
 
 One entry per silhouette, each copy-paste-ready and each already carrying its kind text line.
