@@ -52,8 +52,10 @@ import (
 // intake bot's two tables — slack_inbox (one row per seen message, carrying
 // the whole seen → delivered → acked lifecycle) and slack_marks (the
 // per-conversation `ts` watermarks that make polling incremental) — and
-// touches nothing else (see schemaV17).
-const schemaVersion = 17
+// touches nothing else (see schemaV17). Version 18 adds linear_issues, the
+// Linear intake pass's one-row-per-issue dedupe and delivery-watermark table
+// (see schemaV18 and store/linear.go).
+const schemaVersion = 18
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1025,6 +1027,51 @@ CREATE TABLE slack_marks (
 );
 `
 
+// schemaV18 adds linear_issues: one row per Linear issue the intake pass has
+// ever processed. One brand-new table, no hook — there is nothing anywhere to
+// migrate forward, and an ABSENT row correctly means "never seen", which is
+// what every issue is on the day the feature is first configured.
+//
+// Purely additive: no existing table, column or row is touched, so a database
+// that never gets a LINEAR_API_KEY carries one empty table and is otherwise
+// byte-identical to a v17 one.
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - issue_id is Linear's issue UUID and the PRIMARY KEY, deliberately not
+//     the human identifier: ENG-142 changes when an issue moves team, and the
+//     UUID is what makes "have I seen this before?" survive that.
+//   - job_id defaults to 0, which is a real answer rather than a missing one —
+//     "processed, no job created" — with skip_reason carrying why. There is no
+//     sentinel for "not yet decided" because the row is only written once the
+//     decision is made (store/linear.go's PutLinearIssue is insert-only).
+//   - last_event_at is the delivery watermark, defaulting to 0 so a row
+//     written for a skipped issue needs no value for it.
+//   - identifier and created_at are the two columns with NO default: both are
+//     known at insert time and a row missing either would be a bug the schema
+//     can catch for free.
+//   - NO foreign key and NO cascade on job_id, the job_tokens rule exactly:
+//     the row must outlive the job, or archiving one would hand the issue back
+//     to the next poll to create all over again.
+//
+// No index beyond the primary key. The two reads are a point lookup on
+// issue_id (served by the PK) and a full listing; there is no third query to
+// cover, and this table's row count is bounded by tickets carl is assigned.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v17, long past
+// the point where editing an earlier step would ever run again.
+const schemaV18 = `
+CREATE TABLE linear_issues (
+	issue_id      TEXT    PRIMARY KEY,          -- Linear's issue UUID
+	identifier    TEXT    NOT NULL,             -- the human key, e.g. ENG-142
+	job_id        INTEGER NOT NULL DEFAULT 0,   -- 0 = no job created; skip_reason says why
+	skip_reason   TEXT    NOT NULL DEFAULT '',
+	created_at    INTEGER NOT NULL,             -- unix millis: when kraken processed it
+	last_event_at INTEGER NOT NULL DEFAULT 0    -- unix millis: newest Linear event already delivered
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1076,9 +1123,12 @@ type migrationStep struct {
 // migrations[17] adds the Slack intake bot's slack_inbox and slack_marks
 // tables (no hook — two brand-new tables with no prior home for their data,
 // and an empty inbox is exactly the state a database that predates the
-// feature is in; see schemaV17).
+// feature is in; see schemaV17);
+// migrations[18] adds linear_issues (no hook — a brand-new table has nothing to
+// migrate forward, and an absent row correctly means "never seen"; see
+// schemaV18).
 // Future schema changes append
-// migrations[18], migrations[19], ... rather than editing an existing
+// migrations[19], migrations[20], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1099,6 +1149,7 @@ var migrations = map[int]migrationStep{
 	15: {sql: schemaV15},
 	16: {sql: schemaV16, hook: migrateV16Watchlist},
 	17: {sql: schemaV17},
+	18: {sql: schemaV18},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

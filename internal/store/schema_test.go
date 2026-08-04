@@ -24,13 +24,30 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v18: drop linear_issues. Nothing to put back — v18 is a single
+	// additive CREATE over a v17 shape that had no such table, so the drop is
+	// the whole reversal.
+	//
+	// This block is why schemaV18's DDL is a bare CREATE rather than a
+	// CREATE IF NOT EXISTS: replaying a migration over a database that already
+	// has its table is a shape only this helper can produce, and the remedy
+	// belongs here rather than in a production guard that would also swallow a
+	// genuinely unexpected table at Open().
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 18 {
+		if _, err := s.db.Exec(`DROP TABLE linear_issues`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v18): %v", target, err)
+		}
+	}
 	// Reverse v17: drop the Slack intake bot's two tables. Both are brand new
 	// at v17 (schemaV17 adds them and touches nothing else), so there is
 	// nothing to put back in their place and no rows to carry — the same
 	// situation as the v15 arm below, and the same ruling: this helper
 	// reproduces an older SHAPE.
 	//
-	// Reversed FIRST, before the v16 arm, because downgrades unwind
+	// Reversed after v18, for that block's reason: downgrades unwind
 	// newest-first, mirroring the order migrate() applies them.
 	if target < 17 {
 		for _, stmt := range []string{
@@ -54,8 +71,8 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	// helper reproduces an older SHAPE, and a test that wants pre-migration
 	// rows seeds them after this call.
 	//
-	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
-	// migrate() applies them.
+	// Reversed after v17, for that block's reason: downgrades unwind
+	// newest-first, mirroring the order migrate() applies them.
 	if target < 16 {
 		for _, stmt := range []string{
 			`DROP TABLE kg_watch`,
