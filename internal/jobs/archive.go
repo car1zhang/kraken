@@ -3,6 +3,7 @@ package jobs
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -203,8 +204,9 @@ func releaseCellWorktree(j *Job) error {
 	// --force only relaxes its clean-tree requirement. We are dropping the
 	// REGISTRATION and keeping the files — archive is reversible, and a
 	// worktree can hold plenty git never reports as dirty (build outputs,
-	// node_modules, the cell's own .claude/settings.json — all gitignored,
-	// so `status --porcelain` says nothing about them).
+	// node_modules — gitignored, so `status --porcelain` says nothing about
+	// them; kraken's own settings merge and skill materialization DO show
+	// up, and worktreeDirty filters exactly those two write shapes).
 	//
 	// Deregistering is deleting the admin dir git keeps for this worktree
 	// under <repo>/.git/worktrees/<name>, then pruning so git forgets it.
@@ -236,12 +238,107 @@ func releaseCellWorktree(j *Job) error {
 // clean. An error means the question could not be answered — callers treat
 // that as "not proven dirty" rather than blocking an archive on a git that
 // would not run.
+//
+// Kraken's OWN writes are filtered out before deciding. installHookSettings
+// merges `.claude/settings.json` in every cell worktree and skill
+// materialization drops `.claude/skills/` beside it — and in repos that
+// TRACK `.claude/settings.json` (monolith does) that merge shows up as a
+// porcelain ` M` line on every cell forever. Unfiltered, that line made
+// archiving ANY such job with a live worktree refuse with a message naming
+// only files kraken itself wrote, which no amount of carl-side hygiene can
+// fix. The filter is deliberately narrower than "anything under .claude/":
+// the skills tree is filtered only on UNTRACKED (`??`) lines AND only for a
+// skill name kraken actually ships (isEmbeddedSkill). Untracked, because
+// that is the only status kraken's materialization can produce
+// (installSkills skips any skill the repo tracks) — a ` M .claude/skills/…`
+// line is an agent EDITING a tracked skill, which in the kraken repo is
+// exactly a dream job's uncommitted deliverable and must still refuse. And
+// name-checked, because an untracked skill kraken does not ship is an agent
+// AUTHORING a new one, which is that same deliverable arriving as a new
+// file rather than an edit. settings.json
+// is filtered at any status: tracked-and-merged in monolith (` M`),
+// created-fresh elsewhere (`??`, sometimes collapsed to `?? .claude/` when
+// the repo had no .claude at all). Rename lines are never filtered — kraken
+// renames nothing, so a rename touching these paths is real work.
 func worktreeDirty(repo, wt string) (string, error) {
 	out, err := exec.Command("git", "-C", wt, "status", "--porcelain").Output()
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	var kept []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if isKrakenWorktreeDirt(line) {
+			continue
+		}
+		if strings.TrimSpace(line) != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n"), nil
+}
+
+// isKrakenWorktreeDirt reports whether one porcelain status line names only
+// a write kraken itself makes into every cell worktree. See worktreeDirty's
+// comment for why the skills arm is untracked-only.
+func isKrakenWorktreeDirt(line string) bool {
+	if len(line) < 4 {
+		return false
+	}
+	status := line[:2]
+	path := strings.TrimSpace(line[2:])
+	if strings.Contains(path, " -> ") {
+		return false // a rename is never kraken's write
+	}
+	path = strings.Trim(path, `"`)
+	if path == ".claude/settings.json" {
+		return true
+	}
+	if status != "??" {
+		return false
+	}
+	// untracked-only from here: kraken's materialization, plus the collapsed
+	// directory form a repo with no .claude/ at all produces
+	if path == ".claude/" || path == ".claude" {
+		return true
+	}
+	rest, ok := strings.CutPrefix(path, ".claude/skills/")
+	if !ok {
+		return false
+	}
+	// ...and only for a skill kraken actually ships. A line naming anything
+	// else is an agent AUTHORING a new skill, which is a dream or aim job's
+	// own deliverable and must still refuse. The bare `.claude/skills/` form
+	// is git collapsing a wholly-untracked directory, which is exactly what
+	// kraken's materialization creates in a repo that tracks none of them
+	// (monolith); there the collapse is all-or-nothing and a new
+	// agent-authored skill rides inside it — unavoidable at that
+	// granularity, and the tracked-edit case is the one that mattered.
+	if rest == "" {
+		return true
+	}
+	name, _, _ := strings.Cut(strings.TrimSuffix(rest, "/"), "/")
+	return isEmbeddedSkill(name)
+}
+
+// isEmbeddedSkill reports whether name is one of the skill directories
+// SkillsFS carries — the exact set installSkills materializes, read from the
+// same source rather than from a hand-kept list that could drift from it. A
+// nil SkillsFS (a test binary that never linked the embed) answers false,
+// which errs toward refusing an archive rather than filtering a real edit.
+func isEmbeddedSkill(name string) bool {
+	if SkillsFS == nil || name == "" {
+		return false
+	}
+	entries, err := fs.ReadDir(SkillsFS, ".")
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && e.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 // UnarchiveJob moves an archived job back into the active job set under its
