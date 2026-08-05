@@ -752,12 +752,13 @@ var recallHookEvents = []string{"UserPromptSubmit", "PostToolUse"}
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
 //
-// It renders THREE kraken groups across TWO hook events: the pr-hook group
-// under PostToolUse, and a recall group under each of recallHookEvents —
-// which includes PostToolUse, so that key ends up holding the pr-hook group
-// AND a recall group side by side. The two kinds use DIFFERENT merge rules
-// and the difference is deliberate — pr-hook appends when its exact command
-// is absent, recall REPLACES — for the reason spelled out at the recall loop
+// It renders FOUR kraken groups across THREE hook events: the pr-hook group
+// under PostToolUse, the bash-lint group under PreToolUse, and a recall
+// group under each of recallHookEvents — which includes PostToolUse, so that
+// key ends up holding the pr-hook group AND a recall group side by side. The
+// two kinds use DIFFERENT merge rules and the difference is deliberate —
+// pr-hook and bash-lint append when their exact command is absent, recall
+// REPLACES — for the reason spelled out at the recall loop
 // below; the non-obvious consequence is that the recall loop runs its removal
 // pass over the very list the pr-hook append just wrote, which is why
 // withoutRecallHooks must never match a pr-hook command. Either way, groups
@@ -773,14 +774,8 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	if !ok {
 		hooks = map[string]any{}
 	}
-	postToolUse, ok := hooks["PostToolUse"].([]any)
-	if !ok {
-		postToolUse = nil
-	}
-	command := prHookCommand(slug, krakenBin)
-	if !hasHookCommand(postToolUse, command) {
-		hooks["PostToolUse"] = append(postToolUse, krakenHookEntry(slug, krakenBin))
-	}
+	ensureHookGroup(hooks, "PostToolUse", prHookCommand(slug, krakenBin), krakenHookEntry(slug, krakenBin))
+	ensureHookGroup(hooks, "PreToolUse", bashLintCommand(krakenBin), bashLintHookEntry(krakenBin))
 	// The recall hook (recall.go) is REPLACED rather than appended-if-absent,
 	// which is the one place this function's two halves differ. PostToolUse's
 	// entry is keyed by slug AND binary path, so an exact-command match is a
@@ -813,6 +808,30 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 		return nil, err
 	}
 	return append(out, '\n'), nil
+}
+
+// ensureHookGroup appends entry to hooks[kind] unless some group there
+// already carries exactly command (hasHookCommand) — the one shared
+// implementation of the append-if-absent dance kraken's two matcher hooks
+// do, so a third is a one-liner. It does NOT assign parsed["hooks"]; the
+// caller does that once, unconditionally, at the end.
+//
+// A hooks[kind] that EXISTS but is not a JSON array is left alone entirely:
+// overwriting it would clobber a repo's own (however malformed) config, the
+// exact move mergeHookSettings promises not to make. The recall loop below
+// is deliberately not routed through this — it REPLACES rather than
+// appends, for the reason stated there.
+func ensureHookGroup(hooks map[string]any, kind, command string, entry map[string]any) {
+	groups, ok := hooks[kind].([]any)
+	if !ok {
+		if _, exists := hooks[kind]; exists {
+			return
+		}
+		groups = nil
+	}
+	if !hasHookCommand(groups, command) {
+		hooks[kind] = append(groups, entry)
+	}
 }
 
 // mergeTeammateSettings turns on the agent-teams backing that zeus' brief
