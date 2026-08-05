@@ -105,6 +105,14 @@ var graphFacts = searchFacts
 // outgrows this and vector-only recall turns out to matter at spawn time, the
 // fix is a daemon-owned slab cache — this package is the right owner, since
 // it is the one with process state — not a bigger number here.
+//
+// Since mid-conversation recall (recall.go) retrieves through the same
+// searchFacts seam, this bound now also governs a caller that runs on every
+// user prompt AND every distinct assistant message of every live session —
+// recall's same-query short-circuit is what holds it to that rate rather
+// than to the raw per-tool-call one — which makes the number more
+// load-bearing than it was, not less. The bound itself is unchanged: the
+// same argument holds a fortiori at that frequency.
 const graphVectorLegMaxEdges = 10_000
 
 // searchFacts runs the retrieval and flattens it to the edges the block
@@ -114,7 +122,11 @@ func searchFacts(st *store.Store, vec []float32, query string) []store.GraphEdge
 		// One extra COUNT against a table the spawn is about to search
 		// anyway, next to a `git worktree add`. An unreadable stats query
 		// drops the vector leg rather than the search: BM25 alone still
-		// answers, and this is the spawn path.
+		// answers, and this is the spawn path. Recall (recall.go) calls
+		// through here too, where the comparison is not a worktree add but a
+		// single indexed COUNT per retrieval — once per prompt or distinct
+		// assistant message after its short-circuit, still cheap, and still
+		// the same degradation when it fails.
 		stats, err := st.GetGraphStats()
 		if err != nil || stats.LiveEdges > graphVectorLegMaxEdges {
 			vec = nil
@@ -156,13 +168,37 @@ func graphContext(j *Job) string {
 	if len(edges) == 0 {
 		return ""
 	}
-	terms := core.ContentTerms(spec)
+	// nil skip set: a spawn has no session yet, so there is nothing this
+	// conversation could already have been told. The rendered-id list is
+	// discarded for the same reason — a spawn records no delivery, since the
+	// session that would own the record does not exist until claude starts.
+	block, _ := renderGraphBlock(keepRelevantFacts(edges, vec, core.ContentTerms(spec), nil))
+	return block
+}
+
+// keepRelevantFacts is THE keep-gate: which of the retrieved edges are worth
+// putting in front of an agent. Both injection paths run it — graphContext
+// above (spawn time, nil skip set) and Recall (mid-conversation, skipping
+// whatever this session already got) — and it is one function rather than two
+// loops on purpose. The gate is four separate judgments stacked (world time,
+// renderability, duplicate wording, relevance) and a second copy of that stack
+// would drift silently: the injected block would start meaning slightly
+// different things depending on which path produced it, with nothing that
+// fails when it does.
+//
+// skip is a set of edge ids the caller has already delivered; nil means
+// "nothing delivered", which is the spawn path's answer and keeps this call
+// byte-identical to the loop it replaced.
+func keepRelevantFacts(edges []store.GraphEdge, vec []float32, terms map[string]bool, skip map[int64]bool) []store.GraphEdge {
 	now := time.Now().UnixMilli()
 	var kept []store.GraphEdge
 	seen := map[string]bool{}
 	for _, e := range edges {
 		if len(kept) >= graphContextFacts {
 			break
+		}
+		if skip[e.ID] {
+			continue
 		}
 		// A fact whose world-time window has CLOSED is not current knowledge,
 		// however system-time live the row is — the API deliberately accepts
@@ -185,7 +221,7 @@ func graphContext(j *Job) string {
 		seen[strings.ToLower(fact)] = true
 		kept = append(kept, e)
 	}
-	return renderGraphBlock(kept)
+	return kept
 }
 
 // cachedSpecVector reads the job's cached spec embedding. Every failure —
@@ -226,13 +262,19 @@ const graphContextHeader = "\nKnown from past work (may be stale — verify befo
 // Returns "" when nothing fits, including the case where the header plus the
 // first fact already exceeds the cap: a header with no facts under it claims
 // the graph knows something and then says nothing.
-func renderGraphBlock(edges []store.GraphEdge) string {
+//
+// The second return is the edge ids whose lines the block ACTUALLY carries,
+// which is not the same list as the input: the byte cap below skips a fact
+// that would overflow and takes the next one instead. Recall (recall.go) marks
+// exactly these as delivered, so a skipped fact stays eligible for a later
+// firing. graphContext ignores it — a spawn records nothing.
+func renderGraphBlock(edges []store.GraphEdge) (string, []int64) {
 	if len(edges) == 0 {
-		return ""
+		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString(graphContextHeader)
-	n := 0
+	var rendered []int64
 	for _, e := range edges {
 		line := factLine(e)
 		if b.Len()+len(line) > graphContextBytes {
@@ -246,12 +288,12 @@ func renderGraphBlock(edges []store.GraphEdge) string {
 			continue
 		}
 		b.WriteString(line)
-		n++
+		rendered = append(rendered, e.ID)
 	}
-	if n == 0 {
-		return ""
+	if len(rendered) == 0 {
+		return "", nil
 	}
-	return b.String()
+	return b.String(), rendered
 }
 
 // factLine renders one fact. The episode id and the sighting count are what

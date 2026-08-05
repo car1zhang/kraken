@@ -67,6 +67,51 @@ func cmdPrHook(args []string) {
 	jobs.PrHook(slug)
 }
 
+// --- recall-hook ---
+
+// cmdRecallHook is the thin dispatch wrapper for `kraken recall-hook` — a
+// Claude Code UserPromptSubmit/PostToolUse hook (jobs.RunRecallHook does the
+// work),
+// machinery rather than a user-facing verb, so it stays out of usage()
+// exactly as pr-hook does. It takes no slug: recall is keyed on the session
+// the payload names, not on the job whose worktree the hook fired in.
+//
+// It always returns (never util.Die, never a non-zero exit): a hook that
+// fails a turn is a bug by definition, and RunRecallHook already reports
+// every problem to stderr.
+//
+// --serve-addr/--db-path are handled exactly as cmdPrHook handles them, and
+// for the same reason — this is a fresh OS process spawned by the hook
+// command string, inheriting none of kraken serve's flags or env, so
+// anything serve resolved that differs from the defaults has to arrive as an
+// argument. Setting the equivalent env var for the rest of this one-shot
+// process is simplest: jobs.ServeBaseURL already reads KRAKEN_SERVE_ADDR
+// exactly this way. --db-path is inert here — recall-hook opens no database,
+// it POSTs — and is accepted only for symmetry with pr-hook, so the two verbs
+// take the same flags and recallHookCommand can mirror prHookCommand without
+// a carve-out.
+func cmdRecallHook(args []string) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--serve-addr":
+			i++
+			if i >= len(args) {
+				return
+			}
+			os.Setenv("KRAKEN_SERVE_ADDR", args[i])
+		case "--db-path":
+			i++
+			if i >= len(args) {
+				return
+			}
+			os.Setenv("KRAKEN_DB_PATH", args[i])
+		default:
+			return // an unexpected bare arg: malformed, inject nothing
+		}
+	}
+	jobs.RunRecallHook(os.Stdin, os.Stdout)
+}
+
 // --- k logevent ---
 
 // cmdLogEvent appends one entry to the unified event log — plumbing for

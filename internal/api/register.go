@@ -42,13 +42,18 @@ func Register(mux *http.ServeMux) {
 	// shadows another and none is a subtree — the same property that lets
 	// "/api/feedback" and "/api/feedback/sweep" coexist above. The four reads
 	// stay open under --mirror (a read is a read; search is a POST only
-	// because a query is arbitrary user text, and it writes nothing); the two
-	// writes are gated with the same 403 every other agent-side write gets.
+	// because a query is arbitrary user text, and it writes nothing); the
+	// three writes are gated with the same 403 every other agent-side write
+	// gets.
 	mux.HandleFunc("/api/graph", graphHandler)
 	mux.HandleFunc("/api/graph/stats", graphStatsHandler)
 	mux.HandleFunc("/api/graph/node", graphNodeHandler)
 	mux.HandleFunc("/api/graph/pending", graphPendingHandler)
 	mux.HandleFunc("/api/graph/search", graphSearchHandler)
+	// Recall is a THIRD write despite reading like a search: it records what
+	// it delivered in kg_recall, so it is gated with add and episode-done
+	// rather than left open with the reads (recall.go).
+	mux.HandleFunc("/api/graph/recall", mirrorGated(graphRecallHandler))
 	mux.HandleFunc("/api/graph/add", mirrorGated(graphAddHandler))
 	mux.HandleFunc("/api/graph/episode-done", mirrorGated(graphEpisodeDoneHandler))
 	mux.HandleFunc("/api/questions", questionsHandler)

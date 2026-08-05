@@ -2193,7 +2193,7 @@ func TestDreamWireShape(t *testing.T) {
 	assertShape(t, "/api/dream element", resp.Reports[0], webDreamReportSpec)
 }
 
-// --- the knowledge graph's six routes (graph.go) ---
+// --- the knowledge graph's eight routes (graph.go, recall.go) ---
 //
 // All additive: each is a NEW PATH, never a key added to, retyped in, or
 // removed from an existing shape, so apiContract does NOT bump for them and
@@ -2335,6 +2335,50 @@ var graphSearchRespSpec = map[string]fieldSpec{
 	"facts":   {kind: wireArray, required: true},
 	"triples": {kind: wireString, required: true},
 	"strong":  {kind: wireNumber, required: true},
+}
+
+// graphRecallReqSpec / graphRecallRespSpec cover POST /api/graph/recall
+// (recall.go). Every request key is required rather than omitempty:
+// jobs.RecallRequest carries no omitempty tags, and the shape's only caller is
+// `kraken recall-hook`, which fills all four from one hook payload — a key
+// that vanished when the hook had no prompt would make "no prompt" and "field
+// removed from the payload schema" the same wire fact.
+var graphRecallReqSpec = map[string]fieldSpec{
+	"session_id":      {kind: wireString, required: true},
+	"event":           {kind: wireString, required: true},
+	"prompt":          {kind: wireString, required: true},
+	"transcript_path": {kind: wireString, required: true},
+}
+
+// graphRecallRespSpec. One key, always present, and `""` is its most common
+// value — the graph having nothing to add is the normal answer, not an error,
+// so there is no "error"/"ok" key to spec here on the success path. An
+// omitempty on "context" would erase the distinction between an empty block
+// and an older server that does not serve this route at all.
+var graphRecallRespSpec = map[string]fieldSpec{
+	"context": {kind: wireString, required: true},
+}
+
+// TestGraphRecallWireShape asserts both recall specs against the real types —
+// the request as `kraken recall-hook` marshals it (jobs.RecallRequest), the
+// response as the live handler serves it — so the two specs above are
+// enforced, not merely transcribed. The empty-context answer is the shape's
+// common case (see graphRecallRespSpec's comment), so that is the one driven.
+func TestGraphRecallWireShape(t *testing.T) {
+	useTestStore(t)
+	reqData, err := json.Marshal(jobs.RecallRequest{SessionID: "sess", Event: "UserPromptSubmit", Prompt: "p", TranscriptPath: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "graphRecallReq", reqData, graphRecallReqSpec)
+
+	rec := httptest.NewRecorder()
+	graphRecallHandler(rec, httptest.NewRequest(http.MethodPost, "/api/graph/recall",
+		bytes.NewReader([]byte(`{"session_id":"sess","event":"UserPromptSubmit","prompt":"p","transcript_path":""}`))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recall = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "graphRecallResp", rec.Body.Bytes(), graphRecallRespSpec)
 }
 
 var webGraphFactSpec = map[string]fieldSpec{

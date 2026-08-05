@@ -995,6 +995,26 @@ func redactSecrets(s string) string {
 	})
 }
 
+// RedactSecrets is redactSecrets exported, for the one caller outside this
+// package: internal/jobs' Recall, which embeds the user's new message to
+// retrieve against the knowledge graph.
+//
+// That call is the only place in the binary where a raw prompt LEAVES THE
+// MACHINE — the two readers above redact at emission because their output is
+// copied forward into new transcripts and kraken.db, which is a propagation
+// problem; this one is an exfiltration problem, and it is the stricter of the
+// two. A prompt beginning "here's the token: xoxp-…, why is it 401ing?" is
+// exactly the message a user would want the graph to have context for, and
+// exactly the one that must not be POSTed to api.openai.com verbatim.
+//
+// The retrieval's OTHER leg (BM25, store-local) still sees the unredacted
+// query: it never leaves the machine, and redacting it would only lose
+// matches.
+//
+// A wrapper rather than renaming the original, because every existing caller
+// is in-package and the unexported name is what mine.go's own tests reach.
+func RedactSecrets(s string) string { return redactSecrets(s) }
+
 // writeReduced appends one labelled section, skipping blanks and the
 // harness-injected <system-reminder> parts that ride along in user records
 // but are not the user speaking.
