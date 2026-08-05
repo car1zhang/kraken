@@ -64,7 +64,13 @@ budget on tool results nobody asked for.
 Emit tuples, **never strict JSON**, while you are reading. This is the field consensus and the reason
 is mechanical: JSON makes a model spend attention on brackets and escaping in the middle of the task
 it is actually doing, and one malformed brace loses a whole batch. Convert to the add payload once,
-at the end, when the thinking is done.
+at the end, when the thinking is done — and "convert" means **parse the tuple files with a short
+script, never re-key them by hand**: the tuple format is machine-parseable by construction (that is
+what the `|` discipline buys), and a lead that hand-typed the conversion re-emitted 41KB of strings
+byte-identical to files already on disk, spending 46% of its whole session's output on transcription
+and reintroducing at 63KB-in-one-message exactly the malformed-token hazard this bullet exists to
+avoid (a stray glyph cost three repair rounds). Keep the CANONICALIZATION judgments in your own
+head; move the surviving tuples with code.
 
 ```
 ENTITY|<name>|<type>|<one-sentence description of what this IS>
@@ -266,7 +272,11 @@ sweeps, because the sweep walks the graph, not the batch.
   for a row with no source episode. That is a real exception to the data model's
   every-fact-points-back rule, tolerable here because the sweep's evidence IS the graph. Say in
   the report how many edges carry it — and derive the count from the `/api/graph` payload you
-  already hold rather than trusting a stamped figure, because it moves nightly: the hand-planted
+  already hold rather than trusting a stamped figure. In that RESPONSE the field is spelled
+  `episode` (bare), not `episode_id` — `episode_id` is the request payload's spelling only, and a
+  count derived by probing the response for the request's key reads every edge as provenance-free
+  (a lead measured 684 of 684 and only caught it because the number was absurd). The
+  provenance-free count also moves nightly: the hand-planted
   backfills (the pluto-notes ingest and the watchlist migration) wrote episode-0 edges wholesale,
   making provenance-free edges the MAJORITY of the graph at last measurement (181 of 298 live
   edges, 2026-08-02), with episode-backed ingest closing the gap each night. The operative rule is

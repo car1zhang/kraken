@@ -220,7 +220,7 @@ the cell's brief wins wherever it is more specific:
   the LIST, then: the artifact is what records the fix, so read it against the note — act if the fix is
   not there, say so if it is. Re-doing a fix costs a minute; skipping a note carl is waiting on costs
   the note.)
-- Never run `open` (no browser in a cell); the board renders the artifacts.
+- Never run `open` — it has no display to land in; the board renders the artifacts. A browser may still be REACHABLE from a cell: the claude-in-chrome MCP tools drive carl's own Chrome when its extension is connected, and a "not connected" result is often transient — re-try the same call once after a few minutes before reporting a browser gate as blocked (a cell wrote a full fallback runbook and a blocked load estimate for a disconnection that had healed by the time carl re-asked, 8 minutes later, and the reconnected session then produced the job's best artifacts).
 - **Each round ends with one line, then you stop.** Say exactly:
 
   `explanation ready: <set root>/00-overview.md (+N diagrams, M sections)`

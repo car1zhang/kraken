@@ -52,6 +52,7 @@ Create a GitHub PR for the current branch.
 - **PRs are per-slice, not per-job.** Kraken records every PR opened from the cell's branch on the job's board, and a PR merging NEVER ends the job — teardown happens only when carl accepts it from the board.
 - **You never need to report the URL for the board's sake.** A PostToolUse hook attaches each PR the instant `gh pr create` returns; report it to carl anyway as your closing line, noting it as awaiting checks.
 - **Recycle the branch after a merge.** If a PR of yours merges and more work arrives, reset the branch before starting it — `git fetch origin && git checkout -B <cell branch> origin/main` — then ship the follow-up as a new PR. The cell branch is the one named in your brief.
+- **Rebasing with kraken's own dirt in the tree.** In repos that TRACK `.claude/settings.json` (monolith does), kraken's per-cell settings merge leaves a permanent ` M .claude/settings.json` line, so `git rebase` refuses with "cannot rebase: You have unstaged changes" on a tree where every changed file is kraken's. The sanctioned dance — invented independently by every cell that has hit this, so it is written down once here: `cp .claude/settings.json <scratch path outside the repo>`, `git checkout -- .claude/settings.json`, rebase, then `cp` it back. Never `git stash` (the ban is absolute), never commit kraken's settings file, and say in your closing line that the file was parked and restored.
 - Never poll (step 7 above): the daemon watches for you.
 
 ## Style Guidelines
