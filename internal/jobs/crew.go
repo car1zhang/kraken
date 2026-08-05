@@ -256,3 +256,26 @@ func threadBrief(j *Job, tid, title, worktree string) string {
 	b.WriteString("Answer in your own pane: whatever you write here is what carl reads. Lead every answer with its TLDR — the first sentence alone should carry it. You have no way to reach carl anywhere else — no message to zeus, no file carl watches, no notification.\n")
 	return b.String()
 }
+
+// threadPromptGuard is appended to every side thread's INITIAL PROMPT, under
+// the question carl typed. The brief above already states the whole contract,
+// but a fork wakes up holding zeus' entire conversation and the brief sits at
+// the far end of it; measured across one night's threads, the ones whose
+// prompt carried a guard clause (the board's per-artifact question template)
+// all complied, while half the threads briefed identically but prompted with
+// a bare question wrote artifacts, ran kraken write verbs, or spawned a
+// teammate. The prompt is the LAST thing in context before the thread's first
+// token, so the restatement goes here — where the recency gradient actually
+// points at it — and stays short: the brief owns the full contract, this owns
+// the moment of reading the question.
+const threadPromptGuard = "\n\n(Answer here in this thread. This is a question ABOUT the job's work, never a request to do it: do not edit artifacts or repo files, do not run kraken write verbs, and do not spawn agents — if a good answer seems to need any of those, say so in your answer and leave the doing to zeus.)"
+
+// threadSeed renders a thread's staged initial prompt: carl's question with
+// the standing guard under it. An empty seed stays empty — the revive path
+// resumes an existing conversation and stages no prompt at all.
+func threadSeed(seed string) string {
+	if seed == "" {
+		return ""
+	}
+	return seed + threadPromptGuard
+}
