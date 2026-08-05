@@ -1678,6 +1678,55 @@ PR was already recorded (idempotent re-attach).
 Errors: 400 (bad JSON, missing slug, or `url` doesn't match the GitHub PR
 URL shape), 404 (no such job), 500 (write failure).
 
+### `POST /api/limit-hit` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+The endpoint jobs/limithook.go's in-cell `kraken limit-hook` POSTs to when a
+claude in a cell dies on a usage limit — Claude Code fires that verb as a
+`StopFailure` hook (matcher `rate_limit`, installed into the cell's own
+`.claude/settings.json` beside the `PostToolUse` pr-hook entry). The hook
+process never opens kraken.db; it reports, and `kraken serve` records, the
+same split `/api/pr-attach` above draws. The recorded hit is what the
+daemon's rescue pass reads to decide whether to swap the main login to a
+healthier pool account.
+
+Deliberately **not** mirror-gated: a mirror must still record that a cell hit
+a usage limit. It is the rescue, not the observation, that a mirror never
+performs, and that gate lives in the daemon's own `!mirror` block.
+
+Request (`limitHitReq`): `slug` (string, required), `error` (string, required
+— Claude Code's error-enum value verbatim, e.g. `rate_limit`), `details`
+(string, optional — the failure's message text; one-lined and capped at 200
+**runes** through `core.TruncateOneLine` rather than refused, by the hook
+before it is sent and again on receipt — the second pass is what makes the
+stored value safe whoever posted it, the first is what stops an oversized
+`error_details` hitting the 64 KiB body cap and losing the hit to a 400),
+`session_id`
+(string, optional), `agent_id` (string, optional — present only when the
+failing claude was a subagent). Absent optional fields are the ordinary case,
+not an error: a real captured payload carries neither `agent_id` nor
+`error_details` on the main thread.
+
+Response: `{"ok": true, "deliveries": N}` — `deliveries` is how many hook
+calls have folded into this one recorded hit. A cell is a lead plus a crew of
+teammates all reading one account, so a single exhausted window fires several
+hooks within seconds; deliveries inside a 2-minute window carrying the same
+error type fold into the first hit rather than replacing it.
+
+Errors: 400 (bad JSON; missing `slug`; missing `error`; **no such job**), 405
+(non-POST), 500 (store write failure).
+
+The unknown-slug 400 is where this route deliberately differs from
+`/api/pr-attach`, which answers 404 for the same condition. The only client
+is a hook kraken itself installed with the job's own slug baked into the
+command string, so an unknown slug here means the request is malformed — a
+stale hook left by a torn-down job, or a hand-typed POST — rather than a
+caller asking about a resource the server merely doesn't have yet.
+
+Every accepted delivery writes exactly one `limit-hit` event naming the error
+type **verbatim**, including types the rescue never acts on, because that log
+is how a future change to Claude Code's error enum gets noticed before the
+rescue silently stops firing. `details` never appears in that line.
+
 ### `POST /api/logevent` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
 
 The endpoint `k logevent` (cmd_jobs.go — the Makefile's install target, and

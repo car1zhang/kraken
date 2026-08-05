@@ -727,6 +727,48 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 					d.Notified[key] = now.Unix()
 					dlogEvent("error", "cell-unhealthy", "unhealthy %s: %s", j.Slug, reason)
 				}
+				// transcript arm of the usage-limit rescue. The hook
+				// (StopFailure → kraken limit-hook) is the fast trigger, but
+				// it is installed into a cell's settings at SPAWN, so every
+				// cell already running when this ships has no hook at all and
+				// would otherwise never be rescued. The stall classification
+				// is the second, hook-independent way to learn the same fact:
+				// zeus' transcript ends in a synthetic api-error that reads as
+				// a usage limit. Recorded as "rate_limit" so the rescue's own
+				// gate 3 accepts it — the two triggers must describe one event
+				// in one vocabulary or the fold below can't join them.
+				//
+				// Two things bound the churn. RecordLimitHit folds a repeat
+				// inside its dedupe window into the existing hit, and this key
+				// stops a STANDING complaint (a stalled cell keeps the same
+				// stall at the tail of its transcript indefinitely) from
+				// opening a fresh hit — and so a fresh swap — every couple of
+				// minutes.
+				//
+				// The key EXPIRES rather than being set once, and that is the
+				// difference between a bound and a mute: a weekly-limit banner
+				// is byte-identical every time that window exhausts, so a
+				// never-expiring key would record Monday's limit on account A
+				// and then silently decline Wednesday's on account B forever —
+				// silently, because the "health:" key above suppresses the
+				// notification for the same reason. Reusing the stamp the map
+				// already stores costs nothing and re-arms after the same
+				// interval the rotate backoff uses. Keyed on the job's
+				// immutable ID rather than its slug, matching the record it
+				// guards: archiving frees a slug, so a new job reusing an
+				// archived generation's name would otherwise inherit its
+				// suppression.
+				if IsUsageLimitReason(reason) {
+					lkey := limitHitTriggerKey(j.ID, reason)
+					if limitHitTriggerDue(d.Notified[lkey], now) {
+						if _, err := RecordLimitHit(j, "rate_limit", reason, j.Session, "", now); err != nil {
+							dlogErr("%s: record usage-limit hit from transcript failed: %v", j.Slug, err)
+						} else {
+							d.Notified[lkey] = now.Unix()
+							dlogEvent("info", "limit-hit", "%s: usage limit seen in transcript: %s", j.Slug, reason)
+						}
+					}
+				}
 				// auto-retry retryable stalls with backoff: API overload comes
 				// in waves, and a manual retry during one just eats the next
 				// 529 — keep nudging every repokeAfter until a turn survives.
@@ -887,6 +929,28 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		// chosen colour differs from what was last delivered to this cell.
 		for _, j := range jobs {
 			d.syncColor(j, all, live)
+		}
+		// usage-limit rescue (its own pass, same per-tick cadence): a cell
+		// whose claudes hit the account's usage limit gets the main login
+		// swapped to a healthier pool account and then, once the credential
+		// has propagated, one message telling the crew to carry on. It sits in
+		// this block rather than beside the token pass because it shares this
+		// block's two reasons exactly: it makes a machine-wide credential
+		// change and it TYPES INTO A LIVE PANE. A --mirror daemon still
+		// RECORDS hits (the API handler is not mirror-gated) — it just never
+		// acts on one.
+		//
+		// Its own sweep rather than a line in the colour loop above, for the
+		// same reason every pass in this block has one: each is independently
+		// orderable and independently skippable, and this one in particular
+		// must run after the colour reconcile rather than interleaved with it
+		// — a rotate takes the machine-wide rotation lock and rewrites the
+		// keychain, which is not something to interleave a cosmetic pass
+		// with. The extra loop costs one kv read per job (limitRescue's first
+		// line is ReadLimitHit, and it returns immediately unless that job
+		// has an unresolved hit).
+		for _, j := range jobs {
+			d.limitRescue(j, all, live)
 		}
 	}
 

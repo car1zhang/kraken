@@ -637,14 +637,35 @@ func StartCell(j *Job, repo string) error {
 // File-mode `k daemon`/`k web` cells never call SetHookServeAddr, so their
 // hook commands are byte-identical to before E7.
 func prHookCommand(slug, krakenBin string) string {
-	cmd := krakenBin + " pr-hook"
+	return krakenBin + " pr-hook" + hookCommandFlags() + " " + slug
+}
+
+// hookCommandFlags renders the flag run every kraken hook command carries,
+// shared by prHookCommand and limitHookCommand so the two verbs can never
+// disagree about which serve a cell's hooks talk to. Both hooks run as fresh
+// OS processes spawned by Claude Code, inheriting none of kraken serve's
+// flags or env, so anything serve resolved that isn't the default has to be
+// baked into the command string itself. Empty in the common case, which is
+// what keeps a default-configured cell's hook commands byte-identical to the
+// ones that predate this.
+func hookCommandFlags() string {
+	flags := ""
 	if addr := currentHookServeAddr(); addr != "" && addr != defaultServeAddr {
-		cmd += " --serve-addr " + addr
+		flags += " --serve-addr " + addr
 	}
 	if dbPath := os.Getenv("KRAKEN_DB_PATH"); dbPath != "" {
-		cmd += " --db-path " + dbPath
+		flags += " --db-path " + dbPath
 	}
-	return cmd + " " + slug
+	return flags
+}
+
+// limitHookCommand builds the exact `kraken limit-hook` command string a
+// cell's StopFailure hook runs — prHookCommand's sibling in every respect,
+// including being shared by limitHookEntry and mergeHookSettings'
+// idempotency check for the reason spelled out above: a drift between the
+// builder and the dedup check re-appends a "new" entry on every install.
+func limitHookCommand(slug, krakenBin string) string {
+	return krakenBin + " limit-hook" + hookCommandFlags() + " " + slug
 }
 
 // krakenHookEntry is the PostToolUse matcher group kraken installs into a
@@ -709,6 +730,28 @@ func recallHookEntry(krakenBin string) map[string]any {
 	}
 }
 
+// limitHookEntry is the StopFailure matcher group kraken installs beside the
+// PostToolUse one: a hook that reports a claude dying on a usage limit to
+// `kraken limit-hook <slug>`, which is how the daemon learns a cell is stuck
+// behind an exhausted account without anyone watching the pane.
+//
+// The matcher is "rate_limit" because that is the value Claude Code puts in
+// the payload's `error` field for EVERY branch of its HTTP-429 handler,
+// subscription-window limits included, and the StopFailure matcher matches
+// against that value rather than a tool name (which is what the PostToolUse
+// entry above matches on).
+func limitHookEntry(slug, krakenBin string) map[string]any {
+	return map[string]any{
+		"matcher": "rate_limit",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": limitHookCommand(slug, krakenBin),
+			},
+		},
+	}
+}
+
 // recallHookEvents are the hook events mid-conversation recall rides on.
 // UserPromptSubmit queries on carl's new message, landing in front of the
 // agent before it starts thinking; PostToolUse queries on the assistant's
@@ -752,17 +795,18 @@ var recallHookEvents = []string{"UserPromptSubmit", "PostToolUse"}
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
 //
-// It renders FOUR kraken groups across THREE hook events: the pr-hook group
-// under PostToolUse, the bash-lint group under PreToolUse, and a recall
-// group under each of recallHookEvents — which includes PostToolUse, so that
-// key ends up holding the pr-hook group AND a recall group side by side. The
-// two kinds use DIFFERENT merge rules and the difference is deliberate —
-// pr-hook and bash-lint append when their exact command is absent, recall
-// REPLACES — for the reason spelled out at the recall loop
-// below; the non-obvious consequence is that the recall loop runs its removal
-// pass over the very list the pr-hook append just wrote, which is why
-// withoutRecallHooks must never match a pr-hook command. Either way, groups
-// kraken did not write and unrelated top-level keys survive untouched.
+// It renders FIVE kraken groups across FOUR hook events: the pr-hook group
+// under PostToolUse, the bash-lint group under PreToolUse, the limit-hook
+// group under StopFailure (limitHookEntry, the usage-limit rescue), and a
+// recall group under each of recallHookEvents — which includes PostToolUse,
+// so that key ends up holding the pr-hook group AND a recall group side by
+// side. The two kinds use DIFFERENT merge rules and the difference is
+// deliberate — pr-hook, bash-lint and limit-hook append when their exact
+// command is absent, recall REPLACES — for the reason spelled out at the
+// recall loop below; the non-obvious consequence is that the recall loop runs
+// its removal pass over the very list the pr-hook append just wrote, which is
+// why withoutRecallHooks must never match a pr-hook command. Either way,
+// groups kraken did not write and unrelated top-level keys survive untouched.
 func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) {
 	parsed := map[string]any{}
 	if len(bytes.TrimSpace(existing)) > 0 {
@@ -776,6 +820,13 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	}
 	ensureHookGroup(hooks, "PostToolUse", prHookCommand(slug, krakenBin), krakenHookEntry(slug, krakenBin))
 	ensureHookGroup(hooks, "PreToolUse", bashLintCommand(krakenBin), bashLintHookEntry(krakenBin))
+	// The usage-limit hook (limithook.go): StopFailure fires when a turn dies
+	// on an API error, and the entry's matcher narrows it to the rate_limit
+	// error type — the bucket every 429 lands in, subscription plan limits
+	// included. Append-if-absent like its two neighbours above, since the
+	// command carries the slug and the binary path and is therefore its own
+	// identity test.
+	ensureHookGroup(hooks, "StopFailure", limitHookCommand(slug, krakenBin), limitHookEntry(slug, krakenBin))
 	// The recall hook (recall.go) is REPLACED rather than appended-if-absent,
 	// which is the one place this function's two halves differ. PostToolUse's
 	// entry is keyed by slug AND binary path, so an exact-command match is a
@@ -1302,6 +1353,8 @@ func CellHealth(j *Job, all []*core.Peer) string {
 // before it silently breaks auto-retry classification.
 func stallReason(st core.Stall) string {
 	switch st.Kind {
+	case "usage-limit":
+		return usageLimitReasonPrefix + st.Text
 	case "api-error":
 		if st.Transient {
 			return "zeus hit an API error: " + st.Text
@@ -1312,10 +1365,34 @@ func stallReason(st core.Stall) string {
 	}
 }
 
+// usageLimitReasonPrefix is the one spelling of a usage-limit CellHealth
+// reason: stallReason writes it, IsUsageLimitReason recognizes it, and the
+// daemon's health pass routes on that recognizer rather than rebuilding the
+// string at the call site.
+const usageLimitReasonPrefix = "zeus hit a usage limit: "
+
+// IsUsageLimitReason reports whether a CellHealth reason is the one
+// stallReason produces from a core.Stall of Kind "usage-limit" — the cell is
+// alive but its account is exhausted. It exists as a named predicate so that
+// routing on it is greppable and testable, instead of a prefix literal
+// repeated wherever the decision is made.
+func IsUsageLimitReason(reason string) bool {
+	return strings.HasPrefix(reason, usageLimitReasonPrefix)
+}
+
 // RetryableHealth reports whether a CellHealth reason is fixable by a
 // nudge: transient API errors are, dead processes and needs-attention
-// (credit/auth/prompt-length) stalls are not.
+// (credit/auth/prompt-length) stalls are not — and neither is a usage
+// limit, which is why it is refused explicitly here rather than left to the
+// prefix test below. The two reasons already differ ("zeus hit an API
+// error: …" vs "zeus hit a usage limit: …"), so the guard changes no answer
+// today; it exists because they agree for ten characters and then diverge
+// on wording alone, and the cost of that wording drifting back together is
+// a nudge every ten minutes at an account that cannot answer.
 func RetryableHealth(reason string) bool {
+	if IsUsageLimitReason(reason) {
+		return false
+	}
 	return strings.HasPrefix(reason, "zeus hit an API error")
 }
 
