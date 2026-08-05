@@ -63,6 +63,8 @@ func main() {
 		cmdPrHook(rest)
 	case "bash-lint":
 		cmdBashLint()
+	case "limit-hook":
+		cmdLimitHook(rest)
 	case "questions":
 		cmdQuestions(rest)
 	case "feedback":

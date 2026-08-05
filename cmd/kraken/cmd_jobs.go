@@ -17,10 +17,10 @@ import (
 // board/web UI is the only supported path for starting, completing,
 // archiving, or reactivating a job (Q14: "every job interaction is
 // web/mobile"). What remains here isn't a job verb in that sense: pr-hook
-// is a Claude Code tool hook, and logevent is plumbing for non-Go writers
-// (the Makefile's install target). The scheduler itself now runs only as
-// part of `kraken serve` (cmd_serve.go) — there is no standalone daemon
-// entry point.
+// and limit-hook are Claude Code hooks, and logevent is plumbing for non-Go
+// writers (the Makefile's install target). The scheduler itself now runs
+// only as part of `kraken serve` (cmd_serve.go) — there is no standalone
+// daemon entry point.
 
 // --- pr-hook ---
 
@@ -30,42 +30,78 @@ import (
 // invocation (no slug) is silently ignored rather than util.Die'd: this
 // runs as a hook, and must never fail zeus' tool call.
 //
-// --serve-addr/--db-path (E7) are how a cell's installed hook command
-// propagates kraken serve's ACTUAL bind address/db path into this — a
-// fresh, separate OS process spawned by the hook, inheriting none of
-// serve's own flags or env — when they differ from the defaults PrHook
-// would otherwise assume. See jobs.SetHookServeAddr / cell.go's
-// prHookCommand for where the hook command string gets built. Setting the
-// equivalent env vars for the rest of this (short-lived, one-shot) process
-// is simplest: PrHook already reads
-// KRAKEN_SERVE_ADDR/KRAKEN_DB_PATH exactly this way for tests.
+// --serve-addr/--db-path (E7) are parsed by the shared hookArgs below; see
+// jobs.SetHookServeAddr / cell.go's prHookCommand for where the hook command
+// string that carries them gets built.
 func cmdPrHook(args []string) {
+	slug, ok := hookArgs(args)
+	if !ok {
+		return
+	}
+	jobs.PrHook(slug)
+}
+
+// --- limit-hook ---
+
+// cmdLimitHook is the thin dispatch wrapper for `kraken limit-hook <slug>` —
+// a Claude Code StopFailure hook (jobs.LimitHook does the work), kept out of
+// usage() alongside pr-hook for the same reason, and silently ignoring a
+// malformed invocation for the same reason: it runs as a hook, and a hook
+// that fails the turn it fires on is worse than a hook that does nothing.
+//
+// It takes --serve-addr/--db-path identically to pr-hook, since the cell's
+// hook command for both is built from one shared flag renderer
+// (jobs/cell.go's hookCommandFlags).
+func cmdLimitHook(args []string) {
+	slug, ok := hookArgs(args)
+	if !ok {
+		return
+	}
+	jobs.LimitHook(slug)
+}
+
+// hookArgs parses the argument shape both hook verbs share: any number of
+// --serve-addr/--db-path flags plus exactly one bare slug. ok=false for
+// every malformed shape (a flag with no value, no slug, two slugs), and the
+// caller's only correct response is to do nothing at all.
+//
+// The flags (E7) are how a cell's installed hook command propagates kraken
+// serve's ACTUAL bind address and db path into what is a fresh, separate OS
+// process spawned by the hook, inheriting none of serve's own flags or env.
+// Setting the equivalent env vars for the rest of this short-lived one-shot
+// process is the simplest delivery: jobs.ServeBaseURL, which both hook
+// bodies call, reads KRAKEN_SERVE_ADDR exactly this way.
+//
+// Both verbs accept both flags because jobs/cell.go renders both hook
+// commands from ONE flag renderer (hookCommandFlags), so limit-hook's
+// command string carries --db-path whenever pr-hook's does. It is inert
+// there: LimitHook only POSTs and never opens kraken.db. Accepting and
+// ignoring it is the point — a hook that died on an unrecognized flag would
+// fail the turn it fired on, which is the one thing a hook must never do.
+func hookArgs(args []string) (string, bool) {
 	var slug string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--serve-addr":
 			i++
 			if i >= len(args) {
-				return
+				return "", false
 			}
 			os.Setenv("KRAKEN_SERVE_ADDR", args[i])
 		case "--db-path":
 			i++
 			if i >= len(args) {
-				return
+				return "", false
 			}
 			os.Setenv("KRAKEN_DB_PATH", args[i])
 		default:
 			if slug != "" {
-				return // more than one bare arg: malformed, silently ignore
+				return "", false // more than one bare arg: malformed
 			}
 			slug = args[i]
 		}
 	}
-	if slug == "" {
-		return
-	}
-	jobs.PrHook(slug)
+	return slug, slug != ""
 }
 
 // --- bash-lint ---

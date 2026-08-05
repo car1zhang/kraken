@@ -78,14 +78,22 @@ func TestTeardownFinalFields(t *testing.T) {
 // --- mergeHookSettings ---
 
 func TestMergeHookSettings(t *testing.T) {
-	entry := func(cmd string) map[string]any {
+	group := func(matcher, cmd string) map[string]any {
 		return map[string]any{
-			"matcher": "Bash",
+			"matcher": matcher,
 			"hooks": []any{
 				map[string]any{"type": "command", "command": cmd},
 			},
 		}
 	}
+	// the PostToolUse (PR attach) entry, matched on the tool name
+	entry := func(cmd string) map[string]any { return group("Bash", cmd) }
+	// the StopFailure (usage-limit) entry, matched on the payload's error
+	// value rather than a tool name. Every render carries it beside the
+	// PostToolUse one, so it appears in each non-error expectation below;
+	// its absence would mean a cell that hits a usage limit reports the wall
+	// to nobody.
+	limitEntry := func(cmd string) map[string]any { return group("rate_limit", cmd) }
 	cases := []struct {
 		name     string
 		existing string
@@ -97,6 +105,7 @@ func TestMergeHookSettings(t *testing.T) {
 			want: map[string]any{
 				"hooks": map[string]any{
 					"PostToolUse": []any{entry("kraken pr-hook foo")},
+					"StopFailure": []any{limitEntry("kraken limit-hook foo")},
 				},
 			},
 		},
@@ -107,6 +116,7 @@ func TestMergeHookSettings(t *testing.T) {
 				"env": map[string]any{"FOO": "bar"},
 				"hooks": map[string]any{
 					"PostToolUse": []any{entry("kraken pr-hook foo")},
+					"StopFailure": []any{limitEntry("kraken limit-hook foo")},
 				},
 			},
 		},
@@ -124,6 +134,7 @@ func TestMergeHookSettings(t *testing.T) {
 						},
 						entry("kraken pr-hook foo"),
 					},
+					"StopFailure": []any{limitEntry("kraken limit-hook foo")},
 				},
 			},
 		},
@@ -138,12 +149,15 @@ func TestMergeHookSettings(t *testing.T) {
 		{
 			// a second installation path (e.g. reactivation recreate) merging
 			// into settings that already carry kraken's exact command must be
-			// a no-op — no duplicate entry
+			// a no-op — no duplicate entry. Dedup is per entry: the existing
+			// PostToolUse group is left exactly as it was while the missing
+			// StopFailure one is still installed alongside it.
 			name:     "existing entry with identical command: no-op, no duplicate",
 			existing: `{"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "kraken pr-hook foo"}]}]}}`,
 			want: map[string]any{
 				"hooks": map[string]any{
 					"PostToolUse": []any{entry("kraken pr-hook foo")},
+					"StopFailure": []any{limitEntry("kraken limit-hook foo")},
 				},
 			},
 		},
@@ -158,6 +172,7 @@ func TestMergeHookSettings(t *testing.T) {
 						entry("kraken pr-hook other-slug"),
 						entry("kraken pr-hook foo"),
 					},
+					"StopFailure": []any{limitEntry("kraken limit-hook foo")},
 				},
 			},
 		},

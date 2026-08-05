@@ -105,6 +105,12 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs/files", webLogFiles)
 	mux.HandleFunc("/api/logs", webLogRead)
 	mux.HandleFunc("/api/pr-attach", prAttachHandler)
+	// The cell-side StopFailure hook's report (limithit.go). Ungated on
+	// purpose, like its neighbour /api/pr-attach and unlike the mirror-gated
+	// writes further up: a mirror must still RECORD that a cell hit a usage
+	// limit — it is the rescue, not the observation, that a mirror must never
+	// perform, and that gate lives in the daemon's own !mirror block.
+	mux.HandleFunc("/api/limit-hit", limitHitHandler)
 	mux.HandleFunc("/api/logevent", logEventHandler)
 	// The update POST is mirror-gated for the same reason every tmux-driving
 	// route is, only more so: a mirror board is read-only by policy, and
