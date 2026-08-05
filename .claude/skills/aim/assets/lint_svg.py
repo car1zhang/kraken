@@ -553,6 +553,36 @@ def holds_label(el):
     return p is not None and p.tag == "g" and "holds" in class_tokens(p)
 
 
+def direct_class_label(el, name):
+    """True when the CSS's direct-child rules for `name` style this text run:
+    the run's own text/tspan chain carries the class (`text.group` — checked on
+    every element up to and including the owning <text>, so a <tspan> inside a
+    `text.group` inherits its 12px/start correctly), or the owning <text>'s
+    direct parent <g> does (`.group > text`, `.region > text`). The same
+    direct-parent walk as holds_label, for the same reason — `group` and
+    `region` have NO descendant/inheritance rule in the stylesheet, so a
+    centred label nested deeper inside one keeps its own styling. Testing
+    these two via ctx_cls was the measured TEXT_OVERFLOW false positive:
+    every hermes that markup-nested boxes inside a `<g class="group">` or
+    `<g class="region">` had its centred labels measured as 12px
+    start-anchored runs and warned on text that fit. (`note` and `title` are
+    different: `svg .note`/`svg .title` are descendant selectors whose
+    font-size and text-anchor INHERIT down through nested groups, so for
+    those the ancestor-chain test models the cascade correctly. And the
+    own-class arm applies to `group` only: the stylesheet has `text.group`
+    but no `text.region`, so a self-classed region text follows the default
+    cascade and modelling otherwise would under-measure it.)"""
+    p = el
+    while p is not None and p.tag in ("text", "tspan"):
+        # `svg text.group` selects a <text> ELEMENT, so a self-classed
+        # <tspan class="group"> does not match it — but a tspan under a
+        # `text.group` inherits, which the walk gives us for free.
+        if name == "group" and p.tag == "text" and name in class_tokens(p):
+            return True
+        p = p.parent
+    return p is not None and p.tag == "g" and name in class_tokens(p)
+
+
 def font_size_of(el):
     """Font size for a <text>/<tspan>: an explicit attribute when it is a finite plain
     number, otherwise the stylesheet's class-driven default for that context. `NaN` and
@@ -564,12 +594,14 @@ def font_size_of(el):
             return v
     if holds_label(el):
         return 12.0
+    if direct_class_label(el, "group") or direct_class_label(el, "region"):
+        return 12.0
     cls = (el.attrib.get("class", "") + " " + el.ctx_cls).strip()
     if "cell" in cls or "step" in cls:
         return 11.0
     if "title" in cls:
         return 14.0
-    if "edgeLabel" in cls or "group" in cls or "note" in cls:
+    if "edgeLabel" in cls or "note" in cls:
         return 12.0
     return 13.0
 
@@ -895,8 +927,9 @@ def lint(path, marker_id=None, prefix=None):
             width = estimated_text_width(el)
             anchor = el.attrib.get("text-anchor")
             if not anchor:
-                if (holds_label(el) or "group" in cls or "note" in cls
-                        or "title" in cls or "region" in cls):
+                if (holds_label(el) or direct_class_label(el, "group")
+                        or direct_class_label(el, "region")
+                        or "note" in cls or "title" in cls):
                     anchor = "start"
                 else:
                     anchor = "middle" if cls else "start"
