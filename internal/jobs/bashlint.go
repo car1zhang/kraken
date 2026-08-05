@@ -1,0 +1,388 @@
+package jobs
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"regexp"
+	"strings"
+)
+
+// bashlint.go — `kraken bash-lint`, wired as a Claude Code PreToolUse hook
+// in each cell's worktree (cell.go's mergeHookSettings installs it beside
+// the pr-hook PostToolUse entry). It screens every Bash tool call for a
+// short list of zsh-on-macOS shapes that are measured to fail SILENTLY —
+// the command aborts or lies while `is_error` stays false — and blocks the
+// call with the exact fix named, so the agent repairs it in one turn
+// instead of shipping a conclusion built on output that never ran.
+//
+// The list is deliberately tiny and deterministic. Every entry is a shape
+// that (a) recurred across many cells and nights, (b) was already named in
+// skill prose that agents measurably keep not applying, and (c) has no
+// legitimate use an agent would miss:
+//
+//   - a bare `=word` token (`echo ===`, `===SECTION===`): zsh
+//     equals-expansion kills the whole compound after printing its first
+//     half, leaving a ~20-char `== not found` tail on kilobytes of good
+//     output that reads as success.
+//   - `timeout <secs> …`: timeout(1) does not exist on macOS. Bare, it
+//     exits 127; piped (`timeout … | wc -l`), the pipeline exits through
+//     its last stage and returns a silent false zero.
+//   - an unquoted `--include=*.py`-style glob: zsh NOMATCH aborts before
+//     the command runs, and the abort reads as "no files match".
+//   - assigning `path=`/`fpath=`: zsh ties those to the PATH/fpath arrays,
+//     so a scratch variable named `path` wipes command lookup for the rest
+//     of the shell.
+//
+// False-positive control is structural, not hopeful: every region of a
+// command that is not shell-in-command-position is blanked before any check
+// runs. Heredoc bodies are data (a Python payload carrying `k = None` or
+// `=== banner ===` must never trip a hook — the monolith's gcp guardrail
+// firing on heredoc payloads is the measured counterexample this design
+// avoids); quoted spans go because the whole point of the equals rule is
+// that `echo "==="` is the fix; `[[ … ]]` and `(( … ))` spans go because
+// `==` is an ordinary operator in both; and comments are cut because a
+// block naming a fix for text that never executes is a refusal nobody can
+// satisfy. `lintBashCommand` states the set and the ORDER, which is
+// load-bearing — read it there rather than restating it, since a second
+// copy of that list is how this comment would go stale.
+//
+// Like pr-hook, a hook that fails the tool call by ACCIDENT is a bug: any
+// malformed input exits 0 (allow). Only a confident lint hit blocks.
+
+// bashLintChecks are the shapes bash-lint blocks, applied to the command
+// text only after `lintBashCommand`'s strip pipeline has run over it.
+var bashLintChecks = []struct {
+	re  *regexp.Regexp
+	msg string
+}{
+	{
+		// A token starting with `=` plus at least one more character, in
+		// command-argument position. A LONE `=` is fine (test's operator:
+		// `[ a = b ]`); `=x` and `===` are not. Arithmetic `==` never
+		// reaches this: `(( … ))`/`$(( … ))` spans are stripped first.
+		regexp.MustCompile(`(?:^|[\s;|&(])=[^\s;|&)]+`),
+		"a bare '=…' word (like `echo ===`) is zsh equals-expanded and kills the whole compound after its first half — quote it: echo \"===\"",
+	},
+	{
+		regexp.MustCompile(`(?:^|[\s;|&(])timeout\s+\d`),
+		"timeout(1) does not exist on macOS — run the long command with run_in_background (or a Monitor until-loop) instead of a wrapper; piped, the missing command becomes a silent false zero",
+	},
+	{
+		regexp.MustCompile(`--(?:include|exclude)=[^\s'"]*[*?\[]`),
+		"an unquoted --include=*/--exclude=* glob makes zsh abort with 'no matches found' before the command runs — quote the pattern: --include='*.py'",
+	},
+	{
+		// COMMAND-WORD position only: `gh api -f path=x` and `curl -d
+		// path=/tmp` are arguments, not assignments, and clobber nothing —
+		// so the token must open the command (start, a separator, or a
+		// keyword that precedes an assignment), never follow a bare space.
+		regexp.MustCompile(`(?:^\s*|[;&|({]\s*|\n\s*|(?:^|[\s;|&({])(?:do|then|else|elif|while|until|export|local|readonly|typeset|declare)\s+)f?path=`),
+		"assigning 'path' or 'fpath' in zsh clobbers the tied PATH/fpath arrays and breaks command lookup — use another variable name",
+	},
+}
+
+// heredocIntroRE matches a heredoc redirection and captures the `-`
+// variant marker and the delimiter: <<EOF, << 'EOF', <<-"PY", etc. The
+// caller screens out `<<<` (herestring) at the MATCH position — the regex
+// itself would happily match the tail of one, and a herestring's payload
+// sits on the same line inside quotes, which the quote strip handles.
+var heredocIntroRE = regexp.MustCompile(`<<(-?)\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)(["']?)`)
+
+// stripHeredocBodies removes the BODY lines of every heredoc in cmd,
+// keeping the shell lines (including the intro line itself). Body text is
+// data — a Python script fed via `python3 - <<'PY'` is exactly where `=`
+// signs and the word `timeout` legitimately live.
+func stripHeredocBodies(cmd string) string {
+	lines := strings.Split(cmd, "\n")
+	var out []string
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		out = append(out, line)
+		tabbed, delim, ok := heredocMatch(line)
+		if !ok {
+			continue
+		}
+		// Skip body lines until the delimiter line. Only the <<- form
+		// strips leading tabs (POSIX); trimming them for plain << would end
+		// the strip early and lint heredoc data as shell. An unterminated
+		// heredoc swallows the rest — body text must never be linted, and
+		// the command is broken anyway.
+		for i++; i < len(lines); i++ {
+			body := lines[i]
+			if tabbed {
+				body = strings.TrimLeft(body, "\t")
+			}
+			if body == delim {
+				out = append(out, lines[i])
+				break
+			}
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// heredocMatch finds the first REAL heredoc intro on line: tabbed reports
+// the `<<-` form (the only one whose terminator may be tab-indented), delim
+// is the delimiter word, ok is false when the line opens no heredoc. A
+// `<<<` herestring is skipped at the MATCH position rather than
+// disqualifying the whole line — `grep x <<< "$y" && python3 - <<'PY'`
+// carries both, and a line-wide exclusion would leave PY's body linted as
+// shell.
+func heredocMatch(line string) (tabbed bool, delim string, ok bool) {
+	for start := 0; start < len(line); {
+		loc := heredocIntroRE.FindStringSubmatchIndex(line[start:])
+		if loc == nil {
+			return false, "", false
+		}
+		at := start + loc[0]
+		herestring := (at > 0 && line[at-1] == '<') ||
+			(at+2 < len(line) && line[at+2] == '<')
+		if !herestring {
+			// group 1 is the `-` marker, group 3 the delimiter word; read
+			// both out of the offsets this match already produced rather
+			// than re-running the pattern
+			dash := line[start+loc[2] : start+loc[3]]
+			word := line[start+loc[6] : start+loc[7]]
+			return dash == "-", word, true
+		}
+		start = at + 2
+	}
+	return false, "", false
+}
+
+// stripArith blanks `(( … ))` arithmetic spans (the `$(( … ))` form
+// included — its inner text is the same `(( … ))`). Two reasons, both
+// measured: `==` is an ordinary operator there, so an unstripped span makes
+// the equals check hard-refuse valid zsh (`(( count == 0 ))`); and `<< n`
+// is a left-shift there, which the heredoc scanner would otherwise read as
+// an intro and swallow the rest of the command as body — which is why this
+// runs BEFORE stripHeredocBodies, and so ahead of the quote pass rather
+// than inside it.
+//
+// Running first means this scan cannot lean on the quote pass, so it does
+// its own: quotedMask marks every byte inside a quoted span, and only an
+// UNQUOTED `((`…`))` pair is blanked. That is not tidiness. A quote-blind
+// scan pairs a `((` inside a string with a `))` anywhere after it, and one
+// such pair blanked a heredoc INTRO and exposed its Python payload to the
+// shell checks — the single failure direction this whole design exists to
+// prevent. Bounding the closer to the opener's own line was tried first and
+// is strictly worse: it left that same-line case untouched while newly
+// refusing legal arithmetic that spans lines. An unclosed `((`, and one
+// whose closer is quoted, are both left alone.
+func stripArith(cmd string) string {
+	b := []byte(cmd)
+	quoted := quotedMask(b)
+	for i := 0; i+1 < len(b); i++ {
+		if quoted[i] || b[i] != '(' || b[i+1] != '(' {
+			continue
+		}
+		found := false
+		for j := i + 2; j+1 < len(b); j++ {
+			if quoted[j] || b[j] != ')' || b[j+1] != ')' {
+				continue
+			}
+			blank(b, i, j+1)
+			i = j + 1
+			found = true
+			break
+		}
+		// No unquoted closer after this opener means none after any LATER
+		// opener either — their search ranges are subsets of this one — so
+		// stopping here is verdict-neutral and turns a quadratic walk over
+		// unmatched openers into a linear one.
+		if !found {
+			break
+		}
+	}
+	return string(b)
+}
+
+// quotedMask reports, per byte, whether it lies inside a single- or
+// double-quoted span (delimiters included). It is the quote knowledge
+// stripQuotedAndCond applies inline, lifted out for stripArith, which runs
+// before it and would otherwise be quote-blind. An unterminated quote runs
+// to end of input — the same fail-toward-more-blanking choice
+// stripQuotedAndCond makes, and for the same reason: over-blanking costs a
+// missed block, under-blanking costs a false refusal.
+func quotedMask(b []byte) []bool {
+	mask := make([]bool, len(b))
+	for i := 0; i < len(b); i++ {
+		switch {
+		case b[i] == '\\':
+			i++ // an escaped byte is neither a delimiter nor inside one
+		case b[i] == '\'' || b[i] == '"':
+			q := b[i]
+			j := i + 1
+			for ; j < len(b); j++ {
+				if q == '"' && b[j] == '\\' {
+					j++
+					continue
+				}
+				if j < len(b) && b[j] == q { // bound re-stated, not required: the
+					break // backslash branch's j++ is re-tested by the loop
+				}
+			}
+			for k := i; k <= j && k < len(b); k++ {
+				mask[k] = true
+			}
+			i = j
+		}
+	}
+	return mask
+}
+
+// stripQuotedAndCond blanks single-quoted spans, double-quoted spans, and
+// [[ … ]] conditional spans, replacing their contents with spaces so
+// token positions elsewhere survive. Backslash escapes a following quote
+// outside single quotes.
+func stripQuotedAndCond(s string) string {
+	b := []byte(s)
+	n := len(b)
+	for i := 0; i < n; i++ {
+		switch {
+		case b[i] == '\\' && i+1 < n:
+			i++ // escaped char: leave both, skip the next
+		case b[i] == '\'' || b[i] == '"':
+			// The end of the span, or the end of input when it is never
+			// closed — the run-to-end case is deliberate, and it is stated
+			// once here rather than as a `j == n-1` arm inside the loop:
+			// written that way, a `"` span whose backslash skip stepped
+			// straight past the last byte missed the arm and left its text
+			// unblanked, which is a false REFUSAL on the one input where
+			// this function and quotedMask disagreed.
+			// TestQuotedMaskMirrorsStripQuotedAndCond pins that they cannot
+			// diverge again.
+			q := b[i]
+			j := i + 1
+			for ; j < n; j++ {
+				if q == '"' && b[j] == '\\' {
+					j++
+					continue
+				}
+				if j < n && b[j] == q {
+					break
+				}
+			}
+			if j >= n {
+				j = n - 1
+			}
+			blank(b, i, j)
+			i = j
+		case b[i] == '[' && i+1 < n && b[i+1] == '[':
+			if end := bytes.Index(b[i:], []byte("]]")); end >= 0 {
+				blank(b, i, i+end+1)
+				i += end + 1
+			}
+		}
+	}
+	return string(b)
+}
+
+// blank overwrites b[from..to] inclusive with spaces, preserving newlines —
+// not for `^` anchors (no check compiles with (?m)) but because a newline
+// feeds the separator class `[\s;|&(]`, so a token opening a later line is
+// still seen in command-word position.
+func blank(b []byte, from, to int) {
+	for k := from; k <= to && k < len(b); k++ {
+		if b[k] != '\n' {
+			b[k] = ' '
+		}
+	}
+}
+
+// lintBashCommand returns one message line per fatal-shape hit in cmd,
+// joined, or "" when the command is clean. The preprocessing order is
+// load-bearing: arithmetic spans first (so `<< n` shifts never read as
+// heredocs), then heredoc bodies, then quotes/conditionals — see each
+// stripper's comment. Comments are dropped LAST, which is what makes
+// stripComments' `#` test exact: by then every `#` still standing is
+// outside a quoted span and outside a heredoc body by construction.
+func lintBashCommand(cmd string) string {
+	text := stripComments(stripQuotedAndCond(stripHeredocBodies(stripArith(cmd))))
+	var msgs []string
+	for _, c := range bashLintChecks {
+		if c.re.MatchString(text) {
+			msgs = append(msgs, "kraken bash-lint: "+c.msg)
+		}
+	}
+	return strings.Join(msgs, "\n")
+}
+
+// stripComments truncates each line at its comment, whole-line and TRAILING
+// alike (`ls  # timeout 5 was tried`): comment text is never executed, so a
+// hit there is a pure false positive, and the block message would name a
+// fix — quote it — that cannot apply to prose. A `#` counts only at line
+// start or after whitespace, which is the shell's own rule and leaves
+// `echo a#b` and `curl host/x#frag` alone.
+//
+// It is the one stripper that REMOVES rather than blanks, so it is the one
+// that must run last: every other pass preserves byte offsets (see blank)
+// because a later pass depends on them, and nothing runs after this one.
+func stripComments(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		for j := 0; j < len(line); j++ {
+			if line[j] != '#' {
+				continue
+			}
+			if j == 0 || line[j-1] == ' ' || line[j-1] == '\t' {
+				lines[i] = line[:j]
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// bashLintPayload is the subset of Claude Code's PreToolUse payload
+// bash-lint reads — parsed defensively for the same reason hookPayload is:
+// the schema is Claude Code's, not kraken's.
+type bashLintPayload struct {
+	ToolName  string `json:"tool_name"`
+	ToolInput struct {
+		Command string `json:"command"`
+	} `json:"tool_input"`
+}
+
+// BashLintStdin reads one PreToolUse payload from r and returns the block
+// message and whether to block. Anything that is not a well-formed Bash
+// payload allows: the hook must never fail a tool call by accident.
+func BashLintStdin(r io.Reader) (string, bool) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return "", false
+	}
+	var p bashLintPayload
+	if json.Unmarshal(raw, &p) != nil {
+		return "", false
+	}
+	if p.ToolName != "Bash" || strings.TrimSpace(p.ToolInput.Command) == "" {
+		return "", false
+	}
+	if msg := lintBashCommand(p.ToolInput.Command); msg != "" {
+		return msg, true
+	}
+	return "", false
+}
+
+// bashLintCommand is the exact hook command string cell.go installs and
+// hasHookCommand matches for idempotency — the same single-definition rule
+// prHookCommand follows, for the same drift reason.
+func bashLintCommand(krakenBin string) string {
+	return krakenBin + " bash-lint"
+}
+
+// bashLintHookEntry is the PreToolUse matcher group kraken installs into a
+// cell's worktree settings.
+func bashLintHookEntry(krakenBin string) map[string]any {
+	return map[string]any{
+		"matcher": "Bash",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": bashLintCommand(krakenBin),
+			},
+		},
+	}
+}

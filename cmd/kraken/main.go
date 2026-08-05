@@ -61,8 +61,8 @@ func main() {
 		cmdShipIOS(rest)
 	case "pr-hook":
 		cmdPrHook(rest)
-	case "recall-hook":
-		cmdRecallHook(rest)
+	case "bash-lint":
+		cmdBashLint()
 	case "questions":
 		cmdQuestions(rest)
 	case "feedback":

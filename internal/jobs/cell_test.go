@@ -201,6 +201,10 @@ func TestMergeHookSettings(t *testing.T) {
 					},
 				})
 			}
+			// and the PreToolUse bash-lint group, folded in for the same
+			// reason — TestMergeHookSettingsInstallsBashLint owns its
+			// semantics; this table is about pr-hook merging
+			wantHooks["PreToolUse"] = []any{entry("kraken bash-lint")}
 			c.want["hooks"] = wantHooks
 			var gotParsed map[string]any
 			if err := json.Unmarshal(got, &gotParsed); err != nil {
