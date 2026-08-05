@@ -146,8 +146,13 @@ func TestThreadSpawnCommandBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read staged seed: %v", err)
 	}
-	if string(seed) != "explain the block" {
-		t.Errorf("staged seed = %q, want the seed text", string(seed))
+	// carl's question leads; the standing prompt guard rides under it
+	// (TestThreadSeedCarriesTheGuard owns the guard's wording)
+	if !strings.HasPrefix(string(seed), "explain the block") {
+		t.Errorf("staged seed = %q, want it to open with the seed text", string(seed))
+	}
+	if string(seed) != threadSeed("explain the block") {
+		t.Errorf("staged seed = %q, want the guarded seed", string(seed))
 	}
 }
 
@@ -1114,6 +1119,39 @@ func TestThreadBriefStatesTheContract(t *testing.T) {
 		if strings.Contains(lower, strings.ToLower(banned)) {
 			t.Errorf("thread brief mentions %q — that is zeus' contract, not a thread's:\n%s", banned, brief)
 		}
+	}
+}
+
+// TestThreadSeedCarriesTheGuard holds the prompt-side half of the thread
+// contract. The brief states it in full, but a fork wakes up holding zeus'
+// whole conversation with the brief at the far end; measured across one
+// night's threads, prompts carrying a guard clause were obeyed (2/2 wrote
+// nothing) while bare-question prompts were not (2/4 wrote artifacts, ran
+// kraken write verbs, or spawned a teammate — one emitted /aim's closing
+// line from a thread pane). The guard rides the LAST text before the
+// thread's first token, which is the one placement the recency gradient
+// favors.
+func TestThreadSeedCarriesTheGuard(t *testing.T) {
+	seeded := threadSeed("why does the export table hold arrays?")
+	if !strings.HasPrefix(seeded, "why does the export table hold arrays?") {
+		t.Fatalf("carl's question must lead the prompt: %q", seeded)
+	}
+	lower := strings.ToLower(seeded)
+	for _, want := range []struct{ token, why string }{
+		{"about the job's work", "the question/request distinction is the guard's core"},
+		{"do not edit artifacts", "the measured violation: threads writing the artifact set"},
+		{"kraken write verbs", "the measured violation: questions add / load set from a thread"},
+		{"do not spawn agents", "the measured violation: a thread spawning a hermes teammate"},
+		{"leave the doing to zeus", "the escape hatch — say so instead of complying"},
+	} {
+		if !strings.Contains(lower, want.token) {
+			t.Errorf("thread seed guard is missing %q (%s):\n%s", want.token, want.why, seeded)
+		}
+	}
+	// the revive path stages no prompt at all; an empty seed must stay empty
+	// or stagedCommand would stage a guard-only prompt on every revive
+	if threadSeed("") != "" {
+		t.Error("empty seed must stay empty — revive resumes an existing conversation")
 	}
 }
 

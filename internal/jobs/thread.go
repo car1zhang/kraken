@@ -447,7 +447,7 @@ func threadSpawnCommand(j *Job, tid, title, seed string, resumeArgs []string) (s
 	wt := threadWorktree(j)
 	return stagedCommand(argv,
 		spawnInput{"--append-system-prompt", threadBrief(j, tid, title, wt), threadBriefPath(j, tid)},
-		spawnInput{"--", seed, threadPromptPath(j, tid)})
+		spawnInput{"--", threadSeed(seed), threadPromptPath(j, tid)})
 }
 
 // threadWorktree resolves the cell worktree a thread opens in — the same
