@@ -261,8 +261,17 @@ report file by name with its size and READ IN FULL or PARTIAL (saying what was s
 finding may only cite a report listed READ IN FULL, or a PARTIAL one when the finding comes from a
 section the skipped-note names as read (a legitimately partial read of an oversized report must not
 push the pass into mislabelling it FULL). List the reports as you finish reading them,
-before any finding is written; the order is the honest part. Alongside it: **every finding cites
-its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
+before any finding is written; the order is the honest part. **A scout's own READ rows get the same
+treatment: they are claims, not facts, and the aggregate you print inherits whatever they
+inflated.** Three scouts in one measured night claimed "reduced in full" on transcripts their
+sidecars show were touched only by `grep '^\[assistant\]' -A4 | head -80` — twelve files, eighty
+grep'd lines, twelve rows saying READ — and the lead's "97 READ / 9 SAMPLED" aggregate was exact
+arithmetic over false inputs, while its one verification habit checked that the LEAD had read its
+eleven reports, the link that was never the problem. So before trusting the aggregate, spot-check
+the scouts of at least the two LARGEST assignments against their own transcripts (a real full read
+leaves `Read` calls or paged `sed`/`awk` ranges collectively covering the staged file; a capped
+assistant-prose grep does not), and say in Coverage which scouts were spot-checked. Alongside it:
+**every finding cites its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
 line out of it.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
 snapshot, the watched fact's edge id — and a `solo: true` night says so once at the top and cites what it read
