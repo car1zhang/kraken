@@ -104,6 +104,43 @@ func hookArgs(args []string) (string, bool) {
 	return slug, slug != ""
 }
 
+// --- recall-hook ---
+
+// cmdRecallHook is the thin dispatch wrapper for `kraken recall-hook` — the
+// Claude Code UserPromptSubmit/PostToolUse hook (jobs.RunRecallHook does the
+// work), kept out of usage() alongside pr-hook for the same reason. It shares
+// the two flags the whole hook family carries but NOT hookArgs, whose
+// contract requires exactly one bare slug: recall is keyed on the SESSION in
+// the hook payload, never a slug, so here any bare argument is the malformed
+// shape and the correct response is to run nothing — a hook that dies on an
+// unexpected argument fails the turn it fired on, the one thing a hook must
+// never do. This dispatch case was silently DROPPED once, by a refactor of
+// this very region (the limit-hook rewrite), leaving every installed
+// recall-hook command calling a verb that no longer existed while the build
+// stayed green — TestMainDispatchesEveryHookVerb is the pin that makes that
+// impossible to repeat quietly.
+func cmdRecallHook(args []string) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--serve-addr":
+			i++
+			if i >= len(args) {
+				return
+			}
+			os.Setenv("KRAKEN_SERVE_ADDR", args[i])
+		case "--db-path":
+			i++
+			if i >= len(args) {
+				return
+			}
+			os.Setenv("KRAKEN_DB_PATH", args[i])
+		default:
+			return // any bare arg: malformed, run nothing
+		}
+	}
+	jobs.RunRecallHook(os.Stdin, os.Stdout)
+}
+
 // --- bash-lint ---
 
 // cmdBashLint is the thin dispatch wrapper for `kraken bash-lint` — a

@@ -693,23 +693,15 @@ func krakenHookEntry(slug, krakenBin string) map[string]any {
 // entry rather than matching it, precisely because this string CHANGES
 // between installs when serve's address does.
 //
-// It mirrors prHookCommand's flag treatment exactly — --serve-addr when
-// kraken serve resolved a non-default bind address, --db-path when
-// KRAKEN_DB_PATH is set in serve's own environment — because the propagation
-// problem is identical: a recall-hook invocation is a brand new OS process
-// spawned by this string, inheriting none of serve's flags or env. What it
-// does NOT carry is a slug: recall is keyed on the SESSION named in the hook
-// payload, and a cell's zeus, its side threads and its teammates all fire
-// this hook from the same worktree with different sessions.
+// It renders its flags through the family's shared hookCommandFlags — the
+// propagation problem is identical to pr-hook's and limit-hook's: a
+// recall-hook invocation is a brand new OS process spawned by this string,
+// inheriting none of serve's flags or env. What it does NOT carry is a slug:
+// recall is keyed on the SESSION named in the hook payload, and a cell's
+// zeus, its side threads and its teammates all fire this hook from the same
+// worktree with different sessions.
 func recallHookCommand(krakenBin string) string {
-	cmd := krakenBin + " recall-hook"
-	if addr := currentHookServeAddr(); addr != "" && addr != defaultServeAddr {
-		cmd += " --serve-addr " + addr
-	}
-	if dbPath := os.Getenv("KRAKEN_DB_PATH"); dbPath != "" {
-		cmd += " --db-path " + dbPath
-	}
-	return cmd
+	return krakenBin + " recall-hook" + hookCommandFlags()
 }
 
 // recallHookEntry is the hook group kraken installs under each of
