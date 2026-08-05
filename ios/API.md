@@ -931,9 +931,10 @@ GET/POST).
 
 ## Knowledge graph
 
-Seven routes over the `kg_*` tables (internal/api/graph.go), in the order
-register.go wires them: `graph`, `graph/stats`, `graph/node`,
-`graph/pending`, `graph/search`, `graph/add`, `graph/episode-done`.
+Eight routes over the `kg_*` tables (internal/api/graph.go, plus
+internal/api/recall.go), in the order register.go wires them: `graph`,
+`graph/stats`, `graph/node`, `graph/pending`, `graph/search`, `graph/recall`,
+`graph/add`, `graph/episode-done`.
 **All additive — `apiContract` stays 5.** Every one is a NEW PATH, never a
 key added to, retyped in, or removed from an existing shape, so a client that
 predates them decodes nothing differently.
@@ -959,9 +960,10 @@ saw the old spelling.)
 
 **Mirror mode**: the four reads plus `POST /api/graph/search` stay reachable
 under `--mirror` (search is a POST only because a query is arbitrary user
-text, not because it writes). `POST /api/graph/add` and
-`POST /api/graph/episode-done` are gated with the usual 403
-`disabled in mirror mode`.
+text, not because it writes). `POST /api/graph/recall`,
+`POST /api/graph/add` and `POST /api/graph/episode-done` are gated with the
+usual 403 `disabled in mirror mode` — recall reads like a search but records
+what it delivered.
 
 ### `GET /api/graph`
 
@@ -1179,6 +1181,72 @@ acknowledged as done while the real episode sat pending forever.
 
 Errors: 400 (bad JSON, unknown field, missing/non-positive id), 404, 405,
 413, 500. Gated under `--mirror`.
+
+### `POST /api/graph/recall` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+Mid-conversation memory (api/recall.go, jobs/recall.go). Its only caller is
+`kraken recall-hook`, wired by every cell worktree as two Claude Code hooks:
+`UserPromptSubmit` (query = the user's new message) and `PostToolUse`
+(matcher-less — every tool call — query = the transcript's last assistant
+text). The hook POSTs its payload here and emits the response as
+`hookSpecificOutput.additionalContext`.
+
+`Stop` is deliberately not wired: Claude Code's hooks reference is explicit
+that `additionalContext` at Stop **continues the turn** rather than
+annotating it, so injecting there would resume every agent past its own
+stop-gates and chain paid calls until retrieval ran dry. `PostToolUse` has no
+such problem — its context lands in a turn already continuing. The server
+side is event-agnostic — nothing here reads `event` — so wiring changes live
+in `jobs.recallHookEvents` alone.
+
+Two server-side properties make the per-tool-call cadence affordable and
+correct: firings for one `session_id` SERIALIZE on an in-process per-session
+mutex (parallel tool calls fire parallel hooks; unserialized they could read
+one skip-set and double-inject), and a firing whose query is byte-identical
+to the session's last completed one — every post-tool-call firing after the
+first within one assistant message — short-circuits to `""` before any
+retrieval or embedding. The hook itself also skips any firing whose payload
+carries an `agent_id`: settings hooks run inside in-process subagents too,
+under the PARENT's `session_id`, and injecting there would mark facts
+delivered into a context that is discarded when the subagent finishes.
+
+Request:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `session_id` | string | required in practice | the dedup key; blank/whitespace always yields an empty context, since without one the same facts would re-inject on every firing |
+| `event` | string | optional | `hook_event_name` verbatim — carried for debugging, never branched on |
+| `prompt` | string | optional | the user's new message — `UserPromptSubmit`'s query |
+| `transcript_path` | string | optional | fallback query source: the transcript's last assistant text, read when `prompt` is empty — `PostToolUse`'s query, since its payload carries no prompt |
+
+Response: `{"context": string}` — the rendered block, or `""`.
+
+**`""` is a normal 200, never an error status.** The caller is a hook running
+inside somebody else's conversation, and "the graph has nothing to add" is the
+common case. It is what comes back for: no query text, nothing retrieved,
+nothing that clears `core.RelevantEdge`, everything relevant already delivered
+to this session, or any store failure on the way — a hook that breaks a turn
+is a bug by definition.
+
+A non-empty context is recorded in `kg_recall` (one row per `(session_id,
+edge_id)`) BEFORE it is returned, so **a given fact reaches a given session at
+most once**; a failure to record withdraws the block rather than sending an
+undeduplicatable one. What is recorded is exactly the facts the block CARRIES,
+not every fact that cleared relevance — one skipped by the byte cap stays
+eligible for a later firing. A request whose caller has already gone (the hook
+gives up at 4s) records nothing at all, for the same reason: a fact nobody read
+is not a fact delivered. The block is byte-identical in format to the one
+`graphContext` appends to a fresh cell's brief — same header, same
+`graphContextFacts`/`graphContextBytes` caps.
+
+The query text is redacted (`core.RedactSecrets`) before it is sent to the
+embedding API — this is the only path in the binary that ships a raw user
+prompt off the machine. The BM25 leg searches the unredacted query, which
+never leaves kraken.db.
+
+Additive: `apiContract` stays 5. Gated under `--mirror` (it writes).
+
+Errors: 400 (bad JSON, unknown field), 405, 413, 500 (no store wired).
 
 ---
 

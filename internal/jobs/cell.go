@@ -666,6 +666,79 @@ func krakenHookEntry(slug, krakenBin string) map[string]any {
 	}
 }
 
+// recallHookCommand builds the exact `kraken recall-hook` command string a
+// cell's recall hooks run. Unlike prHookCommand it is not doing
+// double duty as an identity test — mergeHookSettings replaces the recall
+// entry rather than matching it, precisely because this string CHANGES
+// between installs when serve's address does.
+//
+// It mirrors prHookCommand's flag treatment exactly — --serve-addr when
+// kraken serve resolved a non-default bind address, --db-path when
+// KRAKEN_DB_PATH is set in serve's own environment — because the propagation
+// problem is identical: a recall-hook invocation is a brand new OS process
+// spawned by this string, inheriting none of serve's flags or env. What it
+// does NOT carry is a slug: recall is keyed on the SESSION named in the hook
+// payload, and a cell's zeus, its side threads and its teammates all fire
+// this hook from the same worktree with different sessions.
+func recallHookCommand(krakenBin string) string {
+	cmd := krakenBin + " recall-hook"
+	if addr := currentHookServeAddr(); addr != "" && addr != defaultServeAddr {
+		cmd += " --serve-addr " + addr
+	}
+	if dbPath := os.Getenv("KRAKEN_DB_PATH"); dbPath != "" {
+		cmd += " --db-path " + dbPath
+	}
+	return cmd
+}
+
+// recallHookEntry is the hook group kraken installs under each of
+// recallHookEvents. Unlike krakenHookEntry it carries NO matcher, for a
+// different reason per event: UserPromptSubmit has no tool to match on (a
+// matcher key there is at best ignored and at worst a config Claude Code
+// refuses to load), and on PostToolUse the absence is the point — every tool
+// call qualifies, since which tool ran says nothing about whether the
+// conversation just turned toward something the graph knows.
+func recallHookEntry(krakenBin string) map[string]any {
+	return map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": recallHookCommand(krakenBin),
+			},
+		},
+	}
+}
+
+// recallHookEvents are the hook events mid-conversation recall rides on.
+// UserPromptSubmit queries on carl's new message, landing in front of the
+// agent before it starts thinking; PostToolUse queries on the assistant's
+// last text after every tool call, which is what keeps memory arriving as a
+// long turn moves through new territory. PostToolUse is safe where Stop is
+// not because its additionalContext lands in a turn that is ALREADY
+// continuing — nothing is resumed. Its per-tool-call frequency is paid for
+// server-side: concurrent firings for one session serialize on a per-session
+// mutex in Recall (parallel tool calls fire parallel hooks, which would
+// otherwise race the skip-set read against the mark and double-inject), and
+// a firing whose query matches the session's last completed one — every
+// firing after the first within one assistant message — short-circuits
+// before retrieval, so the steady-state cost is one local round trip.
+//
+// STOP IS DELIBERATELY NOT HERE, and the reason is a property of Claude Code
+// rather than a preference. Its hooks reference is explicit that
+// additionalContext at Stop CONTINUES the turn — "The turn doesn't stop; it
+// continues so Claude can read the feedback" — so a Stop injection is not an
+// injection, it is a resume. Wired, it would resume every agent straight past
+// zeus' own stop-gates (the manual-test gate, the /do gate), hold blocked
+// cells at "working" in the daemon's roll call by keeping their zeus running,
+// and chain paid model calls until retrieval finally ran dry. A feature whose
+// whole contract is "invisible when it has nothing to say" cannot be wired to
+// an event where saying something restarts the conversation.
+//
+// It is a list rather than a constant because RunRecallHook is event-agnostic
+// (it echoes hook_event_name verbatim and Recall never reads it): wiring or
+// unwiring an event is a change here and nowhere else.
+var recallHookEvents = []string{"UserPromptSubmit", "PostToolUse"}
+
 // mergeHookSettings renders a cell's .claude/settings.json: kraken's
 // PostToolUse hook entry (krakenHookEntry) appended into whatever's already
 // there. existing empty/nil renders a fresh file. Non-empty existing bytes
@@ -678,6 +751,17 @@ func krakenHookEntry(slug, krakenBin string) map[string]any {
 // since that's what encodes slug + binary path), nothing is appended — a
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
+//
+// It renders THREE kraken groups across TWO hook events: the pr-hook group
+// under PostToolUse, and a recall group under each of recallHookEvents —
+// which includes PostToolUse, so that key ends up holding the pr-hook group
+// AND a recall group side by side. The two kinds use DIFFERENT merge rules
+// and the difference is deliberate — pr-hook appends when its exact command
+// is absent, recall REPLACES — for the reason spelled out at the recall loop
+// below; the non-obvious consequence is that the recall loop runs its removal
+// pass over the very list the pr-hook append just wrote, which is why
+// withoutRecallHooks must never match a pr-hook command. Either way, groups
+// kraken did not write and unrelated top-level keys survive untouched.
 func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) {
 	parsed := map[string]any{}
 	if len(bytes.TrimSpace(existing)) > 0 {
@@ -696,8 +780,33 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	command := prHookCommand(slug, krakenBin)
 	if !hasHookCommand(postToolUse, command) {
 		hooks["PostToolUse"] = append(postToolUse, krakenHookEntry(slug, krakenBin))
-		parsed["hooks"] = hooks
 	}
+	// The recall hook (recall.go) is REPLACED rather than appended-if-absent,
+	// which is the one place this function's two halves differ. PostToolUse's
+	// entry is keyed by slug AND binary path, so an exact-command match is a
+	// good identity test for it. A recall command carries neither — it is the
+	// binary plus flags — so the only thing that varies between installs is
+	// --serve-addr/--db-path, and append-if-absent handled that variation in
+	// the worst possible way: a serve restart on a different port left the OLD
+	// entry in place and added a second one, so every prompt in that cell then
+	// ran two hooks, one of them POSTing at a dead address. Dropping every
+	// group whose command mentions " recall-hook" and re-adding the current
+	// one kills the stale entry and the duplicate together, and makes re-merge
+	// byte-identical rather than merely non-duplicating.
+	for _, event := range recallHookEvents {
+		groups, _ := hooks[event].([]any)
+		// A fresh entry per event rather than one shared map: with two wired
+		// events, one shared entry would be the SAME mutable map in two
+		// places in the tree, where a later mutation through one key silently
+		// edits the other.
+		hooks[event] = append(withoutRecallHooks(groups), recallHookEntry(krakenBin))
+	}
+	// Assigned once, unconditionally: with the PostToolUse merge and the
+	// recall loop above both writing into `hooks`, every branch that could
+	// leave it detached from `parsed` (an absent key, a "hooks" that wasn't
+	// an object) is covered by one line rather than by each branch
+	// remembering.
+	parsed["hooks"] = hooks
 	mergeTeammateSettings(parsed)
 	out, err := json.MarshalIndent(parsed, "", "  ")
 	if err != nil {
@@ -741,8 +850,8 @@ func mergeTeammateSettings(parsed map[string]any) {
 // disappears), this constant is what a grep for the breakage lands on.
 const teamsEnvVar = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 
-// hasHookCommand reports whether any PostToolUse group in groups already
-// contains a hook whose command exactly matches command.
+// hasHookCommand reports whether any group in groups (one hook event's list)
+// already contains a hook whose command exactly matches command.
 func hasHookCommand(groups []any, command string) bool {
 	for _, g := range groups {
 		group, ok := g.(map[string]any)
@@ -766,12 +875,74 @@ func hasHookCommand(groups []any, command string) bool {
 	return false
 }
 
-// installHookSettings writes (or merges kraken's entry into) the cell's
-// project-scoped Claude Code hook config, <wt>/.claude/settings.json, so
-// zeus' `gh pr create` calls self-report to kraken pr-hook. Called from
-// StartCell after the worktree is up and before claude launches in it. Never
-// fails the cell: attachment still works via the daemon's scan/poll paths, so
-// any failure here is a stderr warning, not an error return.
+// recallHookMarker is what identifies a hook group as kraken's recall entry
+// when the exact command string cannot be relied on — which is every install
+// after the first with a different --serve-addr or --db-path. It is the verb
+// with its leading space, so it matches the command kraken writes and cannot
+// match a path component of some unrelated tool.
+const recallHookMarker = " recall-hook"
+
+// withoutRecallHooks returns groups with every group dropped that contains a
+// hook whose command mentions recallHookMarker — the removal half of
+// mergeHookSettings' replace semantics. A command that also mentions
+// " pr-hook" is exempt: `kraken pr-hook recall-hook` — the pr-hook command of
+// a job SLUGGED recall-hook — contains the marker as its slug argument, and
+// without the exemption the recall replace pass (which runs over PostToolUse,
+// where the pr-hook group lives) would silently drop that cell's pr-hook on
+// every install.
+//
+// A whole GROUP goes, not the matching hook inside it, because kraken writes
+// its recall entry as a group of exactly one hook: a group carrying kraken's
+// command plus somebody else's would have to be a hand-edit of kraken's own
+// entry, and there is no reading of that under which the right answer is to
+// keep half of it. A group whose shape isn't the expected object/list is left
+// alone — this function's job is removing what kraken put there, not
+// normalizing a repo's own config.
+func withoutRecallHooks(groups []any) []any {
+	var out []any
+	for _, g := range groups {
+		if group, ok := g.(map[string]any); ok &&
+			groupMentions(group, recallHookMarker) && !groupMentions(group, " pr-hook") {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
+// groupMentions reports whether any hook in one settings group carries a
+// command containing sub.
+func groupMentions(group map[string]any, sub string) bool {
+	hookList, ok := group["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range hookList {
+		hook, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cmd, ok := hook["command"].(string); ok && strings.Contains(cmd, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// installHookSettings writes (or merges kraken's entries into) the cell's
+// project-scoped Claude Code hook config, <wt>/.claude/settings.json. Three
+// kraken groups go in, across two events: a Bash-matcher PostToolUse group so
+// zeus' `gh pr create` calls self-report to `kraken pr-hook`, plus a
+// matcher-less recall group under each of recallHookEvents (UserPromptSubmit
+// and PostToolUse) so every prompt AND every tool call in the cell asks
+// `kraken recall-hook` whether the knowledge graph has anything to add
+// (recall.go). Called from StartCell after the worktree is up and before
+// claude launches in it.
+//
+// Never fails the cell, and each kind is safe to lose for its own reason:
+// PR attachment still happens via the daemon's scan/poll paths, and recall is
+// an enhancement whose absence is a cell that simply remembers nothing. So any
+// failure here is a stderr warning, not an error return.
 func installHookSettings(wt string, j *Job) {
 	slug := util.Slugify(j.Slug)
 	dir := filepath.Join(wt, ".claude")

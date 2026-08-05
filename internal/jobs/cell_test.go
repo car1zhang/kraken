@@ -182,6 +182,26 @@ func TestMergeHookSettings(t *testing.T) {
 			wantEnv[teamsEnvVar] = "1"
 			c.want["env"] = wantEnv
 			c.want["teammateMode"] = "tmux"
+			// every render likewise carries recall's matcher-less group under
+			// each of recallHookEvents, APPENDED after whatever that event
+			// already expects (PostToolUse holds the pr-hook group too, and
+			// the recall merge runs last); folded in here for the same reason
+			// as the switches above — this table is about pr-hook merging,
+			// and restating the recall groups per case would bury what each
+			// case actually varies
+			wantHooks, ok := c.want["hooks"].(map[string]any)
+			if !ok {
+				wantHooks = map[string]any{}
+			}
+			for _, event := range recallHookEvents {
+				existing, _ := wantHooks[event].([]any)
+				wantHooks[event] = append(existing, map[string]any{
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "kraken recall-hook"},
+					},
+				})
+			}
+			c.want["hooks"] = wantHooks
 			var gotParsed map[string]any
 			if err := json.Unmarshal(got, &gotParsed); err != nil {
 				t.Fatalf("mergeHookSettings(%q) produced invalid JSON: %v\n%s", c.existing, err, got)
@@ -336,9 +356,88 @@ func TestMergeHookSettingsIdempotentWithNonDefaultAddr(t *testing.T) {
 	if !reflect.DeepEqual(firstParsed, secondParsed) {
 		t.Fatalf("second merge duplicated the entry: first=%s second=%s", first, second)
 	}
+	// PostToolUse legitimately holds two groups now — pr-hook's beside
+	// recall's — so the E7 invariant is one PR-HOOK command, counted by
+	// command rather than asserted as the whole list.
 	groups := secondParsed["hooks"].(map[string]any)["PostToolUse"].([]any)
-	if len(groups) != 1 {
-		t.Fatalf("want exactly 1 PostToolUse group after re-merge, got %d: %v", len(groups), groups)
+	prHookGroups := 0
+	for _, g := range groups {
+		raw, _ := json.Marshal(g)
+		if strings.Contains(string(raw), " pr-hook") {
+			prHookGroups++
+		}
+	}
+	if prHookGroups != 1 {
+		t.Fatalf("want exactly 1 pr-hook group after re-merge, got %d: %v", prHookGroups, groups)
+	}
+	// the recall hook shares prHookCommand's addr/db-path flag treatment, so it
+	// is exposed to the exact E7 bug this test exists for: entry-builder and
+	// dedup check disagreeing under a non-default addr and re-appending forever.
+	// Counted by COMMAND rather than by group, because PostToolUse legitimately
+	// holds the pr-hook group beside recall's — the invariant is one
+	// recall-hook command per event, not one group.
+	for _, event := range recallHookEvents {
+		groups := secondParsed["hooks"].(map[string]any)[event].([]any)
+		recallGroups := 0
+		for _, g := range groups {
+			raw, _ := json.Marshal(g)
+			if strings.Contains(string(raw), " recall-hook") {
+				recallGroups++
+			}
+		}
+		if recallGroups != 1 {
+			t.Fatalf("want exactly 1 recall-hook group under %s after re-merge, got %d: %v", event, recallGroups, groups)
+		}
+	}
+}
+
+// TestRecallHookEventsPinsTheWiring pins the wiring literal itself, because
+// every other test here reads recallHookEvents and so would silently follow
+// a revert or a widening. Exactly two events: UserPromptSubmit (query = the
+// new prompt) and PostToolUse (query = the assistant's last text, per tool
+// call — safe because its additionalContext lands in a turn that is already
+// continuing). Stop is deliberately NOT wired: Claude Code's hooks reference
+// is explicit that additionalContext at Stop CONTINUES the turn, so a
+// Stop-wired recall would resume every agent past zeus' own stop-gates, hold
+// blocked cells at "working" in the roll call, and chain paid model calls
+// until retrieval ran dry (review round 1, blocking finding). Re-adding
+// "Stop" must come with a deliberate decision about those three
+// consequences, not ride in on a refactor.
+func TestRecallHookEventsPinsTheWiring(t *testing.T) {
+	want := []string{"UserPromptSubmit", "PostToolUse"}
+	if !reflect.DeepEqual(recallHookEvents, want) {
+		t.Fatalf("recallHookEvents = %v, want exactly %v — see this test's comment before changing it", recallHookEvents, want)
+	}
+}
+
+// TestMergeHookSettingsSurvivesARecallHookSlug pins the marker collision: a
+// job slugged `recall-hook` yields the pr-hook command `kraken pr-hook
+// recall-hook`, which CONTAINS withoutRecallHooks' " recall-hook" marker as
+// its slug argument — and the recall replace pass runs over PostToolUse,
+// where that pr-hook group lives. Without the pr-hook exemption the group was
+// silently dropped on every install, and the cell's PRs degraded to the
+// daemon's scan/poll attachment with nothing logged.
+func TestMergeHookSettingsSurvivesARecallHookSlug(t *testing.T) {
+	out, err := mergeHookSettings(nil, "recall-hook", "kraken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	groups := parsed["hooks"].(map[string]any)["PostToolUse"].([]any)
+	prHook, recall := 0, 0
+	for _, g := range groups {
+		raw, _ := json.Marshal(g)
+		if strings.Contains(string(raw), " pr-hook") {
+			prHook++
+		} else if strings.Contains(string(raw), " recall-hook") {
+			recall++
+		}
+	}
+	if prHook != 1 || recall != 1 {
+		t.Fatalf("PostToolUse for slug recall-hook holds %d pr-hook and %d recall groups, want 1 and 1: %s", prHook, recall, out)
 	}
 }
 

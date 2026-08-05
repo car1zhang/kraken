@@ -24,6 +24,18 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v19: drop kg_recall. Nothing to put back — v19 is a single
+	// additive CREATE over a v18 shape that had no such table, so the drop is
+	// the whole reversal (the v18 arm below owns the bare-CREATE-vs-IF-NOT-
+	// EXISTS reasoning this arm exists to serve).
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 19 {
+		if _, err := s.db.Exec(`DROP TABLE kg_recall`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v19): %v", target, err)
+		}
+	}
 	// Reverse v18: drop linear_issues. Nothing to put back — v18 is a single
 	// additive CREATE over a v17 shape that had no such table, so the drop is
 	// the whole reversal.
@@ -34,8 +46,8 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	// belongs here rather than in a production guard that would also swallow a
 	// genuinely unexpected table at Open().
 	//
-	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
-	// migrate() applies them.
+	// Reversed after v19, for that block's reason: downgrades unwind
+	// newest-first, mirroring the order migrate() applies them.
 	if target < 18 {
 		if _, err := s.db.Exec(`DROP TABLE linear_issues`); err != nil {
 			t.Fatalf("downgrade to v%d (undo v18): %v", target, err)

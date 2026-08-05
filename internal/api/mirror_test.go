@@ -36,14 +36,16 @@ var mirrorGatedRoutes = []string{
 	// route's own gate wraps only the /color it types into a live pane, not
 	// its write.
 	"/api/job/load",
-	// The knowledge graph's two WRITES (graph.go), gated via mirrorGated at
-	// registration rather than inline — unlike feedback/questions/load these
-	// are POST-only routes, so there is no GET on the same path that a route
-	// wrapper would take down with them. Its four reads (/api/graph,
-	// /api/graph/stats, /api/graph/node, /api/graph/pending) and
-	// /api/graph/search stay open: search is a POST only because a query is
-	// arbitrary user text, and it writes nothing.
-	"/api/graph/add", "/api/graph/episode-done",
+	// The knowledge graph's three WRITES (graph.go, recall.go), gated via
+	// mirrorGated at registration rather than inline — unlike
+	// feedback/questions/load these are POST-only routes, so there is no GET
+	// on the same path that a route wrapper would take down with them. Its
+	// four reads (/api/graph, /api/graph/stats, /api/graph/node,
+	// /api/graph/pending) and /api/graph/search stay open: search is a POST
+	// only because a query is arbitrary user text, and it writes nothing.
+	// /api/graph/recall is the one that reads like search and is gated
+	// anyway — it records every fact it delivers in kg_recall.
+	"/api/graph/add", "/api/graph/episode-done", "/api/graph/recall",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",

@@ -54,8 +54,11 @@ import (
 // per-conversation `ts` watermarks that make polling incremental) — and
 // touches nothing else (see schemaV17). Version 18 adds linear_issues, the
 // Linear intake pass's one-row-per-issue dedupe and delivery-watermark table
-// (see schemaV18 and store/linear.go).
-const schemaVersion = 18
+// (see schemaV18 and store/linear.go). Version 19 adds kg_recall, the
+// per-session record of which graph facts have already been injected into a
+// conversation, which is what makes mid-conversation recall inject a given
+// memory at most once per session (see schemaV19 and store/recall.go).
+const schemaVersion = 19
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1072,6 +1075,57 @@ CREATE TABLE linear_issues (
 );
 `
 
+// schemaV19 adds kg_recall: one row per (session, fact) pair already injected
+// into a live conversation by the mid-conversation recall hook. One brand-new
+// table, no hook — an ABSENT row means "never delivered to this session", which
+// is what every session is on the day the feature ships, so there is nothing
+// anywhere to migrate forward (schemaV7/V15/V17/V18's situation exactly).
+//
+// Purely additive: no existing table, column or row is touched.
+//
+// WHY IT IS A TABLE AT ALL, since the alternative looks cheaper: the dedup has
+// to survive `kraken serve` restarting mid-conversation. A process-local set
+// would re-inject a session's whole recalled history on the first prompt after
+// any restart — the one failure mode the feature's "at most once per session"
+// rule exists to prevent, and the one an in-memory map cannot see coming.
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - The PRIMARY KEY (session_id, edge_id) IS the dedup: MarkRecalled inserts
+//     OR IGNORE against it, so re-marking a fact for a session is a skip rather
+//     than a duplicate row or a moved `ts`. There is no separate id column
+//     because nothing ever addresses a recall row individually.
+//   - session_id LEADS the key deliberately. The only read is
+//     RecalledEdgeIDs' `WHERE session_id = ?`, and a composite primary key can
+//     only be seeked on a PREFIX of its columns — leading with edge_id would
+//     make the one query this table has a full scan (schemaV9's feedback_ts
+//     argument, applied before the fact rather than after).
+//   - NO foreign key on edge_id and no cascade, the kg_* rule schemaV15's last
+//     bullet states and the same stance job_tokens takes: an invalidated (or,
+//     hypothetically, deleted) edge leaves its recall row standing harmlessly,
+//     since the row's whole meaning is "this was already said to this session",
+//     which stays true whatever later happens to the fact.
+//   - ts carries NO DEFAULT, unlike most INTEGER millis columns here. Every
+//     writer is MarkRecalled, which takes the stamp as a parameter and always
+//     supplies it, so a default could only ever paper over a caller bug — and
+//     this column is read by nothing today (it exists so a future pass can age
+//     rows out), which is exactly when a silent 0 would go unnoticed.
+//
+// No secondary index. The table has one query, served by the primary key, and
+// its row count is bounded by facts actually injected into conversations.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v18, long past
+// the point where editing an earlier step would ever run again.
+const schemaV19 = `
+CREATE TABLE kg_recall (
+	session_id TEXT    NOT NULL,             -- claude's own session uuid; the dedup scope
+	edge_id    INTEGER NOT NULL,             -- the injected fact (kg_edges.id); no FK, per the kg_* no-FK rule
+	ts         INTEGER NOT NULL,             -- unix millis: when it was injected
+	PRIMARY KEY (session_id, edge_id)
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1126,9 +1180,12 @@ type migrationStep struct {
 // feature is in; see schemaV17);
 // migrations[18] adds linear_issues (no hook — a brand-new table has nothing to
 // migrate forward, and an absent row correctly means "never seen"; see
-// schemaV18).
+// schemaV18);
+// migrations[19] adds kg_recall (no hook — a brand-new table has nothing to
+// migrate forward, and an absent row correctly means "never delivered to this
+// session"; see schemaV19).
 // Future schema changes append
-// migrations[19], migrations[20], ... rather than editing an existing
+// migrations[20], migrations[21], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1150,6 +1207,7 @@ var migrations = map[int]migrationStep{
 	16: {sql: schemaV16, hook: migrateV16Watchlist},
 	17: {sql: schemaV17},
 	18: {sql: schemaV18},
+	19: {sql: schemaV19},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

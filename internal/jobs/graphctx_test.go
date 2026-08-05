@@ -371,10 +371,10 @@ func TestFactLineShape(t *testing.T) {
 // exactly where a "can't happen" branch turns out to be reachable.
 func TestRenderGraphBlockRefusesAHeaderAlone(t *testing.T) {
 	long := store.GraphEdge{EpisodeID: 1, Occurrences: 1, Fact: strings.Repeat("知", graphFactRunes)}
-	if got := renderGraphBlock([]store.GraphEdge{long}); got != "" {
+	if got, _ := renderGraphBlock([]store.GraphEdge{long}); got != "" {
 		t.Errorf("a fact too long to fit produced a header-only block:\n%q", got)
 	}
-	if got := renderGraphBlock(nil); got != "" {
+	if got, _ := renderGraphBlock(nil); got != "" {
 		t.Errorf("renderGraphBlock(nil) = %q, want \"\"", got)
 	}
 }

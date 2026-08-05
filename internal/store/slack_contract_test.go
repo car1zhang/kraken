@@ -244,6 +244,7 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 		`DROP TABLE IF EXISTS slack_inbox`,
 		`DROP TABLE IF EXISTS slack_marks`,
 		`DROP TABLE IF EXISTS linear_issues`,
+		`DROP TABLE IF EXISTS kg_recall`,
 		`PRAGMA user_version = 16`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {
