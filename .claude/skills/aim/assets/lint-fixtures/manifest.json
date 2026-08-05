@@ -20,8 +20,8 @@
   {
     "file": "fail-component-map.svg",
     "expect": "fail",
-    "warnings": 0,
-    "note": "embedded <style> block with CSS custom properties -> STYLE_BLOCK"
+    "warnings": 1,
+    "note": "embedded <style> block with CSS custom properties -> STYLE_BLOCK. The one warning is a TEXT_OVERFLOW on its <text class=\"groupLabel\"> at line 50, and it appeared when the group/region style test moved from a SUBSTRING check over the ancestor-class string to token membership: \"groupLabel\" used to match \"group\" by substring and so was modeled 12px start-anchored, which is not what the CSS does — `.group` selects the class token, never a prefix of a longer name. Dropping that accidental match is correct; what the estimator then falls back to is the class-less guess `middle`, and the warning is the width of THAT guess, not a measurement of how the element really renders. It is accepted rather than fixed because the only thing that anchors this element is the fixture's own inline <style> block, which the linter refuses to read by design — refusing it is this fixture's primary expectation. So: an accepted warning on an element whose real styling is deliberately out of reach, and the pin for the token semantics"
   },
   {
     "file": "fail-banned-element.svg",
