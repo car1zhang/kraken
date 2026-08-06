@@ -43,9 +43,10 @@ func edgeSynthetic(text string) string {
 	return `{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"` + text + `"}]}}`
 }
 
-// All four usage-limit phrases, each inside a record that also satisfies the
-// `api error` prefix. Kind must be "usage-limit" and Transient FALSE — the
-// whole point of the new arm is that a nudge cannot fix an exhausted
+// Every usage-limit phrase, in the shape the banner actually arrives: the
+// real ones carry NO `api error` prefix, and the arm must classify them
+// bare as well as prefixed. Kind must be "usage-limit" and Transient FALSE —
+// the whole point of the arm is that a nudge cannot fix an exhausted
 // account, so a transient classification would restart today's ten-minute
 // eternal nudge under a new name.
 //
@@ -59,15 +60,20 @@ func TestEdgeUsageLimitPhrasesClassifyNonTransient(t *testing.T) {
 		text string
 	}{
 		{"usage limit", "API Error: You have exceeded your usage limit"},
-		{"session limit banner", "API Error: You've hit your session limit · resets 3pm"},
-		{"weekly limit banner", "API Error: You've hit your weekly limit · resets Sunday"},
-		{"opus limit banner", "API Error: You've hit your opus limit · resets Sunday"},
+		{"session limit banner", "You've hit your session limit · resets 3pm (America/New_York)"},
+		{"weekly limit banner", "You've hit your weekly limit · resets Sunday"},
+		{"opus limit banner", "You've hit your opus limit · resets Sunday"},
+		{"per-model-tier banner", "You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."},
+		{"usage credits banner", "Usage credits are required for this model."},
+		// a prefixed limit text must keep classifying too — the marker check
+		// runs before the prefix gate, not instead of it
+		{"prefixed session limit", "API Error: You've hit your session limit · resets 3pm"},
 		// the match is on the LOWERCASED text, so the banner's own casing
 		// (which Claude Code renders in sentence case) must not matter
-		{"upper case banner", "API ERROR: YOU'VE HIT YOUR SESSION LIMIT"},
+		{"upper case banner", "YOU'VE HIT YOUR SESSION LIMIT"},
 		{"mixed case prefix and phrase", "Api Error: You'Ve Hit Your Weekly Limit"},
-		// containment rather than word equality still holds for the phrases
-		// that survived: the banner is rendered inside a longer sentence
+		// containment rather than word equality still holds: the banner is
+		// rendered inside a longer sentence
 		{"phrase embedded in a longer sentence", "API Error: heads up — you've hit your opus limit for now, resets Sunday"},
 	}
 	for _, c := range cases {
@@ -150,10 +156,12 @@ func TestEdgeUsageLimitEntryConditions(t *testing.T) {
 		wantTransient bool
 	}{
 		{
-			// no `api error` prefix: a model TALKING about a usage limit is
-			// not a stall at all, whatever it says
-			name:     "phrase present but no api error prefix",
-			line:     edgeSynthetic("We should handle the usage limit case in the rescue pass"),
+			// no prefix and no limit marker: an unrecognised synthetic text
+			// is not a stall. (A synthetic WITH a marker and no prefix now
+			// classifies — that is the reachability fix — so the fall-through
+			// is pinned on a genuinely marker-less text.)
+			name:     "no prefix and no limit marker",
+			line:     edgeSynthetic("Stream disconnected before completion"),
 			wantKind: "",
 		},
 		{

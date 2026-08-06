@@ -195,15 +195,20 @@ type Stall struct {
 // fix — a fresh turn will hit the exact same wall.
 var nonTransientAPIErrors = []string{"credit balance", "prompt is too long", "invalid api key", "authentication", "billing"}
 
-// usageLimitMarkers flag the api-error texts that mean the ACCOUNT is
+// usageLimitMarkers flag the synthetic-record texts that mean the ACCOUNT is
 // exhausted rather than something being broken. They are split out of
 // nonTransientAPIErrors — which they would otherwise land in, since neither
 // kind is fixable by a retry — because the two want opposite responses: a
 // credit or auth failure needs carl, while an exhausted window is fixable
 // with no human at all by swapping the main login to a pool account that
-// still has headroom. The list is one generic phrase plus the three
+// still has headroom. The list is one generic phrase, the three
 // subscription-window banners Claude Code renders for a plan limit ("You've
-// hit your session limit · resets …", and the weekly and opus equivalents).
+// hit your session limit · resets …", and the weekly and opus equivalents),
+// and the two credit-window shapes measured on this machine 2026-08-06: the
+// per-model-tier banner ("You've reached your <model> limit. Run
+// /usage-credits to continue or switch models with /model."), matched on its
+// remedy token because the model name in it varies with the lead's tier, and
+// the flat "Usage credits are required for this model.".
 //
 // A bare "rate limit" is deliberately NOT here, though it looks like the
 // most obvious member: it also matches an organisation burst 429, which is
@@ -211,7 +216,7 @@ var nonTransientAPIErrors = []string{"credit balance", "prompt is too long", "in
 // Listing it would classify that as an exhausted account, take the retry
 // away, and swap the machine's login to fix something that was about to fix
 // itself.
-var usageLimitMarkers = []string{"usage limit", "hit your session limit", "hit your weekly limit", "hit your opus limit"}
+var usageLimitMarkers = []string{"usage limit", "hit your session limit", "hit your weekly limit", "hit your opus limit", "/usage-credits", "usage credits are required"}
 
 // LastStall reads the final message entry of a transcript JSONL file and
 // classifies it. It reads only a fixed 256 KiB tail window (huge
@@ -347,26 +352,25 @@ func classifyStall(entryType string, msg map[string]any, text string) Stall {
 			return Stall{} // a real model merely mentioning "API Error" isn't a stall
 		}
 		lower := strings.ToLower(text)
-		if !strings.HasPrefix(lower, "api error") {
-			return Stall{}
-		}
-		// This arm returns, so it has to precede the nonTransientAPIErrors
-		// loop below, which merely sets a flag and falls through — the
-		// ordering is a consequence of that shape rather than a tie-break
-		// between two tests that both match.
-		//
-		// The arm itself is what earns its place: without it, the very text
-		// this feature exists for ("You've hit your session limit · resets
-		// …") matches nothing in the non-transient list, so it classifies
-		// api-error TRANSIENT and the daemon's health pass nudges it every
-		// ten minutes, forever, at an account that cannot answer. Transient
-		// is therefore stated here rather than left to the zero value: an
-		// exhausted window does pass on its own, but not on the timescale a
-		// nudge assumes.
+		// The usage-limit check runs BEFORE the "api error" prefix gate, and
+		// that ordering is load-bearing: the limit banners Claude Code
+		// actually writes carry no such prefix (measured 2026-08-06 across
+		// every transcript on this machine — 177 limit banners, all opening
+		// "You've …" or "Usage credits …", zero opening "API Error"), so a
+		// marker check placed behind the gate is unreachable on every real
+		// banner. It also precedes the nonTransientAPIErrors loop below for
+		// a reason of its own: a banner that happens to carry both a limit
+		// marker and a non-transient marker must route to the rescue, which
+		// can fix it unattended, rather than to carl. Transient is stated
+		// rather than left to the zero value: an exhausted window does pass
+		// on its own, but not on the timescale a nudge assumes.
 		for _, s := range usageLimitMarkers {
 			if strings.Contains(lower, s) {
 				return Stall{Kind: "usage-limit", Text: TruncateOneLine(text, 120), Transient: false}
 			}
+		}
+		if !strings.HasPrefix(lower, "api error") {
+			return Stall{}
 		}
 		transient := true
 		for _, s := range nonTransientAPIErrors {

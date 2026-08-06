@@ -34,39 +34,36 @@ func contractStallRealModel(text string) string {
 	return `{"type":"assistant","message":{"model":"claude-fable-5","content":[{"type":"text","text":"` + text + `"}]}}`
 }
 
-// TestContractStallUsageLimitPhrases pins the contract's trigger set: a
-// synthetic record whose text begins `api error` and whose LOWERCASED text
-// contains any of the five listed phrases classifies as
-// Stall{Kind: "usage-limit", Transient: false}.
+// TestContractStallUsageLimitPhrases pins the trigger set: a synthetic
+// record whose LOWERCASED text contains any of the listed phrases classifies
+// as Stall{Kind: "usage-limit", Transient: false} — with NO requirement of
+// an `api error` prefix, because the banners Claude Code actually writes
+// carry none. Every fixture below is a real recorded banner shape, verbatim
+// modulo the reset time; a test that edits its fixture toward what a gate
+// expects (the previous revision manufactured an "API Error: " prefix onto
+// each of these) is asserting the gate rather than the banner, which is how
+// the arm shipped unreachable.
 //
 // Amendment 8 retired the bare "rate limit" marker — it also matched an
 // organisation burst 429, which is genuinely transient and whose unattended
-// auto-retry the usage-limit arm would have removed — so the four remaining
-// phrases are the whole of the arm's positive surface. Each gets its own
-// case, spelled in a casing a real banner would use: the containment test is
-// on the lowercased text, so matching must survive the mixed case Claude Code
-// actually prints. The retired marker's own new obligation is pinned by
-// TestContractStallBareRateLimitStaysTransient below.
+// auto-retry the usage-limit arm would have removed. The retired marker's
+// own obligation is pinned by TestContractStallBareRateLimitStaysTransient
+// below.
 func TestContractStallUsageLimitPhrases(t *testing.T) {
 	cases := []struct {
 		name string
 		text string
 	}{
 		{"usage limit", "API Error: You have exceeded your usage limit for this account"},
-		{"hit your session limit", "You've hit your session limit · resets 5pm"},
+		{"hit your session limit", "You've hit your session limit · resets 5pm (America/New_York)"},
 		{"hit your weekly limit", "You've hit your weekly limit · resets Monday"},
 		{"hit your opus limit", "You've hit your Opus limit · resets in 3 hours"},
+		{"per-model-tier banner", "You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."},
+		{"usage credits required", "Usage credits are required for this model."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// every case needs the `api error` prefix the contract requires;
-			// the three banner phrases are prefixed here rather than in the
-			// table so the phrase under test stays readable.
-			text := c.text
-			if !strings.HasPrefix(strings.ToLower(text), "api error") {
-				text = "API Error: " + text
-			}
-			got := LastStall(writeTranscript(t, contractStallSynthetic(text)))
+			got := LastStall(writeTranscript(t, contractStallSynthetic(c.text)))
 			if got.Kind != "usage-limit" {
 				t.Fatalf("Kind = %q, want %q (got %+v)", got.Kind, "usage-limit", got)
 			}
@@ -212,10 +209,12 @@ func TestContractStallOtherTextsUnchanged(t *testing.T) {
 			wantKind: "",
 		},
 		{
-			// ...and neither is a synthetic record that does not open with
-			// the api-error prefix
-			name:     "synthetic without the api error prefix is not a stall",
-			line:     contractStallSynthetic("You have hit your session limit"),
+			// ...and a synthetic record with neither the api-error prefix
+			// nor a limit marker is still nothing. (The previous revision's
+			// case here put a real limit banner behind this "" expectation,
+			// which pinned the unreachable-arm defect as the requirement.)
+			name:     "synthetic with no prefix and no limit marker is not a stall",
+			line:     contractStallSynthetic("Connection lost — retrying in 5s"),
 			wantKind: "",
 		},
 	}
