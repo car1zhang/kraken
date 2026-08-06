@@ -193,6 +193,33 @@ short form, with /info's overrides:
    `Write` tool, write the file with a Bash heredoc (`cat > <path> <<'EOF'`)*. For how to WAIT on
    those files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet and the
    sub-bullets under it — it is the one specification of the protocol and it applies here unchanged.
+   Two more clauses every researcher brief carries, because phase-1 briefs are where they keep
+   getting dropped (the zsh rules used to live only in the phase-2 skill, and one measured night had
+   every Bash error across eleven sessions be the same hook block on `--include=*.py` from
+   researcher briefs that never mentioned the shell). First, the dialect line, verbatim: *Shell is
+   zsh on macOS: write `--include='*.py'` (quote every glob), `echo "==="` (quote any word starting
+   with `=`), `timeout N cmd` does not exist (use a background watch), never name a loop/read
+   variable `path` or `fpath` (it wipes PATH), use absolute paths (cwd is not stable between
+   calls), and never end a `;`-compound with a grep/sed that may match nothing (close with
+   `; true`).* Second, the file-output contract does not survive re-delegation on its own: a brief
+   that permits its researcher to spawn further agents says the contract passes down VERBATIM —
+   every spawned agent gets its own named output file under the same scratch namespace and the same
+   repo bar — or forbids re-delegation outright. A researcher told "read-only" has re-briefed its
+   own children with "do not write any files", stranding a fan-out's entire findings in chat
+   replies that truncate and vanish. The wait protocol's load-bearing lines, inline because a
+   pointer measurably does not deliver them (the same lead used `-f` in the phase that had only
+   the pointer and `-s` in the phase with the text loaded): delete each report path before
+   spawning, arm ONE background conjunctive until-loop over every path with `-s` (never `-f` —
+   true at byte zero), end the turn, and treat expiry as "one of them is missing".
+   Two evidence rules for what the research may CONCLUDE. A NEGATIVE result from an external
+   API or service — a 404, an empty page, a zero-row answer — is not evidence until a known-good
+   positive control has run in the same session/connection: one cell published four consecutive
+   "X is impossible" artifacts off an endpoint that 404s every request after a session's first,
+   and a single positive control overturned all four. And a conclusion relayed from another cell
+   or a side thread — pasted into your prompt, quoted in a spec — is a HYPOTHESIS with a
+   citation, never a result: re-derive or spot-check it before an artifact rests on it, because
+   relay strips the caveats (the same cell adopted a pasted "no workaround exists" verdict whose
+   underlying zero-row evidence was that same 404 artifact, and built three artifacts on it).
 3. **Write the short version.** Create the set root and write `00-overview.md` per the table above,
    plus the one diagram card that carries its mental model. Skip the diagram only in the rare case
    above, and say in the "go deeper" menu that you did.
@@ -211,6 +238,14 @@ the cell's brief wins wherever it is more specific:
   cards (`1N-<id>.html`) and topic docs (`5N-<topic>.md`) as rounds are requested. Fragments stage
   at `<cellDir>/doc/fragments/<id>.svg`. `artifacts/` is the only board-visible directory and is
   the deliverable.
+- **Before any research fan-out, check for sibling work — unconditionally, never only when the
+  spec points at another job.** Finished jobs' artifacts survive as flat copies in
+  `~/Documents/pluto/` (archived: `~/Documents/pluto/archive/`), prefixed `<slug>-<id>.`; list
+  both dirs for prefixes sharing your slug's leading tokens or naming your system, and skim any
+  hit's `00-overview.md` first. Carl files related jobs minutes apart without cross-references,
+  and one cell re-derived from scratch a spec its sibling had preserved seventeen minutes
+  earlier — hundreds of thousands of output tokens of pure re-derivation that one `ls` would
+  have prevented.
 - **Never run `kraken questions` write verbs on an /info job** — no `add`, `set`, `update`, or
   `remove`. An /info job's questions list stays empty. (`kraken feedback get <slug>` still applies:
   carl's per-artifact feedback arrives as rows, each entry you have not already handled gets acted on
