@@ -1,6 +1,10 @@
 package core
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 // pinned as an invariant, not a value: the point of -x/-y is to clear tmux's
 // 80x24 default-size, which starves pane splits in a never-attached session.
@@ -55,5 +59,53 @@ func TestBuildSpawnArgvPinsModel(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("spawned claude missing --model %s: %v", DefaultModel, argv)
+	}
+}
+
+// the hint keys on the two TCC denial texts alone: any other osascript
+// failure (syntax error, timeout, missing Ghostty) must pass through
+// un-decorated.
+func TestFocusErrHintOnlyOnTCCDenials(t *testing.T) {
+	denials := []string{
+		`kraken-focus-1.applescript:127:325: execution error: System Events got an error: osascript is not allowed assistive access. (-25211)`,
+		`execution error: Not authorized to send Apple events to System Events. (-1743)`,
+	}
+	for _, out := range denials {
+		if hint := focusErrHint(out); hint == "" {
+			t.Fatalf("TCC denial %q got no hint", out)
+		}
+	}
+	for _, out := range []string{"", "execution error: syntax error", "AppleEvent timed out. (-1712)"} {
+		if hint := focusErrHint(out); hint != "" {
+			t.Fatalf("non-denial output %q got hint %q", out, hint)
+		}
+	}
+}
+
+// the fallback's argv is pinned whole, as the shape measured working on
+// 2026-08-06: -d must be present (it is what makes a burst of opens converge
+// on one window), and the target carries the "=" exact-match prefix so a
+// stale snapshot's session name can never prefix-match a live sibling's
+// window out from under the user.
+func TestGhosttyAttachArgs(t *testing.T) {
+	got := strings.Join(ghosttyAttachArgs("cell-demo-2"), " ")
+	want := "-na Ghostty.app --args -e tmux attach-session -d -t =cell-demo-2"
+	if got != want {
+		t.Fatalf("ghosttyAttachArgs = %q, want %q", got, want)
+	}
+}
+
+// the never-kick-a-healthy-client rule hangs on RaiseSession's errors.Is
+// check matching what focusGhosttyWindow's notfound branch returns — a %w
+// quietly becoming %v would resume kicking healthy clients with every other
+// test still green, so the linkage is pinned here.
+func TestNoGhosttyWindowErrIsMatchable(t *testing.T) {
+	err := noGhosttyWindowErr("cell-demo-2", "notfound")
+	if !errors.Is(err, errNoGhosttyWindow) {
+		t.Fatalf("noGhosttyWindowErr does not match errNoGhosttyWindow: %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"cell-demo-2:"`) || !strings.Contains(msg, "set-titles") {
+		t.Fatalf("message lost the session or the set-titles remedy: %q", msg)
 	}
 }

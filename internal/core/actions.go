@@ -156,7 +156,10 @@ func EnsureSession(name, dir string) error {
 
 // CurrentPaneSession returns the tmux session a pane currently belongs to,
 // read fresh rather than trusted from a stale Peer snapshot — the pane may
-// have moved sessions, or vanished, since discovery ran.
+// have moved sessions, or vanished, since discovery ran. Note an
+// unresolvable target does not always take the error branch: a dead pane id
+// can resolve to nothing with exit 0 (measured 2026-08-06), returning
+// ("", nil) — treat an empty name as unresolved, not just a non-nil error.
 func CurrentPaneSession(pane string) (string, error) {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{session_name}").Output()
 	if err != nil {
@@ -199,32 +202,135 @@ func UserShell() string {
 	return "/bin/zsh"
 }
 
-// RaiseOutcome reports how RaiseSession made a session visible: a fresh
-// Ghostty window was attached, or an existing one was focused (FocusErr set
-// when the raise failed and the user must switch windows manually).
+// RaiseOutcome reports how RaiseSession made a session visible: Attached when
+// a Ghostty window was opened for it — either because no client was attached,
+// or because an attached client's window couldn't be raised and was replaced
+// (see RaiseSession) — and neither field set when an existing window was
+// raised in place (or the caller was already inside the session). FocusErr
+// means the user must switch windows manually, and is set in exactly two
+// cases: the raise mechanism failed and the replacement attach failed too, or
+// the raise ran fine but found no matching window (errNoGhosttyWindow, which
+// never falls back).
 type RaiseOutcome struct {
 	Attached bool
 	FocusErr error
 }
 
 // RaiseSession brings a tmux session's Ghostty window to the front, attaching
-// it in a new Ghostty window if no client is attached.
+// it in a new Ghostty window if no client is attached. When a client is
+// attached but the raise MECHANISM fails (most often the assistive-access
+// denial described on focusGhosttyWindow), it falls back to reattaching in a
+// fresh window rather than surfacing the error: every attach kraken opens
+// carries `-d` (see ghosttyAttachArgs), which in the fallback detaches the
+// existing clients, and a kraken-opened client's whole window is its
+// `tmux attach`, so that window closes with it and the swap replaces the
+// window instead of accumulating one (measured 2026-08-06: the client tty
+// swaps and the Ghostty
+// instance count is unchanged across it; a hand-run attach inside a shell
+// window survives as its shell, so only kraken-opened windows close). A raise
+// that ran fine but found no window titled for the session never falls back:
+// the client there is healthy — a background tab, a non-Ghostty terminal,
+// set-titles off — and kicking it would trade a diagnosable message for
+// destroying a window the user may be looking at.
 func RaiseSession(session string) (RaiseOutcome, error) {
+	// an empty target is a caller bug — refuse it by name rather than
+	// letting it surface as a misleading "tmux session  is gone" below. The
+	// "="-prefixed probes below would fail closed anyway; the refusal also
+	// keeps the original hazard un-reintroducible: a bare -t "" resolves to
+	// the CALLER's own session (measured 2026-08-06), so a fallback reached
+	// with one would kick the very client the user is typing in.
+	if session == "" {
+		return RaiseOutcome{}, fmt.Errorf("empty tmux session name")
+	}
 	// the caller may hold a snapshot up to a second old — without this check
-	// a dead session would pop an empty Ghostty window that fails to attach
-	if err := exec.Command("tmux", "has-session", "-t", session).Run(); err != nil {
+	// a dead session would pop an empty Ghostty window that fails to attach.
+	// SessionAlive's "=" exact-match matters here: a bare -t target also
+	// PREFIX-matches, so a dead cell-demo-2 would resolve to its live
+	// sibling cell-demo-2-5 and the fallback below would kick that job's
+	// window out from under the user.
+	if !SessionAlive(session) {
 		return RaiseOutcome{}, fmt.Errorf("tmux session %s is gone", session)
 	}
-	out, err := exec.Command("tmux", "list-clients", "-t", session, "-F", "#{client_tty}").Output()
+	out, err := exec.Command("tmux", "list-clients", "-t", "="+session, "-F", "#{client_tty}").Output()
 	attached := err == nil && strings.TrimSpace(string(out)) != ""
 	if !attached {
-		if err := exec.Command("open", "-na", "Ghostty.app", "--args",
-			"-e", "tmux", "attach-session", "-t", session).Run(); err != nil {
+		if err := openGhosttyAttach(session); err != nil {
 			return RaiseOutcome{}, fmt.Errorf("open Ghostty: %v", err)
 		}
 		return RaiseOutcome{Attached: true}, nil
 	}
-	return RaiseOutcome{FocusErr: focusGhosttyWindow(session)}, nil
+	ferr := focusGhosttyWindow(session)
+	if ferr == nil {
+		return RaiseOutcome{}, nil
+	}
+	if errors.Is(ferr, errNoGhosttyWindow) {
+		return RaiseOutcome{FocusErr: ferr}, nil
+	}
+	if currentSession() == session {
+		// the caller is typing inside the very session it asked to raise, so
+		// its window is already on screen and focused — swapping it would
+		// close that window mid-keystroke for nothing
+		return RaiseOutcome{}, nil
+	}
+	if err := openGhosttyAttach(session); err != nil {
+		return RaiseOutcome{FocusErr: fmt.Errorf("%v; reattach fallback failed: %v", ferr, err)}, nil
+	}
+	// the raise failure is swallowed by the successful fallback — keep it
+	// diagnosable in the event log, since it's the signal that granting
+	// Accessibility would restore in-place raising
+	util.LogEvent("core", "info", "open", fmt.Sprintf("raise %s fell back to reattach: %v", session, ferr))
+	return RaiseOutcome{Attached: true}, nil
+}
+
+// currentSession names the tmux session $TMUX_PANE points into, or "" when
+// $TMUX is unset (e.g. kraken serve under launchd) or the pane can't be
+// resolved. NOT a proof the caller is a human at that window: every
+// descendant of a pane inherits $TMUX/$TMUX_PANE — including a server
+// hand-started from one (see jobs.ownTmuxSession, the same shape) — so the
+// self-target guard over-matches there and declines a swap: in that
+// direction the cost is a missing raise. It can also under-match
+// ($TMUX_PANE unset, or the pane gone), where the guard simply does not
+// fire and the fallback swaps as it would for any other session.
+func currentSession() string {
+	if os.Getenv("TMUX") == "" {
+		return ""
+	}
+	pane := os.Getenv("TMUX_PANE")
+	if pane == "" {
+		return ""
+	}
+	name, err := CurrentPaneSession(pane)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// ghosttyAttachArgs builds the `open` argv that attaches a session in a fresh
+// Ghostty window — split out pure so a test can pin the shape. -d is
+// unconditional: a no-op when no client is attached, and what makes a burst
+// of opens converge on one window (each attach kicks the previous client)
+// instead of leaving strays. "=" forces exact-match resolution for the same
+// prefix-collision reason SessionAlive documents.
+func ghosttyAttachArgs(session string) []string {
+	return []string{"-na", "Ghostty.app", "--args", "-e", "tmux", "attach-session", "-d", "-t", "=" + session}
+}
+
+// openGhosttyAttach opens a fresh Ghostty window running `tmux attach-session`
+// on the session, detaching any existing clients first. Both output streams
+// are captured into the returned error — a bare exit status would leave the
+// one message a user sees when the fallback itself fails naming no cause
+// (measured 2026-08-06: a missing app reports its reason on stderr and
+// nothing else).
+func openGhosttyAttach(session string) error {
+	out, err := exec.Command("open", ghosttyAttachArgs(session)...).CombinedOutput()
+	if err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%v: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 // OpenPeer jumps to a claude: selects its tmux window/pane and raises its
@@ -253,6 +359,20 @@ func OpenPeer(p *Peer) (string, RaiseOutcome, error) {
 	}
 }
 
+// errNoGhosttyWindow marks the raise outcome where osascript exited zero and
+// the script did not answer "ok" (in practice "notfound" — no window titled
+// "<session>:"), which is the one focus failure RaiseSession must NOT
+// reattach on, since the attached client behind it is healthy (a background
+// tab, a non-Ghostty terminal, set-titles off).
+var errNoGhosttyWindow = errors.New("no ghostty window")
+
+// noGhosttyWindowErr wraps errNoGhosttyWindow with the session and the
+// script's output — split out so a test can pin the errors.Is linkage, which
+// is the single line the never-kick-a-healthy-client rule hangs on.
+func noGhosttyWindowErr(session, output string) error {
+	return fmt.Errorf("%w titled %q (is 'set-titles on' active?): %s", errNoGhosttyWindow, session+":", output)
+}
+
 // focusGhosttyWindow raises the Ghostty window whose title starts with
 // "<session>:" (requires tmux set-titles on, so the title-string leads with
 // #S) by running the AppleScript inside the tmux server's own process
@@ -265,15 +385,18 @@ func OpenPeer(p *Peer) (string, RaiseOutcome, error) {
 //
 // Two real limitations remain: (a) the tmux server only carries Accessibility
 // when it was born from a context that already had the grant — if kraken
-// serve's daemon is ever the one to *start* the tmux server (e.g. after a
-// reboot, launchd-started serve issues the first `new-session` from StartCell
-// before any terminal has opened one), run-shell inherits that same TCC
-// denial and every focus fails until the tmux server is restarted from a
-// granted context; per decision D1 this surfaces as an explained failure
-// (FocusErr), never silently. (b) the temp AppleScript file is written by
-// serve's uid and read back by the tmux server process — this assumes both
-// run as the same user sharing the same $TMPDIR, true for the documented
-// LaunchAgent layout but not guaranteed in general.
+// serve's daemon is the one to *start* the tmux server (e.g. after a reboot,
+// a launchd-started serve issues the first `new-session` from an iris or cell
+// spawn before any terminal has opened one), run-shell inherits that same TCC
+// denial and every raise fails until the tmux server is restarted from a
+// granted context or osascript itself is granted Accessibility. Observed on
+// this machine (2026-08-06): the tmux server is launchd-born and every raise
+// fails with -25211, so RaiseSession treats a raise-mechanism failure as
+// expected and falls back to reattaching in a fresh window rather than
+// surfacing it. (b) the temp AppleScript file is written by serve's uid and
+// read back by the tmux server process — this assumes both run as the same
+// user sharing the same $TMPDIR, true for the documented LaunchAgent layout
+// but not guaranteed in general.
 func focusGhosttyWindow(session string) error {
 	// iterate every Ghostty process: windows kraken opens via `open -na`
 	// belong to a second app instance
@@ -310,7 +433,7 @@ return "notfound"`, session+":")
 	out, err := exec.Command("tmux", "run-shell", "osascript '"+f.Name()+"' 2>&1").CombinedOutput()
 	trimmed := strings.TrimSpace(string(out))
 	if err != nil {
-		return fmt.Errorf("osascript via tmux run-shell failed (%v): %s", err, trimmed)
+		return fmt.Errorf("osascript via tmux run-shell failed (%v): %s%s", err, trimmed, focusErrHint(trimmed))
 	}
 	// the script's own answer ("ok"/"notfound") is always the last line —
 	// stderr merged in above can add earlier lines (e.g. a stray objc[…]
@@ -319,9 +442,26 @@ return "notfound"`, session+":")
 	lines := strings.Split(trimmed, "\n")
 	sentinel := lines[len(lines)-1]
 	if sentinel != "ok" {
-		return fmt.Errorf("no ghostty window titled %q (is 'set-titles on' active?): %s", session+":", trimmed)
+		return noGhosttyWindowErr(session, trimmed)
 	}
 	return nil
+}
+
+// focusErrHint appends the remedy for the two TCC denials osascript can hit
+// when the tmux server descends from launchd, where nobody is present to
+// answer a consent prompt: the assistive-access denial (the message that
+// carries error -25211 — the phrase is what's matched, the number never
+// appears without it) and the Automation denial (-1743), which lives in a
+// different System Settings pane. Any other failure passes through
+// undecorated.
+func focusErrHint(output string) string {
+	switch {
+	case strings.Contains(output, "not allowed assistive access"):
+		return " — grant Accessibility to osascript (System Settings → Privacy & Security → Accessibility) or restart the tmux server from a granted terminal"
+	case strings.Contains(output, "Not authorized to send Apple events"):
+		return " — allow osascript to control System Events (System Settings → Privacy & Security → Automation) or restart the tmux server from a granted terminal"
+	}
+	return ""
 }
 
 // SendToPeer runs cmdSend's full guard chain plus the tmux send mechanics,
