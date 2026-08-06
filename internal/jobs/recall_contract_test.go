@@ -71,11 +71,11 @@ func contractRecallWithFacts(t *testing.T, edges []store.GraphEdge) *contractRec
 	t.Helper()
 	rec := &contractRecallSeam{}
 	prev := graphFacts
-	graphFacts = func(_ *store.Store, vec []float32, query string) []store.GraphEdge {
+	graphFacts = func(_ *store.Store, vec []float32, query string) ([]store.GraphEdge, map[int64]bool) {
 		rec.calls++
 		rec.queries = append(rec.queries, query)
 		rec.vecs = append(rec.vecs, vec)
-		return edges
+		return edges, nil
 	}
 	t.Cleanup(func() { graphFacts = prev })
 	return rec

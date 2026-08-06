@@ -124,7 +124,9 @@ type webGraphEpisode struct {
 // derived roi on the wire.
 //
 // `weak` is the one exception to that, and it is not a score: it is the
-// BOOLEAN core.RelevantEdge already computes for the spawn path, published
+// BOOLEAN the spawn path's gate reaches — core.RelevantEdge's verdict, waived
+// for facts touching a node the query named (see the anchor note at the split
+// below) — published
 // because the two readers of a search want opposite things from it. An agent
 // wants to know which facts to actually rely on; a human canonicalizing an
 // entity name wants to see the near-misses too. Dropping the weak ones would
@@ -578,7 +580,19 @@ func graphSearchHandler(w http.ResponseWriter, r *http.Request) {
 		if blob, ok := hydrated[e.ID]; ok {
 			judged.Embedding = blob
 		}
-		isWeak := !core.RelevantEdge(judged, vec, terms)
+		// A fact touching a node the QUERY NAMED is never weak, whatever the
+		// cosine says. `weak` means "retrieval ranked this but it is not about
+		// what you asked", and for an anchored fact that claim is false by
+		// construction: the search resolved the anchor from the query's own
+		// terms against the node's name or alias. RelevantEdge cannot see that
+		// — it compares the fact SENTENCE — so a biography of an entity the
+		// caller spelled out would come back labeled as a coincidence, under
+		// the "nothing strongly matched" headline. This is the same exemption
+		// the injection paths take (jobs' keepRelevantFacts), reached through
+		// the same res.Anchors, so the two consequences of one judgment stay
+		// one judgment. Non-anchored facts are judged exactly as before.
+		isWeak := !res.Anchors[e.SrcID] && !res.Anchors[e.DstID] &&
+			!core.RelevantEdge(judged, vec, terms)
 		if isWeak {
 			weak = append(weak, e)
 		} else {

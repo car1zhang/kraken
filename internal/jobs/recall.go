@@ -172,12 +172,18 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	// empty-arm below cannot tell it from an empty graph — accepted (contract
 	// amendment 7's narrowing): the loss is one message's injection, and it
 	// self-heals when the query next changes.
-	edges := graphFacts(st, vec, query)
+	// The anchors come back with the edges rather than being re-resolved here:
+	// they are the search's own answer to "which nodes did this query name",
+	// and keepRelevantFacts waives core.RelevantEdge for the facts touching
+	// them. Nothing else about this function moves — an anchored delivery is
+	// marked in kg_recall like any other, so rule 2 (once per session) covers
+	// the anchor path exactly as it covers the ordinary one.
+	edges, anchors := graphFacts(st, vec, query)
 	if len(edges) == 0 {
 		state.lastQuery = query
 		return ""
 	}
-	kept := keepRelevantFacts(edges, vec, core.ContentTerms(query), skip)
+	kept := keepRelevantFacts(edges, vec, core.ContentTerms(query), skip, anchors)
 	block, rendered := renderGraphBlock(kept)
 	if block == "" {
 		state.lastQuery = query
