@@ -1039,9 +1039,12 @@ id — a named node that does not exist is an answer, not an empty result),
 
 ### `POST /api/graph/search`
 
-Retrieval: embeds the query, fuses vector and BM25 candidates, expands one
-hop, and returns both the structured facts and the triple text an agent
-pastes into its context.
+Retrieval: embeds the query, fuses vector, BM25 and name-anchor candidates,
+expands one hop, and returns both the structured facts and the triple text an
+agent pastes into its context. The name-anchor leg is the query's own terms
+matched against node **names and aliases** rather than fact sentences: a query
+that names a low-degree entity ("who is lewis") retrieves that entity's facts
+even when no sentence shares a word with it.
 
 A missing or failing embedder degrades **silently** to BM25-only — a fresh
 install with no `OPENAI_API_KEY` gets keyword search, never a 500.
@@ -1056,7 +1059,8 @@ Response: `{"nodes": [webGraphNode], "facts": [webGraphFact], "triples": string,
 facts serialized for an LLM context block — facts that clear the relevance
 gate first, then (only when at least one fact fails it) a literal
 `weakly related:` line and the rest. `strong` counts the facts that cleared
-the gate; `0` with a non-empty `facts` means the graph had nothing on-topic
+the gate — including the ones exempted from it for touching a node the query
+named (see `weak` below); `0` with a non-empty `facts` means the graph had nothing on-topic
 and the entries are nearest-neighbour context, not answers. Additive keys on
 a route no iOS client decodes — `apiContract` stays 5.
 
@@ -1081,7 +1085,7 @@ so the layout table is not joined.
 | `strength` | number | always | |
 | `occurrences` | number | always | |
 | `valid_until` | number | always | world time; `0` = still true |
-| `weak` | bool | always | `true` when the fact failed the relevance gate — which passes at cosine ≥ 0.72 against the query, or on ≥2 shared content words when no usable vector exists (no query embedding, no stored embedding, or a dimension mismatch). Marked, never dropped, so the caller decides what nearest-neighbour context is worth |
+| `weak` | bool | always | `true` when the fact failed the relevance gate. Three ways to pass: cosine ≥ 0.72 against the query; ≥2 shared content words when no usable vector exists (no query embedding, no stored embedding, or a dimension mismatch); or — **regardless of cosine or overlap** — either endpoint being a node the query NAMED, i.e. a low-degree node whose name or alias is fully covered by the query's content terms. A fact touching such a node is never `weak`, because the gate compares fact *sentences* and cannot see that the caller spelled the entity out. Marked, never dropped, so the caller decides what nearest-neighbour context is worth |
 
 There is deliberately **no `score` key**: array order already expresses the
 ranking, and publishing a fusion score would invite clients to threshold on a

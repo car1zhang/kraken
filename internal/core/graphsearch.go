@@ -48,6 +48,16 @@ const hopBoost = 1.5
 // occBoostScale scales the log-occurrence multiplier. See fuseScore.
 const occBoostScale = 0.25
 
+// nameBoost is the multiplier an edge gets for touching a node the QUERY NAMED
+// — an anchor. Larger than hopBoost because the two signals are not the same
+// strength of evidence: hop distance says "the top lexical hit also touched
+// this node", which is structure, while an anchor says the query spelled the
+// entity out. It is still a multiplier rather than an additive term, so the
+// rule the rerank has always obeyed holds — a fact no leg retrieved cannot be
+// boosted into the answer, and with the name leg above, an anchored node's
+// edges ARE retrieved rather than conjured.
+const nameBoost = 2.0
+
 // GraphSearchOpts bounds a search. Every field's zero value means "use the
 // default" rather than "zero", so the empty struct is the ordinary call.
 type GraphSearchOpts struct {
@@ -83,10 +93,18 @@ const (
 // — the fused rank score after the rerank multipliers, not the raw fusion, so
 // that a caller comparing two entries against each other (or against Floor)
 // is comparing the same quantity the sort did.
+// Anchors carries the node ids the query NAMED (see AnchorNodes), and it is on
+// the result rather than kept inside the search because the two consumers of a
+// search both have a judgment to make about them: the injection paths pass an
+// anchored fact without consulting RelevantEdge, and the search route declines
+// to mark it weak. Empty is the common answer and means "this query named
+// nothing", which is the case that must behave exactly as it did before
+// anchors existed.
 type GraphResult struct {
-	Edges  []store.GraphEdge         // ranked, best first
-	Nodes  map[int64]store.GraphNode // every node referenced by Edges
-	Scores map[int64]float32         // edge id -> fused score
+	Edges   []store.GraphEdge         // ranked, best first
+	Nodes   map[int64]store.GraphNode // every node referenced by Edges
+	Scores  map[int64]float32         // edge id -> fused score
+	Anchors map[int64]bool            // node ids the query named; never nil
 }
 
 // GraphSearch runs the whole read path against st.
@@ -96,23 +114,29 @@ type GraphResult struct {
 //  1. BM25 leg — SearchEdgesFTS over live edges' fact sentences.
 //  2. Vector leg — only when queryVec is non-nil. Live, embedded edges are
 //     decoded into a candidate slab and scanned by TopK.
-//  3. Fusion — RRF(k=60) on the two RANK lists: score(id) = Σ 1/(60+rank),
+//  3. Name leg — only when the query NAMES a low-degree node (AnchorNodes
+//     over st.AnchorCandidates). Those nodes' live edges enter as a third
+//     ranked list. Absent anchors this leg is empty and every step below runs
+//     over exactly the two lists it always did.
+//  4. Fusion — RRF(k=60) on the RANK lists: score(id) = Σ 1/(60+rank),
 //     rank 1-based within each leg. Never on the raw scores; see rrfK.
-//  4. Rerank — the fused score is multiplied by two graph signals:
-//     occurrence (a fact independently restated by many episodes is a fact
-//     about kraken rather than about one conversation) and hop distance from
-//     the top BM25 edge's endpoints. The exact formula is in fuseScore.
-//  5. Expansion — one hop out of the top edges' endpoints, capped at
+//  5. Rerank — the fused score is multiplied by graph signals: occurrence (a
+//     fact independently restated by many episodes is a fact about kraken
+//     rather than about one conversation), hop distance from the top BM25
+//     edge's endpoints, and whether the edge touches an anchor. The exact
+//     formula is in fuseScore.
+//  6. Expansion — one hop out of the top edges' endpoints, capped at
 //     ExpandCap distinct NEW nodes, appended below every ranked fact.
-//  6. Floor and Limit.
+//  7. Floor and Limit.
 //
 // An empty query with a nil vector is not an error: both legs are empty and
 // the result is empty. Invalidated edges never appear — the store's own
 // queries filter on expired_at, so this file never re-states that rule.
 func GraphSearch(st *store.Store, queryVec []float32, query string, o GraphSearchOpts) (GraphResult, error) {
 	res := GraphResult{
-		Nodes:  map[int64]store.GraphNode{},
-		Scores: map[int64]float32{},
+		Nodes:   map[int64]store.GraphNode{},
+		Scores:  map[int64]float32{},
+		Anchors: map[int64]bool{},
 	}
 	if o.CandidateLimit <= 0 {
 		o.CandidateLimit = defaultCandLimit
@@ -149,17 +173,77 @@ func GraphSearch(st *store.Store, queryVec []float32, query string, o GraphSearc
 			return res, err
 		}
 	}
-	if len(bm25) == 0 && len(vec) == 0 {
+
+	// (b2) Anchor resolution. A FAILED READ IS NOT A FAILED SEARCH: anchors are
+	// an additional way to be found, so a store that cannot answer the
+	// candidate query degrades to the two-leg search this file has always run
+	// rather than to an error the injection paths would collapse to nothing.
+	//
+	// Guarded on the TERMS rather than resolved unconditionally, because
+	// AnchorCandidates is two whole-table sweeps and a query with no content
+	// terms cannot anchor anything — AnchorNodes' own first branch returns
+	// empty for it. The empty-query vector-only shape the (a) comment above
+	// names as a real call, and any query whose every token is under
+	// GraphTermMinRunes, therefore pay nothing for a feature they cannot use,
+	// on a path that runs inside every cell spawn and every PostToolUse hook
+	// firing. It also makes obligation (d) literal rather than merely
+	// equivalent: a query that cannot anchor executes the pre-change pipeline.
+	if terms := ContentTerms(query); len(terms) > 0 {
+		if cands, cerr := st.AnchorCandidates(); cerr == nil {
+			res.Anchors = AnchorNodes(terms, cands)
+		}
+	}
+
+	// (b3) Name leg — the third rank list. It exists for the case both other
+	// legs are structurally unable to serve: a query naming an entity by an
+	// alias ("dilly") against facts that spell the canonical name
+	// ("Christopher DiLollo"), where BM25 has no shared token and the cosine
+	// between a three-word question and a biography sentence sits under any
+	// usable floor.
+	//
+	// Only edges NeighborEdges actually returns for the anchored nodes go in,
+	// so the rule the rerank obeys holds here too: structure cannot nominate an
+	// edge that was never retrieved, it can only retrieve the edges an anchored
+	// node literally has. Truncated at CandidateLimit like the other two legs —
+	// a leg of unbounded length would out-vote them by sheer count.
+	var nameLeg []int64
+	if len(res.Anchors) > 0 {
+		anchorIDs := make([]int64, 0, len(res.Anchors))
+		for id := range res.Anchors {
+			anchorIDs = append(anchorIDs, id)
+		}
+		// Sorted for the same reason the fused id list is: map order is not
+		// deterministic, and a fixed graph plus a fixed query must produce the
+		// same answer run to run.
+		sort.Slice(anchorIDs, func(i, j int) bool { return anchorIDs[i] < anchorIDs[j] })
+		neighbors, err := st.NeighborEdges(anchorIDs)
+		if err != nil {
+			return res, fmt.Errorf("graph search name leg: %w", err)
+		}
+		for _, e := range neighbors {
+			if len(nameLeg) >= o.CandidateLimit {
+				break
+			}
+			nameLeg = append(nameLeg, e.ID)
+		}
+	}
+
+	if len(bm25) == 0 && len(vec) == 0 && len(nameLeg) == 0 {
 		return res, nil
 	}
 
-	// (c) RRF on ranks.
+	// (c) RRF on ranks. Three lists now, summed by edge id exactly as two were
+	// — an edge appearing in more than one leg accumulates each leg's
+	// contribution, which is the whole of what fusion means here.
 	fused := map[int64]float64{}
 	for i, id := range bm25 {
 		fused[id] += 1 / float64(rrfK+i+1)
 	}
 	for i, s := range vec {
 		fused[s.ID] += 1 / float64(rrfK+i+1)
+	}
+	for i, id := range nameLeg {
+		fused[id] += 1 / float64(rrfK+i+1)
 	}
 
 	ids := make([]int64, 0, len(fused))
@@ -191,7 +275,7 @@ func GraphSearch(st *store.Store, queryVec []float32, query string, o GraphSearc
 	}
 	scored := make([]store.GraphEdge, 0, len(edges))
 	for _, e := range edges {
-		s := fuseScore(fused[e.ID], e, seeds)
+		s := fuseScore(fused[e.ID], e, seeds, res.Anchors)
 		if o.Floor > 0 && float32(s) < o.Floor {
 			continue
 		}
@@ -301,17 +385,21 @@ func vectorLeg(st *store.Store, queryVec []float32, limit, maxEdges int) ([]Scor
 // The exact formula, which is the whole of the rerank:
 //
 //	score = rrf * (1 + 0.25*ln(1+occurrences)) * (1.5 if the edge touches a
-//	        seed node, else 1)
+//	        seed node, else 1) * (2.0 if the edge touches an anchor node, else 1)
 //
-// Both are MULTIPLIERS on the fused score rather than additive terms, so a
-// fact that neither leg retrieved cannot be boosted into the answer by graph
+// All three are MULTIPLIERS on the fused score rather than additive terms, so a
+// fact that no leg retrieved cannot be boosted into the answer by graph
 // structure alone — structure reorders candidates, it does not nominate them.
 // Occurrence is log-scaled because it is a count with no ceiling: a fact seen
 // in 100 episodes is more trustworthy than one seen in 10, but not ten times
 // more. The seed multiplier is a flat step rather than a decay because
-// expansion is one hop: every edge here is either at hop 0 from the anchor or
-// unclassified, and there is no hop 2 to distinguish.
-func fuseScore(rrf float64, e store.GraphEdge, seeds map[int64]bool) float64 {
+// expansion is one hop: every edge here is either at hop 0 from the seed or
+// unclassified, and there is no hop 2 to distinguish. ("Seed" rather than
+// "anchor" deliberately — in this function `anchors` now means the nodes the
+// QUERY NAMED, which is a different signal from the top BM25 hit's endpoints.) The anchor multiplier
+// composes with both rather than replacing them — an edge can be lexically
+// central AND named, and that is the strongest evidence available here.
+func fuseScore(rrf float64, e store.GraphEdge, seeds, anchors map[int64]bool) float64 {
 	occ := e.Occurrences
 	if occ < 0 {
 		occ = 0
@@ -319,6 +407,9 @@ func fuseScore(rrf float64, e store.GraphEdge, seeds map[int64]bool) float64 {
 	s := rrf * (1 + occBoostScale*math.Log1p(float64(occ)))
 	if seeds[e.SrcID] || seeds[e.DstID] {
 		s *= hopBoost
+	}
+	if anchors[e.SrcID] || anchors[e.DstID] {
+		s *= nameBoost
 	}
 	return s
 }

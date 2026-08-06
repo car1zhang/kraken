@@ -77,7 +77,7 @@ func edgeRecallStore(t *testing.T) *store.Store {
 func edgeRecallWithFacts(t *testing.T, edges []store.GraphEdge) {
 	t.Helper()
 	prev := graphFacts
-	graphFacts = func(*store.Store, []float32, string) []store.GraphEdge { return edges }
+	graphFacts = func(*store.Store, []float32, string) ([]store.GraphEdge, map[int64]bool) { return edges, nil }
 	t.Cleanup(func() { graphFacts = prev })
 }
 

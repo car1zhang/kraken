@@ -230,7 +230,11 @@ func TestKgedgeSearchStrongIsPresentEvenWhenZero(t *testing.T) {
 	st := useTestStore(t)
 	kgedgeNoEmbedder(t)
 	// One shared content word — matched by BM25, one short of the >=2 gate.
-	kgedgeSeedEdge(t, st, "kraken", "harbour", "sits-in", "kraken sits quietly in a harbour")
+	// The node is "leviathan", not "kraken": a node whose NAME the query
+	// covers anchors under the name-anchor feature and is promoted to strong
+	// regardless of term overlap, which would defeat this fixture's point.
+	// The fact SENTENCE keeps "kraken" so BM25 still retrieves it.
+	kgedgeSeedEdge(t, st, "leviathan", "harbour", "sits-in", "kraken sits quietly in a harbour")
 
 	keys := kgedgeSearchKeys(t, `{"query":"`+kgedgeQuery+`"}`)
 	raw, ok := keys["strong"]
@@ -269,8 +273,11 @@ func kgedgeMapKeys(m map[string]json.RawMessage) []string {
 func TestKgedgeSearchAllWeakGrouping(t *testing.T) {
 	st := useTestStore(t)
 	kgedgeNoEmbedder(t)
-	kgedgeSeedEdge(t, st, "kraken", "harbour", "sits-in", "kraken sits quietly in a harbour")
-	kgedgeSeedEdge(t, st, "kraken", "tide", "rides", "kraken rides an ordinary tide")
+	// "leviathan", not "kraken": a query-covered node name would anchor and
+	// promote both facts to strong (see the fixture note in
+	// TestKgedgeSearchStrongIsPresentEvenWhenZero).
+	kgedgeSeedEdge(t, st, "leviathan", "harbour", "sits-in", "kraken sits quietly in a harbour")
+	kgedgeSeedEdge(t, st, "leviathan", "tide", "rides", "kraken rides an ordinary tide")
 
 	resp := kgedgeSearch(t, `{"query":"`+kgedgeQuery+`"}`)
 	if len(resp.Facts) < 2 {
@@ -444,8 +451,12 @@ func TestKgedgeSearchEveryFactCarriesWeak(t *testing.T) {
 func TestKgedgeSearchSurvivesCorruptEmbeddings(t *testing.T) {
 	st := useTestStore(t)
 	kgedgeNoEmbedder(t)
-	strong := kgedgeSeedEdge(t, st, "kraken", "cells", "spawns", "kraken spawns cells nightly")
-	weak := kgedgeSeedEdge(t, st, "kraken", "harbour", "sits-in", "kraken sits quietly in a harbour")
+	// "leviathan"/"pods", not "kraken"/"cells": both original names are
+	// covered by kgedgeQuery's terms and would anchor, promoting the weak
+	// fact to strong (see the fixture note in
+	// TestKgedgeSearchStrongIsPresentEvenWhenZero).
+	strong := kgedgeSeedEdge(t, st, "leviathan", "pods", "spawns", "kraken spawns cells nightly")
+	weak := kgedgeSeedEdge(t, st, "leviathan", "harbour", "sits-in", "kraken sits quietly in a harbour")
 
 	// Length 3: not a multiple of 4, so DecodeVector calls it a corrupt row.
 	if err := st.SetEmbedding("edge", strong, []byte{0x01, 0x02, 0x03}); err != nil {

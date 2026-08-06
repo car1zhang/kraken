@@ -36,9 +36,11 @@ func leadRecallFacts(t *testing.T, edges []store.GraphEdge) *atomic.Int64 {
 	t.Helper()
 	var calls atomic.Int64
 	prev := graphFacts
-	graphFacts = func(st *store.Store, vec []float32, query string) []store.GraphEdge {
+	graphFacts = func(st *store.Store, vec []float32, query string) ([]store.GraphEdge, map[int64]bool) {
 		calls.Add(1)
-		return edges
+		// nil anchors: serialization and dedup are what these cases pin, and
+		// they hold for anchored and unanchored deliveries alike.
+		return edges, nil
 	}
 	t.Cleanup(func() { graphFacts = prev })
 	return &calls

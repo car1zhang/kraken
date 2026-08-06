@@ -469,6 +469,93 @@ func (s *Store) NeighborEdges(nodeIDs []int64) ([]GraphEdge, error) {
 	return out, rows.Err()
 }
 
+// AnchorCandidate is one node reduced to what a NAME ANCHOR needs: the strings
+// a query could name it by, and the live degree that decides whether naming it
+// means anything. Plain data — the matching judgment lives in core, next to the
+// term vocabulary it shares (core.AnchorNodes).
+//
+// Degree is the guard's whole input. A hub like `carl` or `kraken` is named by
+// half the corpus and its facts already win the ordinary retrieval legs, so
+// promoting every edge that touches it would drown the answer; a low-degree
+// node is the case the anchor exists for, where the facts are few and nothing
+// else surfaces them.
+type AnchorCandidate struct {
+	NodeID  int64
+	Name    string
+	Aliases []string // ascending; empty when the node has none
+	Degree  int      // LIVE edges touching this node at either endpoint
+}
+
+// AnchorCandidates returns every node in kg_nodes with its aliases and live
+// degree, ordered by node id so the caller's resolution is deterministic.
+//
+// Read-only and whole-table on purpose: the caller (core.GraphSearch) has a
+// term SET rather than a name, so there is nothing to push into a WHERE clause
+// — matching is "does every content token of this name appear in the query",
+// which SQL cannot express against a Go map. At this table's scale a full
+// sweep is the same order of work as NodesLite, which the viewer polls.
+//
+// The degree subquery counts each edge ROW once (`src_id = n.id OR dst_id =
+// n.id`), so a self-loop contributes one rather than two. `expired_at = 0` is
+// the only liveness test: an edge whose WORLD time has closed (valid_until set)
+// is still a live row and still evidence of how connected the node is — the
+// keep-gate is where a closed window drops a fact, not here.
+func (s *Store) AnchorCandidates() ([]AnchorCandidate, error) {
+	rows, err := s.db.Query(`SELECT n.id, n.name,
+		(SELECT COUNT(*) FROM kg_edges e WHERE e.expired_at = 0 AND (e.src_id = n.id OR e.dst_id = n.id))
+		FROM kg_nodes n ORDER BY n.id`)
+	if err != nil {
+		return nil, fmt.Errorf("anchor candidates: %w", err)
+	}
+	out := []AnchorCandidate{}
+	at := map[int64]int{}
+	for rows.Next() {
+		var c AnchorCandidate
+		if err := rows.Scan(&c.NodeID, &c.Name, &c.Degree); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("anchor candidates scan: %w", err)
+		}
+		at[c.NodeID] = len(out)
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("anchor candidates: %w", err)
+	}
+	// Closed before the alias sweep rather than deferred: this package runs on
+	// ONE connection, and a second query issued while the first's rows are open
+	// is the shape that deadlocks it.
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("anchor candidates: %w", err)
+	}
+
+	// One sweep of the alias table rather than a per-node round trip — the
+	// `ORDER BY (node_id, alias)` is what makes each node's list ascending
+	// without a sort here.
+	arows, err := s.db.Query(`SELECT node_id, alias FROM kg_node_aliases ORDER BY node_id, alias`)
+	if err != nil {
+		return nil, fmt.Errorf("anchor candidate aliases: %w", err)
+	}
+	defer arows.Close()
+	for arows.Next() {
+		var nodeID int64
+		var alias string
+		if err := arows.Scan(&nodeID, &alias); err != nil {
+			return nil, fmt.Errorf("anchor candidate aliases scan: %w", err)
+		}
+		// An alias whose node is gone is skipped rather than fatal: the alias
+		// table carries no foreign key, so an orphan row is a data question,
+		// not a reason a search cannot answer.
+		if i, ok := at[nodeID]; ok {
+			out[i].Aliases = append(out[i].Aliases, alias)
+		}
+	}
+	if err := arows.Err(); err != nil {
+		return nil, fmt.Errorf("anchor candidate aliases: %w", err)
+	}
+	return out, nil
+}
+
 // GetNodes returns nodes by id; absent ids are skipped, same contract as
 // GetEdges.
 func (s *Store) GetNodes(ids []int64) ([]GraphNode, error) {

@@ -95,6 +95,84 @@ func TermOverlap(fact string, terms map[string]bool) int {
 	return len(hit)
 }
 
+// AnchorMaxDegree is the name anchor's degree guard: a node with more than
+// this many live edges never anchors, however exactly the query names it.
+//
+// The guard is what keeps anchoring from becoming a second, worse ranking. A
+// hub — `carl`, `kraken` — is named by a large fraction of the corpus, so a
+// query mentioning it would promote hundreds of edges past the gate, and the
+// facts that actually answered the question would be one line in a flood.
+// Those nodes are also exactly the ones the ORDINARY legs already serve: their
+// facts are numerous, well-worded and lexically reachable. The anchor exists
+// for the opposite case — a node with three facts nobody's query happens to
+// share four-rune words with.
+//
+// 30 rather than a percentile of the degree distribution because the number
+// must be stable as the graph grows: a percentile silently re-admits hubs when
+// the corpus doubles, and a fixed count is the thing a reader can check a node
+// against by hand.
+const AnchorMaxDegree = 30
+
+// AnchorNodes resolves which of cands the query's terms NAME. Pure: no store,
+// no clock, so both the search path and a test reach the same verdict from the
+// same two inputs.
+//
+// A candidate anchors when its degree is within the guard AND at least one of
+// its strings — the canonical name or any alias — is fully covered by terms:
+// every content token of that string is present in the query's term set.
+// Coverage rather than overlap, because a partial match is a coincidence at
+// this leverage: "lewis" naming the `lewis` node is the feature, while "the
+// probook dispatch service" half-matching `dispatch` would bypass the gate on
+// the strength of one word.
+//
+// Both sides run through ContentTerms, which is what makes the match
+// case-insensitive and punctuation-insensitive without a second normalizer
+// here — and what makes a name whose every token is under GraphTermMinRunes
+// (a two-letter alias) unable to anchor at all. That is the honest outcome:
+// the query side dropped those tokens too, so there is nothing left to have
+// matched on.
+//
+// The result is never nil, so a caller can index it without a guard.
+func AnchorNodes(terms map[string]bool, cands []store.AnchorCandidate) map[int64]bool {
+	out := map[int64]bool{}
+	if len(terms) == 0 {
+		return out
+	}
+	for _, c := range cands {
+		if c.Degree > AnchorMaxDegree {
+			continue
+		}
+		if nameCovered(c.Name, terms) {
+			out[c.NodeID] = true
+			continue
+		}
+		for _, a := range c.Aliases {
+			if nameCovered(a, terms) {
+				out[c.NodeID] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+// nameCovered reports whether every content token of name appears in terms. An
+// empty token set (a name that is all punctuation, or all words under
+// GraphTermMinRunes) is NOT covered — vacuous truth here would anchor every
+// such node on every query.
+func nameCovered(name string, terms map[string]bool) bool {
+	nt := ContentTerms(name)
+	if len(nt) == 0 {
+		return false
+	}
+	for t := range nt {
+		if !terms[t] {
+			return false
+		}
+	}
+	return true
+}
+
 // RelevantEdge is the gate. A fact clears it only by independently passing one
 // of two thresholds — not merely because retrieval ranked it, which it would
 // do for the best of a bad set.

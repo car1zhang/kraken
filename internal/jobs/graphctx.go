@@ -116,8 +116,14 @@ var graphFacts = searchFacts
 const graphVectorLegMaxEdges = 10_000
 
 // searchFacts runs the retrieval and flattens it to the edges the block
-// renders. Errors collapse to nil: see rule 2 above.
-func searchFacts(st *store.Store, vec []float32, query string) []store.GraphEdge {
+// renders, plus the ANCHOR node ids the search resolved. Errors collapse to
+// (nil, nil): see rule 2 above.
+//
+// The anchors ride along rather than being re-derived by each caller because
+// resolving them is a store read and a term comparison the search already did
+// — and because a second derivation is a second answer to "did this query name
+// that node", which is exactly the drift core/relevance.go's preamble is about.
+func searchFacts(st *store.Store, vec []float32, query string) ([]store.GraphEdge, map[int64]bool) {
 	if len(vec) > 0 {
 		// One extra COUNT against a table the spawn is about to search
 		// anyway, next to a `git worktree add`. An unreadable stats query
@@ -140,9 +146,9 @@ func searchFacts(st *store.Store, vec []float32, query string) []store.GraphEdge
 		Limit: graphSearchLimit,
 	})
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return res.Edges
+	return res.Edges, res.Anchors
 }
 
 // graphContext returns the block appended to zeus' brief for job j, or "" when
@@ -164,7 +170,7 @@ func graphContext(j *Job) string {
 		return ""
 	}
 	vec := cachedSpecVector(st, j.ID)
-	edges := graphFacts(st, vec, spec)
+	edges, anchors := graphFacts(st, vec, spec)
 	if len(edges) == 0 {
 		return ""
 	}
@@ -172,7 +178,7 @@ func graphContext(j *Job) string {
 	// conversation could already have been told. The rendered-id list is
 	// discarded for the same reason — a spawn records no delivery, since the
 	// session that would own the record does not exist until claude starts.
-	block, _ := renderGraphBlock(keepRelevantFacts(edges, vec, core.ContentTerms(spec), nil))
+	block, _ := renderGraphBlock(keepRelevantFacts(edges, vec, core.ContentTerms(spec), nil, anchors))
 	return block
 }
 
@@ -189,7 +195,18 @@ func graphContext(j *Job) string {
 // skip is a set of edge ids the caller has already delivered; nil means
 // "nothing delivered", which is the spawn path's answer and keeps this call
 // byte-identical to the loop it replaced.
-func keepRelevantFacts(edges []store.GraphEdge, vec []float32, terms map[string]bool, skip map[int64]bool) []store.GraphEdge {
+//
+// anchors is the set of node ids the QUERY NAMED (core.AnchorNodes, resolved by
+// the search and carried through the seam). An edge touching one at either
+// endpoint skips core.RelevantEdge and nothing else: the query naming the
+// entity IS the relevance evidence, and it is evidence RelevantEdge is
+// structurally unable to see — it compares the fact SENTENCE against the query,
+// and "who is lewis" shares neither four-rune words nor a usable cosine with a
+// biography of lewis. Exactly one of the four judgments above is waived —
+// relevance. The world-time window, renderability and duplicate wording still
+// bind, as do the skip set and the graphContextFacts cap, because none of those
+// is about relevance. nil means no anchors.
+func keepRelevantFacts(edges []store.GraphEdge, vec []float32, terms map[string]bool, skip, anchors map[int64]bool) []store.GraphEdge {
 	now := time.Now().UnixMilli()
 	var kept []store.GraphEdge
 	seen := map[string]bool{}
@@ -215,7 +232,7 @@ func keepRelevantFacts(edges []store.GraphEdge, vec []float32, terms map[string]
 		if fact == "" || seen[strings.ToLower(fact)] {
 			continue
 		}
-		if !core.RelevantEdge(e, vec, terms) {
+		if !anchors[e.SrcID] && !anchors[e.DstID] && !core.RelevantEdge(e, vec, terms) {
 			continue
 		}
 		seen[strings.ToLower(fact)] = true

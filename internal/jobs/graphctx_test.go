@@ -27,7 +27,11 @@ import (
 func withFacts(t *testing.T, edges []store.GraphEdge) {
 	t.Helper()
 	prev := graphFacts
-	graphFacts = func(*store.Store, []float32, string) []store.GraphEdge { return edges }
+	// nil anchors: these cases pin the gate as it behaves when the query named
+	// no entity, which is the path every assertion below was written against.
+	graphFacts = func(*store.Store, []float32, string) ([]store.GraphEdge, map[int64]bool) {
+		return edges, nil
+	}
 	t.Cleanup(func() { graphFacts = prev })
 }
 
@@ -277,9 +281,9 @@ func TestGraphContextKeepsTheBriefUnderItsCeiling(t *testing.T) {
 func TestGraphContextSurvivesASickGraph(t *testing.T) {
 	storeForGraph(t)
 	prev := graphFacts
-	graphFacts = func(*store.Store, []float32, string) []store.GraphEdge {
+	graphFacts = func(*store.Store, []float32, string) ([]store.GraphEdge, map[int64]bool) {
 		// searchFacts' own contract: every error collapses to nil.
-		return nil
+		return nil, nil
 	}
 	t.Cleanup(func() { graphFacts = prev })
 	if got := graphContext(&Job{ID: 1, Body: "anything at all"}); got != "" {
@@ -312,7 +316,7 @@ func TestSearchFactsAgainstARealStore(t *testing.T) {
 		t.Fatalf("insert edge: %v", err)
 	}
 
-	edges := searchFacts(st, nil, "how does tokensPass relate to kraken serve")
+	edges, _ := searchFacts(st, nil, "how does tokensPass relate to kraken serve")
 	if len(edges) == 0 {
 		t.Fatal("BM25-only retrieval against a seeded graph returned nothing — " +
 			"either the FTS index is not populated or the seam has drifted")
