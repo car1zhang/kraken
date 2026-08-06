@@ -119,6 +119,16 @@ func NewWindowNamed(session, dir, name string, env, argv []string) (string, erro
 	return strings.TrimSpace(string(out)), nil
 }
 
+// SessionAlive reports whether a tmux session with exactly this name exists
+// right now — one direct has-session probe, independent of any snapshot a
+// caller may be holding. The "=" prefix forces tmux's exact-match resolution:
+// bare -t targets also PREFIX-match, and cell session names can be prefixes
+// of each other (cell-demo-2 vs cell-demo-2-5), so a bare probe could report
+// a dead session alive on the strength of a live sibling.
+func SessionAlive(name string) bool {
+	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
+}
+
 // EnsureSession makes sure a detached tmux session named name exists,
 // creating it rooted at dir if not.
 func EnsureSession(name, dir string) error {
