@@ -48,7 +48,7 @@ Kraken also ships its own phone app. `k ship-ios` (cmd/kraken/cmd_shipios.go) is
 
 Invariants that shape the code:
 
-- **Verify before acting**: discovery output goes stale, so every destructive/targeted action re-checks the pane still holds the expected agent first (`checkSendTarget`, `verifyKillTarget`, `BranchGuard` in internal/core/actions.go and internal/core/branch.go). Preserve this pattern for new actions.
+- **Verify before acting**: discovery output goes stale, so every destructive/targeted action re-checks the pane still holds the expected agent first (`checkSendTarget`, `verifyKillTarget`, `BranchGuard` in internal/core/actions.go and internal/core/branch.go; `RaiseSession`'s reattach fallback can close a window, so it guards with exact-match `SessionAlive`, a self-target refusal, and never falling back on `errNoGhosttyWindow`). Preserve this pattern for new actions.
 - `SessionIDGuessed` marks session ids inferred from cwd + newest transcript rather than a session file: fine for display, unsafe as a fork/read target.
 - `k b` forks via `claude --fork-session -r <session-id>` in a tmux split, inheriting the source's permission mode from its transcript.
 - `k k` refuses to kill the current pane and nested (Depth > 0) agents.
