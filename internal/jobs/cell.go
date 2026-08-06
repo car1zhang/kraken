@@ -1798,6 +1798,12 @@ func ReactivateJob(j *Job, session, message string) error {
 	if j.Err != "" {
 		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
 	}
+	// same identity gate as StartCell/teardownCell: everything below names
+	// the cell <slug>-<id>, and an id-less job would silently build and
+	// resume a `<slug>-0` cell
+	if err := checkCellIdentity(j); err != nil {
+		return err
+	}
 	if session == "" {
 		session = j.Session
 	}
@@ -1820,15 +1826,36 @@ func ReactivateJob(j *Job, session, message string) error {
 		}
 		return fmt.Errorf("%s: %v", j.Slug, err)
 	}
-	// below the cheap rejections above (unparseable job, no recorded session,
-	// already-live, unresolved repo, reactivateMode's worktree-exists check):
-	// a rejected spawn must not pay for a usage fetch or a swap
-	rotationGate("reactivate " + j.Slug)
+	// teardown deleted the cell dir after mirroring artifacts/ into the
+	// store; bring the mirror back so the resumed zeus finds its own
+	// deliverables where it left them — and so the artifacts dir the loop
+	// below creates isn't an empty true-mirror source that the NEXT
+	// teardown's sync would read as "every artifact was deleted", wiping the
+	// stored rows too. A restore failure aborts here, before any worktree or
+	// tmux work, for that same reason. The call sits BEFORE the MkdirAll on
+	// purpose: restore self-gates on the artifacts dir not existing (a
+	// surviving dir's deletions are real — see restoreCellArtifacts), so it
+	// must observe the dir's true pre-reactivation state, not the empty one
+	// the loop is about to make. The store guard is defensive rather than a
+	// real entrypoint split — the one caller is the board's reactivate route
+	// inside kraken serve, where a store is always wired — so an unwired
+	// store (a test, a future caller) means nothing to restore from, not an
+	// error.
+	if st := ActiveStore(); st != nil {
+		if err := restoreCellArtifacts(st, j.ID, j); err != nil {
+			return fmt.Errorf("job %s: restore artifacts: %v", j.Slug, err)
+		}
+	}
 	for _, d := range []string{cellDir(j), CellArtifacts(j)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
+	// below every rejection above (unparseable job, bad cell identity, no
+	// recorded session, already-live, unresolved repo, reactivateMode's
+	// worktree-exists check, and a failed artifact restore): a rejected
+	// spawn must not pay for a usage fetch or a swap
+	rotationGate("reactivate " + j.Slug)
 	var reorient, rebaseNote string
 	if mode == "resume" {
 		reorient = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."

@@ -1,8 +1,10 @@
 package jobs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"kraken/internal/store"
 )
@@ -26,6 +28,11 @@ import (
 // already has live cells serving artifacts straight from the cell dir, so
 // the table is a history/inspection copy until the cell is actually gone,
 // at which point the final pass has already run.
+//
+// The file also carries the mirror's one INVERSE, restoreCellArtifacts
+// (bottom of file): ReactivateJob writes the stored rows back into a
+// recreated cell dir, so the mirror teardown captured is what the revived
+// cell wakes up to.
 
 // syncArtifactsNow mirrors j's live cell artifacts into the store. Both call
 // sites run only inside kraken serve, where a store is always wired and
@@ -113,4 +120,78 @@ func syncCellArtifacts(st *store.Store, jobID int64, j *Job) error {
 		files = append(files, store.ArtifactFile{Path: rel, Bytes: data, Mtime: mtimeMillis})
 	}
 	return st.SyncArtifacts(jobID, files, unchanged)
+}
+
+// restoreCellArtifacts is syncCellArtifacts' inverse, run at reactivation:
+// it writes jobID's stored artifact rows back into j's cell artifacts dir,
+// so a done job's deliverables come back with its cell instead of the cell
+// resuming over an empty dir. It restores ONLY into a root that does not
+// exist — a surviving artifacts dir (a mid-run "resume" reactivation whose
+// cell dir was never torn down) is the CURRENT truth, deletions included:
+// any path the mirror holds that such a dir lacks is a file zeus deleted or
+// renamed since the last sync, and writing it back would un-delete it, with
+// the next sync re-mirroring the resurrected file as canonical. The
+// absent-root gate is also what makes the restore's writes safe: a dir that
+// doesn't exist holds no symlinks for MkdirAll/WriteFile to follow out of
+// the root. Callers therefore run this BEFORE creating the dir; the rows
+// are read before any write, so a concurrent sync pass can at worst wipe
+// rows the files on disk re-add at the next sync, never the reverse.
+// Each stored mtime is re-stamped onto its restored file so the next sync's
+// (path, mtime, size) comparison reads it as unchanged rather than
+// re-upserting an identical blob; a failed Chtimes only costs that one
+// redundant upsert, so it is best-effort.
+//
+// Errors surface to the caller instead of being swallowed like the sync
+// direction's: an existing-but-incomplete dir is exactly the shape the
+// true-mirror sync above reads as "these artifacts were deleted" — a
+// restore that half-lands and proceeds anyway would have the next teardown
+// wipe the stored history for whatever never made it to disk. The abort
+// also REMOVES whatever it already wrote: the gate above guarantees the
+// root did not exist at entry, so the removal can destroy nothing
+// pre-existing — while a partial dir left behind would turn the next
+// attempt's gate into a silent no-op over a half-restored cell, the very
+// wipe shape this function exists to prevent. That cleanup is what makes
+// the abort retryable for the errors that actually occur (a full disk, a
+// permission); a row that can never be written — a file/dir path conflict
+// from a hand-edited table — stays an honest refusal on every attempt
+// rather than degrading into a silent partial success on the second.
+func restoreCellArtifacts(st *store.Store, jobID int64, j *Job) error {
+	root := CellArtifacts(j)
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		return nil // dir survived (or is unreadable): disk is the truth, restore nothing
+	}
+	arts, err := st.ListArtifacts(jobID)
+	if err != nil {
+		return err
+	}
+	abort := func(err error) error {
+		if rmErr := os.RemoveAll(root); rmErr != nil {
+			return fmt.Errorf("%v (and removing the partial restore failed: %v — remove %s by hand before retrying)", err, rmErr, root)
+		}
+		return err
+	}
+	for _, a := range arts {
+		rel := filepath.FromSlash(a.Path)
+		// stored paths come from our own walk and are always local, but a
+		// row is still external input to THIS process — never let one write
+		// outside the artifacts dir
+		if !filepath.IsLocal(rel) {
+			continue
+		}
+		dst := filepath.Join(root, rel)
+		if _, err := os.Lstat(dst); err == nil {
+			continue // an earlier row already claimed this path (case-fold collision)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return abort(fmt.Errorf("restore artifact %s: %v", a.Path, err))
+		}
+		if err := os.WriteFile(dst, a.Bytes, 0o644); err != nil {
+			return abort(fmt.Errorf("restore artifact %s: %v", a.Path, err))
+		}
+		if a.Mtime > 0 {
+			mt := time.UnixMilli(a.Mtime)
+			_ = os.Chtimes(dst, mt, mt)
+		}
+	}
+	return nil
 }
