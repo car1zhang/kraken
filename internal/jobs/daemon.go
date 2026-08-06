@@ -674,8 +674,20 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			// the other half of the demo-job incident. Detection only:
 			// recovery stays carl's explicit reactivate/done/kill — reactivate
 			// is the one that preserves the worktree's uncommitted work.
+			//
+			// Absent from the snapshot is not evidence of death: one tick's
+			// discovery failing (a tmux call erroring or returning partial
+			// output) reads every live cell as gone at once, and this alert
+			// has fired for five live cells inside 1.4 seconds off exactly
+			// that — an alert carl then acted on with a teardown that
+			// destroyed a day's uncommitted work. Same stance the thread
+			// reconcile takes: deciding a cell is GONE demands positive
+			// evidence, so re-probe tmux directly and flag only when the
+			// probe agrees. A cell that is genuinely gone costs one probe per
+			// tick until the flag is set; a snapshot artifact costs one probe
+			// and self-corrects next tick.
 			key := "gone:" + j.Slug
-			if d.Notified[key] == 0 {
+			if d.Notified[key] == 0 && !core.SessionAlive(CellSession(j)) {
 				if !mirror {
 					notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
 				}
