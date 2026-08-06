@@ -209,3 +209,216 @@ func TestSyncCellArtifactsMissingRootSkipsSync(t *testing.T) {
 		t.Fatalf("pre-seeded rows must survive a missing artifacts root untouched, got %+v", rows)
 	}
 }
+
+// TestRestoreCellArtifactsRoundTrip covers the reactivation half: after a
+// teardown-shaped delete of the cell dir, restore must bring every stored
+// row back — nested paths, binary bytes, and the stored mtime re-stamped so
+// the next sync reads the restored files as unchanged instead of
+// re-upserting identical blobs.
+func TestRestoreCellArtifactsRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	j := &Job{Slug: "restore-roundtrip"}
+	binary := []byte{0x00, 0xFF, 0x10, 0x00, 0x20}
+	writeArtifact(t, j, "00-overview.md", []byte("hello"), time.Hour)
+	writeArtifact(t, j, "figures/sub/icon.png", binary, time.Hour)
+
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syncCellArtifacts(st, id, j); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := st.ListArtifacts(id)
+	if err != nil || len(stored) != 2 {
+		t.Fatalf("want 2 stored rows, got %d (%v)", len(stored), err)
+	}
+
+	// teardown: the whole cell dir goes, the store keeps the mirror.
+	// Reactivation restores BEFORE recreating any dirs — restore self-gates
+	// on the root not existing, so it must run against the torn-down state.
+	if err := os.RemoveAll(cellDir(j)); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreCellArtifacts(st, id, j); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(CellArtifacts(j), "00-overview.md"))
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("restored top-level file: %q, %v", got, err)
+	}
+	got, err = os.ReadFile(filepath.Join(CellArtifacts(j), "figures/sub/icon.png"))
+	if err != nil || string(got) != string(binary) {
+		t.Fatalf("restored nested binary: %v, %v", got, err)
+	}
+
+	// the stored mtime must be stamped back on, so a follow-up sync's
+	// (path, mtime, size) check classifies every restored file as unchanged.
+	byPath := map[string]store.Artifact{}
+	for _, r := range stored {
+		byPath[r.Path] = r
+	}
+	fi, err := os.Stat(filepath.Join(CellArtifacts(j), "00-overview.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.ModTime().UnixMilli() != byPath["00-overview.md"].Mtime {
+		t.Fatalf("restored mtime %d != stored %d", fi.ModTime().UnixMilli(), byPath["00-overview.md"].Mtime)
+	}
+
+	// and the follow-up sync must leave the rows byte-identical — the
+	// restore/sync pair is a fixed point, not a churn loop.
+	if err := syncCellArtifacts(st, id, j); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.ListArtifacts(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 2 {
+		t.Fatalf("rows changed after restore+sync: %+v", after)
+	}
+	for _, r := range after {
+		if prior := byPath[r.Path]; string(r.Bytes) != string(prior.Bytes) || r.Mtime != prior.Mtime {
+			t.Fatalf("row %s drifted across restore+sync: before=%+v after=%+v", r.Path, prior, r)
+		}
+	}
+}
+
+// TestRestoreCellArtifactsSurvivingDirWins covers the mid-run "resume"
+// reactivation whose cell dir survived: the dir is the CURRENT truth,
+// deletions included — a path the mirror holds that the dir lacks is a file
+// zeus deleted or renamed since the last sync, and restoring it would
+// un-delete it (with the next sync re-mirroring the resurrected file as
+// canonical). So restore into an existing root must be a complete no-op:
+// nothing resurrected, nothing overwritten.
+func TestRestoreCellArtifactsSurvivingDirWins(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	j := &Job{Slug: "restore-surviving-dir"}
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the mirror knows two files; on disk one was edited and one deleted
+	// since that mirror was taken.
+	if err := st.SyncArtifacts(id, []store.ArtifactFile{
+		{Path: "live.md", Bytes: []byte("stale-mirror"), Mtime: 1},
+		{Path: "deleted.md", Bytes: []byte("from-mirror"), Mtime: 2},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	writeArtifact(t, j, "live.md", []byte("newer-on-disk"), 0)
+	if err := restoreCellArtifacts(st, id, j); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(CellArtifacts(j), "live.md"))
+	if err != nil || string(got) != "newer-on-disk" {
+		t.Fatalf("restore overwrote a live file: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(CellArtifacts(j), "deleted.md")); !os.IsNotExist(err) {
+		t.Fatalf("restore resurrected a file deleted since the last mirror: %v", err)
+	}
+}
+
+// TestRestoreCellArtifactsRejectsNonLocalPath: stored paths come from our
+// own walk and are always local, but a row is still external input to the
+// restoring process — one carrying a traversal must be skipped, never
+// written outside the artifacts dir.
+func TestRestoreCellArtifactsRejectsNonLocalPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	j := &Job{Slug: "restore-nonlocal"}
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SyncArtifacts(id, []store.ArtifactFile{
+		{Path: "../escape.md", Bytes: []byte("evil"), Mtime: 1},
+		{Path: "ok.md", Bytes: []byte("fine"), Mtime: 2},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := restoreCellArtifacts(st, id, j); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cellDir(j), "escape.md")); !os.IsNotExist(err) {
+		t.Fatalf("non-local path escaped the artifacts dir: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(CellArtifacts(j), "ok.md")); err != nil || string(got) != "fine" {
+		t.Fatalf("local sibling not restored: %q, %v", got, err)
+	}
+}
+
+// TestRestoreCellArtifactsAbortRemovesPartialDir: a restore that fails
+// mid-loop must remove everything it wrote. The root's existence is the
+// gate for the next attempt, so a partial dir left behind would make every
+// retry a silent no-op over a half-restored cell — whose next sync then
+// deletes the rows that never landed. The rows "figures" (a file) +
+// "figures/icon.md" force a deterministic mid-loop failure: ORDER BY path
+// writes the file first, then MkdirAll fails on it standing where a
+// directory must go — the same abort shape any mid-loop ENOSPC/EACCES has.
+func TestRestoreCellArtifactsAbortRemovesPartialDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	j := &Job{Slug: "restore-abort"}
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SyncArtifacts(id, []store.ArtifactFile{
+		{Path: "figures", Bytes: []byte("a file where a dir must go"), Mtime: 1},
+		{Path: "figures/icon.md", Bytes: []byte("unreachable"), Mtime: 2},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := restoreCellArtifacts(st, id, j); err == nil {
+		t.Fatal("restore must fail on a file/dir path conflict")
+	}
+	if _, err := os.Stat(CellArtifacts(j)); !os.IsNotExist(err) {
+		t.Fatalf("abort left a partial artifacts dir behind — the next attempt's gate would silently no-op: %v", err)
+	}
+	if rows, err := st.ListArtifacts(id); err != nil || len(rows) != 2 {
+		t.Fatalf("abort must not touch the stored rows: %d, %v", len(rows), err)
+	}
+
+	// with the poisoned row gone, the retry starts from an absent root and
+	// completes — the abort kept the failure retryable.
+	if err := st.SyncArtifacts(id, []store.ArtifactFile{
+		{Path: "figures/icon.md", Bytes: []byte("now writable"), Mtime: 2},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreCellArtifacts(st, id, j); err != nil {
+		t.Fatalf("retry after fixing the row: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(CellArtifacts(j), "figures/icon.md")); err != nil || string(got) != "now writable" {
+		t.Fatalf("retry did not complete the restore: %q, %v", got, err)
+	}
+}

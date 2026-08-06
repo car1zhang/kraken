@@ -954,3 +954,43 @@ func TestCellSpawnEnvIsBestEffort(t *testing.T) {
 		t.Fatalf("cellSpawnEnv() = %v with no resolvable go, want nil so the spawn is unchanged", got)
 	}
 }
+
+// --- reactivation artifact restore ---
+
+// TestReactivateJobRestoresArtifacts pins ReactivateJob's restore wiring at
+// the source level (the function itself needs live git/tmux to run).
+// ReactivateJob MkdirAll's the artifacts dir either way (restore runs just
+// before that, against the dir's pre-reactivation state), and that dir is a
+// true-mirror SOURCE at the next teardown's sync: a reactivation that
+// stopped restoring would not only bring the cell back without its
+// deliverables, it would leave an existing-but-empty dir that the next
+// teardown reads as "every artifact was deleted" and mirrors into the
+// store — wiping the history too.
+func TestReactivateJobRestoresArtifacts(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "cell.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reactivate *ast.FuncDecl
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "ReactivateJob" {
+			reactivate = fn
+		}
+	}
+	if reactivate == nil {
+		t.Fatal("cell.go no longer declares ReactivateJob — re-aim this guard at wherever reactivation moved")
+	}
+	found := false
+	ast.Inspect(reactivate.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if fun, ok := call.Fun.(*ast.Ident); ok && fun.Name == "restoreCellArtifacts" {
+				found = true
+			}
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("ReactivateJob no longer calls restoreCellArtifacts — a revived cell comes up without its artifacts, and the empty dir wipes the stored mirror at the next teardown")
+	}
+}
