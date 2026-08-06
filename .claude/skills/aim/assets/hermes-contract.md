@@ -287,6 +287,15 @@ colour may never do.
 </g>
 ```
 
+**The ONLY `<text>` that may sit as a direct child of a `region` (or `group`) `<g>` is that
+container's own label.** The stylesheet's `.region > text` direct-child rule claims any
+direct-child text as the container's start-anchored 12px label, and the linter's anchor
+heuristic reads ancestor classes the same way — so a centred `title`, `edgeLabel`, or other
+free-floating text written directly inside the container renders start-anchored at label
+size (measured: a centred label shipped ~77px off the page edge this way, and three
+renderers in one night each rediscovered the trap alone). Any other text inside a
+region/group nests inside its own part's `<g>` (a `note`, a `cell`, a box) — never bare.
+
 ### Diagram title
 
 **Required — every diagram starts with exactly one.** Top-left, and it states the
@@ -1270,6 +1279,13 @@ job is to show ONE concrete instance, not the abstract structure:
 - Render data in its **natural shape**: a 2D array or matrix as a `cell` grid with
   `cell head` row/column headers; a schedule as a labeled day/time strip of cells; a
   payload as a stacked column of `field: value` cells — never as a blob of raw JSON text.
+- **Intervals get a timeline, not a table.** The day/time-strip rule above covers slot
+  MEMBERSHIP (which day, which slot, present or absent). When the figure's subject is the
+  RELATIONSHIP between time intervals — overlap, containment, a gap, a duration, a
+  threshold on a boundary — draw one shared `axis` and put each interval on it as a
+  `region` (or `bar`) spanning its real extent, so the relationship is geometry rather
+  than a sentence. If a verdict label would have to say `overlap 8h`, `≥ 30m`, or
+  `starts 9:00 < 10:00`, the picture should be saying it instead.
 - **Show mutation between stages**: when the instance's data changes as it moves through
   the system, draw the data again at the next stage with the changed cells marked `blue`
   (`+` — this stage introduced that value), or `grey` (`∅`) for a field this stage clears,
@@ -1289,3 +1305,9 @@ The marker id and the path/element id prefix for a diagram are assigned to you i
 — use exactly what's given. Every id you create must start with your assigned prefix. All
 diagrams in a document share one HTML id namespace, so an id collision between two fragments
 breaks both.
+
+The root `<svg>` element takes NO id at all — a fragment's identity belongs to the host
+card, and ids exist only for internal references (markers, paths, animations). A bare
+`id="<diagram-id>"` on the root hard-fails `ID_PREFIX` against your assigned prefix; two
+renderers in one night each escalated that collision to their lead because nothing stated
+the rule. Leave the root bare.
