@@ -70,6 +70,19 @@ func syncArtifactsNow(j *Job, reason string) {
 // read as "the artifacts were deleted." True-mirror semantics (spec Q11)
 // still apply whenever the dir DOES exist: a file genuinely removed from a
 // live root is still reflected as a row deletion.
+//
+// An EMPTIED-but-present root with rows still stored gets the same skip,
+// for the same reason from a different direction: a done-then-reactivate
+// cycle recreates the cell dir with an empty artifacts/ while the store
+// still mirrors the set, and a wipe by anything outside the session leaves
+// the dir present and bare — two cells hit exactly this in one day, and on
+// both the next roll-call sync would have deleted every row, converting a
+// recoverable disk loss into a permanent one. Dropping from N rows to zero
+// files is never a legitimate true-mirror event on a live cell (deleting
+// the LAST artifact on purpose is not a shape any cell produces — the set
+// always keeps its 00-overview), so zero-files-with-rows reads as
+// "catastrophe upstream", not as a deletion to mirror. Partial deletions
+// still mirror: the guard fires only when nothing at all survives the walk.
 func syncCellArtifacts(st *store.Store, jobID int64, j *Job) error {
 	root := CellArtifacts(j)
 	if _, err := os.Stat(root); err != nil {
@@ -118,6 +131,14 @@ func syncCellArtifacts(st *store.Store, jobID int64, j *Job) error {
 			continue // unreadable: skip it this pass rather than fail the whole sync
 		}
 		files = append(files, store.ArtifactFile{Path: rel, Bytes: data, Mtime: mtimeMillis})
+	}
+	// The guard tests the EFFECTIVE set (files ∪ unchanged), after the loop,
+	// rather than the walk's path list before it: a wipe landing during the
+	// walk enumerates N stale entries whose every Stat then fails, which is
+	// zero effective files off a non-empty path list — same catastrophe, one
+	// millisecond narrower.
+	if len(files)+len(unchanged) == 0 && len(metas) > 0 {
+		return nil // emptied root with rows stored: skip rather than mirror the loss
 	}
 	return st.SyncArtifacts(jobID, files, unchanged)
 }

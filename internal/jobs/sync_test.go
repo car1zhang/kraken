@@ -422,3 +422,49 @@ func TestRestoreCellArtifactsAbortRemovesPartialDir(t *testing.T) {
 		t.Fatalf("retry did not complete the restore: %q, %v", got, err)
 	}
 }
+
+// TestSyncCellArtifactsEmptiedRootSkipsSync covers the second half of L3:
+// a root that EXISTS but has dropped to zero files while the store still
+// holds rows. That is what a done-then-reactivate cycle (empty artifacts/
+// in a fresh cell dir) and an out-of-session wipe both produce, and unlike
+// the missing-root case it passes the os.Stat guard — so without its own
+// guard the sync would mirror the loss and delete every row, turning a
+// recoverable disk loss into a permanent one. Zero files with rows stored
+// is never a legitimate mirror event on a live cell; the sync must no-op.
+func TestSyncCellArtifactsEmptiedRootSkipsSync(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	j := &Job{Slug: "sync-emptied-root"}
+	p := writeArtifact(t, j, "keep.md", []byte("a"), time.Hour)
+
+	id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syncCellArtifacts(st, id, j); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ := st.ListArtifacts(id); len(rows) != 1 {
+		t.Fatalf("want 1 row before wipe, got %d", len(rows))
+	}
+
+	// every file goes, the dir itself stays — the emptied-but-present shape.
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncCellArtifacts(st, id, j); err != nil {
+		t.Fatalf("sync against an emptied root must not error: %v", err)
+	}
+	rows, err := st.ListArtifacts(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Path != "keep.md" {
+		t.Fatalf("stored rows must survive an emptied artifacts root untouched, got %+v", rows)
+	}
+}
