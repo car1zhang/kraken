@@ -59,6 +59,10 @@ func cmdMine(args []string) {
 // applies and for the same reason — a dream pass always passes the watermark
 // explicitly, so the default only ever serves a human running it by hand.
 func runMineDigest(args []string, stdout, stderr *os.File) error {
+	if mineHelpRequested(args) {
+		fmt.Fprintln(stdout, "usage: k mine digest [--since <unix-millis>]")
+		return nil
+	}
 	since, rest, err := parseMineSince(args)
 	if err != nil {
 		return err
@@ -119,6 +123,10 @@ func runMineDigest(args []string, stdout, stderr *os.File) error {
 // reading prose, and wrapping a 40 KB reduction in a JSON string would escape
 // every newline in it for no reader's benefit.
 func runMineReduce(args []string, stdout, stderr *os.File) error {
+	if mineHelpRequested(args) {
+		fmt.Fprintln(stdout, "usage: k mine reduce [--since <unix-millis>] <transcript path>")
+		return nil
+	}
 	since, rest, err := parseMineSince(args)
 	if err != nil {
 		return err
@@ -134,14 +142,36 @@ func runMineReduce(args []string, stdout, stderr *os.File) error {
 	if _, err := stdout.Write(b); err != nil {
 		return fmt.Errorf("write stdout: %v", err)
 	}
-	// An empty reduction is a real answer — a session whose every record
-	// predates the floor — and looks identical to a broken read at the shell.
-	// Say which it was.
+	// An empty reduction is rarely the answer the caller wanted, and it has
+	// TWO causes the caller cannot tell apart from a 0-byte file: a dropped
+	// or mistyped --since whose 24h default excludes every record of an
+	// older session, and a window that genuinely holds only records the
+	// reducer drops (tool results, attachments, bookkeeping — a digest can
+	// list such a session while its reduction is empty). Exiting non-zero
+	// with both causes named is what makes either visible to a caller that
+	// redirected stdout to a file and to any && chain — two agents in one
+	// night each staged a 0-byte "reduced view", read the zero exit as
+	// success, and spent calls rediscovering the flag.
 	if len(b) == 0 {
-		fmt.Fprintf(stderr, "reduced to 0 bytes: no records at or after %s\n",
+		return fmt.Errorf("reduced to 0 bytes: no decision-relevant records at or after %s — the window may hold only tool results and bookkeeping, or every record may predate the floor (absent, --since defaults to 24h ago)",
 			time.UnixMilli(since).Format(time.RFC3339))
 	}
 	return nil
+}
+
+// mineHelpRequested reports whether any argument asks for usage. The package
+// convention (cmd_account.go states it outright) is that `--help`/`-h`/`help`
+// print usage to STDOUT and exit 0 — before this existed, `k mine reduce
+// --help` fell through to the positional slot and died with "open transcript:
+// open --help: no such file or directory", which two agents in one night each
+// had to decode.
+func mineHelpRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--help" || a == "-h" || a == "help" {
+			return true
+		}
+	}
+	return false
 }
 
 // parseMineSince pulls an optional --since off the front of args and returns

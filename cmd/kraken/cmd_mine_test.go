@@ -142,23 +142,56 @@ func TestRunMineDigestWritesJSONToStdout(t *testing.T) {
 	}
 }
 
-// TestRunMineReduceEmptyWindowSaysSo: an empty reduction is a real answer
-// (every record predates the floor) and is byte-identical at the shell to a
-// broken read. It has to be named on stderr.
-func TestRunMineReduceEmptyWindowSaysSo(t *testing.T) {
+// TestRunMineReduceEmptyWindowFails: an empty reduction is byte-identical at
+// the shell to a successful one when stdout is redirected to a file, and its
+// common cause is a dropped --since whose 24h default excluded the whole
+// session — so it is an ERROR, not a stderr aside: agents staged 0-byte
+// "reduced views" off the old zero exit and read them as success.
+func TestRunMineReduceEmptyWindowFails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := writeTestTranscript(t, home, "proj", "sess-1", 1_700_000_100_000)
 
-	stdout, stderr := captureMine(t, func(out, errOut *os.File) error {
-		// A floor far past every record in the file.
-		return runMineReduce([]string{"--since", "1800000000000", path}, out, errOut)
-	})
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	outCh := make(chan string, 1)
+	go func() { outCh <- readAll(outR) }()
+	// A floor far past every record in the file.
+	reduceErr := runMineReduce([]string{"--since", "1800000000000", path}, outW, outW)
+	outW.Close()
+	stdout := <-outCh
+	outR.Close()
+	if reduceErr == nil {
+		t.Fatal("want an error for an all-excluded window, got nil")
+	}
+	if !strings.Contains(reduceErr.Error(), "0 bytes") || !strings.Contains(reduceErr.Error(), "--since") {
+		t.Fatalf("error = %q, want the 0-bytes explanation naming --since", reduceErr)
+	}
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want nothing for an all-excluded window", stdout)
 	}
-	if !strings.Contains(stderr, "0 bytes") {
-		t.Fatalf("stderr = %q, want the empty-window explanation", stderr)
+}
+
+// TestRunMineHelpIsUsageNotAPath: `--help`/`-h`/`help` must print usage to
+// stdout and succeed, per the package convention cmd_account.go states — it
+// used to fall through to the positional slot and die with "open transcript:
+// open --help: no such file or directory".
+func TestRunMineHelpIsUsageNotAPath(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}, {"--since", "0", "--help"}} {
+		stdout, _ := captureMine(t, func(out, errOut *os.File) error {
+			return runMineReduce(args, out, errOut)
+		})
+		if !strings.Contains(stdout, "usage:") {
+			t.Fatalf("runMineReduce(%v) stdout = %q, want a usage line", args, stdout)
+		}
+	}
+	stdout, _ := captureMine(t, func(out, errOut *os.File) error {
+		return runMineDigest([]string{"--help"}, out, errOut)
+	})
+	if !strings.Contains(stdout, "usage:") {
+		t.Fatalf("runMineDigest(--help) stdout = %q, want a usage line", stdout)
 	}
 }
 
