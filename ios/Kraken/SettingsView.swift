@@ -303,8 +303,13 @@ private struct MacControlsSection: View {
         ThemedCard {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Mac").kLabelStyle()
-                shipControl
-                updateControl
+                // Side by side as real buttons — carl's call, replacing the
+                // two full-width text rows that read as labels rather than
+                // things you can press.
+                HStack(spacing: 10) {
+                    shipControl
+                    updateControl
+                }
                 messageArea
                 Text("Ship builds and uploads the iOS app to TestFlight; update pulls and rebuilds kraken on the Mac, restarting the server it is talking to. Neither asks twice — the tap is the decision.")
                     .font(.voice(11))
@@ -385,9 +390,10 @@ private struct MacControlsSection: View {
             vm.markShipStarting()
             Task { await vm.startShipIOS(baseURL: serverURL) }
         } label: {
-            controlRow(glyph: state.glyph, label: state.label, color: state.color)
+            controlLabel(glyph: state.glyph, label: state.label)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
+        .tint(state.color)
         .disabled(state.disabled)
         .accessibilityLabel("ship the iOS app to TestFlight — \(state.label). Uploading is not installing: TestFlight processes the build afterwards and you install it from the TestFlight app.")
     }
@@ -410,25 +416,25 @@ private struct MacControlsSection: View {
                 Task { await vm.startUpdate(baseURL: serverURL) }
             }
         } label: {
-            controlRow(glyph: state.glyph, label: state.label, color: state.color)
+            controlLabel(glyph: state.glyph, label: state.label)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
+        .tint(state.color)
         .disabled(state.disabled)
         .accessibilityLabel("update kraken — \(state.label)")
     }
 
-    /// One control as a full-width row. The bar's 10pt mono was sized to share
-    /// a strip with the daemon LED; on a settings card the same two strings get
-    /// row-weight type and the whole row as a target.
-    private func controlRow(glyph: String, label: String, color: Color) -> some View {
+    /// One control's label, for a glass button. The state's color rides the
+    /// button's `.tint` rather than the text, so the glass capsule carries
+    /// the state the way every other tinted control in the app does; the two
+    /// buttons split the row's width equally.
+    private func controlLabel(glyph: String, label: String) -> some View {
         HStack(spacing: 6) {
             Text(glyph)
             Text(label)
-            Spacer(minLength: 6)
         }
-        .font(.data(13))
-        .foregroundStyle(color)
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
+        .font(.data(13, weight: .medium))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
     }
 }
