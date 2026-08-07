@@ -1083,10 +1083,25 @@ input[type="text"], input[type="search"], input[type="number"], textarea,
 /* the zeus pill collapses to a single glyph — its own 7px/side padding
    already gives a lone glyph the same breathing room a chip's glyph+text
    gets, so no extra min-width is needed; just bump the font size a touch
-   since there's no working/total text to carry the row's height. The god
-   glyphs inside crew chips (.crew-ico spans) get the same bump so icons
-   read at one size everywhere while counts stay at the chip's 10px. */
-.crew-pill, .crew-ico { font-size: 12px; }
+   since there's no working/total text to carry the row's height. */
+.crew-pill { font-size: 12px; }
+/* each role's icon sits in the SAME flex-centered box, which is what kills
+   the baseline misalignment (carl's adjustment round): glyph baselines
+   differ per codepoint, and inline rendering let ⚖︎/✉︎ ride high beside the
+   count text. The per-role font sizes then equalize VISUAL size — ⚖︎ and ✉︎
+   draw well inside their em-box where ⚒︎ nearly fills it, so one font-size
+   read as three different icon sizes; the values below were tuned against
+   the live board until the three read as one set. `other`'s ? is a
+   character, not a pictograph, so it stays at text size with a little
+   weight. */
+.crew-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; line-height: 1;
+}
+.crew-ico-hephaestus { font-size: 12px; }
+.crew-ico-athena { font-size: 14px; }
+.crew-ico-hermes { font-size: 14px; }
+.crew-ico-other { font-size: 10px; font-weight: 600; }
 .crew-pill.run { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 /* question/polling colors match the zeus status hues everywhere else
    (--revealed = amber question state, --polling = cyan, see

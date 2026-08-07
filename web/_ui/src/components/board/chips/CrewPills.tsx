@@ -31,14 +31,17 @@ interface RoleCount {
   names: string[];
 }
 
-// A crew role's god glyph, in its text presentation (VS15 forces monochrome
+// A crew role's icon, in its text presentation (VS15 forces monochrome
 // rendering, matching the rest of the UI's icon glyphs — ● ⚑ ↻ ⧉ ↺; zeus' ↯
-// has no emoji variant, so no VS15 is needed there). "other" has no god and
-// keeps its plain text label.
-const CREW_ICONS: Partial<Record<CrewRole, string>> = {
+// has no emoji variant, so no VS15 is needed there). "other" takes a plain
+// `?` rather than a god glyph (carl's adjustment round — it used to print
+// the word "other", the row's one text label): an unknown role is a
+// question, not a deity. The role name still travels in the chip's title.
+const CREW_ICONS: Record<CrewRole, string> = {
   hephaestus: "⚒︎",
   athena: "⚖︎",
   hermes: "✉︎",
+  other: "?",
 };
 
 // Most teammate names a crew chip's tooltip lists before it summarises the
@@ -99,7 +102,6 @@ export function CrewChips({ job }: { job: WebJob }) {
     (pair): pair is readonly [CrewRole, RoleCount] => pair[1] !== undefined,
   );
   const chips = present.map(([role, c]) => {
-    const icon = CREW_ICONS[role];
     // Capped: a native tooltip does not scroll, so a large hephaestus fleet
     // would render a name list taller than the window with no way to see its
     // end. The on-card `.roster` block this replaced was unbounded too, but it
@@ -113,13 +115,11 @@ export function CrewChips({ job }: { job: WebJob }) {
         className={"crew-chip" + (c.working > 0 ? " active" : "")}
         title={`${role} — ${c.working} of ${c.total} working\n${body.join("\n")}`}
       >
-        {icon ? (
-          <>
-            <span className="crew-ico">{icon}</span> {c.working}/{c.total}
-          </>
-        ) : (
-          `${role} ${c.working}/${c.total}`
-        )}
+        {/* per-role class so the sheet can size each glyph individually —
+            ⚖︎ and ✉︎ draw visibly smaller than ⚒︎ inside one em-box, so a
+            single font-size cannot make the row read as one icon set */}
+        <span className={`crew-ico crew-ico-${role}`}>{CREW_ICONS[role]}</span>{" "}
+        {c.working}/{c.total}
       </span>
     );
   });
