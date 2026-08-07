@@ -1,28 +1,94 @@
-/* kraken web — socrat cyber-dark. Sans is the voice, mono is the data accent.
-   One calm dark surface; neon only where something is hot or interactive. */
+/* kraken web — INDUSTRIAL HUD (handoff kit 2A).
+   One accent hue re-derives every surface, border and glow through
+   color-mix; Chakra Petch carries headings/labels/tabs/buttons and IBM Plex
+   Mono carries everything else. Angular clip-path cuts stand in for radii. */
 
+/* @fontsource must lead the file — @import is only legal before other rules.
+   Vite bundles these woff2 files into dist/, so the board makes no Google
+   Fonts request at runtime (verified: `vite build` emits them as assets). */
+@import "@fontsource/chakra-petch/600.css";
+@import "@fontsource/chakra-petch/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+
+/* PRIMITIVES and DERIVATIONS sit on the SAME element (:root, which is where
+   index.html's pre-paint script stamps data-theme). That is load-bearing: a
+   custom property's var() references resolve on the element the declaration
+   lands on, so declaring the derivations here and overriding only the
+   primitives in the [data-theme="light"] block below makes every color-mix
+   re-derive against the light palette. Splitting them across two elements
+   computes each mix once, against the dark primitives, and never updates. */
 :root {
-  --ground: #0A0E14; --surface: #10151E; --raised: #151C28;
-  --hairline: #1E2836; --hairline-2: #2A3A50;
-  --text: #D7E2EC; --text-2: #6B7A8C;
-  --accent: #9E7BFF; --accent-ink: #0A0E14; --accent-soft: #221844;
-  --counter: #FF4D9D; --counter-soft: #3D1428;
-  --solved: #4ADE80; --solved-soft: #0F2E1D;
-  --revealed: #F5B84D; --revealed-soft: #33260E;
+  /* --- kit primitives: violet theme, dark (README "Theme palettes") --- */
+  --ac: #a86aff; --ac2: #ff4fd8; --tint: #c9b2ff;
+  --b0: #0a090d; --b1: #0d0c12; --b2: rgba(10, 9, 13, 0.92);
+  --g1: #90909a; --g2: #ababb8; --fg: #f2edff;
+  --ok: #7fd44a; --warn: #ffb000;
+  --scan: rgba(0, 0, 0, 0.18);
   /* "polling" status (a claude mid poll-loop on a pending ScheduleWakeup) —
      cyan, mirroring ios/Kraken/Theme.swift KTheme.polling and util/ansi.go's
-     StatusColor("polling") = Cyan on the CLI side. */
-  --polling: #22D3EE; --polling-soft: #0E2E33;
-  --glow: 0 0 12px rgba(158, 123, 255, 0.30), 0 0 2px rgba(158, 123, 255, 0.7);
-  --glow-hot: 0 0 10px rgba(255, 77, 157, 0.28), 0 0 2px rgba(255, 77, 157, 0.7);
-  --scanline-ink: rgba(255, 255, 255, 0.011);
-  --scrim: rgba(10, 14, 20, 0.82);
-  --drop-tint: rgba(158, 123, 255, 0.03);
-  --drop-tint-hover: rgba(158, 123, 255, 0.07);
-  --glow-ok: 0 0 8px rgba(74, 222, 128, 0.45);
-  --glow-warn: 0 0 10px rgba(245, 184, 77, 0.3);
-  --zebra: rgba(255, 255, 255, 0.02);
-  --text-glow: 0 0 1px var(--accent), 0 0 9px var(--accent);
+     StatusColor("polling") = Cyan on the CLI side. It is a primitive rather
+     than a derivation because it is a fixed STATUS hue that must not follow
+     the accent — the kit's own cyan palette values are what it takes. */
+  --polling: #00e5ff;
+
+  /* --- kit derivation recipes (README "Derivation recipes"), verbatim --- */
+  --bg-board: color-mix(in srgb, var(--ac) 4%, var(--b0));
+  --surface: color-mix(in srgb, var(--ac) 7%, var(--b1));
+  --border: color-mix(in srgb, var(--ac) 26%, var(--b1));
+  --border-strong: color-mix(in srgb, var(--ac) 36%, var(--b1));
+  --divider: color-mix(in srgb, var(--ac) 16%, var(--b1));
+  --muted: color-mix(in srgb, var(--ac) 28%, var(--g1));
+  --body: color-mix(in srgb, var(--ac) 24%, var(--g2));
+  --gridline: color-mix(in srgb, var(--ac) 6%, transparent);
+  /* the graph canvas's edge stroke — the approved 50-graph mockup's recipe
+     (accent over transparent; the mockup drew 22%, bumped to 32% because a
+     1px WebGL line reads darker than the mockup's 1px SVG stroke), so edges
+     read as PURPLE threads rather than the near-black --hairline-2 they
+     briefly wore. Read by graphModel's probe resolver, not by any CSS rule —
+     so this var LOOKS unused to a grep. Deleting it makes every edge fall
+     back to graphModel's pinned dark hex (the resolver reads
+     `var(--graph-edge, <sentinel>)`, so a deleted token is caught; a token
+     redefined to garbage is not — it would silently inherit). */
+  --graph-edge: color-mix(in srgb, var(--ac) 32%, transparent);
+  --accent-edge: color-mix(in srgb, var(--ac) 40%, transparent);
+  --chip-bg: color-mix(in srgb, var(--ac) 14%, var(--b1));
+  --chip-border: color-mix(in srgb, var(--ac) 25%, transparent);
+  /* the raised sub-panel fill the steer modal's four drilldowns share
+     (mockup 20's .subpanel) — one step brighter than --surface */
+  --raised: color-mix(in srgb, var(--ac) 6%, var(--b1));
+
+  /* --- LEGACY ALIASES. Dozens of rules and a handful of inline styles read
+     these names; the redesign renames nothing, so each keeps its meaning and
+     picks up its value from the system above. Deleting one is a silent
+     repaint of whatever still reads it. --- */
+  --ground: var(--bg-board);
+  --hairline: var(--divider); --hairline-2: var(--border-strong);
+  --text: var(--fg); --text-2: var(--muted);
+  --accent: var(--ac);
+  /* text ON an accent fill — the board colour, per the kit's active tab */
+  --accent-ink: var(--bg-board);
+  --accent-soft: color-mix(in srgb, var(--ac) 22%, var(--b1));
+  --counter: var(--ac2);
+  --counter-soft: color-mix(in srgb, var(--ac2) 14%, var(--b1));
+  --solved: var(--ok);
+  --solved-soft: color-mix(in srgb, var(--ok) 13%, var(--b1));
+  --revealed: var(--warn);
+  --revealed-soft: color-mix(in srgb, var(--warn) 13%, var(--b1));
+  --polling-soft: color-mix(in srgb, var(--polling) 14%, var(--b1));
+  --scanline-ink: var(--scan);
+  --scrim: color-mix(in srgb, var(--b0) 72%, transparent);
+  --drop-tint: color-mix(in srgb, var(--ac) 5%, transparent);
+  --drop-tint-hover: color-mix(in srgb, var(--ac) 11%, transparent);
+  --zebra: color-mix(in srgb, var(--ac) 4%, transparent);
+  /* glows: the kit's soft accent halo, flattened to `none` wholesale in the
+     light block below (the kit: "No box-shadow glow on cards in light mode") */
+  --glow: 0 0 8px color-mix(in srgb, var(--ac) 40%, transparent);
+  --glow-hot: 0 0 8px color-mix(in srgb, var(--ac2) 40%, transparent);
+  --glow-ok: 0 0 8px color-mix(in srgb, var(--ok) 45%, transparent);
+  --glow-warn: 0 0 8px color-mix(in srgb, var(--warn) 45%, transparent);
+  --text-glow: 0 0 9px color-mix(in srgb, var(--ac) 55%, transparent);
   /* skill palette: one color per pipeline command (/info /aim /do /pr
      /dream), used by the command-highlight backdrop and chips (see app.js's
      cmdHighlightHTML/attachCmdChips) — each gets a glow pair mirroring
@@ -63,33 +129,46 @@
      siblings, since the swatch is the whole treatment. */
   --job-red: #DC2626; --job-blue: #6A9BCC; --job-green: #16A34A; --job-yellow: #CA8A04;
   --job-purple: #827DBD; --job-orange: #D97757; --job-pink: #C46686; --job-cyan: #0891B2;
-  --sans: "Avenir Next", "Helvetica Neue", -apple-system, sans-serif;
-  --mono: "SF Mono", "Menlo", monospace;
+  /* two families, per the kit's type spec. --display is Chakra Petch, worn by
+     headings, labels, tabs and buttons ONLY; everything else is IBM Plex Mono.
+     --sans keeps its name (it is read all over the sheet) but now resolves to
+     the mono stack: in this design there is no prose voice distinct from the
+     data voice — the mockups set IBM Plex Mono on <body> and name Chakra Petch
+     per-rule, which is exactly what this pair reproduces. */
+  --display: "Chakra Petch", "Avenir Next", sans-serif;
+  --mono: "IBM Plex Mono", "SF Mono", "Menlo", monospace;
+  --sans: var(--mono);
   --ease: cubic-bezier(0.9, 0, 0.1, 1);
   color-scheme: dark;
 }
 
+/* accent palettes (kit README): each overrides ONLY the three hue primitives,
+   so every derivation above re-derives. There is no UI control for this — the
+   attribute is set by hand on <html> — and an absent attribute is violet. */
+:root[data-accent="cyan"] { --ac: #00e5ff; --ac2: #ff2d95; --tint: #a8f4ff; }
+:root[data-accent="amber"] { --ac: #ffb000; --ac2: #ff6a00; --tint: #ffe0a8; }
+:root[data-accent="crimson"] { --ac: #ff3b5c; --ac2: #ff8a00; --tint: #ffb2c0; }
+:root[data-accent="green"] { --ac: #2bff88; --ac2: #ffcf3f; --tint: #b2ffd4; }
+
 /* light palette — :root above stays the dark default so any failure mode
    (missing data-theme, JS error before the pre-paint stamp runs, unset var)
-   lands on dark rather than an unreadable mixed state */
+   lands on dark rather than an unreadable mixed state.
+
+   This block overrides PRIMITIVES only, so the derivations declared on :root
+   recompute themselves against it. The three exceptions are all things that
+   are not derived from the accent anywhere: `color-scheme`, the glow tokens
+   (which the kit flattens to nothing in light mode rather than re-deriving),
+   and the two fixed palettes below, whose hexes are pinned against other
+   sources and must stay exactly what they were. */
 :root[data-theme="light"] {
-  --ground: #EEF2F7; --surface: #FFFFFF; --raised: #E3E9F1;
-  --hairline: #D8E0EA; --hairline-2: #B9C6D6;
-  --text: #1C2733; --text-2: #5D6C7E;
-  --accent: #6B3FE0; --accent-ink: #FFFFFF; --accent-soft: #E7DFFB;
-  --counter: #C0105F; --counter-soft: #FBDFEC;
-  --solved: #178A44; --solved-soft: #DCF3E4;
-  --revealed: #8A5106; --revealed-soft: #F7ECD4;
-  --polling: #0E7490; --polling-soft: #D9F2F7;
-  --glow: 0 1px 6px rgba(107, 63, 224, 0.25);
-  --glow-hot: 0 1px 6px rgba(192, 16, 95, 0.22);
-  --glow-ok: 0 1px 4px rgba(23, 138, 68, 0.3);
-  --glow-warn: 0 1px 5px rgba(138, 81, 6, 0.25);
-  --scanline-ink: rgba(0, 0, 0, 0.012);
-  --scrim: rgba(28, 39, 51, 0.45);
-  --drop-tint: rgba(107, 63, 224, 0.04);
-  --drop-tint-hover: rgba(107, 63, 224, 0.08);
-  --zebra: rgba(0, 0, 0, 0.025);
+  --ac: #6d3fd4; --ac2: #c41d9e; --tint: #5a2eb8;
+  --b0: #f6f4fa; --b1: #ecebf3; --b2: rgba(250, 249, 253, 0.92);
+  --g1: #6b6a78; --g2: #4c4b58; --fg: #1a1724;
+  --ok: #3e8f1e; --warn: #a36f00;
+  --scan: rgba(20, 16, 40, 0.04);
+  --polling: #00799c;
+  /* the kit: no glow in light mode, on anything */
+  --glow: none; --glow-hot: none; --glow-ok: none; --glow-warn: none;
   --text-glow: none;
   /* skill palette, light siblings — same darkened-for-white-contrast pattern
      as the rest of this block; text-glows follow --text-glow: none above,
@@ -134,85 +213,328 @@
   color-scheme: light;
 }
 
+/* accent palettes, light siblings (kit README "darkened for contrast"). Two
+   attributes rather than one: `:root[data-accent="cyan"]` and
+   `:root[data-theme="light"]` are BOTH (0,2,0), so on a light+cyan board the
+   later of the two would win outright — which is the violet-light block. Only
+   a (0,3,0) selector puts the right hue on the right mode. */
+:root[data-theme="light"][data-accent="cyan"] { --ac: #00799c; --ac2: #c41d6e; --tint: #005f7d; }
+:root[data-theme="light"][data-accent="amber"] { --ac: #a36f00; --ac2: #bc4e00; --tint: #8a5e00; }
+:root[data-theme="light"][data-accent="crimson"] { --ac: #c2183a; --ac2: #b05e00; --tint: #a3142f; }
+:root[data-theme="light"][data-accent="green"] { --ac: #0e8a45; --ac2: #9c7a00; --tint: #0b7038; }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 /* author display values beat the hidden attribute's UA rule — restate it
    once, globally, so no future display:grid/flex element repeats the bug */
 [hidden] { display: none !important; }
 
-/* scrollbars: thin, trackless, hairline thumb — default OS bars read as a
-   white gash on a dark UI */
-* { scrollbar-width: thin; scrollbar-color: var(--hairline-2) transparent; }
+/* scrollbars: thin, trackless, accent-derived thumb — default OS bars read as
+   a white gash on a dark UI */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--hairline-2); border: 2px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ac) 30%, var(--b1)); border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--ac); background-clip: padding-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
+/* search-hit highlight (renderMD / the board's match marks) */
+mark { background: color-mix(in srgb, var(--warn) 30%, transparent); color: var(--fg); }
+
+/* the board colour lives on <html>, not on <body>, so that body::before (the
+   drifting grid) can sit at z-index -1: it then paints over the canvas
+   background and under every scrap of body content, with no stacking context
+   to fight. With the colour on body instead, body's own background propagates
+   to the canvas and a negative-z pseudo-element hides behind it. */
+html { background: var(--ground); }
+
 body {
-  background: var(--ground);
-  color: var(--text);
+  background: transparent;
+  color: var(--body);
   font: 12px/1.5 var(--sans);
   min-height: 100vh;
 }
 
-/* static CRT texture — deliberately not animated: a moving full-viewport
-   layer forces per-vsync compositing and caused system-wide lag on external
-   monitors */
-.scan {
-  position: fixed; inset: 0; pointer-events: none; z-index: 9;
-  background: repeating-linear-gradient(to bottom,
-    transparent 0, transparent 2px, var(--scanline-ink) 3px);
+/* ---- HUD effects ----
+   Four layers, all pointer-events:none. The two that MOVE (the grid drift and
+   the scan bar) are stopped by the prefers-reduced-motion block near the end
+   of this sheet — whose selector list must include `*::before, *::after`,
+   because both movers are pseudo-elements a bare `*` cannot reach — which is
+   why neither re-states the query; the top edge strip and the scanline rake
+   are static and unaffected by it.
+
+   PERFORMANCE RULE for this section: a CONTINUOUS animation may touch
+   transform and opacity ONLY. Those run on the compositor; anything else
+   (background-position, top, filter) re-paints its layer on the main thread
+   every frame, forever — which is exactly what the first cut of these
+   effects did and what made the board cook CPU at idle. The one exception is
+   the wordmark glitch: its interpolating window (91%→98% of an 8s loop,
+   ~0.56s) repaints one short wordmark, which is noise. `will-change:
+   transform` on the two movers promotes each to its own layer ONCE instead
+   of re-rasterizing.
+
+   body::before — the kit's animated grid: two crossed 1px gradients on a 48px
+   cell, drifting one full cell over 6s. Fixed rather than absolute so it
+   covers a scrolled board without being as tall as one. The layer is oversized
+   one cell up-left and TRANSLATED diagonally rather than animating
+   background-position: moving a horizontal line along its own axis is
+   invisible, so one diagonal translate of the whole grid is pixel-identical
+   to the kit's two-direction background drift — and it composites. */
+body::before {
+  content: ""; position: fixed; inset: -48px 0 0 -48px; z-index: -1; pointer-events: none;
+  background-image:
+    linear-gradient(var(--gridline) 1px, transparent 1px),
+    linear-gradient(90deg, var(--gridline) 1px, transparent 1px);
+  background-size: 48px 48px;
+  will-change: transform;
+  animation: gdrift 6s linear infinite;
+}
+@keyframes gdrift { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(48px, 48px, 0); } }
+
+/* body::after — the kit's 2px top edge strip. z-index 10 puts it over the
+   sticky .chrome (z-index 5) and under every overlay (20+), so it reads as
+   the top edge of the WINDOW rather than of the header. */
+body::after {
+  content: ""; position: fixed; top: 0; left: 0; right: 0; height: 2px;
+  z-index: 10; pointer-events: none;
+  background: linear-gradient(90deg, var(--ac2), var(--ac) 30%, transparent 60%);
 }
 
-/* ---- chrome ---- */
+/* .scan (the element index.html renders) carries BOTH CRT layers: the static
+   scanline rake on the element itself, and the 70px scan bar sweeping
+   top→bottom over 7s on its ::after. Splitting them is what keeps the rake
+   static: it was deliberately un-animated because a moving full-viewport
+   layer forces per-vsync compositing and caused system-wide lag on external
+   monitors — so the moving half is a 70px strip, not the whole viewport. */
+.scan {
+  position: fixed; inset: 0; pointer-events: none; z-index: 9;
+  background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 4px);
+  overflow: hidden;
+}
+/* the ▦ FX toggle (kit: showScanlines). The attribute is stamped pre-paint by
+   index.html's krakenHud IIFE; display:none takes the rake AND the sweeping
+   bar (its ::after) out together. */
+:root[data-scanlines="off"] .scan { display: none; }
+.scan::after {
+  content: ""; position: absolute; top: -70px; left: 0; right: 0; height: 70px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent,
+    color-mix(in srgb, var(--ac) 6%, transparent), transparent);
+  will-change: transform;
+  /* translateY, never `top`: animating an offset re-runs layout+paint every
+     frame; the transform sweep composites. Parked at -70px and translated a
+     viewport-plus-both-margins — approximately the kit's -8%→104% sweep, with
+     the entry/exit margins pinned at 70px rather than scaled to the viewport
+     (the two coincide only around vh≈875/1750). Full entry and full exit hold
+     at any height, which is the property that matters. */
+  animation: scanbar 7s linear infinite;
+}
+@keyframes scanbar { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(0, calc(100vh + 140px), 0); } }
+
+/* ---- cursors: a THICK (2px) crosshair with a centre dot, in the board's
+   opposite — near-white on dark, near-black on light. Over a clickable it
+   changes as little as possible: same crosshair, same colour, the centre dot
+   opened into a small ring. Never a different glyph, and never the OS arrow
+   on an interactive surface (a handful of deliberately non-interactive or
+   disabled surfaces below keep `default`/`help`).
+   24px art, hotspot 12 12 (dead centre). The trailing keyword is the fallback
+   for a browser that refuses the data URI. */
+body {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%23f2edff"/></svg>') 12 12, crosshair;
+}
+/* this list is the ONE owner of the pointer-ring cursor: a later rule that
+   re-declares `cursor: pointer` at equal-or-higher specificity silently wins
+   the cascade and brings the OS hand back. The review round found eight —
+   five cascade-overrides visible in dark theme only (the light list below
+   out-specifies them by accident of its theme prefix) and three clickables
+   never listed at all, OS hand in both themes. New clickables get added
+   HERE, never a local cursor declaration. */
+button, a, [role="button"], summary, label.check,
+.card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip,
+.thread-chip, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
+.dq-row.dq-answered, .cmd-chip, #thread-panehead,
+input[type="checkbox"] {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, pointer;
+}
+:root[data-theme="light"] body {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%231a1724"/></svg>') 12 12, crosshair;
+}
+:root[data-theme="light"] button, :root[data-theme="light"] a,
+:root[data-theme="light"] [role="button"], :root[data-theme="light"] summary,
+:root[data-theme="light"] label.check,
+:root[data-theme="light"] .card.editable, :root[data-theme="light"] .card.archived,
+:root[data-theme="light"] .chip, :root[data-theme="light"] .ct-chip,
+:root[data-theme="light"] .dq-chip, :root[data-theme="light"] .fb-chip,
+:root[data-theme="light"] .ld-chip, :root[data-theme="light"] .thread-chip,
+:root[data-theme="light"] .branch-btn, :root[data-theme="light"] .colorsel-row,
+:root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
+:root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
+:root[data-theme="light"] #thread-panehead,
+:root[data-theme="light"] input[type="checkbox"] {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, pointer;
+}
+/* text-entry surfaces keep the I-beam: a crosshair over a textarea says the
+   wrong thing about what a click there does. The light-prefixed
+   .thread-name-label entry is load-bearing, not belt-and-braces: that element
+   also carries role="button", and the light pointer list's theme prefix
+   out-specifies this bare class — without its own light entry the rename
+   label read as a text field on a dark board and a button on a light one
+   (review-round catch). */
+input[type="text"], input[type="search"], input[type="number"], textarea,
+.thread-name-label,
+:root[data-theme="light"] .thread-name-label { cursor: text; }
+/* a drag handle outranks both, but it wears the SAME ring crosshair as every
+   other clickable (carl's call at the perf round: no OS grab hand — the ring
+   already says "actionable", and the card's lift animation says "dragging").
+   The OS keywords survive only as the data-URI fallback. */
+.card[draggable="true"] {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grab;
+}
+.card.dragging {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grabbing;
+}
+:root[data-theme="light"] .card[draggable="true"] {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grab;
+}
+:root[data-theme="light"] .card.dragging {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grabbing;
+}
+
+/* ---- chrome ----
+   ONE line, always. flex-wrap: nowrap is the whole rule: a chrome bar that
+   folds to a second row shoves the board down and moves every control the
+   moment a stat's text grows by a character. Which children give is spelled
+   out rather than left to flex defaults — the stat segments shrink and clip
+   (`flex: 0 1 auto; min-width: 0; overflow: hidden`), everything the pointer
+   aims at (buttons, tabs, the LED, the wordmark) is `flex: none` and keeps its
+   full width. The clock ends up on the elastic side despite being a control's
+   neighbour rather than a stat: it is the bar's error slot too — see
+   `#tick-stat` below. */
 .chrome {
-  display: flex; align-items: center; gap: 14px;
-  padding: 7px 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: nowrap;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--ac) 8%, var(--b2));
+  border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 5;
   font-family: var(--mono); font-size: 11px;
 }
-.mark { font-weight: 700; letter-spacing: 3px; font-size: 12px; }
-.mark i {
-  font-style: normal; color: var(--accent);
+.chrome > .mark, .chrome > .led, .chrome > .viewtabs,
+.chrome > .upd, .chrome > .theme-btn { flex: none; }
+/* .spacer is the one child that must GROW, and it needs saying at this
+   specificity: `.chrome > .spacer` is (0,2,0) and would beat the bare
+   `.spacer { flex: 1 }` below no matter which came first, so leaving the
+   spacer out of the rigid list above is not enough — naming it here is. */
+.chrome > .spacer { flex: 1; }
+.mark {
+  font: 700 16px var(--display); letter-spacing: 0.24em;
+  color: var(--fg); white-space: nowrap;
+  animation: glitch-mark 8s infinite;
+}
+/* the wordmark's trailing glyph — <b>▞</b> after the redesign, <i>▊</i>
+   before it. Both are named so the sheet is correct on either markup. */
+.mark b, .mark i {
+  font-style: normal; font-weight: 700; color: var(--ac);
   text-shadow: var(--text-glow);
 }
-.led { width: 7px; height: 7px; background: var(--counter); box-shadow: var(--glow-hot); }
-.led.ok { background: var(--solved); box-shadow: var(--glow-ok); }
-.stat { color: var(--text-2); }
-.stat.hot { color: var(--counter); text-shadow: var(--glow-hot); }
+/* the kit's glitch: three horizontal jitter steps with a cyan/magenta
+   text-shadow split, interpolating over 91%→98% of an 8s loop (~0.56s), then
+   ~7.4s at rest. Named `glitch-mark` because a plain `glitch` already exists
+   further down (the .btn:active translate nudge) and one would silently
+   replace the other. */
+@keyframes glitch-mark {
+  0%, 91%, 100% { transform: none; text-shadow: none; }
+  92% { transform: translateX(2px); text-shadow: -2px 0 #00e5ff, 2px 0 #ff2d95; }
+  94% { transform: translateX(-2px); }
+  96% { transform: translateX(1px) skewX(4deg); text-shadow: 2px 0 #00e5ff, -2px 0 #ff2d95; }
+  98% { transform: none; }
+}
+/* the kit's opacity pulse, worn by the daemon LED and the card status glyphs */
+@keyframes ppulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+.led {
+  width: 7px; height: 7px;
+  background: var(--ac2); box-shadow: 0 0 8px var(--ac2);
+  animation: ppulse 2s infinite;
+}
+.led.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: none; }
+/* the kit's bordered stat segment: a boxed key/value pair rather than loose
+   text. These are the bar's only elastic children — see .chrome above. */
+.chrome .stat {
+  flex: 0 1 auto; min-width: 0; overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 9px; letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.chrome .stat.hot { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 40%, var(--b1)); text-shadow: none; }
 .stat.hot:empty { display: none; }
-.stat.dim { opacity: 0.55; }
+.stat.dim { opacity: 0.7; }
 /* running build's commit — quiet by default, but it's the one thing that
    visibly changes when a self-update lands, so it gets the accent on hover */
-.stat.build { opacity: 0.5; letter-spacing: 0.5px; cursor: default; }
-.stat.build:hover { opacity: 1; color: var(--accent); }
+.chrome .stat.build { opacity: 0.6; letter-spacing: 0.04em; cursor: default; }
+.chrome .stat.build:hover { opacity: 1; color: var(--ac); border-color: var(--border-strong); }
 .stat.build:empty { display: none; }
-.spacer { flex: 1; }
-.viewtabs { display: flex; gap: 2px; margin-left: 8px; }
-.viewtab {
-  background: none; border: 1px solid transparent; cursor: pointer;
-  font: 10px var(--mono); letter-spacing: 2px;
-  color: var(--text-2); padding: 3px 10px;
+/* the clock is NOT a segment: borderless accent text with a blinking block
+   cursor, and it sits at the bar's right edge.
+
+   It is nonetheless allowed to SHRINK, unlike the buttons and tabs beside it,
+   because it is the one child in this bar whose content is unbounded: the same
+   span carries `✕ <error>` for ten seconds after a failed board fetch
+   (Chrome.tsx's `tick`), and that is an arbitrarily long server sentence. Left
+   rigid and nowrap in a `flex-wrap: nowrap` bar it pushes the sticky header
+   past the viewport and scrolls the whole page sideways. `flex: 0 1 auto` with
+   min-width 0 makes the error ellipsize instead; the clock itself is eight
+   characters and never reaches the basis, so it does not move. */
+.chrome .stat#tick-stat {
+  flex: 0 1 auto; min-width: 0;
+  border: 0; padding: 0 2px;
+  color: var(--ac); font-size: 10px; letter-spacing: 0.04em;
+  overflow: hidden; text-overflow: ellipsis;
 }
-.viewtab.active { color: var(--accent); border-color: var(--accent-soft); text-shadow: var(--glow); }
-.viewtab:hover:not(.active) { color: var(--text); }
+.chrome .stat#tick-stat i { font-style: normal; animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.spacer { flex: 1; }
+.viewtabs { display: flex; gap: 1px; margin-left: 4px; }
+.viewtab {
+  background: transparent; border: 1px solid var(--border);
+  font: 600 10px var(--display); letter-spacing: 0.12em;
+  color: var(--muted); padding: 4px 12px;
+  white-space: nowrap;
+}
+/* the kit's angular active tab: accent fill, board-coloured text, and the
+   bottom-right corner sheared off */
+.viewtab.active {
+  background: var(--ac); color: var(--bg-board);
+  border-color: var(--ac); text-shadow: none;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+}
+.viewtab:hover:not(.active) { color: var(--fg); border-color: var(--border-strong); }
 /* DREAM wears its skill color when active — the /dream chip, the report
    accents and this tab are the one surface family, and the violet is the
    cheapest way to say "this view belongs to the nightly loop, not the
    board". Every other tab keeps the shared --accent. */
 .viewtab[data-view="dream"].active {
-  color: var(--skill-dream); border-color: var(--skill-dream-soft);
-  text-shadow: var(--text-glow-skill-dream);
+  background: var(--skill-dream); color: var(--bg-board);
+  border-color: var(--skill-dream); text-shadow: none;
 }
+/* chrome control buttons sit at STAT-SEGMENT scale, never at tab scale: they
+   are secondary to the tabs and the mockup set sizes them so deliberately
+   (carl's compact-controls note). .upd shares this block — see below. */
 .theme-btn {
-  background: none; border: none; cursor: pointer;
-  font: 10px var(--mono); letter-spacing: 2px;
-  color: var(--text-2); padding: 3px 8px;
+  background: transparent; border: 1px solid var(--border);
+  font: 600 9px var(--display); letter-spacing: 0.08em;
+  color: var(--muted); padding: 2px 8px;
+  white-space: nowrap;
 }
-.theme-btn:hover { color: var(--text); }
+.theme-btn:hover { color: var(--fg); border-color: var(--border-strong); background: color-mix(in srgb, var(--ac) 8%, transparent); }
+/* min-widths sized to each button's WIDEST label (CRIMSON / FX OFF / SYSTEM):
+   these are the controls a user clicks repeatedly while watching this exact
+   corner, and a label that resizes on every click shifts its neighbours and
+   the clock sideways mid-cycle (review finding). */
+#accent-toggle { min-width: 72px; }
+#scanlines-toggle { min-width: 60px; }
+#theme-toggle { min-width: 64px; }
 
 /* the self-update control (see the self-update section in app.js): same
    chrome weight as .theme-btn at rest, taking color only when it has
@@ -228,53 +550,66 @@ body {
    kinds of thing. .gap is the update button's alone — a ship never restarts
    the server, so it has no gap state to paint. */
 .upd {
-  background: none; border: 1px solid transparent; cursor: pointer;
-  font: 10px var(--mono); letter-spacing: 2px;
-  color: var(--text-2); padding: 3px 9px;
-  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent; border: 1px solid var(--border);
+  font: 600 9px var(--display); letter-spacing: 0.08em;
+  color: var(--muted); padding: 2px 8px;
+  display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
 }
-.upd:hover:not([disabled]) { color: var(--text); }
-.upd[disabled] { opacity: 0.85; cursor: default; }
-.upd .gly { display: inline-block; font-size: 11px; }
+.upd:hover:not([disabled]) { color: var(--fg); border-color: var(--border-strong); background: color-mix(in srgb, var(--ac) 8%, transparent); }
+.upd[disabled] { opacity: 0.85; }
+.upd .gly { display: inline-block; font-size: 10px; }
 .upd .dot {
-  width: 5px; height: 5px; border-radius: 50%;
-  background: var(--revealed); box-shadow: var(--glow-warn);
+  width: 5px; height: 5px;
+  background: var(--warn); box-shadow: 0 0 6px var(--warn);
 }
-.upd.avail { color: var(--revealed); border-color: var(--revealed-soft); }
-.upd.busy { color: var(--accent); border-color: var(--accent-soft); }
-.upd.gap { color: var(--polling); border-color: var(--polling-soft); }
-.upd.ok { color: var(--solved); border-color: var(--solved-soft); text-shadow: var(--glow-ok); }
-.upd.bad { color: var(--counter); border-color: var(--counter-soft); text-shadow: var(--glow-hot); }
-/* the only infinite animation in the sheet — the reduce-motion block at the
-   bottom already kills it along with everything else */
+.upd.avail { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--b1)); }
+.upd.busy { color: var(--ac); border-color: color-mix(in srgb, var(--ac) 45%, var(--b1)); }
+.upd.gap { color: var(--polling); border-color: color-mix(in srgb, var(--polling) 45%, var(--b1)); }
+.upd.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--b1)); text-shadow: none; }
+.upd.bad { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 45%, var(--b1)); text-shadow: none; }
+/* killed by the reduce-motion block at the bottom like every other animation
+   here (it stopped being the sheet's only infinite one when the HUD effects
+   landed) */
 .upd.busy .gly, .upd.gap .gly { animation: spin 1.1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* header at-a-glance usage widget: current account's session/weekly/model
    segments + a pool summary, opening the drilldown modal on click (see
    #usage-overlay below and the "usage widget" section in app.js) */
+/* a bordered segment like .chrome .stat, and elastic for the same reason —
+   it is the widest thing in the bar and the first that should give */
 .usage-stat {
   display: flex; align-items: center; gap: 5px;
-  cursor: pointer; color: var(--text-2);
-  padding: 2px 5px; margin-left: 2px;
+  flex: 0 1 auto; min-width: 0; overflow: hidden;
+  /* nowrap on the box, not just .u-seg: the pool summary is a multi-word span,
+     and squeezed without this it wraps INTERNALLY — the flex row keeps its one
+     line while the child grows tall and spills the bordered segment over the
+     bar (seen in the close-out browser drive). Clipping is the design here. */
+  white-space: nowrap;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  font-size: 9px; letter-spacing: 0.06em;
 }
-.usage-stat:hover { color: var(--text); }
+.usage-stat:hover { color: var(--fg); border-color: var(--border-strong); }
 .u-seg { white-space: nowrap; }
-.u-ok { color: var(--solved); }
-.u-warn { color: var(--revealed); }
-.u-danger { color: var(--counter); }
+.u-ok { color: var(--ok); }
+.u-warn { color: var(--warn); }
+.u-danger { color: var(--ac2); }
 .u-sep { opacity: 0.4; }
-.u-pool { color: var(--text-2); }
+.u-pool { color: var(--muted); }
 .u-stale { opacity: 0.55; }
 
 .stale-banner, .update-banner {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 10px;
+  position: relative; z-index: 4;
   padding: 6px 16px;
-  background: var(--revealed-soft);
-  border-bottom: 1px solid var(--revealed);
-  color: var(--revealed);
-  font: 11px var(--mono);
-  letter-spacing: 0.2px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--b1));
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, var(--b1));
+  color: var(--warn);
+  font: 10px var(--mono);
+  letter-spacing: 0.06em;
 }
 /* the update banner borrows the stale banner's shape (both report on the
    binary, not on a job) and recolors per outcome: cyan while the server is
@@ -283,14 +618,18 @@ body {
    run — the amber default there is the "uploaded, but TestFlight still has
    to process it" line. */
 .update-banner.cyan {
-  background: var(--polling-soft); border-bottom-color: var(--polling); color: var(--polling);
+  background: color-mix(in srgb, var(--polling) 9%, var(--b1));
+  border-bottom-color: color-mix(in srgb, var(--polling) 30%, var(--b1));
+  color: var(--polling);
 }
 .update-banner.bad {
-  background: var(--counter-soft); border-bottom-color: var(--counter); color: var(--counter);
+  background: color-mix(in srgb, var(--ac2) 9%, var(--b1));
+  border-bottom-color: color-mix(in srgb, var(--ac2) 30%, var(--b1));
+  color: var(--ac2);
 }
 .update-banner button {
-  background: transparent; border: 1px solid currentColor; color: inherit; cursor: pointer;
-  font: 10px var(--mono); letter-spacing: 1.5px; padding: 2px 9px;
+  background: transparent; border: 1px solid currentColor; color: inherit;
+  font: 600 9px var(--display); letter-spacing: 0.12em; padding: 2px 10px;
 }
 /* the dismiss ✕ is punctuation, not an action: borderless and dimmed so it
    never competes with RELOAD NOW / OPEN LOG sitting beside it. It is appended
@@ -309,36 +648,40 @@ body {
    everything it shows — a slug fragment, a count — is data. */
 .boardbar {
   display: flex; align-items: center; gap: 12px;
+  position: relative; z-index: 4;
   padding: 8px 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--hairline);
-  font-family: var(--mono); font-size: 11px;
+  background: transparent;
+  border-bottom: 1px solid var(--divider);
+  font-family: var(--mono); font-size: 10px;
 }
 .bb-search { position: relative; display: flex; align-items: center; flex: 0 1 340px; }
 /* the magnifier is drawn by the wrapper rather than placed in the markup: it
    is decoration, and an inline glyph would be one more thing between the
    label and the field for a screen reader to read out */
 .bb-search::before {
-  content: "⌕"; position: absolute; left: 6px;
-  color: var(--text-2); font-size: 13px; pointer-events: none;
+  content: "⌕"; position: absolute; left: 7px; z-index: 1;
+  color: var(--muted); font-size: 13px; pointer-events: none;
 }
-/* same family as .dq-input — mono, surface fill, hairline border, accent on
-   focus — with room reserved left for the magnifier and right for the ✕ */
+/* the kit's angular search field: top-left corner cut, transparent fill so
+   the drifting grid shows through, accent border on focus. Room reserved
+   left for the magnifier and right for the ✕. */
 .bb-input {
   flex: 1 1 auto; min-width: 80px;
-  font: 11px var(--mono); color: var(--text);
-  background: var(--surface); border: 1px solid var(--hairline-2);
-  padding: 4px 22px 4px 20px;
+  font: 10px var(--mono); letter-spacing: 0.04em; color: var(--fg);
+  background: transparent; border: 1px solid var(--border-strong);
+  padding: 5px 22px 5px 22px;
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
 }
-.bb-input::placeholder { color: var(--text-2); opacity: 0.6; }
-.bb-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.bb-input::placeholder { color: var(--muted); opacity: 0.8; }
+.bb-input:hover { border-color: var(--ac); }
+.bb-input:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
 .bb-clear {
   position: absolute; right: 4px;
-  background: none; border: none; cursor: pointer;
-  color: var(--text-2); font: 12px var(--mono); padding: 0 3px;
+  background: none; border: none;
+  color: var(--muted); font: 11px var(--mono); padding: 0 3px;
 }
-.bb-clear:hover { color: var(--text); }
-.bb-hint { color: var(--text-2); opacity: 0.5; font-size: 9.5px; }
+.bb-clear:hover { color: var(--fg); }
+.bb-hint { color: var(--muted); opacity: 0.6; font-size: 9px; }
 /* pushed to the far edge so the count sits where the chrome's own stats do */
 .bb-read { color: var(--text-2); margin-left: auto; }
 .bb-read b { color: var(--accent); font-weight: 400; }
@@ -347,23 +690,24 @@ body {
 .board {
   display: grid;
   grid-template-columns: repeat(5, minmax(200px, 1fr));
-  gap: 14px;
-  padding: 18px 16px 12px;
+  gap: 12px;
+  padding: 14px 16px 20px;
   align-items: start;
   overflow-x: auto;
+  position: relative; z-index: 3;
 }
 
 /* ---- archived drawer: collapsible, tucked under the DONE column ---- */
 .archive-drawer { margin-top: 18px; }
 .archive-head {
-  display: flex; align-items: baseline; gap: 7px;
-  width: 100%; text-align: left; cursor: pointer;
-  background: transparent; border: none;
-  border-bottom: 1px solid var(--hairline);
-  padding: 0 2px 6px;
-  color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 2.5px;
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; text-align: left;
+  background: color-mix(in srgb, var(--ac) 5%, var(--b1));
+  border: none; border-left: 3px solid var(--muted);
+  padding: 5px 8px;
+  color: var(--muted); font: 600 10px var(--display); letter-spacing: 0.2em;
 }
-.archive-head:hover { color: var(--text); }
+.archive-head:hover { color: var(--fg); border-left-color: var(--border-strong); }
 /* pointer-events none: disabled form controls swallow drag events in
    Blink/WebKit, and with zero archived jobs the header IS the drawer's whole
    done→archived drop area — pass hit-testing through to .archive-drawer.
@@ -408,19 +752,46 @@ body {
 }
 .btn.reactivate:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
 .col { min-height: 120px; }
+/* the kit's column head: a filled bar with a 3px left rule in the column's
+   own colour, not a hairline underline. The per-state treatment keys off the
+   `data-col` attribute BoardColumn already writes, so the five heads stay
+   distinguishable with no markup change (this slice edits no TSX).
+   Five, not the kit's four: QUEUED sits between DRAFT and WORKING here and
+   takes --tint, the one hue left that separates from the other four. */
 .col-head {
-  display: flex; justify-content: space-between; align-items: baseline;
-  padding: 0 2px 6px;
-  border-bottom: 1px solid var(--hairline);
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 8px;
+  background: color-mix(in srgb, var(--ac) 7%, var(--b1));
+  border-left: 3px solid var(--muted);
+  color: var(--muted);
   margin-bottom: 10px;
 }
 .col-head b {
-  color: var(--text-2); font-weight: 600;
-  font-size: 10px; letter-spacing: 2.5px;
+  color: inherit; font-weight: 600;
+  font: 600 10px var(--display); letter-spacing: 0.2em;
 }
-.col-head .n { font: 10px var(--mono); color: var(--text-2); }
-.col.has-cards .col-head .n { color: var(--accent); }
-.col-cards { display: flex; flex-direction: column; gap: 10px; min-height: 60px; }
+.col-head .n { font: 10px var(--mono); color: inherit; }
+.col[data-col="queued"] .col-head {
+  color: var(--tint); border-left-color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 10%, var(--b1));
+}
+.col[data-col="working"] .col-head {
+  color: var(--ac); border-left-color: var(--ac);
+  background: color-mix(in srgb, var(--ac) 13%, var(--b1));
+}
+.col[data-col="blocked"] .col-head {
+  color: var(--ac2); border-left-color: var(--ac2);
+  background: color-mix(in srgb, var(--ac2) 12%, var(--b1));
+}
+.col[data-col="done"] .col-head {
+  color: var(--ok); border-left-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, var(--b1));
+}
+/* the count no longer needs its own accent to stand out — the head's own
+   colour already says which column it is, and a second hue in a two-word bar
+   reads as noise. It keeps a weight change instead. */
+.col.has-cards .col-head .n { color: inherit; font-weight: 600; }
+.col-cards { display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
 
 /* drop affordances: only legal targets light up */
 .col.droptarget .col-cards {
@@ -431,47 +802,83 @@ body {
 .col.drophover .col-cards { background: var(--drop-tint-hover); }
 
 /* ---- cards ---- */
-/* the 2px left accent bar is the job's colour channel, and NOTHING else —
-   there are no exceptions and no precedence chain: a card shows its colour,
-   or grey. It carries neither state (an uncoloured job is grey whether it is
-   draft, queued, working, blocked or done) nor alerts (a pending question or
-   health error used to force it to --counter with a hot glow; that rule is
-   gone). So the bar means "which job is this", never "how is it going" or
-   "does this need me". Both of those are still legible elsewhere on the
-   card: state from its column and its `● working` chip, which keep
-   var(--state); a question from its answer button, its .dq-chip.p0 count and
-   the --counter .err line.
-   The grey is --text-2, the same value draft/done/archived cards already
-   showed here, so it is proven legible at 2px rather than a new token. */
+/* the kit's card: uniform 7% surface whatever the status, a 1px border, a
+   3px left accent edge (2px before — the kit specifies 3), and the top-right
+   corner sheared off with a 12px clip.
+
+   That left edge is the job's COLOUR CHANNEL and NOTHING else — no exceptions,
+   no precedence chain. It carries neither state (an uncoloured job looks the
+   same whether it is draft, queued, working, blocked or done) nor alerts (a
+   pending question or health error used to force it to the alert hue with a
+   hot glow; that rule is long gone). So the bar means "which job is this",
+   never "how is it going" or "does this need me", and both of those are
+   legible elsewhere on the card: state from its COLUMN (plus the
+   `◌ queued` / `✓ done` token on the two settled columns — the live states
+   carry no token at all, at carl's ask: the column says it), a question from
+   its `.chip-question` flag, its `.dq-chip.p0` count and the alert-coloured
+   .err line.
+
+   The unset value is now the kit's 40%-transparent accent rather than the grey
+   it used to be, which is what makes an uncoloured card read as belonging to
+   the board rather than as switched off. */
 .card {
   background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-left: 2px solid var(--job-color, var(--text-2));
-  padding: 8px 10px 9px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--job-color, var(--accent-edge));
+  padding: 10px;
+  font-size: 9px;
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
   transition: border-color 140ms var(--ease);
 }
-.card[draggable="true"] { cursor: grab; }
+/* no cursor rules here: the cursors section near the top of the sheet owns
+   the drag cursor (the ring crosshair with a grab/grabbing keyword fallback),
+   and a bare `cursor: grab` repeated HERE would win the cascade over those
+   data-URI rules and silently bring the OS hand back. */
 /* the in-column original while its card live-shifts around the pointer
    (see flipMove in app.js) — reads as a lifted placeholder sitting in its
    current slot; the native drag ghost carries the "real" card under the
    cursor */
-.card.dragging { opacity: 0.35; cursor: grabbing; }
-.card:hover { border-color: var(--hairline-2); border-left-color: var(--job-color, var(--text-2)); }
+.card.dragging { opacity: 0.35; }
+/* on hover the accent edge goes FULL opacity (carl's post-gate note): a
+   colored job's --job-color is already opaque, so only the uncolored
+   fallback moves — from the 40%-transparent accent edge to the accent
+   itself. NOTE this base rule is out-specified on every real card by
+   `.card.editable:hover, .card.archived:hover` near the end of the sheet
+   (JobCard hardcodes .editable in its className), so the two rules must move
+   together — editing only this one changes nothing on the board. */
+.card:hover { border-color: var(--border-strong); border-left-color: var(--job-color, var(--ac)); }
 /* there is deliberately no .card.flagged bar/glow rule: a question or health
-   error used to force the bar to --counter with a hot glow, from before jobs
-   had colours of their own. The bar is the job's colour channel now and has
-   no exceptions — a card is its colour, or grey, and nothing else. The
-   "needs you" signal did not disappear with it: the answer button, the
-   --counter .err line, the .dq-chip.p0 count and the column header's own
-   flag all still carry it, and blocked jobs still sit in the blocked
-   column under a `● blocked` chip. */
-.card-top { display: flex; align-items: baseline; gap: 8px; }
-.slug { font: 700 11.5px var(--mono); color: var(--text); word-break: break-all; }
+   error used to force the bar to the alert hue with a hot glow, from before
+   jobs had colours of their own. See the block above for why the bar has no
+   exceptions. The "needs you" signal did not disappear with it: the
+   `.chip-question` flag, the alert-coloured .err line, the .dq-chip.p0 count
+   and the column header's own flag all still carry it, and blocked jobs still
+   sit in the blocked column, whose header carries the alert hue. */
+.card-top { display: flex; align-items: center; gap: 6px; }
+.slug { font: 600 11px var(--mono); color: var(--fg); overflow-wrap: anywhere; }
 .state {
   margin-left: auto; white-space: nowrap;
-  font: 9.5px var(--mono); letter-spacing: 0.5px;
-  color: var(--state, var(--text-2));
+  font: 9px var(--mono); letter-spacing: 0.06em;
+  color: var(--state, var(--muted));
 }
+
+/* the status token that replaced the card's `.state` span: last child of the
+   .meta row, pushed right by its own auto margin so the row needs no second
+   flex rule (S2 renders `<span class="status status-<column>">`). Only the
+   two SETTLED columns render one — carl removed the live active/blocked
+   tokens outright at the post-gate rounds (the column already says it), so
+   there is deliberately no .status-working, .status-blocked, or
+   .status-draft. It does NOT read the --state custom property the old span
+   used: the class names the column, and one channel is enough. `.state`
+   itself survives just above for ArchivedCard, which is the only thing still
+   rendering it (`■ archived`). */
+.status {
+  margin-left: auto; white-space: nowrap;
+  font: 9px var(--mono); letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.status-queued { color: var(--tint); }
+.status-done { color: var(--ok); }
 /* the cell's poll-timer chip: a pending ScheduleWakeup counting down to its
    next tick. Accent-tinted like .chip, but with a subtle filled background
    (rather than .chip's transparent one) since it's a status readout, not a
@@ -479,9 +886,9 @@ body {
 .wakeup-row { margin-top: 4px; }
 .chip-wakeup {
   display: inline-block;
-  font: 9.5px var(--mono); letter-spacing: 0.3px;
-  color: var(--accent); background: var(--accent-soft);
-  border: 1px solid var(--accent-soft);
+  font: 9px var(--mono); letter-spacing: 0.04em;
+  color: var(--tint); background: var(--chip-bg);
+  border: 1px solid var(--chip-border);
   padding: 2px 7px;
 }
 
@@ -497,27 +904,31 @@ body {
    .chip (that class is claimed by the delegated click handler that opens an
    artifact panel) */
 .queue-cancel {
-  font: 10px var(--mono); line-height: 1;
-  background: transparent; color: var(--text-2);
-  border: 1px solid var(--hairline-2);
-  padding: 2px 6px; cursor: pointer;
+  font: 9px var(--mono); line-height: 1;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-strong);
+  padding: 2px 6px;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
-.queue-cancel:hover { background: var(--counter-soft); border-color: var(--counter); color: var(--counter); box-shadow: var(--glow-hot); }
+.queue-cancel:hover { background: color-mix(in srgb, var(--ac2) 14%, transparent); border-color: var(--ac2); color: var(--ac2); box-shadow: var(--glow-hot); }
 /* PR chips: one linked badge per open/merged/closed PR on the job, styled
    like .chip but color-coded by PR state instead of the uniform accent */
-.prs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.prs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .pr-chip {
-  font: 10px var(--mono); text-decoration: none;
-  padding: 2px 7px; border: 1px solid;
+  font: 9px var(--mono); text-decoration: none;
+  padding: 2px 6px; border: 1px solid;
+  white-space: nowrap;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
-.pr-chip.pr-merged { color: var(--accent); border-color: var(--accent-soft); }
-.pr-chip.pr-merged:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
-.pr-chip.pr-open { color: var(--solved); border-color: var(--solved-soft); }
-.pr-chip.pr-open:hover { background: var(--solved-soft); box-shadow: var(--glow-ok); border-color: var(--solved); }
-.pr-chip.pr-closed { color: var(--text-2); border-color: var(--counter-soft); opacity: 0.8; }
-.pr-chip.pr-closed:hover { background: var(--counter-soft); opacity: 1; border-color: var(--counter); }
+/* the label is `#9129` on every state — the STATE is said by colour alone
+   (S2), so these three rules are the whole distinction and none may be
+   collapsed into a shared neutral */
+.pr-chip.pr-merged { color: var(--tint); border-color: color-mix(in srgb, var(--ac) 45%, transparent); }
+.pr-chip.pr-merged:hover { background: color-mix(in srgb, var(--ac) 14%, transparent); box-shadow: var(--glow); border-color: var(--ac); }
+.pr-chip.pr-open { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.pr-chip.pr-open:hover { background: color-mix(in srgb, var(--ok) 12%, transparent); box-shadow: var(--glow-ok); border-color: var(--ok); }
+.pr-chip.pr-closed { color: var(--muted); border-color: var(--border-strong); opacity: 0.8; }
+.pr-chip.pr-closed:hover { background: color-mix(in srgb, var(--ac2) 10%, transparent); opacity: 1; border-color: var(--ac2); }
 
 /* side-thread chips: one per fork of zeus' session. On the card they sit
    among the crew tokens and the counts in the .chips row (band 2); .threads
@@ -535,77 +946,90 @@ body {
    makes a flex item wider than the column and overflows the card sideways —
    the full title is on the chip's own title attribute either way. */
 .thread-chip {
-  font: 10px var(--mono);
+  font: 9px var(--mono);
   background: transparent; color: var(--polling);
   border: 1px solid var(--polling-soft);
-  padding: 2px 7px; cursor: pointer;
+  padding: 2px 6px;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   /* no box-shadow here: --polling has no glow token, and these chips lift by
      filling in rather than glowing (unlike .chip/.pr-chip) */
   transition: background 80ms var(--ease), border-color 80ms var(--ease);
 }
-.thread-chip:hover { background: var(--polling-soft); border-color: var(--polling); }
+.thread-chip:hover { background: var(--polling-soft); border-color: var(--polling); color: var(--fg); }
 .thread-chip .dot {
   display: inline-block; width: 5px; height: 5px;
   background: var(--polling); margin-right: 5px; vertical-align: middle;
 }
-.thread-chip.closed { color: var(--text-2); border-color: var(--hairline-2); opacity: 0.8; }
-.thread-chip.closed:hover { background: var(--raised); opacity: 1; border-color: var(--text-2); color: var(--text); }
-.thread-chip.closed .dot { background: var(--hairline-2); }
+.thread-chip.closed { color: var(--muted); border-color: var(--border-strong); opacity: 0.8; }
+.thread-chip.closed:hover { background: var(--raised); opacity: 1; border-color: var(--muted); color: var(--fg); }
+.thread-chip.closed .dot { background: var(--border-strong); }
+/* the card's collapsed form of the same thing (S2's `compact`): a bare count,
+   a SPAN rather than a button — the card's own click opens the modal that
+   holds the list — so it takes the resting chip look and no hover fill. */
+.thread-count {
+  font: 9px var(--mono);
+  color: var(--polling); border: 1px solid var(--polling-soft);
+  padding: 2px 6px; white-space: nowrap;
+}
 /* dashed rather than solid: an affordance rather than a thing that exists.
    Modal-only now — the card's chip row shows branches that EXIST and leaves
    starting one to the click-in. */
 .branch-btn {
-  font: 10px var(--mono);
-  background: transparent; color: var(--text-2);
-  border: 1px dashed var(--hairline-2);
-  padding: 2px 7px; cursor: pointer;
+  font: 9px var(--mono);
+  background: transparent; color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  padding: 2px 6px;
   transition: background 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
-.branch-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.branch-btn:hover { border-color: var(--ac); color: var(--ac); background: color-mix(in srgb, var(--ac) 10%, transparent); box-shadow: var(--glow); }
 
 .meta {
-  color: var(--text-2); margin-top: 3px;
-  display: flex; gap: 9px; flex-wrap: wrap;
-  font: 10px var(--mono);
+  color: var(--muted); margin-top: 3px;
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font: 9px var(--mono);
 }
-.err { color: var(--counter); font-size: 11px; margin-top: 5px; }
+.err { color: var(--ac2); font-size: 9px; margin-top: 8px; }
 
 /* A queued job's start failure. Louder than .err on purpose: this is the
    message that was invisible for nine minutes while a job silently refused
    to start, and the monospace body is a real git/tmux error worth reading
    verbatim rather than a summary. */
 .start-error {
-  margin-top: 6px; padding: 6px 8px;
-  border-left: 2px solid var(--revealed);
-  background: var(--revealed-soft);
-  border-radius: 0 5px 5px 0;
+  margin-top: 8px; padding: 6px 8px;
+  border-left: 2px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
   display: flex; flex-direction: column; gap: 3px;
 }
 .start-error-label {
-  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--revealed); font-weight: 600;
+  font: 600 9px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--warn);
 }
 .start-error-msg {
-  font-family: var(--mono); font-size: 10.5px; line-height: 1.45;
-  color: var(--text); word-break: break-word;
+  font-family: var(--mono); font-size: 9px; line-height: 1.5;
+  color: var(--body); word-break: break-word;
 }
-.outcome { color: var(--solved); font-size: 11px; margin-top: 5px; }
+.outcome { color: var(--ok); font-size: 9px; margin-top: 8px; }
 
 /* the cell's last words: a live zeus' most recent assistant text block —
    clamped to 2 lines; click opens the steer modal, which renders the full
    text (see #steer-detail) */
+/* the kit's "latest message" treatment: a 2px alert rule on the left with
+   6px of padding beside it, which is what marks the card's ONE prose surface
+   off from the icons-and-numbers everywhere else on it. */
 .detail {
-  color: var(--text-2); font-size: 11px; line-height: 1.4; margin-top: 6px;
+  color: var(--body); font-size: 9px; line-height: 1.55; margin-top: 8px;
   white-space: pre-wrap;
+  border-left: 2px solid var(--ac2); padding-left: 6px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-/* carl's own last message to the cell, above .detail */
+/* carl's own last message to the cell, above .detail — same left-rule family,
+   in the neutral border colour: it is what he already said, not news */
 .last-sent {
-  font: 10px var(--mono); color: var(--text-2); opacity: 0.7;
-  margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font: 9px var(--mono); color: var(--muted);
+  border-left: 2px solid var(--border-strong); padding-left: 6px;
+  margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* why this card is on screen at all: rendered only when the search kept it by
@@ -614,9 +1038,9 @@ body {
    Amber, outlined, the quietest badge on the card — it is an aside about the
    search, not a fact about the job. */
 .match-why {
-  display: inline-block; margin-top: 5px;
-  font: 9px var(--mono); letter-spacing: 0.6px;
-  color: var(--revealed); border: 1px solid var(--revealed);
+  display: inline-block; margin-top: 6px;
+  font: 9px var(--mono); letter-spacing: 0.06em;
+  color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
   opacity: 0.85; padding: 1px 5px;
 }
 /* the matched words inside those lines. No background — the card is dense
@@ -648,10 +1072,13 @@ body {
    "zeus", "hephaestus", etc. */
 .crew { display: flex; flex-wrap: wrap; gap: 5px; }
 .steer-context .threads { margin-top: 0; }
+/* the kit's agent-pod chip: a filled tint pod rather than a bare outline —
+   the crew is the one thing on a card that is a THING rather than a count */
 .crew-pill, .crew-chip {
-  font: 10px var(--mono); letter-spacing: 0.3px;
-  padding: 2px 7px; border: 1px solid var(--hairline-2);
-  color: var(--text-2);
+  font: 9px var(--mono); letter-spacing: 0.04em;
+  padding: 2px 7px;
+  background: var(--chip-bg); border: 1px solid var(--chip-border);
+  color: var(--tint);
 }
 /* the zeus pill collapses to a single glyph — its own 7px/side padding
    already gives a lone glyph the same breathing room a chip's glyph+text
@@ -659,15 +1086,15 @@ body {
    since there's no working/total text to carry the row's height. The god
    glyphs inside crew chips (.crew-ico spans) get the same bump so icons
    read at one size everywhere while counts stay at the chip's 10px. */
-.crew-pill, .crew-ico { font-size: 13px; }
-.crew-pill.run { color: var(--solved); border-color: var(--solved-soft); }
+.crew-pill, .crew-ico { font-size: 12px; }
+.crew-pill.run { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 /* question/polling colors match the zeus status hues everywhere else
    (--revealed = amber question state, --polling = cyan, see
    ios/Kraken/Theme.swift KTheme and internal/util/ansi.go's StatusColor) rather than
    the pink/purple UI accents, which mean something else in this UI. */
-.crew-pill.question { color: var(--revealed); border-color: var(--revealed-soft); }
-.crew-pill.polling { color: var(--polling); border-color: var(--polling-soft); }
-.crew-chip.active { color: var(--solved); border-color: var(--solved-soft); }
+.crew-pill.question { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.crew-pill.polling { color: var(--polling); border-color: color-mix(in srgb, var(--polling) 40%, transparent); }
+.crew-chip.active { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 
 /* a pending AskUserQuestion: header + option buttons, answered by a click.
    Scoped to its two actual render parents (card body, steer-actions modal —
@@ -677,32 +1104,53 @@ body {
    (equal 0,1,0 specificity, earlier in source) and win, wrecking that
    pill's padding/border/font. */
 .card > .question, .steer-actions > .question {
-  margin-top: 7px; padding: 6px 8px;
-  background: var(--counter-soft);
-  border-left: 2px solid var(--counter);
-  font-size: 11px; line-height: 1.45;
+  margin-top: 8px; padding: 6px 8px;
+  background: color-mix(in srgb, var(--ac2) 7%, transparent);
+  border: 1px solid var(--ac2);
+  font-size: 10px; line-height: 1.5;
 }
-.q-header { font-weight: 600; color: var(--text); }
-.q-text { color: var(--text-2); margin-top: 2px; }
-.q-opts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.q-header { font: 600 9px var(--display); letter-spacing: 0.14em; color: var(--ac2); }
+.q-text { color: var(--body); margin-top: 4px; }
+.q-opts { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .q-opt {
-  font: 10px var(--mono);
-  background: transparent; color: var(--counter);
-  border: 1px solid var(--counter-soft);
-  padding: 3px 8px; cursor: pointer;
+  font: 10px var(--mono); text-align: left;
+  background: transparent; color: var(--tint);
+  border: 1px solid color-mix(in srgb, var(--ac2) 45%, transparent);
+  padding: 3px 7px;
 }
-.q-opt:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
-.q-opt:disabled { opacity: 0.4; cursor: default; }
+.q-opt:hover { background: color-mix(in srgb, var(--ac2) 14%, transparent); border-color: var(--ac2); color: var(--fg); box-shadow: var(--glow-hot); }
+.q-opt:disabled { opacity: 0.4; }
+
+/* the card's collapsed stand-in for that whole block (S2): a bare ⚑ in the
+   chip row, the question itself one click into the modal. Alert-coloured
+   because it is the one chip on the card that means "you are the blocker".
+
+   It PULSES, and that is the only thing separating it from `.dq-chip.p0`,
+   which is a ⚑ in the same hue sitting a few tokens along the same row on
+   exactly the card where both appear — a blocked one. Hue is spoken for (both
+   mean alert) and the glyph is frozen by the contract, so motion is the
+   channel left: the kit's own attention treatment, and the same ppulse the
+   live status tokens wear. `prefers-reduced-motion` kills it along with
+   everything else, which leaves the fill and the absence of a count as the
+   static fallback. */
+.chip-question {
+  font: 9px var(--mono);
+  color: var(--ac2); border: 1px solid var(--ac2);
+  background: color-mix(in srgb, var(--ac2) 9%, transparent);
+  padding: 2px 6px; white-space: nowrap;
+  animation: ppulse 2s infinite;
+}
 
 /* doc-review questions (questions.yaml) — deliberately a neutral/accent
    panel, not the counter-colored .question block above, so "an
    AskUserQuestion is blocking the pane" and "zeus has an open doc question"
    read as two different kinds of thing at a glance. */
 .doc-questions {
-  margin-top: 7px; padding: 6px 8px;
+  margin-top: 10px; padding: 8px 10px;
   background: var(--raised);
-  border-left: 2px solid var(--hairline-2);
-  font-size: 11px; line-height: 1.45;
+  border: 1px solid var(--divider);
+  border-left: 2px solid var(--ac2);
+  font-size: 10px; line-height: 1.5;
 }
 /* no `.card .doc-questions` cap any more: the panel is modal-only, and the
    card carries just .dq-chip's count (docQuestionsChipHTML). The cap existed
@@ -716,15 +1164,15 @@ body {
 .dq-head { display: flex; align-items: baseline; gap: 5px; }
 .dq-imp {
   flex: none;
-  font: 9px var(--mono); letter-spacing: 0.5px;
-  border: 1px solid var(--hairline-2); color: var(--text-2);
+  font: 8px var(--mono); letter-spacing: 0.08em;
+  border: 1px solid var(--border-strong); color: var(--muted);
   padding: 1px 4px;
 }
-.dq-imp.p0 { color: var(--counter); border-color: var(--counter-soft); }
-.dq-imp.p1 { color: var(--revealed); border-color: var(--revealed-soft); }
-.dq-imp.p2 { color: var(--text-2); }
+.dq-imp.p0 { color: var(--ac2); border-color: var(--ac2); }
+.dq-imp.p1 { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
+.dq-imp.p2 { color: var(--muted); }
 .dq-q {
-  color: var(--text); overflow-wrap: anywhere;
+  color: var(--fg); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .dq-ctx {
@@ -737,31 +1185,33 @@ body {
 }
 .dq-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
 .dq-accept, .dq-send, .dq-reanswer-cancel {
-  font: 10px var(--mono);
-  background: transparent; color: var(--accent);
-  border: 1px solid var(--accent-soft);
-  padding: 3px 8px; cursor: pointer;
+  font: 600 9px var(--display); letter-spacing: 0.1em;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-strong);
+  padding: 3px 9px; white-space: nowrap;
 }
-.dq-accept:hover, .dq-send:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
-.dq-accept:disabled, .dq-send:disabled, .dq-input:disabled, .dq-reanswer-cancel:disabled { opacity: 0.4; cursor: default; }
+.dq-accept:hover, .dq-send:hover { color: var(--fg); background: color-mix(in srgb, var(--ac) 12%, transparent); box-shadow: var(--glow); border-color: var(--ac); }
+.dq-accept:disabled, .dq-send:disabled, .dq-input:disabled, .dq-reanswer-cancel:disabled { opacity: 0.4; }
 .dq-input {
   flex: 1 1 120px; min-width: 80px;
-  font: 10px var(--mono); color: var(--text);
-  background: var(--surface); border: 1px solid var(--hairline-2);
+  font: 10px var(--mono); color: var(--fg);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1));
+  border: 1px solid var(--border-strong);
   padding: 3px 6px;
 }
-.dq-input:focus { outline: none; border-color: var(--accent); }
+.dq-input:hover { border-color: var(--ac); }
+.dq-input:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
 /* answered rows are dimmed AND clickable — Q13: editable forever — so they
    get a hover affordance distinct from the plain read-only look */
-.dq-row.dq-answered { color: var(--text-2); opacity: 0.65; font-size: 10.5px; cursor: pointer; }
+.dq-row.dq-answered { color: var(--muted); opacity: 0.65; font-size: 9.5px; }
 .dq-row.dq-answered:hover { opacity: 0.9; }
 .dq-answered-text { margin-top: 2px; overflow-wrap: anywhere; }
 /* a reopened answered row renders as a plain .dq-row (docQuestionRowHTML,
    same markup as a genuinely open question) plus a "cancel" affordance back
    to the read-only view */
-.dq-reanswer-cancel { color: var(--text-2); border-color: var(--hairline-2); }
-.dq-reanswer-cancel:hover { background: var(--raised); border-color: var(--text-2); color: var(--text); }
-.dq-hint { color: var(--text-2); opacity: 0.55; font-size: 9px; margin-top: 7px; }
+.dq-reanswer-cancel { color: var(--muted); border-color: var(--border-strong); }
+.dq-reanswer-cancel:hover { background: var(--raised); border-color: var(--muted); color: var(--fg); box-shadow: none; }
+.dq-hint { color: var(--muted); opacity: 0.6; font-size: 9px; margin-top: 8px; }
 
 /* job feedback panel — same family as .doc-questions/.dq-row, its own
    neutral panel so it reads as a distinct kind of thing from both artifact
@@ -773,45 +1223,48 @@ body {
    uncapped (.panel-body already scrolls the whole composer); the editor copy
    sets its own cap below, beside the questions panel's. */
 .job-feedback {
-  margin-top: 7px; padding: 6px 8px;
+  margin-top: 10px; padding: 8px 10px;
   background: var(--raised);
-  border-left: 2px solid var(--hairline-2);
-  font-size: 11px; line-height: 1.45;
+  border: 1px solid var(--divider);
+  border-left: 2px solid var(--warn);
+  font-size: 10px; line-height: 1.5;
 }
 .fb-row { margin-top: 7px; }
 .fb-row:first-child { margin-top: 0; }
 .fb-head { display: flex; align-items: baseline; gap: 6px; }
 .fb-artifact {
   flex: 1 1 auto; min-width: 0;
-  color: var(--text); font: 10px var(--mono); overflow-wrap: anywhere;
+  color: var(--fg); font: 10px var(--mono); overflow-wrap: anywhere;
 }
 .fb-actions { display: flex; gap: 5px; flex: none; }
 .fb-edit, .fb-delete, .fb-cancel, .fb-save {
-  font: 9px var(--mono);
-  background: transparent; color: var(--text-2);
-  border: 1px solid var(--hairline-2);
-  padding: 2px 6px; cursor: pointer;
+  font: 600 9px var(--display); letter-spacing: 0.1em;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-strong);
+  padding: 2px 7px; white-space: nowrap;
 }
-.fb-edit:hover, .fb-save:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.fb-delete:hover { background: var(--counter-soft); border-color: var(--counter); color: var(--counter); }
-.fb-cancel:hover { background: var(--raised); border-color: var(--text-2); color: var(--text); }
-.fb-edit:disabled, .fb-delete:disabled, .fb-save:disabled, .fb-cancel:disabled { opacity: 0.4; cursor: default; }
+.fb-edit:hover, .fb-save:hover { background: color-mix(in srgb, var(--ac) 12%, transparent); border-color: var(--ac); color: var(--fg); box-shadow: var(--glow); }
+.fb-delete:hover { background: color-mix(in srgb, var(--ac2) 14%, transparent); border-color: var(--ac2); color: var(--ac2); box-shadow: var(--glow-hot); }
+.fb-cancel:hover { background: var(--raised); border-color: var(--muted); color: var(--fg); }
+.fb-edit:disabled, .fb-delete:disabled, .fb-save:disabled, .fb-cancel:disabled { opacity: 0.4; }
 .fb-note {
-  color: var(--text-2); margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap;
+  color: var(--body); margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
-.fb-addressed-text { color: var(--solved); margin-top: 3px; overflow-wrap: anywhere; }
+.fb-addressed-text { color: var(--ok); margin-top: 3px; overflow-wrap: anywhere; }
 .fb-addressed .fb-note { opacity: 0.75; }
 .fb-edit-input {
   display: block; width: 100%; box-sizing: border-box;
   margin-top: 4px;
-  font: 10.5px/1.5 var(--sans); color: var(--text);
-  background: var(--surface); border: 1px solid var(--hairline-2);
+  font: 10px/1.6 var(--mono); color: var(--fg);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1));
+  border: 1px solid var(--border-strong);
   padding: 6px 8px; resize: vertical; min-height: 44px;
 }
-.fb-edit-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.fb-edit-input:hover { border-color: var(--ac); }
+.fb-edit-input:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
 .fb-edit-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; margin-top: 5px; }
-.fb-edit-note { font: 10px var(--mono); color: var(--counter); margin-right: auto; }
+.fb-edit-note { font: 9px var(--mono); color: var(--ac2); margin-right: auto; }
 
 /* align-items: center is load-bearing because this is the card's one
    MIXED-HEIGHT chip row (.prs below is the other chip row, but everything in
@@ -824,15 +1277,15 @@ body {
    of a box ~3px taller than their text while .thread-chip beside them sat
    centred. Only rows with a live crew would show it, which is what makes it
    easy to miss. */
-.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; font-size: 9px; }
 .chip {
-  font: 10px var(--mono);
-  background: transparent; color: var(--accent);
-  border: 1px solid var(--accent-soft);
-  padding: 2px 7px; cursor: pointer;
-  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+  font: 9px var(--mono);
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-strong);
+  padding: 2px 6px; white-space: nowrap;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
-.chip:hover { background: var(--accent-soft); box-shadow: var(--glow); border-color: var(--accent); }
+.chip:hover { background: color-mix(in srgb, var(--ac) 12%, transparent); box-shadow: var(--glow); border-color: var(--ac); color: var(--fg); }
 /* no .chip-more any more: .chip is a modal-only renderer now (artifactListHTML
    fills #steer-chips and #editor-chips), and a modal scrolls, so there is
    nothing left to collapse behind a "+N more" toggle. */
@@ -847,12 +1300,12 @@ body {
    too — that stopped being an example of something owed when `addressed`
    became the dream pass' column; see .fb-chip below.) */
 .ct-chip {
-  font: 10px var(--mono);
-  color: var(--text-2); border: 1px solid var(--hairline-2);
-  padding: 2px 7px; cursor: pointer;
+  font: 9px var(--mono);
+  color: var(--muted); border: 1px solid var(--border-strong);
+  padding: 2px 6px; white-space: nowrap;
   transition: border-color 80ms var(--ease), color 80ms var(--ease);
 }
-.card:hover .ct-chip { color: var(--text); border-color: var(--text-2); }
+.card:hover .ct-chip { color: var(--fg); border-color: var(--ac); }
 
 /* the board's whole question surface: an open-count chip in the card's chip
    row, the questions themselves one click into the job (docQuestionsChipHTML).
@@ -862,9 +1315,9 @@ body {
    importance badges: muted by default, counter-hot the moment a P0 is open,
    which is the same signal the header's ⚑ counter uses. */
 .dq-chip {
-  font: 10px var(--mono);
-  color: var(--text-2); border: 1px solid var(--hairline-2);
-  padding: 2px 7px; cursor: pointer;
+  font: 9px var(--mono);
+  color: var(--muted); border: 1px solid var(--border-strong);
+  padding: 2px 6px; white-space: nowrap;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
 /* :not(.p0) on the hover rule is load-bearing, not tidiness: `.card:hover
@@ -872,9 +1325,9 @@ body {
    would repaint a P0 chip plain-text the moment the pointer touched the card
    — killing exactly the signal the chip exists to carry, and only while
    you're looking at it. */
-.card:hover .dq-chip:not(.p0) { color: var(--text); border-color: var(--text-2); }
-.dq-chip.p0 { color: var(--counter); border-color: var(--counter-soft); }
-.card:hover .dq-chip.p0 { border-color: var(--counter); box-shadow: var(--glow-hot); }
+.card:hover .dq-chip:not(.p0) { color: var(--fg); border-color: var(--ac); }
+.dq-chip.p0 { color: var(--ac2); border-color: var(--ac2); }
+.card:hover .dq-chip.p0 { border-color: var(--ac2); box-shadow: var(--glow-hot); }
 
 /* the board's whole feedback surface, exactly parallel to .dq-chip above:
    a count in the card's chip row, the notes themselves one click into the job
@@ -890,72 +1343,80 @@ body {
    job carrying feedback, and an emphasis that fires on nearly everything is
    one carl stops reading. FeedbackChip.tsx owns the wording that says so. */
 .fb-chip {
-  font: 10px var(--mono);
-  color: var(--text-2); border: 1px solid var(--hairline-2);
-  padding: 2px 7px; cursor: pointer;
+  font: 9px var(--mono);
+  color: var(--muted); border: 1px solid var(--border-strong);
+  padding: 2px 6px; white-space: nowrap;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
-.card:hover .fb-chip { color: var(--text); border-color: var(--text-2); }
+.card:hover .fb-chip { color: var(--fg); border-color: var(--ac); }
 
 /* the board's triage badge (LoadChip): zeus' unblock/scope estimates for a
    BLOCKED card, rendered as the ratio between them. Leads the .chips row, and
    is the one token in it that is not a count — see JobCard's band note.
 
    Not a .chip and not a button, same fall-through reason as .ct-chip/.dq-chip/
-   .fb-chip above: .chip is the artifact-overlay click target. cursor: pointer
-   all the same, and for the same reason those three carry it — the whole CARD
-   is a click target, so the pointer is the card's affordance showing through an
-   element that does not intercept the click.
+   .fb-chip above: .chip is the artifact-overlay click target. The pointer-ring
+   cursor it shows is the card's affordance showing through an element that
+   does not intercept the click, and it comes from the cursors section's list —
+   never a local cursor declaration, which would out-cascade the data-URI (see
+   the note on that list).
 
-   Sized exactly like its siblings (10px mono, 2px 7px, 1px border) so leading
-   the row costs the same width as any other chip in it. white-space: nowrap is
-   the one addition: the label carries two internal spaces (`⚡ 4.0× 2→8`) and a
-   flex item is free to break at them, which would split the ratio from the
-   arrow across two lines in a narrow column.
+   Sized exactly like its siblings (9px mono, 2px 6px, 1px border) so leading
+   the row costs the same width as any other chip in it. white-space: nowrap
+   survives the redesign even though the label is now the bare ratio (`⚡ 4.0×`,
+   S2): the one space it still carries is a legal flex break point, and a band
+   badge split across two lines is the one shape that makes a card taller.
 
    FOUR bands, and hue is deliberately not the only channel separating them —
    red/green is the common colour-blind failure and two of these four sit either
    side of it. Each band therefore gets a distinct BOX treatment as well:
-     hot   filled (--counter-soft) + counter text  — the board's "a human is
+     hot   filled alert tint + alert text        — the board's "a human is
            needed here" colour, which is exactly what a high ratio says
-     warm  amber text, amber border, no fill       — --revealed, "work owed"
+     warm  amber text, amber border, no fill      — --warn, "work owed"
            (the weight .fb-chip carried before its count stopped meaning that)
-     even  muted text, hairline border             — the .ct-chip resting look
-     cold  muted text, DASHED border               — the only dashed border in
+     even  muted text, standard border            — the .ct-chip resting look
+     cold  muted text, DASHED border              — the only dashed border in
            the row, so it is legible with no colour perception at all
    Every colour is a theme token, so both palettes follow without a second
    block here. */
 .ld-chip {
-  font: 10px var(--mono);
-  color: var(--text-2); border: 1px solid var(--hairline-2);
-  padding: 2px 7px; white-space: nowrap; cursor: pointer;
+  font: 9px var(--mono);
+  color: var(--muted); border: 1px solid var(--border-strong);
+  padding: 2px 6px; white-space: nowrap;
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
-.ld-chip.hot { color: var(--counter); border-color: var(--counter-soft); background: var(--counter-soft); }
-.ld-chip.warm { color: var(--revealed); border-color: var(--revealed-soft); }
+.ld-chip.hot { color: var(--ac2); border-color: var(--ac2); background: color-mix(in srgb, var(--ac2) 12%, transparent); }
+.ld-chip.warm { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
 .ld-chip.cold { border-style: dashed; opacity: 0.75; }
 /* :not() on the hover rules for the same specificity reason .dq-chip's carries
    one: `.card:hover .ld-chip` (0,2,1) outranks `.ld-chip.hot` (0,2,0), so an
    unscoped hover would repaint the hot and warm badges plain-text the moment
    the pointer touched the card — killing the ranking signal exactly while you
    are looking at it. */
-.card:hover .ld-chip:not(.hot):not(.warm) { color: var(--text); border-color: var(--text-2); }
-.card:hover .ld-chip.hot { border-color: var(--counter); box-shadow: var(--glow-hot); }
-.card:hover .ld-chip.warm { border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.card:hover .ld-chip:not(.hot):not(.warm) { color: var(--fg); border-color: var(--ac); }
+.card:hover .ld-chip.hot { border-color: var(--ac2); box-shadow: var(--glow-hot); }
+.card:hover .ld-chip.warm { border-color: var(--warn); box-shadow: var(--glow-warn); }
 
-.prereq span { font: 10px var(--mono); }
-.prereq .ok { color: var(--solved); }
-.prereq .pend { color: var(--revealed); }
-.prereq .gate { color: var(--counter); }
+.prereq span { font: 9px var(--mono); }
+.prereq .ok { color: var(--ok); }
+.prereq .pend { color: var(--warn); }
+.prereq .gate { color: var(--ac2); }
 
-.empty { color: var(--text-2); opacity: 0.35; text-align: center; padding: 14px 0; font-size: 11px; }
+.empty { color: var(--muted); opacity: 0.4; text-align: center; padding: 14px 0; font-size: 10px; }
 
 /* ---- overlays ---- */
+/* No backdrop-filter, deliberately: the grid keeps drifting UNDER an open
+   overlay, and a backdrop blur re-samples everything beneath it every frame
+   anything there changes — a per-frame viewport blur for as long as a modal
+   is open. The 72% scrim carries the wash on its own (it mixes --b0, so it
+   dims a dark board and whitens a light one). The kit's dim-layer did carry
+   blur(2px); dropping it is a deliberate departure, for the reason above. */
 .overlay {
   position: fixed; inset: 0; z-index: 20;
   background: var(--scrim);
   display: flex; justify-content: center; align-items: flex-start;
-  padding: 6vh 4vw;
+  padding: 6vh 2vw;
+  overflow: auto;
 }
 /* the artifact viewer can be opened from inside the steer/unblock modal —
    it must always paint above any other overlay, regardless of DOM order */
@@ -971,11 +1432,12 @@ body {
 .toast {
   position: fixed; left: 50%; bottom: 24px; z-index: 40;
   transform: translate(-50%, 12px);
-  background: var(--counter-soft); color: var(--counter);
-  border: 1px solid var(--counter);
+  background: color-mix(in srgb, var(--ac2) 12%, var(--b0)); color: var(--ac2);
+  border: 1px solid var(--ac2);
   box-shadow: var(--glow-hot);
-  font: 11px var(--mono); letter-spacing: 0.3px;
+  font: 10px var(--mono); letter-spacing: 0.06em;
   padding: 8px 16px;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
   max-width: min(720px, calc(100vw - 32px));
   white-space: pre-wrap; word-break: break-word;
   opacity: 0; pointer-events: none;
@@ -988,12 +1450,12 @@ body {
 .steer-context {
   display: flex; flex-direction: column; gap: 8px;
   padding-bottom: 12px; margin-bottom: 2px;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--divider);
 }
 .steer-detail {
-  color: var(--text-2); font-size: 11.5px; line-height: 1.5;
+  color: var(--body); font-size: 10px; line-height: 1.6;
   max-height: 40vh; overflow-y: auto;
-  padding: 9px 11px; background: var(--raised); border: 1px solid var(--hairline-2);
+  padding: 9px 11px; background: var(--raised); border: 1px solid var(--divider);
 }
 /* rendered markdown, not preformatted text — normalize the block rhythm.
    .steer-spec-body shares these rules so the spec preview reads the same as
@@ -1005,8 +1467,10 @@ body {
 .steer-detail li, .steer-spec-body li { margin: 0.15em 0; }
 .steer-detail :last-child, .steer-spec-body :last-child { margin-bottom: 0; }
 .steer-detail h1, .steer-detail h2, .steer-detail h3,
-.steer-spec-body h1, .steer-spec-body h2, .steer-spec-body h3 { font-size: 12.5px; margin: 10px 0 6px; color: var(--text); }
-.steer-detail code, .steer-spec-body code { background: var(--surface); padding: 1px 4px; }
+.steer-spec-body h1, .steer-spec-body h2, .steer-spec-body h3 {
+  font: 600 11px var(--display); letter-spacing: 0.1em; margin: 10px 0 6px; color: var(--fg);
+}
+.steer-detail code, .steer-spec-body code { background: color-mix(in srgb, var(--warn) 8%, var(--b1)); color: var(--warn); padding: 1px 4px; }
 .steer-detail pre, .steer-spec-body pre { white-space: pre-wrap; }
 /* in the modal the last-sent line is decision context, not a card ornament —
    let it wrap instead of inheriting the card's one-line ellipsis */
@@ -1031,28 +1495,28 @@ body {
 .steer-spec {
   margin-bottom: 2px;
   background: var(--raised);
-  border: 1px solid var(--hairline-2);
+  border: 1px solid var(--divider);
 }
 .steer-spec-head {
   display: flex; align-items: center; gap: 6px;
-  width: 100%; text-align: left; cursor: pointer;
+  width: 100%; text-align: left;
   background: transparent; border: none;
   padding: 8px 11px;
-  color: var(--text-2); font: 600 10px var(--mono); letter-spacing: 1.5px;
+  color: var(--muted); font: 600 9px var(--display); letter-spacing: 0.2em;
   text-transform: uppercase;
 }
-.steer-spec-head:hover { color: var(--text); }
+.steer-spec-head:hover { color: var(--fg); }
 .steer-spec-head .tri { font-size: 9px; letter-spacing: 0; }
 .steer-spec-body {
   padding: 0 11px 11px;
   max-height: 40vh; overflow-y: auto;
-  color: var(--text-2); font-size: 11.5px; line-height: 1.5;
+  color: var(--body); font-size: 10px; line-height: 1.6;
 }
 .spec-meta {
   display: grid; grid-template-columns: 1fr 1fr; gap: 3px 28px;
   margin-bottom: 10px; padding-bottom: 10px;
-  border-bottom: 1px solid var(--hairline);
-  font: 11px var(--mono);
+  border-bottom: 1px solid var(--divider);
+  font: 10px var(--mono);
 }
 .spec-meta-row { display: flex; gap: 8px; }
 .spec-meta-row.wide { grid-column: 1 / -1; }
@@ -1071,15 +1535,16 @@ body {
    is hot or interactive — it is a fact about the past — so nothing here
    earns full --text, let alone neon. */
 .tok {
-  margin-top: 7px; padding: 6px 8px;
+  margin-top: 10px; padding: 8px 10px;
   background: var(--raised);
-  border-left: 2px solid var(--hairline-2);
-  font: 11px var(--mono); line-height: 1.45;
-  color: var(--text-2);
+  border: 1px solid var(--divider);
+  border-left: 2px solid var(--border-strong);
+  font: 10px var(--mono); line-height: 1.5;
+  color: var(--muted);
 }
 .tok-head { display: flex; align-items: baseline; gap: 5px; }
-.tok-big { font: 600 15px var(--mono); letter-spacing: 0.5px; }
-.tok-unit { font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; opacity: 0.65; }
+.tok-big { font: 600 15px var(--mono); letter-spacing: 0.04em; color: var(--fg); }
+.tok-unit { font: 600 8px var(--display); text-transform: uppercase; letter-spacing: 0.14em; opacity: 0.65; }
 .tok-break {
   display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 5px;
   font-size: 10px; opacity: 0.85;
@@ -1111,18 +1576,19 @@ body {
    the treatment is not. even/cold take the neutral resting look and so need no
    rule, as .ld-chip.even does not. */
 .ld-drill {
-  margin-top: 7px; padding: 6px 8px;
+  margin-top: 10px; padding: 8px 10px;
   background: var(--raised);
-  border-left: 2px solid var(--hairline-2);
-  font: 11px var(--mono); line-height: 1.45;
-  color: var(--text-2);
+  border: 1px solid var(--divider);
+  border-left: 2px solid var(--border-strong);
+  font: 10px var(--mono); line-height: 1.5;
+  color: var(--muted);
 }
-.ld-drill.hot { border-left-color: var(--counter); }
-.ld-drill.warm { border-left-color: var(--revealed); }
+.ld-drill.hot { border-left-color: var(--ac2); }
+.ld-drill.warm { border-left-color: var(--warn); }
 .ld-drill-head { display: flex; align-items: baseline; gap: 8px; }
-.ld-drill-roi { font: 600 15px var(--mono); letter-spacing: 0.5px; }
-.ld-drill.hot .ld-drill-roi { color: var(--counter); }
-.ld-drill.warm .ld-drill-roi { color: var(--revealed); }
+.ld-drill-roi { font: 600 15px var(--mono); letter-spacing: 0.04em; color: var(--fg); }
+.ld-drill.hot .ld-drill-roi { color: var(--ac2); }
+.ld-drill.warm .ld-drill-roi { color: var(--warn); }
 .ld-drill-age { font-size: 9px; opacity: 0.55; }
 /* the rung rows: number left, anchor label right. The label is the brighter of
    the two — the number is the machine's spelling of it and stays quiet. */
@@ -1131,30 +1597,58 @@ body {
   font-size: 10px; opacity: 0.85;
 }
 .ld-drill-k { min-width: 96px; opacity: 0.7; }
-.ld-drill-v { color: var(--text); }
+.ld-drill-v { color: var(--fg); }
 .ld-drill-note {
   margin-top: 5px; font-size: 10px; opacity: 0.7;
   white-space: pre-wrap; word-break: break-word;
 }
-.spec-meta-row .k { color: var(--text-2); min-width: 88px; letter-spacing: 0.5px; }
-.spec-meta-row .v { color: var(--text); }
+.spec-meta-row .k { color: var(--g1); min-width: 88px; letter-spacing: 0.08em; }
+.spec-meta-row .v { color: var(--body); }
+/* the kit's panel: wide (carl's note — every overlay is min(1120px, 96vw),
+   not the old 720-880px), two corners sheared off, an accent top edge, and
+   NO glow ring (the shear is what makes it read as lifted). */
 .panel {
-  background: var(--surface);
-  border: 1px solid var(--hairline-2);
-  box-shadow: var(--glow);
-  width: min(880px, 100%);
+  position: relative;
+  background: color-mix(in srgb, var(--ac) 5%, var(--b0));
+  border: 1px solid var(--border-strong);
+  width: min(1120px, 96vw);
   max-height: 86vh;
   display: flex; flex-direction: column;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
   animation: panel-in 140ms steps(3, end);
 }
+.panel::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--ac2), var(--ac) 40%, transparent 70%);
+}
 @keyframes panel-in { from { opacity: 0; transform: translateY(6px); } }
+/* ONE LINE, always — the same rule the chrome bar follows and for the same
+   reason. Every control is rigid; only the title gives, and it truncates. */
 .panel-head {
   display: flex; align-items: center; gap: 8px;
-  padding: 9px 14px;
-  border-bottom: 1px solid var(--hairline);
+  flex-wrap: nowrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--ac) 8%, var(--b1));
 }
-.panel-title { font: 700 11.5px var(--mono); letter-spacing: 1px; }
-.panel-title::after { content: "▊"; color: var(--accent); margin-left: 4px; }
+.panel-head > * { flex: none; }
+/* the head's own spacer, which pushes the trailing controls to the right
+   edge. (0,2,0) so it wins over the blanket `> *` above — the modal heads
+   lay out with a .spacer element rather than the mockup's margin-left:auto. */
+.panel-head > .spacer { flex: 1; }
+.panel-title {
+  font: 600 12px var(--display); letter-spacing: 0.18em; color: var(--fg);
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.panel-title::after { content: "▊"; color: var(--ac); margin-left: 4px; animation: blink 1s step-end infinite; }
+/* every control in a modal head sits at ONE height, so the row reads as a
+   single instrument strip rather than as buttons of assorted sizes */
+.panel-head .btn, .panel-head .colorsel-btn, .panel-head .pg {
+  height: 22px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 9px;
+}
 /* artifact pager: ‹ n / N › in the head's own vocabulary (.btn.ghost, mono,
    lowercase), just tighter than the action buttons since the glyphs are one
    character wide. Hiding it for a single-artifact sequence needs nothing
@@ -1163,8 +1657,8 @@ body {
 .panel-pager .pg { padding: 3px 8px; line-height: 1; }
 /* inert at the ends: .btn:disabled already dims, but .btn.ghost:hover would
    still light the border on a button that does nothing */
-.panel-pager .pg:disabled:hover { background: transparent; border-color: var(--hairline-2); }
-.pg-pos { font: 10px var(--mono); color: var(--text-2); padding: 0 5px; letter-spacing: 0.5px; }
+.panel-pager .pg:disabled:hover { background: transparent; border-color: var(--border-strong); box-shadow: none; }
+.pg-pos { font: 10px var(--mono); color: var(--muted); padding: 0 5px; letter-spacing: 0.04em; }
 /* empty on an older server (rotation_mode undefined — see
    rotationModeChipHTML in app.js): collapse out of the panel-head's flex
    gap entirely so the row looks pixel-identical to before this chip existed */
@@ -1174,43 +1668,59 @@ body {
    steer-done) rest with a faint -soft border and no background, and on
    hover fill with the -soft tint, solidify the border, and glow. The one
    exception is tmux, whose border is solid yellow at all times. */
+/* the base .btn is now an OUTLINE control at the kit's compact scale (9px
+   Chakra, tight padding — carl's compact-controls note); .btn.primary is the
+   one that takes the accent fill, with the tab's angular shear. That inverts
+   which class carries the fill, but no call site changes: .btn.ghost still
+   resolves to a quieter outline, and the handful of solid-looking buttons in
+   the head are the ones that ask for .primary. */
 .btn {
-  font: 11px var(--mono);
-  background: var(--accent); color: var(--accent-ink);
-  border: none; padding: 4px 11px; cursor: pointer;
+  font: 600 9px var(--display); letter-spacing: 0.1em;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-strong); padding: 3px 9px;
+  white-space: nowrap;
 }
-.btn:hover { box-shadow: var(--glow); }
+.btn:hover { color: var(--fg); border-color: var(--ac); box-shadow: var(--glow); }
+.btn.primary {
+  background: var(--ac); color: var(--bg-board); border-color: var(--ac);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+}
+.btn.primary:hover { color: var(--bg-board); box-shadow: 0 0 12px color-mix(in srgb, var(--ac) 55%, transparent); }
 .btn:active { animation: glitch 120ms steps(2, end); }
 @keyframes glitch {
   0% { translate: -1px 1px; }
   50% { translate: 1px -1px; }
   100% { translate: 0 0; }
 }
-.btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--hairline-2); }
-.btn.ghost:hover { background: var(--raised); border-color: var(--text-2); box-shadow: none; }
-.btn.ghost.danger { color: var(--counter); border-color: var(--counter-soft); }
-.btn.ghost.danger:hover { background: var(--counter-soft); border-color: var(--counter); box-shadow: var(--glow-hot); }
+.btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+.btn.ghost:hover { background: color-mix(in srgb, var(--ac) 8%, transparent); border-color: var(--border-strong); color: var(--fg); box-shadow: none; }
+.btn.ghost.danger { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 45%, transparent); }
+.btn.ghost.danger:hover { background: color-mix(in srgb, var(--ac2) 14%, transparent); border-color: var(--ac2); box-shadow: var(--glow-hot); }
 /* primary composer action — standard .btn size, tucked under the input's
    right edge (the .answer-body flex column makes align-self work) */
+/* the composer's send: the one place in the sheet that asks for the accent
+   fill by geometry rather than by class, since it is the panel's single
+   primary action */
 .btn-big {
   align-self: flex-end;
   padding: 4px 14px; margin-top: 2px;
-  letter-spacing: 0.5px;
+  background: var(--ac); color: var(--bg-board); border-color: var(--ac);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
 }
+.btn-big:hover { color: var(--bg-board); box-shadow: 0 0 12px color-mix(in srgb, var(--ac) 55%, transparent); }
 .btn.retry {
   display: block; width: 100%; margin-top: 8px;
-  background: transparent; color: var(--revealed);
-  border: 1px solid var(--revealed-soft);
-  font-size: 10px; letter-spacing: 1px; padding: 5px 0;
+  background: color-mix(in srgb, var(--warn) 8%, transparent); color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  padding: 5px 0;
 }
-.btn.retry:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.btn.retry:hover { background: color-mix(in srgb, var(--warn) 16%, transparent); border-color: var(--warn); color: var(--warn); box-shadow: var(--glow-warn); }
 /* panel-head only — sits beside the yellow-outlined tmux button */
 .btn.steer-done {
-  background: transparent; color: var(--solved);
-  border: 1px solid var(--solved-soft);
-  font-size: 10px; letter-spacing: 1px;
+  background: transparent; color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 55%, transparent);
 }
-.btn.steer-done:hover { background: var(--solved-soft); border-color: var(--solved); box-shadow: var(--glow-ok); }
+.btn.steer-done:hover { background: color-mix(in srgb, var(--ok) 14%, transparent); border-color: var(--ok); color: var(--ok); box-shadow: none; }
 /* ---- command highlight: mirrored backdrop behind the steer/editor
    textareas, so /info /aim /do /pr each read highlighted inline in their own
    skill color + glow (info blue, aim red, do yellow, pr green) — a
@@ -1265,9 +1775,9 @@ body {
 .cmd-hl-backdrop .cmd-hl-dream {
   color: var(--skill); text-shadow: var(--skill-glow);
 }
-#steer-text-wrap { background: var(--raised); }
+#steer-text-wrap { background: color-mix(in srgb, var(--ac) 3%, var(--b1)); }
 #steer-text, #steer-text-backdrop {
-  font: 12px/1.5 var(--sans);
+  font: 11px/1.6 var(--mono);
   padding: 9px 11px;
   border: 1px solid transparent;
   /* kills the ~6px inline-block descender strip a bare <textarea> reserves
@@ -1277,12 +1787,13 @@ body {
   display: block;
 }
 #steer-text {
-  background: transparent;
-  border-color: var(--hairline-2);
+  background: transparent; color: var(--fg);
+  border-color: var(--border-strong);
   resize: vertical; min-height: 70px; width: 100%;
 }
-#steer-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
-#steer-text::placeholder { color: var(--text-2); opacity: 1; }
+#steer-text:hover { border-color: var(--ac); }
+#steer-text:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
+#steer-text::placeholder { color: var(--muted); opacity: 1; }
 /* color:transparent (+ caret-color) only apply once JS has actually wired
    the mirrored backdrop (attachCmdHighlight stamps .cmd-hl-on on the
    wrapper) — unconditional transparent text would render invisible for
@@ -1290,9 +1801,9 @@ body {
    unrendered. */
 .cmd-hl-wrap.cmd-hl-on #steer-text,
 .cmd-hl-wrap.cmd-hl-on #editor-text {
-  color: transparent; caret-color: var(--text);
+  color: transparent; caret-color: var(--fg);
 }
-.btn:disabled { opacity: 0.4; cursor: default; }
+.btn:disabled { opacity: 0.4; cursor: default; box-shadow: none; }
 /* artifact-overlay composer — a compact box that drops into the panel head,
    same family as #steer-text. ONE box, two modes: the un-modified form posts a
    feedback row, `.ask` branches a side thread seeded with the question. They
@@ -1301,51 +1812,61 @@ body {
 .feedback-form {
   display: flex; flex-direction: column; gap: 6px;
   padding: 9px 14px;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--border);
   background: var(--raised);
   border-left: 2px solid transparent;
 }
-.feedback-form.ask { border-left-color: var(--accent); }
-.composer-hint { font: 11px/1.5 var(--mono); color: var(--text-2); }
+.feedback-form.ask { border-left-color: var(--ac); }
+.composer-hint { font: 10px/1.6 var(--mono); color: var(--muted); }
 .feedback-form textarea {
-  font: 12px/1.5 var(--sans);
-  background: var(--surface); color: var(--text);
-  border: 1px solid var(--hairline-2);
+  font: 11px/1.6 var(--mono);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong);
   padding: 8px 10px; resize: vertical; min-height: 54px;
 }
-.feedback-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.feedback-form textarea:hover { border-color: var(--ac); }
+.feedback-form textarea:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
 .feedback-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
-.feedback-note { font: 11px var(--mono); color: var(--text-2); margin-right: auto; }
-.panel-body { overflow-y: auto; padding: 16px 20px; font-size: 12.5px; line-height: 1.6; }
-.panel-body.raw { white-space: pre-wrap; font: 11px/1.6 var(--mono); color: var(--text-2); }
+.feedback-note { font: 10px var(--mono); color: var(--muted); margin-right: auto; }
+.panel-body { overflow-y: auto; padding: 12px 14px; font-size: 10px; line-height: 1.6; }
+.panel-body.raw { white-space: pre-wrap; font: 10px/1.7 var(--mono); color: var(--body); }
 .panel-body.page { padding: 0; overflow: hidden; }
 .panel-body.page iframe { display: block; width: 100%; height: 78vh; border: none; background: #fff; }
 
-/* rendered markdown: prose voice, mono for code only */
-.md h1, .md h2, .md h3, .md h4 { margin: 1.1em 0 0.4em; font-weight: 600; }
-.md h1 { font-size: 16px; color: var(--accent); }
-.md h2 { font-size: 13.5px; border-bottom: 1px solid var(--hairline); padding-bottom: 3px; }
-.md h3 { font-size: 12.5px; }
+/* rendered markdown — the artifact viewer's whole surface. Headings take the
+   display face (they are headings); body, code and tables stay mono. */
+.md { font-size: 11px; line-height: 1.7; color: var(--body); }
+.md h1, .md h2, .md h3, .md h4 { margin: 1.1em 0 0.4em; font-family: var(--display); }
+.md h1 { font: 700 15px var(--display); letter-spacing: 0.08em; color: var(--ac); margin: 0 0 10px; }
+.md h2 {
+  font: 600 12px var(--display); letter-spacing: 0.1em; color: var(--fg);
+  border-bottom: 1px solid var(--divider); padding-bottom: 4px; margin: 16px 0 8px;
+}
+.md h3 { font: 600 11px var(--display); letter-spacing: 0.1em; color: var(--fg); }
 .md p, .md ul, .md ol { margin: 0.55em 0; }
 .md ul, .md ol { padding-left: 20px; }
 .md li { margin: 0.15em 0; }
-.md code { font: 11px var(--mono); background: var(--raised); color: var(--revealed); padding: 1px 4px; }
-.md pre { background: var(--ground); border: 1px solid var(--hairline); padding: 10px 12px; overflow-x: auto; margin: 0.7em 0; }
-.md pre code { background: none; padding: 0; color: var(--text); }
-.md a { color: var(--accent); }
-.md strong { color: var(--text); font-weight: 600; }
-.md blockquote { border-left: 2px solid var(--hairline-2); padding-left: 10px; color: var(--text-2); margin: 0.55em 0; }
+.md code { font: 10px var(--mono); background: color-mix(in srgb, var(--warn) 8%, var(--b1)); color: var(--warn); padding: 1px 4px; }
+.md pre { background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider); padding: 10px 12px; overflow-x: auto; margin: 0.7em 0; }
+.md pre code { background: none; padding: 0; color: var(--body); }
+.md a { color: var(--ac); }
+.md a:hover { color: var(--ac2); }
+.md strong { color: var(--fg); font-weight: 600; }
+.md blockquote { border-left: 2px solid var(--border-strong); padding-left: 10px; color: var(--muted); margin: 0.55em 0; }
 .md .md-table { overflow-x: auto; margin: 0.7em 0; }
-.md table { border-collapse: collapse; width: 100%; font-size: 12px; }
-.md th, .md td { border: 1px solid var(--hairline); padding: 5px 9px; }
-.md th { background: var(--raised); color: var(--text); font-weight: 600; text-align: left; }
-.md td { color: var(--text); }
+.md table { border-collapse: collapse; width: 100%; font-size: 10px; }
+.md th, .md td { border: 1px solid var(--divider); padding: 4px 9px; }
+.md th {
+  background: color-mix(in srgb, var(--ac) 10%, var(--b1)); color: var(--fg);
+  font: 600 10px var(--display); letter-spacing: 0.08em; text-align: left;
+}
+.md td { color: var(--body); }
 .md tbody tr:nth-child(even) td, .md tr:nth-child(even) td { background: var(--zebra); }
 
 /* ---- steer/editor note styling, shared by the message-zeus and job-editor
    overlays ---- */
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
-.answer-note { font-size: 11px; color: var(--counter); min-height: 1em; }
+.answer-note { font: 10px var(--mono); color: var(--ac2); min-height: 1em; }
 
 /* command chips: one-tap /info /aim /do /pr /dream insertion above a
    composer textarea, colored per skill (info blue, aim red, do yellow,
@@ -1360,12 +1881,12 @@ body {
    opens an artifact panel. */
 .cmd-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .cmd-chip {
-  font: 10px var(--mono);
+  font: 9px var(--mono);
   background: transparent;
-  color: var(--accent);
+  color: var(--ac);
   border: 1px solid;
-  border-color: var(--accent-soft);
-  padding: 2px 7px; cursor: pointer;
+  border-color: var(--border-strong);
+  padding: 2px 7px;
   transition: background 80ms var(--ease), box-shadow 80ms var(--ease), border-color 80ms var(--ease);
 }
 /* each .cmd-chip-<name> aliases the shared custom props consumed by the one
@@ -1395,44 +1916,45 @@ body {
 .att-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .att-chip {
   display: flex; align-items: center; gap: 5px;
-  background: var(--raised); border: 1px solid var(--hairline-2);
+  background: var(--raised); border: 1px solid var(--border-strong);
   padding: 3px 6px 3px 3px;
 }
 .att-chip img { width: 22px; height: 22px; object-fit: cover; display: block; }
-.att-name { font: 10px var(--mono); color: var(--text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-name { font: 9px var(--mono); color: var(--fg); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .att-rm {
-  background: none; border: none; cursor: pointer;
-  font: 10px var(--mono); color: var(--text-2); padding: 0 2px;
+  background: none; border: none;
+  font: 10px var(--mono); color: var(--muted); padding: 0 2px;
 }
-.att-rm:hover { color: var(--counter); }
+.att-rm:hover { color: var(--ac2); }
 .att-bar { display: flex; align-items: center; gap: 8px; }
-.att-btn { font-size: 10px; letter-spacing: 0.5px; padding: 3px 9px; }
-.att-hint { font: 10px var(--mono); color: var(--text-2); opacity: 0.65; }
+.att-btn { padding: 3px 9px; }
+.att-hint { font: 9px var(--mono); color: var(--muted); opacity: 0.7; }
 
-/* ---- usage drilldown: one block per account, bar rows per window ---- */
-.u-account { padding: 11px 0; border-bottom: 1px solid var(--hairline); }
+/* ---- usage drilldown: one block per account, bar rows per window.
+   The meters lose their radii like everything else — the kit has none. ---- */
+.u-account { padding: 12px 0; border-bottom: 1px solid var(--divider); }
 .u-account:first-child { padding-top: 0; }
 .u-account:last-child { border-bottom: none; padding-bottom: 0; }
 .u-account-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.u-slug { font: 700 12px var(--mono); color: var(--text); }
+.u-slug { font: 600 11px var(--mono); color: var(--fg); }
 .u-rows { margin-top: 9px; display: flex; flex-direction: column; gap: 7px; }
 .u-row { display: grid; grid-template-columns: minmax(56px, auto) 1fr 92px; align-items: center; gap: 9px; }
-.u-row-label { font: 10px var(--mono); color: var(--text-2); }
-.u-bar { height: 7px; background: var(--raised); border: 1px solid var(--hairline-2); border-radius: 4px; overflow: hidden; }
-.u-bar-fill { display: block; height: 100%; border-radius: 3px 0 0 3px; }
-.u-bar-fill.u-ok { background: var(--solved); }
-.u-bar-fill.u-warn { background: var(--revealed); }
-.u-bar-fill.u-danger { background: var(--counter); }
-.u-row-val { font: 10px var(--mono); color: var(--text-2); text-align: right; white-space: nowrap; }
-.u-row-val [data-resets] { color: var(--text-2); }
+.u-row-label { font: 9px var(--mono); color: var(--muted); letter-spacing: 0.06em; }
+.u-bar { height: 6px; background: color-mix(in srgb, var(--ac) 8%, var(--b1)); border: 1px solid var(--border); overflow: hidden; }
+.u-bar-fill { display: block; height: 100%; }
+.u-bar-fill.u-ok { background: var(--ok); }
+.u-bar-fill.u-warn { background: var(--warn); }
+.u-bar-fill.u-danger { background: var(--ac2); }
+.u-row-val { font: 9px var(--mono); color: var(--muted); text-align: right; white-space: nowrap; }
+.u-row-val [data-resets] { color: var(--muted); }
 .u-chip {
-  font: 9.5px var(--mono); letter-spacing: 0.3px;
-  padding: 2px 6px; border: 1px solid var(--hairline-2); color: var(--text-2);
+  font: 8.5px var(--mono); letter-spacing: 0.04em;
+  padding: 2px 6px; border: 1px solid var(--border-strong); color: var(--muted);
 }
-.u-chip-current { color: var(--accent); border-color: var(--accent-soft); }
-.u-chip-ok { color: var(--solved); border-color: var(--solved-soft); }
-.u-chip-warn { color: var(--revealed); border-color: var(--revealed-soft); }
-.u-chip-danger { color: var(--counter); border-color: var(--counter-soft); cursor: help; }
+.u-chip-current { color: var(--ac); border-color: color-mix(in srgb, var(--ac) 50%, transparent); }
+.u-chip-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.u-chip-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
+.u-chip-danger { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 50%, transparent); cursor: help; }
 .u-chip-dim { opacity: 0.6; }
 /* rotation manual-pin banner: top of the usage drilldown body, only when
    rotation_mode is "manual" (see manualBannerHTML in app.js) */
@@ -1440,91 +1962,128 @@ body {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   flex-wrap: wrap;
   padding: 7px 11px; margin-bottom: 12px;
-  background: var(--revealed-soft);
-  border: 1px solid var(--revealed);
-  color: var(--revealed);
-  font: 11px var(--mono);
-  letter-spacing: 0.2px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--b1));
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--b1));
+  color: var(--warn);
+  font: 10px var(--mono);
+  letter-spacing: 0.06em;
 }
 .u-manual-banner .btn { flex: none; }
 /* bare .dim spans inside the usage widget/modal (email, "usage —",
    fetched-ago) — .stat.dim doesn't reach them */
 .usage-stat .dim,
 #usage-overlay .dim { opacity: 0.55; }
-.btn.mini { font-size: 9.5px; letter-spacing: 0.3px; padding: 2px 7px; }
+.btn.mini { font-size: 8.5px; letter-spacing: 0.08em; padding: 2px 7px; }
 
 /* ---- job editor: frontmatter as a form, spec as prose ---- */
 .editor-body { display: flex; flex-direction: column; gap: 12px; }
 .editor-newrow { display: flex; gap: 8px; }
 #editor-slug {
-  flex: 1; font: 12px var(--mono);
-  background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2); padding: 6px 10px;
+  flex: 1; font: 11px var(--mono);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong); padding: 6px 10px;
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
 }
-#editor-slug:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+#editor-slug:hover { border-color: var(--ac); }
+#editor-slug:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
-.editor-form label { display: flex; flex-direction: column; gap: 4px; font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
+.editor-form label { display: flex; flex-direction: column; gap: 4px; font: 600 9px var(--display); letter-spacing: 0.16em; color: var(--muted); }
 .f-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
-/* [type="radio"] is excluded alongside the checkbox because the colour
-   picker's radios are real form controls (that's what buys them the
-   delegated autosave) sized to cover their swatch — the text-field padding
-   and min-width:120px below would blow the strip's layout apart */
-.f-row select, .f-row input:not([type="checkbox"]):not([type="radio"]) {
-  font: 12px var(--mono); background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2); padding: 5px 8px; min-width: 120px;
+/* the checkbox is excluded because .f-toggles' real checkboxes sit in this
+   same row, and the text-field padding + min-width:120px below would blow
+   them apart. There is no radio exclusion any more: the colour picker was the
+   form's only radio group and it is a dropdown now. */
+.f-row select, .f-row input:not([type="checkbox"]) {
+  font: 10px var(--mono); letter-spacing: normal;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong); padding: 6px 9px; min-width: 120px;
+}
+.f-row select:hover, .f-row input:hover, .f-block textarea:hover, #f-prereqs input:hover {
+  border-color: var(--ac);
 }
 .f-row select:focus, .f-row input:focus, .f-block textarea:focus, #f-prereqs input:focus {
-  outline: none; border-color: var(--accent); box-shadow: var(--glow);
+  outline: none; border-color: var(--ac); box-shadow: var(--glow);
 }
-/* the job-colour picker: a strip of nine swatches (a hatched "none" first,
-   then the eight --job-* in /color's order) sitting in the same .f-row as
-   repo / base / model. Each swatch is a <label> wrapping a real radio, NOT a
-   button — only a real form control fires the change event app.js's strip
-   handler listens for; a <button> strip would render identically and
-   silently never save. Unlike its .f-row neighbours the strip does not ride
-   the form autosave: it POSTs /api/job/color itself (see app.js), and stays
-   enabled on a read-only form because recolouring a live job is the point.
-   .f-colors carries the column layout .editor-form's label rule gives its
-   neighbours. */
-.f-colors { display: flex; flex-direction: column; gap: 4px; font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
+/* the job-colour picker's two WRAPPERS. Both keep their old swatch-strip
+   names — the picker is a dropdown now (see .colorsel below), but the outer
+   hooks were frozen by the contract and are load-bearing for the existing
+   tests, so only the strip's own `.f-sw*` skin went away with the radios.
+
+   .f-colors is the editor's, a div sitting in the same .f-row as repo / base /
+   model, and it carries the column layout `.editor-form label` gives its
+   neighbours — it is not a <label>, so that rule does not reach it. It is also
+   the one control in that form left ENABLED while read-only, which is the
+   editor's own decision rather than anything this sheet does.
+
+   .f-swatches is the steer modal's, a span in the .panel-head; `.compact` is
+   its head-sized variant. .f-swatches is a one-child row now; .f-colors still
+   spaces its bare "color" text label off the picker, so its gap is
+   load-bearing. */
+.f-colors { display: flex; flex-direction: column; gap: 4px; font: 600 9px var(--display); letter-spacing: 0.16em; color: var(--muted); }
 .f-swatches { display: flex; gap: 5px; align-items: center; }
-/* `label.f-sw`, not a bare `.f-sw`, on purpose: each swatch IS a <label>, so
-   `.editor-form label`'s column-flex/10px-mono block above outranks a lone
-   class selector (0,1,1 beats 0,1,0) and would stretch the editor's swatches
-   into flex columns. Matching that specificity and declaring it later wins,
-   and unlike an `.editor-form .f-sw` scope it still applies to the steer
-   modal's copy of the strip, which has no .editor-form ancestor. */
-label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer; }
-.f-sw input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.f-sw-fill {
-  display: block; width: 20px; height: 20px; border-radius: 2px;
-  border: 1px solid var(--ground); background: var(--sw, transparent);
-}
-.f-sw.none .f-sw-fill {
-  background: repeating-linear-gradient(45deg, var(--hairline-2) 0 4px, var(--ground) 4px 8px);
-}
-.f-sw input:checked + .f-sw-fill { outline: 2px solid var(--text); outline-offset: 2px; }
-.f-sw input:focus-visible + .f-sw-fill { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: var(--glow); }
-/* the steer modal's copy of the strip: same swatches, shrunk to sit in a
-   .panel-head beside an 11.5px title without becoming the loudest thing in
-   the row. The tighter outline-offset keeps the selected ring from colliding
-   with its neighbour at this size. */
 .f-swatches.compact { gap: 4px; }
-.f-swatches.compact .f-sw-fill { width: 13px; height: 13px; }
-.f-swatches.compact .f-sw input:checked + .f-sw-fill { outline-offset: 1px; }
-.f-swatches.compact .f-sw input:focus-visible + .f-sw-fill { outline-offset: 1px; }
+
+/* ---- job-colour dropdown (mockups 20/21) — the strip's replacement.
+   S3 renders these class names; the skin is here so that slice ships markup
+   and behaviour only.
+
+   `.dot` is deliberately scoped to `.colorsel` rather than declared bare: two
+   OTHER components already own a `.dot` — the update button's 5px status dot
+   and the thread chip's live pip — and a global `.dot` rule would silently
+   resize both. The class name on the element is unchanged either way. */
+.colorsel { position: relative; display: inline-block; }
+.colorsel-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1));
+  color: var(--muted); font: 9px var(--mono); letter-spacing: 0.06em;
+  clip-path: polygon(5px 0, 100% 0, 100% 100%, 0 100%, 0 5px);
+  white-space: nowrap;
+}
+.colorsel-btn:hover { color: var(--fg); border-color: var(--ac); }
+.colorsel-btn .caret { opacity: 0.6; font-size: 8px; }
+.colorsel .dot {
+  width: 9px; height: 9px; flex: none; display: inline-block;
+  border: 1px solid var(--b0);
+  background: var(--sw, var(--job-color, transparent));
+}
+/* the no-colour state reads as hatched rather than as a missing swatch */
+.colorsel .dot.none {
+  background: repeating-linear-gradient(45deg, var(--border-strong) 0 3px, var(--b0) 3px 6px);
+}
+.colorsel-menu {
+  position: absolute; top: calc(100% + 3px); left: 0; z-index: 50;
+  min-width: 128px;
+  background: color-mix(in srgb, var(--ac) 6%, var(--b0));
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--b0) 80%, transparent);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+.colorsel-row {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 4px 9px;
+  background: transparent; border: 0; text-align: left;
+  font: 9px var(--mono); letter-spacing: 0.06em; color: var(--body);
+  white-space: nowrap;
+}
+.colorsel-row.sel { background: color-mix(in srgb, var(--ac) 14%, transparent); color: var(--fg); }
+.colorsel-row:hover { background: color-mix(in srgb, var(--ac) 22%, transparent); color: var(--fg); }
+.colorsel-row .tick { margin-left: auto; color: var(--ac); }
 .f-toggles { display: flex; gap: 14px; align-items: center; padding-bottom: 6px; }
 .editor-form label.check {
   flex-direction: row; align-items: center; gap: 5px;
-  font: 11px var(--mono); color: var(--text); cursor: pointer;
+  font: 10px var(--mono); letter-spacing: 0.04em; color: var(--body);
 }
-.check input { accent-color: var(--accent); }
+.editor-form label.check:hover { color: var(--fg); }
+.check input { accent-color: var(--ac); }
 .f-block { display: flex; flex-direction: column; gap: 4px; }
 .f-block textarea {
-  font: 12px/1.5 var(--sans); background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2); padding: 8px 10px; resize: vertical;
+  font: 11px/1.6 var(--mono); letter-spacing: normal;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong); padding: 8px 10px; resize: vertical;
 }
-.f-label { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+.f-label { font: 600 9px var(--display); letter-spacing: 0.16em; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 /* the editor's copy of the doc-questions panel — one of the two drilldown
    surfaces the board's .dq-chip points at (the steer modal is the other; the
    card itself renders no questions). Labeled (the steer copy isn't) because
@@ -1533,7 +2092,7 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
    editor's own body scrolls, but the spec textarea below it is the thing you
    came for, and a long question list shouldn't push it off-screen. */
 .editor-docq { flex: none; display: flex; flex-direction: column; gap: 4px; }
-.editor-docq-head { font: 10px var(--mono); letter-spacing: 1px; color: var(--text-2); }
+.editor-docq-head { font: 600 9px var(--display); letter-spacing: 0.2em; color: var(--muted); }
 .editor-docq .doc-questions { margin-top: 0; max-height: 40vh; overflow-y: auto; }
 /* the editor's copy of the feedback panel, beside the questions one — same
    labeled + capped treatment, same reasoning (this is where a done job's
@@ -1554,58 +2113,66 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 .editor-chips { flex: none; display: flex; flex-direction: column; gap: 4px; }
 .editor-chips .chips { margin-top: 0; max-height: 24vh; overflow-y: auto; }
 .mini-add {
-  background: none; border: 1px solid var(--hairline-2); cursor: pointer;
-  font: 10px var(--mono); color: var(--text-2); padding: 1px 7px;
+  background: none; border: 1px solid var(--border-strong);
+  font: 10px var(--mono); letter-spacing: normal; color: var(--muted); padding: 1px 7px;
 }
-.mini-add:hover { color: var(--accent); border-color: var(--accent); }
+.mini-add:hover { color: var(--ac); border-color: var(--ac); box-shadow: var(--glow); }
 #f-prereqs { display: flex; flex-direction: column; gap: 6px; }
 .prereq-row { display: flex; gap: 8px; align-items: center; }
 .prereq-row input[type="text"] {
-  flex: 1; font: 12px var(--mono); background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2); padding: 5px 8px;
+  flex: 1; font: 10px var(--mono); letter-spacing: normal;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong); padding: 6px 9px;
 }
 .prereq-row .rm {
-  background: none; border: none; cursor: pointer;
-  font: 11px var(--mono); color: var(--text-2); padding: 0 4px;
+  background: none; border: none;
+  font: 11px var(--mono); color: var(--muted); padding: 0 4px;
 }
-.prereq-row .rm:hover { color: var(--counter); }
-#editor-text-wrap { background: var(--ground); }
+.prereq-row .rm:hover { color: var(--ac2); }
+#editor-text-wrap { background: color-mix(in srgb, var(--ac) 2%, var(--b0)); }
 /* metric properties (font/padding/border-width) are declared ONCE for the
    textarea/backdrop pair via this selector union, same reasoning as the
    #steer-text union above — splitting them into separate rules is exactly
    what lets the two surfaces' box models drift apart and ghosts the
    glyphs. */
 #editor-text, #editor-text-backdrop {
-  font: 12.5px/1.6 var(--sans);
+  font: 11px/1.7 var(--mono);
   padding: 12px 14px;
   border: 1px solid transparent;
   tab-size: 2;
   display: block;
 }
 #editor-text {
-  background: transparent;
-  border-color: var(--hairline-2);
+  background: transparent; color: var(--fg);
+  border-color: var(--border-strong);
   resize: vertical; min-height: 32vh; width: 100%;
 }
-#editor-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+#editor-text:hover { border-color: var(--ac); }
+#editor-text:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
 
+/* the kit's "+ NEW JOB" ghost card: dashed accent at 31% transparency */
 .btn-new {
-  width: 100%; padding: 13px 0;
-  background: transparent; color: var(--accent);
-  border: 1px dashed var(--accent);
-  cursor: pointer;
-  font: 700 11px var(--mono); letter-spacing: 3px;
+  width: 100%; padding: 10px 0;
+  background: transparent; color: var(--ac);
+  border: 1px dashed color-mix(in srgb, var(--ac) 31%, transparent);
+  font: 600 10px var(--display); letter-spacing: 0.12em;
   transition: box-shadow 80ms var(--ease), background 80ms var(--ease);
 }
-.btn-new:hover { background: var(--accent-soft); box-shadow: var(--glow); }
+.btn-new:hover { background: color-mix(in srgb, var(--ac) 10%, transparent); border-color: var(--ac); box-shadow: var(--glow); }
 .btn-new:active { animation: glitch 120ms steps(2, end); }
 /* .archived is named alongside .editable because an archived card opens the
    editor too now (data-editable="false" — read-only, but it opens). It does
    not carry .editable, so without this it would be a silent hit area: a
    clickable card with a default cursor and no hover feedback, its only visible
    affordance the cursor:pointer on the ▤/✎ count chips themselves. */
-.card.editable, .card.archived { cursor: pointer; }
-.card.editable:hover, .card.archived:hover { border-color: var(--accent-soft); border-left-color: var(--job-color, var(--text-2)); }
+/* THE governing hover rule for the left edge: every JobCard carries .editable
+   as a literal className, so this (0,3,0) selector out-specifies the base
+   .card:hover — an edit to the fallback there changes nothing anywhere, which
+   is exactly how carl's full-opacity note shipped as a no-op once (review
+   catch). The uncolored fallback is full-opacity --ac to match: without it,
+   hover lit the three 1px hairlines to full accent while pinning the 3px
+   identity bar at 40%, which read as the bar switching OFF as the card lit. */
+.card.editable:hover, .card.archived:hover { border-color: var(--ac); border-left-color: var(--job-color, var(--ac)); }
 
 @media (max-width: 1200px) { .board { grid-template-columns: repeat(3, minmax(200px, 1fr)); } }
 @media (max-width: 700px) { .board { grid-template-columns: 1fr; } }
@@ -1619,11 +2186,10 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 /* open the cell's tmux pane in Ghostty — wireframe like every other outline
    button, in yellow. */
 .btn.tmux-open {
-  background: transparent; color: var(--revealed);
-  border: 1px solid var(--revealed-soft);
-  font-size: 10px; letter-spacing: 1px;
+  background: color-mix(in srgb, var(--warn) 9%, transparent); color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
 }
-.btn.tmux-open:hover { background: var(--revealed-soft); border-color: var(--revealed); box-shadow: var(--glow-warn); }
+.btn.tmux-open:hover { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: var(--warn); color: var(--warn); box-shadow: var(--glow-warn); }
 
 /* band 6 of the card (see cardHTML): the card's controls, in one row at its
    foot. archivedCardHTML renders it too, holding unarchive + delete — those
@@ -1651,35 +2217,62 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 .card-actions > .btn.retry,
 .card-actions > .btn.reactivate {
   display: inline-block; width: auto; margin-top: 0;
-  font-size: 10px; letter-spacing: 1px; padding: 5px 9px;
+  padding: 5px 9px;
 }
 
-/* honor the OS-level motion preference — kills the remaining finite
-   animations/transitions (panel-in, glitch, hover fades) outright */
+/* LIGHT MODE FLATTENS EVERY GLOW. Most of them already vanish because their
+   token is `none` there (--glow/--glow-hot/--glow-ok/--glow-warn/--text-glow
+   and the six skill glows), but a handful of rules spell a color-mix halo out
+   inline — the emphasized hover states and the three status pips. They are
+   collected here rather than fixed at each site so the rule reads as one
+   decision, and so a new inline glow only needs its selector adding. */
+:root[data-theme="light"] .btn.primary:hover,
+:root[data-theme="light"] .btn-big:hover,
+:root[data-theme="light"] .led,
+:root[data-theme="light"] .led.ok,
+:root[data-theme="light"] .upd .dot,
+:root[data-theme="light"] #thread-panehead .live-dot { box-shadow: none; }
+
+/* honor the OS-level motion preference — one rule kills every animation and
+   transition in the sheet, which is why no animated rule declares its own
+   reduced-motion query. The ::before/::after selectors are load-bearing, not
+   ritual: a bare `*` matches ELEMENTS only, and the two biggest movers (the
+   grid drift on body::before, the scan bar on .scan::after) are
+   pseudo-elements a bare `*` cannot reach — the review round caught them
+   still animating under reduced motion. `will-change: auto` rides along
+   because the two movers' layer-promotion hint is pure memory cost once
+   nothing moves. */
 @media (prefers-reduced-motion: reduce) {
-  * { animation: none !important; transition: none !important; }
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    will-change: auto !important;
+  }
 }
 
 /* ---- unified event log view ---- */
 
-.logview { height: calc(100vh - 64px); display: flex; padding: 12px 16px 16px; }
+.logview { height: calc(100vh - 64px); display: flex; padding: 12px 16px 16px; position: relative; z-index: 3; }
 .log-scroll {
-  flex: 1; overflow-y: auto; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px; line-height: 1.55; background: var(--surface);
-  border: 1px solid var(--line, var(--raised)); border-radius: 6px; padding: 8px 10px;
+  flex: 1; overflow-y: auto; font-family: var(--mono);
+  font-size: 10px; line-height: 1.65;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1));
+  border: 1px solid var(--border); padding: 10px 12px;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
 }
-.log-more, .log-empty { color: var(--text-2); text-align: center; padding: 6px 0; font-size: 11px; }
-.log-row { display: flex; gap: 10px; align-items: baseline; white-space: pre-wrap; word-break: break-word; }
+.log-more, .log-empty { color: var(--muted); text-align: center; padding: 6px 0; font-size: 10px; opacity: 0.75; }
+.log-row { display: flex; gap: 12px; align-items: baseline; white-space: pre-wrap; word-break: break-word; }
 .log-row + .log-row { margin-top: 1px; }
-.log-ts { color: var(--text-2); flex: none; }
-.log-src { color: var(--accent); flex: none; min-width: 52px; }
-.log-event { color: var(--text-2); flex: none; min-width: 92px; }
-.log-msg { color: var(--text); }
-.log-row.lvl-error .log-msg { color: var(--counter); }
-.log-row.lvl-error .log-event { color: var(--counter); }
+.log-ts { color: var(--muted); flex: none; opacity: 0.8; }
+.log-src { color: var(--ac); flex: none; min-width: 52px; }
+.log-event { color: var(--muted); flex: none; min-width: 92px; letter-spacing: 0.04em; }
+.log-msg { color: var(--body); }
+.log-row.lvl-error .log-msg { color: var(--ac2); }
+.log-row.lvl-error .log-event { color: var(--ac2); }
 .log-file-divider {
-  color: var(--text-2); font-size: 10px; text-align: center; margin: 6px 0;
-  border-top: 1px dashed var(--raised); padding-top: 4px;
+  color: var(--muted); font: 600 9px var(--display); letter-spacing: 0.2em;
+  text-align: center; margin: 8px 0;
+  border-top: 1px dashed var(--divider); padding-top: 6px;
 }
 
 /* ---- DREAM view (see the DREAM section in app.js) ----
@@ -1691,102 +2284,106 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   height: calc(100vh - 64px);
   display: grid; grid-template-columns: 1.15fr 1fr;
   gap: 14px; padding: 12px 16px 16px;
+  position: relative; z-index: 3;
 }
 .dream-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .dream-panehdr {
-  font: 10px var(--mono); letter-spacing: 2px; text-transform: uppercase;
-  color: var(--text-2); padding-bottom: 8px;
+  font: 600 10px var(--display); letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--muted); padding-bottom: 10px;
 }
-.dream-panehdr .ct { color: var(--skill-dream); letter-spacing: 1px; }
+.dream-panehdr .ct { color: var(--skill-dream); letter-spacing: 0.1em; }
 .dream-scroll {
   flex: 1; min-height: 0; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--hairline);
-  padding: 10px;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1));
+  border: 1px solid var(--border);
+  padding: 12px;
 }
-.dream-empty { color: var(--text-2); opacity: 0.6; font-size: 11px; padding: 26px 10px; text-align: center; }
+.dream-empty { color: var(--muted); opacity: 0.7; font-size: 10px; padding: 26px 10px; text-align: center; }
 
 /* a night's report: a full-width header button that toggles the body */
-.rep { border: 1px solid var(--hairline); background: var(--ground); }
+.rep { border: 1px solid var(--border); background: color-mix(in srgb, var(--ac) 2%, var(--b0)); }
 .rep + .rep { margin-top: 8px; }
 .rep-h {
   width: 100%; display: flex; align-items: center; gap: 8px;
-  background: var(--raised); border: none; cursor: pointer;
-  padding: 8px 10px; text-align: left; color: var(--text);
+  background: color-mix(in srgb, var(--ac) 6%, var(--b1)); border: none;
+  padding: 8px 10px; text-align: left; color: var(--body); font-size: 10px;
 }
-.rep-h:hover { background: var(--accent-soft); }
-.rep-h .tri { color: var(--skill-dream); font-size: 10px; flex: none; }
-.rep-h .d { font: 700 11.5px var(--mono); flex: none; }
-.rep-h .sum { font: 10px var(--mono); color: var(--text-2); flex: none; }
-.rep.open { border-color: var(--skill-dream-soft); }
+.rep-h:hover { background: color-mix(in srgb, var(--ac) 12%, var(--b1)); color: var(--fg); }
+.rep-h .tri { color: var(--skill-dream); font-size: 9px; flex: none; }
+.rep-h .d { font: 600 11px var(--mono); color: var(--fg); flex: none; }
+.rep-h .sum { font: 9px var(--mono); color: var(--muted); flex: none; }
+.rep.open { border-color: color-mix(in srgb, var(--skill-dream) 45%, var(--b1)); }
 /* section counts pulled out of the report body (dreamSectionCount) — the
    header has to say whether a night was worth opening */
 .rep-tag {
-  font: 9.5px var(--mono); letter-spacing: 0.5px; flex: none;
-  padding: 1px 5px; border: 1px solid var(--hairline-2); color: var(--text-2);
+  font: 8.5px var(--mono); letter-spacing: 0.06em; flex: none;
+  padding: 1px 5px; border: 1px solid var(--border-strong); color: var(--muted);
 }
-.rep-tag.pr { color: var(--solved); border-color: var(--solved-soft); }
-.rep-tag.watch { color: var(--revealed); border-color: var(--revealed-soft); }
-.rep-tag.judge { color: var(--counter); border-color: var(--counter-soft); }
-.rep-b { padding: 4px 12px 10px; border-top: 1px solid var(--hairline); }
+.rep-tag.pr { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.rep-tag.watch { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.rep-tag.judge { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 45%, transparent); }
+.rep-b { padding: 8px 12px 12px; border-top: 1px solid var(--divider); }
 /* the report is markdown rendered by renderMD, so it arrives wearing .md —
    only the h1 accent is retuned, to the view's own violet */
 .rep-b.md h1 { color: var(--skill-dream); }
-.rep-b.md blockquote { border-left-color: var(--skill-dream); color: var(--text); font-style: italic; }
+.rep-b.md blockquote { border-left-color: var(--skill-dream); color: var(--fg); font-style: italic; }
+.rep-b.md th { background: color-mix(in srgb, var(--skill-dream) 10%, var(--b1)); }
 
 /* ---- watchlist rows: the loop's one inbound channel ---- */
-.wl { border: 1px solid var(--hairline); background: var(--ground); }
+.wl { border: 1px solid var(--border); background: color-mix(in srgb, var(--ac) 2%, var(--b0)); font-size: 10px; }
 .wl + .wl { margin-top: 9px; }
 .wl-h { padding: 9px 11px 0; }
-.wl-h .obs { font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
-.wl-h .obs code { font: 11px var(--mono); background: var(--raised); color: var(--revealed); padding: 1px 4px; }
+.wl-h .obs { font-size: 10px; line-height: 1.55; color: var(--fg); overflow-wrap: anywhere; }
+.wl-h .obs code { font: 9px var(--mono); background: color-mix(in srgb, var(--warn) 8%, var(--b1)); color: var(--warn); padding: 1px 4px; }
 .wl-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 11px 0; }
 .cls {
-  font: 9.5px var(--mono); letter-spacing: 0.5px;
-  background: var(--raised); color: var(--text-2); padding: 2px 6px;
+  font: 8.5px var(--mono); letter-spacing: 0.06em;
+  background: color-mix(in srgb, var(--ac) 8%, var(--b1)); color: var(--muted); padding: 2px 6px;
 }
-.seen { font: 10px var(--mono); color: var(--text-2); }
+.seen { font: 9px var(--mono); color: var(--muted); }
 .wl-fix {
-  font-size: 11px; color: var(--text-2); font-style: italic;
+  font-size: 9.5px; color: var(--muted); font-style: italic;
   padding: 5px 11px 0; overflow-wrap: anywhere;
 }
-.wl-ctrl { display: flex; align-items: center; gap: 6px; padding: 8px 11px; }
+.wl-ctrl { display: flex; align-items: center; gap: 6px; padding: 9px 11px; }
 .wl-btn {
-  font: 600 10.5px var(--sans); letter-spacing: 0.3px;
-  background: transparent; color: var(--text-2);
-  border: 1px solid var(--hairline-2);
-  padding: 5px 11px; cursor: pointer;
+  font: 600 9px var(--display); letter-spacing: 0.1em;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-strong);
+  padding: 5px 11px;
   transition: background 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
-.wl-btn:hover:not(:disabled) { color: var(--text); border-color: var(--text-2); }
+.wl-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); background: color-mix(in srgb, var(--ac) 8%, transparent); }
 .wl-btn:disabled { opacity: 0.4; cursor: default; }
 /* the two verdicts take the colors they already mean elsewhere: green for
    settled, amber for "a human wants something done" */
-.wl-btn.fine.on { color: var(--solved); border-color: var(--solved); background: var(--solved-soft); }
-.wl-btn.fix.on { color: var(--revealed); border-color: var(--revealed); background: var(--revealed-soft); }
-.wl-stamp { font: 9.5px var(--mono); color: var(--text-2); margin-left: auto; }
+.wl-btn.fine.on { color: var(--ok); border-color: var(--ok); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+.wl-btn.fix.on { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.wl-stamp { font: 8.5px var(--mono); color: var(--muted); margin-left: auto; }
 /* the comment box is the PRIMARY control on a fix, not a disclosure behind an
    edit toggle: what carl types here becomes the spec the next run follows, so
    it is always open, always visible, and sized to hold a sentence. */
 .wl-comment {
   display: block; width: calc(100% - 22px); margin: 0 11px 11px;
-  font: 11.5px/1.5 var(--sans); color: var(--text);
-  background: var(--raised); border: 1px solid var(--hairline-2);
+  font: 10px/1.6 var(--mono); color: var(--fg);
+  background: color-mix(in srgb, var(--ac) 4%, var(--b1)); border: 1px solid var(--border-strong);
   padding: 7px 9px; resize: vertical; min-height: 40px;
 }
-.wl-comment:focus { outline: none; border-color: var(--revealed); box-shadow: var(--glow-warn); }
-.wl-comment::placeholder { color: var(--text-2); opacity: 1; }
+.wl-comment:hover { border-color: var(--warn); }
+.wl-comment:focus { outline: none; border-color: var(--warn); box-shadow: var(--glow-warn); }
+.wl-comment::placeholder { color: var(--muted); opacity: 1; }
 /* a row ruled `fine` is suppressed for good — dimmed, sunk to the bottom of
    the list (sortWatch), its comment read back rather than editable */
 .wl.done { opacity: 0.55; }
 .wl.done:hover { opacity: 0.85; }
 .wl-said {
   margin: 0 11px 11px; padding: 7px 9px;
-  border-left: 2px solid var(--solved); background: var(--solved-soft);
-  font-size: 11.5px; color: var(--text); overflow-wrap: anywhere;
+  border-left: 2px solid var(--ok); background: color-mix(in srgb, var(--ok) 7%, transparent);
+  font-size: 10px; color: var(--fg); overflow-wrap: anywhere;
 }
 .wl-said .who {
   display: block; margin-bottom: 3px;
-  font: 700 9.5px var(--mono); letter-spacing: 1px; color: var(--solved);
+  font: 700 8px var(--display); letter-spacing: 0.14em; color: var(--ok);
 }
 
 @media (max-width: 900px) { .dreamview { grid-template-columns: 1fr; height: auto; } }
@@ -1803,29 +2400,31 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   height: calc(100vh - 64px);
   display: flex; flex-direction: column;
   padding: 12px 16px 16px; gap: 8px;
+  position: relative; z-index: 3;
 }
 .graph-hdr { display: flex; align-items: baseline; gap: 12px; }
 .graph-title {
-  font: 10px var(--mono); letter-spacing: 2px; text-transform: uppercase;
+  font: 600 10px var(--display); letter-spacing: 0.2em; text-transform: uppercase;
   color: var(--skill-graph); text-shadow: var(--text-glow-skill-graph);
 }
-.graph-stat { font: 10.5px var(--mono); color: var(--text-2); letter-spacing: 0.4px; }
-.graph-stat b { color: var(--text); font-weight: 600; }
-.graph-stat.err { color: var(--counter); }
+.graph-stat { font: 9.5px var(--mono); color: var(--muted); letter-spacing: 0.03em; }
+.graph-stat b { color: var(--fg); font-weight: 600; }
+.graph-stat.err { color: var(--ac2); }
 
 .graph-stage {
   flex: 1; min-height: 0;
   display: grid; grid-template-columns: 190px minmax(0, 1fr) 250px;
-  background: var(--surface); border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); border: 1px solid var(--border);
 }
 .graph-rail {
-  border-right: 1px solid var(--hairline);
+  border-right: 1px solid var(--border);
   padding: 12px 11px; overflow-y: auto; min-width: 0;
+  font-size: 10px;
 }
-.graph-rail.r { border-right: 0; border-left: 1px solid var(--hairline); }
+.graph-rail.r { border-right: 0; border-left: 1px solid var(--border); }
 .graph-lbl {
-  font: 700 9.5px var(--mono); letter-spacing: 1.4px; text-transform: uppercase;
-  color: var(--text-2); margin: 0 0 8px;
+  font: 700 8.5px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 8px;
 }
 .graph-lbl + .graph-lbl, .graph-chk + .graph-lbl, .graph-stat + .graph-lbl,
 .graph-meta + .graph-lbl { margin-top: 18px; }
@@ -1834,8 +2433,8 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
    `off` is the only state that needs styling since on is the default. */
 .graph-chk {
   display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 3px 2px; background: none; border: 0; cursor: pointer;
-  font: 12px var(--sans); color: var(--text); text-align: left;
+  padding: 3px 2px; background: none; border: 0;
+  font: 500 10px var(--mono); color: var(--fg); text-align: left;
 }
 
 /* The header's physics toggle: .graph-chk chrome, but the rail authors that
@@ -1849,61 +2448,63 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
   flex: none;
   margin-left: auto;
 }
-.graph-chk.off { color: var(--text-2); }
+.graph-chk.off { color: var(--muted); }
 .graph-chk:hover { color: var(--skill-graph); }
 .graph-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .graph-chk.off .graph-dot { opacity: 0.45; }
-.graph-slider { width: 100%; margin: 4px 0 6px; accent-color: var(--accent); }
-.graph-railempty { font: 11px var(--sans); color: var(--text-2); line-height: 1.5; }
+.graph-slider { width: 100%; margin: 4px 0 6px; accent-color: var(--ac); }
+.graph-railempty { font: 10px var(--mono); color: var(--muted); line-height: 1.6; }
 
-.graph-canvas { position: relative; overflow: hidden; background: var(--ground); }
+.graph-canvas { position: relative; overflow: hidden; background: color-mix(in srgb, var(--ac) 2%, var(--b0)); }
 /* sigma owns this element's children — the overlays below are its siblings */
 .graph-gl { position: absolute; inset: 0; }
 .graph-overlay {
   position: absolute; inset: 0; display: grid; place-items: center;
   padding: 20px; text-align: center;
-  font: 11.5px var(--mono); color: var(--text-2);
-  background: var(--ground); pointer-events: none;
+  font: 10px var(--mono); color: var(--muted);
+  background: color-mix(in srgb, var(--ac) 2%, var(--b0)); pointer-events: none;
 }
 .graph-hint {
   position: absolute; left: 12px; bottom: 10px; pointer-events: none;
-  font: 10.5px var(--mono); color: var(--text-2); letter-spacing: 0.4px;
+  font: 9px var(--mono); color: var(--muted); letter-spacing: 0.05em;
 }
 .graph-zoom { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 5px; }
 .graph-zbtn {
-  width: 23px; height: 23px; display: grid; place-items: center; cursor: pointer;
-  border: 1px solid var(--hairline-2); background: var(--surface);
-  color: var(--text-2); font-size: 13px; line-height: 1;
+  width: 23px; height: 23px; display: grid; place-items: center;
+  border: 1px solid var(--border-strong); background: color-mix(in srgb, var(--ac) 5%, var(--b1));
+  color: var(--muted); font-size: 13px; line-height: 1;
 }
 .graph-zbtn:hover { color: var(--skill-graph); border-color: var(--skill-graph); }
 
-.graph-name { margin: 0 0 5px; font: 600 14px var(--sans); color: var(--text); }
+.graph-name { margin: 0 0 6px; font: 600 13px var(--display); letter-spacing: 0.06em; color: var(--fg); }
+/* squared off like the rest of the sheet — the kit has no radii, it shears
+   corners instead */
 .graph-pill {
-  display: inline-block; padding: 1.5px 7px; border-radius: 20px;
-  font: 700 9.5px var(--mono); letter-spacing: 0.8px; text-transform: uppercase;
-  background: var(--skill-graph-soft); color: var(--skill-graph);
+  display: inline-block; padding: 1.5px 8px;
+  font: 700 8.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase;
+  background: color-mix(in srgb, var(--skill-graph) 14%, var(--b1)); color: var(--skill-graph);
 }
 .graph-desc {
   margin: 10px 0 0; padding: 8px 10px;
-  background: var(--raised); border-left: 2px solid var(--skill-graph);
-  font: 12px/1.5 var(--sans); color: var(--text); overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--ac) 6%, var(--b1)); border-left: 2px solid var(--skill-graph);
+  font: 10px/1.55 var(--mono); color: var(--fg); overflow-wrap: anywhere;
 }
-.graph-meta { margin-top: 11px; font: 11px/1.8 var(--sans); color: var(--text-2); }
-.graph-meta b { color: var(--text); font-weight: 600; }
+.graph-meta { margin-top: 11px; font: 9.5px/1.8 var(--mono); color: var(--muted); }
+.graph-meta b { color: var(--fg); font-weight: 600; }
 .graph-fact {
-  padding: 7px 0; border-top: 1px solid var(--hairline);
-  font: 12px/1.45 var(--sans); color: var(--text); overflow-wrap: anywhere;
+  padding: 7px 0; border-top: 1px solid var(--divider);
+  font: 10px/1.5 var(--mono); color: var(--fg); overflow-wrap: anywhere;
 }
-.graph-src { display: block; margin-top: 3px; font: 10px var(--mono); color: var(--text-2); }
+.graph-src { display: block; margin-top: 3px; font: 8.5px var(--mono); color: var(--muted); }
 /* an invalidated fact — still stored, still queryable, visibly superseded */
 .graph-fact.stale { opacity: 0.45; text-decoration: line-through; }
 .graph-fact.stale .graph-src { text-decoration: none; }
-.graph-empty-facts { font: 11px var(--sans); color: var(--text-2); }
+.graph-empty-facts { font: 10px var(--mono); color: var(--muted); }
 
 @media (max-width: 900px) {
   .graphview { height: auto; }
   .graph-stage { grid-template-columns: 1fr; }
-  .graph-rail, .graph-rail.r { border: 0; border-bottom: 1px solid var(--hairline); }
+  .graph-rail, .graph-rail.r { border: 0; border-bottom: 1px solid var(--border); }
   .graph-canvas { min-height: 60vh; }
 }
 
@@ -1915,52 +2516,53 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 /* head: "⑂ t1" is the .panel-title (mono, with its own ▊), the thread's name
    sits beside it in the prose voice and doubles as the rename affordance */
 .thread-name-label {
-  font-size: 12px; color: var(--text);
-  cursor: text; padding: 1px 4px;
+  font-size: 10px; color: var(--body);
+  padding: 1px 4px;
   border: 1px solid transparent;
   max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.thread-name-label:hover { border-color: var(--hairline-2); color: var(--accent); }
-.thread-name-label:empty::before { content: "unnamed"; color: var(--text-2); }
+.thread-name-label:hover { border-color: var(--border-strong); color: var(--ac); }
+.thread-name-label:empty::before { content: "unnamed"; color: var(--muted); }
 .thread-name-input {
-  font: 12px var(--sans);
-  background: var(--ground); color: var(--text);
-  border: 1px solid var(--accent);
+  font: 10px var(--mono);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--ac);
   padding: 1px 4px; width: 26ch;
 }
 .thread-name-input:focus { outline: none; box-shadow: var(--glow); }
 .thread-pill {
-  font: 9.5px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  font: 9px var(--mono); letter-spacing: 0.1em; text-transform: uppercase;
   padding: 1px 7px; border: 1px solid currentColor;
 }
-.thread-pill.live { color: var(--solved); }
-.thread-pill.closed { color: var(--text-2); }
+.thread-pill.live { color: var(--ok); }
+.thread-pill.closed { color: var(--muted); }
 
 /* branch dialog: says plainly what the fork does and doesn't touch */
 .thread-banner {
-  font-size: 11.5px; line-height: 1.5; color: var(--text);
-  border-left: 2px solid var(--accent);
+  font-size: 10px; line-height: 1.6; color: var(--fg);
+  border-left: 2px solid var(--ac);
   background: var(--raised);
   padding: 9px 11px;
 }
-.thread-banner b { color: var(--accent); }
+.thread-banner b { color: var(--ac); }
 .thread-field {
   display: flex; flex-direction: column; gap: 5px;
-  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
-  color: var(--text-2);
+  font: 600 9px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--muted);
 }
-.thread-field .dim { opacity: 0.7; text-transform: none; letter-spacing: 0.5px; }
+.thread-field .dim { opacity: 0.7; text-transform: none; letter-spacing: 0.05em; }
 .thread-field input, .thread-field textarea {
-  font: 12px/1.5 var(--sans); letter-spacing: normal; text-transform: none;
-  background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2);
+  font: 11px/1.6 var(--mono); letter-spacing: normal; text-transform: none;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong);
   padding: 8px 10px; width: 100%;
 }
 .thread-field textarea { resize: vertical; min-height: 70px; }
+.thread-field input:hover, .thread-field textarea:hover { border-color: var(--ac); }
 .thread-field input:focus, .thread-field textarea:focus {
-  outline: none; border-color: var(--accent); box-shadow: var(--glow);
+  outline: none; border-color: var(--ac); box-shadow: var(--glow);
 }
-.thread-field ::placeholder { color: var(--text-2); opacity: 1; }
+.thread-field ::placeholder { color: var(--muted); opacity: 1; }
 .thread-new { display: flex; flex-direction: column; gap: 12px; }
 .thread-new-actions { display: flex; gap: 8px; }
 
@@ -1968,16 +2570,16 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
    thread's own turns at full strength below it */
 .thread-view { display: flex; flex-direction: column; gap: 12px; }
 #thread-convo { max-height: 48vh; overflow-y: auto; padding-right: 6px; }
-#thread-convo .blk { margin-bottom: 11px; font-size: 12.5px; line-height: 1.55; }
+#thread-convo .blk { margin-bottom: 11px; font-size: 11px; line-height: 1.6; }
 #thread-convo .blk:last-child { margin-bottom: 0; }
 #thread-convo .who {
-  font: 10px var(--mono); letter-spacing: 0.6px;
-  color: var(--text-2); margin-bottom: 2px;
+  font: 600 9px var(--display); letter-spacing: 0.08em;
+  color: var(--muted); margin-bottom: 2px;
 }
 #thread-convo .blk.user .who { color: var(--polling); }
-#thread-convo .blk.asst .who { color: var(--accent); }
-#thread-convo .blk.tool { font: 10.5px var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
-#thread-convo .blk.think { color: var(--text-2); font-style: italic; }
+#thread-convo .blk.asst .who { color: var(--ac); }
+#thread-convo .blk.tool { font: 9px var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+#thread-convo .blk.think { color: var(--muted); font-style: italic; }
 #thread-convo .inherited { opacity: 0.55; }
 #thread-convo .blk-body p,
 #thread-convo .blk-body ul,
@@ -1985,53 +2587,54 @@ label.f-sw { position: relative; display: block; line-height: 0; cursor: pointer
 #thread-convo .blk-body pre { margin: 0 0 8px; }
 #thread-convo .blk-body ul, #thread-convo .blk-body ol { padding-left: 20px; }
 #thread-convo .blk-body :last-child { margin-bottom: 0; }
-#thread-convo .blk-body code { background: var(--raised); color: var(--revealed); padding: 1px 4px; font: 11px var(--mono); }
-#thread-convo .blk-body pre { background: var(--ground); border: 1px solid var(--hairline); padding: 8px 10px; white-space: pre-wrap; }
+#thread-convo .blk-body code { background: color-mix(in srgb, var(--warn) 8%, var(--b1)); color: var(--warn); padding: 1px 4px; font: 10px var(--mono); }
+#thread-convo .blk-body pre { background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider); padding: 8px 10px; white-space: pre-wrap; }
 .thread-divider {
   display: flex; align-items: center; gap: 9px;
   margin: 14px 0;
-  color: var(--accent);
-  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
+  color: var(--ac);
+  font: 600 9px var(--display); letter-spacing: 0.18em; text-transform: uppercase;
 }
 .thread-divider::before, .thread-divider::after {
-  content: ""; flex: 1; height: 1px; background: var(--accent-soft);
+  content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--ac) 35%, transparent);
 }
 
 /* live pane mirror: plain capture-pane text, the only way to watch a live
-   thread from a phone (⧉ tmux raises Ghostty, which a phone can't) */
+   thread from a phone (⌁ attach tmux raises Ghostty, which a phone can't) */
 /* the head row is the mirror's toggle (▸/▾ in its label), so it's a control:
    the capture only polls while the reader has the <pre> open */
 #thread-panehead {
   display: flex; align-items: center; gap: 7px;
-  font: 10px var(--mono); letter-spacing: 1px; text-transform: uppercase;
-  color: var(--text-2); cursor: pointer; user-select: none;
+  font: 600 9px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--muted); user-select: none;
   transition: color 80ms var(--ease);
 }
-#thread-panehead:hover { color: var(--text); }
+#thread-panehead:hover { color: var(--fg); }
 #thread-panehead .live-dot {
-  width: 6px; height: 6px; background: var(--solved); box-shadow: var(--glow-ok);
+  width: 6px; height: 6px; background: var(--ok); box-shadow: 0 0 6px var(--ok);
 }
 .thread-pane {
   margin: 0;
-  background: var(--ground); border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider);
   padding: 9px 11px;
-  font: 10.5px/1.45 var(--mono); color: var(--text-2);
+  font: 9.5px/1.5 var(--mono); color: var(--muted);
   white-space: pre; overflow-x: auto; max-height: 30vh; overflow-y: auto;
 }
 
 /* what replaces the pane mirror and the composer once a thread is closed */
 .thread-empty {
-  border: 1px dashed var(--hairline-2);
+  border: 1px dashed var(--border-strong);
   padding: 14px; text-align: center;
-  font: 10.5px var(--mono); color: var(--text-2);
+  font: 10px var(--mono); color: var(--muted);
 }
 
 .thread-composer { display: flex; flex-direction: column; gap: 2px; }
 #thread-text {
-  font: 12px/1.5 var(--sans);
-  background: var(--raised); color: var(--text);
-  border: 1px solid var(--hairline-2);
+  font: 11px/1.6 var(--mono);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong);
   padding: 9px 11px; resize: vertical; min-height: 62px; width: 100%;
 }
-#thread-text:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
-#thread-text::placeholder { color: var(--text-2); opacity: 1; }
+#thread-text:hover { border-color: var(--ac); }
+#thread-text:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
+#thread-text::placeholder { color: var(--muted); opacity: 1; }

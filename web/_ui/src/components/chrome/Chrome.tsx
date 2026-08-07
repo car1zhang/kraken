@@ -5,6 +5,7 @@ import type { BoardModel } from "../../hooks/useBoard.ts";
 import { VIEWS, type View } from "../../hooks/useHashRoute.ts";
 import { age, flagCount } from "../../lib/format.ts";
 import { Banner, StaleBanner } from "./Banners.tsx";
+import { AccentToggle, ScanToggle } from "./HudControls.tsx";
 import { ShipControl, useShipRun } from "./ShipControl.tsx";
 import { ThemeToggle } from "./ThemeToggle.tsx";
 import { UpdControlButton, useUpdateRun } from "./UpdateControl.tsx";
@@ -121,8 +122,17 @@ export function Chrome({
   return (
     <>
       <header className="chrome">
+        {/* The wordmark's trailing glyph is a `<b>`, not the `<i>` the clock
+            corner uses, and the distinction is SEMANTIC: this header's one
+            `<i>▊</i>` is the BLINKING cursor block, and it is in #tick-stat,
+            where a blink means "still ticking". (It is not the only ▊ the app
+            can put on screen — style.css blinks the same glyph off
+            `.panel-title::after` in an open overlay — so the reading is local to
+            this bar rather than global.) The wordmark's `▞` is an accent mark
+            that means nothing of the sort, so it gets a different element —
+            style.css styles the two tags identically and says so. */}
         <span className="mark">
-          KRAKEN<i>▊</i>
+          KRAKEN<b>▞</b>
         </span>
         <span className={"led" + (ledOK ? " ok" : "")} id="daemon-led" />
         <span className="stat" id="daemon-stat">
@@ -157,9 +167,16 @@ export function Chrome({
         <span className="spacer" />
         <UpdControlButton id="update-btn" model={update.button} onClick={update.onClick} />
         <ShipControl id="ship-btn" model={ship.button} onClick={ship.onClick} />
+        <AccentToggle />
+        <ScanToggle />
         <ThemeToggle />
+        {/* The blinking block rides the CLOCK only. On the failure text it
+            would read as the corner still ticking at the exact moment it has
+            stopped saying so — and the refusal is a sentence to read, not a
+            terminal prompt. */}
         <span className="stat dim" id="tick-stat">
           {tick}
+          {showErr ? null : <i>▊</i>}
         </span>
       </header>
       <StaleBanner id="stale-banner" messages={staleMessages} />

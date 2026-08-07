@@ -10,6 +10,16 @@ declare global {
       get(): "light" | "dark" | "system";
       set(pref: "light" | "dark" | "system"): void;
     };
+    // window.krakenHud is the second pre-paint IIFE's API (same file, same
+    // reason): the accent palette cycle and the scanline toggle, stamped as
+    // <html data-accent> / <html data-scanlines> before first paint.
+    krakenHud?: {
+      accents: string[];
+      getAccent(): string;
+      setAccent(accent: string): void;
+      getScanlines(): boolean;
+      setScanlines(on: boolean): void;
+    };
   }
 }
 

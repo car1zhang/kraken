@@ -756,55 +756,64 @@ describe("the job colour strip", () => {
     );
   };
 
+  // The strip became a DROPDOWN (contract 50-contract.md, slice S3): a
+  // `.colorsel-btn` showing the current colour, and a `.colorsel-menu` of
+  // `.colorsel-row`s opened on demand. The nine radios these tests used to pin
+  // no longer exist, so every selector below moved to the frozen S3 markup.
+  const trigger = () =>
+    document.querySelector("#f-swatches .colorsel-btn") as HTMLButtonElement;
+  const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(trigger());
+    return [
+      ...document.querySelectorAll<HTMLElement>("#f-swatches .colorsel-row"),
+    ];
+  };
+
   it("offers 'no colour' plus the eight palette names, in /color's order", async () => {
+    const user = userEvent.setup();
     mount({ job: job() });
     await ready();
-    const radios = [
-      ...document.querySelectorAll<HTMLInputElement>('#f-swatches input[type="radio"]'),
-    ];
-    expect(radios.map((r) => r.value)).toEqual([
-      "", "red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan",
+    const rows = await openMenu(user);
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "NO COLOR✓", "RED", "BLUE", "GREEN", "YELLOW", "PURPLE", "ORANGE", "PINK", "CYAN",
     ]);
-    // "no colour" is a REAL radio, so a job with none still has one checked and
+    // "no colour" is a REAL row, so a job with none still has one selected and
     // a coloured job has a way back to neutral
-    expect(radios[0]?.checked).toBe(true);
+    expect(rows[0]).toHaveClass("sel");
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
   });
 
   it("reflects the job's colour, and falls back to none for an unknown one", async () => {
     const { unmount } = mount({ job: job({ color: "cyan" }) });
     await ready();
-    expect(
-      document.querySelector<HTMLInputElement>('#f-swatches input[value="cyan"]')?.checked,
-    ).toBe(true);
+    expect(trigger().textContent).toContain("CYAN");
     unmount();
 
     mount({ job: job({ color: "chartreuse" }) });
     await ready();
-    expect(
-      document.querySelector<HTMLInputElement>('#f-swatches input[value=""]')?.checked,
-    ).toBe(true);
+    expect(trigger().textContent).toContain("NO COLOR");
   });
 
   it("POSTs the pick on the spot rather than through the form autosave", async () => {
     const user = userEvent.setup();
     mount({ job: job() });
     await ready();
-    await user.click(
-      document.querySelector('#f-swatches input[value="purple"]') as HTMLElement,
-    );
+    const rows = await openMenu(user);
+    await user.click(rows[5] as HTMLElement); // PURPLE
     await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", "purple"));
     // saveform refuses a job whose cell is live, which is exactly when
     // recolouring matters — a colour pick must never ride it
     expect(saveJobForm).not.toHaveBeenCalled();
+    // the pick closes the menu
+    expect(document.querySelector("#f-swatches .colorsel-menu")).toBeNull();
   });
 
-  it("clears the colour with the none swatch", async () => {
+  it("clears the colour with the none row", async () => {
     const user = userEvent.setup();
     mount({ job: job({ color: "red" }) });
     await ready();
-    await user.click(
-      document.querySelector('#f-swatches input[value=""]') as HTMLElement,
-    );
+    const rows = await openMenu(user);
+    await user.click(rows[0] as HTMLElement); // NO COLOR
     await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", ""));
   });
 
@@ -820,11 +829,9 @@ describe("the job colour strip", () => {
     mount({ job: job({ state: "working", live: true }) });
     await ready();
     expect(document.getElementById("f-repo")).toBeDisabled();
-    const purple = document.querySelector(
-      '#f-swatches input[value="purple"]',
-    ) as HTMLInputElement;
-    expect(purple.disabled).toBe(false);
-    await user.click(purple);
+    expect(trigger().disabled).toBe(false);
+    const rows = await openMenu(user);
+    await user.click(rows[5] as HTMLElement); // PURPLE
     await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", "purple"));
   });
 });

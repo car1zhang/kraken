@@ -8,12 +8,11 @@ import {
   countdown,
   docQuestionsOpenP0,
   flagCount,
-  loadBadgeText,
   loadBadgeTitle,
+  loadRatioText,
   loadROI,
   logTime,
   settledJob,
-  stateColor,
   usageColorClass,
   usageCountdown,
   wakeupLabel,
@@ -28,22 +27,10 @@ const job = (over: Partial<WebJob> = {}): WebJob => ({
   ...over,
 });
 
-describe("stateColor", () => {
-  it("maps every board state to its token", () => {
-    expect(stateColor("working")).toBe("var(--solved)");
-    expect(stateColor("blocked")).toBe("var(--counter)");
-    expect(stateColor("queued")).toBe("var(--accent)");
-    expect(stateColor("done")).toBe("var(--text-2)");
-    expect(stateColor("draft")).toBe("var(--text-2)");
-    expect(stateColor("archived")).toBe("var(--text-2)");
-  });
-
-  it("falls back to the muted token for an unknown state", () => {
-    // A server that grows a sixth state must not paint a card with `--state`
-    // resolving to nothing, which is a card with no rail at all.
-    expect(stateColor("wat")).toBe("var(--text-2)");
-  });
-});
+// stateColor was deleted with the HUD redesign: the card's state renders as a
+// text token from JobCard's STATUS_TEXT (50-contract.md, JobCard band 1/3 row
+// as amended), and ArchivedCard hardcodes its own `--state`, so nothing read
+// the mapping any more.
 
 describe("age", () => {
   it("formats seconds-resolution stamps", () => {
@@ -247,15 +234,18 @@ describe("loadROI", () => {
   });
 });
 
-describe("loadBadgeText / loadBadgeTitle", () => {
+describe("loadRatioText / loadBadgeTitle", () => {
   const NOW = 1_769_040_000_000;
   // `at` three hours back, so every tooltip below reads "estimated 3h ago".
   const AT = NOW - 3 * 3600_000;
 
+  // loadBadgeText (the `⚡ 4.0× 2→8` label) was deleted with the HUD redesign:
+  // the card's chip is `⚡ ${loadRatioText(roi)}` alone (50-contract.md, S2
+  // LoadChip row), so the ratio rendering is what remains to pin here.
   it("renders the ratio to ONE decimal, rounding half away from zero", () => {
-    expect(loadBadgeText({ unblock: 2, scope: 8 }, 4)).toBe("⚡ 4.0× 2→8");
-    expect(loadBadgeText({ unblock: 8, scope: 2 }, 0.25)).toBe("⚡ 0.3× 8→2");
-    expect(loadBadgeText({ unblock: 3, scope: 5 }, 5 / 3)).toBe("⚡ 1.7× 3→5");
+    expect(loadRatioText(4)).toBe("4.0×");
+    expect(loadRatioText(0.25)).toBe("0.3×");
+    expect(loadRatioText(5 / 3)).toBe("1.7×");
   });
 
   it("carries the AGE clause, and appends a note only when there is one", () => {

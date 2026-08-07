@@ -82,7 +82,14 @@ export function ArchivedCard({ job, actions }: ArchivedCardProps) {
       <div className="card-top">
         <span className="slug">{label}</span>
         {renamed ? <span className="state">as {job.slug}</span> : null}
-        <span className="state">● archived</span>
+        {/* `■` rather than the old `●`: it pairs with the two glyphs the live
+            cards still carry (`◌ queued` · `✓ done`) as a mark for something
+            SETTLED — the live active/blocked tokens went bare-word at carl's
+            post-gate note, so the square no longer echoes a "blocked" square
+            anywhere. It stays in .card-top rather than moving to .meta as the
+            live card's did — an archived card has no state to report, only a
+            fact about the card itself. */}
+        <span className="state">■ archived</span>
       </div>
       <div className="meta">
         <span>{job.repo}</span>

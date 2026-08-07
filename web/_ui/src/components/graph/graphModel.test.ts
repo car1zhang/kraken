@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { GraphEdge, GraphNode } from "../../hooks/useGraph.ts";
 import {
   DEFAULT_FILTERS,
+  DEFAULT_TYPE_VAR,
+  EDGE_VAR,
   edgeVisible,
   hiddenNodeIds,
   invalidatedAt,
   isInvalidated,
+  LABEL_VAR,
   makeEdgeReducer,
   makeNodeReducer,
   nodeColor,
@@ -15,7 +18,9 @@ import {
   nodeTypes,
   PALETTE_FALLBACK,
   readGraphPalette,
+  SELECTED_VAR,
   shortDate,
+  TYPE_COLOR_VARS,
   withFallbackPositions,
   type EdgeAttrs,
   type GraphFilters,
@@ -214,14 +219,31 @@ describe("the palette", () => {
   // jsdom resolves no custom properties, so this is also the path every test
   // in this file takes — and the path a page takes before its stylesheet has
   // applied. It must never produce `undefined` as a colour.
+  // pins updated at the graph+HUD review round: the fallback map now carries
+  // the HUD redesign's dark evaluations (the old pins were the pre-redesign
+  // palette — athena-logic finding 3), and it gained the three seed-type vars
+  // person/tool/external-system read (finding 1).
   it("falls back per-var when nothing resolves", () => {
     expect(readGraphPalette(null)).toEqual(PALETTE_FALLBACK);
-    expect(nodeColor("convention", PALETTE_FALLBACK)).toBe("#9E7BFF");
-    expect(nodeColor("file", PALETTE_FALLBACK)).toBe("#2A3A50");
+    expect(nodeColor("convention", PALETTE_FALLBACK)).toBe("#a86aff");
+    expect(nodeColor("file", PALETTE_FALLBACK)).toBe("#452e67");
+  });
+
+  it("covers every var the type map, the default-type var, and the three VAR constants name", () => {
+    // the map is BOTH the read list and the fallback — a var missing here is
+    // never read from CSS at all, which is exactly how person/tool/
+    // external-system rendered a hardcoded grey that ignored theme and accent
+    for (const varName of Object.values(TYPE_COLOR_VARS)) {
+      expect(PALETTE_FALLBACK[varName], varName).toBeDefined();
+    }
+    expect(PALETTE_FALLBACK[EDGE_VAR]).toBeDefined();
+    expect(PALETTE_FALLBACK[SELECTED_VAR]).toBeDefined();
+    expect(PALETTE_FALLBACK[LABEL_VAR]).toBeDefined();
+    expect(PALETTE_FALLBACK[DEFAULT_TYPE_VAR]).toBeDefined();
   });
 
   it("gives an unrecognized type the fallback hue rather than nothing", () => {
-    expect(nodeColor("something-new", PALETTE_FALLBACK)).toBe("#6B7A8C");
+    expect(nodeColor("something-new", PALETTE_FALLBACK)).toBe("#9785b6");
   });
 });
 
@@ -237,7 +259,7 @@ describe("makeNodeReducer", () => {
 
   it("colours by type and only hides what the rail switched off", () => {
     const r = makeNodeReducer(new Set([nodeKey(2)]), null, PALETTE_FALLBACK);
-    expect(r("1", attrs())).toMatchObject({ color: "#9E7BFF" });
+    expect(r("1", attrs())).toMatchObject({ color: "#a86aff" });
     expect(r("1", attrs()).hidden).toBeUndefined();
     expect(r("2", attrs())).toMatchObject({ hidden: true });
   });

@@ -30,11 +30,15 @@ function renderChip(job: WebJob, col: Column = "blocked") {
 }
 
 describe("LoadChip", () => {
+  // 50-contract.md, S2 `LoadChip`: "Chip text is exactly `⚡ ${roi.toFixed(1)}×`
+  // — e.g. `⚡ 4.0×`, `⚡ 0.3×`. No `unblock→scope` on the card." The two halves
+  // the ratio came from moved to the tooltip, which the case below still pins in
+  // full; the ratio itself — precision included — is unchanged.
   it("renders the shared contract's worked examples exactly", () => {
-    expect(renderChip(blocked({ load: load(2, 8) }))?.textContent).toBe("⚡ 4.0× 2→8");
-    expect(renderChip(blocked({ load: load(5, 5) }))?.textContent).toBe("⚡ 1.0× 5→5");
-    expect(renderChip(blocked({ load: load(8, 2) }))?.textContent).toBe("⚡ 0.3× 8→2");
-    expect(renderChip(blocked({ load: load(3, 5) }))?.textContent).toBe("⚡ 1.7× 3→5");
+    expect(renderChip(blocked({ load: load(2, 8) }))?.textContent).toBe("⚡ 4.0×");
+    expect(renderChip(blocked({ load: load(5, 5) }))?.textContent).toBe("⚡ 1.0×");
+    expect(renderChip(blocked({ load: load(8, 2) }))?.textContent).toBe("⚡ 0.3×");
+    expect(renderChip(blocked({ load: load(3, 5) }))?.textContent).toBe("⚡ 1.7×");
   });
 
   it("bands each worked example where the contract states", () => {
@@ -127,7 +131,8 @@ describe("LoadChip", () => {
       (c) => bucketJobs([sick]).byColumn[c].length > 0,
     )!;
     expect(col).toBe("blocked");
-    expect(renderChip(sick, col)?.textContent).toBe("⚡ 4.0× 2→8");
+    // 50-contract.md, S2 `LoadChip`: chip text is the ratio alone.
+    expect(renderChip(sick, col)?.textContent).toBe("⚡ 4.0×");
   });
 });
 
@@ -178,7 +183,8 @@ describe("LoadChip in JobCard", () => {
     // hasChips is asked per chip rather than by measuring the rendered row, so
     // a chip left out of that predicate renders into a row that never mounts.
     const card = renderCard(blocked({ load: load(2, 8) }));
-    expect(card.querySelector(".chips .ld-chip")?.textContent).toBe("⚡ 4.0× 2→8");
+    // 50-contract.md, S2 `LoadChip`: chip text is the ratio alone.
+    expect(card.querySelector(".chips .ld-chip")?.textContent).toBe("⚡ 4.0×");
   });
 
   it("stays out of the chip row entirely on a working card", () => {

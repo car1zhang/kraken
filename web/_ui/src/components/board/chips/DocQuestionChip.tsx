@@ -46,9 +46,13 @@ export function DocQuestionChip({ job }: { job: WebJob }) {
   const p0 = open.filter((q) => q.importance === "P0").length;
   const label = `${open.length} question${open.length === 1 ? "" : "s"}`;
   const title = `${label} open${p0 ? ` (${p0} P0)` : ""} — click the card to read and answer`;
+  // The visible text is the COUNT alone — `⚑ 4`. The word "question(s)" is what
+  // the glyph already says, and dropping it is what lets four of these chips sit
+  // on one line of a narrow column without wrapping. It survives in `title`,
+  // which is unchanged: the full sentence, P0 clause and all.
   return (
     <span className={"dq-chip" + (p0 ? " p0" : "")} title={title}>
-      ⚑ {label}
+      ⚑ {open.length}
     </span>
   );
 }

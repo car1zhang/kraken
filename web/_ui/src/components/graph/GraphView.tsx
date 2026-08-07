@@ -77,13 +77,14 @@ export interface GraphViewProps {
 }
 
 /**
- * Re-render when the theme flips.
+ * Re-render when the theme or the accent palette flips.
  *
  * Node and edge colours are resolved from style.css custom properties (see
- * readGraphPalette), and those change value under `data-theme="light"`. The
- * attribute is written by the pre-paint IIFE in index.html — which also owns
- * the `prefers-color-scheme` listener — so observing the attribute catches
- * both the ◐ button and a system switch, and adds no second writer.
+ * readGraphPalette), and those change value under `data-theme="light"` AND
+ * under `data-accent` (the ◈ palette cycle re-derives every accent mix). Both
+ * attributes are written by index.html's pre-paint IIFEs (the theme one also
+ * owns the `prefers-color-scheme` listener), so observing them catches the
+ * ◐/◈ buttons and a system switch alike, and adds no second writer.
  */
 function useThemeTick(): number {
   const [tick, setTick] = useState(0);
@@ -92,7 +93,7 @@ function useThemeTick(): number {
     const obs = new MutationObserver(() => setTick((n) => n + 1));
     obs.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme"],
+      attributeFilter: ["data-theme", "data-accent"],
     });
     return () => obs.disconnect();
   }, []);
@@ -378,6 +379,18 @@ export function GraphView({ active }: GraphViewProps) {
       const s = new Sigma<NodeAttrs, EdgeAttrs>(g, el, {
         renderEdgeLabels: false,
         enableEdgeEvents: false,
+        // The view stays MOUNTED while hidden (App.tsx), and the theme/accent
+        // MutationObserver above refreshes sigma's settings while the
+        // container is display:none — width 0, on which sigma's resize()
+        // THROWS (surfacing as an uncaught error from the rAF'd render, which
+        // also aborts that frame). This is sigma's own switch for exactly
+        // that hidden-container case. Recovery on show is NOT sigma's doing —
+        // this sigma has no ResizeObserver, only a window resize listener —
+        // it is this same effect's early-return branch ABOVE calling
+        // resize()+refresh() on the `active` flip, which this flag makes
+        // load-bearing. The trade: a genuinely zero-sized container while
+        // VISIBLE now renders blank with no message.
+        allowInvalidContainer: true,
         // Label level-of-detail is sigma's own: it draws a label only once the
         // node is rendered at least this many pixels across, so zooming out of
         // a 5k-node graph thins the labels out instead of stacking them.

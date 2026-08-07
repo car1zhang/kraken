@@ -97,7 +97,13 @@ describe("the archived card's bands", () => {
     );
     const chips = card.querySelector(".chips")!;
     expect(chips.querySelector(".ct-chip")).toHaveTextContent("▤ 4");
-    expect(chips.querySelector(".fb-chip")).toHaveTextContent("1 feedback · 1 no durable fix");
+    // 50-contract.md, S2 `FeedbackChip`: "Text exactly `✎ ${count}` — no
+    // `feedback` word, no `no durable fix` clause in the text. `title`
+    // unchanged (the durable-fix detail lives there)."
+    expect(chips.querySelector(".fb-chip")).toHaveTextContent("✎ 1");
+    expect(chips.querySelector(".fb-chip")!.getAttribute("title")).toContain(
+      "no durable fix shipped yet",
+    );
     expect(card.querySelector(".chip")).toBeNull();
     expect(card.querySelector(".chip-more")).toBeNull();
     expect(card.querySelector(".job-feedback")).toBeNull();
@@ -117,7 +123,11 @@ describe("the archived card's bands", () => {
   });
 
   it("omits --job-color entirely when the archived job has none", () => {
-    expect(renderCard().card.getAttribute("style")).not.toContain("--job-color");
+    // `?? ""`: today the attribute always exists (ArchivedCard sets --state
+    // unconditionally), but if that property ever goes the way JobCard's did,
+    // .not.toContain would throw on null instead of asserting absence — same
+    // guard JobCard.test.tsx carries.
+    expect(renderCard().card.getAttribute("style") ?? "").not.toContain("--job-color");
   });
 
   it("shows the renamed-on-archive label alongside the archive name", () => {

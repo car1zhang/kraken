@@ -42,27 +42,48 @@ export const TYPE_COLOR_VARS: Readonly<Record<string, string>> = {
 /** Anything the extraction agent invented that the map above does not name. */
 export const DEFAULT_TYPE_VAR = "--text-2";
 
-/** Edges, labels and the selection ring. */
-export const EDGE_VAR = "--hairline-2";
+/** Edges, labels and the selection ring. Edges take the graph's own token
+ * rather than `--hairline-2`, whose evaluated mix is so dark it read as black
+ * on the dark board — carl's report. The mockup's stroke is 22% accent; the
+ * token is bumped to 32% (style.css says why beside its definition). */
+export const EDGE_VAR = "--graph-edge";
 export const SELECTED_VAR = "--skill-graph";
 export const LABEL_VAR = "--text";
 
 /**
- * The dark `:root` values, used when getComputedStyle has nothing to say —
- * which is every test (jsdom does not resolve custom properties) and any
- * moment before the stylesheet has applied. Dark rather than light because
- * `:root` in style.css is the dark palette and every failure mode there is
- * documented to land on it.
+ * This map is BOTH the list of vars readGraphPalette reads AND their
+ * fallbacks — a var absent here is never read at all, which is how three
+ * seed types (person/tool/external-system) once rendered a hardcoded grey
+ * that ignored theme and accent alike (review finding): TYPE_COLOR_VARS
+ * named their vars but this map did not carry them. Every var
+ * TYPE_COLOR_VARS, DEFAULT_TYPE_VAR, or the three VAR constants above name
+ * must have a row.
+ *
+ * Values are the HUD redesign's dark evaluations (the `:root` violet
+ * palette), used when getComputedStyle has nothing to say — which is every
+ * test (jsdom's getContext("2d") is null, so the resolver body never runs)
+ * and any moment before the stylesheet has applied. Dark rather than light
+ * because `:root` in style.css is the dark palette and every failure mode
+ * there is documented to land on it. The mixes are computed by hand from
+ * style.css's recipes; if the primitives move, these move with them.
  */
 export const PALETTE_FALLBACK: Readonly<Record<string, string>> = {
-  "--accent": "#9E7BFF",
-  "--polling": "#22D3EE",
-  "--revealed": "#F5B84D",
-  "--solved": "#4ADE80",
-  "--hairline-2": "#2A3A50",
-  "--text-2": "#6B7A8C",
-  "--text": "#D7E2EC",
+  "--accent": "#a86aff",
+  "--polling": "#00e5ff",
+  "--revealed": "#ffb000",
+  "--solved": "#7fd44a",
+  "--counter": "#ff4fd8",
+  "--skill-do": "#F5D34D",
+  "--skill-info": "#5EA8FF",
+  // color-mix(in srgb, var(--ac) 36%, var(--b1)) on the dark primitives
+  "--hairline-2": "#452e67",
+  // color-mix(in srgb, var(--ac) 28%, var(--g1)) on the dark primitives
+  "--text-2": "#9785b6",
+  "--text": "#f2edff",
   "--skill-graph": "#87DF49",
+  // 32% violet over transparent — the dark evaluation of --graph-edge's mix,
+  // in the rgba() form sigma parses.
+  "--graph-edge": "rgba(168, 106, 255, 0.32)",
 };
 
 export type Palette = Readonly<Record<string, string>>;
@@ -71,20 +92,85 @@ export type Palette = Readonly<Record<string, string>>;
  * Resolve every var this module can ask for against a live element, falling
  * back per-var. Called once per sigma settings pass rather than per node: it
  * is a forced style recalc, and there are thousands of nodes.
+ *
+ * Resolution goes through a PROBE ELEMENT's `color`, never through
+ * `getPropertyValue(--x)` directly: since the HUD token redesign most of
+ * these vars hold `color-mix(...)` expressions, and an unregistered custom
+ * property's value is handed back as that raw expression string — which
+ * sigma's color parser cannot read, so every edge and half the node types
+ * rendered BLACK (carl's report, dark theme). Assigning `var(--x)` to a real
+ * `color` property makes the browser evaluate the mix at computed-value
+ * time — but the SERIALIZATION it hands back is `color(srgb …)` in Chromium,
+ * which sigma cannot parse either, and a canvas `fillStyle` round-trip does
+ * NOT normalize it (fillStyle re-serializes modern color syntax in the same
+ * form; measured, and it is how the first cut of this fix still drew black).
+ * So the normalizer PAINTS: fill one pixel, read the bytes back with
+ * getImageData, and compose the `rgba()` string ourselves — pixels have no
+ * serialization to disagree about. The read is `var(--x, #010203)` with the
+ * SENTINEL as the var's own fallback: a DELETED token substitutes the
+ * sentinel and keeps its pinned hex. (A token that exists but holds garbage
+ * is invalid-at-computed-value-time and inherits the container's color —
+ * that case is not caught, and `color` being inherited is why the bare
+ * `var(--x)` form silently painted the container's text color for a missing
+ * token too, which two comments then mispromised as "falls back".) Remaining
+ * failure paths — no document, no canvas 2d context (jsdom, which is also
+ * why NO test reaches this body), an empty computed value — fall back
+ * per-var. One accuracy bound worth knowing: getImageData un-premultiplies,
+ * so a low-alpha token loses precision — worst-case per-channel drift is
+ * ±127/α₈ (α₈ being the 8-bit alpha, round(255·α)), i.e. ±5 at α = 0.1, ±13 at α ≈ 0.04, and unbounded as α → 0. At
+ * --graph-edge's 0.32 all three channels round-trip exactly (168 → 54 → 168,
+ * 106 → 34 → 106, 255 → 82 → 255); the alpha recomposes as 0.322 rather
+ * than 0.320.
  */
 export function readGraphPalette(el: Element | null | undefined): Palette {
-  if (!el || typeof getComputedStyle !== "function") return PALETTE_FALLBACK;
-  const style = getComputedStyle(el);
+  if (!el || typeof getComputedStyle !== "function" || typeof document === "undefined") {
+    return PALETTE_FALLBACK;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext?.("2d", { willReadFrequently: true });
+  if (!ctx || typeof ctx.getImageData !== "function") return PALETTE_FALLBACK;
+  const probe = document.createElement("span");
+  probe.style.display = "none";
+  el.appendChild(probe);
   const out: Record<string, string> = { ...PALETTE_FALLBACK };
-  for (const name of Object.keys(PALETTE_FALLBACK)) {
-    const v = style.getPropertyValue(name).trim();
-    if (v) out[name] = v;
+  try {
+    for (const name of Object.keys(PALETTE_FALLBACK)) {
+      // the sentinel doubles as the var() fallback — see the docstring
+      probe.style.color = `var(${name}, #010203)`;
+      const evaluated = getComputedStyle(probe).color.trim();
+      if (!evaluated) continue;
+      // an invalid assignment leaves fillStyle unchanged, so seed the same
+      // sentinel and treat a sentinel pixel as the parse failing; the alpha
+      // check keeps a real (impossible today) rgba(1,2,3,x) token from
+      // colliding, since the sentinel always paints opaque
+      ctx.fillStyle = "#010203";
+      ctx.fillStyle = evaluated;
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillRect(0, 0, 1, 1);
+      const d = ctx.getImageData(0, 0, 1, 1).data;
+      const [r, g, b, a] = [d[0]!, d[1]!, d[2]!, d[3]!];
+      if (r === 1 && g === 2 && b === 3 && a === 255) continue;
+      // alpha is painted onto a cleared (transparent) pixel, so the bytes are
+      // the color itself, not a blend; 255 → opaque shorthand
+      out[name] =
+        a === 255
+          ? `rgb(${r}, ${g}, ${b})`
+          : `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
+    }
+  } finally {
+    probe.remove();
   }
   return out;
 }
 
 export function colorOf(varName: string, palette: Palette): string {
-  return palette[varName] ?? PALETTE_FALLBACK[varName] ?? "#6B7A8C";
+  // the last resort reads the default-type row itself rather than repeating
+  // its hex by hand (a hand copy is the drift the review round just caught in
+  // this map's own values); the coverage test pins the row present, and it
+  // fires only for a var name in neither map
+  return palette[varName] ?? PALETTE_FALLBACK[varName] ?? PALETTE_FALLBACK[DEFAULT_TYPE_VAR]!;
 }
 
 export function nodeColor(type: string, palette: Palette): string {

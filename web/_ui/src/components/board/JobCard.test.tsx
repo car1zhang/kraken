@@ -70,6 +70,11 @@ const BAND_OF: Array<[string, number]> = [
   ["match-why", 3],
   ["wakeup-row", 3],
   ["wakeup-reason", 3],
+  // band 4 is EMPTY on a card now — 50-contract.md, S2 `JobCard` band 4:
+  // "QuestionBlock is NOT rendered on the card." The mapping stays so the
+  // numbering keeps its shared vocabulary with style.css and the iOS card, and
+  // so a QuestionBlock rendered here again lands in band 4 rather than throwing
+  // "card child in no band" and hiding which rule it broke.
   ["question", 4],
   ["prs", 5],
   ["card-actions", 6],
@@ -120,8 +125,10 @@ describe("the six bands", () => {
   it("renders every band, in order, on a maximal card", () => {
     const { card } = renderCard(MAXIMAL);
     const seen = bands(card);
-    // present at all…
-    expect([...new Set(seen)]).toEqual([1, 2, 3, 4, 5, 6]);
+    // present at all… band 4 excepted: 50-contract.md, S2 `JobCard` band 4
+    // takes QuestionBlock off the card entirely, so the maximal card — which
+    // still carries a pending `question` — has nothing left to put there.
+    expect([...new Set(seen)]).toEqual([1, 2, 3, 5, 6]);
     // …and never out of order
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
   });
@@ -279,7 +286,13 @@ describe("band 2 carries counts, not lists", () => {
         ],
       }),
     );
-    expect(card.querySelector(".chips .fb-chip")).toHaveTextContent("2 feedback · 1 no durable fix");
+    // 50-contract.md, S2 `FeedbackChip`: "Text exactly `✎ ${count}` — no
+    // `feedback` word, no `no durable fix` clause in the text. `title`
+    // unchanged (the durable-fix detail lives there)."
+    expect(card.querySelector(".chips .fb-chip")).toHaveTextContent("✎ 2");
+    expect(card.querySelector(".fb-chip")!.getAttribute("title")).toContain(
+      "1 with no durable fix shipped yet",
+    );
     // no `.open` emphasis any more: `addressed` is the dream pass' column
     // alone, so an un-addressed note is a corroboration backlog rather than
     // work owed, and the state would now fire on nearly every job with feedback
@@ -313,7 +326,13 @@ describe("band 2 carries counts, not lists", () => {
     expect(card.querySelector(".crew-chip")!.getAttribute("title")).toContain("● heph-1 (opus)");
   });
 
-  it("carries branch chips as STATUS, with no ⑂ branch affordance", () => {
+  // 50-contract.md, S2 `ThreadChips`: "`compact` renders ONE `<span
+  // class="thread-count chip-threads">` reading `⑂ ${list.length}` — a span,
+  // NOT a button (the card's own click opens the modal where the full list
+  // lives); its `title` lists every thread as `tid · title` lines with
+  // live/closed noted." The per-thread buttons this used to pin are now the
+  // MODAL's rendering, which the same row freezes as byte-identical to today.
+  it("collapses the thread list to one ⑂ count, with no ⑂ branch affordance", () => {
     const { card } = renderCard(
       job({
         state: "working",
@@ -325,19 +344,22 @@ describe("band 2 carries counts, not lists", () => {
       }),
     );
     const chips = card.querySelector(".chips")!;
-    expect(chips.querySelectorAll(".thread-chip")).toHaveLength(2);
+    expect(chips.querySelectorAll(".thread-chip")).toHaveLength(0);
+    const count = chips.querySelector(".thread-count.chip-threads")!;
+    expect(count).toHaveTextContent("⑂ 2");
+    expect(count.tagName).toBe("SPAN");
     expect(card.querySelector(".branch-btn")).toBeNull();
     // and no .threads row of its own any more — that class is modal-only
     expect(card.querySelector(".threads")).toBeNull();
   });
 
-  it("opens a thread from its chip without opening the card", async () => {
+  it("falls through to the card, which is where the thread list lives", async () => {
     const { card, actions } = renderCard(
       job({ state: "working", live: true, threads: [{ tid: "t1", state: "live", created_at: 0 }] }),
     );
-    await userEvent.click(card.querySelector(".thread-chip")!);
-    expect(actions.onOpenThread).toHaveBeenCalledWith("demo", "t1");
-    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    await userEvent.click(card.querySelector(".thread-count")!);
+    expect(actions.onOpenThread).not.toHaveBeenCalled();
+    expect(actions.onOpenSteer).toHaveBeenCalledWith("demo", "steer");
   });
 
   it("renders no chip row at all when the job has nothing in it", () => {
@@ -357,7 +379,10 @@ describe("the card's question surface is the count chip and nothing else", () =>
     const { card } = renderCard(job({ doc_questions: QUESTIONS }));
     const chip = card.querySelector(".dq-chip");
     expect(chip).not.toBeNull();
-    expect(chip).toHaveTextContent("⚑ 2 questions");
+    // 50-contract.md, S2 `DocQuestionChip`: "Text exactly `⚑ ${openCount}` — no
+    // `question(s)` word. `title` unchanged (still carries the P0 clause)."
+    expect(chip).toHaveTextContent("⚑ 2");
+    expect(chip!.getAttribute("title")).toContain("2 questions open");
     // the panel and every answer affordance live one click into the job
     expect(card.querySelector(".doc-questions")).toBeNull();
     expect(card.querySelector(".dq-row")).toBeNull();
@@ -381,7 +406,10 @@ describe("the card's question surface is the count chip and nothing else", () =>
     const { card } = renderCard(job({ doc_questions: [QUESTIONS[2]!] }));
     expect(card.querySelector(".dq-chip")).toBeNull();
     const one = renderCard(job({ doc_questions: [QUESTIONS[0]!] })).card;
-    expect(one.querySelector(".dq-chip")).toHaveTextContent("⚑ 1 question");
+    // 50-contract.md, S2 `DocQuestionChip`: the count alone, no `question(s)`
+    // word — so the singular/plural the text used to carry lives in the title.
+    expect(one.querySelector(".dq-chip")).toHaveTextContent("⚑ 1");
+    expect(one.querySelector(".dq-chip")!.getAttribute("title")).toContain("1 question open");
   });
 
   it("skips a settled (done/archived) job — nobody is waiting on its answers", () => {
@@ -402,23 +430,23 @@ describe("the card's question surface is the count chip and nothing else", () =>
 
 // ---------------------------------------------------------------------------
 
-describe("state color", () => {
-  it("rides on the --state inline custom property", () => {
-    // style.css reads var(--state) for the `● working` chip; a card that loses
-    // the inline property loses its state color silently, since var(--state)
-    // simply resolves to nothing.
-    const { card } = renderCard(job({ state: "working", live: true }));
-    expect(card.getAttribute("style")).toContain("--state: var(--solved)");
-  });
-});
+// The "state color" describe that stood here pinned `--state: var(--solved)` on
+// the card's style attribute. 50-contract.md, S2 `JobCard` band 1/3, as amended
+// at the review round: "the `--state` inline custom property is REMOVED with the
+// span — the span was its only reader … the pinning test goes with it as
+// obsoleted maintenance." The state channel that replaced it shrank again at
+// carl's post-gate ask: only the SETTLED columns render a `.status` token now
+// (`◌ queued` / `✓ done`, pinned in the blind suites); a live card's state is
+// its column.
 
 // ---------------------------------------------------------------------------
-// JOB COLOUR — the 2px left accent bar, and the card's only colour channel.
+// JOB COLOUR — the 3px left accent bar, and the card's only colour channel.
 //
-// style.css: `border-left: 2px solid var(--job-color, var(--text-2))`. The bar
+// style.css: `border-left: 3px solid var(--job-color, var(--accent-edge))`. The bar
 // carries neither state nor alerts, so nothing else on the card can stand in
 // for it — a card that stops emitting the property does not degrade, it loses
-// the whole feature, and every coloured job goes grey with no error anywhere.
+// the whole feature, and every coloured job falls back to the neutral accent
+// edge with no error anywhere.
 // internal/jobs/color.go types the same colour into the cell's live tmux pane,
 // so board and pane are meant to be the same pixel colour.
 // ---------------------------------------------------------------------------
@@ -431,27 +459,38 @@ describe("job colour", () => {
     }
   });
 
-  it("keeps --state alongside it — they are different channels", () => {
+  it("emits it on a live working card, where state has its own channel", () => {
+    // Was "keeps --state alongside it — they are different channels": per the
+    // same amended band 1/3 row, --state is gone and --job-color is the card's
+    // ONLY inline custom property, so what is left to pin is that a running job
+    // still carries its colour.
     const { card } = renderCard(job({ state: "working", live: true, color: "purple" }));
     const style = card.getAttribute("style")!;
-    expect(style).toContain("--state: var(--solved)");
     expect(style).toContain("--job-color: var(--job-purple)");
+    expect(style).not.toContain("--state");
   });
 
+  // `?? ""` on both cases below, and it is the amendment that made it
+  // necessary rather than a laxness: --job-color is the card's ONLY inline
+  // custom property since --state was removed (50-contract.md, S2 `JobCard`
+  // band 1/3, amended at the review round), so an uncoloured card that is not
+  // being dragged now has an EMPTY style object and React omits the attribute
+  // outright — getAttribute returns null, which .not.toContain cannot take. The
+  // assertion is unchanged in what it forbids: the property must not appear.
   it("OMITS the property entirely when the job has no colour", () => {
     // Not `--job-color: ""`: a custom property set to the empty string
     // substitutes nothing, so `var(--job-color, var(--text-2))` would resolve to
     // nothing rather than to its fallback and the border-left declaration would
     // go invalid at computed-value time. Absence is what makes the bar grey.
     const { card } = renderCard(job());
-    expect(card.getAttribute("style")).not.toContain("--job-color");
+    expect(card.getAttribute("style") ?? "").not.toContain("--job-color");
   });
 
   it("drops an unrecognised colour from the wire rather than passing it through", () => {
     // The whitelist is what makes the value safe to hand to a style attribute
     // at all — nothing from the wire reaches the stylesheet unchecked.
     const { card } = renderCard(job({ color: "octarine" }));
-    expect(card.getAttribute("style")).not.toContain("--job-color");
+    expect(card.getAttribute("style") ?? "").not.toContain("--job-color");
   });
 });
 
@@ -522,7 +561,11 @@ describe("PR chips", () => {
     );
     const chips = [...container.querySelectorAll(".pr-chip")];
     expect(chips[0]!.tagName).toBe("A");
-    expect(chips[0]).toHaveTextContent("#73 merged");
+    // 50-contract.md, S2 `PRChips`: "Chip label is exactly `#${n}` when the URL
+    // parses `/pull/<n>`; the bare state word when it does not. State classes
+    // … unchanged — state is said by color alone."
+    expect(chips[0]).toHaveTextContent("#73");
+    expect(chips[0]!.className).toBe("pr-chip pr-merged");
     expect(chips[0]!.getAttribute("href")).toBe("https://github.com/o/r/pull/73");
     // the dangerous one degrades to a span that still says what it is
     expect(chips[1]!.tagName).toBe("SPAN");
@@ -543,87 +586,55 @@ describe("retry", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// AskUserQuestion.
+//
+// 50-contract.md, S2 `JobCard` band 4: "`QuestionBlock` is NOT rendered on the
+// card. When `job.question` is present, band 2's chip row instead carries
+// `<span class="chip-question">⚑</span>` with `title="pending question — open
+// the card to answer"`; `hasChips` accounts for it. The steer modal's
+// QuestionBlock is untouched (not this slice's file)."
+//
+// The option buttons, the disable-on-answer behaviour, the re-arm on a failed
+// post and the "answer in the pane" fallback that this block used to pin are
+// all QuestionBlock's, and they are pinned where that component now renders —
+// SteerOverlay.test.tsx's "#steer-actions — retry and the pending question".
+// ---------------------------------------------------------------------------
+
+const QUESTION = {
+  tool_use_id: "t",
+  questions: [
+    {
+      question: "which store?",
+      header: "store",
+      multi_select: false,
+      options: [{ label: "sqlite", description: "one file" }],
+    },
+  ],
+};
+
 describe("AskUserQuestion", () => {
-  it("offers option buttons for a single non-multi question", async () => {
-    const j = job({
-      state: "blocked",
-      live: true,
-      question: {
-        tool_use_id: "t",
-        questions: [
-          {
-            question: "which store?",
-            header: "store",
-            multi_select: false,
-            options: [
-              { label: "sqlite", description: "one file" },
-              { label: "files", description: "many" },
-            ],
-          },
-        ],
-      },
-    });
-    const { container, actions } = renderCard(j);
-    const opts = [...container.querySelectorAll(".q-opt")];
-    expect(opts.map((o) => o.textContent)).toEqual(["1. sqlite", "2. files"]);
-    await userEvent.click(opts[1]!);
-    expect(actions.onAnswerQuestion).toHaveBeenCalledWith("demo", 2);
-    // both die once one is posted — a second digit would be a second answer
-    expect((opts[0] as HTMLButtonElement).disabled).toBe(true);
+  it("shows the ⚑ flag in band 2 and no answerable block anywhere", () => {
+    const { card } = renderCard(job({ state: "blocked", live: true, question: QUESTION }));
+    const flag = card.querySelector(".chips .chip-question")!;
+    expect(flag).toHaveTextContent("⚑");
+    expect(flag.tagName).toBe("SPAN");
+    expect(flag.getAttribute("title")).toBe("pending question — open the card to answer");
+    expect(card.querySelector(".question")).toBeNull();
+    expect(card.querySelector(".q-opt")).toBeNull();
+    expect(card.querySelector(".q-text")).toBeNull();
   });
 
-  it("re-arms the options when the answer fails to post", async () => {
-    // Vanilla self-healed inside one 3s tick: its disable was a DOM sweep that
-    // the next board rebuild undid. A mounted component cannot rely on that —
-    // and a failed answer never reaches the pane, so the same question keeps
-    // arriving and the block stays mounted, disabled, forever.
-    const actions = stubActions();
-    actions.onAnswerQuestion = vi.fn(async () => new Error("daemon restarting"));
-    const { container } = renderCard(
-      job({
-        state: "blocked",
-        live: true,
-        question: {
-          tool_use_id: "t",
-          questions: [
-            {
-              question: "which store?",
-              header: "store",
-              multi_select: false,
-              options: [{ label: "sqlite", description: "" }],
-            },
-          ],
-        },
-      }),
-      actions,
-    );
-    const opt = container.querySelector<HTMLButtonElement>(".q-opt")!;
-    await userEvent.click(opt);
-    expect(actions.onAnswerQuestion).toHaveBeenCalledWith("demo", 1);
-    expect(container.querySelector<HTMLButtonElement>(".q-opt")!.disabled).toBe(false);
+  it("is enough on its own to give the card a chip row", () => {
+    // hasChips is asked per chip rather than by measuring the rendered row, so
+    // a chip left out of that predicate renders into a row that never mounts.
+    const { card } = renderCard(job({ state: "blocked", live: true, question: QUESTION }));
+    expect(card.querySelector(".chips")).not.toBeNull();
   });
 
-  it("points at the pane for anything a single digit cannot answer", () => {
-    const { container } = renderCard(
-      job({
-        cell: "kraken-demo",
-        question: {
-          tool_use_id: "t",
-          questions: [
-            {
-              question: "a?",
-              header: "a",
-              multi_select: true,
-              options: [{ label: "x", description: "" }],
-            },
-          ],
-        },
-      }),
-    );
-    expect(container.querySelector(".q-opt")).toBeNull();
-    expect(container.querySelector(".q-text")).toHaveTextContent(
-      "answer in the pane (k o kraken-demo)",
-    );
+  it("carries no flag when there is no pending question", () => {
+    const { card } = renderCard(job({ state: "blocked", live: true }));
+    expect(card.querySelector(".chip-question")).toBeNull();
   });
 });
 
