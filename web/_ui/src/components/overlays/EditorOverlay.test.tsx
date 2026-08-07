@@ -99,34 +99,55 @@ describe("EditorOverlay modes", () => {
   });
 
   it("editable mode fills every field from the form payload", async () => {
+    const user = userEvent.setup();
     mount();
     await waitFor(() => expect(fetchJobForm).toHaveBeenCalledWith("j", expect.anything()));
     await waitFor(() =>
       expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
     );
-    expect((document.getElementById("f-repo") as HTMLSelectElement).value).toBe(
-      "kraken",
-    );
+    // the repo selector is a custom dropdown now — the id sits on its button
+    const repoBtn = document.getElementById("f-repo") as HTMLButtonElement;
+    expect(repoBtn.tagName).toBe("BUTTON");
+    expect(repoBtn).toHaveTextContent("kraken");
     expect((document.getElementById("f-base") as HTMLInputElement).value).toBe(
       "origin/main",
     );
-    // both real checkouts plus the "—" option
+    // both real checkouts plus the "—" row
+    await user.click(repoBtn);
     expect(
-      document.querySelectorAll("#f-repo option").length,
+      document.querySelectorAll(".colorsel-menu .colorsel-row").length,
     ).toBe(3);
   });
 
-  it("keeps an unusual repo as an extra option rather than resetting it to —", async () => {
+  it("keeps an unusual repo as an extra row rather than resetting it to —", async () => {
     (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
       Promise.resolve({ ...form, repo: "somewhere-else" }),
     );
+    const user = userEvent.setup();
     mount();
     await waitFor(() =>
-      expect((document.getElementById("f-repo") as HTMLSelectElement).value).toBe(
-        "somewhere-else",
-      ),
+      expect(document.getElementById("f-repo")).toHaveTextContent("somewhere-else"),
     );
-    expect(document.querySelectorAll("#f-repo option").length).toBe(4);
+    await user.click(document.getElementById("f-repo") as HTMLButtonElement);
+    expect(document.querySelectorAll(".colorsel-menu .colorsel-row").length).toBe(4);
+  });
+
+  it("a repo pick lands in the autosave payload", async () => {
+    const user = userEvent.setup();
+    mount();
+    await waitFor(() =>
+      expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
+    );
+    await user.click(document.getElementById("f-repo") as HTMLButtonElement);
+    await user.click(screen.getByText("monolith"));
+    // the menu closed on the pick, and the button shows the new value
+    expect(document.querySelector(".colorsel-menu")).toBeNull();
+    expect(document.getElementById("f-repo")).toHaveTextContent("monolith");
+    await waitFor(() => expect(saveJobForm).toHaveBeenCalled());
+    const body = (saveJobForm as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      repo: string;
+    };
+    expect(body.repo).toBe("monolith");
   });
 
   it("read-only mode locks every control and says why", async () => {
