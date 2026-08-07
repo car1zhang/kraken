@@ -54,6 +54,7 @@ func contractLimitFullHit() LimitHit {
 		LastAttempt: 1_700_000_003,
 		SwappedAt:   1_700_000_004,
 		SwappedTo:   "carl@example.com",
+		ResetAt:     1_700_000_005,
 	}
 }
 
@@ -73,7 +74,7 @@ func TestContractLimitHitJSONTags(t *testing.T) {
 	want := []string{
 		"error", "details", "at", "session_id", "agent_id", "deliveries",
 		"handled_at", "outcome", "attempts", "last_attempt_at",
-		"swapped_at", "swapped_to",
+		"swapped_at", "swapped_to", "reset_at",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -575,15 +576,11 @@ func TestContractLimitMergePreservesUnrelatedTopLevelKeys(t *testing.T) {
 // --- jobs.RecordLimitHit / jobs.ReadLimitHit: the fold rule ---
 //
 // Contract row `jobs.RecordLimitHit`: when the stored record is unresolved
-// (HandledAt == 0), carries the SAME Error, and now.Sub(At) <
-// limitHitDedupeWindow, the record is kept with At/SessionID/AgentID unchanged
-// and Deliveries incremented by one. Otherwise a fresh record is written.
-
-func TestContractLimitDedupeWindowConstant(t *testing.T) {
-	if limitHitDedupeWindow != 2*time.Minute {
-		t.Errorf("limitHitDedupeWindow = %v, want 2m", limitHitDedupeWindow)
-	}
-}
+// (HandledAt == 0) and carries the SAME Error, the record is kept with
+// At/SessionID/AgentID unchanged and Deliveries incremented by one — with NO
+// time bound, since a time-bounded fold let the transcript trigger's
+// re-deliveries reset the attempt counter forever. Otherwise (resolved, or a
+// different error) a fresh record is written.
 
 // TestContractLimitRecordFreshRecord: a missing key is not an error, it is the
 // fresh-record case — and every counter starts at its documented value.
@@ -647,31 +644,34 @@ func TestContractLimitRecordFoldsTheTeammateHerd(t *testing.T) {
 	}
 }
 
-// TestContractLimitRecordStartsFreshOutsideTheWindow: the fold is bounded. A
-// delivery at or past limitHitDedupeWindow is a NEW limit, not a repeat of the
-// old one, so every counter resets and the new delivery's identity is adopted.
-func TestContractLimitRecordStartsFreshOutsideTheWindow(t *testing.T) {
+// TestContractLimitRecordFoldsLateSameErrorDeliveries: the fold is bounded by
+// RESOLUTION, not time. A same-error delivery hours later — the transcript
+// trigger re-reading a standing stall — is the same ongoing event, and folds
+// onto the unresolved hit with its identity and counters intact; a fresh
+// record here is what reset the attempt counter forever and kept the reset
+// re-arm unreachable.
+func TestContractLimitRecordFoldsLateSameErrorDeliveries(t *testing.T) {
 	j := contractLimitJob(t, useTestStore(t), "window")
 	first := time.Unix(1_700_000_000, 0)
 
 	if _, err := RecordLimitHit(j, "rate_limit", "old", "s-old", "a-old", first); err != nil {
 		t.Fatal(err)
 	}
-	later := first.Add(limitHitDedupeWindow + time.Second)
+	later := first.Add(3 * time.Hour)
 	got, err := RecordLimitHit(j, "rate_limit", "new", "s-new", "a-new", later)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := LimitHit{
 		Error:      "rate_limit",
-		Details:    "new",
-		At:         later.Unix(),
-		SessionID:  "s-new",
-		AgentID:    "a-new",
-		Deliveries: 1,
+		Details:    "old",
+		At:         first.Unix(),
+		SessionID:  "s-old",
+		AgentID:    "a-old",
+		Deliveries: 2,
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("record after the window = %+v, want %+v", got, want)
+		t.Fatalf("late same-error delivery = %+v, want a fold onto the unresolved hit %+v", got, want)
 	}
 }
 
@@ -2356,13 +2356,18 @@ func TestContractLimitRecordCarriesTheSwapForwardOnSupersession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// a delivery past the dedupe window supersedes the record
-	later := first.Add(limitHitDedupeWindow + time.Second)
-	got, err := RecordLimitHit(j, "rate_limit", "a later limit", "other-sess", "", later)
+	// a same-error delivery now folds however late it lands, so the fresh
+	// branch is reached through a DIFFERENT error type superseding the
+	// unresolved swapped hit, then a rate_limit superseding that
+	later := first.Add(3 * time.Minute)
+	if _, err := RecordLimitHit(j, "billing_error", "a different failure", "mid-sess", "", later); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RecordLimitHit(j, "rate_limit", "a later limit", "other-sess", "", later.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.At != later.Unix() || got.Deliveries != 1 || got.Attempts != 0 {
+	if got.At != later.Add(time.Minute).Unix() || got.Deliveries != 1 || got.Attempts != 0 {
 		t.Fatalf("record = %+v, want a fresh record with the attempt counters reset", got)
 	}
 	if got.SwappedAt != swappedOpen.SwappedAt || got.SwappedTo != swappedOpen.SwappedTo {
@@ -2477,8 +2482,9 @@ func TestContractLimitSaveRefusesADifferentHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// a delivery past the window replaces the record with a new hit
-	fresh, err := RecordLimitHit(j, "rate_limit", "a later limit", "other-sess", "", now.Add(limitHitDedupeWindow+time.Second))
+	// a different-error delivery replaces the record with a new hit (a
+	// same-error one would fold onto the unresolved record)
+	fresh, err := RecordLimitHit(j, "billing_error", "a different failure", "other-sess", "", now.Add(3*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
