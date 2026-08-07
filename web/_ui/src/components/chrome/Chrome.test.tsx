@@ -161,12 +161,12 @@ describe("the ⟳ UPDATE control", () => {
     renderChrome(model({ update: { phase: "idle", behind: 3, checked_at: NOW } }));
     expect(upd()).toHaveTextContent("UPDATE · 3 BEHIND");
     expect(upd().classList.contains("avail")).toBe(true);
-    // a dot, not a glyph — .upd .dot is a pip, and .gly is what spins
+    // a dot, not a glyph — .upd .dot is a pip, .gly the idle state glyph
     expect(upd().querySelector(".dot")).not.toBeNull();
     expect(upd().querySelector(".gly")).toBeNull();
   });
 
-  it("spins while a run is live, and keeps the same glyph node across repaints", () => {
+  it("wears the ring spinner while a run is live, and keeps that node across repaints", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const board = model({ update: { phase: "building", started_at: NOW - 12_000 } });
     const { container } = render(
@@ -184,7 +184,11 @@ describe("the ⟳ UPDATE control", () => {
     expect(upd()).toBeDisabled();
     // The vanilla painter existed only to avoid replacing this node — the 1.1s
     // spin keyframe restarts if it is. React reconciles it in place instead.
-    const glyph = upd().querySelector(".gly");
+    // A ring spinner, not the ⟳ glyph: the busy states swap glyphCls (carl's
+    // cursor round — the rotating arrow orbited off its optical centre).
+    const glyph = upd().querySelector(".spinner");
+    expect(glyph).not.toBeNull();
+    expect(upd().querySelector(".gly")).toBeNull();
     render(
       <Chrome
         board={board}
@@ -196,7 +200,7 @@ describe("the ⟳ UPDATE control", () => {
       />,
       { container },
     );
-    expect(upd().querySelector(".gly")).toBe(glyph);
+    expect(upd().querySelector(".spinner")).toBe(glyph);
   });
 
   it("shows the finished run, its sha chip, and a RELOAD NOW banner", () => {

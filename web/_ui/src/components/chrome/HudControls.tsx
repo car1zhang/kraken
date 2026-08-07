@@ -47,7 +47,7 @@ export function ScanToggle() {
     <button
       className="theme-btn"
       id="scanlines-toggle"
-      title="CRT scanlines + sweep on/off"
+      title="CRT scanlines on/off"
       onClick={() => {
         const hud = window.krakenHud;
         if (!hud) return;

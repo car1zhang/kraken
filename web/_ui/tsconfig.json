@@ -6,8 +6,9 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     // @types/node is here for the few test/config files that touch the
-// filesystem — palette.test.ts reads style.css to check the TS palette
-// against it, since web/jobpalette_test.go cannot see TypeScript.
+// filesystem — palette.test.ts and styles/motion.test.ts both read
+// style.css from disk, since the invariants they pin live in a stylesheet
+// no runtime assertion can see.
     "types": ["vitest/globals", "@testing-library/jest-dom", "node"],
 
     "strict": true,
