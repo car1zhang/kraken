@@ -199,10 +199,12 @@ short form, with /info's overrides:
    researcher briefs that never mentioned the shell). First, the dialect line, verbatim: *Shell is
    zsh on macOS: write `--include='*.py'` (quote every glob), `echo "==="` (quote any word starting
    with `=`), `timeout N cmd` does not exist (use a background watch), never name a loop/read
-   variable `path` or `fpath` (it wipes PATH), use absolute paths (cwd is not stable between
-   calls), and never end a `;`-compound with a grep/sed that may match nothing (close with
-   `; true`).* Second, the file-output contract does not survive re-delegation on its own: a brief
-   that permits its researcher to spawn further agents says the contract passes down VERBATIM —
+   variable `path` or `fpath` (`while read sid path` wipes PATH for the rest of the run), use
+   absolute paths (an earlier call's `cd` may still be in effect, or the cwd may have reset — a
+   relative path is a bet either way), and never end a `;`-compound with a grep/sed that may match
+   nothing (close with `; true`).* Second, the file-output contract does not survive
+   re-delegation on its own: a brief that permits its researcher to spawn further agents
+   says the contract passes down VERBATIM —
    every spawned agent gets its own named output file under the same scratch namespace and the same
    repo bar — or forbids re-delegation outright. A researcher told "read-only" has re-briefed its
    own children with "do not write any files", stranding a fan-out's entire findings in chat
