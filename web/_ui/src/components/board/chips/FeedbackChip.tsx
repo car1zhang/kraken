@@ -39,18 +39,20 @@ export function FeedbackChip({ job }: { job: WebJob }) {
   const list = job.feedback ?? [];
   if (!list.length) return null;
   const unfixed = list.filter((f) => !f.addressed).length;
-  const label = unfixed
-    ? `${list.length} feedback · ${unfixed} no durable fix`
-    : `${list.length} feedback`;
   const title =
     `${list.length} feedback note${list.length === 1 ? "" : "s"}` +
     (unfixed
       ? `, ${unfixed} with no durable fix shipped yet (the nightly pass writes that, not the cell)`
       : ", all have a durable fix recorded") +
     " — click the card to read them";
+  // The visible text is the TOTAL alone — `✎ 3`. The second count (notes with
+  // no durable fix recorded) and the sentence explaining what that does and does
+  // not mean stay in `title`, which is unchanged: it was never a number to scan
+  // a column on, and spelling it out on the card is what made this the widest
+  // chip in the row.
   return (
     <span className="fb-chip" title={title}>
-      ✎ {label}
+      ✎ {list.length}
     </span>
   );
 }

@@ -882,22 +882,12 @@ function LoadDrill({
 }
 
 /**
- * The job-colour picker: nine radios — "no colour" plus /color's own eight, in
- * /color's own order. Port of swatchStripHTML + setSwatchStrip + initSwatchStrip
- * (app.js:107-155), collapsed into one component because React makes the
- * "reflect the job's colour into the strip" half a render rather than a call.
- *
- * Generated from JOB_COLORS rather than hand-written, so this strip and the
- * editor's cannot drift in palette, order or markup.
- *
- * `name` must differ per strip — both strips can be in the DOM at once and
- * radios sharing a name are ONE group, so a reused name would make a pick here
- * silently unpick the editor's. `steer-color` is this one's, `f-color` the
- * editor's, exactly as in vanilla.
- *
- * "No colour" is a REAL radio (value "") rather than an absence: an
- * unrecognised colour from the wire falls back to it instead of leaving the
- * strip with nothing checked and no way to click back to neutral.
+ * The job-colour picker: the SwatchStrip dropdown — "no colour" plus /color's
+ * own eight, in /color's own order. Generated from JOB_COLORS rather than
+ * hand-written, so this picker and the editor's cannot drift in palette,
+ * order or markup. "No colour" is a real row (value "") rather than an
+ * absence: an unrecognised colour from the wire falls back to it instead of
+ * leaving the picker with nothing selected and no way back to neutral.
  *
  * The pick POSTs immediately and is deliberately NOT the debounced form
  * autosave every editor control rides: saveform refuses any job whose cell is
@@ -931,9 +921,8 @@ function ColorPicker({
   return (
     <span className="f-swatches compact" id="steer-swatches" title="job color">
       <SwatchStrip
-        // `steer-color` vs the editor's `f-color`: both strips can be in the
-        // DOM at once and radios sharing a name are ONE group, so a shared
-        // name would make a pick here silently unpick the editor's.
+        // Vestigial since the strip became a dropdown (see SwatchStripProps.name);
+        // kept because the prop is frozen in the component's signature.
         name="steer-color"
         value={current}
         onPick={(v) => void choose(v)}

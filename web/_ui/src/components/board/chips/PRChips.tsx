@@ -1,9 +1,17 @@
 import type { JobPR } from "../../../api/types.ts";
 
-/** "#<N> <state>" parsed from the URL's trailing "/pull/<N>". */
+/**
+ * "#<N>" parsed from the URL's trailing "/pull/<N>", falling back to the bare
+ * state word when there is no number to print.
+ *
+ * The state is said by COLOUR alone now (prClass below, painted by style.css):
+ * a PR chip is read as "which PR, and did it land", and the number is the half
+ * you cannot infer from anything else on the card. The fallback keeps the word
+ * because a chip with no number and no word would say nothing at all.
+ */
 function prLabel(pr: JobPR): string {
   const m = /\/pull\/(\d+)(?:[/?#]|$)/.exec(pr.url || "");
-  return m ? `#${m[1]} ${pr.state}` : pr.state;
+  return m ? `#${m[1]}` : pr.state;
 }
 
 function prClass(pr: JobPR): string {

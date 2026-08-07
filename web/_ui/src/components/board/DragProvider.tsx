@@ -154,8 +154,8 @@ export interface ColumnDrop {
   isTarget: boolean;
   /**
    * `droptarget` / `drophover` — the two vanilla classes, on the same
-   * elements and with the same meaning (style.css:286-335). Append it to the
-   * element's own className.
+   * elements and with the same meaning (style.css's `.col.droptarget` /
+   * `.col.drophover` rules). Append it to the element's own className.
    */
   className: string;
 }
@@ -210,7 +210,7 @@ export interface SortableCard {
   listeners: Record<string, (event: never) => void>;
   style: { transform?: string; transition?: string };
   isDragging: boolean;
-  /** `"dragging"` while in the air — style.css:350 dims it to 0.35. */
+  /** `"dragging"` while in the air — style.css's `.card.dragging` rule dims it to 0.35. */
   className: string;
 }
 

@@ -8,26 +8,6 @@
 import type { WebJob } from "../api/types.ts";
 import { COLUMNS, type Column } from "./columns.ts";
 
-// ---------------------------------------------------------------- state color
-
-// STATE_COLOR is the whole state-color mechanism: the value lands on the card
-// root as the `--state` inline custom property and style.css reads it back
-// with var(--state) for the rail, the dot and the hover glow. Ported verbatim
-// from app.js:26 — a card that loses the inline property loses its color
-// entirely, silently, since var(--state) simply resolves to nothing.
-const STATE_COLOR: Record<string, string> = {
-  working: "var(--solved)",
-  blocked: "var(--counter)",
-  queued: "var(--accent)",
-  done: "var(--text-2)",
-  draft: "var(--text-2)",
-  archived: "var(--text-2)",
-};
-
-export function stateColor(state: string): string {
-  return STATE_COLOR[state] ?? "var(--text-2)";
-}
-
 // ---------------------------------------------------------------- job colour
 
 /**
@@ -267,7 +247,7 @@ export interface LoadROI {
  *
  * The bands are closed-open on the FLOAT ratio, boundary value in the HIGHER
  * band: `>= 3.0` hot, `>= 1.5` warm, `>= 0.75` even, below that cold. Deciding
- * on the float rather than on the one-decimal text `loadBadgeText` prints is
+ * on the float rather than on the one-decimal text `loadRatioText` prints is
  * deliberate, and it means the two can disagree at the edges — a ratio of 2.96
  * prints "3.0×" and still bands warm. The alternative is worse: banding the
  * rounded number would make the band depend on a display choice, and the iOS
@@ -308,18 +288,6 @@ export function loadROI(
  */
 export function loadRatioText(roi: number): string {
   return `${roi.toFixed(1)}×`;
-}
-
-/**
- * loadBadgeText is the badge's exact label: `⚡ 4.0× 2→8`. The ratio carries ONE
- * decimal — see loadRatioText.
- *
- * Separate from loadROI so the number and its rendering can be tested apart,
- * and because the tooltip below needs the same ratio at the same precision
- * without the arrow half.
- */
-export function loadBadgeText(load: { unblock: number; scope: number }, roi: number): string {
-  return `⚡ ${loadRatioText(roi)} ${load.unblock}→${load.scope}`;
 }
 
 /**

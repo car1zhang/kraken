@@ -1,6 +1,6 @@
 import type { WebJob } from "../../../api/types.ts";
 import type { Column } from "../../../lib/columns.ts";
-import { loadBadgeText, loadBadgeTitle, loadROI } from "../../../lib/format.ts";
+import { loadBadgeTitle, loadRatioText, loadROI } from "../../../lib/format.ts";
 
 /**
  * The chip's own rule, split out so the card can ask whether the chip row is
@@ -29,8 +29,16 @@ export function loadChipVisible(job: WebJob, col: Column): boolean {
 
 /**
  * The board's triage badge: zeus' two 1..10 estimates for a blocked job,
- * rendered as the ratio between them — `⚡ 4.0× 2→8` — so scanning the blocked
- * column down the page ranks the jobs by what an unblock buys.
+ * rendered as the RATIO between them and nothing else — `⚡ 4.0×` — so scanning
+ * the blocked column down the page ranks the jobs by what an unblock buys.
+ *
+ * The `unblock→scope` pair used to ride the visible text. It no longer does:
+ * the ratio is what the column is scanned on, and the two halves it came from
+ * are a detail you ask for rather than one you read past on every card. They
+ * are not lost — `title`/`aria-label` still carry the whole sentence, `unblock
+ * effort N/10 · next step N/10` included (loadBadgeTitle, lib/format.ts, which
+ * this change does not touch), and that sentence is also what a screen reader
+ * gets in place of a string with no spoken form.
  *
  * Class rules, both load-bearing:
  *
@@ -60,8 +68,8 @@ export function LoadChip({ job, col }: { job: WebJob; col: Column }) {
   if (!load || !derived) return null;
   // One sentence, on both attributes: `title` is what a pointer gets, and
   // `aria-label` is what replaces the visible text for a screen reader — which
-  // is worth spending, because the visible text is `⚡ 4.0× 2→8`, a string with
-  // no spoken form worth hearing.
+  // is worth spending, because the visible text is `⚡ 4.0×`, a string with no
+  // spoken form worth hearing.
   const title = loadBadgeTitle(load, derived.roi);
   return (
     <span
@@ -70,7 +78,7 @@ export function LoadChip({ job, col }: { job: WebJob; col: Column }) {
       aria-label={title}
       data-band={derived.band}
     >
-      {loadBadgeText(load, derived.roi)}
+      ⚡ {loadRatioText(derived.roi)}
     </span>
   );
 }

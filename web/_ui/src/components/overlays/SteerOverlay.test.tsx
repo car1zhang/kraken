@@ -633,31 +633,41 @@ describe("#steer-threads — thread chips and the ⑂ branch button", () => {
   });
 });
 
-describe("#steer-swatches — the job colour strip", () => {
+// The strip became a DROPDOWN (contract 50-contract.md, slice S3): the nine
+// radios these tests pinned are gone, and with them the per-strip radio-group
+// `name` (frozen in the props type, but vestigial — there is no group left to
+// collide with the editor's). Selectors below moved to the S3 markup: a
+// `.colorsel-btn` trigger over a `.colorsel-menu` of `.colorsel-row`s.
+describe("#steer-swatches — the job colour picker", () => {
   beforeEach(() => vi.clearAllMocks());
 
   const strip = () => document.getElementById("steer-swatches") as HTMLElement;
-  const radios = () =>
-    [...strip().querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
+  const trigger = () => strip().querySelector(".colorsel-btn") as HTMLButtonElement;
+  const rows = () =>
+    [...strip().querySelectorAll(".colorsel-row")] as HTMLElement[];
+  const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(trigger());
+    return rows();
+  };
 
-  it("renders the none swatch plus /color's eight, in /color's order", () => {
+  it("renders the none row plus /color's eight, in /color's order", async () => {
+    const user = userEvent.setup();
     render(
       <Steer open slug="j" mode="steer" job={job} onClose={() => {}} mutate={mutate} />,
     );
-    expect(radios().map((r) => r.value)).toEqual([
-      "",
-      "red",
-      "blue",
-      "green",
-      "yellow",
-      "purple",
-      "orange",
-      "pink",
-      "cyan",
+    expect(rows()).toHaveLength(0); // the menu is closed until asked for
+    const open = await openMenu(user);
+    expect(open.map((r) => r.textContent)).toEqual([
+      "NO COLOR✓",
+      "RED",
+      "BLUE",
+      "GREEN",
+      "YELLOW",
+      "PURPLE",
+      "ORANGE",
+      "PINK",
+      "CYAN",
     ]);
-    // radios must not share the editor strip's group name, or a pick in one
-    // would silently unpick the other
-    expect(radios().every((r) => r.name === "steer-color")).toBe(true);
   });
 
   it("reflects the job's colour, falling back to none for unset or unknown", () => {
@@ -671,16 +681,16 @@ describe("#steer-swatches — the job colour strip", () => {
         mutate={mutate}
       />,
     );
-    expect(radios().find((r) => r.checked)?.value).toBe("blue");
+    expect(trigger().textContent).toContain("BLUE");
     unmount();
 
     const second = render(
       <Steer open slug="j" mode="steer" job={job} onClose={() => {}} mutate={mutate} />,
     );
-    expect(radios().find((r) => r.checked)?.value).toBe("");
+    expect(trigger().textContent).toContain("NO COLOR");
     second.unmount();
 
-    // a colour this client does not know must still land on a real radio
+    // a colour this client does not know must still read as the none state
     render(
       <Steer
         open
@@ -691,7 +701,7 @@ describe("#steer-swatches — the job colour strip", () => {
         mutate={mutate}
       />,
     );
-    expect(radios().find((r) => r.checked)?.value).toBe("");
+    expect(trigger().textContent).toContain("NO COLOR");
   });
 
   it("POSTs the pick to /api/job/color and nothing else", async () => {
@@ -699,14 +709,15 @@ describe("#steer-swatches — the job colour strip", () => {
     render(
       <Steer open slug="j" mode="steer" job={job} onClose={() => {}} mutate={mutate} />,
     );
-    await user.click(radios().find((r) => r.value === "green") as HTMLElement);
+    const open = await openMenu(user);
+    await user.click(open[3] as HTMLElement); // GREEN
     await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", "green"));
     // recolouring never steers the cell
     expect(steerJob).not.toHaveBeenCalled();
     expect(reactivateJob).not.toHaveBeenCalled();
   });
 
-  it("clears a colour with the none swatch, and shows in every mode", async () => {
+  it("clears a colour with the none row, and shows in every mode", async () => {
     const user = userEvent.setup();
     for (const mode of ["steer", "unblock", "reactivate"] as SteerMode[]) {
       vi.clearAllMocks();
@@ -722,7 +733,8 @@ describe("#steer-swatches — the job colour strip", () => {
       );
       // recolouring is valid on a live cell AND on a dead one — /api/job/color
       // is ungated precisely so a running job can be recoloured
-      await user.click(radios().find((r) => r.value === "") as HTMLElement);
+      const open = await openMenu(user);
+      await user.click(open[0] as HTMLElement); // NO COLOR
       await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", ""));
       unmount();
     }
@@ -833,9 +845,14 @@ describe("#steer-prs — the PR chips", () => {
     const box = document.getElementById("steer-prs") as HTMLElement;
     expect(box).not.toHaveAttribute("hidden");
     const chips = box.querySelectorAll(".pr-chip");
-    expect([...chips].map((c) => c.textContent)).toEqual([
-      "#12 merged",
-      "#13 open",
+    // 50-contract.md, S2 `PRChips`: "Chip label is exactly `#${n}` when the URL
+    // parses `/pull/<n>` … State classes (`pr-merged/pr-open/pr-closed`) …
+    // unchanged — state is said by color alone." The modal renders the same
+    // component the card does, so the label change lands here too.
+    expect([...chips].map((c) => c.textContent)).toEqual(["#12", "#13"]);
+    expect([...chips].map((c) => c.className)).toEqual([
+      "pr-chip pr-merged",
+      "pr-chip pr-open",
     ]);
     expect(chips[0]?.tagName).toBe("A");
     // exactly one .prs box: PRChips' own wrapper would nest a second

@@ -38,6 +38,60 @@
       mq.addEventListener("change", function () { if (pref === "system") stamp(); });
     })();
   </script>
+  <script>
+    // Its own <script> block, deliberately: an uncaught throw in the theme
+    // IIFE above (e.g. a browser without MediaQueryList.addEventListener)
+    // aborts only ITS script, so the HUD stamps below still run — one shared
+    // block would take both down together.
+    //
+    // pre-paint HUD stamps, same posture as the theme above: accent palette
+    // (localStorage kraken-accent → <html data-accent>, absent/violet = no
+    // attribute, so the :root violet defaults apply) and the CRT scanlines
+    // (localStorage kraken-scanlines: "off" → <html data-scanlines="off">,
+    // which style.css uses to hide the .scan element). Pre-paint because a
+    // React-mounted stamp would flash violet-with-scanlines first; a dead
+    // localStorage leaves both at their defaults.
+    (function () {
+      var ACCENTS = ["violet", "cyan", "amber", "crimson", "green"];
+      var accent, scan;
+      try {
+        accent = localStorage.getItem("kraken-accent");
+        scan = localStorage.getItem("kraken-scanlines");
+      } catch (e) {}
+      if (ACCENTS.indexOf(accent) < 0) accent = "violet";
+      function stampAccent() {
+        if (accent === "violet") delete document.documentElement.dataset.accent;
+        else document.documentElement.dataset.accent = accent;
+      }
+      function stampScan() {
+        if (scan === "off") document.documentElement.dataset.scanlines = "off";
+        else delete document.documentElement.dataset.scanlines;
+      }
+      stampAccent();
+      stampScan();
+      window.krakenHud = {
+        accents: ACCENTS.slice(),
+        getAccent: function () { return accent; },
+        setAccent: function (a) {
+          accent = ACCENTS.indexOf(a) >= 0 ? a : "violet";
+          stampAccent();
+          try {
+            if (accent === "violet") localStorage.removeItem("kraken-accent");
+            else localStorage.setItem("kraken-accent", accent);
+          } catch (e) {}
+        },
+        getScanlines: function () { return scan !== "off"; },
+        setScanlines: function (on) {
+          scan = on ? "on" : "off";
+          stampScan();
+          try {
+            if (on) localStorage.removeItem("kraken-scanlines");
+            else localStorage.setItem("kraken-scanlines", "off");
+          } catch (e) {}
+        },
+      };
+    })();
+  </script>
 </head>
 <body>
   <div class="scan" aria-hidden="true"></div>
