@@ -1343,7 +1343,7 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 			// The PR number is substituted from the url ({owner}/{repo} gh
 			// expands itself; a bare N it does not).
 			parts = append(parts, fmt.Sprintf(
-				"%s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
+				"[kraken pr-watch — automated notice, not a reply from carl] %s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
 				url, url, url[strings.LastIndex(url, "/")+1:]))
 			newLastCommentAt = f.LastCommentAt
 		}
@@ -1356,8 +1356,17 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 	// — doing so would make the NEXT pass's fetch look like first sight
 	// again (bumpedSHA=="" is part of firstSight's definition).
 	case len(f.FailingChecks) > 0 && f.HeadSHA != "" && f.HeadSHA != bumpedSHA:
+		// The bracketed prefix and the inherited-red clause are both
+		// load-bearing. This message arrives on the same user channel as
+		// carl's own words, on a timer, with no knowledge of what the pane
+		// last said — a bump landing minutes after zeus asked carl a yes/no
+		// question has been read as carl's "yes" and bought a six-figure
+		// detour of discarded cross-team work. And the bare imperative
+		// "fix it" left no branch for a red inherited from origin/main: two
+		// sibling cells each adopted the same cross-team breakage as their
+		// own work the same evening, duplicating a fix hours apart.
 		parts = append(parts, fmt.Sprintf(
-			"%s has failing CI on %s (at least %s) — run `gh pr checks %s` to see the full current rollup and fix it",
+			"[kraken pr-watch — automated notice, not a reply from carl] %s has failing CI on %s (at least %s) — run `gh pr checks %s` to see the full current rollup and fix it. If the failure reproduces on pristine origin/main it is inherited, not yours: note that on the PR and report it in your pane instead of adopting the cross-team fix",
 			url, f.HeadSHA, strings.Join(f.FailingChecks, ", "), url))
 		newBumpedSHA = f.HeadSHA
 	case firstSight && f.HeadSHA != "":
