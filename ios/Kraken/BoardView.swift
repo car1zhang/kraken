@@ -66,7 +66,9 @@ final class BoardViewModel {
 
     // MARK: - self-update
     //
-    // The daemon bar's ⟳ control is a view over one server record (WebUpdate
+    // The ⟳ update control — which lives in Settings' "Mac" section since the
+    // nav restructure, not in the board's daemon bar where it grew up — is a
+    // view over one server record (WebUpdate
     // — carried both by /api/board's `update` key and by GET
     // /api/update/status) plus two facts no server record can hold: the last
     // refusal, because a refused update never became a run, and how long the
@@ -92,6 +94,21 @@ final class BoardViewModel {
     /// server is down, so this side is deliberately far more generous.
     private static let updateGapCeiling: TimeInterval = 300
     private static let updatePollInterval: Duration = .milliseconds(1200)
+    /// The most any ONE tick may contribute to the gap clock. Six seconds:
+    /// five times the 1.2s poll interval, sitting just under the longest
+    /// legitimate tick — a fetch that times out (5s) plus the sleep after it
+    /// (1.2s) is 6.2s, which this clamps to 6 rather than rejecting.
+    ///
+    /// Clamping, not discarding, and the distinction is the whole point. A
+    /// discard rule reads as "an over-long delta is time nobody was polling
+    /// across" — true of a suspension or a tab switch, and false of exactly
+    /// the case the ceiling exists for: when `kraken serve` never comes back,
+    /// EVERY tick is a timeout, so every delta was over the ceiling and the
+    /// clock stayed at zero forever. Clamping keeps both properties: a 600s
+    /// suspension credits 6s (the protection survives), and a 6.2s timeout
+    /// tick credits 6s (the ceiling is reachable in every failure mode).
+    /// See `updateGapObserved`.
+    private static let updateGapTickCeiling: TimeInterval = 6
 
     /// Last record seen, from either poll.
     private(set) var update: WebUpdate?
@@ -136,8 +153,50 @@ final class BoardViewModel {
     /// 50ms apart both reach the handler and the second earns a 409 whose
     /// "update already in flight" then sits in the bar for the whole run.
     private(set) var updateStarting = false
-    /// When this gap's first failed fetch happened; nil = the server answers.
-    private var updateGapSince: Date?
+    /// How many seconds of restart gap this RUN has actually been WATCHED for,
+    /// and the timestamp of the last failing tick, contributing or not (see
+    /// `updateGapLastTick`'s own doc — the assignment is unconditional). Both
+    /// live on the model rather than inside `runUpdatePoll`, and that is the
+    /// whole fix for a real bug: the loop is restarted every time its `.task`
+    /// re-enters, and since the ship/update polls now run from BOTH the Board
+    /// and Settings (a `.task` dies when its view leaves the screen), a
+    /// loop-local clock was reset on every tab switch. Flipping tabs more
+    /// often than once per ceiling — trivially easy while watching an update —
+    /// meant the ceiling could never fire, and a serve that never came back
+    /// spun a cyan "restarting" control forever.
+    ///
+    /// Accumulating OBSERVED time rather than diffing a start date is what
+    /// makes that safe to persist across loops. The old loop-local clock was
+    /// reset per loop for a real reason: it measured wall-clock time while the
+    /// loop itself was frozen, so locking the phone for ten minutes during a
+    /// perfectly normal restart synthesised a failure on resume. Here every
+    /// tick contributes at most `updateGapTickCeiling` seconds, so a
+    /// suspension or a tab switch contributes six seconds rather than the ten
+    /// minutes it actually spanned, while ordinary ticks accumulate honestly.
+    /// Reset when a new RUN starts and on any successful fetch — never on task
+    /// re-entry.
+    private var updateGapObserved: TimeInterval = 0
+    /// When the last FAILING tick happened, contributing or not — the
+    /// assignment is unconditional, because this is the anchor the next
+    /// delta is measured from and skipping it would silently double the next
+    /// one. It doubles as the "a gap is open" flag (`updateInGap`).
+    private var updateGapLastTick: Date?
+    /// Failing ticks in a row, on the model for the same reason. The ceiling
+    /// needs two BACK TO BACK so that a single blip on resume — one failure
+    /// followed 1.2s later by a success — can't trip it.
+    private var updateFailureStreak = 0
+    /// Whether a gap is open right now, for `updateButton`'s "restarting" paint.
+    private var updateInGap: Bool { updateGapLastTick != nil }
+
+    /// Drops the gap clock and the failure streak. Called when a new update RUN
+    /// begins and on every successful status fetch — deliberately NOT when a
+    /// poll loop re-enters, which is the distinction that keeps the ceiling
+    /// reachable across a tab switch.
+    private func resetUpdateGapClock() {
+        updateGapObserved = 0
+        updateGapLastTick = nil
+        updateFailureStreak = 0
+    }
 
     /// Folds the 4s board poll's copy of the record in. The 1.2s status poll
     /// wins outright while it is running: the two race, and a board response
@@ -146,7 +205,7 @@ final class BoardViewModel {
     private func ingestBoardUpdate(_ u: WebUpdate?) {
         guard !updatePolling, let u else { return }
         update = u
-        updateGapSince = nil
+        resetUpdateGapClock()
         if !Self.terminalPhases.contains(u.phase ?? "idle") {
             // a run someone else started — the CLI, the web board, another
             // phone. Follow it just as closely as one started from here.
@@ -159,6 +218,10 @@ final class BoardViewModel {
     /// Asks BoardView's `.task(id: updatePollGeneration)` for a fresh poll
     /// loop. The generation bump is the whole point — see its declaration.
     private func beginUpdatePolling() {
+        // A new RUN is exactly one of the two moments the gap clock resets
+        // (the other is a successful fetch). A poll loop merely re-entering is
+        // NOT — see updateGapObserved.
+        resetUpdateGapClock()
         updatePolling = true
         updatePollGeneration &+= 1
     }
@@ -190,7 +253,6 @@ final class BoardViewModel {
                 startedAt: now, updatedAt: now,
                 buildSHA: update?.buildSHA ?? "", checkedAt: update?.checkedAt ?? 0
             )
-            updateGapSince = nil
             beginUpdatePolling()
         } catch {
             // A 409's text is one specific sentence about the machine's state
@@ -278,28 +340,19 @@ final class BoardViewModel {
         // has a successor loop already running by the time this one unwinds
         // (see updatePollEpoch).
         defer { if updatePollEpoch == epoch { updatePolling = false } }
-        // The gap clock belongs to THIS loop. It measures wall-clock time,
-        // but the loop is frozen whenever the app is suspended or the Board
-        // tab is off screen — so a gap inherited from an earlier loop counts
-        // minutes nobody was watching. Lock the phone during a perfectly
-        // normal restart gap, unlock ten minutes later, and the first fetch
-        // on resume (against a radio/tailnet that hasn't come up yet) would
-        // read 600s > 300s and synthesize a failure for an update that
-        // succeeded. Keying the task on scenePhase is what makes this reset
-        // actually fire on resume — the loop restarts rather than thawing.
-        updateGapSince = nil
-        // …and the reset alone isn't enough, because a suspend can also
-        // happen between a task restart and the next tick. So the ceiling
-        // additionally needs two failures BACK TO BACK: at 1.2s a real
-        // five-minute outage racks up hundreds of them, while a single blip
-        // on resume is followed 1.2s later by a success that clears the gap.
-        var consecutiveFailures = 0
+        // NOTE what is deliberately NOT here: a gap-clock reset. It used to
+        // live on this line, and that made the ceiling unreachable — this loop
+        // restarts on every tab switch (the poll runs from both the Board and
+        // Settings, and a `.task` dies with its view), so the clock was zeroed
+        // far more often than the 300s it was counting to. The clock now lives
+        // on the model, accumulates only OBSERVED seconds, and resets when a
+        // RUN starts or a fetch succeeds. See updateGapObserved for why that
+        // is still safe across a suspension.
         while !Task.isCancelled && updatePolling && updatePollEpoch == epoch {
             do {
                 let u = try await APIClient.shared.updateStatus(baseURL: baseURL)
                 update = u
-                updateGapSince = nil
-                consecutiveFailures = 0
+                resetUpdateGapClock()
                 if Self.terminalPhases.contains(u.phase ?? "idle") { return }
             } catch {
                 // Cancellation is not a gap. This view is a TabView child, so
@@ -315,24 +368,35 @@ final class BoardViewModel {
                 // `error is CancellationError` nor a URLError with
                 // `.cancelled` can ever match. Don't add those casts back.
                 if Task.isCancelled { return }
-                consecutiveFailures += 1
-                let since = updateGapSince ?? Date()
-                updateGapSince = since
-                if consecutiveFailures >= 2, Date().timeIntervalSince(since) > Self.updateGapCeiling {
+                updateFailureStreak += 1
+                let now = Date()
+                // Each tick credits its own elapsed time, CLAMPED. A delta
+                // far past the ceiling is mostly time nobody was polling
+                // across — a suspension, or the hand-over from a loop on the
+                // other tab — so crediting the clamp instead of the whole
+                // thing is what the old per-loop reset was really trying to
+                // achieve. Crediting the clamp rather than nothing is what
+                // keeps the ceiling reachable when every tick is a timeout;
+                // see updateGapTickCeiling.
+                if let last = updateGapLastTick {
+                    updateGapObserved += min(now.timeIntervalSince(last), Self.updateGapTickCeiling)
+                }
+                updateGapLastTick = now
+                if updateFailureStreak >= 2, updateGapObserved > Self.updateGapCeiling {
                     // Five minutes of silence is no longer a restart. Say so
                     // rather than spinning a cyan control at a dead socket
                     // forever — update.log on the Mac is the only thing that
                     // can explain a serve which never bound.
-                    let now = Int64(Date().timeIntervalSince1970 * 1000)
+                    let stamp = Int64(now.timeIntervalSince1970 * 1000)
                     update = WebUpdate(
                         phase: "failed",
                         fromSHA: update?.fromSHA ?? "", toSHA: update?.toSHA ?? "",
                         behind: update?.behind ?? 0,
                         error: "kraken serve did not come back after the restart — see ~/.kraken/update.log",
-                        startedAt: update?.startedAt ?? now, updatedAt: now,
+                        startedAt: update?.startedAt ?? stamp, updatedAt: stamp,
                         buildSHA: update?.buildSHA ?? "", checkedAt: update?.checkedAt ?? 0
                     )
-                    updateGapSince = nil
+                    resetUpdateGapClock()
                     return
                 }
             }
@@ -355,7 +419,7 @@ final class BoardViewModel {
             // and a second tap would earn a 409 (see updateStarting)
             return UpdateButtonState(glyph: "⟳", label: "starting", color: KTheme.accent, disabled: true)
         }
-        if running && (updateGapSince != nil || phase == "restarting") {
+        if running && (updateInGap || phase == "restarting") {
             // either the updater says it's restarting, or the endpoint
             // stopped answering mid-run — which IS the restart, from here
             return UpdateButtonState(glyph: "⟳", label: "restarting", color: KTheme.polling, disabled: true)
@@ -391,7 +455,8 @@ final class BoardViewModel {
 
     // MARK: - ship to TestFlight
     //
-    // The daemon bar's ⇧ control, the update control's sibling: one server
+    // The ⇧ ship control, the update control's sibling and its neighbour in
+    // Settings' "Mac" section: one server
     // record (WebShipIOS, carried both by /api/board's `ship_ios` key and by
     // GET /api/ship-ios/status) plus the one refusal no record can carry.
     //
@@ -463,6 +528,32 @@ final class BoardViewModel {
     /// synchronously in the button's action so two taps 50ms apart can't both
     /// reach the handler and leave a "ship already in flight" 409 in the bar.
     private(set) var shipStarting = false
+    /// Failing ticks in a row for the ship poll. On the model, not inside
+    /// `runShipPoll`, for the reason `updateGapObserved` spells out: the poll
+    /// runs from both the Board and Settings and its loop restarts on every
+    /// tab switch, so a loop-local counter could be zeroed indefinitely and
+    /// the ceiling never reached. There is no gap CLOCK here — a ship takes
+    /// nothing down, so the count alone is the signal.
+    ///
+    /// Which is exactly why it needs `noteBecameActive`. The update ceiling is
+    /// an AND of a streak and 300 observed seconds, so a suspension can't trip
+    /// it; this one is the streak alone, and two is the ceiling. Without the
+    /// foreground reset, one blip before locking the phone and one blip on
+    /// unlocking — two ticks that can be days apart, neither of them evidence
+    /// of anything — would synthesise "✕ ship failed" over a run that was
+    /// fine.
+    private var shipFailureStreak = 0
+
+    /// The app came back to the foreground.
+    ///
+    /// A failure recorded before a suspension says the radio was off, not that
+    /// the Mac is gone, and the ship ceiling cannot tell those apart on its own
+    /// (see shipFailureStreak). Called from the scene-phase transition rather
+    /// than from a poll loop, because the loops are keyed on that same
+    /// transition and would race it.
+    func noteBecameActive() {
+        shipFailureStreak = 0
+    }
 
     /// Folds the 4s board poll's copy of the record in. The 1.2s status poll
     /// wins outright while it is running — the two race, and applying an older
@@ -480,6 +571,9 @@ final class BoardViewModel {
     }
 
     private func beginShipPolling() {
+        // A new RUN resets the streak; a poll loop re-entering does not. Same
+        // reasoning as beginUpdatePolling — see shipFailureStreak.
+        shipFailureStreak = 0
         shipPolling = true
         shipPollGeneration &+= 1
     }
@@ -548,12 +642,11 @@ final class BoardViewModel {
         shipPollEpoch &+= 1
         let epoch = shipPollEpoch
         defer { if shipPollEpoch == epoch { shipPolling = false } }
-        var consecutiveFailures = 0
         while !Task.isCancelled && shipPolling && shipPollEpoch == epoch {
             do {
                 let s = try await APIClient.shared.shipIOSStatus(baseURL: baseURL)
                 ship = s
-                consecutiveFailures = 0
+                shipFailureStreak = 0
                 if Self.shipTerminalPhases.contains(s.phase ?? "idle") { return }
             } catch {
                 // Cancellation is not a failure: this view is a TabView child,
@@ -563,8 +656,8 @@ final class BoardViewModel {
                 // URLSession failure, cancellation included, as
                 // KrakenError.message, so no cast can match. Don't add one.
                 if Task.isCancelled { return }
-                consecutiveFailures += 1
-                if consecutiveFailures >= shipFailureCeilingNow {
+                shipFailureStreak += 1
+                if shipFailureStreak >= shipFailureCeilingNow {
                     // Say what is and isn't known. The shipper is a detached
                     // child of a `kraken serve` that may have died under it, so
                     // the upload could well still be running; the phone simply
@@ -604,10 +697,11 @@ final class BoardViewModel {
         }
         if shipRecordFresh, phase == "failed" {
             // Tapping this re-runs the ship rather than "revealing" the error,
-            // which the update control has to do because its message shares the
-            // daemon bar's one-line slot. A ship has its own banner strip and
-            // `shipBanner` is already printing the error in full underneath
-            // this very button, so a reveal tap would change nothing on screen.
+            // which the update control has to do because its message has no
+            // strip of its own. A ship's error is already on screen in full
+            // twice over — the board's shipBanner, and the Mac section's own
+            // message area right under the two controls — so a reveal tap here
+            // would change nothing.
             return ShipButtonState(glyph: "✕", label: "ship failed", color: KTheme.counter, disabled: false)
         }
         if shipRecordFresh, phase == "done" {
@@ -655,7 +749,8 @@ final class BoardViewModel {
     }
 }
 
-/// One paint of the daemon bar's ⟳ control — see BoardViewModel.updateButton.
+/// One paint of the ⟳ update control (Settings' "Mac" section; the state
+/// machine behind it stays here on the model) — see BoardViewModel.updateButton.
 struct UpdateButtonState {
     let glyph: String
     let label: String
@@ -669,7 +764,8 @@ struct UpdateButtonState {
     var revealsError: String?
 }
 
-/// One paint of the daemon bar's ⇧ control — see BoardViewModel.shipButton.
+/// One paint of the ⇧ ship control (Settings' "Mac" section; the state machine
+/// behind it stays here on the model) — see BoardViewModel.shipButton.
 /// A separate type from UpdateButtonState rather than a shared one: they
 /// happen to carry the same four fields today, and merging them would invite
 /// the next state either one grows (the update control's gap/behind states,
@@ -687,23 +783,38 @@ struct ShipButtonState {
 }
 
 /// The ship poll's `.task(id:)` key — the update poll's key, for the same two
-/// reasons (a run STARTING bumps the generation; a scene-phase change has to
-/// restart rather than thaw the loop, since a suspended loop's failure streak
-/// would otherwise resume against a radio that hasn't come back up).
-private struct ShipPollKey: Hashable {
+/// reasons. The generation covers a run STARTING (see shipPollGeneration). The
+/// scene phase is what gets a loop RUNNING again after a suspension: a
+/// suspended `.task` is not resumed, it is cancelled, so without this key
+/// nothing would poll a ship that was in flight when the phone was locked.
+/// The failure streak it used to also protect now lives on the model and is
+/// cleared by `BoardViewModel.noteBecameActive`, not by this restart.
+struct ShipPollKey: Hashable {
     let generation: Int
     let phase: ScenePhase
 }
 
 /// The update poll's `.task(id:)` key. Two independent things restart that
-/// loop, and it must restart for either. The generation covers a run
-/// STARTING (see updatePollGeneration); the scene phase covers the app
-/// coming back from suspension, where the point is not to start polling but
-/// to throw away a gap clock that has been counting wall-clock minutes while
-/// the loop itself was frozen — see runUpdatePoll.
-private struct UpdatePollKey: Hashable {
+/// loop, and it must restart for either. The generation covers a run STARTING
+/// (see updatePollGeneration); the scene phase covers the app coming back from
+/// suspension, where the point is simply to have a loop again — a suspended
+/// `.task` is cancelled, not paused. It is no longer about throwing the gap
+/// clock away: the clock lives on the model now and survives on purpose, and
+/// the minutes it was not awake for are handled by clamping each tick's
+/// contribution rather than by resetting — see updateGapTickCeiling.
+struct UpdatePollKey: Hashable {
     let generation: Int
     let phase: ScenePhase
+}
+
+/// The job route's `.task(id:)` key. The slug alone would be enough if the
+/// route always acted immediately, but it can be HELD — a link arriving over a
+/// composer waits rather than eating half-typed text (see BoardSheet.isComposer)
+/// — and a held route needs something to wake it. `resume` is bumped when a
+/// sheet is dismissed, which is the only moment a held link can proceed.
+struct JobRouteKey: Hashable {
+    let slug: String?
+    let resume: Int
 }
 
 /// The surface the board's three chrome strips — daemon bar, ship banner,
@@ -745,37 +856,126 @@ final class SheetNavState {
     var childPushed = false
 }
 
+/// Every sheet the board can present, as ONE value.
+///
+/// This used to be several independent `.sheet` modifiers hung off one
+/// presenter, and SwiftUI presents at most one sheet per presenter: whichever
+/// modifier wins, the others' bindings stay set with nothing on screen. That is
+/// not a cosmetic loss — the flag LATCHES. `kraken://graph` arriving while the
+/// job sheet was up consumed `pendingGraph`, presented nothing, and left
+/// `showingGraph == true`; the toolbar's graph button then set a `true` that
+/// was already `true`, so the screen was unreachable for the rest of the
+/// session. `showingDream` had the identical shape. The mirror case cost job
+/// routes: a `kraken://job/<slug>` link tapped while one of those was up went
+/// nowhere.
+///
+/// One enum behind one `.sheet(item:)` makes exclusivity STRUCTURAL rather than
+/// a rule every presenter has to remember. Assigning replaces whatever is up —
+/// last route wins, and nothing can latch, because there is no second flag to
+/// leave set.
+///
+/// The two drag-presented sheets (steer / reactivate, raised by a cross-column
+/// drop on the chip bar) are in here too. They share the same presenter, so
+/// they shared the same defect; that a drop is hard to perform WITH a sheet
+/// already up made them the least likely to hit it, not immune, and leaving
+/// them outside would have meant keeping the exact modifier-stacking shape this
+/// type exists to delete.
+///
+/// The overview's search-focus flag rides IN its case rather than beside it as
+/// separate state: the sheet has three entry points and only the magnifier
+/// means "I am here to search", so carrying it in the value is what keeps a
+/// stale `true` from a previous magnifier tap out of a later chevron tap. It is
+/// part of the `id` so switching entry points re-presents.
+enum BoardSheet: Identifiable {
+    case job(WebJob)
+    case newJob
+    case dream
+    case usage
+    case overview(searchFocused: Bool)
+    case dragSteer(WebJob)
+    case dragReactivate(WebJob)
+
+    var id: String {
+        switch self {
+        case .job(let job): "job:\(job.slug)"
+        case .newJob: "newJob"
+        case .dream: "dream"
+        case .usage: "usage"
+        case .overview(let focused): "overview:\(focused)"
+        case .dragSteer(let job): "dragSteer:\(job.slug)"
+        case .dragReactivate(let job): "dragReactivate:\(job.slug)"
+        }
+    }
+
+    /// The presented job, when a job sheet is what's up. The staleness
+    /// auto-dismiss and the pushed-child reset both key off this.
+    var jobSlug: String? {
+        if case .job(let job) = self { return job.slug }
+        return nil
+    }
+
+    /// Whether this sheet holds unsaved typing.
+    ///
+    /// "Last route wins" is right for readers — a drawer, an overview, a job
+    /// detail all cost nothing to reopen — and wrong for these three, where the
+    /// thing on screen is a half-written brief, steer, or resume message that
+    /// exists nowhere else. A notification tapped mid-sentence must not eat it,
+    /// so a route arriving over a composer WAITS: the pending flag stays set
+    /// and is consumed the moment the composer closes.
+    var isComposer: Bool {
+        switch self {
+        case .newJob, .dragSteer, .dragReactivate: true
+        case .job, .dream, .usage, .overview: false
+        }
+    }
+}
+
+/// The board's route stamp, in a reference box.
+///
+/// `kraken://job/<slug>` is the one route that cannot act immediately — on a
+/// cold launch the board may not have loaded, so it retries for up to five
+/// seconds. Five seconds is long enough for a SECOND route to arrive and be
+/// acted on, and the job task would then present over it, silently inverting
+/// "last route wins". So each consumed route stamps a new generation and the
+/// job task presents only if its own stamp is still the current one.
+///
+/// A class rather than a plain `@State Int` because the check happens INSIDE
+/// the task: a `.task` closure captures the view struct by value, so reading an
+/// `Int` field there would read the value as of when the body was evaluated,
+/// which is always the stamp the task started with. A reference gives the
+/// closure a live read. Nothing observes it — it is only ever compared — so it
+/// is deliberately not `@Observable`.
+final class BoardRouteStamp {
+    var generation = 0
+}
+
 struct BoardView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @Environment(\.scenePhase) private var scenePhase
     @Environment(AppRouter.self) private var router
-    @State private var vm = BoardViewModel()
-    @State private var selectedJob: WebJob?
-    // The presented job's `state` as of whenever it was (re-)assigned to
-    // selectedJob — the baseline the staleness check below diffs the next
-    // polling refresh against. WebJob isn't Equatable (Decodable-only), so
-    // this is captured explicitly at every assignment site rather than via
-    // .onChange(of: selectedJob).
+    // Owned by KrakenApp, not by this view: Settings' "Mac" section drives the
+    // same ship/update state from the other end of the tab bar, and a @State
+    // here would hand it a second model. See KrakenApp.boardVM.
+    @Environment(BoardViewModel.self) private var vm
+    // THE board's one sheet slot. Every screen the board can raise — job
+    // detail, new job, DREAM, the USAGE drawer, the overview, and the two
+    // drag-raised composers — is a case of this, because a presenter can only
+    // show one and independent flags latched when it didn't. See BoardSheet.
+    @State private var sheet: BoardSheet?
+    // The presented job's `state` as of whenever the job sheet was (re-)raised
+    // — the baseline the staleness check below diffs the next polling refresh
+    // against. WebJob isn't Equatable (Decodable-only), so this is captured
+    // explicitly at every assignment site rather than via .onChange.
     @State private var presentedJobState: String?
     // Set by whatever JobDetailView has pushed on the job sheet's stack; see
     // SheetNavState above.
     @State private var jobSheetNav = SheetNavState()
-    @State private var showingNewJob = false
-    @State private var showingOverview = false
-    // Whether the overview sheet should come up with its search field already
-    // focused. The sheet is ONE sheet with three ways in — the strip's chevron,
-    // the kraken://overview deep link, and the toolbar's magnifier — and only
-    // the magnifier means "I am here to search", so every presenter sets this
-    // explicitly rather than letting the last one's value persist.
-    @State private var overviewSearchFocused = false
-    // The DREAM screen hangs off this toolbar rather than a sixth tab — iOS
-    // collapses a TabView past five items into a "More" list, which would
-    // bury an existing tab behind a disclosure. See DreamView's header.
-    @State private var showingDream = false
-    // The GRAPH screen hangs off this toolbar for the same reason DREAM does
-    // — five tabs is the ceiling before iOS collapses the TabView into a
-    // "More" list. See GraphView's header.
-    @State private var showingGraph = false
+    // Which route is the current one — see BoardRouteStamp.
+    @State private var routeStamp = BoardRouteStamp()
+    // Bumped when ANY sheet is dismissed (see JobRouteKey) — the case that
+    // needs it is a composer closing, so the job route's `.task` re-runs and
+    // picks up a link that was held back while it was open (see isComposer).
+    @State private var routeResume = 0
     @State private var selectedColumn: BoardColumn = .draft
 
     // MARK: - drag reorder / cross-column drag state
@@ -808,10 +1008,6 @@ struct BoardView: View {
     // the board went on rendering a gesture that was over. See
     // BoardDragState.swift.
     @State private var drag = BoardDragState()
-    // Sheets presented for cross-column drops that need user input rather
-    // than a bare API call (blocked→working, done→working).
-    @State private var dragSteerJob: WebJob?
-    @State private var dragReactivateJob: WebJob?
 
     // body is deliberately a composition of four small expressions, not one
     // chain. It used to hang every modifier below — seven sheets, seven
@@ -880,8 +1076,7 @@ struct BoardView: View {
         // search would have had to build anyway.
         ToolbarItem(placement: .topBarTrailing) {
             Button {
-                overviewSearchFocused = true
-                showingOverview = true
+                sheet = .overview(searchFocused: true)
             } label: {
                 Image(systemName: "magnifyingglass")
             }
@@ -889,23 +1084,26 @@ struct BoardView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
-                showingDream = true
+                sheet = .dream
             } label: {
                 Image(systemName: "moon.stars")
             }
             .accessibilityLabel("Dream")
         }
+        // The graph button is gone — the graph is a tab now (RootTabView).
+        // The gauge that replaced it opens the Usage drawer, which used to be
+        // a tab of its own.
         ToolbarItem(placement: .topBarTrailing) {
             Button {
-                showingGraph = true
+                sheet = .usage
             } label: {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
+                Image(systemName: "gauge.with.dots.needle.50percent")
             }
-            .accessibilityLabel("Knowledge graph")
+            .accessibilityLabel("Usage")
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
-                showingNewJob = true
+                sheet = .newJob
             } label: {
                 Image(systemName: "plus")
             }
@@ -949,10 +1147,13 @@ struct BoardView: View {
             // web board — bumps the generation, which always differs from
             // the last one this body saw, so the loop always restarts (see
             // updatePollGeneration for the frame-collision this avoids).
-            // Keyed on `scenePhase` as well, matching the board poll above:
-            // a suspended loop's gap clock keeps counting wall-clock time it
-            // was not awake for, so resuming has to restart the loop rather
-            // than thaw it (see UpdatePollKey and runUpdatePoll).
+            // Keyed on `scenePhase` as well, matching the board poll above,
+            // because a suspended `.task` is CANCELLED rather than paused —
+            // without that key a run that was in flight when the phone locked
+            // would come back to no poller at all. The gap clock is no longer
+            // part of this: it lives on the model, survives the suspension
+            // deliberately, and discounts the unwatched minutes by clamping
+            // each tick (see updateGapTickCeiling and UpdatePollKey).
             .task(id: UpdatePollKey(generation: vm.updatePollGeneration, phase: scenePhase)) {
                 guard scenePhase == .active else { return }
                 await vm.resumeUpdatePoll(baseURL: serverURL)
@@ -967,23 +1168,21 @@ struct BoardView: View {
             }
     }
 
-    // Every sheet the board presents, plus the two onChanges that manage the
-    // job sheet's lifetime.
+    // The board's ONE sheet, plus the two onChanges that manage the job
+    // sheet's lifetime. Every screen lives in the switch below — see
+    // BoardSheet for why this is one modifier and not seven.
     private func withSheets(_ content: some View) -> some View {
         content
-            .sheet(item: $selectedJob) { job in
-                NavigationStack {
-                    JobDetailView(job: job, baseURL: serverURL) {
-                        Task { await vm.refresh(baseURL: serverURL) }
-                    }
-                }
-                .environment(jobSheetNav)
+            .sheet(item: $sheet) { presented in
+                sheetContent(presented)
             }
             // Presenting a different job (or dismissing entirely) starts the
             // stack over at JobDetailView's root, so the pushed-child flag
             // resets with it — belt and braces against an unbalanced
             // appear/disappear pair leaving auto-dismiss suppressed forever.
-            .onChange(of: selectedJob?.slug) { jobSheetNav.childPushed = false }
+            // Keyed on the presented JOB, not on the sheet as a whole: raising
+            // the usage drawer over nothing is not a reason to touch it.
+            .onChange(of: sheet?.jobSlug) { jobSheetNav.childPushed = false }
             // Auto-dismiss the presented job sheet once the board's own
             // polling refresh (vm.refresh, every 4s above) shows that job's
             // `state` has moved on since it was opened — unblocked, killed,
@@ -998,57 +1197,67 @@ struct BoardView: View {
             // (jobSheetNav): a pushed thread view is a place to sit and read,
             // and a working↔blocked flip underneath it is routine, not a
             // reason to tear the reader's stack down (see SheetNavState).
-            .onChange(of: vm.board?.jobs.first(where: { $0.slug == selectedJob?.slug })?.state) { _, newState in
-                guard selectedJob != nil, !jobSheetNav.childPushed,
+            .onChange(of: vm.board?.jobs.first(where: { $0.slug == sheet?.jobSlug })?.state) { _, newState in
+                // `case .job` and not merely "a slug is presented": clearing
+                // the slot has to be conditional on a JOB being the thing in
+                // it, or a state flip could dismiss a drawer.
+                guard case .job = sheet, !jobSheetNav.childPushed,
                       let presentedJobState, let newState, newState != presentedJobState else { return }
-                selectedJob = nil
+                sheet = nil
             }
-            .sheet(isPresented: $showingNewJob) {
-                NavigationStack {
-                    NewJobSheet(baseURL: serverURL) {
-                        Task { await vm.refresh(baseURL: serverURL) }
-                    }
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ presented: BoardSheet) -> some View {
+        switch presented {
+        case .job(let job):
+            NavigationStack {
+                JobDetailView(job: job, baseURL: serverURL) {
+                    Task { await vm.refresh(baseURL: serverURL) }
                 }
             }
-            .sheet(isPresented: $showingDream) {
-                NavigationStack {
-                    DreamView(baseURL: serverURL)
+            .environment(jobSheetNav)
+        case .newJob:
+            NavigationStack {
+                NewJobSheet(baseURL: serverURL) {
+                    Task { await vm.refresh(baseURL: serverURL) }
                 }
             }
-            .sheet(isPresented: $showingGraph) {
-                NavigationStack {
-                    GraphView(baseURL: serverURL)
+        case .dream:
+            NavigationStack {
+                DreamView(baseURL: serverURL)
+            }
+        case .usage:
+            // UsageView carries its own NavigationStack and close button, so
+            // it is presented bare rather than wrapped like the others.
+            UsageView()
+        case .overview(let searchFocused):
+            NavigationStack {
+                BoardOverviewSheet(vm: vm, baseURL: serverURL, searchFocused: searchFocused) {
+                    Task { await vm.refresh(baseURL: serverURL) }
                 }
             }
-            .sheet(isPresented: $showingOverview) {
-                NavigationStack {
-                    BoardOverviewSheet(vm: vm, baseURL: serverURL, searchFocused: overviewSearchFocused) {
-                        Task { await vm.refresh(baseURL: serverURL) }
-                    }
-                }
-            }
+        case .dragSteer(let job):
             // blocked→working overview-strip drag: reuses JobDetailView's
             // SteerView with unblockFraming — same delivery as the in-detail
             // Unblock button, just reached from the strip instead.
-            .sheet(item: $dragSteerJob) { job in
-                NavigationStack {
-                    SteerView(job: job, baseURL: serverURL, unblockFraming: true) {
-                        dragSteerJob = nil
-                        Task { await vm.refresh(baseURL: serverURL) }
-                    }
+            NavigationStack {
+                SteerView(job: job, baseURL: serverURL, unblockFraming: true) {
+                    sheet = nil
+                    Task { await vm.refresh(baseURL: serverURL) }
                 }
             }
+        case .dragReactivate(let job):
             // done→working overview-strip drag: reuses ReactivateView with
             // requireText, since this entry path has no separate
             // confirmation step to catch an accidental empty resume.
-            .sheet(item: $dragReactivateJob) { job in
-                NavigationStack {
-                    ReactivateView(job: job, baseURL: serverURL, requireText: true) {
-                        dragReactivateJob = nil
-                        Task { await vm.refresh(baseURL: serverURL) }
-                    }
+            NavigationStack {
+                ReactivateView(job: job, baseURL: serverURL, requireText: true) {
+                    sheet = nil
+                    Task { await vm.refresh(baseURL: serverURL) }
                 }
             }
+        }
     }
 
     // Deep-link routing — consuming the pending values AppRouter stamps for
@@ -1056,7 +1265,7 @@ struct BoardView: View {
     private func withRouting(_ content: some View) -> some View {
         content
             // Deep links (kraken://board/<column>, kraken://overview,
-            // kraken://dream, kraken://graph, kraken://job/<slug>) stamp a
+            // kraken://dream, kraken://usage, kraken://job/<slug>) stamp a
             // pending value on the shared
             // router; this view is the one that owns each destination, so
             // it's the one that consumes and clears it. onAppear covers a
@@ -1067,9 +1276,23 @@ struct BoardView: View {
             .onChange(of: router.pendingBoardColumn) { consumePendingBoardRoutes() }
             .onChange(of: router.pendingOverview) { consumePendingBoardRoutes() }
             .onChange(of: router.pendingDream) { consumePendingBoardRoutes() }
-            .onChange(of: router.pendingGraph) { consumePendingBoardRoutes() }
-            .task(id: router.pendingJobSlug) {
+            .onChange(of: router.pendingUsage) { consumePendingBoardRoutes() }
+            // A composer closing releases whatever routes were held back while
+            // it was open (see BoardSheet.isComposer). Routes first, so the
+            // job task restarts against the final stamp; the resume bump is
+            // what restarts it, since its own key can't see a sheet change.
+            .onChange(of: sheet == nil) { _, dismissed in
+                guard dismissed else { return }
+                consumePendingBoardRoutes()
+                routeResume &+= 1
+            }
+            .task(id: JobRouteKey(slug: router.pendingJobSlug, resume: routeResume)) {
                 guard let slug = router.pendingJobSlug else { return }
+                // Held, not dropped: leaving the pending slug set is what gets
+                // this link presented once the composer is closed, instead of
+                // the link eating a half-written brief (see isComposer).
+                guard sheet?.isComposer != true else { return }
+                let stamp = routeStamp.generation
                 // The board may not have loaded yet (e.g. a cold launch
                 // straight into a kraken://job/<slug> link) — retry briefly
                 // rather than silently dropping the link.
@@ -1078,7 +1301,11 @@ struct BoardView: View {
                         await vm.refresh(baseURL: serverURL)
                     }
                     if let job = vm.board?.jobs.first(where: { $0.slug == slug }) {
-                        presentJob(job)
+                        // Up to five seconds have passed and a later route may
+                        // already be on screen. Presenting now would put this
+                        // OLDER link on top of it — so the stamp decides, and
+                        // last route still wins (see BoardRouteStamp).
+                        if stamp == routeStamp.generation { presentJob(job) }
                         break
                     }
                     try? await Task.sleep(for: .seconds(0.5))
@@ -1089,31 +1316,50 @@ struct BoardView: View {
 
     // Presents a job sheet and records its state as the staleness baseline
     // — see presentedJobState's doc comment and the onChange next to the
-    // sheet(item:) modifier above.
+    // sheet(item:) modifier above. Assigning REPLACES whatever sheet is up,
+    // which is the point: a kraken://job link tapped while the usage drawer
+    // was open used to go nowhere at all.
     private func presentJob(_ job: WebJob) {
-        selectedJob = job
+        sheet = .job(job)
         presentedJobState = job.state
     }
 
+    // Each pending flag is cleared as it is read, and each writes the ONE
+    // sheet slot — so two routes arriving in the same frame end with the last
+    // one on screen rather than one presented and the others latched forever
+    // (the defect BoardSheet documents). "Last route wins" is the whole rule,
+    // with one exception above it: a composer is never interrupted.
+    //
+    // Each consumed route stamps a new generation, which is how the job
+    // route's slow retry loop finds out it has been superseded. The stamp is
+    // bumped per CONSUMED route rather than once per call, so that the
+    // sheet-dismissal call — which usually finds nothing pending — cannot
+    // invalidate a job task that is legitimately in flight.
     private func consumePendingBoardRoutes() {
+        // Nothing is consumed and nothing is cleared: the flags stay set and
+        // this runs again the moment the composer closes. See isComposer.
+        guard sheet?.isComposer != true else { return }
         if let column = router.pendingBoardColumn {
             // Animated for the same reason the chip tap is: the carousel is a
             // scroll view, and a scroll view teleports unless told otherwise.
             withAnimation(.easeInOut(duration: 0.3)) { selectedColumn = column }
             router.pendingBoardColumn = nil
+            routeStamp.generation &+= 1
         }
         if router.pendingOverview {
-            overviewSearchFocused = false
-            showingOverview = true
+            sheet = .overview(searchFocused: false)
             router.pendingOverview = false
+            routeStamp.generation &+= 1
         }
         if router.pendingDream {
-            showingDream = true
+            sheet = .dream
             router.pendingDream = false
+            routeStamp.generation &+= 1
         }
-        if router.pendingGraph {
-            showingGraph = true
-            router.pendingGraph = false
+        if router.pendingUsage {
+            sheet = .usage
+            router.pendingUsage = false
+            routeStamp.generation &+= 1
         }
     }
 
@@ -1149,8 +1395,17 @@ struct BoardView: View {
                     .font(.data(11))
                     .foregroundStyle(KTheme.text2)
                 Spacer(minLength: 6)
-                shipControl
-                updateControl
+                // The ⇧ ship and ⟳ update controls used to sit here. They are
+                // Mac-side maintenance, not board state, so they moved to
+                // Settings' "Mac" section (MacControlsSection in
+                // SettingsView.swift) with their states, strings and
+                // no-confirmation tap semantics intact. What stays is what
+                // reads on every glance: the LED, the daemon label, the shared
+                // error slot below, and the cell counter. The update poll and
+                // the ship banner stay here too — the banner is board-adjacent
+                // news, and BoardViewModel is shared, so a run started from
+                // Settings still paints here.
+                //
                 // One error slot, shared — precedence lives in barMessage.
                 // lineLimit is not cosmetic here: a preflight refusal embeds
                 // an absolute path and `update.error` can carry git's whole
@@ -1186,70 +1441,6 @@ struct BoardView: View {
         .padding(.vertical, 8)
         .boardBarSurface()
         .padding(.horizontal, 16)
-    }
-
-    // The self-update control (POST /api/update + the status poll that
-    // follows the run through the server restart — see BoardViewModel's
-    // self-update section). Deliberately bar-weight mono rather than a
-    // prominent button: it belongs to the server-health row, not the action
-    // toolbar. No confirmation step — the tap IS the decision, matching the
-    // web board. Fixed-size so a long error next to it can't squeeze it away.
-    private var updateControl: some View {
-        let state = vm.updateButton
-        return Button {
-            if let err = state.revealsError {
-                vm.revealUpdateError(err)
-            } else {
-                // Synchronously, in the tap handler — a Task body doesn't
-                // start soon enough to keep a second tap out (see
-                // BoardViewModel.updateStarting).
-                vm.markUpdateStarting()
-                Task { await vm.startUpdate(baseURL: serverURL) }
-            }
-        } label: {
-            HStack(spacing: 3) {
-                Text(state.glyph)
-                Text(state.label)
-            }
-            .font(.data(10))
-            .foregroundStyle(state.color)
-        }
-        .buttonStyle(.plain)
-        .disabled(state.disabled)
-        .fixedSize()
-        .accessibilityLabel("update kraken — \(state.label)")
-    }
-
-    // The TestFlight ship control (POST /api/ship-ios + the status poll that
-    // follows the run — see BoardViewModel's ship section). Sits left of the
-    // update control, same bar weight, same no-confirmation tap.
-    //
-    // The accessibility label carries the distinction the two-word visible
-    // label can't: "uploaded" is where this run ends, and installing the build
-    // on this phone is a separate manual step in the TestFlight app afterwards.
-    private var shipControl: some View {
-        let state = vm.shipButton
-        return Button {
-            // One action, always: start a ship. A fresh failure re-runs rather
-            // than "revealing" itself — shipBanner is already showing the error
-            // in full right below this control (see BoardViewModel.shipButton).
-            //
-            // Synchronously, in the tap handler — a Task body doesn't start
-            // soon enough to keep a second tap out (see shipStarting).
-            vm.markShipStarting()
-            Task { await vm.startShipIOS(baseURL: serverURL) }
-        } label: {
-            HStack(spacing: 3) {
-                Text(state.glyph)
-                Text(state.label)
-            }
-            .font(.data(10))
-            .foregroundStyle(state.color)
-        }
-        .buttonStyle(.plain)
-        .disabled(state.disabled)
-        .fixedSize()
-        .accessibilityLabel("ship the iOS app to TestFlight — \(state.label). Uploading is not installing: TestFlight processes the build afterwards and you install it from the TestFlight app.")
     }
 
     // The ship run's own strip, under the daemon bar. It exists because the
@@ -1306,8 +1497,7 @@ struct BoardView: View {
                 chipScroller
             }
             Button {
-                overviewSearchFocused = false
-                showingOverview = true
+                sheet = .overview(searchFocused: false)
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))
@@ -1493,6 +1683,13 @@ struct BoardView: View {
         )
     }
 
+    /// The tap/drag hit region of a job card: `ThemedCard`'s own surface,
+    /// corner radius and style included, so the target is exactly the glass
+    /// the reader sees rather than its bounding box.
+    private var cardTapShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+    }
+
     private func columnView(_ column: BoardColumn) -> some View {
         let jobs = orderedJobs(column)
         return ScrollView {
@@ -1523,10 +1720,37 @@ struct BoardView: View {
                             // cards render without draggable at all).
                             if column == .archived {
                                 JobCardView(job: job)
+                                    // See the non-archived branch below for
+                                    // why the shape is spelled out.
+                                    .contentShape(cardTapShape)
                                     .onTapGesture { presentJob(job) }
                             } else {
                                 JobCardView(job: job)
                                     .opacity(drag.slug == job.slug ? 0.4 : 1.0)
+                                    // The WHOLE card surface opens the detail
+                                    // sheet, not just the glyphs and text runs
+                                    // inside it. Without this the tap only
+                                    // lands on the card's own subviews — the
+                                    // gaps between the title row, the chips and
+                                    // the card's 14pt padding are transparent,
+                                    // and a transparent region is not hit-
+                                    // tested, so half the card read as dead.
+                                    // `.contentShape` with the card's own
+                                    // rounded rect makes the surface the target
+                                    // and stops the corners claiming taps the
+                                    // card does not visually cover.
+                                    //
+                                    // It sits ABOVE `.onDrag`, so the drag
+                                    // source gets the same shape and the two
+                                    // gestures keep coexisting exactly as
+                                    // before: SwiftUI hands a press to the tap
+                                    // and a press-and-move to the drag, and
+                                    // widening the hit region changes which
+                                    // pixels are live, not which gesture wins.
+                                    // The PR chips inside are `Link`s and stay
+                                    // Links — a child's own hit region is
+                                    // tested first, so they still open Safari.
+                                    .contentShape(cardTapShape)
                                     .onTapGesture { presentJob(job) }
                                     // The item provider is the drag session's
                                     // lifetime: UIKit releases it when the
@@ -1732,12 +1956,12 @@ struct BoardView: View {
         // an action that ran and was reverted. Every other case fires an API
         // call that surfaces its own error.
         case (.blocked, .working):
-            if let job { dragSteerJob = job } else { vm.errorMessage = missingJobMessage(slug) }
+            if let job { sheet = .dragSteer(job) } else { vm.errorMessage = missingJobMessage(slug) }
         case (.done, .blocked):
             runBoardAction { try await APIClient.shared.reactivateJob(baseURL: serverURL, slug: slug, text: "") }
         // (the second of the two sheet-presenting drops — see above)
         case (.done, .working):
-            if let job { dragReactivateJob = job } else { vm.errorMessage = missingJobMessage(slug) }
+            if let job { sheet = .dragReactivate(job) } else { vm.errorMessage = missingJobMessage(slug) }
         case (.done, .archived):
             runBoardAction { try await APIClient.shared.archiveJob(baseURL: serverURL, slug: slug) }
         default:

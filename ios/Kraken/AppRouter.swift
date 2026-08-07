@@ -3,9 +3,9 @@ import Observation
 
 /// Deep-link routing (`kraken://...`), kept thin on purpose: it only parses
 /// a URL into "where to go" intent and stamps a handful of pending targets.
-/// The views that own that destination (BoardView, SessionsView) observe
-/// this object, act on the relevant pending value, and clear it — the
-/// router itself never reaches into another view's state.
+/// The views that own that destination (BoardView, SessionsView,
+/// SettingsView) observe this object, act on the relevant pending value, and
+/// clear it — the router itself never reaches into another view's state.
 ///
 /// Supported URLs:
 ///   kraken://board                 → Board tab
@@ -13,8 +13,9 @@ import Observation
 ///   kraken://overview              → Board tab, open the overview sheet
 ///   kraken://dream                 → Board tab, open the DREAM sheet
 ///                                     (the nightly loop's reports + watchlist)
-///   kraken://graph                 → Board tab, open the GRAPH sheet
-///                                     (the knowledge graph viewer)
+///   kraken://graph                 → Graph tab (the knowledge graph viewer,
+///                                     a tab of its own since the nav
+///                                     restructure — no longer a Board sheet)
 ///   kraken://job/<slug>            → Board tab, open that job's detail
 ///                                     (waits for the board to load if needed)
 ///   kraken://job/<slug>/answer     → …and open the answer sheet
@@ -24,12 +25,13 @@ import Observation
 ///   kraken://session/<pane>        → Sessions tab, open that peer's detail
 ///                                     ("3" → pane "%3"; the % is implicit
 ///                                     so the scheme stays URL-safe)
-///   kraken://usage                 → Usage tab
+///   kraken://usage                 → Board tab, open the USAGE drawer
+///   kraken://log                   → Settings tab, open the LOG drawer
 ///   kraken://settings              → Settings tab
 @Observable
 final class AppRouter {
     enum Tab: Hashable {
-        case board, sessions, usage, log, settings
+        case board, sessions, graph, settings
     }
 
     var selectedTab: Tab = .board
@@ -46,11 +48,12 @@ final class AppRouter {
     // The DREAM screen is a sheet over the Board (not a tab — see DreamView),
     // so it routes exactly the way the overview sheet does.
     var pendingDream = false
-    // The GRAPH screen is a sheet over the Board for exactly the reason DREAM
-    // is one: `Tab` already holds five cases, and iOS collapses a TabView past
-    // five items into a "More" list, which would bury an existing tab behind a
-    // disclosure. So this is a pending flag, not a sixth `Tab` case.
-    var pendingGraph = false
+    // USAGE and LOG are drawers (sheets) rather than tabs since the nav
+    // restructure: Usage hangs off the Board's toolbar, Log off a Settings
+    // row. Each deep link therefore selects the tab that OWNS the drawer and
+    // stamps a flag that view consumes — the same shape as pendingDream.
+    var pendingUsage = false
+    var pendingLog = false
     var pendingJobSlug: String?
     var pendingJobAction: JobAction?
     var pendingSessionPane: String?
@@ -76,8 +79,7 @@ final class AppRouter {
             selectedTab = .board
             pendingDream = true
         case "graph":
-            selectedTab = .board
-            pendingGraph = true
+            selectedTab = .graph
         case "job":
             selectedTab = .board
             if let slug = components.first, !slug.isEmpty {
@@ -103,7 +105,11 @@ final class AppRouter {
                 pendingSessionPane = "%" + pane
             }
         case "usage":
-            selectedTab = .usage
+            selectedTab = .board
+            pendingUsage = true
+        case "log":
+            selectedTab = .settings
+            pendingLog = true
         case "settings":
             selectedTab = .settings
         default:

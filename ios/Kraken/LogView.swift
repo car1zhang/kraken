@@ -5,8 +5,14 @@ import SwiftUI
 /// first; scrolling to the end of loaded history offers the previous
 /// (older) file, one fetch per file via each response's `prev` name.
 /// Pull-to-refresh re-fetches the newest file.
+///
+/// Presented as a DRAWER (a sheet off the Settings "Log" row) rather than as
+/// the tab it used to be: the log is something you go and look at when
+/// something looks wrong, not one of the four places the app lives. The list
+/// behaviour below is untouched by that move — only the close button is new.
 struct LogView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
+    @Environment(\.dismiss) private var dismiss
 
     // Chain of loaded files oldest→newest; the last is the live "latest".
     // Mirrors app.js's logChain/logData so the two viewers paginate the
@@ -83,6 +89,11 @@ struct LogView: View {
             .kListStyle()
             .navigationTitle("Log")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    SheetCloseButton { dismiss() }
+                }
+            }
             .task { await refreshLatest() }
             .refreshable { await refreshLatest() }
         }

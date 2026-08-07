@@ -1013,7 +1013,7 @@ struct JobDetailView: View {
                 SpecSection(job: job, baseURL: baseURL, editSheetOpen: showingEdit)
                 if let detail = job.detail, !detail.isEmpty {
                     JobSectionCard("Detail") {
-                        DetailCard(text: detail, stateColor: BoardTheme.color(forState: job.state))
+                        DetailCard(text: detail)
                     }
                 }
                 if let lastSent = job.lastSent, !lastSent.isEmpty {
@@ -2155,7 +2155,7 @@ private struct SpecSection: View {
         Group {
             if let spec, !spec.isEmpty {
                 JobSectionCard("Spec") {
-                    DetailCard(text: spec, stateColor: BoardTheme.color(forState: job.state))
+                    DetailCard(text: spec)
                 }
             }
         }
@@ -2167,18 +2167,19 @@ private struct SpecSection: View {
     }
 }
 
-/// The `detail` field: the cell's last words / blocked reason, rendered
-/// as a markdown card in the state color — replaces the old escalation body
-/// card now that escalations are gone from the wire.
+/// The `detail` field: the cell's last words / blocked reason, rendered as a
+/// plain markdown card — no leading state bar (carl's call: the sheet's state
+/// capsule already answers "how is it going", so a colored bar here repeated
+/// it). Replaces the old escalation body card now that escalations are gone
+/// from the wire.
 struct DetailCard: View {
     let text: String
-    let stateColor: Color
 
     var body: some View {
         MarkdownText(markdown: text)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .cardBackground(barColor: stateColor)
+            .cardBackground(bar: false)
     }
 }
 
@@ -2517,7 +2518,7 @@ struct SteerView: View {
                     // below the fold — the web modal caps at 40vh for the same
                     // reason; the inner scroll keeps the full text reachable
                     ScrollView {
-                        DetailCard(text: detail, stateColor: BoardTheme.color(forState: job.state))
+                        DetailCard(text: detail)
                     }
                     .frame(maxHeight: 280)
                 }

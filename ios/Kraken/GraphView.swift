@@ -72,10 +72,17 @@ private let graphDrawerDetent: CGFloat = 0.45
 /// How often the payload refreshes while the screen is up.
 private let graphPollSeconds: UInt64 = 30
 
-/// The GRAPH screen. `baseURL` is the same `@AppStorage("serverURL")` value
-/// every other screen is handed (SettingsView owns it), and the init is
-/// unchanged from the WKWebView version — BoardView's `showingGraph` sheet and
-/// the `kraken://graph` deep link both call exactly this.
+/// The GRAPH screen — a TAB since the nav restructure (`RootTabView`), not the
+/// Board-toolbar sheet it opened life as; `kraken://graph` selects that tab.
+/// It never drew a close button of its own (the sheet's swipe-down was the
+/// dismissal), so a tab needs nothing removed; the drawer-ish
+/// `.navigationBarTitleDisplayMode(.inline)` is GONE rather than replaced, so
+/// the title takes the default treatment a tab root should have — large and
+/// left-aligned; and the canvas, the physics and the node drawer are
+/// untouched.
+///
+/// `baseURL` is the same `@AppStorage("serverURL")` value every other screen is
+/// handed (SettingsView owns it); the tab root reads it and passes it in.
 struct GraphView: View {
     let baseURL: String
 
@@ -173,7 +180,10 @@ struct GraphView: View {
         }
         .background { ThemeBackgroundView() }
         .navigationTitle("Graph")
-        .navigationBarTitleDisplayMode(.inline)
+        // Full-page treatment: the graph is a tab root now, and a tab root gets
+        // a large left-aligned title. It carried .inline from its life as a
+        // sheet, where a small centred title was right — re-hosting it without
+        // re-styling it left it reading as a drawer that had lost its handle.
     }
 
     // body is deliberately a composition of small expressions rather than one
@@ -194,7 +204,16 @@ struct GraphView: View {
             vm.startDisplayLoop()
         }
         .onChange(of: reduceMotion) { _, on in vm.reduceMotion = on }
-        .onDisappear { vm.stopDisplayLoop() }
+        .onDisappear {
+            vm.stopDisplayLoop()
+            // Drop the node selection with the screen. The drawer is presented
+            // from THIS view, and this view is now a tab root: switching tabs
+            // with a node open would leave the drawer on screen over the Board
+            // with the canvas behind it stopped — a sheet belonging to a screen
+            // nobody is looking at. As a Board sheet the whole stack went away
+            // together and there was nothing to clean up.
+            vm.select(nil)
+        }
     }
 
     private func withDrawer<Content: View>(_ content: Content) -> some View {
