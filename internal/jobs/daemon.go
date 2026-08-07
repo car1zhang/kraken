@@ -751,11 +751,13 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				// in one vocabulary or the fold below can't join them.
 				//
 				// Two things bound the churn. RecordLimitHit folds a repeat
-				// inside its dedupe window into the existing hit, and this key
-				// stops a STANDING complaint (a stalled cell keeps the same
-				// stall at the tail of its transcript indefinitely) from
-				// opening a fresh hit — and so a fresh swap — every couple of
-				// minutes.
+				// onto the still-unresolved hit (resolution, not time, is the
+				// event boundary — a windowed fold made the standing stall's
+				// re-deliveries reset the rescue's attempt counter forever),
+				// and this key stops a STANDING complaint (a stalled cell
+				// keeps the same stall at the tail of its transcript
+				// indefinitely) from re-recording — and, once the hit
+				// resolves, from opening a fresh one — every tick.
 				//
 				// The key EXPIRES rather than being set once, and that is the
 				// difference between a bound and a mute: a weekly-limit banner

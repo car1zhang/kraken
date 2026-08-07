@@ -864,14 +864,17 @@ func TestEdgeRecordLimitHitWithoutStoreErrs(t *testing.T) {
 	}
 }
 
-// The dedupe window's two sides. The fold is what makes the teammate herd —
-// every claude in the cell firing its own hook for one limit — count as ONE
-// hit; the boundary is `< limitHitDedupeWindow`, so a delivery landing
-// exactly ON the window is a NEW hit rather than the last fold of the old
-// one.
-func TestEdgeRecordLimitHitDedupeWindowBoundary(t *testing.T) {
+// The fold's boundary is RESOLUTION, not time. The fold is what makes the
+// teammate herd — every claude in the cell firing its own hook for one limit
+// — count as ONE hit, and it also absorbs the transcript trigger's
+// re-deliveries of a standing stall, which arrive every ten minutes for as
+// long as the cell is down: a time-bounded fold reset the attempt counter on
+// each of those, so the exhausted-attempts state was unreachable on exactly
+// the long-dead cells the reset re-arm exists for. Only resolving the hit
+// closes it to further folds.
+func TestEdgeRecordLimitHitFoldIgnoresElapsedTime(t *testing.T) {
 	st := useTestStore(t)
-	j := edgeStoreJob(t, st, "edge-dedupe")
+	j := edgeStoreJob(t, st, "edge-fold-time")
 
 	first, err := RecordLimitHit(j, "rate_limit", "one", "sess-a", "", edgeNow)
 	if err != nil {
@@ -881,11 +884,10 @@ func TestEdgeRecordLimitHitDedupeWindowBoundary(t *testing.T) {
 		t.Fatalf("first delivery = %+v, want At=now Deliveries=1 HandledAt=0", first)
 	}
 
-	// one second short of the window, from a DIFFERENT teammate: folds, and
-	// the fold keeps the original At/SessionID/AgentID — the hit's identity
-	// is the FIRST delivery, not the loudest one
-	inside := edgeNow.Add(limitHitDedupeWindow - time.Second)
-	folded, err := RecordLimitHit(j, "rate_limit", "two", "sess-b", "agent-2", inside)
+	// seconds later, from a DIFFERENT teammate: folds, and the fold keeps
+	// the original At/SessionID/AgentID — the hit's identity is the FIRST
+	// delivery, not the loudest one
+	folded, err := RecordLimitHit(j, "rate_limit", "two", "sess-b", "agent-2", edgeNow.Add(3*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -899,14 +901,35 @@ func TestEdgeRecordLimitHitDedupeWindowBoundary(t *testing.T) {
 		t.Errorf("folded identity = (%q,%q), want the first delivery's (%q,%q)", folded.SessionID, folded.AgentID, "sess-a", "")
 	}
 
-	// exactly ON the window: a fresh hit, counters reset
-	atBoundary := edgeNow.Add(limitHitDedupeWindow)
-	fresh, err := RecordLimitHit(j, "rate_limit", "three", "sess-c", "", atBoundary)
+	// ten minutes on (the transcript trigger's re-delivery cadence) and then
+	// nineteen hours on: still the same unresolved hit, still folds
+	for i, late := range []time.Time{edgeNow.Add(10*time.Minute + time.Second), edgeNow.Add(19 * time.Hour)} {
+		got, err := RecordLimitHit(j, "rate_limit", "again", "sess-late", "", late)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.At != first.At || got.Deliveries != 3+i {
+			t.Fatalf("late delivery %d = %+v, want a fold onto the original hit (At=%d, Deliveries=%d)", i, got, first.At, 3+i)
+		}
+	}
+
+	// resolution closes the hit: the next delivery is a fresh record
+	resolved := ReadLimitHit(j)
+	resolved.HandledAt = edgeNow.Add(20 * time.Hour).Unix()
+	resolved.Outcome = "parked-no-target"
+	raw, err := json.Marshal(resolved)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh.At != atBoundary.Unix() || fresh.Deliveries != 1 {
-		t.Fatalf("delivery exactly at the window = %+v, want a fresh record (At=now, Deliveries=1)", fresh)
+	if err := st.SetKV(limitHitKey(j.ID), string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := RecordLimitHit(j, "rate_limit", "three", "sess-c", "", edgeNow.Add(21*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.At != edgeNow.Add(21*time.Hour).Unix() || fresh.Deliveries != 1 {
+		t.Fatalf("delivery after resolution = %+v, want a fresh record (At=now, Deliveries=1)", fresh)
 	}
 	if fresh.SessionID != "sess-c" {
 		t.Errorf("fresh SessionID = %q, want the new delivery's", fresh.SessionID)
@@ -1117,7 +1140,7 @@ func TestEdgeNudgeCellAgentsEmptySetErrs(t *testing.T) {
 	j := &Job{Slug: "edge-nudge-empty", ID: 9, Repo: "monolith"}
 
 	t.Run("no peers at all", func(t *testing.T) {
-		n, err := nudgeCellAgents(j, nil)
+		n, err := nudgeCellAgents(j, nil, limitRescueNudgeMsg)
 		if err == nil {
 			t.Fatalf("nudgeCellAgents(nil) = (%d, nil), want an error for an empty set", n)
 		}
@@ -1131,7 +1154,7 @@ func TestEdgeNudgeCellAgentsEmptySetErrs(t *testing.T) {
 			edgeAgentPeer("cell-other-1", "%1", "claude", 0),
 			edgeAgentPeer("carl-scratch", "%2", "claude", 0),
 		}
-		n, err := nudgeCellAgents(j, peers)
+		n, err := nudgeCellAgents(j, peers, limitRescueNudgeMsg)
 		if err == nil {
 			t.Fatalf("nudgeCellAgents(other sessions only) = (%d, nil), want an error", n)
 		}
@@ -1143,14 +1166,18 @@ func TestEdgeNudgeCellAgentsEmptySetErrs(t *testing.T) {
 
 // --- the constants themselves ---
 
-// The four windows are load-bearing numbers rather than taste: the settle
-// is enforced ACROSS daemon ticks (so it must be larger than nothing and
-// small enough that one tick's cadence can carry it), and the retry
-// interval matches the health pass's repoke cadence. Pinning them here is
-// what makes the boundary cases above mean what their names say.
+// The windows are load-bearing numbers rather than taste: the settle is
+// enforced ACROSS daemon ticks (so it must be larger than nothing and
+// small enough that one tick's cadence can carry it), the retry interval
+// matches the health pass's repoke cadence, and the reset pair bounds the
+// re-arm in limitrescue_reset_test.go's cases. Pinning them here is what
+// makes those boundary cases mean what their names say.
 func TestEdgeLimitConstants(t *testing.T) {
-	if limitHitDedupeWindow != 2*time.Minute {
-		t.Errorf("limitHitDedupeWindow = %v, want 2m", limitHitDedupeWindow)
+	if limitResetSettle != 2*time.Minute {
+		t.Errorf("limitResetSettle = %v, want 2m", limitResetSettle)
+	}
+	if limitResetMaxWait != 6*time.Hour {
+		t.Errorf("limitResetMaxWait = %v, want 6h", limitResetMaxWait)
 	}
 	if limitRescueSettle != 15*time.Second {
 		t.Errorf("limitRescueSettle = %v, want 15s", limitRescueSettle)
@@ -1579,9 +1606,9 @@ func TestEdgeRecordLimitHitFoldPreservesTheSwapWatermark(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// a late teammate hook fires inside the window, carrying different
+	// a late teammate hook fires a minute on, carrying different
 	// details, a different session and a different agent
-	late := edgeNow.Add(limitHitDedupeWindow - time.Second)
+	late := edgeNow.Add(time.Minute)
 	got, err := RecordLimitHit(j, "rate_limit", "a later teammate's message", "sess-b", "agent-b", late)
 	if err != nil {
 		t.Fatal(err)
@@ -1740,7 +1767,7 @@ func TestEdgeNudgeCellAgentsRefusedSendsCountOutToZero(t *testing.T) {
 		t.Fatalf("fixture: want 2 target panes, got %d", len(cellAgentPanes(j, peers)))
 	}
 
-	nudged, err := nudgeCellAgents(j, peers)
+	nudged, err := nudgeCellAgents(j, peers, limitRescueNudgeMsg)
 	if err != nil {
 		t.Fatalf("nudgeCellAgents = (%d, %v), want a nil error — a per-pane failure is counted out, never fatal", nudged, err)
 	}
@@ -1749,7 +1776,7 @@ func TestEdgeNudgeCellAgentsRefusedSendsCountOutToZero(t *testing.T) {
 	}
 	// the pairing the guard depends on: err==nil does NOT imply anyone was
 	// reached, so `nudged > 0` has to be checked in its own right
-	if empty, emptyErr := nudgeCellAgents(j, nil); emptyErr == nil || empty != 0 {
+	if empty, emptyErr := nudgeCellAgents(j, nil, limitRescueNudgeMsg); emptyErr == nil || empty != 0 {
 		t.Fatalf("empty set = (%d, %v), want (0, error)", empty, emptyErr)
 	}
 }
@@ -2004,12 +2031,26 @@ func TestEdgeLimitRescueApplyNudgeOutcomeLiteralIsExact(t *testing.T) {
 		t.Run("outcome "+outcome, func(t *testing.T) {
 			hit := edgeApplyHit()
 			hit.Attempts = 1
+			hit.SwappedAt = edgeNow.Unix() - 60 // a landed swap: this nudge is the swap's completion
 			got := limitRescueApply(hit, rescueNudge, outcome, "", edgeNow)
 			if got.Outcome != "rotated" || got.HandledAt != edgeNow.Unix() {
 				t.Fatalf("= (HandledAt %d, Outcome %q), want (%d, %q) — only the exact literal counts a round", got.HandledAt, got.Outcome, edgeNow.Unix(), "rotated")
 			}
 			if got.Attempts != hit.Attempts {
 				t.Errorf("Attempts = %d, want %d unchanged — the resolving path counts nothing", got.Attempts, hit.Attempts)
+			}
+		})
+		t.Run("outcome "+outcome+" reset re-arm", func(t *testing.T) {
+			// The same resolve path with NO landed swap can only be the
+			// reset re-arm's nudge, and the outcome word must say so — a
+			// "rotated" here would claim a credential change that never
+			// happened.
+			hit := edgeApplyHit()
+			hit.Attempts = limitRescueMaxAttempts
+			hit.ResetAt = edgeNow.Unix() - 300
+			got := limitRescueApply(hit, rescueNudge, outcome, "", edgeNow)
+			if got.Outcome != "resumed-after-reset" || got.HandledAt != edgeNow.Unix() {
+				t.Fatalf("= (HandledAt %d, Outcome %q), want (%d, %q)", got.HandledAt, got.Outcome, edgeNow.Unix(), "resumed-after-reset")
 			}
 		})
 	}
@@ -2041,7 +2082,7 @@ func TestEdgeLimitRescueApplyNudgeOutcomeLiteralIsExact(t *testing.T) {
 // rotate gate cannot re-arm with Attempts back at zero. Both directions
 // matter — carrying from a RESOLVED record would resurrect a finished swap.
 func TestEdgeMergeLimitHitDeliveryCarriesTheSwapWatermark(t *testing.T) {
-	past := edgeNow.Add(-limitHitDedupeWindow - time.Second) // guarantees the fresh branch
+	past := edgeNow.Add(-time.Hour)
 	swapped := LimitHit{
 		Error: "rate_limit", Details: "the first delivery", At: past.Unix(),
 		SessionID: "sess-old", AgentID: "agent-old", Deliveries: 3,
@@ -2050,8 +2091,21 @@ func TestEdgeMergeLimitHitDeliveryCarriesTheSwapWatermark(t *testing.T) {
 	}
 
 	t.Run("carried when the superseded record was swapped and open", func(t *testing.T) {
-		got := mergeLimitHitDelivery(swapped, "rate_limit", "a later message", "sess-new", "agent-new", edgeNow)
+		// A same-error delivery now FOLDS onto an unresolved hit however
+		// late it lands, so the fresh branch is reached through a DIFFERENT
+		// error type. The carry must survive that hop and the hop back:
+		// unresolved-swapped → billing_error supersedes (carries) →
+		// rate_limit supersedes again (carries) → gate 5 nudges rather than
+		// swapping a second time.
+		hop := mergeLimitHitDelivery(swapped, "billing_error", "a different failure", "sess-mid", "", edgeNow.Add(-time.Minute))
+		if hop.Error != "billing_error" || hop.At != edgeNow.Add(-time.Minute).Unix() || hop.Deliveries != 1 {
+			t.Fatalf("first supersession = %+v, want a fresh billing_error record", hop)
+		}
+		if hop.SwappedAt != swapped.SwappedAt || hop.SwappedTo != swapped.SwappedTo {
+			t.Fatalf("first supersession dropped the swap watermark: (%d, %q)", hop.SwappedAt, hop.SwappedTo)
+		}
 
+		got := mergeLimitHitDelivery(hop, "rate_limit", "a later message", "sess-new", "agent-new", edgeNow)
 		want := LimitHit{
 			Error: "rate_limit", Details: "a later message", At: edgeNow.Unix(),
 			SessionID: "sess-new", AgentID: "agent-new", Deliveries: 1,

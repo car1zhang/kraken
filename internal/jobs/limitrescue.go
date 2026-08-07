@@ -3,7 +3,9 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"kraken/internal/core"
@@ -60,6 +62,24 @@ const (
 	// window has reset becomes eligible on a timescale of minutes, not
 	// seconds.
 	limitRescueRetryInterval = 10 * time.Minute
+	// limitResetSettle is how long past the banner's stated reset moment the
+	// reset-nudge waits. The banner's time carries minute precision and no
+	// seconds, and the serverside window is not guaranteed to reopen on the
+	// exact minute boundary — a nudge landing seconds early would burn the
+	// hit's resolution on a turn that fails on the same limit.
+	limitResetSettle = 2 * time.Minute
+	// limitResetMaxWait is the staleness bound on a parsed reset target. A
+	// FRESH banner names a reset at most one session window (~5h) ahead, so
+	// a target further out than this can only be a stale banner read long
+	// after it was written — the transcript trigger stamps hit.At at the
+	// TICK it noticed the stall, which lags the banner's write time (both
+	// real reset-clause rows in kraken.db were recorded after the time
+	// their clause names, by 84 and 3 minutes; a daemon restart or a
+	// sleeping Mac can stretch that lag to hours), and a stated time
+	// already behind the lagged anchor would otherwise roll a full day
+	// forward. A stale banner means the window already reopened, so the
+	// parse answers "due now" rather than "due tomorrow".
+	limitResetMaxWait = 6 * time.Hour
 )
 
 // limitRescueNudgeMsg is what every agent in the rescued cell is told. It
@@ -68,13 +88,102 @@ const (
 // carl reads, not in the crew's context.
 const limitRescueNudgeMsg = "kraken: your last turn failed on a usage limit. The main Claude account has been switched to a healthier one and the new credential is live — continue where you left off."
 
+// limitResetNudgeMsg is the no-swap sibling of limitRescueNudgeMsg: the
+// account never moved, its own window reopened. Same rule about naming no
+// account — this lands in a transcript.
+const limitResetNudgeMsg = "kraken: your last turn failed on a usage limit. That account's usage window has since reset — continue where you left off."
+
+// limitResetRe matches the reset clause the SESSION-limit banner carries:
+// "resets 4:50am (America/New_York)", "resets 10:20pm" — an hour, optional
+// minutes, am/pm, and an optional IANA zone in parens. That family is the
+// only one with a bare-time clause: the weekly banner's date form ("resets
+// Aug 12 at 3pm") deliberately never matches (measured — it parses to zero),
+// and banners with no clause at all (credit entitlement, Fable tier) never
+// match either, so both route to the terminal park exactly as before. That
+// scoping matters: a bare time can only describe a window at most a day
+// out, so a distant weekly reset must never reach the re-arm through it.
+var limitResetRe = regexp.MustCompile(`(?i)resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)]+)\))?`)
+
+// parseLimitReset extracts the banner's stated reset moment from a hit's
+// recorded details, as unix seconds — the first wall-clock occurrence of the
+// stated time STRICTLY AFTER the hit itself, in the banner's own zone when
+// it names one and the machine's otherwise. Zero when the text carries no
+// parseable clause, which callers treat as "no reset re-arm" rather than an
+// error: the terminal park is the correct fallback for a banner that never
+// said when it ends.
+//
+// Anchoring on the HIT time rather than on the current tick is what makes
+// the answer stable: every tick re-deriving "next 4:50am after now" would
+// walk the target forward a day the moment the first computation's day
+// passed, and the re-arm would never fire.
+func parseLimitReset(details string, hitAt time.Time) int64 {
+	m := limitResetRe.FindStringSubmatch(details)
+	if m == nil {
+		return 0
+	}
+	hour, err := strconv.Atoi(m[1])
+	if err != nil || hour < 1 || hour > 12 {
+		return 0
+	}
+	minute := 0
+	if m[2] != "" {
+		minute, err = strconv.Atoi(m[2])
+		if err != nil || minute > 59 {
+			return 0
+		}
+	}
+	if strings.EqualFold(m[3], "pm") {
+		if hour != 12 {
+			hour += 12
+		}
+	} else if hour == 12 {
+		hour = 0
+	}
+	loc := time.Local
+	if m[4] != "" {
+		if l, lerr := time.LoadLocation(strings.TrimSpace(m[4])); lerr == nil {
+			loc = l
+		}
+	}
+	at := hitAt.In(loc)
+	candidate := time.Date(at.Year(), at.Month(), at.Day(), hour, minute, 0, 0, loc)
+	if !candidate.After(at) {
+		candidate = time.Date(at.Year(), at.Month(), at.Day()+1, hour, minute, 0, 0, loc)
+	}
+	// Staleness cap — see limitResetMaxWait. It binds ANY target beyond the
+	// cap, rolled past midnight or not: the cap's premise is that a fresh
+	// session banner cannot name a reset more than one window (~5h) ahead,
+	// and a rolled-only guard made a 21-minute shift in when the daemon
+	// noticed the stall swing the outcome by 22 hours — the same stale
+	// 10:20pm banner read at 23:44 was already-due, and read at 00:05 was a
+	// 22h15m park, because crossing midnight un-rolled it. Answering with
+	// the hit time itself makes the stale case already-due: the decide
+	// chain's settle margin then releases the nudge on the next tick, which
+	// is the right action for a window that reopened before kraken ever
+	// read the banner. The cap also bounds the fall-back DST roll (once a
+	// year, same shape as a stale banner). Spring-forward names a wall time
+	// that does not exist; Go documents time.Date's choice there as
+	// unspecified, and this toolchain measures it resolving an hour EARLY —
+	// the nudge then fails on the still-closed window and resolves the hit,
+	// but the failed turn writes a fresh banner and a fresh, correctly
+	// anchored record within a tick or two, so the cost is one wasted turn
+	// once a year, not a strand.
+	if candidate.Sub(at) > limitResetMaxWait {
+		return at.Unix()
+	}
+	return candidate.Unix()
+}
+
 // limitHitTriggerKey and limitHitTriggerDue are the health pass's churn
 // bound, split out of the tick so the rule can be tested without discovery,
 // tmux or a daemon. The pass they guard is the transcript-derived trigger:
 // CellHealth classifies off the LAST transcript entry, so a cell that stays
-// stalled re-reports the same reason every tick, while RecordLimitHit's fold
-// only joins deliveries inside limitHitDedupeWindow — ungated, that opens a
-// fresh hit every couple of minutes and walks the pool one account at a time.
+// stalled re-reports the same reason every tick. RecordLimitHit's fold now
+// absorbs a re-delivery onto the still-unresolved hit, so ungated ticks
+// would no longer walk the pool — but they would still write a log event
+// and re-marshal the record every 15 seconds per stalled cell, and once the
+// hit RESOLVES an ungated trigger would open a fresh one on the very next
+// tick, restarting the whole rescue against a banner already handled.
 //
 // The bound has to expire, and that half was the expensive one to learn: a
 // key that is only ever SET reads as "one hit per distinct banner for the
@@ -142,12 +251,24 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 	if mode == "manual" {
 		return rescueParkManual, "account rotation is pinned to manual — not rotating"
 	}
-	// Defensive floor rather than the normal exit. limitRescueApply resolves
-	// a park at the moment the INCREMENTED attempt count reaches the max, so
-	// an exhausted hit already carries a HandledAt and never gets past gate 2
-	// — this gate only catches a record whose counter was advanced by
-	// something other than the park path, and refuses to keep rotating on it.
+	// Attempts spent. With no reset time on the record this is the defensive
+	// floor it always was: limitRescueApply resolves a park at the moment the
+	// INCREMENTED attempt count reaches the max, so an exhausted hit already
+	// carries a HandledAt and never gets past gate 2, and this gate only
+	// catches a record whose counter was advanced by something else. WITH a
+	// reset time, an exhausted hit is the ordinary parked-until-reset state:
+	// the park deliberately left it unresolved, and this gate is what holds
+	// it (skip) until the banner's own stated reopen time has passed, then
+	// releases the no-swap nudge. Four cells measured 2026-08-06 sat 42m to
+	// 10h37m dead on the far side of a reset their banner named, because the
+	// park was terminal.
 	if hit.Attempts >= limitRescueMaxAttempts {
+		if hit.ResetAt != 0 {
+			if now.Sub(time.Unix(hit.ResetAt, 0)) >= limitResetSettle {
+				return rescueNudge, "usage window reset — resuming the cell"
+			}
+			return rescueSkip, ""
+		}
 		return rescueParkNoTarget, fmt.Sprintf("no rotation target after %d attempts", hit.Attempts)
 	}
 	if hit.Attempts > 0 && now.Sub(time.Unix(hit.LastAttempt, 0)) < limitRescueRetryInterval {
@@ -243,13 +364,13 @@ func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, e
 //
 // A per-pane failure is counted out rather than raised — rescuing three of
 // four agents beats rescuing none — so the only error is an empty target set.
-func nudgeCellAgents(j *Job, all []*core.Peer) (nudged int, err error) {
+func nudgeCellAgents(j *Job, all []*core.Peer, msg string) (nudged int, err error) {
 	targets := cellAgentPanes(j, all)
 	if len(targets) == 0 {
 		return 0, fmt.Errorf("%s: no live agent panes found to nudge", j.Slug)
 	}
 	for _, p := range targets {
-		if sendErr := core.SendMessage(p, limitRescueNudgeMsg); sendErr != nil {
+		if sendErr := core.SendMessage(p, msg); sendErr != nil {
 			dlogEvent("error", "limit-rescue-failed", "%s: nudge of pane %s failed: %v", j.Slug, p.Pane, sendErr)
 			continue
 		}
@@ -297,18 +418,25 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 	case rescueNudge:
 		if outcome == "no-agents" {
 			// A round that reached NOBODY. It must not resolve the hit (that
-			// strands a swapped cell), but it cannot be unbounded either:
-			// while a hit sits swapped-but-unresolved, a delivery arriving
-			// past the dedupe window supersedes it, and every such cycle
-			// re-arms the rotate gate with Attempts back at zero — so the
-			// attempt cap is bypassed rather than exceeded, and the pool
-			// drains one account per cycle for as long as the tmux session
-			// outlives its agents. Increment-then-test, exactly as
-			// rescueParkNoTarget does, so a cell whose crew cannot be reached
-			// parks instead.
+			// strands a swapped cell), but it cannot be unbounded either —
+			// an open hit is re-decided every tick, and a crew that can
+			// never be reached would write this event forever.
+			// Increment-then-test, exactly as rescueParkNoTarget does, so a
+			// cell whose crew cannot be reached parks instead. The cap is
+			// path-relative: a reset re-arm ARRIVES with Attempts already at
+			// the max (the parks spent them), so capping it at the same
+			// absolute number would give its nudge exactly one shot at a
+			// discovery snapshot the code below calls "not exotic" to find
+			// empty — the swap path's nudge effectively gets several rounds,
+			// and the reset path gets the same allowance on top of the
+			// attempts it inherited.
+			failCap := limitRescueMaxAttempts
+			if hit.SwappedAt == 0 && hit.ResetAt != 0 {
+				failCap = limitRescueMaxAttempts * 2
+			}
 			hit.Attempts++
 			hit.LastAttempt = now.Unix()
-			if hit.Attempts >= limitRescueMaxAttempts {
+			if hit.Attempts >= failCap {
 				hit.HandledAt = now.Unix()
 				hit.Outcome = "parked-no-agents"
 			}
@@ -317,8 +445,14 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 		// Reached at least one pane: resolved whether or not EVERY pane was
 		// reachable — the account is already swapped, and re-running the swap
 		// because one pane was busy would rotate a second time for nothing.
+		// The outcome word records WHICH nudge this was: a swap's completion,
+		// or the no-swap resume after the window's own reset.
 		hit.HandledAt = now.Unix()
-		hit.Outcome = "rotated"
+		if hit.SwappedAt != 0 {
+			hit.Outcome = "rotated"
+		} else {
+			hit.Outcome = "resumed-after-reset"
+		}
 	case rescueParkManual:
 		// No counter touched: carl pinned the account deliberately, so there
 		// is nothing here to retry and nothing to count.
@@ -328,8 +462,18 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 		hit.Attempts++
 		hit.LastAttempt = now.Unix()
 		if hit.Attempts >= limitRescueMaxAttempts {
-			hit.HandledAt = now.Unix()
-			hit.Outcome = "parked-no-target"
+			// Terminal only when the banner never said when the window
+			// reopens. With a parsed ResetAt the hit stays UNRESOLVED on
+			// purpose: the decide chain's exhausted-attempts gate holds it
+			// (skip) until the reset passes, then releases the no-swap nudge
+			// — resolving here would close the one record that can wake the
+			// cell.
+			if hit.ResetAt != 0 {
+				hit.Outcome = "parked-until-reset"
+			} else {
+				hit.HandledAt = now.Unix()
+				hit.Outcome = "parked-no-target"
+			}
 		}
 	}
 	return hit
@@ -371,6 +515,7 @@ func mergeLimitRescueState(cur, hit LimitHit) (LimitHit, bool) {
 	cur.SwappedTo = hit.SwappedTo
 	cur.HandledAt = hit.HandledAt
 	cur.Outcome = hit.Outcome
+	cur.ResetAt = hit.ResetAt
 	return cur, true
 }
 
@@ -454,6 +599,31 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		return
 	}
 	now := time.Now()
+	// Derive the banner's stated reset moment before deciding, so the decide
+	// chain and the park write-back both see it. In-memory only until the
+	// next apply-save persists it; a details string with no clause re-derives
+	// zero every tick, which costs one regexp scan and writes nothing.
+	if hit.ResetAt == 0 {
+		hit.ResetAt = parseLimitReset(hit.Details, time.Unix(hit.At, 0))
+	}
+	// A parked-until-reset hit is unresolved for its whole wait — the one
+	// long-lived shape gate 2's short-circuit above cannot cover — and
+	// selectRescueTarget below costs a usage-snapshot read plus a full
+	// rotation ranking. Skip the wait ticks before paying it. In auto mode
+	// the decide chain would return skip anyway (its exhausted-attempts
+	// gate holds a future reset); under a MANUAL pin it would return
+	// park-manual instead, and suppressing that is deliberate — the hit has
+	// already parked once, its notification already fired, and re-parking
+	// it would resolve the record and kill the pending reset nudge. The
+	// skip also makes the wait's rotate-blindness explicit: a pool account
+	// that turns healthy mid-wait is not used — the attempts were spent,
+	// the window's own reset is nearer than another swap cycle, and
+	// re-arming rotates here would re-open the uncapped-selection problem
+	// the attempt cap exists for.
+	if hit.SwappedAt == 0 && hit.Attempts >= limitRescueMaxAttempts && hit.ResetAt != 0 &&
+		now.Sub(time.Unix(hit.ResetAt, 0)) < limitResetSettle {
+		return
+	}
 	target, mainEmail, _ := selectRescueTarget(now)
 	action, reason := limitRescueDecide(hit, RotationMode(), live[CellSession(j)], target != "", now)
 	if action == rescueSkip {
@@ -511,7 +681,14 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		}
 
 	case rescueNudge:
-		nudged, err := nudgeCellAgents(j, all)
+		// Which nudge this is decides what the crew is told: a landed swap
+		// means a new credential is live; a zero SwappedAt on this arm can
+		// only be the reset re-arm, where the account never moved.
+		nudgeMsg := limitRescueNudgeMsg
+		if hit.SwappedAt == 0 {
+			nudgeMsg = limitResetNudgeMsg
+		}
+		nudged, err := nudgeCellAgents(j, all, nudgeMsg)
 		if err != nil || nudged == 0 {
 			// A hit resolved with NOBODY nudged is a permanently stranded
 			// cell: the account was swapped, the crew was never told, and a
@@ -532,8 +709,17 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 				dlogErr("%s: persist limit-hit record failed: %v", j.Slug, saveErr)
 			}
 			if hit.HandledAt != 0 {
-				notifyOnce("kraken ⚠ "+j.Slug, "usage limit — account switched but the cell's agents could not be reached")
-				dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d nudge rounds reached no agent pane — account was switched, cell was not resumed", j.Slug, hit.Attempts)
+				// Which nudge failed decides what carl is told: on the reset
+				// path no credential ever moved, and a notice claiming a
+				// switch would report a machine-wide change that never
+				// happened.
+				if hit.SwappedAt != 0 {
+					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — account switched but the cell's agents could not be reached")
+					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d nudge rounds reached no agent pane — account was switched, cell was not resumed", j.Slug, hit.Attempts)
+				} else {
+					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — window reset but the cell's agents could not be reached")
+					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d nudge rounds reached no agent pane — window had reset, cell was not resumed", j.Slug, hit.Attempts)
+				}
 				return
 			}
 			dlogEvent("error", "limit-rescue-failed", "%s: %s: nudge round %d reached no agent pane (%v)", j.Slug, reason, hit.Attempts, err)
@@ -558,7 +744,22 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		if err := saveLimitRescueState(j, hit); err != nil {
 			dlogErr("%s: persist limit-hit record failed: %v", j.Slug, err)
 		}
-		notifyOnce("kraken ⚠ "+j.Slug, "hit a usage limit — "+reason)
+		// Worded for attempt 1, where the notification actually fires
+		// (notifyOnce keys on the hit, and the first park is the first
+		// chance): two more rotate attempts are still ahead, so the reset
+		// nudge is conditional, not promised. The time carries a date
+		// whenever the target is not today — a bare "10:20pm" for a
+		// tomorrow target reads as tonight.
+		parkNote := "hit a usage limit — " + reason
+		if hit.ResetAt != 0 {
+			reset := time.Unix(hit.ResetAt, 0).Local()
+			form := "3:04pm"
+			if reset.Format("2006-01-02") != now.Local().Format("2006-01-02") {
+				form = "3:04pm on Jan 2"
+			}
+			parkNote += " — will keep retrying, and if no account appears, nudge the cell after the window resets at " + reset.Format(form)
+		}
+		notifyOnce("kraken ⚠ "+j.Slug, parkNote)
 		dlogEvent("info", "limit-rescue-skipped", "%s: %s (attempt %d)", j.Slug, reason, hit.Attempts)
 	}
 }
