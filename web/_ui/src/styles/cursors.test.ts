@@ -1,17 +1,18 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-// cursors.test.ts — pins the reversal round's art/role assignment: the REST
-// cursor (body) is the open reticle — pulled-back arms, a 3.5-radius ring —
-// and every ACT-ABLE surface (pointer/text/grab/grabbing fallbacks) wears
-// the full dot crosshair. The two arts predate the swap; only the roles
-// moved, and a rule quietly reverting one role would read as "the swap
-// never happened" with nothing else failing. Same source-text stance as
-// motion.test.ts beside it: the invariant lives in the stylesheet, so the
-// test reads the sheet — and same twin arrangement: web/cursorpolicy_test.go
-// is the Go copy that puts this rule behind `go test ./...` (npm test is not
-// part of the repo's gate); this copy exists so a web-side edit fails in the
-// web-side suite too, with the better error.
+// cursors.test.ts — pins the cursor family's art/role assignment: the REST
+// cursor (body) is the full dot crosshair, and every ACT-ABLE surface
+// (pointer/text/grab/grabbing fallbacks) wears the open reticle — pulled-back
+// arms, a 3.5-radius ring. The reversal round swapped the roles, carl drove
+// it and switched them back, so this assignment is a decision made twice —
+// and a rule quietly flipping one role would read as "nothing changed" with
+// nothing else failing. Same source-text stance as motion.test.ts beside it:
+// the invariant lives in the stylesheet, so the test reads the sheet — and
+// same twin arrangement: web/cursorpolicy_test.go is the Go copy that puts
+// this rule behind `go test ./...` (npm test is not part of the repo's
+// gate); this copy exists so a web-side edit fails in the web-side suite
+// too, with the better error.
 
 // path relative to the vitest root (web/_ui), not import.meta.url: under
 // the jsdom environment that is not a file: URL and readFileSync rejects it
@@ -39,19 +40,19 @@ describe("cursor family", () => {
     expect(decls.length).toBe((css.match(/cursor:\s*url\(/g) ?? []).length);
   });
 
-  it("rest (the crosshair fallback) wears the ring reticle", () => {
+  it("rest (the crosshair fallback) wears the dot crosshair", () => {
     const rest = decls.filter(([, kw]) => kw === "crosshair");
     expect(rest.length).toBe(2); // the dark and light body rules, exactly
     for (const [svg] of rest) {
-      expect(svg, `rest cursor lost the ring art: ${svg}`).toContain(RING);
+      expect(svg, `rest cursor lost the dot art: ${svg}`).toContain(DOT);
     }
   });
 
-  it("every act-able surface wears the dot crosshair", () => {
+  it("every act-able surface wears the ring reticle", () => {
     const actable = decls.filter(([, kw]) => kw !== "crosshair");
     expect(actable.length).toBeGreaterThan(0);
     for (const [svg, kw] of actable) {
-      expect(svg, `act-able (${kw}) cursor lost the dot art: ${svg}`).toContain(DOT);
+      expect(svg, `act-able (${kw}) cursor lost the ring art: ${svg}`).toContain(RING);
     }
   });
 

@@ -317,14 +317,14 @@ body::after {
 /* ---- cursors: one crosshair family — 2px arms — in the board's opposite,
    near-white on dark, near-black on light, in TWO arts (carl's cursor
    round, after a serifed third variant tried for text boxes came out
-   janky; the reversal round then swapped which art wears which ROLE —
-   the arts themselves are unchanged):
+   janky; the reversal round then swapped the roles, carl drove it on the
+   dev board and switched them back — this assignment is a decision made
+   twice, not a default):
 
-     rest      — an open reticle (the ring crosshair): the arms pull back
+     rest      — full crosshair, arms to 3px of centre, small filled dot;
+     act-able  — an open reticle (the ring crosshair): the arms pull back
                  and a larger 1.8px-stroke ring floats in the gap they
-                 leave;
-     act-able  — full crosshair, arms to 3px of centre, small filled dot.
-                 Worn by clickables, drag handles AND text-entry
+                 leave. Worn by clickables, drag handles AND text-entry
                  surfaces — "you can act here" is one statement, and the
                  fallback keyword (pointer/grab/text) is what still keeps
                  the three roles apart when the URI is refused.
@@ -335,9 +335,9 @@ body::after {
    24px art, hotspot 12 12 (dead centre). The trailing keyword is the fallback
    for a browser that refuses the data URI. */
 body {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, crosshair;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%23f2edff"/></svg>') 12 12, crosshair;
 }
-/* this list is the ONE owner of the pointer cursor (the dot crosshair): a
+/* this list is the ONE owner of the pointer cursor (the ring crosshair): a
    later rule re-declaring `cursor: pointer` at equal-or-higher specificity
    silently wins the cascade and brings the OS hand back. The review round
    found eight — five cascade-overrides visible in dark theme only (the light
@@ -349,10 +349,10 @@ button, a, [role="button"], summary, label.check,
 .thread-chip, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
 input[type="checkbox"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%23f2edff"/></svg>') 12 12, pointer;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
 :root[data-theme="light"] body {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, crosshair;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%231a1724"/></svg>') 12 12, crosshair;
 }
 :root[data-theme="light"] button, :root[data-theme="light"] a,
 :root[data-theme="light"] [role="button"], :root[data-theme="light"] summary,
@@ -366,11 +366,11 @@ input[type="checkbox"] {
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
 :root[data-theme="light"] #thread-panehead,
 :root[data-theme="light"] input[type="checkbox"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%231a1724"/></svg>') 12 12, pointer;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
-/* text-entry surfaces wear the same dot crosshair with the `text` fallback
-   — "you can act here", the act being typing. These rules still exist
-   separately from the pointer lists for the fallback keyword alone. The
+/* text-entry surfaces wear the same reticle with the `text` fallback — "you
+   can act here", the act being typing. These rules still exist separately
+   from the pointer lists for the fallback keyword alone. The
    `input:not([type])` term is not optional: an attribute selector matches
    the content attribute, never the IDL default, and five of the app's
    eight single-line text fields are bare `<input>` elements (the thread
@@ -389,28 +389,28 @@ input[type="checkbox"] {
    out-specified the bare class. */
 input[type="text"], input:not([type]), input[type="search"], input[type="number"], textarea,
 .thread-name-label {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%23f2edff"/></svg>') 12 12, text;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, text;
 }
 :root[data-theme="light"] input[type="text"], :root[data-theme="light"] input:not([type]),
 :root[data-theme="light"] input[type="search"], :root[data-theme="light"] input[type="number"],
 :root[data-theme="light"] textarea, :root[data-theme="light"] .thread-name-label {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%231a1724"/></svg>') 12 12, text;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, text;
 }
-/* a drag handle outranks both, but it wears the SAME dot crosshair as every
-   other clickable (carl's call at the perf round: no OS grab hand — the
-   act-able art already says "actionable", and the card's lift animation says
-   "dragging"). The OS keywords survive only as the data-URI fallback. */
+/* a drag handle outranks both, but it wears the SAME ring crosshair as every
+   other clickable (carl's call at the perf round: no OS grab hand — the ring
+   already says "actionable", and the card's lift animation says "dragging").
+   The OS keywords survive only as the data-URI fallback. */
 .card[draggable="true"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%23f2edff"/></svg>') 12 12, grab;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grab;
 }
 .card.dragging {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%23f2edff"/></svg>') 12 12, grabbing;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grabbing;
 }
 :root[data-theme="light"] .card[draggable="true"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%231a1724"/></svg>') 12 12, grab;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grab;
 }
 :root[data-theme="light"] .card.dragging {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%231a1724"/></svg>') 12 12, grabbing;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grabbing;
 }
 
 /* ---- chrome ----
@@ -850,7 +850,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   transition: border-color 140ms var(--ease);
 }
 /* no cursor rules here: the cursors section near the top of the sheet owns
-   the drag cursor (the dot crosshair with a grab/grabbing keyword fallback),
+   the drag cursor (the ring crosshair with a grab/grabbing keyword fallback),
    and a bare `cursor: grab` repeated HERE would win the cascade over those
    data-URI rules and silently bring the OS hand back. */
 /* the in-column original while its card live-shifts around the pointer
@@ -1404,11 +1404,11 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    is the one token in it that is not a count — see JobCard's band note.
 
    Not a .chip and not a button, same fall-through reason as .ct-chip/.dq-chip/
-   .fb-chip above: .chip is the artifact-overlay click target. The dot-crosshair
-   pointer cursor it shows is the card's affordance showing through an element
-   that does not intercept the click, and it comes from the cursors section's
-   list — never a local cursor declaration, which would out-cascade the
-   data-URI (see the note on that list).
+   .fb-chip above: .chip is the artifact-overlay click target. The pointer-ring
+   cursor it shows is the card's affordance showing through an element that
+   does not intercept the click, and it comes from the cursors section's list —
+   never a local cursor declaration, which would out-cascade the data-URI (see
+   the note on that list).
 
    Sized exactly like its siblings (9px mono, 2px 6px, 1px border) so leading
    the row costs the same width as any other chip in it. white-space: nowrap
@@ -2097,6 +2097,22 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   white-space: nowrap;
 }
 .colorsel-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--ac); }
+/* in the editor's .f-row the dropdown buttons sit beside real text inputs
+   (base, model), and the chip-scale button read as half their height —
+   carl's sizing note at the follow-up round. Match the inputs' font-size,
+   padding and 120px min-width there (letter-spacing stays the chip's own
+   0.06em — the skin's identity, not an oversight), and anchor the caret to
+   the right edge, where the min-width floor would otherwise leave it
+   floating mid-button after a short value. The steer head is untouched by
+   MARKUP, not by cascade: its picker is a .f-swatches span in the
+   .panel-head, and the sheet's only .f-row is the editor form's, so this
+   rule never matches there. Do not lean on the .panel-head pin instead —
+   it sits ~400 lines ABOVE, both selectors are (0,2,0) so this later rule
+   would take the padding, and that pin declares neither font-size nor
+   min-width to lose; a .f-row inside a modal head would regress the strip
+   silently. */
+.f-row .colorsel-btn { font-size: 10px; padding: 6px 9px; min-width: 120px; }
+.f-row .colorsel-btn .caret { margin-left: auto; }
 /* only the repo dropdown ever disables (read-only form); the colour picker
    stays live by design. Same treatment as .btn:disabled — including its
    theme asymmetry: (0,2,0) beats the dark pointer list's bare `button` term

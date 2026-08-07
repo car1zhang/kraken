@@ -8,12 +8,13 @@ import (
 )
 
 // cursorpolicy_test.go — the Go twin of _ui/src/styles/cursors.test.ts,
-// pinning the reversal round's cursor art/role assignment: the REST cursor
-// (body, `crosshair` fallback) is the open reticle — pulled-back arms, a
-// 3.5-radius ring — and every ACT-ABLE surface (pointer/text/grab/grabbing
-// fallbacks) wears the full dot crosshair. The two arts predate the swap;
-// only the roles moved, and a rule quietly reverting one role would read as
-// "the swap never happened" with nothing else failing.
+// pinning the cursor family's art/role assignment: the REST cursor (body,
+// `crosshair` fallback) is the full dot crosshair, and every ACT-ABLE
+// surface (pointer/text/grab/grabbing fallbacks) wears the open reticle —
+// pulled-back arms, a 3.5-radius ring. The reversal round swapped the
+// roles, carl drove it and switched them back, so this assignment is a
+// decision made twice — and a rule quietly flipping one role would read as
+// "nothing changed" with nothing else failing.
 //
 // The twin exists for motionpolicy_test.go's exact reason: the vitest copy
 // runs only under `npm test`, which neither `make build` nor
@@ -64,7 +65,7 @@ func TestCursorPinSeesEveryDecl(t *testing.T) {
 	}
 }
 
-func TestRestCursorWearsTheRing(t *testing.T) {
+func TestRestCursorWearsTheDot(t *testing.T) {
 	_, decls := cursorDecls(t)
 	var rest [][2]string
 	for _, d := range decls {
@@ -77,13 +78,13 @@ func TestRestCursorWearsTheRing(t *testing.T) {
 		t.Errorf("expected exactly 2 rest (crosshair-fallback) cursor rules, got %d", len(rest))
 	}
 	for _, d := range rest {
-		if !strings.Contains(d[0], ringArt) {
-			t.Errorf("rest cursor lost the ring art: %s", d[0])
+		if !strings.Contains(d[0], dotArt) {
+			t.Errorf("rest cursor lost the dot art: %s", d[0])
 		}
 	}
 }
 
-func TestActableCursorsWearTheDot(t *testing.T) {
+func TestActableCursorsWearTheRing(t *testing.T) {
 	_, decls := cursorDecls(t)
 	kws := map[string]bool{}
 	for _, d := range decls {
@@ -91,8 +92,8 @@ func TestActableCursorsWearTheDot(t *testing.T) {
 		if d[1] == "crosshair" {
 			continue
 		}
-		if !strings.Contains(d[0], dotArt) {
-			t.Errorf("act-able (%s) cursor lost the dot art: %s", d[1], d[0])
+		if !strings.Contains(d[0], ringArt) {
+			t.Errorf("act-able (%s) cursor lost the ring art: %s", d[1], d[0])
 		}
 	}
 	// The fallback keywords are what keep the roles apart when a browser
