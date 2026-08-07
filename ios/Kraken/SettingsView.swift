@@ -44,10 +44,6 @@ struct SettingsView: View {
                                 Text("Dark").tag("dark")
                             }
                             .pickerStyle(.segmented)
-
-                            Text("System follows the iOS appearance, including scheduled dark mode.")
-                                .font(.voice(11))
-                                .foregroundStyle(KTheme.text2)
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -57,9 +53,6 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Theme color").kLabelStyle()
                             themeTintStrip
-                            Text("One hue drives the background, the glass and the accent. Job colors, state colors and skill colors never re-tint — those carry meaning.")
-                                .font(.voice(11))
-                                .foregroundStyle(KTheme.text2)
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -130,10 +123,6 @@ struct SettingsView: View {
                                     .font(.voice(11))
                                     .foregroundStyle(KTheme.revealed)
                             }
-
-                            Text("Checked in the background every ~15 minutes (iOS-scheduled, not exact) plus whenever the board tab is open. Background delivery stops if the app is force-quit.")
-                                .font(.voice(11))
-                                .foregroundStyle(KTheme.text2)
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -160,19 +149,11 @@ struct SettingsView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-
-                            Text("The daemon's unified event log, newest first — the same stream as the web board's LOG tab.")
-                                .font(.voice(11))
-                                .foregroundStyle(KTheme.text2)
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Text("Server must run `k web --tailnet` on the Mac; traffic stays inside your tailnet.")
-                        .font(.voice(11))
-                        .foregroundStyle(KTheme.text2)
-                        .padding(.horizontal, 4)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -311,9 +292,6 @@ private struct MacControlsSection: View {
                     updateControl
                 }
                 messageArea
-                Text("Ship builds and uploads the iOS app to TestFlight; update pulls and rebuilds kraken on the Mac, restarting the server it is talking to. Neither asks twice — the tap is the decision.")
-                    .font(.voice(11))
-                    .foregroundStyle(KTheme.text2)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
