@@ -234,9 +234,14 @@ private struct UsageBanner: View {
     }
 }
 
+/// The account-pool readout. Presented as a DRAWER (a sheet off the Board's
+/// gauge toolbar button) rather than as the tab it used to be — it is a thing
+/// you check, not a place you live. Behaviour below, including the 30s poll,
+/// is unchanged by that move; only the close button is new.
 struct UsageView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismiss
     @State private var vm = UsageViewModel()
 
     private var footerText: String? {
@@ -273,11 +278,37 @@ struct UsageView: View {
                             }
                         }
 
+                        // A snapshot that lists no accounts at all used to
+                        // render as one grey meta line under a title — a screen
+                        // that looks broken rather than empty. Say which it is.
+                        if usage.accounts.isEmpty {
+                            ContentUnavailableView(
+                                "No accounts",
+                                systemImage: "person.crop.circle.badge.questionmark",
+                                description: Text("The daemon's snapshot lists no Claude accounts — add one with `ccp login` on the Mac.")
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+
                         if let footerText {
                             Text(footerText)
                                 .font(.voice(11))
                                 .foregroundStyle(KTheme.text2)
                         }
+                    } else if vm.errorMessage == nil {
+                        // First load. The fetch can sit for the whole request
+                        // timeout when the Mac is asleep or off the tailnet,
+                        // and until this existed the drawer was a blank sheet
+                        // for every second of it.
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .tint(KTheme.accent)
+                                .controlSize(.large)
+                            Spacer()
+                        }
+                        .padding(.top, 60)
+                        .accessibilityLabel("Loading usage")
                     }
 
                     if let err = vm.errorMessage {
@@ -292,9 +323,16 @@ struct UsageView: View {
             .scrollContentBackground(.hidden)
             .background { ThemeBackgroundView() }
             .navigationTitle("Usage")
-            // Large title, and no per-view opaque scroll-edge appearance —
-            // this screen is one of the three the deleted proxy used to hide.
-            .navigationBarTitleDisplayMode(.large)
+            // Small centred title: this is a DRAWER now, and drawers get the
+            // inline treatment (the .large here was left over from its life as
+            // a tab). Still no per-view opaque scroll-edge appearance — this
+            // screen is one of the three the deleted proxy used to hide.
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    SheetCloseButton { dismiss() }
+                }
+            }
             .refreshable { await vm.refresh(baseURL: serverURL) }
             .task(id: scenePhase) {
                 guard scenePhase == .active else { return }

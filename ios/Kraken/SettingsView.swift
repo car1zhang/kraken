@@ -6,6 +6,14 @@ import SwiftUI
 // over spacing/surfaces with none of that baggage.
 struct SettingsView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(AppRouter.self) private var router
+    // The board's model, owned by KrakenApp. Settings reads it for exactly one
+    // thing: the ship + update controls, which used to live in the board's
+    // daemon bar. Sharing the instance rather than making a second one is what
+    // keeps a run started here visible in the board's ship banner, and vice
+    // versa. See KrakenApp.boardVM.
+    @Environment(BoardViewModel.self) private var boardVM
     @AppStorage("notifyBlocked") private var notifyBlocked = false
     @AppStorage("appearance") private var appearance = "system"
     /// The theme tint, persisted under the one key KTheme owns. Writing a
@@ -17,6 +25,10 @@ struct SettingsView: View {
     @State private var testIsError = false
     @State private var isTesting = false
     @State private var notificationManager = NotificationManager.shared
+    // The LOG drawer, opened by the row below or by kraken://log. The log was
+    // a tab until the nav restructure; it is a thing you go and look at when
+    // something is off, which is a drawer, not one of four homes.
+    @State private var showingLog = false
 
     var body: some View {
         NavigationStack {
@@ -127,6 +139,36 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
+                    MacControlsSection(vm: boardVM, serverURL: serverURL)
+
+                    ThemedCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Diagnostics").kLabelStyle()
+
+                            Button {
+                                showingLog = true
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Label("Log", systemImage: "list.bullet.rectangle")
+                                        .font(.voice(13))
+                                        .foregroundStyle(KTheme.text)
+                                    Spacer(minLength: 6)
+                                    Image(systemName: "chevron.right")
+                                        .font(.voice(11))
+                                        .foregroundStyle(KTheme.text2)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Text("The daemon's unified event log, newest first — the same stream as the web board's LOG tab.")
+                                .font(.voice(11))
+                                .foregroundStyle(KTheme.text2)
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     Text("Server must run `k web --tailnet` on the Mac; traffic stays inside your tailnet.")
                         .font(.voice(11))
                         .foregroundStyle(KTheme.text2)
@@ -143,7 +185,38 @@ struct SettingsView: View {
                     notificationManager.refreshAuthorizationStatus()
                 }
             }
+            // LogView carries its own NavigationStack and close button, so it
+            // is presented bare rather than wrapped.
+            .sheet(isPresented: $showingLog) { LogView() }
+            // kraken://log stamps pendingLog and selects this tab; this view
+            // owns the drawer, so it is the one that consumes and clears the
+            // flag. onAppear covers a route stamped before this tab mounted
+            // (cold launch via -KrakenRoute), onChange one arriving after.
+            .onAppear { consumePendingLog() }
+            .onChange(of: router.pendingLog) { consumePendingLog() }
+            // The ship and update polls, mirroring BoardView's. They live in
+            // BOTH places on purpose: a `.task` is cancelled when its view
+            // leaves the screen, and switching to this tab takes the board's
+            // copies down with it — so without these, tapping Update here
+            // would start a run nothing was watching. Only one copy is ever
+            // awake (the other tab is off screen), and BoardViewModel's poll
+            // epochs already arbitrate the hand-over frame. See
+            // BoardViewModel.updatePollEpoch.
+            .task(id: UpdatePollKey(generation: boardVM.updatePollGeneration, phase: scenePhase)) {
+                guard scenePhase == .active else { return }
+                await boardVM.resumeUpdatePoll(baseURL: serverURL)
+            }
+            .task(id: ShipPollKey(generation: boardVM.shipPollGeneration, phase: scenePhase)) {
+                guard scenePhase == .active else { return }
+                await boardVM.resumeShipPoll(baseURL: serverURL)
+            }
         }
+    }
+
+    private func consumePendingLog() {
+        guard router.pendingLog else { return }
+        showingLog = true
+        router.pendingLog = false
     }
 
     /// The eight curated tints, in `ThemeTint` order, same interaction shape
@@ -198,5 +271,164 @@ struct SettingsView: View {
                 testResult = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+}
+
+/// The "Mac" section: the ⇧ ship-to-TestFlight and ⟳ self-update controls.
+///
+/// This file owns their LAYOUT and nothing else. Every rule they obey — the
+/// phase precedence, the freshness windows, which taps are refused, which
+/// glyph and label go with which state, why the update control reveals an
+/// error instead of re-running — is documented once, on the state machines
+/// themselves: `BoardViewModel.updateButton` and `BoardViewModel.shipButton`
+/// in BoardView.swift. Read those; do not restate them here, because two
+/// copies of a precedence table drift and the one over here has no tests.
+///
+/// They lived in the board's daemon bar until the nav restructure, and nothing
+/// about their behaviour changed in the move — only where they sit. They are
+/// Mac-side maintenance, and the daemon bar is a status readout carl glances
+/// at six columns' worth of times a day.
+///
+/// The ship run's BANNER stayed on the board, where a run in flight is news
+/// whether or not anyone is in Settings; `messageArea` is this screen's own
+/// copy of what the controls have to say, because those messages otherwise
+/// land on a tab the user tapping these controls is not looking at (see
+/// `messageArea`'s doc for why expiry is NOT the reason). The model is shared
+/// (KrakenApp owns it), so a run started here paints in both places.
+private struct MacControlsSection: View {
+    let vm: BoardViewModel
+    let serverURL: String
+
+    var body: some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Mac").kLabelStyle()
+                shipControl
+                updateControl
+                messageArea
+                Text("Ship builds and uploads the iOS app to TestFlight; update pulls and rebuilds kraken on the Mac, restarting the server it is talking to. Neither asks twice — the tap is the decision.")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.text2)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Everything these two controls have to SAY, and nothing they don't.
+    ///
+    /// Without it the section was three silent failures: a start that 409s
+    /// writes `updateMessage`/`shipMessage`, a ship failure writes the record's
+    /// error, and the update control's "✕ update failed" tap does nothing BUT
+    /// set `updateMessage`. All three were rendered only by the board's daemon
+    /// bar and ship banner — a tab away, on a screen carl is by definition not
+    /// looking at, since he is here having just tapped the button. That is the
+    /// reason, not expiry: the windows are 120s (ship) and 60s (update), long
+    /// enough to walk over, and a 409 refusal has no window at all. A message nobody is
+    /// in front of is a message that didn't happen.
+    ///
+    /// What it deliberately does NOT read is `vm.barMessage`. That property is
+    /// the daemon bar's slot and its precedence puts `errorMessage` — the
+    /// BOARD poll's last failure — ahead of `updateMessage`. Over there that is
+    /// right; here it would pin a stale "Could not connect to the server." from
+    /// a poll that has since been cancelled by a tab switch, on top of and
+    /// hiding the refusal this area exists to show.
+    ///
+    /// Two lines, ship above update, matching the order of the controls above
+    /// them rather than the bar's precedence — these are two independent runs,
+    /// not one slot two things compete for, so both show at once when both have
+    /// something to say. Unabridged: a settings card has the room the bar's
+    /// one-line slot never had, so nothing here is truncated.
+    @ViewBuilder
+    private var messageArea: some View {
+        // `shipBanner` is already exactly the ship half — refusal, live phase,
+        // or a FRESH record's error in full — and it never consults
+        // errorMessage, so it is reused verbatim.
+        if let banner = vm.shipBanner {
+            Text(banner.text)
+                .font(.voice(12))
+                .foregroundStyle(banner.color)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // The update half, assembled from its own two sinks: whatever the
+        // control last had to say (a refusal, or an error carl revealed by
+        // tapping), else the error a fresh failed record is carrying — which is
+        // `revealsError`, non-nil exactly when the record is both failed and
+        // fresh. Printing it unprompted is the small divergence from the bar,
+        // and it is deliberate: the bar hides it because it has one line to
+        // spend, and this card does not.
+        if let message = vm.updateMessage ?? vm.updateButton.revealsError, !message.isEmpty {
+            Text(message)
+                .font(.voice(12))
+                .foregroundStyle(KTheme.counter)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The TestFlight ship control (POST /api/ship-ios + the status poll that
+    /// follows the run — see BoardViewModel's ship section).
+    ///
+    /// The accessibility label carries the distinction the two-word visible
+    /// label can't: "uploaded" is where this run ends, and installing the build
+    /// on this phone is a separate manual step in the TestFlight app afterwards.
+    private var shipControl: some View {
+        let state = vm.shipButton
+        return Button {
+            // One action, always: start a ship. A fresh failure re-runs rather
+            // than "revealing" itself — `messageArea` right below is already
+            // printing the error in full (see BoardViewModel.shipButton).
+            //
+            // Synchronously, in the tap handler — a Task body doesn't start
+            // soon enough to keep a second tap out (see shipStarting).
+            vm.markShipStarting()
+            Task { await vm.startShipIOS(baseURL: serverURL) }
+        } label: {
+            controlRow(glyph: state.glyph, label: state.label, color: state.color)
+        }
+        .buttonStyle(.plain)
+        .disabled(state.disabled)
+        .accessibilityLabel("ship the iOS app to TestFlight — \(state.label). Uploading is not installing: TestFlight processes the build afterwards and you install it from the TestFlight app.")
+    }
+
+    /// The self-update control (POST /api/update + the status poll that follows
+    /// the run through the server restart — see BoardViewModel's self-update
+    /// section). A recorded failure reveals itself on tap rather than
+    /// re-running: the revealed text lands in `messageArea` below, which is
+    /// what makes that tap mean something on this screen.
+    private var updateControl: some View {
+        let state = vm.updateButton
+        return Button {
+            if let err = state.revealsError {
+                vm.revealUpdateError(err)
+            } else {
+                // Synchronously, in the tap handler — a Task body doesn't
+                // start soon enough to keep a second tap out (see
+                // BoardViewModel.updateStarting).
+                vm.markUpdateStarting()
+                Task { await vm.startUpdate(baseURL: serverURL) }
+            }
+        } label: {
+            controlRow(glyph: state.glyph, label: state.label, color: state.color)
+        }
+        .buttonStyle(.plain)
+        .disabled(state.disabled)
+        .accessibilityLabel("update kraken — \(state.label)")
+    }
+
+    /// One control as a full-width row. The bar's 10pt mono was sized to share
+    /// a strip with the daemon LED; on a settings card the same two strings get
+    /// row-weight type and the whole row as a target.
+    private func controlRow(glyph: String, label: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(glyph)
+            Text(label)
+            Spacer(minLength: 6)
+        }
+        .font(.data(13))
+        .foregroundStyle(color)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 }

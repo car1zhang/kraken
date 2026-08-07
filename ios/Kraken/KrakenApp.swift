@@ -7,6 +7,17 @@ struct KrakenApp: App {
     // Owned here (above every tab/sheet) rather than per-view, so a draft
     // survives dismissing a sheet or switching tabs — see DraftStore.swift.
     @State private var draftStore = DraftStore()
+    // Owned here rather than by BoardView because TWO tabs now read it: the
+    // Board (jobs, daemon LED, ship/contract banners) and Settings, whose
+    // "Mac" section holds the ship + update controls that used to live in the
+    // daemon bar. A @State inside BoardView would give Settings a second,
+    // separate model — two poll loops, two divergent ship phases — so the one
+    // instance lives above the TabView and both tabs read the same object.
+    @State private var boardVM = BoardViewModel()
+    /// Whether the `-KrakenRoute` launch argument has already been acted on.
+    /// Lives on the App (not on the identified view below), so `.id(themeTint)`
+    /// tearing the tree down cannot reset it — see `consumeLaunchRoute`.
+    @State private var didConsumeLaunchRoute = false
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearance = "system"
     // The persisted theme tint. Read here (rather than only inside KTheme's
@@ -47,6 +58,7 @@ struct KrakenApp: App {
             RootTabView()
                 .environment(router)
                 .environment(draftStore)
+                .environment(boardVM)
                 .environment(\.theme, GlassTheme(tint: themeTint))
                 .preferredColorScheme(preferredScheme)
                 .tint(KTheme.accent)
@@ -56,17 +68,7 @@ struct KrakenApp: App {
                 // holding them. Discarding the identity is the blunt but
                 // reliable way to guarantee that everywhere at once.
                 .id(themeTint)
-                .onAppear {
-                    // launch-argument route (simctl launch ... -KrakenRoute
-                    // kraken://job/x): lands in UserDefaults; used by the
-                    // orchestrator's simulator test drive, where openurl would
-                    // stall behind the "Open in Kraken?" system dialog
-                    if let s = UserDefaults.standard.string(forKey: "KrakenRoute"),
-                       let url = URL(string: s) {
-                        UserDefaults.standard.removeObject(forKey: "KrakenRoute")
-                        router.handle(url: url)
-                    }
-                }
+                .onAppear { consumeLaunchRoute() }
                 .onOpenURL { url in
                     router.handle(url: url)
                 }
@@ -75,12 +77,56 @@ struct KrakenApp: App {
             if scenePhase == .background {
                 NotificationManager.shared.scheduleBackgroundRefresh()
             }
+            if scenePhase == .active {
+                // Forget failures recorded before the suspension — they say the
+                // radio was off, not that the Mac is gone. Here rather than in
+                // either tab's poll task, because those are keyed on this same
+                // transition and would race it; here rather than in BoardView,
+                // because the ship poll also runs from Settings and this has to
+                // fire whichever tab carl came back to.
+                boardVM.noteBecameActive()
+            }
         }
+    }
+
+    /// The launch-argument route (`simctl launch … -KrakenRoute kraken://job/x`),
+    /// used by the orchestrator's simulator test drive because `openurl` stalls
+    /// behind the "Open in Kraken?" system dialog.
+    ///
+    /// Exactly ONCE per process, and the flag is what enforces it. The obvious
+    /// spelling — read it, `removeObject`, done — silently doesn't work: a value
+    /// supplied as a launch argument lives in `NSArgumentDomain`, which is
+    /// read-only, so `removeObject` writes nothing and the key still reads back.
+    /// That was harmless only while this `onAppear` ran once; it no longer does,
+    /// because `.id(themeTint)` above discards the tree's identity on a tint
+    /// change and the fresh tree appears again. Net effect before this flag, in
+    /// any run LAUNCHED with `-KrakenRoute` — so: the orchestrator's test
+    /// drives, not carl's phone, where the argument is never present and the
+    /// key never set — picking a new theme colour in Settings teleported you
+    /// back to whatever screen the app was launched at.
+    private func consumeLaunchRoute() {
+        guard !didConsumeLaunchRoute else { return }
+        didConsumeLaunchRoute = true
+        guard let raw = UserDefaults.standard.string(forKey: "KrakenRoute"),
+              let url = URL(string: raw) else { return }
+        router.handle(url: url)
     }
 }
 
+/// Four tabs, in this order: Board · Sessions · Graph · Settings.
+///
+/// Usage and Log used to be tabs three and four. They are drawers now — Usage
+/// off the Board's toolbar, Log off a Settings row — which bought the slot
+/// GRAPH moved into. The graph was a Board-toolbar sheet only because five
+/// tabs was the ceiling before iOS collapses a TabView into a "More" list;
+/// with two screens demoted to drawers it fits as a peer, which is what it
+/// always read as.
 struct RootTabView: View {
     @Environment(AppRouter.self) private var router
+    // The graph talks to the same Mac as every other screen; it takes its base
+    // as a plain `let` (it predates the tab), so the tab root reads the stored
+    // URL and hands it over.
+    @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
 
     var body: some View {
         @Bindable var router = router
@@ -91,12 +137,14 @@ struct RootTabView: View {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
                 .tag(AppRouter.Tab.sessions)
-            UsageView()
-                .tabItem { Label("Usage", systemImage: "gauge.with.dots.needle.50percent") }
-                .tag(AppRouter.Tab.usage)
-            LogView()
-                .tabItem { Label("Log", systemImage: "list.bullet.rectangle") }
-                .tag(AppRouter.Tab.log)
+            NavigationStack {
+                GraphView(baseURL: serverURL)
+            }
+            // The board toolbar's own graph glyph, carried over with the
+            // screen it opened — carl on the alternative: "this brain is
+            // kinda buns".
+            .tabItem { Label("Graph", systemImage: "point.3.connected.trianglepath.dotted") }
+            .tag(AppRouter.Tab.graph)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppRouter.Tab.settings)

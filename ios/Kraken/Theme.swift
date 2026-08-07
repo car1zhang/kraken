@@ -826,6 +826,10 @@ struct KChip: View {
 /// grey either way.
 struct CardBackground: ViewModifier {
     var barColor: Color?
+    /// false = the same surface with no leading bar at all — for cards where
+    /// the bar would answer a question nobody is asking (DetailCard: you are
+    /// already looking at one job whose state sits a section above).
+    var bar: Bool = true
 
     var resolvedBar: Color { barColor ?? KTheme.text2 }
 
@@ -836,18 +840,20 @@ struct CardBackground: ViewModifier {
             .background(.ultraThinMaterial, in: shape)
             .overlay(shape.stroke(KTheme.hairline, lineWidth: 1))
             .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(resolvedBar)
-                    .frame(width: 3)
-                    .padding(.vertical, 10)
-                    .padding(.leading, 3)
+                if bar {
+                    Capsule()
+                        .fill(resolvedBar)
+                        .frame(width: 3)
+                        .padding(.vertical, 10)
+                        .padding(.leading, 3)
+                }
             }
     }
 }
 
 extension View {
-    func cardBackground(barColor: Color? = nil) -> some View {
-        modifier(CardBackground(barColor: barColor))
+    func cardBackground(barColor: Color? = nil, bar: Bool = true) -> some View {
+        modifier(CardBackground(barColor: barColor, bar: bar))
     }
 }
 

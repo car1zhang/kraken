@@ -4,12 +4,21 @@ import Observation
 // The DREAM screen: the nightly corroboration loop's two outputs, and the one
 // place carl talks back to it.
 //
-// Reached from the Board's toolbar (the moon control) rather than a sixth tab.
-// Two reasons, and the first is hard: iOS collapses a TabView past five items
-// into a "More" list, so a sixth tab would bury an existing one behind a
-// disclosure. The second is that this is a read-and-judge surface visited
-// once in a while, not a peer of Board/Sessions/Usage/Log/Settings — the web
-// board can afford a fourth view tab because a browser has the width for it.
+// Reached from the Board's toolbar (the moon control) rather than a tab of its
+// own. That used to be forced — five tabs was the ceiling before iOS collapses
+// a TabView into a "More" list, and the bar was full. The nav restructure took
+// the bar down to four (Board · Sessions · Graph · Settings), so a fifth slot
+// is available and this is now a CHOICE: DREAM is a read-and-judge surface
+// visited once in a while, not a peer of the four places the app lives, and
+// the web board can afford a fourth view tab only because a browser has the
+// width for it.
+//
+// It is presented as a sheet but READ as a full page, so it takes the full-page
+// header treatment rather than a drawer's small centred one: the explicit
+// `.navigationBarTitleDisplayMode(.inline)` is dropped and the title falls back
+// to the default, which is large and left-aligned. It keeps sheet chrome (the
+// close button) because it is still a sheet; see the contract's
+// header-treatment paragraph.
 //
 // The watchlist is the only genuinely new interaction in the app: `fine`
 // suppresses a row permanently, `fix` asks for it to be done — and a `fix`
@@ -142,7 +151,8 @@ struct DreamView: View {
         }
         .kListStyle()
         .navigationTitle("Dream")
-        .navigationBarTitleDisplayMode(.inline)
+        // Full-page treatment: large, left-aligned. Sheet-hosted, but carl
+        // reads DREAM as a page, not a drawer — see this file's header.
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 SheetCloseButton { dismiss() }
