@@ -25,6 +25,7 @@ import {
 } from "../../api/types.ts";
 import { insertIntoTextarea } from "../../hooks/useCmdHighlight.ts";
 import { useDebouncedCallback } from "../../hooks/useDebouncedDraft.ts";
+import { FieldSelect } from "./FieldSelect.tsx";
 import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { jobKey } from "../../lib/jobKey.ts";
@@ -727,27 +728,29 @@ function EditorBody({
           }}
         >
           <div className="f-row">
-            <label>
+            {/* a DIV, not a <label> like its neighbours: FieldSelect's menu
+                rows sit inside the wrapper, and a label's activation behaviour
+                would forward a row's click to the button — the labelable
+                descendant — reopening the menu the pick just closed. .f-field
+                carries the column layout `.editor-form label` would have
+                given it. */}
+            <div className="f-field">
               repo{" "}
-              <select
+              <FieldSelect
                 id="f-repo"
+                label="repo"
                 disabled={readOnly}
                 value={repo}
-                onChange={(e) => setRepo(e.target.value)}
-              >
-                <option value="">—</option>
-                {repos.map((x) => (
-                  <option value={x} key={x}>
-                    {x}
-                  </option>
-                ))}
-                {/* an existing job with an unusual repo still round-trips
-                    instead of silently resetting to "—" */}
-                {form?.repo && !repos.includes(form.repo) ? (
-                  <option value={form.repo}>{form.repo}</option>
-                ) : null}
-              </select>
-            </label>
+                onPick={setRepo}
+                // an existing job with an unusual repo still round-trips
+                // instead of silently resetting to "—"
+                options={
+                  form?.repo && !repos.includes(form.repo)
+                    ? [...repos, form.repo]
+                    : repos
+                }
+              />
+            </div>
             <label>
               base{" "}
               <input

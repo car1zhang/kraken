@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
+import { useMenuDismiss } from "../../hooks/useMenuDismiss.ts";
 import { JOB_COLORS } from "../../lib/format.ts";
 
 interface SwatchStripProps {
@@ -49,37 +50,7 @@ export function SwatchStrip({ value, onPick, compact }: SwatchStripProps) {
     ? (value as string)
     : "";
 
-  // Escape closes the MENU and nothing else. It is captured on the document so
-  // the press is stopped before useEscapeStack's own document listener sees it
-  // (that one is registered first, when the overlay opened, so a bubble-phase
-  // listener here could never get in front of it) — otherwise one Escape would
-  // close the menu AND the overlay underneath it.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape") return;
-      ev.stopPropagation();
-      setOpen(false);
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [open]);
-
-  // Outside-click closes it, on mousedown rather than click: the click that
-  // follows may well land on a control that is about to be re-rendered away,
-  // and a menu left open over the next overlay is the failure people notice.
-  // Presses INSIDE the component are ignored here — the button toggles and a
-  // row picks, both of which own their own close.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (ev: MouseEvent) => {
-      const root = rootRef.current;
-      if (root && ev.target instanceof Node && root.contains(ev.target)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
+  useMenuDismiss(open, setOpen, rootRef);
 
   const label = (val: string) => (val ? val.toUpperCase() : NO_COLOR);
   // The dot's colour is set inline rather than left to the sheet because the
