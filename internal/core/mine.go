@@ -417,7 +417,13 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 		switch rec.Type {
 		case "assistant":
 			if counted && rec.Message.Model == "<synthetic>" {
-				// an API failure the harness gave up retrying
+				// a harness-written record in place of a real turn. On this
+				// machine these are mostly USAGE-LIMIT banners plus null
+				// turns ("No response requested."), not transport failures —
+				// three scouts in one night each re-derived that after
+				// briefs relayed this counter as "API failures", so read it
+				// as "session-interrupting records" and classify from the
+				// text.
 				dg.SyntheticErrors++
 			}
 			if counted && rec.Message.StopReason == "max_tokens" &&

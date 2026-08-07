@@ -1245,6 +1245,12 @@ second copy of this vocabulary (edit both together). Do not do them even once:
   inside the `viewBox` edges.
 - Route edges to attach at box borders (not box centers/interiors) and route them **around**
   other boxes, never through them.
+- **Reserve routing lanes at layout time, before any band is committed**: for every planned
+  edge run, leave a clear corridor (24px+ wide) through the layout it will cross — a layout
+  placed band-by-band with edges drawn last has no legal routing lanes left, and the final
+  band then moves boxes that earlier bands already settled. Two lane-blockers are easy to
+  miss because they are not boxes: a group's own label, and step badges — an edge routed
+  through either passes the linter and fails the eye.
 - Keep at least 24px of gap between unrelated elements (grid cells may abut within a grid).
 - Escape `<` and `>` in label text as `&lt;` and `&gt;`.
 

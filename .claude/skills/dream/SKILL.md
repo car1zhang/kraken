@@ -29,6 +29,17 @@ Three outputs, three destinations. Getting this wrong is the only mistake here t
 change; the machine keeps the reasoning. This is structural rather than a redaction rule, which is
 why it is reliable: a commit contains a diff, and that is all it ever contains.
 
+The leak this rule keeps failing at is **evidence used as illustration**: you hold all the
+evidence, you write the diff, and when a change needs an example string the most natural example
+to reach for is the real one — a pass wrote a real coworker's private DM ask, name and all, into
+a Go example string, and only the style reviewer's last-gate block kept an identified human's
+private message out of git history, the compiled binary, and every future transcript that binary
+would emit it into. The next night's pass then wrote the SAME string into this very
+paragraph while writing the rule against it, and was again saved only by its style reviewer.
+Every example string in a diff is INVENTED — a made-up name, a made-up ask — and if a real
+detail from tonight's evidence would make the example clearer, that is precisely the sign it
+must not be there: the real thing belongs in `00-dream-report.md`, the side that never travels.
+
 The corollary is freeing — because the local side never travels, the report and a watched fact can
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
 the report worth reading.
@@ -133,12 +144,16 @@ pressing escape), `<synthetic>` API failures, output-ceiling deaths (`MaxTokensS
 at stop_reason max_tokens, the failure that burns a whole budget while reading as a clean session),
 turn durations, literally repeated calls, and the four
 **token counters** (`In`, `Out`, `CacheWrite`, `CacheRead`) per session plus a roll-up across the
-whole sweep. Two counter caveats, both measured, for anything you build on those numbers:
+whole sweep. Three counter caveats, all measured, for anything you build on those numbers:
 `ErrorCounts` includes the benign tail-exit-1 shape (a `;`-compound whose last command is a grep
 that matched nothing — every wanted byte arrived, exit 1 anyway) while missing aborts that exit 0,
-so read an error cluster as a hypothesis about command SHAPES rather than as N failures; and
+so read an error cluster as a hypothesis about command SHAPES rather than as N failures;
 `RepeatedCalls` keys `Read`/`Edit` on file path alone, so careful paged reads of one large file and
-distinct edits to one file both present as repetition. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
+distinct edits to one file both present as repetition; and `SyntheticErrors` counts every
+`<synthetic>` assistant record, which on this machine is mostly USAGE-LIMIT BANNERS and null turns
+rather than transport failures — three scouts in one night independently re-derived this after
+their briefs relayed the counter as "API failures", so brief it as "session-interrupting records"
+and let the scout classify them. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
 — user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
 which is about an eighth of the bytes. Carl's MID-TURN messages — typed while a turn was running,
 the course corrections that matter most to the prompting-feedback output — are stored as queue
@@ -268,9 +283,14 @@ sidecars show were touched only by `grep '^\[assistant\]' -A4 | head -80` — tw
 grep'd lines, twelve rows saying READ — and the lead's "97 READ / 9 SAMPLED" aggregate was exact
 arithmetic over false inputs, while its one verification habit checked that the LEAD had read its
 eleven reports, the link that was never the problem. So before trusting the aggregate, spot-check
-the scouts of at least the two LARGEST assignments against their own transcripts (a real full read
-leaves `Read` calls or paged `sed`/`awk` ranges collectively covering the staged file; a capped
-assistant-prose grep does not), and say in Coverage which scouts were spot-checked. Alongside it:
+the scouts of at least the two LARGEST assignments against their own transcripts, and say in
+Coverage which scouts were spot-checked. The spot-check's test is PAGE COVERAGE, never tool
+choice: READ means the reads collectively reach the staged file's LAST line, so a `Read` capped
+at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row says — a brief
+that banned "a capped grep" while blessing "paged reads" was violated twice in one night by
+capped Reads and a `head`, forms that sentence literally permits, one row even stating the true
+line count its reads never reached. Write the rule into scout briefs as coverage ("a row claiming
+full means your pages reached the last line"), never as a list of banned tools. Alongside it:
 **every finding cites its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
 line out of it.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
@@ -348,7 +368,7 @@ Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it op
 | Watching | Newly watched facts, and what changed on existing ones — the watch overlay is not committed, so this is the only place its movement is visible. |
 | Your prompting | The prompting feedback, quoted. |
 | Seen, not actionable | One line each, capped around ten. It is what distinguishes a quiet night from a blind one. |
-| Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. |
+| Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. Also the pass's OWN stalls: limit banners, dead stretches, and carl interventions in your own pane tonight — your session is tomorrow's sweep evidence, so tonight's report is the only one that can carry them, and one pass reported four cells' outages while omitting its own 10h37m, 2.5× the four combined. |
 
 ## Inside A Kraken Cell
 
