@@ -162,13 +162,15 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   const prereqs = job.prereqs ?? [];
   const retryable = !!job.health && !/is gone|startup prompt/.test(job.health);
 
-  // band 2 — is there anything to put in the row at all? Asked per chip rather
-  // than by rendering and measuring, because a component that returns null
-  // still occupies a slot in an array.
+  // band 2 — is there anything to put in each row at all? Asked per chip
+  // rather than by rendering and measuring, because a component that returns
+  // null still occupies a slot in an array. Two rows since carl's
+  // adjustment round: the CREW gets its own line (hasCrewRow), everything
+  // else shares the counts row (hasChips).
+  const hasCrewRow = crewChipsVisible(job);
   const hasChips =
     loadChipVisible(job, col) ||
     !!job.question ||
-    crewChipsVisible(job) ||
     threadChipsVisible(job) ||
     docQuestionChipVisible(job) ||
     artifactCountVisible(job) ||
@@ -297,12 +299,20 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
         ) : null}
       </div>
 
-      {/* ---- band 2: CHIPS — counts, not lists. Assembled most-live-first: who
-           is working on it, what has been branched off it, then what it has
-           accumulated. `withBranch={false}` because starting a branch is a
-           detail action; the chips here are STATUS. The ROI badge leads,
-           blocked cards only — see the band note above for why a triage number
-           rides an inventory row. */}
+      {/* ---- band 2: CHIPS — counts, not lists, in TWO rows since carl's
+           adjustment round. The CREW row comes first and holds only the agent
+           badges (zeus pill + role chips): who is working on it is the most
+           live fact on the card and no longer competes for wrap position with
+           the inventory. The counts row follows — the ROI badge leads it,
+           blocked cards only (see the band note above for why a triage number
+           rides an inventory row), then the pending-question flag, then the
+           inventory. `withBranch={false}` because starting a branch is a
+           detail action; the chips here are STATUS. */}
+      {hasCrewRow ? (
+        <div className="chips chips-crew">
+          <CrewChips job={job} />
+        </div>
+      ) : null}
       {hasChips ? (
         <div className="chips">
           <LoadChip job={job} col={col} />
@@ -317,7 +327,6 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
               ⚑
             </span>
           ) : null}
-          <CrewChips job={job} />
           <ThreadChips
             job={job}
             onOpenThread={actions.onOpenThread}
