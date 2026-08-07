@@ -232,6 +232,8 @@ export function useShipRun({ record, updating, onOpenLog, onToast }: ShipRunOpti
     // terminal — without this the next repaint hands the button back and a
     // second click earns a 409.
     cls = "busy";
+    glyphCls = "spinner";
+    glyphChar = "";
     label = "STARTING…";
     disabled = true;
   } else if (refusal && Date.now() - refusalAt < SHIP_RECENT_MS) {
@@ -245,6 +247,8 @@ export function useShipRun({ record, updating, onOpenLog, onToast }: ShipRunOpti
   } else if (running) {
     const secs = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : 0;
     cls = "busy";
+    glyphCls = "spinner";
+    glyphChar = "";
     label = `${phase.toUpperCase()}… ${secs}s`;
     disabled = true;
     title = "ship in flight — archiving and uploading takes several minutes" + build;

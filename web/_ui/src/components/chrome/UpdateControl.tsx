@@ -52,13 +52,14 @@ export interface UpdButtonModel {
  * differs.
  *
  * The vanilla painter wrote this node-by-node, and only where something had
- * actually changed, because `.upd.busy .gly` spins on a 1.1s keyframe while
- * its caller repaints on BOTH the 1s status poll and the 3s board poll:
- * reassigning innerHTML replaced the glyph element even for identical markup,
- * which restarted the animation from 0° about once a second, and the spinner
- * never once completed a turn during a build. React's reconciler keeps the
- * same DOM nodes and only touches changed attributes, which is exactly what
- * that hand-rolled differ was for — so there is no differ here, and adding one
+ * actually changed, because the in-flight indicator (now `.upd .spinner`, in
+ * vanilla the glyph itself) spins on a 1.1s keyframe while its caller
+ * repaints on BOTH the 1s status poll and the 3s board poll: reassigning
+ * innerHTML replaced the element even for identical markup, which restarted
+ * the animation from 0° about once a second, and the spinner never once
+ * completed a turn during a build. React's reconciler keeps the same DOM
+ * nodes and only touches changed attributes, which is exactly what that
+ * hand-rolled differ was for — so there is no differ here, and adding one
  * back would be re-solving a solved problem.
  */
 export function UpdControlButton({
@@ -346,6 +347,8 @@ export function useUpdateRun({
     // Either the updater says it's restarting, or the endpoint stopped
     // answering mid-run — which IS the restart, seen from this side.
     cls = "gap";
+    glyphCls = "spinner";
+    glyphChar = "";
     label = "RESTARTING…";
     disabled = true;
     banner = {
@@ -356,6 +359,8 @@ export function useUpdateRun({
   } else if (running) {
     const secs = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : 0;
     cls = "busy";
+    glyphCls = "spinner";
+    glyphChar = "";
     label = `${phase.toUpperCase()}… ${secs}s`;
     disabled = true;
   } else if (phase === "failed" && fresh) {

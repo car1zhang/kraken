@@ -242,7 +242,7 @@
 mark { background: color-mix(in srgb, var(--warn) 30%, transparent); color: var(--fg); }
 
 /* the board colour lives on <html>, not on <body>, so that body::before (the
-   drifting grid) can sit at z-index -1: it then paints over the canvas
+   background grid) can sit at z-index -1: it then paints over the canvas
    background and under every scrap of body content, with no stacking context
    to fight. With the colour on body instead, body's own background propagates
    to the canvas and a negative-z pseudo-element hides behind it. */
@@ -256,40 +256,36 @@ body {
 }
 
 /* ---- HUD effects ----
-   Four layers, all pointer-events:none. The two that MOVE (the grid drift and
-   the scan bar) are stopped by the prefers-reduced-motion block near the end
-   of this sheet — whose selector list must include `*::before, *::after`,
-   because both movers are pseudo-elements a bare `*` cannot reach — which is
-   why neither re-states the query; the top edge strip and the scanline rake
-   are static and unaffected by it.
+   Three static layers, all pointer-events:none: the grid, the top edge
+   strip, and the scanline rake.
 
-   PERFORMANCE RULE for this section: a CONTINUOUS animation may touch
-   transform and opacity ONLY. Those run on the compositor; anything else
-   (background-position, top, filter) re-paints its layer on the main thread
-   every frame, forever — which is exactly what the first cut of these
-   effects did and what made the board cook CPU at idle. The one exception is
-   the wordmark glitch: its interpolating window (91%→98% of an 8s loop,
-   ~0.56s) repaints one short wordmark, which is noise. `will-change:
-   transform` on the two movers promotes each to its own layer ONCE instead
-   of re-rasterizing.
+   PERFORMANCE RULE for this section, tightened at the perf round: NO
+   continuous smooth animation, anywhere in this sheet. Compositor-only
+   movers (transform/opacity) were the previous rule, and they still forced
+   the compositor to produce a frame at every vsync forever — with an
+   external monitor attached that per-frame composite is system-wide
+   WindowServer load, which is exactly the display lag that killed the first
+   moving rake and then, at this round, the grid drift and the scan-bar
+   sweep too. What survives is DISCRETE: an infinite animation may only use
+   a step timing function (`steps()`, `step-start`, `step-end`), which
+   invalidates a few times a second instead of every frame; one-shot
+   animations (panel-in, the .btn:active glitch) are fine as-is. And with
+   nothing moving continuously, no rule carries a non-auto `will-change`
+   either — a promoted layer held resident is pure memory cost.
+   web/motionpolicy_test.go and motion.test.ts beside this file pin all of
+   this.
 
-   body::before — the kit's animated grid: two crossed 1px gradients on a 48px
-   cell, drifting one full cell over 6s. Fixed rather than absolute so it
-   covers a scrolled board without being as tall as one. The layer is oversized
-   one cell up-left and TRANSLATED diagonally rather than animating
-   background-position: moving a horizontal line along its own axis is
-   invisible, so one diagonal translate of the whole grid is pixel-identical
-   to the kit's two-direction background drift — and it composites. */
+   body::before — the kit's grid: two crossed 1px gradients on a 48px cell,
+   static since the perf round (it used to drift one cell over 6s). Fixed
+   rather than absolute so it covers a scrolled board without being as tall
+   as one. */
 body::before {
-  content: ""; position: fixed; inset: -48px 0 0 -48px; z-index: -1; pointer-events: none;
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background-image:
     linear-gradient(var(--gridline) 1px, transparent 1px),
     linear-gradient(90deg, var(--gridline) 1px, transparent 1px);
   background-size: 48px 48px;
-  will-change: transform;
-  animation: gdrift 6s linear infinite;
 }
-@keyframes gdrift { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(48px, 48px, 0); } }
 
 /* body::after — the kit's 2px top edge strip. z-index 10 puts it over the
    sticky .chrome (z-index 5) and under every overlay (20+), so it reads as
@@ -300,42 +296,39 @@ body::after {
   background: linear-gradient(90deg, var(--ac2), var(--ac) 30%, transparent 60%);
 }
 
-/* .scan (the element index.html renders) carries BOTH CRT layers: the static
-   scanline rake on the element itself, and the 70px scan bar sweeping
-   top→bottom over 7s on its ::after. Splitting them is what keeps the rake
-   static: it was deliberately un-animated because a moving full-viewport
-   layer forces per-vsync compositing and caused system-wide lag on external
-   monitors — so the moving half is a 70px strip, not the whole viewport. */
+/* .scan (the element index.html renders) is the static scanline rake, the
+   one CRT layer left. Its sweeping-bar half (a 70px strip translating down
+   the viewport on the ::after) was removed at the perf round: even
+   compositor-only, a strip in flight meant a full-screen composite at every
+   vsync, forever — carl's call was keep the rake, drop the sweep.
+   z-index 60 puts the rake over EVERYTHING, modals included (carl's call at
+   the cursor round: scanlines are the CRT glass, and glass sits in front of
+   whatever the screen shows) — the overlay stack tops out at 50 (the editor
+   dropdown; overlays 20-30, toast 40). pointer-events: none is what makes
+   that safe. */
 .scan {
-  position: fixed; inset: 0; pointer-events: none; z-index: 9;
+  position: fixed; inset: 0; pointer-events: none; z-index: 60;
   background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 4px);
-  overflow: hidden;
 }
 /* the ▦ FX toggle (kit: showScanlines). The attribute is stamped pre-paint by
-   index.html's krakenHud IIFE; display:none takes the rake AND the sweeping
-   bar (its ::after) out together. */
+   index.html's krakenHud IIFE. */
 :root[data-scanlines="off"] .scan { display: none; }
-.scan::after {
-  content: ""; position: absolute; top: -70px; left: 0; right: 0; height: 70px;
-  pointer-events: none;
-  background: linear-gradient(180deg, transparent,
-    color-mix(in srgb, var(--ac) 6%, transparent), transparent);
-  will-change: transform;
-  /* translateY, never `top`: animating an offset re-runs layout+paint every
-     frame; the transform sweep composites. Parked at -70px and translated a
-     viewport-plus-both-margins — approximately the kit's -8%→104% sweep, with
-     the entry/exit margins pinned at 70px rather than scaled to the viewport
-     (the two coincide only around vh≈875/1750). Full entry and full exit hold
-     at any height, which is the property that matters. */
-  animation: scanbar 7s linear infinite;
-}
-@keyframes scanbar { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(0, calc(100vh + 140px), 0); } }
 
-/* ---- cursors: a THICK (2px) crosshair with a centre dot, in the board's
-   opposite — near-white on dark, near-black on light. Over a clickable it
-   changes as little as possible: same crosshair, same colour, the centre dot
-   opened into a small ring. Never a different glyph, and never the OS arrow
-   on an interactive surface (a handful of deliberately non-interactive or
+/* ---- cursors: one crosshair family — 2px arms — in the board's opposite,
+   near-white on dark, near-black on light, in TWO arts (carl's cursor
+   round, after a serifed third variant tried for text boxes came out
+   janky):
+
+     rest      — full crosshair, arms to 3px of centre, small filled dot;
+     act-able  — an open reticle (the ring crosshair): the arms pull back
+                 and a larger 1.8px-stroke ring floats in the gap they
+                 leave. Worn by clickables, drag handles AND text-entry
+                 surfaces — "you can act here" is one statement, and the
+                 fallback keyword (pointer/grab/text) is what still keeps
+                 the three roles apart when the URI is refused.
+
+   Never a different glyph beyond those, and never the OS arrow on an
+   interactive surface (a handful of deliberately non-interactive or
    disabled surfaces below keep `default`/`help`).
    24px art, hotspot 12 12 (dead centre). The trailing keyword is the fallback
    for a browser that refuses the data URI. */
@@ -354,7 +347,7 @@ button, a, [role="button"], summary, label.check,
 .thread-chip, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
 input[type="checkbox"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, pointer;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
 :root[data-theme="light"] body {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.3" fill="%231a1724"/></svg>') 12 12, crosshair;
@@ -371,33 +364,51 @@ input[type="checkbox"] {
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
 :root[data-theme="light"] #thread-panehead,
 :root[data-theme="light"] input[type="checkbox"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, pointer;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
-/* text-entry surfaces keep the I-beam: a crosshair over a textarea says the
-   wrong thing about what a click there does. The light-prefixed
-   .thread-name-label entry is load-bearing, not belt-and-braces: that element
-   also carries role="button", and the light pointer list's theme prefix
-   out-specifies this bare class — without its own light entry the rename
-   label read as a text field on a dark board and a button on a light one
-   (review-round catch). */
-input[type="text"], input[type="search"], input[type="number"], textarea,
-.thread-name-label,
-:root[data-theme="light"] .thread-name-label { cursor: text; }
+/* text-entry surfaces wear the same reticle with the `text` fallback — "you
+   can act here", the act being typing. These rules still exist separately
+   from the pointer lists for the fallback keyword alone. The
+   `input:not([type])` term is not optional: an attribute selector matches
+   the content attribute, never the IDL default, and five of the app's
+   eight single-line text fields are bare `<input>` elements (the thread
+   rename field among them) that `input[type="text"]` can never reach — a
+   review round caught them wearing the background crosshair. The
+   .thread-name-label entries are load-bearing, not belt-and-braces: that
+   element also carries role="button", so each theme's pointer list above
+   matches it too — the bare class ties the dark pointer list's attribute
+   selector and the light entry ties the light pointer list's, and both win
+   only by sitting LATER in the sheet (today the two rules agree on the
+   art, so the tie decides only the fallback keyword; keep these below the
+   pointer lists anyway, or a future art split regresses silently). An
+   earlier review round caught the label reading as a text field on a dark
+   board and a button on a light one, back when there was no light-side
+   entry at all and the light pointer list's theme prefix simply
+   out-specified the bare class. */
+input[type="text"], input:not([type]), input[type="search"], input[type="number"], textarea,
+.thread-name-label {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, text;
+}
+:root[data-theme="light"] input[type="text"], :root[data-theme="light"] input:not([type]),
+:root[data-theme="light"] input[type="search"], :root[data-theme="light"] input[type="number"],
+:root[data-theme="light"] textarea, :root[data-theme="light"] .thread-name-label {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, text;
+}
 /* a drag handle outranks both, but it wears the SAME ring crosshair as every
    other clickable (carl's call at the perf round: no OS grab hand — the ring
    already says "actionable", and the card's lift animation says "dragging").
    The OS keywords survive only as the data-URI fallback. */
 .card[draggable="true"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grab;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grab;
 }
 .card.dragging {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grabbing;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, grabbing;
 }
 :root[data-theme="light"] .card[draggable="true"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grab;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grab;
 }
 :root[data-theme="light"] .card.dragging {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V9 M12 15 V21 M3 12 H9 M15 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grabbing;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, grabbing;
 }
 
 /* ---- chrome ----
@@ -426,10 +437,13 @@ input[type="text"], input[type="search"], input[type="number"], textarea,
    `.spacer { flex: 1 }` below no matter which came first, so leaving the
    spacer out of the rigid list above is not enough — naming it here is. */
 .chrome > .spacer { flex: 1; }
+/* no idle animation on the wordmark since the perf round: the old 8s glitch
+   loop held constant values ~93% of the time, but a running transform
+   animation keeps the compositor ticking regardless — the no-continuous-
+   animation rule in the HUD section above applies. */
 .mark {
   font: 700 16px var(--display); letter-spacing: 0.24em;
   color: var(--fg); white-space: nowrap;
-  animation: glitch-mark 8s infinite;
 }
 /* the wordmark's trailing glyph — <b>▞</b> after the redesign, <i>▊</i>
    before it. Both are named so the sheet is correct on either markup. */
@@ -437,24 +451,15 @@ input[type="text"], input[type="search"], input[type="number"], textarea,
   font-style: normal; font-weight: 700; color: var(--ac);
   text-shadow: var(--text-glow);
 }
-/* the kit's glitch: three horizontal jitter steps with a cyan/magenta
-   text-shadow split, interpolating over 91%→98% of an 8s loop (~0.56s), then
-   ~7.4s at rest. Named `glitch-mark` because a plain `glitch` already exists
-   further down (the .btn:active translate nudge) and one would silently
-   replace the other. */
-@keyframes glitch-mark {
-  0%, 91%, 100% { transform: none; text-shadow: none; }
-  92% { transform: translateX(2px); text-shadow: -2px 0 #00e5ff, 2px 0 #ff2d95; }
-  94% { transform: translateX(-2px); }
-  96% { transform: translateX(1px) skewX(4deg); text-shadow: 2px 0 #00e5ff, -2px 0 #ff2d95; }
-  98% { transform: none; }
-}
-/* the kit's opacity pulse, worn by the daemon LED and the card status glyphs */
+/* the kit's attention pulse, worn by the daemon LED and the blocked-card
+   question chip. Always used with a STEP timing function (the HUD section's
+   rule): stepped, it invalidates once a second; smooth, it produced a frame
+   every vsync for the life of the page. */
 @keyframes ppulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 .led {
   width: 7px; height: 7px;
   background: var(--ac2); box-shadow: 0 0 8px var(--ac2);
-  animation: ppulse 2s infinite;
+  animation: ppulse 2s step-end infinite;
 }
 .led.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: none; }
 /* the kit's bordered stat segment: a boxed key/value pair rather than loose
@@ -568,10 +573,22 @@ input[type="text"], input[type="search"], input[type="number"], textarea,
 .upd.gap { color: var(--polling); border-color: color-mix(in srgb, var(--polling) 45%, var(--b1)); }
 .upd.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--b1)); text-shadow: none; }
 .upd.bad { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 45%, var(--b1)); text-shadow: none; }
-/* killed by the reduce-motion block at the bottom like every other animation
-   here (it stopped being the sheet's only infinite one when the HUD effects
-   landed) */
-.upd.busy .gly, .upd.gap .gly { animation: spin 1.1s linear infinite; }
+/* a real spinner for the in-flight states: a bordered ring with one
+   currentColor arc, ticking through 8 positions. It replaced spinning the
+   state GLYPH (⟳/⇧), which rotated about its inline box's centre — below
+   the glyph's optical centre, so the arrow orbited instead of spinning
+   (carl's cursor round: "looks goofy"). A square ring box rotates about
+   its true centre by construction. Stepped rather than linear (the HUD
+   section's rule): `.gap` can persist for the length of a serve outage,
+   and a smooth rotate composites every frame for that whole stretch;
+   steps(8) reads as a classic ticking spinner and invalidates ~7×/s. */
+.upd .spinner {
+  width: 9px; height: 9px; box-sizing: border-box; flex: none;
+  border: 1.5px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 1.1s steps(8) infinite;
+}
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* header at-a-glance usage widget: current account's session/weekly/model
@@ -1153,7 +1170,7 @@ input[type="text"], input[type="search"], input[type="number"], textarea,
   color: var(--ac2); border: 1px solid var(--ac2);
   background: color-mix(in srgb, var(--ac2) 9%, transparent);
   padding: 2px 6px; white-space: nowrap;
-  animation: ppulse 2s infinite;
+  animation: ppulse 2s step-end infinite;
 }
 
 /* doc-review questions (questions.yaml) — deliberately a neutral/accent
@@ -2266,12 +2283,12 @@ input[type="text"], input[type="search"], input[type="number"], textarea,
 /* honor the OS-level motion preference — one rule kills every animation and
    transition in the sheet, which is why no animated rule declares its own
    reduced-motion query. The ::before/::after selectors are load-bearing, not
-   ritual: a bare `*` matches ELEMENTS only, and the two biggest movers (the
-   grid drift on body::before, the scan bar on .scan::after) are
-   pseudo-elements a bare `*` cannot reach — the review round caught them
-   still animating under reduced motion. `will-change: auto` rides along
-   because the two movers' layer-promotion hint is pure memory cost once
-   nothing moves. */
+   ritual: a bare `*` matches ELEMENTS only, and the panel-title cursor is an
+   animated pseudo-element it cannot reach (as were the grid drift and scan
+   bar until the perf round retired them — the review round once caught those
+   two still animating under reduced motion). `will-change: auto` rides along
+   so the reset stays in place if a hint ever returns; the sheet itself
+   carries none (the HUD section's rule, pinned by the motion tests). */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation: none !important;
