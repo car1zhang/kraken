@@ -175,11 +175,18 @@ struct SessionDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
-            if !isShell {
-                modePicker
+            // Header + mode picker are one glass bar at the top, and the key
+            // bar + composer are one glass bar at the bottom, instead of the
+            // old four hand-drawn 1px hairline rects between five opaque
+            // `surface` slabs. Slot order and every string are unchanged.
+            VStack(spacing: 0) {
+                header
+                if !isShell {
+                    modePicker
+                }
             }
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .bottom) { Divider().allowsHitTesting(false) }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
@@ -193,7 +200,6 @@ struct SessionDetailView: View {
                         Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
                 }
-                .background(KTheme.ground)
                 // Bottom-anchor scroll-to-bottom, both modes. Transcript's
                 // blocks are native MarkdownText views that lay out
                 // synchronously, so a scroll fired the instant data arrives
@@ -250,14 +256,16 @@ struct SessionDetailView: View {
                     }
                 }
             }
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
-            if peer.pane?.isEmpty == false {
-                keyBar
-                Rectangle().fill(KTheme.hairline).frame(height: 1)
+            VStack(spacing: 0) {
+                if peer.pane?.isEmpty == false {
+                    keyBar
+                }
+                composer
             }
-            composer
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .top) { Divider().allowsHitTesting(false) }
         }
-        .background(KTheme.ground)
+        .background { ThemeBackgroundView() }
         .navigationTitle(peer.agentName ?? peer.name ?? peer.tmuxSession ?? "session")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -285,8 +293,8 @@ struct SessionDetailView: View {
                 Text(toast)
                     .font(.data(11))
                     .foregroundStyle(KTheme.accentInk)
-                    .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(KTheme.accent)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(KTheme.accent, in: Capsule())
                     .padding(.top, 8)
             }
         }
@@ -303,15 +311,23 @@ struct SessionDetailView: View {
         }
     }
 
+    // Session status, not job state — SessionTheme's own mapping, so this is
+    // deliberately a glowing dot rather than a StateCapsule (which reads
+    // BoardTheme's job-state table and would mis-colour every status here).
+    private var statusColor: Color {
+        SessionTheme.color(forStatus: peer.status, role: peer.role)
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Rectangle()
-                    .fill(SessionTheme.color(forStatus: peer.status, role: peer.role))
+                Circle()
+                    .fill(statusColor)
                     .frame(width: 8, height: 8)
+                    .shadow(color: statusColor.opacity(0.75), radius: 3)
                 Text(peer.status)
                     .font(.data(11))
-                    .foregroundStyle(SessionTheme.color(forStatus: peer.status, role: peer.role))
+                    .foregroundStyle(statusColor)
                 if let branch = peer.branch, !branch.isEmpty {
                     Text(branch).font(.data(11)).foregroundStyle(KTheme.accent)
                 }
@@ -322,8 +338,7 @@ struct SessionDetailView: View {
             }
         }
         .padding(.horizontal)
-        .padding(.vertical, 7)
-        .background(KTheme.surface)
+        .padding(.vertical, 8)
     }
 
     private var modePicker: some View {
@@ -334,8 +349,7 @@ struct SessionDetailView: View {
         }
         .pickerStyle(.segmented)
         .padding(.horizontal)
-        .padding(.vertical, 6)
-        .background(KTheme.surface)
+        .padding(.bottom, 8)
     }
 
     private var transcriptContent: some View {
@@ -405,26 +419,31 @@ struct SessionDetailView: View {
     private var keyBar: some View {
         if let pane = peer.pane, !pane.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(Self.keyBarItems, id: \.key) { item in
-                        Button {
-                            sendKey(pane: pane, key: item.key)
-                        } label: {
-                            Text(item.label)
-                                .font(.data(11))
-                                .foregroundStyle(KTheme.text)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(KTheme.raised)
-                                .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
+                // Glass key caps in one GlassEffectContainer so neighbouring
+                // caps blend rather than each carrying its own separate
+                // lensing pass. Same 13 keys, same key names, same order.
+                GlassEffectContainer(spacing: 6) {
+                    HStack(spacing: 6) {
+                        ForEach(Self.keyBarItems, id: \.key) { item in
+                            Button {
+                                sendKey(pane: pane, key: item.key)
+                            } label: {
+                                Text(item.label)
+                                    .font(.data(11))
+                                    .foregroundStyle(KTheme.text)
+                                    .frame(minWidth: 28)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .glassEffect(.regular, in: Capsule())
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 6)
+                .padding(.vertical, 8)
             }
-            .background(KTheme.surface)
         }
     }
 
@@ -473,15 +492,16 @@ struct SessionDetailView: View {
                     } label: {
                         Label("Send", systemImage: "paperplane.fill")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .labelStyle(.iconOnly)
                     .accessibilityLabel("Send")
+                    // Send gating is unchanged: in flight, or nothing but
+                    // whitespace typed.
                     .disabled(vm.isSending || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
         .padding()
-        .background(KTheme.surface)
     }
 
     private func send() {

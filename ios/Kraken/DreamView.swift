@@ -241,9 +241,9 @@ private struct WatchItemCard: View {
                 Text(item.watchClass)
                     .font(.data(9, weight: .semibold))
                     .foregroundStyle(KTheme.text2)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(KTheme.raised)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(KTheme.raised, in: Capsule())
                 Text(sightingsLine)
                     .font(.data(10))
                     .foregroundStyle(KTheme.text2)
@@ -273,6 +273,8 @@ private struct WatchItemCard: View {
             if commentDirty {
                 HStack {
                     Spacer()
+                    // Tinted with skillDream, not the theme accent: DREAM keeps
+                    // its own hue whatever tint the app is wearing.
                     Button("Save comment") {
                         // A comment typed with no verdict yet means "fix":
                         // nobody writes an instruction for something they
@@ -283,7 +285,8 @@ private struct WatchItemCard: View {
                         onJudge(v, trimmedComment)
                     }
                     .font(.data(11, weight: .semibold))
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
+                    .tint(KTheme.skillDream)
                     .disabled(busy)
                 }
             }
@@ -313,11 +316,11 @@ private struct WatchItemCard: View {
             Text(label)
                 .font(.data(11, weight: .semibold))
                 .foregroundStyle(on ? color : KTheme.text2)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(on ? soft : Color.clear)
-                .overlay(Rectangle().stroke(on ? color : KTheme.hairline2, lineWidth: 1))
-                .contentShape(Rectangle())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(on ? soft : Color.clear, in: Capsule())
+                .overlay(Capsule().stroke(on ? color : KTheme.hairline2, lineWidth: 1))
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(busy)

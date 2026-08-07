@@ -186,16 +186,16 @@ struct ArtifactView: View {
                         // keeps its label
                         Label("Retry", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(KTheme.ground)
+                .background { ThemeBackgroundView() }
             } else {
                 ProgressView()
                     .tint(KTheme.accent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(KTheme.ground)
+                    .background { ThemeBackgroundView() }
             }
         }
         // No .navigationTitle here: this view is always a page inside
@@ -344,7 +344,7 @@ struct ArtifactPagerView: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(KTheme.ground)
+        .background { ThemeBackgroundView() }
         .navigationTitle(pages[index].name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -358,7 +358,7 @@ struct ArtifactPagerView: View {
                     } label: {
                         Image(systemName: "chevron.left")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .controlSize(.large)
                     .tint(KTheme.accent)
                     .disabled(neighbours.prev == nil)
@@ -379,7 +379,7 @@ struct ArtifactPagerView: View {
                     } label: {
                         Image(systemName: "chevron.right")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .controlSize(.large)
                     .tint(KTheme.accent)
                     .disabled(neighbours.next == nil)

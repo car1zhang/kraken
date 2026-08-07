@@ -49,50 +49,64 @@ func usageGaugeColor(percent: Double) -> Color {
     return KTheme.solved
 }
 
-/// One labeled window row: name on the left, a horizontal fill gauge in the
-/// middle, "NN% · countdown" right-aligned.
+/// One labeled window row: name on the left, "NN% · countdown" right-aligned,
+/// and a thin capsule meter underneath — the same bar treatment as the
+/// job-detail tokens card, so the two screens' meters read as one family.
+///
+/// The meter is hand-drawn rather than a native `Gauge`, for two reasons
+/// checked on the iOS 26.3 simulator: `.labelsHidden()` does not suppress a
+/// `Gauge`'s label on iOS, so the label renders twice (small in the header
+/// row, body-sized inside the Gauge), and a `Gauge` cannot be drawn this
+/// thin. The whole row collapses to one spoken sentence for VoiceOver.
 private struct UsageGaugeRow: View {
     let label: String
     let percent: Double
     let resetsAt: Int64?
 
+    private var clamped: Double { min(max(percent, 0), 100) }
+
+    private var readout: String {
+        resetsAt.map { "\(Int(percent))% · \(formatCountdown(millis: $0))" } ?? "\(Int(percent))%"
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(label)
                     .font(.data(11, weight: .semibold))
                     .foregroundStyle(KTheme.text2)
                 Spacer()
-                Text(resetsAt.map { "\(Int(percent))% · \(formatCountdown(millis: $0))" } ?? "\(Int(percent))%")
+                Text(readout)
                     .font(.data(11))
                     .foregroundStyle(KTheme.text2)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Rectangle().fill(KTheme.raised)
-                    Rectangle()
+                    Capsule().fill(KTheme.raised)
+                    Capsule()
                         .fill(usageGaugeColor(percent: percent))
-                        .frame(width: geo.size.width * min(max(percent, 0), 100) / 100)
+                        .frame(width: max(geo.size.width * clamped / 100, clamped > 0 ? 5 : 0))
                 }
             }
-            .frame(height: 6)
-            .overlay(Rectangle().stroke(KTheme.hairline, lineWidth: 1))
+            .frame(height: 5)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(resetsAt.map { "\(Int(percent)) percent, resets in \(formatCountdown(millis: $0))" } ?? "\(Int(percent)) percent")
     }
 }
 
-/// Small colored pill for account status — cooling/reauth/no-creds/stale.
+/// Small colored capsule for account status — cooling/reauth/no-creds/stale.
+/// Rendered through the shared `KChip` so it matches every other chip in the
+/// app; each status gets an SF Symbol, and the TEXT of each chip is verbatim
+/// what it always was.
 private struct UsageChip: View {
+    let icon: String
     let text: String
     let color: Color
 
     var body: some View {
-        Text(text)
-            .font(.data(10, weight: .semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .overlay(Rectangle().stroke(color, lineWidth: 1))
+        KChip(icon: icon, text: text, tint: color)
     }
 }
 
@@ -104,24 +118,49 @@ private struct UsageAccountCard: View {
         return tier.hasPrefix("default_claude_") ? String(tier.dropFirst("default_claude_".count)) : tier
     }
 
-    private var chips: [(String, Color)] {
-        var chips: [(String, Color)] = []
+    /// (icon, text, color). Texts are unchanged from the pre-glass build; the
+    /// icons are new, one per status, so each chip reads at a glance.
+    private struct StatusChip: Identifiable {
+        var id: String { text }
+        let icon: String
+        let text: String
+        let color: Color
+    }
+
+    private var chips: [StatusChip] {
+        var chips: [StatusChip] = []
         if let cooldownUntil = account.cooldownUntil, cooldownUntil > Int64(Date().timeIntervalSince1970 * 1000) {
-            chips.append(("cooling \(formatCountdown(millis: cooldownUntil))", KTheme.revealed))
+            chips.append(StatusChip(
+                icon: "snowflake",
+                text: "cooling \(formatCountdown(millis: cooldownUntil))",
+                color: KTheme.revealed
+            ))
         }
         if account.reauth == true {
-            chips.append(("reauth needed — ccp login", KTheme.counter))
+            chips.append(StatusChip(
+                icon: "key.horizontal.fill", text: "reauth needed — ccp login", color: KTheme.counter
+            ))
         }
         if account.noCreds == true {
-            chips.append(("no creds", KTheme.counter))
+            chips.append(StatusChip(
+                icon: "exclamationmark.triangle.fill", text: "no creds", color: KTheme.counter
+            ))
         }
         if account.stale == true {
-            chips.append(("stale", KTheme.text2))
+            chips.append(StatusChip(
+                icon: "clock.arrow.circlepath", text: "stale", color: KTheme.text2
+            ))
         }
         return chips
     }
 
     var body: some View {
+        ThemedCard {
+            cardContent.padding(14)
+        }
+    }
+
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -142,9 +181,13 @@ private struct UsageAccountCard: View {
             }
 
             if !chips.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(chips, id: \.0) { chip in
-                        UsageChip(text: chip.0, color: chip.1)
+                // Wrapping-free horizontal scroll: "reauth needed — ccp login"
+                // is long enough to overflow a 390pt row on its own.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(chips) { chip in
+                            UsageChip(icon: chip.icon, text: chip.text, color: chip.color)
+                        }
                     }
                 }
             }
@@ -165,9 +208,29 @@ private struct UsageAccountCard: View {
                 UsageGaugeRow(label: model.name.lowercased(), percent: model.percent, resetsAt: model.resetsAt)
             }
         }
-        .padding(12)
-        .background(KTheme.surface)
-        .overlay(Rectangle().stroke(KTheme.hairline, lineWidth: 1))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The two full-width state banners at the top of the screen. Rounded glass
+/// with a tinted hairline, replacing the old sharp `Rectangle` stroke; the
+/// sentences are unchanged.
+private struct UsageBanner: View {
+    let text: String
+    let tint: Color
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.voice(12))
+            .foregroundStyle(tint)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: shape)
+            .overlay(shape.stroke(tint.opacity(0.55), lineWidth: 1))
     }
 }
 
@@ -189,21 +252,9 @@ struct UsageView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if let usage = vm.usage {
                         if usage.daemonOK == false {
-                            Text("daemon down — data frozen")
-                                .font(.voice(12))
-                                .foregroundStyle(KTheme.counter)
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(KTheme.surface)
-                                .overlay(Rectangle().stroke(KTheme.counter, lineWidth: 1))
+                            UsageBanner(text: "daemon down — data frozen", tint: KTheme.counter)
                         } else if !usage.available {
-                            Text("no usage snapshot yet")
-                                .font(.voice(12))
-                                .foregroundStyle(KTheme.text2)
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(KTheme.surface)
-                                .overlay(Rectangle().stroke(KTheme.hairline, lineWidth: 1))
+                            UsageBanner(text: "no usage snapshot yet", tint: KTheme.text2)
                         }
 
                         if let current = vm.current {
@@ -238,8 +289,11 @@ struct UsageView: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .background(KTheme.ground)
+            .scrollContentBackground(.hidden)
+            .background { ThemeBackgroundView() }
             .navigationTitle("Usage")
+            // Large title, and no per-view opaque scroll-edge appearance —
+            // this screen is one of the three the deleted proxy used to hide.
             .navigationBarTitleDisplayMode(.large)
             .refreshable { await vm.refresh(baseURL: serverURL) }
             .task(id: scenePhase) {

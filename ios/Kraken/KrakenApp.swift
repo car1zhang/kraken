@@ -9,6 +9,14 @@ struct KrakenApp: App {
     @State private var draftStore = DraftStore()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearance = "system"
+    // The persisted theme tint. Read here (rather than only inside KTheme's
+    // colour providers) so SwiftUI OBSERVES it: a Settings tap writes the
+    // rawValue, this re-evaluates, and the `.id(themeTint)` below tears the
+    // whole tree down and rebuilds it so every KTheme token re-resolves
+    // against the new hue — no relaunch.
+    @AppStorage(KTheme.themeTintKey) private var themeTintRaw = ThemeTint.violet.rawValue
+
+    private var themeTint: ThemeTint { ThemeTint.resolve(themeTintRaw) }
 
     private var preferredScheme: ColorScheme? {
         switch appearance {
@@ -19,7 +27,6 @@ struct KrakenApp: App {
     }
 
     init() {
-        KTheme.applyGlobalAppearance()
         NotificationManager.shared.attachDelegate()
         // BGTaskScheduler registration must happen before the app finishes
         // launching, so init() (there's no AppDelegate in this SwiftUI-only
@@ -40,8 +47,15 @@ struct KrakenApp: App {
             RootTabView()
                 .environment(router)
                 .environment(draftStore)
+                .environment(\.theme, GlassTheme(tint: themeTint))
                 .preferredColorScheme(preferredScheme)
                 .tint(KTheme.accent)
+                // Re-identify on a tint change: KTheme's tokens are dynamic
+                // UIColors that read the stored tint at RESOLVE time, so they
+                // only pick up a new hue once SwiftUI re-renders the views
+                // holding them. Discarding the identity is the blunt but
+                // reliable way to guarantee that everywhere at once.
+                .id(themeTint)
                 .onAppear {
                     // launch-argument route (simctl launch ... -KrakenRoute
                     // kraken://job/x): lands in UserDefaults; used by the
@@ -87,6 +101,6 @@ struct RootTabView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppRouter.Tab.settings)
         }
-        .background(KTheme.ground)
+        .background { ThemeBackgroundView() }
     }
 }

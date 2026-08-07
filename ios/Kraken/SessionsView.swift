@@ -59,8 +59,15 @@ struct SessionsView: View {
                     Text(err)
                         .font(.voice(12))
                         .foregroundStyle(KTheme.counter)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .glassEffect(
+                            .regular.tint(KTheme.counter.opacity(0.16)),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
                         .padding(.horizontal)
-                        .padding(.bottom, 4)
+                        .padding(.bottom, 6)
                 }
 
                 TabView(selection: $selectedTab) {
@@ -70,18 +77,23 @@ struct SessionsView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .background(KTheme.ground)
+            .background { ThemeBackgroundView() }
             .navigationTitle("Sessions")
+            // Large, and NEVER with a per-view opaque scroll-edge appearance:
+            // the deleted appearance proxy is what used to paint over this
+            // title at rest, and nothing here may reintroduce it.
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    // Native glass toolbar button — tint flows from the app's
+                    // `.tint`, no hand-painted accent foreground.
                     Button {
                         showingSpawn = true
                     } label: {
-                        Image(systemName: "plus")
+                        Label("New Session", systemImage: "plus")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(KTheme.accent)
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("New Session")
                 }
             }
             .navigationDestination(for: Peer.self) { peer in
@@ -212,7 +224,10 @@ struct SessionsView: View {
                 }
             }
         }
-        .listStyle(.plain)
+        // .insetGrouped rather than the old .plain: the glass idiom wants
+        // inset, rounded row groups floating over the tint field instead of
+        // edge-to-edge flat rows. List/swipe/context structure is untouched.
+        .listStyle(.insetGrouped)
         .kListStyle()
         .refreshable { await vm.refresh(baseURL: serverURL) }
     }
@@ -263,11 +278,20 @@ private struct SessionRow: View {
         return trimmed.split(separator: "/").last.map(String.init) ?? "~"
     }
 
+    // The status mapping is SessionTheme's (running/waiting/question/polling/
+    // blocked/error/shell), NOT BoardTheme's job-state mapping — so this stays
+    // its own dot rather than adopting StateCapsule, which would recolour
+    // every session status through the wrong table.
+    private var statusColor: Color {
+        SessionTheme.color(forStatus: peer.status, role: peer.role)
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            Rectangle()
-                .fill(SessionTheme.color(forStatus: peer.status, role: peer.role))
+            Circle()
+                .fill(statusColor)
                 .frame(width: 8, height: 8)
+                .shadow(color: statusColor.opacity(0.75), radius: 3)
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName)
                     .font(.data(13, weight: .bold))
@@ -283,7 +307,7 @@ private struct SessionRow: View {
             Spacer()
             Text(peer.status)
                 .font(.data(11))
-                .foregroundStyle(SessionTheme.color(forStatus: peer.status, role: peer.role))
+                .foregroundStyle(statusColor)
         }
         .padding(.leading, indent)
     }
@@ -383,7 +407,7 @@ private struct SpawnSheet: View {
                 }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Spawn")
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(isBusy || !canSpawn)
             }
         }
