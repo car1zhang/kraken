@@ -13,12 +13,10 @@ import Observation
 // the web board can afford a fourth view tab only because a browser has the
 // width for it.
 //
-// It is presented as a sheet but READ as a full page, so it takes the full-page
-// header treatment rather than a drawer's small centred one: the explicit
-// `.navigationBarTitleDisplayMode(.inline)` is dropped and the title falls back
-// to the default, which is large and left-aligned. It keeps sheet chrome (the
-// close button) because it is still a sheet; see the contract's
-// header-treatment paragraph.
+// As a sheet it takes the drawer header treatment — small centred inline
+// title with the close button — matching the Log and Usage drawers (carl's
+// call, revising an earlier round that briefly gave it a full-page large
+// title; see the contract's header-treatment paragraph).
 //
 // The watchlist is the only genuinely new interaction in the app: `fine`
 // suppresses a row permanently, `fix` asks for it to be done — and a `fix`
@@ -151,8 +149,9 @@ struct DreamView: View {
         }
         .kListStyle()
         .navigationTitle("Dream")
-        // Full-page treatment: large, left-aligned. Sheet-hosted, but carl
-        // reads DREAM as a page, not a drawer — see this file's header.
+        // Drawer treatment: small centred title, like Log and Usage — see
+        // this file's header.
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 SheetCloseButton { dismiss() }
