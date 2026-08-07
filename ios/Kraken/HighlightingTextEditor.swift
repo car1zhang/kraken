@@ -6,10 +6,17 @@ import UIKit
 /// type — something plain `TextEditor` cannot do (no attributed-string
 /// support), and the iOS 26 attributed-`TextEditor` API isn't available
 /// since this app targets iOS 17. Drops into SteerView, ReactivateView, and
-/// JobFormView's spec editor with the same `kField` chrome around it: this
-/// view itself stays visually transparent (clear background, no internal
-/// insets beyond UITextView's own defaults) so the raised background/border
-/// that chrome supplies is unaffected.
+/// JobFormView's spec editor. This view itself stays visually transparent
+/// (clear background, no internal insets beyond UITextView's own defaults),
+/// so whatever it lands in supplies the chrome: the steer/reactivate
+/// composers put it inline on the section card's surface with no chrome at
+/// all, while JobFormView's spec editor still wraps it in `kField` on a
+/// cleared row.
+///
+/// No focus affordance on the inline composers: SwiftUI's `.focused($state)`
+/// never fires on a UIViewRepresentable, and the inline composers don't want
+/// a kField accent border anyway — so nothing here bridges UIKit
+/// first-responder state back to SwiftUI.
 ///
 /// Coloring is additive over a normal, always-visible UITextView: if
 /// `commandTokenRanges` or attribute application ever misbehaves, the worst
@@ -46,13 +53,6 @@ import UIKit
 /// clobbering an active composition.
 struct HighlightingTextEditor: UIViewRepresentable {
     @Binding var text: String
-    /// Optional focus bridge: SwiftUI's `.focused($state)` never fires on a
-    /// UIViewRepresentable, so call sites that need the `kField`
-    /// accent-on-focus border pass this binding instead; the coordinator
-    /// writes it from `textViewDidBeginEditing`/`textViewDidEndEditing`. Nil
-    /// for call sites that don't need focus styling (JobFormView's spec
-    /// editor).
-    var isFocused: Binding<Bool>?
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -87,24 +87,17 @@ struct HighlightingTextEditor: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isFocused: isFocused)
+        Coordinator(text: $text)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         private let text: Binding<String>
-        private let isFocused: Binding<Bool>?
 
-        init(text: Binding<String>, isFocused: Binding<Bool>? = nil) {
+        init(text: Binding<String>) {
             self.text = text
-            self.isFocused = isFocused
-        }
-
-        func textViewDidBeginEditing(_ textView: UITextView) {
-            isFocused?.wrappedValue = true
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            isFocused?.wrappedValue = false
             // Covers resign-mid-composition: UIKit commits any marked text
             // on resign (markedTextRange becomes nil) but does not guarantee
             // a textViewDidChange call for that commit. Without this, the

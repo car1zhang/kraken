@@ -2388,10 +2388,6 @@ struct ReactivateView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(DraftStore.self) private var draftStore
-    // Not @FocusState: SwiftUI's .focused($state) never fires on a
-    // UIViewRepresentable, so HighlightingTextEditor bridges focus itself
-    // via its own isFocused binding instead (see that type's doc comment).
-    @State private var textFocused = false
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -2410,9 +2406,11 @@ struct ReactivateView: View {
             }
             kSection("What to adjust (optional)") {
                 CmdChipsRow(text: $text)
-                HighlightingTextEditor(text: $text, isFocused: $textFocused)
-                    .kField(focused: textFocused, minHeight: 120)
-                    .listRowBackground(Color.clear)
+                // Inline in the section card, matching SteerView's composer
+                // (see the comment there), so both steer-family sheets read
+                // the same.
+                HighlightingTextEditor(text: $text)
+                    .frame(minHeight: 120, alignment: .topLeading)
             }
             if let errorMessage {
                 kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
@@ -2487,10 +2485,6 @@ struct SteerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(DraftStore.self) private var draftStore
-    // Not @FocusState: SwiftUI's .focused($state) never fires on a
-    // UIViewRepresentable, so HighlightingTextEditor bridges focus itself
-    // via its own isFocused binding instead (see that type's doc comment).
-    @State private var textFocused = false
     @State private var text = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -2537,9 +2531,12 @@ struct SteerView: View {
             }
             kSection("Message") {
                 CmdChipsRow(text: $text)
-                HighlightingTextEditor(text: $text, isFocused: $textFocused)
-                    .kField(focused: textFocused, minHeight: 120)
-                    .listRowBackground(Color.clear)
+                // Inline in the section card, not kField chrome: the composer
+                // reads as one continuous surface with the chips row above and
+                // the attachment rows below, rather than a floating bordered
+                // box between two card fragments.
+                HighlightingTextEditor(text: $text)
+                    .frame(minHeight: 120, alignment: .topLeading)
                 ImageAttachmentBar(
                     baseURL: baseURL, slug: job.slug,
                     isUploading: $isUploading,
