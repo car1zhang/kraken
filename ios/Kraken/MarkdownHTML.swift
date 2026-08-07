@@ -78,11 +78,101 @@ private func markdownToHTML(_ src: String) -> String {
     return out.joined(separator: "\n")
 }
 
+// MARK: - the shell's palette, derived from the app's tint
+//
+// This page renders inside a WKWebView that sits directly on the tinted
+// field, so a hardcoded cyber-dark palette here reads as a foreign near-black
+// rectangle pasted onto a violet (or cyan, or amber…) screen — a seam. The
+// custom properties below are therefore GENERATED from the same
+// `(hue, saturation, brightness)` recipe `GlassTheme.shadeUI` uses, off the
+// same persisted tint, so the artifact page is the same surface as the app
+// around it whichever of the eight swatches is selected.
+//
+// The one deliberate exception is `--revealed` (inline code): state hues,
+// job colors and skill hues are NOT tint-derived anywhere in this redesign,
+// so inline code keeps KTheme.revealed's two literal hexes.
+
+/// HSB → a CSS `hsl()` string, so the stylesheet can be written in the same
+/// numbers `GlassTheme` is written in rather than in hand-picked hexes that
+/// would drift from it. `saturation` is PRE-scale — the tint's
+/// `saturationScale` is applied here, once, exactly as `shadeUI` does it.
+private func themeCSSColor(
+    hueDegrees: Double, saturationScale: Double, saturation: Double, brightness: Double
+) -> String {
+    let s = min(max(saturation * saturationScale, 0), 1)
+    let v = min(max(brightness, 0), 1)
+    let lightness = v * (1 - s / 2)
+    let denominator = min(lightness, 1 - lightness)
+    let hslSaturation = denominator <= 0 ? 0 : (v - lightness) / denominator
+    return String(
+        format: "hsl(%.0f, %.1f%%, %.1f%%)",
+        hueDegrees, hslSaturation * 100, lightness * 100
+    )
+}
+
+/// The `:root` / light-override custom properties for the currently stored
+/// tint. Read through `ThemeTint.resolve`, so an unrecognized or absent
+/// persisted value degrades to violet rather than producing a broken page.
+private func themeCSSVariables() -> String {
+    let tint = ThemeTint.resolve(UserDefaults.standard.string(forKey: KTheme.themeTintKey))
+    let hue = tint.hueDegrees
+    let scale = tint.saturationScale
+    func color(_ saturation: Double, _ brightness: Double) -> String {
+        themeCSSColor(
+            hueDegrees: hue, saturationScale: scale,
+            saturation: saturation, brightness: brightness
+        )
+    }
+
+    // Dark: the field's own near-black stops, lifted step by step for the
+    // surfaces above it. Light: the pale siblings. The accent pair is
+    // literally `GlassTheme.accentUI`'s numbers (0.45/1.0 dark;
+    // 0.72/`tint.lightBrightness` light — per-tint, so the artifact page's
+    // links clear the same 4.5:1 the app's accent was re-solved to), so a
+    // link in an artifact is the same colour as a link in the app.
+    return """
+      :root {
+        color-scheme: light dark;
+        --field-1: \(color(0.55, 0.075));
+        --field-2: \(color(0.62, 0.170));
+        --ground: \(color(0.55, 0.075));
+        --raised: \(color(0.50, 0.140));
+        --hairline: \(color(0.40, 0.220));
+        --hairline2: \(color(0.32, 0.340));
+        --text: \(color(0.10, 0.930));
+        --text2: \(color(0.12, 0.620));
+        --accent: \(color(0.45, 1.000));
+        --revealed: #F5B84D;
+        --zebra: rgba(255, 255, 255, 0.02);
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --field-1: \(color(0.06, 0.990));
+          --field-2: \(color(0.12, 0.940));
+          --ground: \(color(0.06, 0.990));
+          --raised: \(color(0.10, 0.950));
+          --hairline: \(color(0.14, 0.880));
+          --hairline2: \(color(0.18, 0.740));
+          --text: \(color(0.30, 0.160));
+          --text2: \(color(0.18, 0.450));
+          --accent: \(color(0.72, tint.lightBrightness));
+          --revealed: #8A5106;
+          --zebra: rgba(0, 0, 0, 0.025);
+        }
+      }
+    """
+}
+
 /// Common HTML shell matching web/style.css's .md rules (accent h1,
 /// hairline-underlined h2, raised-bg inline code, bordered pre blocks,
 /// accent links) plus a viewport meta tag and a touch-friendly base font
 /// size. Always fills its container — full-screen ArtifactView is the only
 /// caller now, so there's no transparent/inline variant to switch between.
+///
+/// The body paints the theme's own three-stop gradient (same hues, same
+/// top-leading→bottom-trailing direction as `ThemeBackgroundView`), fixed so
+/// scrolling doesn't drag it, and every block surface picked up a continuous
+/// corner radius — the sharp-rect idiom is gone from this page too.
 private func documentShell(body: String) -> String {
     return """
     <!doctype html>
@@ -91,37 +181,17 @@ private func documentShell(body: String) -> String {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-      :root {
-        color-scheme: light dark;
-        --ground: #0A0E14;
-        --raised: #151C28;
-        --hairline: #1E2836;
-        --hairline2: #2A3A50;
-        --text: #D7E2EC;
-        --text2: #6B7A8C;
-        --accent: #9E7BFF;
-        --revealed: #F5B84D;
-        --zebra: rgba(255, 255, 255, 0.02);
-      }
-      @media (prefers-color-scheme: light) {
-        :root {
-          --ground: #EEF2F7;
-          --raised: #E3E9F1;
-          --hairline: #D8E0EA;
-          --hairline2: #B9C6D6;
-          --text: #1C2733;
-          --text2: #5D6C7E;
-          --accent: #6B3FE0;
-          --revealed: #8A5106;
-          --zebra: rgba(0, 0, 0, 0.025);
-        }
-      }
+    \(themeCSSVariables())
       * { box-sizing: border-box; -webkit-text-size-adjust: 100%; }
-      html, body { background: var(--ground); }
+      html, body { background: var(--field-1); }
       body {
         margin: 0; padding: 16px;
+        min-height: 100%;
         color: var(--text);
         font: 15px/1.55 -apple-system, "Avenir Next", "Helvetica Neue", sans-serif;
+        background:
+          linear-gradient(135deg, var(--field-1) 0%, var(--field-2) 50%, var(--field-1) 100%)
+          fixed;
       }
       h1, h2, h3, h4 { margin: 1.1em 0 0.4em; font-weight: 600; }
       h1:first-child, h2:first-child, h3:first-child, h4:first-child, p:first-child { margin-top: 0; }
@@ -132,17 +202,30 @@ private func documentShell(body: String) -> String {
       p, ul, ol { margin: 0.55em 0; }
       ul, ol { padding-left: 20px; }
       li { margin: 0.15em 0; }
-      code { font: 13px "SF Mono", Menlo, monospace; background: var(--raised); color: var(--revealed); padding: 1px 4px; }
+      code {
+        font: 13px "SF Mono", Menlo, monospace; background: var(--raised);
+        color: var(--revealed); padding: 1px 5px; border-radius: 5px;
+      }
       pre {
-        background: var(--ground); border: 1px solid var(--hairline); padding: 10px 12px;
+        background: var(--raised); border: 1px solid var(--hairline); padding: 10px 12px;
+        border-radius: 12px;
         overflow-x: auto; margin: 0.7em 0; white-space: pre-wrap; word-break: break-word;
       }
       pre code { background: none; padding: 0; color: var(--text); }
       a { color: var(--accent); }
       strong { color: var(--text); font-weight: 600; }
-      blockquote { border-left: 2px solid var(--hairline2); padding-left: 10px; color: var(--text2); margin: 0.55em 0; }
-      table { border-collapse: collapse; width: 100%; margin: 0.7em 0; font-size: 14px; }
-      th, td { border: 1px solid var(--hairline); padding: 6px 10px; }
+      blockquote {
+        border-left: 3px solid var(--hairline2); border-radius: 2px;
+        padding-left: 10px; color: var(--text2); margin: 0.55em 0;
+      }
+      table {
+        border-collapse: separate; border-spacing: 0; width: 100%; margin: 0.7em 0;
+        font-size: 14px; border: 1px solid var(--hairline); border-radius: 12px;
+        overflow: hidden;
+      }
+      th, td { border-bottom: 1px solid var(--hairline); border-right: 1px solid var(--hairline); padding: 6px 10px; }
+      th:last-child, td:last-child { border-right: none; }
+      tbody tr:last-child td { border-bottom: none; }
       th { background: var(--raised); color: var(--text); font-weight: 600; text-align: left; }
       td { color: var(--text); }
       tr:nth-child(even) td { background: var(--zebra); }

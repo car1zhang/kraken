@@ -1,28 +1,84 @@
 import XCTest
 @testable import Kraken
 
-// Byte-parity guard between the current parser+renderer split
-// (MarkdownParser.swift + MarkdownHTML.swift) and the pre-refactor
-// self-contained implementation it replaced (see `git show HEAD~1:
-// ios/Kraken/MarkdownHTML.swift`, commit a5545b6's parent). The refactor
-// was supposed to be a pure restructuring — same markdown in, same HTML
-// out — and this file is what actually proves that, over a wide corpus.
+// This file makes TWO claims, and they are deliberately separate.
 //
-// The legacy implementation is embedded below verbatim, renamed with a
-// `legacy` prefix. Pure Foundation code, copied unchanged except for names,
-// so it keeps behaving exactly as it did in production before the refactor
-// regardless of any future edits to MarkdownParser.swift/MarkdownHTML.swift.
+// 1. BODY PARITY (unchanged coverage, re-scoped). Byte-parity between the
+//    current parser+renderer split (MarkdownParser.swift +
+//    MarkdownHTML.swift) and the pre-refactor self-contained implementation
+//    it replaced (see `git show HEAD~1:ios/Kraken/MarkdownHTML.swift`,
+//    commit a5545b6's parent). That refactor was supposed to be a pure
+//    restructuring — same markdown in, same HTML out — and the whole corpus
+//    below, injection-safety cases included, is still compared BYTE for BYTE.
 //
-// NOTE ON ACCESS LEVEL: the current `markdownToHTML(_:)` (MarkdownHTML.swift)
-// is declared `private`, i.e. file-private for a top-level declaration —
-// @testable import does not reach it. Rather than change production source
-// to make this test file compile (out of scope for this change; flagged
-// separately), parity is checked through the exported `markdownHTML(_:)`
-// wrapper instead. Its document shell is fixed and deterministic on both
-// sides, so `markdownHTML(x) == legacyMarkdownHTML(x)` for all x is exactly
-// as strong a guarantee as comparing the private `markdownToHTML` bodies
-// directly would have been.
+//    What changed is the SCOPE of the comparison: only the rendered markdown
+//    body is compared now, not the whole document. The Liquid Glass redesign
+//    made the document SHELL tint-derived (its CSS custom properties are
+//    generated from the stored `ThemeTint` so an artifact page sits on the
+//    same field as the app instead of reading as a near-black seam), which
+//    deliberately and permanently obsoletes shell parity with a legacy copy
+//    frozen at the cyber-dark palette. The parser/renderer parity the file
+//    was written to protect is untouched by that and is what survives here.
+//
+//    The legacy implementation is embedded below verbatim, renamed with a
+//    `legacy` prefix. Pure Foundation code, copied unchanged except for
+//    names, so it keeps behaving exactly as it did in production before the
+//    refactor regardless of any future edits to the current files.
+//
+//    NOTE ON ACCESS LEVEL: the current `markdownToHTML(_:)` is `private`,
+//    i.e. file-private for a top-level declaration — @testable import does
+//    not reach it. Parity therefore goes through the exported
+//    `markdownHTML(_:)` wrapper and slices the body back out of the document
+//    (`htmlBody`), which is exactly as strong as comparing the private
+//    functions directly would have been.
+//
+// 2. SHELL OBLIGATIONS (new). The shell is no longer a constant, so it gets
+//    assertions of its own instead of a frozen expected string: it carries
+//    the STORED tint's hue, an unrecognized or absent stored tint degrades to
+//    violet, inline code's `--revealed` stays the two literal KTheme.revealed
+//    hexes (state hues are never tint-derived), and rendering is
+//    deterministic for a fixed tint.
+//
+// Every test that touches the tint key SETS it explicitly and tearDown
+// REMOVES it — no test may depend on, or leave behind, UserDefaults state.
 final class MarkdownHTMLParityTests: XCTestCase {
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: KTheme.themeTintKey)
+        super.tearDown()
+    }
+
+    // MARK: - helpers
+
+    /// The rendered markdown body, sliced back out of a full document.
+    ///
+    /// Both shells (current and legacy) close `</head>` and open `<body>` on
+    /// their own lines and end with `\n</body>\n</html>`, so these two anchors
+    /// bracket the body exactly. They can't collide with rendered content: a
+    /// literal `<body>` in the markdown source is entity-escaped to
+    /// `&lt;body&gt;` before it ever reaches the document.
+    private func htmlBody(_ document: String, file: StaticString = #filePath, line: UInt = #line) -> String {
+        guard let open = document.range(of: "</head>\n<body>\n") else {
+            XCTFail("no <body> opener in document", file: file, line: line)
+            return ""
+        }
+        guard let close = document.range(of: "\n</body>\n</html>", options: .backwards) else {
+            XCTFail("no </body> closer in document", file: file, line: line)
+            return ""
+        }
+        guard open.upperBound <= close.lowerBound else {
+            XCTFail("body markers out of order", file: file, line: line)
+            return ""
+        }
+        return String(document[open.upperBound..<close.lowerBound])
+    }
+
+    /// Renders with a specific tint stored, so no test depends on whatever
+    /// tint another test (or the app) happened to leave behind.
+    private func rendered(_ markdown: String, tint: ThemeTint) -> String {
+        UserDefaults.standard.set(tint.rawValue, forKey: KTheme.themeTintKey)
+        return markdownHTML(markdown)
+    }
 
     // MARK: - corpus
 
@@ -115,15 +171,30 @@ final class MarkdownHTMLParityTests: XCTestCase {
         """,
     ]
 
-    func testMarkdownHTMLByteParityAcrossCorpus() {
+    // MARK: - body parity with the pre-refactor renderer
+
+    /// The whole corpus, byte for byte — headings, lists, fences, tables,
+    /// ragged rows, CRLF, multibyte, and every injection-safety case.
+    func testMarkdownBodyByteParityAcrossCorpus() {
         for (i, input) in Self.corpus.enumerated() {
-            let actual = markdownHTML(input)
-            let expected = legacyMarkdownHTML(input)
+            let actual = htmlBody(rendered(input, tint: .violet))
+            let expected = htmlBody(legacyMarkdownHTML(input))
             XCTAssertEqual(actual, expected, "corpus[\(i)] mismatch for input:\n\(input)")
         }
     }
 
-    func testMarkdownHTMLFullShellParityOnMixedDocument() {
+    /// The body is a pure function of the markdown: the tint changes the
+    /// shell and nothing else. Rendering the corpus under a different tint
+    /// must produce the identical body.
+    func testMarkdownBodyIsIndependentOfTint() {
+        for (i, input) in Self.corpus.enumerated() {
+            let violet = htmlBody(rendered(input, tint: .violet))
+            let amber = htmlBody(rendered(input, tint: .amber))
+            XCTAssertEqual(violet, amber, "corpus[\(i)] body moved with the tint")
+        }
+    }
+
+    func testMarkdownBodyParityOnMixedDocument() {
         let doc = """
         # Title
 
@@ -142,12 +213,133 @@ final class MarkdownHTMLParityTests: XCTestCase {
 
         > quoted
         """
-        XCTAssertEqual(markdownHTML(doc), legacyMarkdownHTML(doc))
+        UserDefaults.standard.set(ThemeTint.violet.rawValue, forKey: KTheme.themeTintKey)
+        XCTAssertEqual(htmlBody(markdownHTML(doc)), htmlBody(legacyMarkdownHTML(doc)))
     }
 
-    func testPlainTextHTMLParity() {
+    func testPlainTextHTMLBodyParity() {
         let text = "raw <text> & \"quotes\" 'apostrophes' > done"
-        XCTAssertEqual(plainTextHTML(text), legacyPlainTextHTML(text))
+        UserDefaults.standard.set(ThemeTint.violet.rawValue, forKey: KTheme.themeTintKey)
+        XCTAssertEqual(htmlBody(plainTextHTML(text)), htmlBody(legacyPlainTextHTML(text)))
+    }
+
+    // MARK: - shell obligations
+
+    /// Every tint's shell carries that tint's own hue in its accent, in both
+    /// the dark `:root` block and the light override — so a link in an
+    /// artifact is the same colour as a link in the app.
+    func testShellAccentCarriesStoredTintHue() {
+        for tint in ThemeTint.allCases {
+            let document = rendered("# hello", tint: tint)
+            let needle = "--accent: hsl(\(Int(tint.hueDegrees)),"
+            let occurrences = document.components(separatedBy: needle).count - 1
+            XCTAssertEqual(
+                occurrences, 2,
+                "\(tint.rawValue): expected the accent at hue \(Int(tint.hueDegrees)) in both the dark and light blocks"
+            )
+        }
+    }
+
+    /// The LIGHT `--accent`'s lightness channel follows `ThemeTint.
+    /// lightBrightness` (contract amendment 2026-08-07 r2/r3) — the hue test
+    /// above cannot see this channel, so a shell pinned at one brightness for
+    /// every tint would pass it while failing the amendment's contrast bar.
+    /// Expected lightness replicates the shell's own HSV→HSL identity
+    /// (L = V·(1−S/2)) at the light saturation 0.72 × saturationScale.
+    func testShellLightAccentLightnessFollowsLightBrightness() {
+        for tint in ThemeTint.allCases {
+            let document = rendered("# hello", tint: tint)
+            guard let lightBlock = document.components(separatedBy: "@media (prefers-color-scheme: light)").last,
+                  let accentValue = lightBlock.components(separatedBy: "--accent: hsl(").dropFirst().first?
+                      .components(separatedBy: ")").first,
+                  let lightness = accentValue.components(separatedBy: ",").dropFirst(2).first?
+                      .trimmingCharacters(in: CharacterSet(charactersIn: " %")),
+                  let got = Double(lightness)
+            else {
+                XCTFail("\(tint.rawValue): could not extract the light --accent hsl() lightness")
+                continue
+            }
+            let hsvSaturation = 0.72 * tint.saturationScale
+            let want = tint.lightBrightness * (1 - hsvSaturation / 2) * 100
+            XCTAssertEqual(got, want, accuracy: 1.0,
+                           "\(tint.rawValue): light --accent lightness \(got)%, want \(want)%")
+        }
+    }
+
+    /// A `:root` block exists at all, and it is the generated one (i.e. the
+    /// old frozen cyber-dark hexes are gone from the tint-derived channels).
+    func testShellEmitsGeneratedRootBlockAndDropsLegacyHexes() {
+        let document = rendered("# hello", tint: .violet)
+        XCTAssertTrue(document.contains(":root {"), "no :root block")
+        XCTAssertTrue(document.contains("--ground: hsl("), "--ground is not tint-derived")
+        XCTAssertTrue(document.contains("--text: hsl("), "--text is not tint-derived")
+        for legacyHex in ["#0A0E14", "#9E7BFF", "#D7E2EC", "#6B3FE0", "#EEF2F7", "#1C2733"] {
+            XCTAssertFalse(
+                document.contains(legacyHex),
+                "frozen cyber-dark hex \(legacyHex) survived into the tint-derived shell"
+            )
+        }
+    }
+
+    /// Different tints must actually produce different shells — otherwise
+    /// every assertion above would pass on a shell that ignored the tint.
+    func testDifferentTintsProduceDifferentShells() {
+        let violet = rendered("# hello", tint: .violet)
+        let green = rendered("# hello", tint: .green)
+        XCTAssertNotEqual(violet, green)
+        // ...while the graphite escape hatch differs from a chromatic tint by
+        // saturation, not just hue.
+        XCTAssertNotEqual(rendered("# hello", tint: .graphite), rendered("# hello", tint: .blue))
+    }
+
+    /// `ThemeTint.resolve`'s contract, seen from this page: an unrecognized
+    /// stored value and an absent key both render exactly as violet does,
+    /// rather than producing a broken or empty palette.
+    func testUnrecognizedOrAbsentStoredTintDegradesToViolet() {
+        let violet = rendered("# hello", tint: .violet)
+
+        UserDefaults.standard.set("chartreuse", forKey: KTheme.themeTintKey)
+        XCTAssertEqual(markdownHTML("# hello"), violet, "unrecognized tint did not degrade to violet")
+
+        UserDefaults.standard.set("", forKey: KTheme.themeTintKey)
+        XCTAssertEqual(markdownHTML("# hello"), violet, "empty tint did not degrade to violet")
+
+        UserDefaults.standard.removeObject(forKey: KTheme.themeTintKey)
+        XCTAssertEqual(markdownHTML("# hello"), violet, "absent tint did not degrade to violet")
+    }
+
+    /// The stated exception: state hues are never tint-derived, so inline
+    /// code keeps KTheme.revealed's two literal hexes under EVERY tint.
+    func testInlineCodeRevealedStaysLiteralUnderEveryTint() {
+        for tint in ThemeTint.allCases {
+            let document = rendered("`code`", tint: tint)
+            XCTAssertTrue(
+                document.contains("--revealed: #F5B84D;"),
+                "\(tint.rawValue): dark --revealed drifted off KTheme.revealed"
+            )
+            XCTAssertTrue(
+                document.contains("--revealed: #8A5106;"),
+                "\(tint.rawValue): light --revealed drifted off KTheme.revealed"
+            )
+        }
+    }
+
+    /// The shell reads UserDefaults at render time, so it must still be a
+    /// pure function of (markdown, stored tint) — two consecutive calls with
+    /// the key untouched are byte-identical.
+    func testRenderingIsDeterministicForAFixedTint() {
+        let doc = """
+        # Title
+
+        Some **bold** and `code`.
+
+        | A | B |
+        | --- | --- |
+        | 1 | 2 |
+        """
+        UserDefaults.standard.set(ThemeTint.cyan.rawValue, forKey: KTheme.themeTintKey)
+        XCTAssertEqual(markdownHTML(doc), markdownHTML(doc))
+        XCTAssertEqual(plainTextHTML(doc), plainTextHTML(doc))
     }
 }
 

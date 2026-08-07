@@ -32,15 +32,18 @@ struct CmdChipsRow: View {
                 Button {
                     append(cmd)
                 } label: {
+                    // Capsule rather than the old sharp 1px rect — the glass
+                    // idiom's chip shape. The skill hues themselves are
+                    // untouched (they are NOT tint-derived; see KTheme).
                     Text(cmd)
                         .font(.data(11, weight: .semibold))
                         .foregroundStyle(style.color)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(active ? style.soft : .clear)
-                        .overlay(Rectangle().stroke(active ? style.color : style.soft, lineWidth: 1))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(active ? style.soft : .clear, in: Capsule())
+                        .overlay(Capsule().stroke(active ? style.color : style.soft, lineWidth: 1))
                         .shadow(color: active ? style.color.opacity(0.5) : .clear, radius: 4)
-                        .contentShape(Rectangle())
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -234,8 +237,11 @@ private struct AttachmentChip: View {
                     }
                 }
                 .frame(width: 56, height: 56)
-                .clipped()
-                .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(KTheme.hairline2, lineWidth: 1)
+                )
 
                 Button(action: onRemove) {
                     Image(systemName: "xmark.circle.fill")
@@ -511,13 +517,20 @@ struct PRChip: View {
         }
     }
 
+    // Capsule with a soft tint fill — the glass idiom's chip shape. The
+    // leading pull-request glyph is decorative (no a11y label of its own), so
+    // the spoken sentence is still exactly the chip's text.
     private var chipLabel: some View {
-        Text(label)
-            .font(.data(10, weight: .semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .overlay(Rectangle().stroke(color, lineWidth: 1))
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.triangle.pull")
+            Text(label)
+        }
+        .font(.data(10, weight: .semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.13), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.45), lineWidth: 1))
     }
 }
 
@@ -623,9 +636,10 @@ struct CrewChipsView: View {
         }
         .font(.data(9, weight: .semibold))
         .foregroundStyle(color)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .overlay(Rectangle().stroke(color, lineWidth: 1))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.13), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.45), lineWidth: 1))
         .accessibilityElement(children: .ignore)
     }
 }
@@ -679,10 +693,62 @@ struct WakeupChip: View {
         Text("⏱ next check in \(wakeupCountdownLabel(secondsRemaining: secondsRemaining))")
             .font(.data(10, weight: .semibold))
             .foregroundStyle(KTheme.polling)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(KTheme.pollingSoft)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(KTheme.pollingSoft, in: Capsule())
     }
+}
+
+/// One themed card standing in for what used to be a `kSection` row group.
+///
+/// The detail sheet left the `Form` behind in the glass redesign: its sections
+/// are now cards on a scrolling field, which is what lets the action bar float
+/// over them. This is the shape every section shares — an optional
+/// letterspaced mono caption, then the section's own rows — so a section reads
+/// the same whether it holds two labelled rows or a whole question card.
+///
+/// Not private: it is the detail screen's section primitive and the composers'
+/// sibling of `kSection`.
+struct JobSectionCard<Content: View>: View {
+    let title: String?
+    let content: Content
+
+    init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 8) {
+                if let title {
+                    Text(title).kLabelStyle()
+                }
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+    }
+}
+
+/// One action on the job sheet's floating bar.
+///
+/// The bar's job is placement only. Which actions EXIST is decided by the
+/// `canQueue`/`canKill`/… flags below, each of which mirrors a server 409 and
+/// is unchanged by the redesign; this type just carries a visible action's
+/// label, icon, tint and closure so the bar can decide whether it draws as the
+/// prominent primary, as a glass icon button, or as a row in the overflow
+/// menu. Nothing here can hide an action the rules made visible.
+struct JobActionItem: Identifiable {
+    let id: String
+    let title: String
+    let icon: String
+    /// nil = inherit the bar's tint (Edit Spec and the destructive pair, which
+    /// took the system default before the redesign too).
+    let tint: Color?
+    var isDestructive: Bool = false
+    let run: () -> Void
 }
 
 struct JobDetailView: View {
@@ -791,61 +857,19 @@ struct JobDetailView: View {
         let known = Set(served.map(\.tid))
         return served + branchedThreads.filter { !known.contains($0.tid) }
     }
+    // Whether the floating bar renders at all. The same ten flags
+    // `visibleActions` is built from, so the two can only ever agree: if this
+    // is true the bar has at least one action, and if it is false there is
+    // nothing to float.
     private var hasAnyAction: Bool {
         canQueue || canDequeue || canRetry || canMarkDone || canSteer || isEditable || canKill
             || canArchive || canReactivate || isArchived
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if hasAnyAction {
-                actionBar
-            }
-            Form {
-                kSection {
-                    HStack {
-                        Rectangle()
-                            .fill(BoardTheme.color(forState: job.state))
-                            .frame(width: 8, height: 8)
-                        Text(job.state)
-                            .font(.data(11))
-                            .foregroundStyle(BoardTheme.color(forState: job.state))
-                        Spacer()
-                    }
-                    if let wakeup = job.wakeup, job.state == "working" {
-                        WakeupChip(wakeup: wakeup)
-                    }
-                    if let prs = job.prs, !prs.isEmpty {
-                        HStack(spacing: 6) {
-                            ForEach(prs, id: \.url) { pr in
-                                PRChip(pr: pr)
-                            }
-                        }
-                    }
-                    fieldRow("Repo", job.repo)
-                    if job.live, let cell = job.cell {
-                        Button {
-                            router.pendingSessionCell = cell
-                            router.selectedTab = .sessions
-                            dismiss()
-                        } label: {
-                            HStack {
-                                Text("Cell").font(.data(10)).foregroundStyle(KTheme.text2)
-                                Spacer()
-                                Text(cell).font(.voice(13)).foregroundStyle(KTheme.accent)
-                                Image(systemName: "chevron.right")
-                                    .font(.data(10))
-                                    .foregroundStyle(KTheme.accent)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if isArchived, job.title != job.slug {
-                        // numbered archive copy: the file base differs from
-                        // the original slug shown in the title
-                        fieldRow("Archived as", job.slug)
-                    }
-                }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                headerCard
 
                 // zeus' triage estimate, spelled out. The board card carries
                 // the same estimate as a one-line badge ("⚡ 4.0× 2→8"), which
@@ -872,7 +896,7 @@ struct JobDetailView: View {
                 // row, and web's drilldown hides on the same test, which is
                 // what keeps the two boards drilling down on the same jobs.
                 if let load = job.load, load.badgeText != nil {
-                    kSection("Triage") { loadRows(load) }
+                    JobSectionCard("Triage") { loadRows(load) }
                 }
 
                 // Token spend sits this high — beside Repo rather than down
@@ -896,7 +920,7 @@ struct JobDetailView: View {
                 if let tokens = job.tokens,
                    tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead > 0
                        || tokens.sessions > 0 {
-                    kSection("Tokens") { tokensRows(tokens) }
+                    JobSectionCard("Tokens") { tokensRows(tokens) }
                 }
 
                 // Outside every editability gate on purpose. The spec editor
@@ -909,7 +933,7 @@ struct JobDetailView: View {
                 // neither does this. Archived jobs are the one exclusion:
                 // their file has left the active namespace.
                 if !isArchived {
-                    kSection("Color") {
+                    JobSectionCard("Color") {
                         JobColorStrip(baseURL: baseURL, slug: job.slug, serverColor: job.color) { _ in
                             // Refresh the board so the card's swatch and this
                             // sheet's `job` snapshot pick the new color up.
@@ -918,18 +942,18 @@ struct JobDetailView: View {
                     }
                 }
                 if let err = job.err, !err.isEmpty {
-                    kSection("Error") { Text(err).font(.voice(13)).foregroundStyle(KTheme.counter) }
+                    JobSectionCard("Error") { Text(err).font(.voice(13)).foregroundStyle(KTheme.counter) }
                 }
                 if isUnhealthy {
-                    kSection("Health") { Text(job.health ?? "").font(.voice(13)).foregroundStyle(KTheme.revealed) }
+                    JobSectionCard("Health") { Text(job.health ?? "").font(.voice(13)).foregroundStyle(KTheme.revealed) }
                 }
                 // done/archived only: a reactivated job may still carry a
                 // stale outcome in its file — it reads as never-completed
                 if let outcome = job.outcome, !outcome.isEmpty, column == .done || isArchived {
-                    kSection("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
+                    JobSectionCard("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
                 }
                 if let prereqs = job.prereqs, !prereqs.isEmpty {
-                    kSection("Prereqs") {
+                    JobSectionCard("Prereqs") {
                         ForEach(prereqs, id: \.job) { p in
                             HStack {
                                 Text(p.job).font(.data(12)).foregroundStyle(KTheme.text)
@@ -942,7 +966,7 @@ struct JobDetailView: View {
                     }
                 }
                 if job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty {
-                    kSection("Roster") {
+                    JobSectionCard("Roster") {
                         CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
                         ForEach(Array((job.roster ?? []).enumerated()), id: \.offset) { _, agent in
                             HStack(spacing: 4) {
@@ -956,7 +980,7 @@ struct JobDetailView: View {
                     }
                 }
                 if !allThreads.isEmpty || canBranchThread {
-                    kSection("Threads") {
+                    JobSectionCard("Threads") {
                         if !allThreads.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 6) {
@@ -988,26 +1012,26 @@ struct JobDetailView: View {
                 }
                 SpecSection(job: job, baseURL: baseURL, editSheetOpen: showingEdit)
                 if let detail = job.detail, !detail.isEmpty {
-                    kSection("Detail") {
+                    JobSectionCard("Detail") {
                         DetailCard(text: detail, stateColor: BoardTheme.color(forState: job.state))
                     }
                 }
                 if let lastSent = job.lastSent, !lastSent.isEmpty {
-                    kSection("Last sent") {
+                    JobSectionCard("Last sent") {
                         Text(lastSent)
                             .font(.data(12))
                             .foregroundStyle(KTheme.text2)
                     }
                 }
                 if let wakeup = job.wakeup, !wakeup.reason.isEmpty, job.state == "working" {
-                    kSection("Poll timer") {
+                    JobSectionCard("Poll timer") {
                         Text("↻ " + wakeup.reason)
                             .font(.data(12))
                             .foregroundStyle(KTheme.text2)
                     }
                 }
                 if let question = job.question {
-                    kSection("Question") {
+                    JobSectionCard("Question") {
                         // Tappable option buttons only work for a single,
                         // single-select question: the server answers with one
                         // digit keystroke, so a multi-select or multi-question
@@ -1025,13 +1049,11 @@ struct JobDetailView: View {
                             Text("answer in the pane — k o \(job.cell ?? job.slug)")
                                 .font(.voice(11))
                                 .foregroundStyle(KTheme.text2)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
-                                .listRowBackground(Color.clear)
                         }
                     }
                 }
                 if !(job.docQuestions ?? []).isEmpty {
-                    kSection("Doc questions") {
+                    JobSectionCard("Doc questions") {
                         ForEach(sortedDocQuestions) { q in
                             DocQuestionCard(item: q) { text in
                                 answerDocQuestion(id: q.id, text: text)
@@ -1041,8 +1063,6 @@ struct JobDetailView: View {
                             Text("answers land in kraken.db — the agent reads them when it next resumes")
                                 .font(.voice(11))
                                 .foregroundStyle(KTheme.text2)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
-                                .listRowBackground(Color.clear)
                         }
                     }
                 }
@@ -1054,7 +1074,7 @@ struct JobDetailView: View {
                 // server order — see sortedFeedback for why that is no longer
                 // the same "needs you first" claim sortedDocQuestions makes.
                 if !mergedFeedback.isEmpty {
-                    kSection("Feedback · \(mergedFeedback.count)") {
+                    JobSectionCard("Feedback · \(mergedFeedback.count)") {
                         ForEach(sortedFeedback) { f in
                             FeedbackRow(
                                 item: f,
@@ -1068,21 +1088,33 @@ struct JobDetailView: View {
                         Text("notes land in kraken.db — the agent reads them when it next resumes")
                             .font(.voice(11))
                             .foregroundStyle(KTheme.text2)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
-                            .listRowBackground(Color.clear)
                     }
                 }
                 if let artifacts = job.artifacts, !artifacts.isEmpty {
-                    kSection("Artifacts") {
+                    JobSectionCard("Artifacts") {
                         CollapsedArtifactList(artifacts: artifacts, onOpen: { showingArtifact = $0 })
                     }
                 }
 
                 if let errorMessage {
-                    kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
+                    JobSectionCard { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
                 }
             }
-            .kListStyle()
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(ThemeBackgroundView())
+        // The floating bar is a real safe-area INSET, not bottom padding on
+        // the content: the scroll view reserves exactly the bar's measured
+        // height (plus the home indicator), so the last card always scrolls
+        // clear of it no matter how tall the bar gets — which padding
+        // guesswork got wrong in the phase-1 mockup.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if hasAnyAction {
+                actionBar
+            }
         }
         .navigationTitle(job.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -1116,8 +1148,9 @@ struct JobDetailView: View {
                 Text(isBlockedColumn ? "sent" : "steering sent")
                     .font(.data(11))
                     .foregroundStyle(KTheme.accentInk)
-                    .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(KTheme.accent)
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(KTheme.accent, in: Capsule())
+                    .shadow(color: KTheme.accent.opacity(0.35), radius: 10, y: 3)
                     .padding(.top, 8)
             }
         }
@@ -1221,139 +1254,308 @@ struct JobDetailView: View {
         }
     }
 
-    // One horizontal row of compact bordered buttons, outside the Form's row
-    // system entirely — a .bordered/.borderedProminent Button placed inside a
-    // List/Form row renders as a doubled-background full-row blob (a known
-    // SwiftUI Form quirk); living in a plain HStack above the Form sidesteps
-    // it completely and reads as a normal iOS action bar. Icon-only per
-    // carl: "no text within the circular buttons" — each keeps its tint as
-    // the only differentiator, so .accessibilityLabel carries the name for
-    // VoiceOver now that there's no visible text.
-    private var actionBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                if canQueue {
-                    Button {
-                        runAction { try await APIClient.shared.queueJob(baseURL: baseURL, slug: job.slug) }
-                    } label: {
-                        Label("Queue", systemImage: "play.fill")
+    // MARK: - the job's header card
+
+    /// The unlabelled first section: state, the ROI capsule, then the job's
+    /// identifying rows. Same content the old header `kSection` carried, in a
+    /// themed card — plus the triage ratio, which moved up here from the
+    /// Triage card (see `loadRows`): it is the one fact worth reading beside
+    /// the state, and it is drawn once, in one place, either way.
+    private var headerCard: some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    StateCapsule(state: job.state)
+                    if let load = job.load, load.badgeText != nil {
+                        roiCapsule(load)
                     }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Queue")
-                    .tint(KTheme.accent)
+                    Spacer(minLength: 0)
                 }
-                if canDequeue {
-                    Button {
-                        runAction { try await APIClient.shared.dequeueJob(baseURL: baseURL, slug: job.slug) }
-                    } label: {
-                        Label("Cancel Queue", systemImage: "xmark.circle")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Cancel Queue")
-                    .tint(KTheme.text2)
+                if let wakeup = job.wakeup, job.state == "working" {
+                    WakeupChip(wakeup: wakeup)
                 }
-                if canRetry {
-                    Button {
-                        runAction { try await APIClient.shared.retryJob(baseURL: baseURL, slug: job.slug) }
-                    } label: {
-                        Label("Retry", systemImage: "arrow.clockwise")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Retry")
-                    .tint(KTheme.revealed)
-                }
-                if canMarkDone {
-                    Button {
-                        runAction { try await APIClient.shared.markDone(baseURL: baseURL, slug: job.slug) }
-                    } label: {
-                        Label("Mark Done", systemImage: "checkmark")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Mark Done")
-                    .tint(KTheme.solved)
-                }
-                if canSteer {
-                    Button {
-                        showingSteer = true
-                    } label: {
-                        if isBlockedColumn {
-                            Label("Unblock", systemImage: "lock.open.fill")
-                        } else {
-                            Label("Steer", systemImage: "arrowshape.turn.up.right.fill")
+                if let prs = job.prs, !prs.isEmpty {
+                    // Horizontal scroller rather than a plain HStack: a job
+                    // with several PRs used to run its chips off the row.
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(prs, id: \.url) { pr in
+                                PRChip(pr: pr)
+                            }
                         }
                     }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel(isBlockedColumn ? "Unblock" : "Steer")
-                    .tint(isBlockedColumn ? KTheme.revealed : KTheme.accent)
                 }
-                if canReactivate {
+                cardDivider
+                fieldRow("Repo", job.repo)
+                if job.live, let cell = job.cell {
                     Button {
-                        showingReactivate = true
+                        router.pendingSessionCell = cell
+                        router.selectedTab = .sessions
+                        dismiss()
                     } label: {
-                        Label("Reactivate", systemImage: "arrow.counterclockwise")
+                        HStack {
+                            Text("Cell").font(.voice(13)).foregroundStyle(KTheme.text2)
+                            Spacer()
+                            Text(cell).font(.data(12, weight: .medium)).foregroundStyle(KTheme.accent)
+                            Image(systemName: "chevron.right")
+                                .font(.data(10))
+                                .foregroundStyle(KTheme.accent)
+                        }
                     }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Reactivate")
-                    .tint(KTheme.revealed)
+                    .buttonStyle(.plain)
                 }
-                if canArchive {
-                    Button {
-                        runAction { try await APIClient.shared.archiveJob(baseURL: baseURL, slug: job.slug) }
-                    } label: {
-                        Label("Archive", systemImage: "archivebox")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Archive")
-                    .tint(KTheme.text2)
-                }
-                if isArchived {
-                    Button {
-                        runAction { try await APIClient.shared.unarchiveJob(baseURL: baseURL, slug: job.slug) }
-                    } label: {
-                        Label("Unarchive", systemImage: "tray.and.arrow.up")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Unarchive")
-                    .tint(KTheme.accent)
-
-                    Button(role: .destructive) {
-                        showingDeleteConfirm = true
-                    } label: {
-                        Label("Delete Forever", systemImage: "trash")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Delete Forever")
-                }
-                if isEditable {
-                    Button {
-                        showingEdit = true
-                    } label: {
-                        Label("Edit Spec", systemImage: "square.and.pencil")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Edit Spec")
-                }
-                if canKill {
-                    Button(role: .destructive) {
-                        showingKillConfirm = true
-                    } label: {
-                        Label("Kill", systemImage: "xmark")
-                    }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Kill")
+                if isArchived, job.title != job.slug {
+                    // numbered archive copy: the file base differs from
+                    // the original slug shown in the title
+                    fieldRow("Archived as", job.slug)
                 }
             }
-            .buttonStyle(.bordered)
-            // Comfortable tap targets — .large gives ~44pt-tall pills; carl
-            // found the previous .small pills too small to hit reliably.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+    }
+
+    /// The leading bolt on `WebJobLoad.badgeText` — U+26A1 HIGH VOLTAGE SIGN
+    /// and a space.
+    ///
+    /// It is lifted out at RENDER time and redrawn as an SF Symbol because the
+    /// bucketed monospaced face `Font.data` now resolves to has no glyph for
+    /// U+26A1, and the 26.3 simulator gives it no fallback — it draws as a
+    /// missing-glyph box. The string itself is NOT touched: `badgeText` is
+    /// built client-side (`WebJobLoad`, Models.swift) and pinned byte-identical
+    /// against the web board's own badge format, so the glyph moves to SF
+    /// Symbols here and nowhere else. Today the string always carries the
+    /// prefix; the guard keeps a future prefix-less shape rendering untouched.
+    private static let roiBoltPrefix = "⚡ "
+
+    /// zeus' ROI ratio as a capsule beside the state, with its age.
+    ///
+    /// Painted by `BoardTheme.style(forLoadBand:)` exactly as the board card's
+    /// badge is, so one estimate reads the same on both surfaces — including
+    /// `cold`'s dash and dim, which stay on the badge alone and never on the
+    /// age beside it. The rounded capsule and the SF Symbol bolt (see
+    /// `roiBoltPrefix`) are the only changes: the ratio text, the band, the age
+    /// clause and the one-line rule are the badge's own.
+    private func roiCapsule(_ load: WebJobLoad) -> some View {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let style = BoardTheme.style(forLoadBand: load.band ?? .even)
+        let badge = load.badgeText ?? ""
+        let hasBolt = badge.hasPrefix(Self.roiBoltPrefix)
+        let ratio = hasBolt ? String(badge.dropFirst(Self.roiBoltPrefix.count)) : badge
+        return HStack(spacing: 5) {
+            HStack(spacing: 4) {
+                if hasBolt {
+                    // Decorative — no a11y label of its own, so the capsule's
+                    // spoken sentence below is unchanged by the swap. Same
+                    // pinned symbol size as the board card's LoadBadge, so
+                    // one estimate reads the same on both surfaces.
+                    Image(systemName: "bolt.horizontal.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                // one line, for the badge's own reason: the string carries two
+                // internal spaces and breaking at either splits the ratio from
+                // the pair it came from
+                Text(ratio)
+            }
+                .lineLimit(1)
+                .font(.data(10, weight: .semibold))
+                .foregroundStyle(style.text)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(style.fill ?? .clear, in: Capsule())
+                .overlay(
+                    Capsule().stroke(
+                        style.border,
+                        style: StrokeStyle(lineWidth: 1, dash: style.dashed ? [3, 2] : [])
+                    )
+                )
+                .opacity(style.opacity)
+            if let age = load.age(nowMillis: now) {
+                Text("\(age) ago")
+                    .lineLimit(1)
+                    .font(.data(9))
+                    .foregroundStyle(KTheme.text2)
+                    .opacity(0.7)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(load.summary(nowMillis: now) ?? (load.badgeText ?? ""))
+    }
+
+    /// The hairline between a card's header row and its rows — the shared
+    /// translucent edge token, so it fades with the glass instead of reading
+    /// as a drawn rule.
+    private var cardDivider: some View {
+        Rectangle()
+            .fill(KTheme.hairline)
+            .frame(height: 1)
+    }
+
+    // MARK: - floating action bar
+
+    /// Every action visible under today's rules, in PRIORITY order.
+    ///
+    /// The `if` on each entry is the untouched visibility rule — each mirrors
+    /// a server 409 and is quoted in the computed property it reads. Order is
+    /// the only thing this list adds, and it decides placement alone: the
+    /// first visible action becomes the prominent primary, the next few draw
+    /// as glass icon buttons, and anything left falls into the overflow menu
+    /// (`actionBar` below). Nothing is ever dropped, so an action reachable
+    /// today is reachable after the restyle under exactly the same rule.
+    ///
+    /// The priority is "what is this job waiting for": a live cell wants
+    /// steering, a draft wants queueing, a done job wants reactivating, an
+    /// archived one wants restoring. Reversible bookkeeping (dequeue, mark
+    /// done, retry, edit, archive) sorts under those, and the two destructive
+    /// actions sort last so a mis-tap can't reach them from the prominent
+    /// slot.
+    private var visibleActions: [JobActionItem] {
+        var out: [JobActionItem] = []
+        if canSteer {
+            out.append(JobActionItem(
+                id: "steer",
+                title: isBlockedColumn ? "Unblock" : "Steer",
+                icon: isBlockedColumn ? "lock.open.fill" : "arrowshape.turn.up.right.fill",
+                tint: isBlockedColumn ? KTheme.revealed : KTheme.accent
+            ) { showingSteer = true })
+        }
+        if canQueue {
+            out.append(JobActionItem(id: "queue", title: "Queue", icon: "play.fill", tint: KTheme.accent) {
+                runAction { try await APIClient.shared.queueJob(baseURL: baseURL, slug: job.slug) }
+            })
+        }
+        if canReactivate {
+            out.append(JobActionItem(
+                id: "reactivate", title: "Reactivate",
+                icon: "arrow.counterclockwise", tint: KTheme.revealed
+            ) { showingReactivate = true })
+        }
+        if isArchived {
+            out.append(JobActionItem(
+                id: "unarchive", title: "Unarchive",
+                icon: "tray.and.arrow.up", tint: KTheme.accent
+            ) {
+                runAction { try await APIClient.shared.unarchiveJob(baseURL: baseURL, slug: job.slug) }
+            })
+        }
+        if canDequeue {
+            out.append(JobActionItem(
+                id: "dequeue", title: "Cancel Queue",
+                icon: "xmark.circle", tint: KTheme.text2
+            ) {
+                runAction { try await APIClient.shared.dequeueJob(baseURL: baseURL, slug: job.slug) }
+            })
+        }
+        if canMarkDone {
+            out.append(JobActionItem(
+                id: "markDone", title: "Mark Done", icon: "checkmark", tint: KTheme.solved
+            ) {
+                runAction { try await APIClient.shared.markDone(baseURL: baseURL, slug: job.slug) }
+            })
+        }
+        if canRetry {
+            out.append(JobActionItem(
+                id: "retry", title: "Retry", icon: "arrow.clockwise", tint: KTheme.revealed
+            ) {
+                runAction { try await APIClient.shared.retryJob(baseURL: baseURL, slug: job.slug) }
+            })
+        }
+        if isEditable {
+            out.append(JobActionItem(
+                id: "edit", title: "Edit Spec", icon: "square.and.pencil", tint: nil
+            ) { showingEdit = true })
+        }
+        if canArchive {
+            out.append(JobActionItem(
+                id: "archive", title: "Archive", icon: "archivebox", tint: KTheme.text2
+            ) {
+                runAction { try await APIClient.shared.archiveJob(baseURL: baseURL, slug: job.slug) }
+            })
+        }
+        if canKill {
+            out.append(JobActionItem(
+                id: "kill", title: "Kill", icon: "xmark", tint: nil, isDestructive: true
+            ) { showingKillConfirm = true })
+        }
+        if isArchived {
+            out.append(JobActionItem(
+                id: "delete", title: "Delete Forever", icon: "trash", tint: nil, isDestructive: true
+            ) { showingDeleteConfirm = true })
+        }
+        return out
+    }
+
+    /// How many non-primary actions draw as icon buttons before the rest
+    /// spill into the menu. Three fit beside the primary pill at phone width;
+    /// a fourth would crowd it, and a menu holding ONE item is worse than
+    /// showing that item — so the split is "all three, or two plus a menu".
+    private static let inlineSecondaryLimit = 3
+
+    private var secondaryActions: [JobActionItem] {
+        let rest = Array(visibleActions.dropFirst())
+        return rest.count <= Self.inlineSecondaryLimit ? rest : Array(rest.prefix(2))
+    }
+
+    private var overflowActions: [JobActionItem] {
+        let rest = Array(visibleActions.dropFirst())
+        return rest.count <= Self.inlineSecondaryLimit ? [] : Array(rest.dropFirst(2))
+    }
+
+    /// The floating glass bar: one prominent contextual primary, up to three
+    /// glass icon buttons, and an ellipsis menu for the tail. It replaces the
+    /// eleven-button horizontal scroller — which never told you which button
+    /// mattered, and hid half of them off-screen — without changing which
+    /// buttons exist.
+    ///
+    /// The icon buttons stay icon-only (carl: "no text within the circular
+    /// buttons"), so `.accessibilityLabel` carries each name for VoiceOver
+    /// exactly as it did before; the menu rows are labelled, which is what a
+    /// menu is for.
+    private var actionBar: some View {
+        GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                if let primary = visibleActions.first {
+                    Button(role: primary.isDestructive ? .destructive : nil, action: primary.run) {
+                        Label(primary.title, systemImage: primary.icon)
+                            .font(.voice(15, weight: .semibold))
+                            .padding(.horizontal, 4)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(primary.tint ?? KTheme.accent)
+                    .accessibilityLabel(primary.title)
+                }
+                ForEach(secondaryActions) { action in
+                    Button(role: action.isDestructive ? .destructive : nil, action: action.run) {
+                        Image(systemName: action.icon)
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(minWidth: 22, minHeight: 22)
+                    }
+                    .buttonStyle(.glass)
+                    .tint(action.tint ?? KTheme.accent)
+                    .accessibilityLabel(action.title)
+                }
+                if !overflowActions.isEmpty {
+                    Menu {
+                        ForEach(overflowActions) { action in
+                            Button(role: action.isDestructive ? .destructive : nil, action: action.run) {
+                                Label(action.title, systemImage: action.icon)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(minWidth: 22, minHeight: 22)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.glass)
+                    .tint(KTheme.text2)
+                    .accessibilityLabel("More actions")
+                }
+            }
             .controlSize(.large)
-            .padding(.horizontal)
-            .padding(.vertical, 8)
         }
-        .background(KTheme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
-        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
     }
 
     // MARK: - triage estimate
@@ -1401,46 +1603,13 @@ struct JobDetailView: View {
         VStack(alignment: .leading, spacing: 6) {
             loadRungRow("unblock", rung: load.unblock, anchor: LoadAnchors.label(unblock: load.unblock))
             loadRungRow("next step", rung: load.scope, anchor: LoadAnchors.label(scope: load.scope))
-            if let text = load.badgeText, let band = load.band {
-                let style = BoardTheme.style(forLoadBand: band)
-                HStack(spacing: 5) {
-                    // one line, for the badge's own reason: the string carries
-                    // two internal spaces and breaking at either splits the
-                    // ratio from the pair it came from
-                    Text(text)
-                        .lineLimit(1)
-                        .font(.data(10, weight: .semibold))
-                        .foregroundStyle(style.text)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(style.fill ?? .clear)
-                        .overlay(
-                            Rectangle().stroke(
-                                style.border,
-                                style: StrokeStyle(lineWidth: 1, dash: style.dashed ? [3, 2] : [])
-                            )
-                        )
-                        // on the badge alone, never the age beside it: `cold`'s
-                        // dim is part of that band's treatment, and carrying it
-                        // onto the age would make the freshest information
-                        // hardest to read on exactly the estimates worth doing
-                        // last. The card splits it the same way.
-                        .opacity(style.opacity)
-                    if let age = load.age(nowMillis: now) {
-                        // "3h ago", never a bare "3h": an unqualified duration
-                        // sitting beside a ratio invites being read as part of
-                        // it — the same reason the token note spells it out.
-                        // Muted and a size down, so it annotates the badge
-                        // rather than reading as a second chip.
-                        Text("\(age) ago")
-                            .lineLimit(1)
-                            .font(.data(9))
-                            .foregroundStyle(KTheme.text2)
-                            .opacity(0.7)
-                    }
-                    Spacer()
-                }
-            }
+            // The badge and its age are no longer drawn HERE: they moved to
+            // the header card's state row (`roiCapsule`), which is where the
+            // ratio earns its place beside the state. It is still drawn
+            // exactly once, still through `WebJobLoad.badgeText` and
+            // `BoardTheme.style(forLoadBand:)`, and still under this same
+            // section's gate — the two just render in different cards now.
+            //
             // `note` is legitimately "" — the estimate is the payload and the
             // server keeps a numbers-only write rather than refusing it — so
             // an empty one drops the row instead of leaving a blank line where
@@ -1616,11 +1785,46 @@ struct JobDetailView: View {
                         tokenCell("subagents", subagents)
                         Spacer()
                     }
+                    // The origin split, drawn. Purely a second reading of the
+                    // two counters directly above — nothing here is a number
+                    // the row doesn't already print — so it carries no label
+                    // and no a11y element of its own, and it is dropped
+                    // whenever the split itself is (a server predating those
+                    // keys sends neither half).
+                    originBar(zeus: min(zeus, total), total: total)
                 }
             }
             Text(tokensNote(t)).font(.data(9)).foregroundStyle(KTheme.text2).opacity(0.55)
         }
         .padding(.vertical, 2)
+    }
+
+    /// zeus' share of the spend as a two-segment capsule bar: the accent for
+    /// zeus, the accent at a third for everything it delegated to.
+    ///
+    /// A zero total would divide by zero, so it degrades to an all-subagent
+    /// bar — unreachable through `tokensRows`' own gate (a zero total with a
+    /// zeus split can't be served), and cheaper than a second gate here.
+    private func originBar(zeus: Int64, total: Int64) -> some View {
+        let fraction = total > 0 ? min(1, Double(zeus) / Double(total)) : 0
+        return GeometryReader { geo in
+            HStack(spacing: 2) {
+                // Each half is drawn only when it has width: a zero-width
+                // Capsule still takes the HStack's 2pt spacing, which reads as
+                // a gouge in the bar rather than as an empty half.
+                if fraction > 0 {
+                    Capsule()
+                        .fill(KTheme.accent)
+                        .frame(width: geo.size.width * fraction)
+                }
+                if fraction < 1 {
+                    Capsule().fill(KTheme.accent.opacity(0.35))
+                }
+            }
+        }
+        .frame(height: 5)
+        .padding(.top, 4)
+        .accessibilityHidden(true)
     }
 
     /// One `label value` pair. Both halves are `fixedSize` because the four
@@ -1654,11 +1858,14 @@ struct JobDetailView: View {
         return note
     }
 
+    /// One `label … value` row inside a card — the LabeledContent shape the
+    /// glass idiom uses: prose caption on the left, the value in mono on the
+    /// right, since every value here (a repo, a slug) is an identifier.
     private func fieldRow(_ label: String, _ value: String) -> some View {
         HStack {
-            Text(label).font(.data(10)).foregroundStyle(KTheme.text2)
+            Text(label).font(.voice(13)).foregroundStyle(KTheme.text2)
             Spacer()
-            Text(value).font(.voice(13)).foregroundStyle(KTheme.text)
+            Text(value).font(.data(12, weight: .medium)).foregroundStyle(KTheme.text)
         }
     }
 
@@ -1824,10 +2031,11 @@ struct ThreadChip: View {
         }
         .font(.data(10, weight: .semibold))
         .foregroundStyle(color)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .overlay(Rectangle().stroke(color, lineWidth: 1))
-        .contentShape(Rectangle())
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.13), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.45), lineWidth: 1))
+        .contentShape(Capsule())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("thread \(thread.displayTitle) — \(thread.isLive ? "live" : "closed")")
     }
@@ -1892,7 +2100,7 @@ private struct BranchThreadView: View {
                 }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Branch")
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(isBusy || trimmedTitle.isEmpty)
             }
         }
@@ -1946,7 +2154,7 @@ private struct SpecSection: View {
     var body: some View {
         Group {
             if let spec, !spec.isEmpty {
-                kSection("Spec") {
+                JobSectionCard("Spec") {
                     DetailCard(text: spec, stateColor: BoardTheme.color(forState: job.state))
                 }
             }
@@ -1962,7 +2170,7 @@ private struct SpecSection: View {
 /// The `detail` field: the cell's last words / blocked reason, rendered
 /// as a markdown card in the state color — replaces the old escalation body
 /// card now that escalations are gone from the wire.
-private struct DetailCard: View {
+struct DetailCard: View {
     let text: String
     let stateColor: Color
 
@@ -1971,8 +2179,6 @@ private struct DetailCard: View {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardBackground(barColor: stateColor)
-            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-            .listRowBackground(Color.clear)
     }
 }
 
@@ -1980,19 +2186,20 @@ private struct DetailCard: View {
 /// answers with its 1-based index within THIS question's own options list —
 /// there's no free-text composer anymore, the tap IS the answer, sent
 /// straight to POST /api/question.
-private struct QuestionCard: View {
+struct QuestionCard: View {
     let item: WebQuestionItem
     var onSelect: (Int) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(item.header)
+        VStack(alignment: .leading, spacing: 8) {
+            Label(item.header, systemImage: "flag.fill")
                 .font(.data(10, weight: .semibold))
                 .foregroundStyle(KTheme.counter)
             Text(item.question)
                 .font(.voice(13, weight: .semibold))
                 .foregroundStyle(KTheme.text)
-            VStack(alignment: .leading, spacing: 6) {
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(item.options.enumerated()), id: \.offset) { index, option in
                     Button {
                         onSelect(index + 1)
@@ -2007,39 +2214,60 @@ private struct QuestionCard: View {
                                     .foregroundStyle(KTheme.text2)
                             }
                         }
-                        .padding(10)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
-                        .contentShape(Rectangle())
+                        // Accent-tinted glass idiom, replacing the old sharp
+                        // hairline rect: the option still reads as the one
+                        // tappable thing in the card, and the tap still sends
+                        // this option's 1-based index within THIS question.
+                        .background(
+                            KTheme.accent.opacity(0.10),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(KTheme.accent.opacity(0.35), lineWidth: 1)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
-        .padding(10)
-        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-        .listRowBackground(KTheme.counterSoft)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        // The "a human is needed here" wash the section's List row used to
+        // carry — now inside the card, since the card IS the row.
+        .background(
+            KTheme.counterSoft.opacity(0.7),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
     }
 }
 
 /// A multi-select or multi-question question's header + prose, read-only —
 /// no option buttons, since a single digit keystroke can't answer it (see
 /// the count/multiSelect gate above QuestionCard's call site).
-private struct QuestionSummary: View {
+struct QuestionSummary: View {
     let item: WebQuestionItem
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(item.header)
+            Label(item.header, systemImage: "flag.fill")
                 .font(.data(10, weight: .semibold))
                 .foregroundStyle(KTheme.counter)
             Text(item.question)
                 .font(.voice(13, weight: .semibold))
                 .foregroundStyle(KTheme.text)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(10)
-        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-        .listRowBackground(KTheme.counterSoft)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            KTheme.counterSoft.opacity(0.7),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
     }
 }
 
@@ -2049,7 +2277,7 @@ private struct QuestionSummary: View {
 /// carries the answer text straight up to JobDetailView's answerDocQuestion,
 /// which posts it and re-runs the same busy/error/dismiss handling as every
 /// other board action.
-private struct DocQuestionCard: View {
+struct DocQuestionCard: View {
     let item: WebDocQuestion
     var onAnswer: (String) -> Void
 
@@ -2063,16 +2291,17 @@ private struct DocQuestionCard: View {
         }
     }
 
-    // Outlined-stroke treatment matching PRChip.chipLabel (no filled tint) —
+    // Soft-filled capsule matching PRChip.chipLabel's glass-idiom treatment —
     // used for both the open and answered states so the badge reads the
     // same regardless of which branch renders it.
     private var badge: some View {
         Text(item.importance)
             .font(.data(9, weight: .semibold))
             .foregroundStyle(badgeColor)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .overlay(Rectangle().stroke(badgeColor, lineWidth: 1))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(badgeColor.opacity(0.15), in: Capsule())
+            .overlay(Capsule().stroke(badgeColor.opacity(0.45), lineWidth: 1))
     }
 
     var body: some View {
@@ -2087,33 +2316,35 @@ private struct DocQuestionCard: View {
                         .font(.voice(12, weight: .semibold))
                         .foregroundStyle(KTheme.solved)
                 }
+                Spacer(minLength: 0)
             }
             .opacity(0.6)
-            .padding(.vertical, 2)
-            .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12))
-            .listRowBackground(Color.clear)
+            .padding(.vertical, 4)
         } else {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 badge
                 Text(item.text)
                     .font(.voice(13, weight: .semibold))
                     .foregroundStyle(KTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let context = item.context, !context.isEmpty {
                     Text(context)
                         .font(.voice(12))
                         .foregroundStyle(KTheme.text2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let recommendation = item.recommendation, !recommendation.isEmpty {
-                    Text("suggests: \(recommendation)")
+                    Label("suggests: \(recommendation)", systemImage: "lightbulb")
                         .font(.voice(12))
                         .foregroundStyle(KTheme.polling)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button("Accept recommendation") {
                         onAnswer(recommendation)
                     }
                     .font(.data(11, weight: .semibold))
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     TextField("answer", text: $answerText)
                         .kField()
                     Button("Send") {
@@ -2122,12 +2353,16 @@ private struct DocQuestionCard: View {
                         onAnswer(trimmed)
                     }
                     .font(.data(11, weight: .semibold))
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .padding(10)
-            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(
+                KTheme.surface,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
         }
     }
 }
@@ -2197,7 +2432,7 @@ struct ReactivateView: View {
                 }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Reactivate")
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(isBusy || (requireText && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             }
         }
@@ -2335,7 +2570,7 @@ struct SteerView: View {
                 }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Send")
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(isBusy || isUploading || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
             }
         }

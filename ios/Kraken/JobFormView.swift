@@ -110,11 +110,11 @@ struct JobFormView: View {
                 // keeps its label (icon-only rule is for the compact buttons)
                 Label("Retry", systemImage: "arrow.clockwise")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(KTheme.ground)
+        .background { ThemeBackgroundView() }
         .navigationTitle(slug)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -147,24 +147,7 @@ struct JobFormView: View {
                     .kField()
                     .listRowBackground(Color.clear)
                 if !repoSuggestions.isEmpty {
-                    // .bordered/.borderedProminent inside a List row renders
-                    // as a doubled-background blob (a known Form quirk) —
-                    // .plain + manual border reads as a clean tappable chip
-                    // instead, same fix as the row-button audit elsewhere.
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(repoSuggestions, id: \.self) { r in
-                                Button(r) { repo = r }
-                                    .buttonStyle(.plain)
-                                    .font(.data(11))
-                                    .foregroundStyle(KTheme.accent)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .overlay(Rectangle().stroke(KTheme.accentSoft, lineWidth: 1))
-                            }
-                        }
-                    }
-                    .listRowBackground(Color.clear)
+                    suggestionChips(repoSuggestions) { repo = $0 }
                 }
                 TextField("base ref (optional, default origin/main)", text: $base)
                     .autocorrectionDisabled()
@@ -180,20 +163,7 @@ struct JobFormView: View {
                     .kField()
                     .listRowBackground(Color.clear)
                 // suggestion chips, same pattern as the repo suggestions above
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(["fable", "opus", "sonnet", "haiku"], id: \.self) { m in
-                            Button(m) { model = m }
-                                .buttonStyle(.plain)
-                                .font(.data(11))
-                                .foregroundStyle(KTheme.accent)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .overlay(Rectangle().stroke(KTheme.accentSoft, lineWidth: 1))
-                        }
-                    }
-                }
-                .listRowBackground(Color.clear)
+                suggestionChips(["fable", "opus", "sonnet", "haiku"]) { model = $0 }
             }
             kSection("Color") {
                 // Deliberately NOT gated on `editable` and deliberately not
@@ -313,7 +283,7 @@ struct JobFormView: View {
                 }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Queue")
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .tint(KTheme.accent)
                 .disabled(!canQueueForm || isQueueing)
             }
@@ -325,7 +295,7 @@ struct JobFormView: View {
                 }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Done")
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(isUploading)
             }
         }
@@ -334,6 +304,38 @@ struct JobFormView: View {
         // act right away rather than wait out the debounce.
         .onChange(of: autosaveSnapshotKey) { scheduleAutosave() }
         .onChange(of: ready) { flushAutosave() }
+    }
+
+    /// The repo/model suggestion strips: KChip-shaped capsules on glass.
+    ///
+    /// Still `.plain` buttons rather than `.bordered`/`.glass` ones — the
+    /// doubled-background blob a bordered button style renders inside a List
+    /// row is the same Form quirk that forced the hand-built chip originally.
+    /// Only the geometry changed: a sharp `Rectangle` stroke became a tinted
+    /// glass capsule.
+    private func suggestionChips(_ values: [String], onPick: @escaping (String) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 6) {
+                    ForEach(values, id: \.self) { value in
+                        Button {
+                            onPick(value)
+                        } label: {
+                            Text(value)
+                                .font(.data(11, weight: .semibold))
+                                .foregroundStyle(KTheme.accent)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.tint(KTheme.accent.opacity(0.22)), in: Capsule())
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .listRowBackground(Color.clear)
     }
 
     @ViewBuilder

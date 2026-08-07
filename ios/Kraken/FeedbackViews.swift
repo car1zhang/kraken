@@ -181,6 +181,7 @@ struct FeedbackRow: View {
             Text(item.note)
                 .font(.voice(13))
                 .foregroundStyle(KTheme.text)
+                .fixedSize(horizontal: false, vertical: true)
             if item.isAddressed {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("✓")
@@ -190,7 +191,15 @@ struct FeedbackRow: View {
                 .foregroundStyle(KTheme.solved)
             }
         }
-        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // The job sheet's sections are cards on a scrolling field now rather
+        // than List rows, so a note carries its own faint surface — otherwise
+        // several notes in one card run together with nothing between them.
+        .padding(10)
+        .background(
+            KTheme.surface,
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
         .opacity(item.isAddressed ? 0.6 : 1)
     }
 }
@@ -220,9 +229,10 @@ struct FeedbackCountChip: View {
             Text(unfixed > 0 ? "✎ \(feedback.count) · \(unfixed) no durable fix" : "✎ \(feedback.count)")
                 .font(.data(10, weight: .semibold))
                 .foregroundStyle(KTheme.text2)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .overlay(Rectangle().stroke(KTheme.text2, lineWidth: 1))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(KTheme.text2.opacity(0.13), in: Capsule())
+                .overlay(Capsule().stroke(KTheme.text2.opacity(0.45), lineWidth: 1))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(feedback.count) feedback notes, \(unfixed) with no durable fix")
         }
@@ -327,7 +337,7 @@ struct FeedbackComposeView: View {
                 }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Send")
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(!canSend)
             }
         }

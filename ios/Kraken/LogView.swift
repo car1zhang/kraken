@@ -43,7 +43,7 @@ struct LogView: View {
             List {
                 ForEach(rows) { row in
                     LogRowView(entry: row.entry)
-                        .listRowBackground(Color.clear)
+                        .listRowBackground(rowBackground(for: row.entry))
                         .listRowSeparator(.hidden)
                 }
                 if hasOlder {
@@ -60,9 +60,12 @@ struct LogView: View {
                             }
                             Spacer()
                         }
+                        .padding(.vertical, 6)
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(KTheme.text2)
+                    .glassEffect(.regular, in: Capsule())
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     // reaching the tail of loaded history auto-pulls the next
@@ -70,12 +73,32 @@ struct LogView: View {
                     .onAppear { Task { await loadOlder() } }
                 }
             }
+            // A log is a dense stream, so the rows deliberately stay flat and
+            // full-bleed over the tint field rather than becoming one card
+            // each — cards would halve the lines per screen. The glass shows
+            // up as the field behind them, the error rows' soft capsule, and
+            // the "Load older" pill.
+            .listStyle(.plain)
             .overlay { if rows.isEmpty { emptyState } }
             .kListStyle()
             .navigationTitle("Log")
             .navigationBarTitleDisplayMode(.inline)
             .task { await refreshLatest() }
             .refreshable { await refreshLatest() }
+        }
+    }
+
+    /// Error lines get a soft counter-tinted rounded row so they're findable
+    /// in a long scroll; everything else stays transparent over the field.
+    @ViewBuilder
+    private func rowBackground(for entry: LogEntry) -> some View {
+        if entry.level == "error" {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(KTheme.counterSoft.opacity(0.6))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 1)
+        } else {
+            Color.clear
         }
     }
 

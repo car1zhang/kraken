@@ -103,24 +103,26 @@ struct MarkdownText: View {
     /// same as `<pre><code>` on the HTML side. Horizontal scroll instead of
     /// wrapping, matching `pre { overflow-x: auto }`.
     private func codeView(_ code: String) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return ScrollView(.horizontal, showsIndicators: false) {
             Text(code)
                 .font(.data(12))
                 .foregroundStyle(KTheme.text)
                 .textSelection(.enabled)
                 .padding(10)
         }
-        .background(KTheme.ground)
-        .overlay(Rectangle().stroke(KTheme.hairline, lineWidth: 1))
+        .background(KTheme.ground, in: shape)
+        .overlay(shape.stroke(KTheme.hairline, lineWidth: 1))
+        .clipShape(shape)
     }
 
-    /// 2pt leading bar in hairline2, dimmed text2 body — matches
+    /// 3pt rounded leading bar in hairline2, dimmed text2 body — matches
     /// `blockquote { border-left; color: var(--text2) }`.
     private func blockquoteView(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Rectangle()
+            Capsule()
                 .fill(KTheme.hairline2)
-                .frame(width: 2)
+                .frame(width: 3)
             Text(styledInline(text))
                 .font(.voice(13))
                 .foregroundStyle(KTheme.text2)
@@ -133,7 +135,11 @@ struct MarkdownText: View {
     /// in a horizontal ScrollView so a wide table scrolls instead of
     /// squeezing the phone layout, same as the HTML path's overflow-x div.
     private func tableView(header: [String], alignments: [String], rows: [[String]]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        // The cell hairlines are the table's grid and stay square; the TABLE
+        // is what gets the rounded corner, clipped as one block so it sits in
+        // the glass idiom without redrawing every cell.
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return ScrollView(.horizontal, showsIndicators: false) {
             Grid(horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
                     ForEach(Array(header.enumerated()), id: \.offset) { i, cell in
@@ -164,6 +170,8 @@ struct MarkdownText: View {
                     }
                 }
             }
+            .clipShape(shape)
+            .overlay(shape.stroke(KTheme.hairline, lineWidth: 1))
         }
     }
 

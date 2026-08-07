@@ -189,7 +189,6 @@ struct ThreadDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
             if isLive {
                 modePicker
             }
@@ -206,7 +205,6 @@ struct ThreadDetailView: View {
                         Color.clear.frame(height: 1).id(Self.bottomAnchorID)
                     }
                 }
-                .background(KTheme.ground)
                 // Identical bottom-anchor policy to SessionDetailView: an
                 // immediate scroll plus one delayed retry while the
                 // ScrollView's content-size measurement catches up, and every
@@ -274,10 +272,9 @@ struct ThreadDetailView: View {
                     }
                 }
             }
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
             composer
         }
-        .background(KTheme.ground)
+        .background(ThemeBackgroundView())
         // A thread that dies (killed here, or from the pane) takes its pane
         // with it — Terminal has nothing left to show, and its picker is
         // gone, so fall back to the conversation rather than stranding the
@@ -360,8 +357,9 @@ struct ThreadDetailView: View {
                 Text(toast)
                     .font(.data(11))
                     .foregroundStyle(KTheme.accentInk)
-                    .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(KTheme.accent)
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(KTheme.accent, in: Capsule())
+                    .shadow(color: KTheme.accent.opacity(0.35), radius: 10, y: 3)
                     .padding(.top, 8)
             }
         }
@@ -370,12 +368,22 @@ struct ThreadDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Rectangle()
-                    .fill(isLive ? KTheme.solved : KTheme.text2)
-                    .frame(width: 8, height: 8)
-                Text(isLive ? "live" : "closed")
-                    .font(.data(11))
-                    .foregroundStyle(isLive ? KTheme.solved : KTheme.text2)
+                // Glowing dot in a tinted capsule — the same treatment
+                // StateCapsule gives a job's state, since this row answers the
+                // same question about a thread.
+                let stateColor = isLive ? KTheme.solved : KTheme.text2
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(stateColor)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: stateColor.opacity(0.7), radius: 4)
+                    Text(isLive ? "live" : "closed")
+                        .font(.data(11))
+                        .foregroundStyle(stateColor)
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(stateColor.opacity(0.13), in: Capsule())
                 Text(thread.tid)
                     .font(.data(11))
                     .foregroundStyle(KTheme.accent)
@@ -390,7 +398,8 @@ struct ThreadDetailView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 7)
-        .background(KTheme.surface)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial)
     }
 
     private var modePicker: some View {
@@ -402,7 +411,7 @@ struct ThreadDetailView: View {
         .pickerStyle(.segmented)
         .padding(.horizontal)
         .padding(.vertical, 6)
-        .background(KTheme.surface)
+        .background(.regularMaterial)
     }
 
     // Where the "⑂ branched here" divider goes: the first block the thread
@@ -532,7 +541,7 @@ struct ThreadDetailView: View {
                     } label: {
                         Label("Send", systemImage: "paperplane.fill")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .labelStyle(.iconOnly)
                     .accessibilityLabel("Send")
                     .disabled(vm.isSending || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -544,7 +553,7 @@ struct ThreadDetailView: View {
             }
         }
         .padding()
-        .background(KTheme.surface)
+        .background(.regularMaterial)
     }
 
     private func send() {

@@ -2,7 +2,7 @@ name: Kraken
 options:
   bundleIdPrefix: dev.carl
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
   fileTypes:
     icon:
       file: true
@@ -13,7 +13,7 @@ targets:
   Kraken:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Kraken
     settings:
@@ -80,7 +80,7 @@ targets:
   KrakenUITests:
     type: bundle.ui-testing
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: KrakenUITests
     dependencies:
@@ -94,7 +94,7 @@ targets:
   KrakenTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: KrakenTests
     dependencies:

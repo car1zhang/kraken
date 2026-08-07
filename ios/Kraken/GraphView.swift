@@ -171,7 +171,7 @@ struct GraphView: View {
                 noServer
             }
         }
-        .background(KTheme.ground)
+        .background { ThemeBackgroundView() }
         .navigationTitle("Graph")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -256,7 +256,7 @@ struct GraphView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(KTheme.surface)
+        .background(.ultraThinMaterial)
     }
 
     private var statsLine: String {
@@ -281,41 +281,44 @@ struct GraphView: View {
 
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(vm.render.types, id: \.self) { type in
-                    typeChip(type)
+            GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 6) {
+                    ForEach(vm.render.types, id: \.self) { type in
+                        typeChip(type)
+                    }
+                    invalidatedChip
                 }
-                invalidatedChip
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
-        .background(KTheme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
-        }
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) { Divider().allowsHitTesting(false) }
     }
 
     private func typeChip(_ type: String) -> some View {
         let on = !vm.hiddenTypes.contains(type)
+        // The type's own dot colour is meaning, not theme — it stays
+        // graphTypeColorUI's. Only the chip's shell became a glass capsule.
+        let dot = on ? (vm.render.typeColors[type] ?? KTheme.text2) : KTheme.hairline2
         return Button {
             if on { vm.hiddenTypes.insert(type) } else { vm.hiddenTypes.remove(type) }
         } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(on ? (vm.render.typeColors[type] ?? KTheme.text2) : KTheme.hairline2)
+                    .fill(dot)
                     .frame(width: 7, height: 7)
                 Text(type)
                     .font(.data(10, weight: .semibold))
                     .foregroundStyle(on ? KTheme.text : KTheme.text2)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(on ? KTheme.raised : Color.clear)
-            .overlay(Rectangle().stroke(on ? KTheme.hairline2 : KTheme.hairline, lineWidth: 1))
-            .contentShape(Rectangle())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .glassEffect(on ? .regular.tint(dot.opacity(0.28)) : .regular, in: Capsule())
+        .opacity(on ? 1 : 0.6)
         .accessibilityLabel("\(type) nodes")
         .accessibilityAddTraits(on ? [.isSelected] : [])
     }
@@ -333,15 +336,13 @@ struct GraphView: View {
             Text(on ? "incl. invalidated" : "current only")
                 .font(.data(10, weight: .semibold))
                 .foregroundStyle(on ? KTheme.revealed : KTheme.text2)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(on ? KTheme.revealedSoft : Color.clear)
-                .overlay(
-                    Rectangle().stroke(on ? KTheme.revealed : KTheme.hairline, lineWidth: 1)
-                )
-                .contentShape(Rectangle())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .glassEffect(on ? .regular.tint(KTheme.revealed.opacity(0.28)) : .regular, in: Capsule())
+        .opacity(on ? 1 : 0.6)
     }
 
     // MARK: - the canvas
@@ -363,7 +364,8 @@ struct GraphView: View {
             .onChange(of: geo.size) { _, size in fitIfNeeded(size: size) }
             .onChange(of: vm.render.nodes.count) { _, _ in fitIfNeeded(size: geo.size) }
         }
-        .background(KTheme.ground)
+        // No opaque slab here any more — the canvas draws straight onto the
+        // screen's tint field. Drawing, physics and gestures are untouched.
     }
 
     /// Named `stateOverlay` rather than `overlay`: the latter would be an
@@ -407,10 +409,14 @@ struct GraphView: View {
     }
 
     private var zoomControls: some View {
-        VStack(spacing: 1) {
-            zoomButton("+", label: "zoom in") { zoomAboutCenter(by: graphZoomStep) }
-            zoomButton("−", label: "zoom out") { zoomAboutCenter(by: 1 / graphZoomStep) }
-            zoomButton("⤢", label: "fit to graph") { fit(size: viewport) }
+        // Three floating glass pucks in one container so they read as a single
+        // stacked control. Still 36×36 each — the tap targets are unchanged.
+        GlassEffectContainer(spacing: 6) {
+            VStack(spacing: 6) {
+                zoomButton("+", label: "zoom in") { zoomAboutCenter(by: graphZoomStep) }
+                zoomButton("−", label: "zoom out") { zoomAboutCenter(by: 1 / graphZoomStep) }
+                zoomButton("⤢", label: "fit to graph") { fit(size: viewport) }
+            }
         }
         .padding(12)
     }
@@ -419,12 +425,12 @@ struct GraphView: View {
         Button(action: action) {
             Text(glyph)
                 .font(.data(15, weight: .semibold))
-                .foregroundStyle(KTheme.text2)
+                .foregroundStyle(KTheme.text)
                 .frame(width: 36, height: 36)
-                .background(KTheme.surface)
-                .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .glassEffect(.regular, in: Circle())
         .accessibilityLabel(label)
     }
 
@@ -756,15 +762,24 @@ private struct GraphNodeDrawer: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 14) {
                     if let node = vm.selectedNode {
-                        heading(node)
-                        if !node.description.isEmpty {
-                            Text(node.description)
-                                .font(.voice(13))
-                                .foregroundStyle(KTheme.text)
+                        // Identity + description + counts are one themed card;
+                        // Facts stay a loose list underneath so a long fact
+                        // history doesn't sit inside one enormous card.
+                        ThemedCard {
+                            VStack(alignment: .leading, spacing: 8) {
+                                heading(node)
+                                if !node.description.isEmpty {
+                                    Text(node.description)
+                                        .font(.voice(13))
+                                        .foregroundStyle(KTheme.text)
+                                }
+                                meta(node)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
                         }
-                        meta(node)
                         facts
                     } else {
                         // Selected, but the payload does not carry it and the
@@ -778,7 +793,8 @@ private struct GraphNodeDrawer: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
             }
-            .background(KTheme.ground)
+            .scrollContentBackground(.hidden)
+            .background { ThemeBackgroundView() }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -797,9 +813,10 @@ private struct GraphNodeDrawer: View {
             Text(node.type)
                 .font(.data(10, weight: .semibold))
                 .foregroundStyle(tint)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .overlay(Rectangle().stroke(tint.opacity(0.5), lineWidth: 1))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(tint.opacity(0.16), in: Capsule())
+                .overlay(Capsule().stroke(tint.opacity(0.5), lineWidth: 1))
         }
     }
 
@@ -869,11 +886,14 @@ private struct FactRow: View {
                 .foregroundStyle(KTheme.text2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 8)
+        .padding(.leading, 10)
+        .padding(.vertical, 2)
         .overlay(alignment: .leading) {
-            Rectangle()
+            // The leading bar is the fact's liveness channel; it keeps
+            // skillGraph's own hue and just loses its sharp corners.
+            Capsule()
                 .fill(dead ? KTheme.hairline2 : KTheme.skillGraph)
-                .frame(width: 2)
+                .frame(width: 3)
         }
     }
 

@@ -48,10 +48,10 @@ struct JobColorStrip: View {
                     Button {
                         apply("")
                     } label: {
-                        Rectangle()
-                            .fill(KTheme.ground)
+                        Circle()
+                            .fill(KTheme.raised)
                             .frame(width: chip, height: chip)
-                            .overlay(Rectangle().stroke(KTheme.hairline2, lineWidth: 1))
+                            .overlay(Circle().stroke(KTheme.hairline, lineWidth: 1))
                             .overlay(
                                 Text("—")
                                     .font(.data(11))
@@ -65,8 +65,8 @@ struct JobColorStrip: View {
                         Button {
                             apply(name)
                         } label: {
-                            Rectangle()
-                                .fill(BoardTheme.jobColor(name) ?? KTheme.ground)
+                            Circle()
+                                .fill(BoardTheme.jobColor(name) ?? KTheme.raised)
                                 .frame(width: chip, height: chip)
                                 .overlay(ring(on: selected == name))
                         }
@@ -74,9 +74,9 @@ struct JobColorStrip: View {
                         .accessibilityLabel(name)
                     }
                 }
-                // room for the 2px selection ring, which is drawn outside
+                // room for the 2pt selection ring, which is drawn outside
                 // each chip's own frame
-                .padding(4)
+                .padding(5)
             }
             if let errorText, !errorText.isEmpty {
                 Text(errorText).font(.voice(11)).foregroundStyle(KTheme.counter)
@@ -98,8 +98,8 @@ struct JobColorStrip: View {
     }
 
     private func ring(on: Bool) -> some View {
-        Rectangle()
-            .stroke(on ? KTheme.accent : Color.clear, lineWidth: 2)
+        Circle()
+            .stroke(on ? KTheme.text : Color.clear, lineWidth: 2)
             .padding(-3)
     }
 

@@ -50,7 +50,7 @@ struct NewJobSheet: View {
                         }
                         .labelStyle(.iconOnly)
                         .accessibilityLabel("Create")
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
                         .disabled(isBusy || slug.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }

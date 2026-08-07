@@ -706,6 +706,28 @@ private struct UpdatePollKey: Hashable {
     let phase: ScenePhase
 }
 
+/// The surface the board's three chrome strips — daemon bar, ship banner,
+/// contract banner — all sit on.
+///
+/// A material rather than `ThemedCard`'s glass, and that is the distinction
+/// rather than an approximation of it: these three are status readouts that
+/// sit still while six columns of glass cards scroll past under them, and a
+/// tinted glass strip layered over a tinted glass card is two lensings of the
+/// same background field with nothing between them. `ThemedCard` is for the
+/// things you scroll and tap; this is for the things that stay.
+///
+/// `tint` colours the hairline alone, so a ship failure's strip carries its
+/// own edge without the text having to fight a fill for it.
+private extension View {
+    func boardBarSurface(tint: Color? = nil) -> some View {
+        background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder((tint ?? KTheme.hairline).opacity(tint == nil ? 1 : 0.35), lineWidth: 1)
+            )
+    }
+}
+
 /// Whether a job sheet's NavigationStack currently has a child view pushed on
 /// top of JobDetailView (today: ThreadDetailView).
 ///
@@ -810,26 +832,45 @@ struct BoardView: View {
     }
 
     // The visible board — the stack, its chrome, and the toolbar.
+    //
+    // The pager is a view-aligned horizontal carousel rather than the paged
+    // TabView it replaced: same one-column-per-page side-scroll (carl's
+    // explicit requirement), but with the neighbouring columns peeking at
+    // both edges, so the board reads as six columns you are looking along
+    // rather than six unrelated screens. The page dots went with the
+    // TabView — the only way to colour them was one of the global styling
+    // proxies this redesign deletes wholesale, and an untinted system dot
+    // row under a tinted board is worse than no dots at all. Position
+    // awareness moved to the column chip bar, which was already the
+    // always-visible table of contents and now also says which column you
+    // are on.
     private var boardStack: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
             daemonBar
             shipBanner
             contractBanner
-            overviewStrip
-            TabView(selection: $selectedColumn) {
-                ForEach(BoardColumn.allCases) { column in
-                    columnView(column)
-                        .tag(column)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
+            columnChipBar
+            columnCarousel
         }
-        .background(KTheme.ground)
+        .padding(.top, 4)
+        // `.ignoresSafeArea()` on the BACKGROUND only, never on the content:
+        // the field has to run under the nav bar's and the floating tab
+        // bar's glass or they lens a system background instead of this
+        // screen's, while the stack itself stays inside the safe area so
+        // nothing ends up hidden beneath either bar.
+        .background { ThemeBackgroundView().ignoresSafeArea() }
         .navigationTitle("Board")
         .toolbar { boardToolbar }
     }
 
     // The board's trailing toolbar buttons.
+    //
+    // Plain-styled, hand-coloured glyphs before; stock toolbar buttons now.
+    // The nav bar draws its own glass and takes its colour from the app's
+    // `.tint`, which is the theme accent — so `.buttonStyle(.plain)` plus a
+    // per-button `foregroundStyle` would opt each one back out of exactly
+    // the material this redesign exists to adopt. The button set, their
+    // order, their symbols and their accessibility labels are unchanged.
     @ToolbarContentBuilder
     private var boardToolbar: some ToolbarContent {
         // Search presents the EXISTING overview sheet with its search
@@ -844,8 +885,6 @@ struct BoardView: View {
             } label: {
                 Image(systemName: "magnifyingglass")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(KTheme.accent)
             .accessibilityLabel("Search jobs")
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -854,8 +893,6 @@ struct BoardView: View {
             } label: {
                 Image(systemName: "moon.stars")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(KTheme.skillDream)
             .accessibilityLabel("Dream")
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -864,8 +901,6 @@ struct BoardView: View {
             } label: {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(KTheme.accent)
             .accessibilityLabel("Knowledge graph")
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -874,8 +909,6 @@ struct BoardView: View {
             } label: {
                 Image(systemName: "plus")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(KTheme.accent)
         }
     }
 
@@ -1064,7 +1097,9 @@ struct BoardView: View {
 
     private func consumePendingBoardRoutes() {
         if let column = router.pendingBoardColumn {
-            selectedColumn = column
+            // Animated for the same reason the chip tap is: the carousel is a
+            // scroll view, and a scroll view teleports unless told otherwise.
+            withAnimation(.easeInOut(duration: 0.3)) { selectedColumn = column }
             router.pendingBoardColumn = nil
         }
         if router.pendingOverview {
@@ -1093,27 +1128,27 @@ struct BoardView: View {
                 .font(.voice(11))
                 .foregroundStyle(KTheme.revealed)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-                .background(KTheme.revealedSoft)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(KTheme.hairline).frame(height: 1)
-                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .boardBarSurface(tint: KTheme.revealed)
+                .padding(.horizontal, 16)
         }
     }
 
-    // 7x7 square LED with a soft glow — mirrors .led / .led.ok.
+    // 7pt LED with a soft glow — mirrors .led / .led.ok. Round rather than
+    // square now: the sharp-cornered rects are what this redesign is
+    // replacing, and the glow is the part that was ever load-bearing.
     private var daemonBar: some View {
         HStack(spacing: 8) {
             if let board = vm.board {
-                Rectangle()
+                Circle()
                     .fill(board.daemonOK ? KTheme.solved : KTheme.counter)
                     .frame(width: 7, height: 7)
                     .shadow(color: (board.daemonOK ? KTheme.solved : KTheme.counter).opacity(0.55), radius: 4)
                 Text(board.daemonOK ? "daemon up" : "daemon down")
                     .font(.data(11))
                     .foregroundStyle(KTheme.text2)
-                Spacer()
+                Spacer(minLength: 6)
                 shipControl
                 updateControl
                 // One error slot, shared — precedence lives in barMessage.
@@ -1141,16 +1176,16 @@ struct BoardView: View {
                     .foregroundStyle(KTheme.text2)
             } else if let err = vm.errorMessage {
                 Text(err).font(.data(11)).foregroundStyle(KTheme.counter)
+                Spacer(minLength: 0)
             } else {
                 Text("loading…").font(.data(11)).foregroundStyle(KTheme.text2)
+                Spacer(minLength: 0)
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 7)
-        .background(KTheme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .boardBarSurface()
+        .padding(.horizontal, 16)
     }
 
     // The self-update control (POST /api/update + the status poll that
@@ -1228,80 +1263,182 @@ struct BoardView: View {
                 .font(.voice(11))
                 .foregroundStyle(banner.color)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-                .background(KTheme.surface)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(KTheme.hairline).frame(height: 1)
-                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .boardBarSurface(tint: banner.color)
+                .padding(.horizontal, 16)
         }
     }
 
-    // Always-visible table-of-contents strip: one compact cell per column so
-    // the whole board's shape is readable without swiping the pager. Tapping
-    // a cell jumps the pager there; the chevron opens the full breakdown.
-    private var overviewStrip: some View {
-        HStack(spacing: 0) {
-            ForEach(BoardColumn.allCases) { column in
-                overviewCell(column)
+    // Always-visible table of contents, now the capsule chip bar: one chip
+    // per column so the whole board's shape is readable without swiping the
+    // carousel. It carries four jobs at once, all of which survive the
+    // restyle — tap to jump, the current-column highlight (which is also
+    // what replaces the departed page dots), the attention dot for a column
+    // holding a question or a health string, and the drop target for every
+    // legal cross-column drag.
+    //
+    // THE BAR HAS TWO SHAPES, and which one is showing is decided by whether
+    // a card is in the air. Six capsules at reading size measure ~465-497pt
+    // against a phone's ~346-402pt, so at rest the bar scrolls and follows
+    // the current column (see `chipScroller`). That is fine for reading and
+    // fatal for dropping: `.onDrop` is attached per chip, nothing auto-
+    // scrolls a plain ScrollView while a drag is in flight, and a target you
+    // cannot bring on screen with a card in your hand is a target that does
+    // not exist. Centering on the source column happens to keep every legal
+    // pair's target near the middle today, but that is an accident of the
+    // current pair table and scroll offset, not a guarantee. So for the
+    // duration of a drag the bar becomes the old overview strip's geometry:
+    // six equal-width compact cells, all six on screen by construction,
+    // every legal pair reachable without letting go. The pre-redesign strip
+    // used exactly this geometry, which is the proof those six fit.
+    //
+    // The chevron is outside both shapes and moves in neither: it is one of
+    // three ways into the overview sheet (see BoardOverviewSheet's doc
+    // comment), and an entry point that can be scrolled off screen — or that
+    // vanishes when the bar changes shape — is one that has been quietly
+    // removed.
+    private var columnChipBar: some View {
+        HStack(spacing: 8) {
+            if drag.isActive {
+                dragTargetStrip
+            } else {
+                chipScroller
             }
             Button {
                 overviewSearchFocused = false
                 showingOverview = true
             } label: {
                 Image(systemName: "chevron.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(KTheme.text2)
+                    .padding(9)
+                    .background(.regularMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(KTheme.hairline, lineWidth: 1))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(KTheme.text2)
-            .padding(.leading, 6)
-            .padding(.trailing, 10)
+            .padding(.trailing, 16)
         }
-        .padding(.leading, 6)
-        .padding(.vertical, 4)
-        .background(KTheme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(KTheme.hairline).frame(height: 1)
+        .animation(.easeInOut(duration: 0.18), value: drag.isActive)
+    }
+
+    /// The resting shape: capsules that scroll, and that FOLLOW the current
+    /// column. The follow is not a nicety — this bar is what replaced the
+    /// pager's dots, so a lit chip that has scrolled out of sight leaves the
+    /// board with no position indicator at all, and does so exactly when the
+    /// user is furthest from home. Re-centred on every column change, and on
+    /// appear, which is also what re-centres it when a drag ends and the
+    /// strip hands the bar back.
+    private var chipScroller: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(BoardColumn.allCases) { column in
+                        overviewCell(column, compact: false)
+                            .id(column)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .onAppear { proxy.scrollTo(selectedColumn, anchor: .center) }
+            .onChange(of: selectedColumn) { _, column in
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo(column, anchor: .center)
+                }
+            }
         }
     }
 
-    private func overviewCell(_ column: BoardColumn) -> some View {
+    /// The drag shape: the pre-redesign overview strip's geometry, in the new
+    /// idiom. Six equal-width cells in a plain HStack — no scroll view, so
+    /// every one of the nine legal pairs has its target under the finger from
+    /// the moment the card lifts.
+    private var dragTargetStrip: some View {
+        HStack(spacing: 4) {
+            ForEach(BoardColumn.allCases) { column in
+                overviewCell(column, compact: true)
+            }
+        }
+        .padding(.leading, 16)
+    }
+
+    /// One column's cell, in whichever shape the bar is currently wearing.
+    /// Both shapes carry the same four signals and the same drop delegate —
+    /// `compact` changes the geometry and nothing else, so a drag cannot
+    /// silently lose a target or a badge on the way into strip mode.
+    private func overviewCell(_ column: BoardColumn, compact: Bool) -> some View {
         let count = vm.jobs(in: column).count
         let flagged = vm.hasFlag(in: column)
         let isCurrent = selectedColumn == column
         let isLegalTarget = drag.sourceColumn.map { isLegalCrossColumnDrop(from: $0, to: column) } ?? false
         let isHovered = drag.hoveredColumn == column
+        // Three signals share one cell, so each gets its own channel and they
+        // compose rather than overwrite: the FILL says where you are (and,
+        // while a drag hovers, that the finger is here), the STROKE says this
+        // cell will accept the card in flight, and the dot says the column
+        // wants attention. A hovered cell therefore still reads as the
+        // current one, and a legal target still reads as flagged.
+        let fill: Color = isHovered
+            ? KTheme.accent.opacity(0.30)
+            : (isCurrent ? KTheme.accent.opacity(0.16) : Color.clear)
+        let stroke: Color = isLegalTarget
+            ? KTheme.accent
+            : (isCurrent ? KTheme.accent.opacity(0.5) : KTheme.hairline)
+        // A capsule reads right on a chip sized to its text; on the strip's
+        // squat equal-width cell the same capsule becomes a lozenge, so that
+        // shape is a rounded rect. One erased value so the fill and the
+        // stroke can never disagree about which outline they are drawing.
+        let shape: AnyShape = compact
+            ? AnyShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            : AnyShape(Capsule())
         return Button {
-            selectedColumn = column
+            // Animated, because the carousel it drives is a scroll view and a
+            // scroll view teleports unless told otherwise — the paged TabView
+            // this replaced animated its jumps for free.
+            withAnimation(.easeInOut(duration: 0.3)) { selectedColumn = column }
         } label: {
-            VStack(spacing: 2) {
-                HStack(spacing: 3) {
-                    Text(column.shortTitle)
-                        .font(.data(9, weight: .semibold))
-                        .kerning(0.5)
-                        .foregroundStyle(isCurrent ? KTheme.accent : KTheme.text2)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    if flagged {
-                        Rectangle().fill(KTheme.counter).frame(width: 5, height: 5)
+            Group {
+                if compact {
+                    VStack(spacing: 2) {
+                        HStack(spacing: 3) {
+                            Text(column.shortTitle)
+                                .font(.data(9, weight: .semibold))
+                                .kerning(0.5)
+                                .foregroundStyle(isCurrent ? KTheme.accent : KTheme.text2)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            if flagged {
+                                Circle().fill(KTheme.counter).frame(width: 5, height: 5)
+                            }
+                        }
+                        Text("\(count)")
+                            .font(.data(13, weight: .semibold))
+                            .foregroundStyle(count > 0 ? KTheme.accent : KTheme.text2)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                } else {
+                    HStack(spacing: 5) {
+                        Text(column.shortTitle)
+                            .font(.data(11, weight: .semibold))
+                            .kerning(0.5)
+                            .foregroundStyle(isCurrent ? KTheme.accent : KTheme.text2)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Text("\(count)")
+                            .font(.data(11, weight: .bold))
+                            .foregroundStyle(count > 0 ? KTheme.accent : KTheme.text2)
+                        if flagged {
+                            Circle().fill(KTheme.counter).frame(width: 5, height: 5)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
                 }
-                Text("\(count)")
-                    .font(.data(13, weight: .semibold))
-                    .foregroundStyle(count > 0 ? KTheme.accent : KTheme.text2)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
-            .background(isHovered ? KTheme.accent.opacity(0.18) : Color.clear)
-            .overlay(alignment: .bottom) {
-                if isCurrent {
-                    Rectangle().fill(KTheme.accent).frame(height: 2)
-                }
-            }
-            .overlay {
-                if isLegalTarget {
-                    Rectangle().stroke(KTheme.accent, lineWidth: isHovered ? 2 : 1)
-                }
-            }
+            .background(fill, in: shape)
+            .overlay(shape.stroke(stroke, lineWidth: isLegalTarget && isHovered ? 2 : 1))
         }
         .buttonStyle(.plain)
         .onDrop(of: [.text], delegate: OverviewDropDelegate(
@@ -1313,25 +1450,63 @@ struct BoardView: View {
         ))
     }
 
+    // The six columns as one view-aligned carousel — the paged TabView's
+    // replacement. `containerRelativeFrame` is what keeps it one column per
+    // page (each page is exactly the container's width) and `contentMargins`
+    // is what lets the neighbours peek; `.viewAligned` is what makes a swipe
+    // land on a column rather than anywhere in between.
+    //
+    // Both drag paths cross this scroll view and both still work. A
+    // within-column reorder happens inside one page's vertical stack, whose
+    // drop targets are unchanged; a cross-column drag leaves the carousel
+    // entirely for the chip bar above it, which is not a scroll target at
+    // all.
+    private var columnCarousel: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: 12) {
+                ForEach(BoardColumn.allCases) { column in
+                    columnView(column)
+                        .containerRelativeFrame(.horizontal)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.viewAligned)
+        .contentMargins(.horizontal, 20, for: .scrollContent)
+        .scrollPosition(id: carouselColumn, anchor: .center)
+    }
+
+    /// `selectedColumn` as the optional identity `scrollPosition(id:)` wants.
+    /// Optional in both directions: the scroll view reports `nil` while the
+    /// content is mid-flight between two pages, and writing that back would
+    /// mean the chip bar's highlight — and every deep link's target — losing
+    /// track of the column on every single swipe. The identity is the raw
+    /// value because that is `BoardColumn.id`, which is what the `ForEach`
+    /// above tags each page with.
+    private var carouselColumn: Binding<String?> {
+        Binding(
+            get: { selectedColumn.rawValue },
+            set: { raw in
+                guard let raw, let column = BoardColumn(rawValue: raw), column != selectedColumn else { return }
+                selectedColumn = column
+            }
+        )
+    }
+
     private func columnView(_ column: BoardColumn) -> some View {
         let jobs = orderedJobs(column)
         return ScrollView {
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 10) {
                 HStack(alignment: .lastTextBaseline) {
                     Text(column.title)
-                        .kLabelStyle(size: 10)
+                        .kLabelStyle(size: 11)
                     Spacer()
                     Text("\(jobs.count)")
-                        .font(.data(10))
+                        .font(.data(11))
                         .foregroundStyle(jobs.isEmpty ? KTheme.text2 : KTheme.accent)
                 }
-                .padding(.horizontal)
-                .padding(.top)
-                .padding(.bottom, 6)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(KTheme.hairline).frame(height: 1)
-                }
-                .padding(.horizontal)
+                .padding(.horizontal, 4)
+                .padding(.top, 2)
 
                 if jobs.isEmpty {
                     Text("·")
@@ -1339,7 +1514,7 @@ struct BoardView: View {
                         .foregroundStyle(KTheme.text2.opacity(0.5))
                         .padding(.top, 40)
                 } else {
-                    LazyVStack(spacing: 10) {
+                    Group {
                         ForEach(jobs) { job in
                             // Archived cards aren't draggable: the server
                             // rejects a reorder of the "archived" column,
@@ -1384,11 +1559,11 @@ struct BoardView: View {
                             }
                         }
                     }
-                    .padding()
                 }
             }
+            .padding(.bottom, 8)
         }
-        .background(KTheme.ground)
+        .scrollIndicators(.hidden)
         .refreshable {
             await vm.refresh(baseURL: serverURL)
             clearSettledReorders()
@@ -1754,17 +1929,39 @@ private struct JobCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
+        ThemedCard {
+            cardBody
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // Split out of `body` so the card is one expression the type-checker can
+    // chew alone — the same discipline BoardView.body's four-helper split
+    // exists for, and this stack has grown to ten conditional children.
+    private var cardBody: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                // The job colour, and ONLY the job colour: a leading capsule
+                // beside the title rather than the flush left edge-bar
+                // `cardBackground(barColor:)` used to draw. Same channel,
+                // same source (`BoardTheme.jobColor`, which returns nil for
+                // an unrecognized name and takes the capsule with it), read
+                // against a rounded card that has no square edge to paint.
+                if let bar = BoardTheme.jobColor(job.color) {
+                    Capsule()
+                        .fill(bar)
+                        .frame(width: 4, height: 15)
+                }
                 Text(job.title)
-                    .font(.data(13, weight: .bold))
+                    .font(.data(15, weight: .semibold))
                     .foregroundStyle(KTheme.text)
                 if job.archived == true, job.title != job.slug {
                     Text("as \(job.slug)")
                         .font(.data(10))
                         .foregroundStyle(KTheme.text2)
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 if hasPendingQuestion {
                     Image(systemName: "flag.fill")
                         .foregroundStyle(KTheme.counter)
@@ -1774,12 +1971,10 @@ private struct JobCardView: View {
             Text(job.repo)
                 .font(.data(11))
                 .foregroundStyle(KTheme.text2)
-            HStack(spacing: 6) {
-                Text(job.state)
-                    .font(.data(10))
-                    .foregroundStyle(BoardTheme.color(forState: job.state))
+            HStack(spacing: 8) {
+                StateCapsule(state: job.state)
                 if job.live, let cell = job.cell {
-                    Text("· \(cell)").font(.data(10)).foregroundStyle(KTheme.text2)
+                    Text("· \(cell)").font(.data(11)).foregroundStyle(KTheme.text2)
                 }
             }
             // The triage badge, on its own line directly under the state row.
@@ -1813,17 +2008,24 @@ private struct JobCardView: View {
                     FeedbackCountChip(feedback: job.feedback ?? [])
                 }
             }
-            // band 3
+            // band 3. The ⚠ / ✕ / ↻ glyphs became SF Symbols with the rest of
+            // the card — same two strings, same counter colour, drawn in the
+            // system's own vocabulary instead of literal characters that had
+            // to be typed to match the web board's.
             if let health = job.health, !health.isEmpty {
-                Text("⚠ " + health).font(.voice(11)).foregroundStyle(KTheme.counter)
+                Label(health, systemImage: "exclamationmark.triangle.fill")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.counter)
             }
             if let err = job.err, !err.isEmpty {
-                Text("✕ " + err).font(.voice(11)).foregroundStyle(KTheme.counter)
+                Label(err, systemImage: "xmark.octagon.fill")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.counter)
             }
             if let wakeup = job.wakeup, job.state == "working" {
                 WakeupChip(wakeup: wakeup)
                 if !wakeup.reason.isEmpty {
-                    Text("↻ " + wakeup.reason)
+                    Label(wakeup.reason, systemImage: "arrow.trianglehead.clockwise")
                         .font(.data(10))
                         .foregroundStyle(KTheme.text2)
                         .lineLimit(1)
@@ -1836,9 +2038,6 @@ private struct JobCardView: View {
                 }
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardBackground(barColor: BoardTheme.jobColor(job.color))
     }
 }
 
@@ -1952,21 +2151,26 @@ private struct CardChipFlow: Layout {
 /// web's `.dq-chip`. Counter-coloured the moment a P0 is open, which is the
 /// same signal the web chip and the board's flag counter carry. Renders
 /// nothing when nothing is open.
+///
+/// The ⚑ is `flag.fill` in a `KChip` now rather than a literal character in a
+/// stroked rect; the count, the pluralisation, the P0 rule and the spoken
+/// sentence are all the ones web's chip has always carried.
 private struct DocQuestionCountChip: View {
     let open: [WebDocQuestion]
 
     var body: some View {
         if !open.isEmpty {
             let p0 = open.filter { $0.importance == "P0" }.count
-            let color = p0 > 0 ? KTheme.counter : KTheme.text2
-            Text("⚑ \(open.count) question\(open.count == 1 ? "" : "s")")
-                .font(.data(10, weight: .semibold))
-                .foregroundStyle(color)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .overlay(Rectangle().stroke(color, lineWidth: 1))
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(open.count) open questions\(p0 > 0 ? ", \(p0) P0" : "")")
+            // KChip's nil tint IS the muted rendering the old `text2` stroke
+            // gave — so the P0 rule stays a two-state rule, not a colour
+            // literal repeated in a third place.
+            KChip(
+                icon: "flag.fill",
+                text: "\(open.count) question\(open.count == 1 ? "" : "s")",
+                tint: p0 > 0 ? KTheme.counter : nil
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(open.count) open questions\(p0 > 0 ? ", \(p0) P0" : "")")
         }
     }
 }
@@ -2007,19 +2211,49 @@ private struct LoadBadge: View {
             // few-second poll already drives; no separate ticker, and the age
             // is coarse enough (one unit, no decimals) that it does not need one.
             let now = Int64(Date().timeIntervalSince1970 * 1000)
+            // The badge's leading "⚡ " is U+26A1, and the bucketed system
+            // MONOSPACED face `Font.data` now resolves to has no glyph for it
+            // — verified on the 26.3 simulator against the live board, where
+            // it drew as a missing-glyph box in front of every ROI. The
+            // string itself is NOT touched: `badgeText` is built client-side
+            // (`WebJobLoad`, Models.swift) and pinned byte-identical against
+            // the web board's own badge format. Only the RENDER changes —
+            // the prefix comes off here and an SF Symbol takes its place
+            // inside the same capsule.
+            //
+            // Conditional on the prefix actually being there, never assumed.
+            // Today the guard branch is dead: `WebJobLoad.badgeText`
+            // (Models.swift) builds the string client-side and always
+            // prepends the bolt. The guard is there so a future badgeText
+            // shape without it renders untouched instead of losing its first
+            // two characters.
+            let boltPrefix = "⚡ "
+            let hasBolt = text.hasPrefix(boltPrefix)
+            let badgeLabel = hasBolt ? String(text.dropFirst(boltPrefix.count)) : text
             HStack(spacing: 5) {
-                Text(text)
-                    // The one label on this card that must not wrap: it carries
-                    // two internal spaces ("⚡ 4.0× 2→8") and breaking at either
-                    // splits the ratio from the pair it came from.
-                    .lineLimit(1)
-                    .font(.data(10, weight: .semibold))
+                HStack(spacing: 4) {
+                    if hasBolt {
+                        Image(systemName: "bolt.horizontal.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    Text(badgeLabel)
+                        // The one label on this card that must not wrap: it
+                        // carries an internal space ("4.0× 2→8") and breaking
+                        // at it splits the ratio from the pair it came from.
+                        .lineLimit(1)
+                        .font(.data(10, weight: .semibold))
+                }
                     .foregroundStyle(style.text)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(style.fill ?? .clear)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    // A tinted capsule now, matching every other pill on the
+                    // card. The band's three channels are untouched: its
+                    // fill, its border colour, and the dash that marks a
+                    // stale estimate all still come from
+                    // `BoardTheme.style(forLoadBand:)`.
+                    .background(style.fill ?? .clear, in: Capsule())
                     .overlay(
-                        Rectangle().stroke(
+                        Capsule().stroke(
                             style.border,
                             style: StrokeStyle(lineWidth: 1, dash: style.dashed ? [3, 2] : [])
                         )
@@ -2047,14 +2281,17 @@ private struct LoadBadge: View {
             // then "3h ago" again, since the sentence already carries the age.
             // Same reason (and same shape) as JobDetailView's chipLabel.
             .accessibilityElement(children: .ignore)
-            // The visible text is "⚡ 4.0× 2→8", which has no spoken form worth
-            // hearing; the sentence replaces it entirely.
+            // The visible badge is a bolt symbol over "4.0× 2→8", which has no
+            // spoken form worth hearing; the sentence replaces it entirely.
+            // The fallback is still the UNSTRIPPED `text`, so a summary-less
+            // estimate is spoken exactly as it always was.
             .accessibilityLabel(load.summary(nowMillis: now) ?? text)
         }
     }
 }
 
-/// "▤ N" — the board card's entire artifact surface, mirroring web's
+/// "▤ N" (`doc.on.doc` + N, since the restyle) — the board card's entire
+/// artifact surface, mirroring web's
 /// `.ct-chip`. A count and nothing else: the names live one tap in, in the job
 /// sheet. Always muted, because unlike an open question a pile of artifacts is
 /// never something owed. (This used to contrast with an unaddressed note too —
@@ -2065,12 +2302,7 @@ private struct ArtifactCountChip: View {
 
     var body: some View {
         if count > 0 {
-            Text("▤ \(count)")
-                .font(.data(10, weight: .semibold))
-                .foregroundStyle(KTheme.text2)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .overlay(Rectangle().stroke(KTheme.text2, lineWidth: 1))
+            KChip(icon: "doc.on.doc", text: "\(count)", tint: nil)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(count) artifact\(count == 1 ? "" : "s")")
         }
@@ -2253,7 +2485,7 @@ private struct BoardOverviewSheet: View {
     private func overviewRow(_ job: WebJob, reason: MatchReason) -> some View {
         let flagged = job.question != nil || !(job.health ?? "").isEmpty
         return HStack(spacing: 8) {
-            Rectangle()
+            Circle()
                 .fill(BoardTheme.color(forState: job.state))
                 .frame(width: 6, height: 6)
             Text(job.title)
