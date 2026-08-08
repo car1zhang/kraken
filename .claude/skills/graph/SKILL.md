@@ -54,8 +54,13 @@ Drain in the order given (oldest first) and stop at the end of one batch — the
 design and the nightly job is a drain, not a race.
 
 For a `transcript` episode the content is a raw JSONL span and the ref is `path#start-end`. The span
-is the evidence; when you need more than the span carries, `k mine reduce --since <ts> <path>` gives
+is the evidence; when you need more than the span carries, `k mine reduce --since 1 <path>` gives
 the whole session as user prose + tool calls + assistant text, which is about an eighth of the bytes.
+The `--since 1` is load-bearing, and it goes into every extraction teammate's brief: the flag takes
+unix MILLIS (so `1` is an epoch floor, not one day) and defaults to a 24-hour floor, while ingest
+reads BACKLOG episodes, which are old by definition — two teammates in one night independently
+burned a zero-byte invocation each rediscovering this, and their escalations never reached each
+other.
 Do not read raw transcript JSONL by hand when `reduce` will answer — you will spend the batch's whole
 budget on tool results nobody asked for.
 
