@@ -199,28 +199,31 @@ install-completion:
 ios-testflight:
 	@./ios/ship-testflight.sh $(ARGS)
 
-# Kraken.app — the native macOS board. `mac` is the Debug compile check; a
-# regression here is otherwise SILENT, since nothing in this repo's CI builds
-# any Swift (an iOS compile break once sat unnoticed across 24 commits).
+# Kraken.app — the macOS board (a frameless WKWebView over the SPA kraken
+# serve embeds; macos/project.yml's header carries the provenance). `mac` is
+# the Debug compile check; a regression here is otherwise SILENT, since
+# nothing in this repo's CI builds any Swift (an iOS compile break once sat
+# unnoticed across 24 commits).
 #
 # xcodegen regenerates macos/Kraken.xcodeproj from macos/project.yml on every
-# run. The project IS committed (same as ios/Kraken.xcodeproj) so Xcode can be
-# opened on a fresh clone without a generate step; project.yml stays the source
-# of truth and this target is what keeps the two in agreement.
+# run. The project and its generated Info.plist ARE committed (as under ios/)
+# so Xcode can be opened on a fresh clone without a generate step — the one
+# asymmetry with ios/ is that no shared scheme is tracked; xcodebuild
+# auto-creates the `Kraken` scheme, so `-scheme Kraken` below still resolves.
+# project.yml stays the source of truth and this target keeps the two in step. The regenerate
+# usually rewrites project.pbxproj's bytes, so a `make mac` on main leaves the
+# tree dirty until the churn is committed or reverted — and `k update`'s
+# preflight refuses on a dirty tree, which is where that state actually bites.
 #
 # No -derivedDataPath: the default DerivedData lives under ~/Library and so
 # nothing build-shaped lands in the working tree. install-mac below does pass
 # one, and points it at a mktemp dir outside the repo for the same reason
 # ios/ship-testflight.sh keeps its archives there.
 #
-# The product is Kraken.app while the target and Swift module are KrakenMac
-# (macos/project.yml pins PRODUCT_NAME/PRODUCT_MODULE_NAME apart, because the
-# test contract freezes `@testable import KrakenMac`) — which is why the
-# scheme below is KrakenMac and the bundle copied further down is Kraken.app.
 mac:
 	@command -v xcodegen >/dev/null 2>&1 || { echo "xcodegen not found — brew install xcodegen"; exit 1; }
 	xcodegen generate --spec macos/project.yml
-	xcodebuild build -project macos/Kraken.xcodeproj -scheme KrakenMac -destination 'platform=macOS'
+	xcodebuild build -project macos/Kraken.xcodeproj -scheme Kraken -destination 'platform=macOS'
 
 # Build Release and install into /Applications.
 #
@@ -241,14 +244,15 @@ install-mac:
 	@set -e; \
 	dd=$$(mktemp -d /tmp/kraken-mac-build.XXXXXX); \
 	trap 'rm -rf "$$dd"' EXIT; \
-	xcodebuild build -project macos/Kraken.xcodeproj -scheme KrakenMac \
+	xcodebuild build -project macos/Kraken.xcodeproj -scheme Kraken \
 	  -configuration Release -destination 'platform=macOS' -derivedDataPath "$$dd"; \
 	app="$$dd/Build/Products/Release/Kraken.app"; \
 	[ -d "$$app" ] || { echo "build produced no Kraken.app at $$app"; exit 1; }; \
-	rm -rf /Applications/.Kraken.app.new /Applications/.Kraken.app.old; \
+	rm -rf /Applications/.Kraken.app.new; \
 	cp -R "$$app" /Applications/.Kraken.app.new; \
-	if [ -d /Applications/Kraken.app ]; then mv /Applications/Kraken.app /Applications/.Kraken.app.old; fi; \
-	mv /Applications/.Kraken.app.new /Applications/Kraken.app; \
+	if [ -d /Applications/Kraken.app ]; then rm -rf /Applications/.Kraken.app.old; mv /Applications/Kraken.app /Applications/.Kraken.app.old; fi; \
+	mv /Applications/.Kraken.app.new /Applications/Kraken.app \
+	  || { mv /Applications/.Kraken.app.old /Applications/Kraken.app 2>/dev/null; exit 1; }; \
 	rm -rf /Applications/.Kraken.app.old; \
 	echo "installed Kraken.app → /Applications (quit and relaunch to pick it up)"
 

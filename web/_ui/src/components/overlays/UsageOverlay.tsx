@@ -121,6 +121,9 @@ export function UsageStatContent({ data }: { data: WebUsage | undefined }) {
       {pool.length ? (
         <>
           <span className="u-sep">·</span>
+          {/* the count alone — the `worst 7d` clause that used to ride here
+              was retired at the macOS app's manual gate (carl's call, both
+              clients at once) */}
           <span className="u-pool">pool {pool.length}</span>
         </>
       ) : null}
