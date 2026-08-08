@@ -26,6 +26,16 @@ func TestLintBashCommandBlocks(t *testing.T) {
 		{"code before a trailing comment still lints", `echo ===  # explain`, "equals-expanded"},
 		{"hash inside a word is not a comment", `grep -rn --include=*.py a#b .`, "no matches found"},
 		{"path assignment in while head", `while path=$(next); do echo done; done`, "clobbers"},
+		{"bare git stash", `git stash`, "git stash"},
+		{"git stash before redirect", `git stash 2>/dev/null; ./run.sh`, "git stash"},
+		{"git stash in compound", `git stash list | head -2; cd svc && git -C .. stash 2>/dev/null; echo ok`, "git stash"},
+		{"git stash pop", `git stash pop --index`, "git stash"},
+		{"git stash push with message", `git stash push -m wip`, "git stash"},
+		{"git stash with flag", `git stash -u`, "git stash"},
+		{"git stash drop", `git stash drop stash@{0}`, "git stash"},
+		{"git -C stash", `git -C /tmp/wt stash`, "git stash"},
+		{"git stash in backticks", "x=`git stash` && echo done", "git stash"},
+		{"path-qualified git stash", `/usr/bin/git stash pop`, "git stash"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -77,6 +87,14 @@ func TestLintBashCommandAllows(t *testing.T) {
 		{"flag ending in a keyword is not an assignment", `cmd --until path=x`},
 		{"git config --local path field", `git config --local path=x`},
 		{"fragment hash is not a comment", `curl https://host/x#frag`},
+		{"git stash list", `git stash list`},
+		{"git stash list piped", `git stash list | head -2`},
+		{"git stash show", `git stash show -p stash@{0}`},
+		{"git stash in quotes", `echo "never run git stash here"`},
+		{"git stash in heredoc payload", "cat > /tmp/report.md <<'EOF'\nthe agent ran git stash pop --index to recover\nEOF"},
+		{"git stash in comment", "# git stash was the mistake\ngit status"},
+		{"stash as a positional ref", `git log --oneline stash`},
+		{"git diff against stash ref", `git diff --stat stash`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -11,9 +11,10 @@ import (
 // bashlint.go — `kraken bash-lint`, wired as a Claude Code PreToolUse hook
 // in each cell's worktree (cell.go's mergeHookSettings installs it beside
 // the pr-hook PostToolUse entry). It screens every Bash tool call for a
-// short list of zsh-on-macOS shapes that are measured to fail SILENTLY —
-// the command aborts or lies while `is_error` stays false — and blocks the
-// call with the exact fix named, so the agent repairs it in one turn
+// short list of shapes measured to fail SILENTLY — zsh-on-macOS quirks
+// where the command aborts or lies while `is_error` stays false, plus one
+// destructive git shape whose damage lands on OTHER agents — and blocks
+// the call with the exact fix named, so the agent repairs it in one turn
 // instead of shipping a conclusion built on output that never ran.
 //
 // The list is deliberately tiny and deterministic. Every entry is a shape
@@ -33,6 +34,18 @@ import (
 //   - assigning `path=`/`fpath=`: zsh ties those to the PATH/fpath arrays,
 //     so a scratch variable named `path` wipes command lookup for the rest
 //     of the shell.
+//   - a mutating `git stash` (bare, or push/pop/apply/drop/…): the one
+//     entry that is not a zsh quirk but a destructive shape — in a cell the
+//     worktree is shared with live teammates, a stash sweeps THEIR
+//     uncommitted work along with the caller's, and it is a twice-recorded
+//     destructive incident with a "the ban is absolute" rule in pr/SKILL.md
+//     (do/SKILL.md carries the shared-worktree half) that implementers
+//     measurably keep reinventing around — the rules live in files only the
+//     lead reads. Read-only `git stash list` and `git stash show` pass;
+//     `create` is blocked for uniformity although it changes nothing in the
+//     worktree or the ref namespace, and `--help` rides the flag arm — both
+//     get a message naming a better route, acceptable for forms this
+//     obscure.
 //
 // False-positive control is structural, not hopeful: every region of a
 // command that is not shell-in-command-position is blanked before any check
@@ -79,6 +92,30 @@ var bashLintChecks = []struct {
 		// keyword that precedes an assignment), never follow a bare space.
 		regexp.MustCompile(`(?:^\s*|[;&|({]\s*|\n\s*|(?:^|[\s;|&({])(?:do|then|else|elif|while|until|export|local|readonly|typeset|declare)\s+)f?path=`),
 		"assigning 'path' or 'fpath' in zsh clobbers the tied PATH/fpath arrays and breaks command lookup — use another variable name",
+	},
+	{
+		// Mutating `git stash` forms only, matched by what FOLLOWS `stash`:
+		// end-of-command (bare `git stash`, incl. before a redirect or a
+		// closing backtick), an explicit mutating subcommand, or a flag
+		// (`-u`, `--include-untracked` — the flag arm also catches the
+		// read-only `--help`, accepted per the header comment). `git stash
+		// list`/`show` fall through all three arms and stay allowed — as are
+		// read-only commands taking `stash` as a positional ref (`git log
+		// stash`): a subcommand word before `stash` makes the flag group
+		// unmatchable — and so does prose in quotes/heredocs/comments
+		// (stripped before this runs). RE2 has no lookahead, so the allowed
+		// words are excluded by never being matchable rather than by
+		// negation. The leading group covers `$(…)` and backtick
+		// substitution plus a path-qualified `/usr/bin/git`; global flags
+		// between `git` and `stash` cover the measured `git -C .. stash`
+		// shape. Documented fail-open residue, consistent with the hook's
+		// guardrail-not-sandbox stance: the space-separated `--git-dir /x`
+		// form, a `~`-relative path (`~/bin/git stash` — `~` is outside the
+		// prefix class), a backslash-continuation splitting `stash` from its
+		// subcommand, `git stash $ARGS`, and `eval`/`bash -c` wrappers
+		// (quote-blanking is lint-wide, not stash-specific).
+		regexp.MustCompile("(?:^|[\\s;|&(`])(?:[\\w./-]*/)?git(?:\\s+-[A-Za-z]\\s+\\S+|\\s+--?[A-Za-z][-A-Za-z0-9]*(?:=\\S+)?)*\\s+stash(?:\\s*(?:$|[;|&)\\n`])|\\s+\\d?[<>]|\\s+(?:push|pop|apply|drop|clear|branch|store|create|save)\\b|\\s+-)"),
+		"a mutating `git stash` in a cell sweeps every agent's uncommitted work out of the shared worktree (a twice-recorded destructive incident) — verify against an isolated copy instead: `git show HEAD:<path>` into scratch, or a throwaway `git worktree add`; read-only `git stash list`/`show` are allowed, and if you were only PRINTING the words, quote them",
 	},
 }
 
