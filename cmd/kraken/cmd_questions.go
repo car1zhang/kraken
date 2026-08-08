@@ -78,14 +78,22 @@ func runQuestionsGet(args []string) ([]byte, error) {
 }
 
 // runQuestionsSet is `kraken questions set <slug>`: reads a JSON array of
-// question objects from stdin and bulk-replaces the job's whole set
-// (POST /api/questions {slug, questions}). The array is forwarded as raw
+// question objects — or `get`'s {"questions":[…]} envelope — from stdin and
+// bulk-replaces the job's whole set (POST /api/questions {slug, questions}).
+// The array is forwarded as raw
 // JSON rather than decoded into a local struct — this verb is a thin proxy,
 // not a second copy of the wire schema; questions.go's questionWire (and
 // its validation) is the single source of truth for what a question object
 // looks like, and stays that way even if a field is added there later. The
 // only local check is "stdin is valid JSON" (a friendlier error than a
 // server-side "bad json" 400 for a plainly malformed stdin).
+//
+// A {"questions":[…]} envelope is accepted and unwrapped alongside the bare
+// array: `questions get` prints exactly that envelope, so the natural
+// read-edit-set round trip otherwise fails on the writer refusing the
+// reader's own output (a zeus fed `get`'s output back verbatim and burned a
+// retry discovering the inner array was wanted). An envelope naming a slug
+// DIFFERENT from the arg is refused outright — see the guard below.
 func runQuestionsSet(args []string, stdin io.Reader) error {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
 		return fmt.Errorf("usage: k questions set <slug> (JSON question array on stdin)")
@@ -100,7 +108,25 @@ func runQuestionsSet(args []string, stdin io.Reader) error {
 	}
 	var probe []json.RawMessage
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return fmt.Errorf("stdin is not a JSON array of questions: %w", err)
+		// Not a bare array — accept `get`'s own {"questions":[…]} envelope
+		// before refusing. Any other object (no `questions` key, or one
+		// holding a non-array) still fails with the original array error.
+		var env struct {
+			Questions json.RawMessage `json:"questions"`
+			Slug      string          `json:"slug"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Questions == nil ||
+			json.Unmarshal(env.Questions, &probe) != nil || probe == nil {
+			return fmt.Errorf("stdin is not a JSON array of questions (a bare [...] or questions get's {\"questions\":[...]} envelope): %w", err)
+		}
+		// `get`'s envelope carries no slug, so a present-and-different one
+		// means the caller piped a full POST body aimed at another job —
+		// and set is a bulk REPLACE, so accepting it would silently wipe
+		// the arg's job with another job's questions.
+		if s := strings.TrimSpace(env.Slug); s != "" && s != slug {
+			return fmt.Errorf("stdin's envelope names slug %q but the command targets %q — refusing a bulk replace aimed at two different jobs", s, slug)
+		}
+		raw = env.Questions
 	}
 	if probe == nil {
 		return fmt.Errorf("stdin is not a JSON array of questions: got null")
