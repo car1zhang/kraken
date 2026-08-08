@@ -1756,11 +1756,15 @@ func reactivatePrompt(reorient, message, rebaseNote string) (prompt string, hasP
 
 // recreateFromRemote checks whether the job's branch still lives on origin
 // (carl pushed it before the cell was lost) and, if so, whether it has
-// drifted behind base. ok=false means no usable remote ref was found — a
-// failed fetch (offline) or a branch that was never pushed — and the caller
-// falls back to ensureUsableBranch's local reset-or-rename logic unchanged.
+// drifted behind base. ok=false means no usable remote PATH — a failed
+// fetch (offline), a branch that was never pushed, a local branch ahead of
+// the remote, or a remote tip already fully merged into base — and the
+// caller falls back to ensureUsableBranch's local reset-or-rename logic
+// unchanged. The fetch prunes so a branch deleted on origin (the merge
+// button's usual cleanup) stops resolving here instead of surviving as a
+// stale tracking ref that reads like a live remote.
 func recreateFromRemote(repo, branch, base string) (needsRebase bool, ok bool) {
-	if err := exec.Command("git", "-C", repo, "fetch", "origin").Run(); err != nil {
+	if err := exec.Command("git", "-C", repo, "fetch", "--prune", "origin").Run(); err != nil {
 		return false, false
 	}
 	remoteRef := "origin/" + branch
@@ -1774,6 +1778,27 @@ func recreateFromRemote(repo, branch, base string) (needsRebase bool, ok bool) {
 		exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", branch, remoteRef).Run() != nil {
 		return false, false
 	}
+	// A remote tip fully contained in base is a MERGED branch: it preserves
+	// nothing base lacks, and the drift test below cannot tell merged from
+	// behind (after a merge commit, base is an ancestor of neither), so
+	// every merged-PR branch would earn the rebase instruction — telling a
+	// reactivated zeus to rebase onto a base its commits are already in,
+	// which replays them; and in the no-steer case that false instruction
+	// is the ENTIRE prompt (see reactivatePrompt), with nothing to
+	// contradict it. Merged ⇒ fall back to ensureUsableBranch, whose
+	// recycle-off-base logic is built for exactly this state. Ancestry sees
+	// merge-commit and fast-forward merges only: a SQUASH- or rebase-merged
+	// tip is not an ancestor of base and still takes the remote path with a
+	// rebase note — the same blind spot ensureUsableBranch has always had —
+	// though the pruning fetch above closes the common case where the
+	// repo's delete-branch-on-merge setting is on: the squash-merged branch
+	// stops resolving here at all. (The prune's own trade: a branch deleted
+	// upstream while still genuinely unmerged loses its stale tracking ref
+	// here too and falls back to a base reset — recoverable from origin's
+	// objects, and far rarer than the merge-cleanup case the prune fixes.)
+	if exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", remoteRef, base).Run() == nil {
+		return false, false
+	}
 	needsRebase = exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", base, remoteRef).Run() != nil
 	return needsRebase, true
 }
@@ -1783,9 +1808,10 @@ func recreateFromRemote(repo, branch, base string) (needsRebase bool, ok bool) {
 // at the SAME path (the claude project dir — and with it the transcript
 // history — is keyed on that path). If carl pushed the branch before the
 // cell was lost, the worktree recreates off the REMOTE tip (origin/<branch>)
-// so pushed work is never silently dropped for a locally-reset one; only a
-// branch that never made it to origin falls back to ensureUsableBranch's
-// reset-or-rename. A remote branch that has drifted behind base earns a
+// so pushed work is never silently dropped for a locally-reset one; a
+// branch with no usable remote path — never pushed, origin unreachable,
+// local ahead of remote, or a tip already merged into base — falls back to
+// ensureUsableBranch's reset-or-rename. A remote branch that has drifted behind base earns a
 // rebase instruction in the resumed prompt. For a started job whose cell
 // died mid-run with its worktree intact: the existing worktree — dirty files
 // and all — is reused in place, so the one recovery path that preserves WIP
@@ -1877,7 +1903,8 @@ func ReactivateJob(j *Job, session, message string) error {
 				rebaseNote = "your branch " + branch + " is behind " + base + ". first run: git fetch origin && git rebase " + base + " — resolve any conflicts, verify the build still passes, and report the rebase result. then continue."
 			}
 		} else {
-			// never pushed (or origin unreachable): recycle the branch when
+			// no usable remote path (never pushed, origin unreachable, local
+			// ahead, or already merged into base): recycle the branch when
 			// its PRs are all merged into base; only unmerged leftovers force
 			// a fresh -rN name (persisted inside)
 			branchFlag, err = ensureUsableBranch(j, repo, base)
