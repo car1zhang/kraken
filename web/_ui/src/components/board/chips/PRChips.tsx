@@ -33,7 +33,16 @@ export function PRChip({ pr }: { pr: JobPR }) {
     return <span className={cls}>{prLabel(pr)}</span>;
   }
   return (
-    <a className={cls} href={pr.url} target="_blank" rel="noreferrer">
+    // stopPropagation: the chip sits inside the card's whole-card click
+    // target, and without it a PR click opens the link AND the drilldown —
+    // the reader asked for GitHub and got a modal on top of it.
+    <a
+      className={cls}
+      href={pr.url}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => e.stopPropagation()}
+    >
       {prLabel(pr)}
     </a>
   );

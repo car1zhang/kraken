@@ -64,10 +64,13 @@ describe("UsageStatContent", () => {
     expect(text).toContain("5h 12%");
     expect(text).toContain("7d 55%");
     expect(text).toContain("opus 91%");
-    // one pool account, worst weekly across it
     expect(text).toContain("pool 1");
-    expect(text).toContain("worst 7d");
-    expect(text).toContain("70%");
+    // the pool summary is the COUNT alone — the `worst 7d` clause was
+    // retired (carl's call at the macOS-app manual gate), so a pool
+    // account's own percents must not leak into the widget (the fixture's
+    // pool account carries weekly 70%)
+    expect(text).not.toContain("worst 7d");
+    expect(text).not.toContain("70%");
   });
 
   it("degrades to a dash rather than broken markup", () => {

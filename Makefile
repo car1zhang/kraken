@@ -1,4 +1,4 @@
-.PHONY: build web-assets install install-completion install-serve ios-testflight clean
+.PHONY: build web-assets install install-completion install-serve ios-testflight mac install-mac clean
 
 PLIST := $(HOME)/Library/LaunchAgents/dev.carl.kraken.plist
 
@@ -198,6 +198,63 @@ install-completion:
 # Setup and credentials: ios/TESTFLIGHT.md
 ios-testflight:
 	@./ios/ship-testflight.sh $(ARGS)
+
+# Kraken.app — the macOS board (a frameless WKWebView over the SPA kraken
+# serve embeds; macos/project.yml's header carries the provenance). `mac` is
+# the Debug compile check; a regression here is otherwise SILENT, since
+# nothing in this repo's CI builds any Swift (an iOS compile break once sat
+# unnoticed across 24 commits).
+#
+# xcodegen regenerates macos/Kraken.xcodeproj from macos/project.yml on every
+# run. The project and its generated Info.plist ARE committed (as under ios/)
+# so Xcode can be opened on a fresh clone without a generate step — the one
+# asymmetry with ios/ is that no shared scheme is tracked; xcodebuild
+# auto-creates the `Kraken` scheme, so `-scheme Kraken` below still resolves.
+# project.yml stays the source of truth and this target keeps the two in step. The regenerate
+# usually rewrites project.pbxproj's bytes, so a `make mac` on main leaves the
+# tree dirty until the churn is committed or reverted — and `k update`'s
+# preflight refuses on a dirty tree, which is where that state actually bites.
+#
+# No -derivedDataPath: the default DerivedData lives under ~/Library and so
+# nothing build-shaped lands in the working tree. install-mac below does pass
+# one, and points it at a mktemp dir outside the repo for the same reason
+# ios/ship-testflight.sh keeps its archives there.
+#
+mac:
+	@command -v xcodegen >/dev/null 2>&1 || { echo "xcodegen not found — brew install xcodegen"; exit 1; }
+	xcodegen generate --spec macos/project.yml
+	xcodebuild build -project macos/Kraken.xcodeproj -scheme Kraken -destination 'platform=macOS'
+
+# Build Release and install into /Applications.
+#
+# Same never-write-over-a-live-bundle discipline as the `install` target above,
+# for the same macOS reason: modifying a running app's files invalidates its
+# code signature and gets the process SIGKILLed. A bundle is a DIRECTORY, so
+# the single `mv -f` that works for the kraken binary does not apply — `mv` onto
+# an existing directory moves the source INSIDE it. The dance is instead:
+# stage a full copy under a dot-name in /Applications (same filesystem, so the
+# renames below are cheap and atomic), rename any existing Kraken.app OUT of the
+# way, then rename the staged copy IN. A running Kraken.app keeps its files via
+# the moved-aside directory and is never touched; the old copy is removed only
+# after the new one is in place. Quitting the app first is still the right move
+# if you want the new build — this recipe deliberately does not kill it.
+install-mac:
+	@command -v xcodegen >/dev/null 2>&1 || { echo "xcodegen not found — brew install xcodegen"; exit 1; }
+	xcodegen generate --spec macos/project.yml
+	@set -e; \
+	dd=$$(mktemp -d /tmp/kraken-mac-build.XXXXXX); \
+	trap 'rm -rf "$$dd"' EXIT; \
+	xcodebuild build -project macos/Kraken.xcodeproj -scheme Kraken \
+	  -configuration Release -destination 'platform=macOS' -derivedDataPath "$$dd"; \
+	app="$$dd/Build/Products/Release/Kraken.app"; \
+	[ -d "$$app" ] || { echo "build produced no Kraken.app at $$app"; exit 1; }; \
+	rm -rf /Applications/.Kraken.app.new; \
+	cp -R "$$app" /Applications/.Kraken.app.new; \
+	if [ -d /Applications/Kraken.app ]; then rm -rf /Applications/.Kraken.app.old; mv /Applications/Kraken.app /Applications/.Kraken.app.old; fi; \
+	mv /Applications/.Kraken.app.new /Applications/Kraken.app \
+	  || { mv /Applications/.Kraken.app.old /Applications/Kraken.app 2>/dev/null; exit 1; }; \
+	rm -rf /Applications/.Kraken.app.old; \
+	echo "installed Kraken.app → /Applications (quit and relaunch to pick it up)"
 
 # node_modules is deliberately NOT removed: it is expensive to rebuild and
 # `npm ci` already replaces it wholesale. dist IS removed — it is the embed

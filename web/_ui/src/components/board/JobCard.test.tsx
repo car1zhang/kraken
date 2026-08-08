@@ -502,6 +502,19 @@ describe("the card click fallback", () => {
     expect(actions.onOpenEditor).not.toHaveBeenCalled();
   });
 
+  it("does NOT fire on a PR chip click — the chip stops the bubble", async () => {
+    // The chip is an <a> inside the whole-card click target; without the
+    // stopPropagation a click opened GitHub AND the drilldown (found at the
+    // macOS app's manual gate). jsdom won't navigate, so asserting the card
+    // handlers stayed quiet is the whole observable.
+    const { card, actions } = renderCard(
+      job({ state: "working", live: true, prs: [{ url: "https://github.com/o/r/pull/73", state: "open" }] }),
+    );
+    await userEvent.click(card.querySelector(".pr-chip")!);
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
+  });
+
   it("opens it in unblock mode on a live blocked job", async () => {
     const { card, actions } = renderCard(job({ state: "blocked", live: true }));
     await userEvent.click(card);

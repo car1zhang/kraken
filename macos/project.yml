@@ -1,0 +1,51 @@
+name: Kraken
+options:
+  bundleIdPrefix: dev.carl
+  deploymentTarget:
+    macOS: "15.0"
+  fileTypes:
+    icon:
+      file: true
+configs:
+  Debug: debug
+  Release: release
+targets:
+  # The macOS board app: a frameless native window over the web SPA that
+  # `kraken serve` embeds — the WKWebView shell that won the manual-gate A/B
+  # against a full native SwiftUI board (that build is preserved in history at
+  # commit 591800e, "native swiftui board and wkwebview shell for the manual
+  # gate ab").
+  # The window chrome IS the web chrome: traffic lights float in the SPA's own
+  # navbar row, drag/zoom ride a window-level event monitor, and everything
+  # else is the board the browser shows.
+  Kraken:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Kraken
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.carl.KrakenMac
+        PRODUCT_NAME: Kraken
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: DDUUFX5L3W  # same team as the iOS target
+        SWIFT_VERSION: "5.10"
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: "1.0"
+        # AppIcon.icon is the Icon Composer bundle shared with the iOS app
+        # (copied, not referenced — ios/ owns its own); Xcode 26 compiles it
+        # for a macOS 15 deployment target.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Generated-Info.plist
+      properties:
+        CFBundleDisplayName: Kraken
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # kraken serve binds plain HTTP on loopback. macOS ATS blocks that
+        # without a declaration; NSAllowsLocalNetworking is the narrow one —
+        # loopback/local hosts only, unlike the iOS app's arbitrary-loads
+        # (its server is a tailnet IP rather than a local name).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
