@@ -5,7 +5,7 @@ import type { BoardModel } from "../../hooks/useBoard.ts";
 import { VIEWS, type View } from "../../hooks/useHashRoute.ts";
 import { age, flagCount } from "../../lib/format.ts";
 import { Banner, StaleBanner } from "./Banners.tsx";
-import { AccentToggle, ScanToggle } from "./HudControls.tsx";
+import { AccentToggle, ScanToggle, SfxToggle } from "./HudControls.tsx";
 import { ShipControl, useShipRun } from "./ShipControl.tsx";
 import { ThemeToggle } from "./ThemeToggle.tsx";
 import { UpdControlButton, useUpdateRun } from "./UpdateControl.tsx";
@@ -169,6 +169,7 @@ export function Chrome({
         <ShipControl id="ship-btn" model={ship.button} onClick={ship.onClick} />
         <AccentToggle />
         <ScanToggle />
+        <SfxToggle />
         <ThemeToggle />
         {/* The blinking block rides the CLOCK only. On the failure text it
             would read as the corner still ticking at the exact moment it has

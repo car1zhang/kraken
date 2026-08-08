@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchUsage } from "./api/client.ts";
 import type { WebUsage } from "./api/types.ts";
@@ -26,6 +26,7 @@ import { useLocalStorageSet } from "./hooks/useLocalStorage.ts";
 import { usePoll } from "./hooks/usePoll.ts";
 import { columnFor } from "./lib/format.ts";
 import { jobKey } from "./lib/jobKey.ts";
+import { installSfxListeners } from "./lib/sfx.ts";
 import {
   answerQuestion,
   deleteFeedback,
@@ -63,6 +64,9 @@ const USAGE_POLL_MS = 60000;
 export function App() {
   const board = useBoard();
   const [view, navigate] = useHashRoute();
+  // the sfx module's document-level capture listeners; the returned
+  // uninstaller keeps strict-mode's double mount from stacking a second set
+  useEffect(() => installSfxListeners(), []);
 
   // DEAD, kept only so App's own call sites below still compile. This used to
   // be hoisted because the card and the steer modal shared one "+3 more"
