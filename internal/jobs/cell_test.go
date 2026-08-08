@@ -633,6 +633,68 @@ func TestReactivatePrompt(t *testing.T) {
 	}
 }
 
+// --- recreateFromRemote ---
+
+// TestRecreateFromRemoteMergedBranchFallsBack pins the merged-branch arm
+// against a real git fixture: a remote branch whose every commit is already
+// in base must NOT be recreated from (ok=false, so the caller recycles off
+// base via ensureUsableBranch) and must never earn a rebase note — the
+// is-ancestor drift test alone cannot tell merged from behind (post-merge,
+// base is an ancestor of neither), and the note it produced told a
+// reactivated zeus to rebase a branch whose PR had already merged, as the
+// ENTIRE prompt when carl attached no steer. The behind and ahead-of-base
+// cases pin that genuinely-drifted branches still take the remote path.
+func TestRecreateFromRemoteMergedBranchFallsBack(t *testing.T) {
+	gitEnv := append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	origin := t.TempDir()
+	runIn := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = gitEnv
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	commitFile := func(dir, name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runIn(dir, "add", name)
+		runIn(dir, "commit", "-q", "-m", name)
+	}
+	runIn(origin, "init", "-q", "-b", "main")
+	commitFile(origin, "base.txt")
+	runIn(origin, "checkout", "-q", "-b", "feature")
+	commitFile(origin, "feature.txt")
+	runIn(origin, "checkout", "-q", "main")
+
+	repo := t.TempDir()
+	runIn(repo, "init", "-q", "-b", "main")
+	runIn(repo, "remote", "add", "origin", origin)
+	runIn(repo, "fetch", "-q", "origin")
+	runIn(repo, "checkout", "-q", "main")
+	runIn(repo, "reset", "-q", "--hard", "origin/main")
+
+	// feature holds a commit main lacks: usable remote, no rebase needed
+	if needsRebase, ok := recreateFromRemote(repo, "feature", "origin/main"); !ok || needsRebase {
+		t.Fatalf("unmerged up-to-date branch: needsRebase=%v ok=%v, want false/true", needsRebase, ok)
+	}
+	// main moves on without feature: genuinely behind, rebase earned
+	commitFile(origin, "drift.txt")
+	if needsRebase, ok := recreateFromRemote(repo, "feature", "origin/main"); !ok || !needsRebase {
+		t.Fatalf("behind branch: needsRebase=%v ok=%v, want true/true", needsRebase, ok)
+	}
+	// feature merges into main: merged is not behind — fall back to the
+	// recycle path, no rebase note
+	runIn(origin, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+	if needsRebase, ok := recreateFromRemote(repo, "feature", "origin/main"); ok || needsRebase {
+		t.Fatalf("merged branch: needsRebase=%v ok=%v, want false/false", needsRebase, ok)
+	}
+}
+
 // --- AllArtifactPaths ---
 
 // TestAllArtifactPathsNoReservedNames covers the flip side of the retired
