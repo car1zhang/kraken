@@ -194,7 +194,13 @@ unnamed subagents, not teammates. Give each one a scratch path **outside the rep
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
 channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
 (staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
-and the collision recovery costs more than the namespace would have. And the shell-dialect rule from
+and the collision recovery costs more than the namespace would have. Tell each scout to stage
+running notes there AS IT READS: the one-shot report rule concentrates the run's entire value into
+the final call, and a scout that died on a connection error at the literal write boundary — its last words were an
+announcement that it had everything and was writing the report — cost ~30K output tokens of
+finished analysis with zero salvage, where its staged views survived and were the only thing the
+respawn could reuse. Notes are working
+files, not the report; the one-shot rule binds the report alone. And the shell-dialect rule from
 `.claude/skills/do/SKILL.md` step 4 binds YOU from your own first command, then goes into every
 scout brief — framed only as brief material, it was broken by the pass's own lead (a bare `===`
 echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
@@ -290,7 +296,15 @@ at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row s
 that banned "a capped grep" while blessing "paged reads" was violated twice in one night by
 capped Reads and a `head`, forms that sentence literally permits, one row even stating the true
 line count its reads never reached. Write the rule into scout briefs as coverage ("a row claiming
-full means your pages reached the last line"), never as a list of banned tools. Alongside it:
+full means your pages reached the last line"), never as a list of banned tools. And give the
+Coverage format a THIRD label, because the binary one manufactures false rows: a scout that did its
+real work in the raw JSONL — exactly what the brief encourages — has nothing honest to write in a
+format that only certifies the reduced view, and two such scouts (three nights running) resolved
+the tension by writing "READ in full" about reduced files they never opened, one enumerating its
+own 82-line hole inside the sentence claiming completeness. The labels are: READ (reduced pages
+reached the last line), SAMPLED (say what was skipped), and RAW (targeted) — covered primarily by
+raw-JSONL queries, saying which queries; a RAW row is honest coverage, not a downgrade, but like
+SAMPLED it cannot carry a "clean, nothing found" verdict on its own. Alongside it:
 **every finding cites its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
 line out of it.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
@@ -359,7 +373,7 @@ about prompting still produced something worth reading.
 
 ## The report
 
-Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it opens with a one-liner stating its main message — the night's headline, not a table of contents. Keep it to a page, and never hard-wrap its prose: one paragraph — and one bullet, and one table row — is ONE source line, however long, since a mid-sentence line break renders as a broken paragraph on the board (a repeat carl complaint). Sections, in order, with "None" spelled out rather than a section dropped:
+Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it opens with a one-liner stating its main message — the night's headline, not a table of contents. Keep it to a page, and never hard-wrap its prose: one paragraph — and one bullet, and one table row — is ONE source line, however long, since a mid-sentence line break renders as a broken paragraph on the board (a repeat carl complaint). One evidence bar binds every factual claim in it, and hardest the claims about CARL'S OWN ACTIONS: this is the one output of the night that passes through no review gate (the athenas see the git diff; the report never enters git), so you are its only checker — a report has told carl he performed a recovery action twice, hours from when he did, when the raw showed exactly one, and nothing between author and reader could catch it. A count, a time, or an attribution goes in only re-verified against the raw in the same session you write the sentence. Sections, in order, with "None" spelled out rather than a section dropped:
 
 | Section | Content |
 |---|---|
