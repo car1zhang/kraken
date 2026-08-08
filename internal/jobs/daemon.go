@@ -946,13 +946,15 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
 		// whose claudes hit the account's usage limit gets the main login
-		// swapped to a healthier pool account and then, once the credential
-		// has propagated, one message telling the crew to carry on. It sits in
-		// this block rather than beside the token pass because it shares this
-		// block's two reasons exactly: it makes a machine-wide credential
-		// change and it TYPES INTO A LIVE PANE. A --mirror daemon still
-		// RECORDS hits (the API handler is not mirror-gated) — it just never
-		// acts on one.
+		// swapped to a healthier pool account, and then — a settle window
+		// later — its zeus KILLED IN PLACE and respawned on its own session,
+		// since a running claude neither re-reads the swapped credential nor
+		// drops the limit it has latched onto locally. It sits in this block
+		// rather than beside the token pass because it shares this block's
+		// two reasons exactly: it makes a machine-wide credential change and
+		// it destroys and recreates a live pane's process. A --mirror daemon
+		// still RECORDS hits (the API handler is not mirror-gated) — it just
+		// never acts on one.
 		//
 		// Its own sweep rather than a line in the colour loop above, for the
 		// same reason every pass in this block has one: each is independently

@@ -178,13 +178,34 @@ func rotationLockPath() string {
 	return filepath.Join(util.Home(), ".kraken", "rotation.lock")
 }
 
-// --- swappable seams, mirroring core's securityFind pattern, so the gate's
-// decision table is testable without network, keychain, or osascript. ---
+// --- swappable seams, mirroring core's securityFind pattern, so the two
+// account-moving paths in this package are testable without network,
+// keychain, tmux or osascript.
+//
+// They serve BOTH: RotationGate below (fetch, select, swap, notify, the
+// post-swap usage kick) and the mid-run limit rescue in limitrescue.go,
+// which reuses selectTarget/swapMain/runUsagePass and adds the two of its
+// own at the end — the zeus respawn and the live main identity. One block
+// rather than a per-file one, because the rescue and the gate must agree
+// about what "swap main" and "pick a target" mean; two blocks would be two
+// places to swap in a test and one of them would get missed. ---
 var (
 	fetchMainUsage = core.FetchMainUsage
 	selectTarget   = core.SelectRotationTarget
 	swapMain       = core.SwapMainTo
 	notifyFn       = notify
+	// respawnPeerPane is the limit rescue's resume half — kill the claude in
+	// ZEUS' pane (the rescue's only target) and bring its session back on
+	// the current account. Its second argument is the CALLER's full launch
+	// command: core builds none, since what a resumed zeus must be launched
+	// with is this package's knowledge. A seam for the same reason swapMain
+	// is one — the rescue's resume path is decision logic worth exercising
+	// without a tmux server under it.
+	respawnPeerPane = core.RespawnPeerPane
+	// mainIdentityEmail reports who main is RIGHT NOW (~/.claude.json),
+	// which the rescue prefers over the polled snapshot's main row — the
+	// snapshot lags a swap the rescue itself just made.
+	mainIdentityEmail = core.MainIdentityEmail
 	// runUsagePass defaults to the real UsagePass; swapped out in tests so a
 	// successful-rotation test doesn't kick off a real network usage pass in
 	// the background.

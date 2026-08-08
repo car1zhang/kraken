@@ -14,25 +14,40 @@ import (
 // --- mid-run usage-limit rescue ---
 //
 // A cell whose claudes have hit the account's usage limit is stuck in a way
-// no nudge can fix: the turn failed because the credential behind it is
+// no message can fix: the turn failed because the credential behind it is
 // exhausted, so the only repair is a different account. The hook (limithook.go)
 // records the hit; this file decides what to do about it and does it.
 //
-// The design has no restart in it, and that is the measured fact it rests on
-// (2026-08-05, Claude Code 2.1.222): a RUNNING claude re-reads its credential
-// live. The credential LANE is latched at process start — a cell starts with
-// no CLAUDE_CODE_OAUTH_TOKEN, so its lane is the macOS keychain item
-// core.SwapMainTo already writes — while the VALUE inside that lane is
-// re-resolved on the next turn, in both directions. So overwriting the item
-// under a live session and then telling it to carry on is enough, and every
-// claude in the cell reads that same item: zeus and its teammates recover
-// together. Nothing here may kill a tmux session, restart a cell, or call
-// ReactivateJob — that would throw away the very crew this rescue exists to
-// preserve.
+// The repair is a swap followed by a kill+resume of ZEUS, and both halves of
+// that are forced by measurement (2026-08-07, Claude Code 2.1.224). A
+// RUNNING claude does not re-read a swapped credential: it resolves one at
+// session start and re-resolves it only on an auth error or on a refresh
+// scheduled off the OLD token's expiry, so turns kept billing the
+// swapped-out account for as long as the probe ran. And a claude that has
+// already 429'd carries a client-side limit latch — Claude Code blocks
+// further requests locally until the reset time the banner names. On a
+// latched process, the keychain swap and a real /usage fetch showing the new
+// account healthy were both measured to leave the latch exactly where it
+// was. A message typed into such a pane cannot produce a successful turn no
+// matter what it says.
 //
-// Propagation is fast but not instant (a request ~0.4s after the write still
-// used the old token), which is why the swap and the nudge are two separate
-// steps a settle window apart rather than one.
+// So the resume arm kills zeus' claude in place and respawns it with the
+// full cell-spawn surface plus `-r <session-id>` (resumeCellAgents through
+// core.RespawnPeerPane). The fresh process reads the keychain at startup, so
+// it adopts the current account on its first turn, and it carries no latch;
+// the conversation comes back intact.
+//
+// Zeus alone, because a tmux teammate has no resolvable session id to resume
+// (discover.go leaves SessionID empty for every teammate row) — so the crew
+// is handed to zeus as its first instruction rather than pretended at here.
+// The blast radius stays that one pane: nothing here may kill a tmux
+// session, restart a cell, or call ReactivateJob — the cell's windows, its
+// worktree and its session are exactly what this rescue exists to preserve.
+//
+// The swap and the resume stay two steps a settle window apart. Not for
+// propagation — a new process reads the keychain when it starts — but as a
+// debounce: the halves land on different ticks, so the swap is durably
+// recorded, and visibly complete, before anything SIGKILLs a pane.
 
 // limitRescueAction is the decision's outcome — what the pass should do with
 // a recorded hit on this tick.
@@ -41,17 +56,23 @@ type limitRescueAction string
 const (
 	rescueSkip         limitRescueAction = "skip"
 	rescueRotate       limitRescueAction = "rotate"
-	rescueNudge        limitRescueAction = "nudge"
+	rescueResume       limitRescueAction = "resume"
 	rescueParkManual   limitRescueAction = "park-manual"
 	rescueParkNoTarget limitRescueAction = "park-no-target"
 )
 
 const (
-	// limitRescueSettle is how long after the swap the nudge waits, so the
-	// new credential has propagated to the running sessions. It is enforced
-	// ACROSS ticks by the gate chain rather than by sleeping inside one: the
-	// daemon's own DaemonInterval cadence is the timer, and a pass that
-	// blocks the tick would stall every other job's pass behind it.
+	// limitRescueSettle is how long after the swap the resume waits. Under
+	// teardown+resume it is NOT a propagation delay — a fresh process reads
+	// the keychain when it starts, so there is nothing to wait for — it is a
+	// debounce: the swap and the resume are separate arms of the decide
+	// chain, and this window is what stops a tick that has just swapped from
+	// also killing the pane, so the swap is recorded and a contended or
+	// half-failed rotation is visible before anything irreversible happens.
+	// It is enforced ACROSS ticks by the gate chain rather than by sleeping
+	// inside one: the daemon's own DaemonInterval cadence is the timer, and
+	// a pass that blocks the tick would stall every other job's pass behind
+	// it.
 	limitRescueSettle = 15 * time.Second
 	// limitRescueMaxAttempts bounds how many rotate attempts one hit gets
 	// before it parks. Without a bound, a pool with nothing healthy in it
@@ -63,9 +84,9 @@ const (
 	// seconds.
 	limitRescueRetryInterval = 10 * time.Minute
 	// limitResetSettle is how long past the banner's stated reset moment the
-	// reset-nudge waits. The banner's time carries minute precision and no
+	// reset-resume waits. The banner's time carries minute precision and no
 	// seconds, and the serverside window is not guaranteed to reopen on the
-	// exact minute boundary — a nudge landing seconds early would burn the
+	// exact minute boundary — a resume landing seconds early would burn the
 	// hit's resolution on a turn that fails on the same limit.
 	limitResetSettle = 2 * time.Minute
 	// limitResetMaxWait is the staleness bound on a parsed reset target. A
@@ -82,16 +103,25 @@ const (
 	limitResetMaxWait = 6 * time.Hour
 )
 
-// limitRescueNudgeMsg is what every agent in the rescued cell is told. It
-// names no account: the message is typed into a pane and lands in a
-// transcript, and the identity of the account belongs in the notification
-// carl reads, not in the crew's context.
-const limitRescueNudgeMsg = "kraken: your last turn failed on a usage limit. The main Claude account has been switched to a healthier one and the new credential is live — continue where you left off."
+// limitRescueResumePrompt is zeus' first turn back after a swap-path rescue.
+// It is a PROMPT handed to a process that was just SIGKILLed and resumed,
+// not a message typed at a running agent, and everything unusual about it
+// follows from that: the reader has no memory of the last few seconds, its
+// background tasks and in-flight tool calls did not survive, and its
+// teammates are still sitting where they were. Saying so is the whole job of
+// this text — an agent that assumes its crew came back with it will wait on
+// panes that will never answer.
+//
+// It names no account. It lands in a transcript, and which account kraken
+// moved to belongs in the notification carl reads, not in the cell's
+// context.
+const limitRescueResumePrompt = "kraken: your last turns failed on a usage limit. The main Claude account has been switched to a healthier one, and kraken killed and resumed you so this process would pick it up — your conversation is intact, but any background tasks and in-flight tool calls from before the resume are gone. Your teammates were NOT resumed: they are still limit-stalled or dead, and reviving or replacing them (TaskStop plus fresh spawns, or SendMessage to a live one) is your first move. Then re-check the work in flight and continue."
 
-// limitResetNudgeMsg is the no-swap sibling of limitRescueNudgeMsg: the
-// account never moved, its own window reopened. Same rule about naming no
-// account — this lands in a transcript.
-const limitResetNudgeMsg = "kraken: your last turn failed on a usage limit. That account's usage window has since reset — continue where you left off."
+// limitResetResumePrompt is the no-swap sibling: the account never moved,
+// its own usage window reopened. Same shape and the same warnings — the
+// resume was just as fatal to this process' background work either way — and
+// no account is named here either.
+const limitResetResumePrompt = "kraken: your last turns failed on a usage limit. That account's usage window has since reset — the account never changed — and kraken killed and resumed you so this process would drop the limit it had latched onto. Your conversation is intact, but any background tasks and in-flight tool calls from before the resume are gone. Your teammates were NOT resumed: they are still limit-stalled or dead, and reviving or replacing them (TaskStop plus fresh spawns, or SendMessage to a live one) is your first move. Then re-check the work in flight and continue."
 
 // limitResetRe matches the reset clause the SESSION-limit banner carries:
 // "resets 4:50am (America/New_York)", "resets 10:20pm" — an hour, optional
@@ -158,13 +188,13 @@ func parseLimitReset(details string, hitAt time.Time) int64 {
 	// 10:20pm banner read at 23:44 was already-due, and read at 00:05 was a
 	// 22h15m park, because crossing midnight un-rolled it. Answering with
 	// the hit time itself makes the stale case already-due: the decide
-	// chain's settle margin then releases the nudge on the next tick, which
+	// chain's settle margin then releases the resume on the next tick, which
 	// is the right action for a window that reopened before kraken ever
 	// read the banner. The cap also bounds the fall-back DST roll (once a
 	// year, same shape as a stale banner). Spring-forward names a wall time
 	// that does not exist; Go documents time.Date's choice there as
 	// unspecified, and this toolchain measures it resolving an hour EARLY —
-	// the nudge then fails on the still-closed window and resolves the hit,
+	// the resume then fails on the still-closed window and resolves the hit,
 	// but the failed turn writes a fresh banner and a fresh, correctly
 	// anchored record within a tick or two, so the cost is one wasted turn
 	// once a year, not a strand.
@@ -217,9 +247,10 @@ func limitHitTriggerDue(stamp int64, now time.Time) bool {
 //   - gate 6 (manual mode) sits above every rotate path, so a job carl has
 //     pinned to manual is never rotated whatever else is true.
 //   - gate 5 (a landed swap) sits ABOVE gate 6, because once the account has
-//     actually been swapped the nudge must complete even if the mode changed
-//     in between: a swapped cell left un-nudged is worse than either outcome
-//     on its own — the credential moved and nobody told the crew.
+//     actually been swapped the resume must complete even if the mode changed
+//     in between: a swapped cell left un-resumed is worse than either outcome
+//     on its own — the credential moved and the crew is still latched onto
+//     the old one.
 //
 // The second return is a short human reason, non-empty for every outcome
 // except skip (a skip is the overwhelmingly common tick and has nothing to
@@ -238,13 +269,13 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 		return rescueSkip, ""
 	}
 	if !cellLive {
-		// Nothing to rescue: a swap only helps sessions that are still running
-		// to re-read the credential.
+		// Nothing to rescue: the resume respawns a live cell's zeus pane,
+		// and a dead cell has none to respawn.
 		return rescueSkip, ""
 	}
 	if hit.SwappedAt != 0 {
 		if now.Sub(time.Unix(hit.SwappedAt, 0)) >= limitRescueSettle {
-			return rescueNudge, "credential swapped to " + hit.SwappedTo + " — resuming the cell"
+			return rescueResume, "credential swapped to " + hit.SwappedTo + " — resuming the cell"
 		}
 		return rescueSkip, ""
 	}
@@ -259,13 +290,13 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 	// reset time, an exhausted hit is the ordinary parked-until-reset state:
 	// the park deliberately left it unresolved, and this gate is what holds
 	// it (skip) until the banner's own stated reopen time has passed, then
-	// releases the no-swap nudge. Four cells measured 2026-08-06 sat 42m to
+	// releases the no-swap resume. Four cells measured 2026-08-06 sat 42m to
 	// 10h37m dead on the far side of a reset their banner named, because the
 	// park was terminal.
 	if hit.Attempts >= limitRescueMaxAttempts {
 		if hit.ResetAt != 0 {
 			if now.Sub(time.Unix(hit.ResetAt, 0)) >= limitResetSettle {
-				return rescueNudge, "usage window reset — resuming the cell"
+				return rescueResume, "usage window reset — resuming the cell"
 			}
 			return rescueSkip, ""
 		}
@@ -281,11 +312,39 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 }
 
 // selectRescueTarget picks the pool slot the rescue would rotate into, and
-// reports main's own email alongside it (the snapshot is the only place the
-// rescue learns who main currently is, and both the selector and the
+// reports main's own email alongside it (both the selector and the
 // notification need it). Shared by the pass' targetAvailable probe and by
 // rescueLimitedCell's own selection under the lock, so the two can never
 // disagree about what "a target exists" means.
+//
+// main's identity comes from the mainIdentityEmail seam — ~/.claude.json,
+// read live — with the snapshot's own main row as the fallback for when
+// that file says nothing. The snapshot is a poll, and the rescue is the
+// thing most likely to have invalidated it: after its own swap the snapshot
+// still names the OUTGOING account as main until the next usage pass lands,
+// and feeding that stale name to the selector makes the account we just
+// rotated onto look like an eligible target while the freshly exhausted one
+// looks excluded — the exclusion is by email, so pointing it at the wrong
+// identity aims it at exactly the wrong row.
+//
+// Which is why the pool handed to the selector excludes main's own identity
+// HERE, case-insensitively, rather than leaning on the seam's production
+// value to do it: main is routinely mirrored into the pool as a save-back
+// slot (see core.SwapMainTo), and the seam is a seam — a test double, or any
+// future selector, is not obliged to repeat the filter.
+//
+// The exclusion is DUAL — the live identity and the snapshot main row's
+// email are both matched — because the live-identity preference above split
+// what used to be one row into two. Take a rescue that has just swapped
+// A→B: the live identity is B, so B's mirror slot is excluded, but the
+// snapshot still calls A "main" and also still carries slot(A) with the
+// stale-healthy numbers it had before A ran out. Excluding only B would
+// leave the account that was exhausted forty seconds ago sitting in the pool
+// as the best-looking candidate, and the next hit would rotate straight back
+// onto it. Identity-less rows (Email == "") are swept by neither match; they
+// are excluded downstream on their own merits ("no identity").
+// core.SelectRotationTarget still applies its own main-identity filter, and
+// the two agreeing is the point.
 //
 // Deliberately no NeedsRotation check and no row-freshness filter: the limit
 // hit IS the evidence that main is exhausted, and the polled snapshot can be
@@ -297,14 +356,42 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 // declared: it is what lets a rescue's decision be exercised without a real
 // pool on disk, and RotationGate and the account API already go through it.
 func selectRescueTarget(now time.Time) (target, mainEmail, why string) {
+	mainEmail = mainIdentityEmail()
 	snap, ok := ReadUsageSnapshot()
 	if !ok {
-		return "", "", "no usage snapshot"
+		return "", mainEmail, "no usage snapshot"
 	}
-	var pool []core.AccountUsage
+	var rows []core.AccountUsage
+	snapMain := ""
 	for _, a := range snap.Accounts {
 		if a.Slug == "main" {
-			mainEmail = a.Email
+			snapMain = a.Email
+			if mainEmail == "" {
+				mainEmail = a.Email
+			}
+			continue
+		}
+		rows = append(rows, a)
+	}
+	// Both exclusions run in a SECOND pass, and they have to: neither
+	// mainEmail (on the fallback path) nor snapMain is known until the loop
+	// above has walked past the main row, so a filter fused into that loop
+	// would compare every earlier row against an empty string and let main's
+	// own mirror through. Guarding each match on a non-empty needle is what
+	// keeps identity-less rows out of the exclusion.
+	excluded := func(email string) bool {
+		if email == "" {
+			return false
+		}
+		lower := strings.ToLower(email)
+		if mainEmail != "" && lower == strings.ToLower(mainEmail) {
+			return true
+		}
+		return snapMain != "" && lower == strings.ToLower(snapMain)
+	}
+	var pool []core.AccountUsage
+	for _, a := range rows {
+		if excluded(a.Email) {
 			continue
 		}
 		pool = append(pool, a)
@@ -323,8 +410,15 @@ func selectRescueTarget(now time.Time) (target, mainEmail, why string) {
 // belong to exactly one implementation — reached through rotation.go's
 // swapMain seam, the same identifier RotationGate and the account API use,
 // which is what makes the swapped path exercisable without a real keychain.
-// This function kills nothing and restarts nothing: the running claudes
-// re-read the credential themselves.
+// This is the swap half only — it kills nothing; resumeCellAgents does that,
+// a settle window later, once the swap is recorded.
+//
+// A landed swap also kicks one usage pass, so the snapshot's idea of who
+// main is catches up before the next rescue tick reads it (selectRescueTarget
+// prefers the live identity for the same staleness, but the notification and
+// the board read the snapshot). Same single-flight the rotation gate's own
+// post-swap kick uses, and non-blocking for the same reason: this runs inside
+// a daemon tick that every other job's pass is queued behind.
 func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, err error) {
 	release, ok, lockErr := AcquireRotationLock()
 	if !ok {
@@ -349,34 +443,117 @@ func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, e
 	if swapErr != nil {
 		return "", "swap-failed", swapErr
 	}
+	// runUsagePass is captured into a local before the goroutine starts
+	// (rather than read from inside it) so a test that swaps the package var
+	// back right after this call returns can never race this read — the same
+	// care RotationGate's kick takes.
+	if pass := runUsagePass; usagePassRunning.CompareAndSwap(false, true) {
+		go func() {
+			defer usagePassRunning.Store(false)
+			if err := pass(); err != nil {
+				dlog("usage pass after limit-rescue swap failed: %v", err)
+			}
+		}()
+	}
 	return to, "swapped", nil
 }
 
-// nudgeCellAgents tells every agent in the cell to carry on, now that the
-// credential under it has changed. It targets the same pane set Stop does
-// (cellAgentPanes) — zeus plus its tmux teammates, never a side thread — for
-// the reason the whole design exists: the teammates were never killed, so a
-// message is all they need to resume.
+// resumeCellAgents brings the cell back on the account that is current now:
+// zeus' claude is killed in its own pane and its session is respawned there,
+// with prompt as its first turn.
 //
-// core.SendMessage rather than a raw send-keys: it re-verifies the pane still
-// holds the expected agent and refuses a pane sitting on a question prompt,
-// where a trailing Enter would answer the question instead of resuming.
+// ZEUS AND NOBODY ELSE, which is a measured constraint rather than a policy
+// choice. A resume needs a session id, and a tmux teammate has none: it
+// writes no ~/.claude/sessions file and its transcript is not locatable, so
+// discovery leaves SessionID empty for every teammate row (discover.go's
+// teammate arm). Sweeping cellAgentPanes here — Stop's set — would therefore
+// respawn zeus, have core.ResumeGuard refuse every teammate for want of an
+// id, and still report a resume that "reached at least one pane", resolving
+// the hit with the rest of the crew latched onto a dead account. Codex and
+// shell rows are out for the same class of reason (nothing to resume with
+// `claude -r`), and a side thread is out because it always is: carl branched
+// it to ASK about the work, and killing his conversation is never part of
+// rescuing the job.
 //
-// A per-pane failure is counted out rather than raised — rescuing three of
-// four agents beats rescuing none — so the only error is an empty target set.
-func nudgeCellAgents(j *Job, all []*core.Peer, msg string) (nudged int, err error) {
-	targets := cellAgentPanes(j, all)
-	if len(targets) == 0 {
-		return 0, fmt.Errorf("%s: no live agent panes found to nudge", j.Slug)
+// So the crew is zeus' problem, and the prompt says so — reviving or
+// replacing its teammates is zeus' first move on the way back. That is the
+// one thing a rescue can do about processes it cannot address itself, and it
+// is also what zeus is for.
+//
+// The command is the FULL cell-spawn surface plus `-r`, built through the
+// same spawnCommand/zeusSpawnArgv machinery ReactivateJob uses. A bare `-r`
+// is not enough and that is measured (thread.go's threadSpawnCommand
+// records it, and cell.go's reactivation path was corrected for it): a
+// resumed session does NOT retain an earlier run's --append-system-prompt,
+// and the model comes from the command line too — a briefless, modelless
+// resume comes back as a plain claude holding zeus' history, on whatever
+// tier claude defaults to, with a crew that would inherit that tier.
+//
+// The respawn goes through the respawnPeerPane seam rather than
+// core.RespawnPeerPane directly, so who gets resumed and with what command is
+// exercisable without a tmux server; the seam owns the guard, the pre-kill
+// re-verification and the session-file cleanup.
+//
+// CellZeus alone is not enough to authorize a kill, and that is the
+// difference between this caller and every other one. Its election has a
+// POSITIONAL fallback — lowest pane index among the session's depth-0
+// claudes — for the startup window where zeus has not written its name yet,
+// and a `k b` fork or any unregistered claude carl started in the cell's
+// session can win it. Reading a bit of the wrong transcript is what that
+// fallback was priced against; SIGKILLing carl's side conversation is not.
+// So the candidate must also be zeus BY IDENTITY: its --name, or the session
+// id the job file itself records for zeus. Anything else is counted out and
+// the round is retried next tick, when the name has usually landed.
+//
+// An empty CWD is refused: PeerCWD falls back to $HOME, and a zeus respawned
+// in $HOME cannot see the worktree it was working in. No other zeus spawn
+// site has to check, since they build the worktree path themselves rather
+// than reading it off a peer.
+//
+// The side-thread set is read STRICTLY here (liveThreadPanesForOK). Its
+// ordinary fail-open — an unreadable store reads as "no threads" — is
+// correct for Stop, where the cost is a stray Escape, and wrong for a verb
+// that kills: a thread pane missing from the set is carl's conversation
+// destroyed. Unreadable therefore counts the round out; a skipped round is
+// retried, a SIGKILL is not.
+//
+// Only a missing zeus pane is an error — that is the "no-agents" outcome the
+// apply arm counts and eventually parks on. Every other refusal (identity,
+// cwd, thread set, command build, seam) is counted out with its own log
+// line at the point it fires, and leaves resumed at 0, which the caller
+// already reads as the same "reached nobody, try again next tick".
+func resumeCellAgents(j *Job, all []*core.Peer, prompt string) (resumed int, err error) {
+	zeus := CellZeus(j, all)
+	if zeus == nil || zeus.Pane == "" {
+		return 0, fmt.Errorf("%s: no zeus pane found to resume", j.Slug)
 	}
-	for _, p := range targets {
-		if sendErr := core.SendMessage(p, msg); sendErr != nil {
-			dlogEvent("error", "limit-rescue-failed", "%s: nudge of pane %s failed: %v", j.Slug, p.Pane, sendErr)
-			continue
-		}
-		nudged++
+	if zeus.Name != ZeusName(j) && !(j.Session != "" && zeus.SessionID == j.Session) {
+		dlogEvent("info", "limit-rescue-skipped", "%s: pane %s is not zeus by identity (name %q, session %q) — not killing it", j.Slug, zeus.Pane, zeus.Name, zeus.SessionID)
+		return 0, nil
 	}
-	return nudged, nil
+	if zeus.CWD == "" {
+		dlogEvent("error", "limit-rescue-failed", "%s: zeus pane %s has no cwd — a respawn would land in $HOME instead of the worktree", j.Slug, zeus.Pane)
+		return 0, nil
+	}
+	threads, ok := liveThreadPanesForOK(j)
+	if !ok {
+		dlogEvent("error", "limit-rescue-failed", "%s: cannot read the cell's live threads — not killing pane %s while a side thread may be in it", j.Slug, zeus.Pane)
+		return 0, nil
+	}
+	if threads[zeus.Pane] {
+		dlogEvent("info", "limit-rescue-skipped", "%s: pane %s holds a live side thread — not killing it", j.Slug, zeus.Pane)
+		return 0, nil
+	}
+	cmd, cmdErr := spawnCommand(j, zeusSpawnArgv(j, "-r", zeus.SessionID), zeusBrief(j)+graphContext(j), prompt)
+	if cmdErr != nil {
+		dlogEvent("error", "limit-rescue-failed", "%s: building zeus' resume command failed: %v", j.Slug, cmdErr)
+		return 0, nil
+	}
+	if resumeErr := respawnPeerPane(zeus, cmd); resumeErr != nil {
+		dlogEvent("error", "limit-rescue-failed", "%s: resume of zeus pane %s failed: %v", j.Slug, zeus.Pane, resumeErr)
+		return 0, nil
+	}
+	return 1, nil
 }
 
 // limitRescueApply folds what just happened back into the hit record and
@@ -393,13 +570,13 @@ func nudgeCellAgents(j *Job, all []*core.Peer, msg string) (nudged int, err erro
 // Increment-then-test is the obligation in that arm: the counter is bumped
 // first and the INCREMENTED value is what decides whether the hit gives up,
 // so the third failed park is the one that resolves and no fourth attempt is
-// ever recorded. The nudge arm's own failure path (outcome "no-agents")
+// ever recorded. The resume arm's own failure path (outcome "no-agents")
 // takes the same treatment for the same reason — see below.
 //
 // outcome is read on two arms and means something different on each: for
 // rescueRotate it is rescueLimitedCell's own outcome word, and for
-// rescueNudge only the literal "no-agents" is significant (anything else,
-// including the empty string, is a round that reached at least one pane).
+// rescueResume only the literal "no-agents" is significant (anything else,
+// including the empty string, is a round whose respawn landed).
 func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail string, now time.Time) LimitHit {
 	switch action {
 	case rescueSkip:
@@ -413,21 +590,21 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 			hit.SwappedAt = now.Unix()
 			hit.SwappedTo = toEmail
 			// HandledAt stays zero deliberately: the swap is only half the
-			// rescue, and the nudge a settle window later is what resolves it.
+			// rescue, and the resume a settle window later is what resolves it.
 		}
-	case rescueNudge:
+	case rescueResume:
 		if outcome == "no-agents" {
-			// A round that reached NOBODY. It must not resolve the hit (that
-			// strands a swapped cell), but it cannot be unbounded either —
-			// an open hit is re-decided every tick, and a crew that can
-			// never be reached would write this event forever.
+			// A round that respawned NOTHING. It must not resolve the hit
+			// (that strands a swapped cell), but it cannot be unbounded
+			// either — an open hit is re-decided every tick, and a zeus that
+			// can never be reached would write this event forever.
 			// Increment-then-test, exactly as rescueParkNoTarget does, so a
-			// cell whose crew cannot be reached parks instead. The cap is
+			// cell whose zeus cannot be reached parks instead. The cap is
 			// path-relative: a reset re-arm ARRIVES with Attempts already at
 			// the max (the parks spent them), so capping it at the same
-			// absolute number would give its nudge exactly one shot at a
+			// absolute number would give its resume exactly one shot at a
 			// discovery snapshot the code below calls "not exotic" to find
-			// empty — the swap path's nudge effectively gets several rounds,
+			// empty — the swap path's resume effectively gets several rounds,
 			// and the reset path gets the same allowance on top of the
 			// attempts it inherited.
 			failCap := limitRescueMaxAttempts
@@ -442,11 +619,11 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 			}
 			break
 		}
-		// Reached at least one pane: resolved whether or not EVERY pane was
-		// reachable — the account is already swapped, and re-running the swap
-		// because one pane was busy would rotate a second time for nothing.
-		// The outcome word records WHICH nudge this was: a swap's completion,
-		// or the no-swap resume after the window's own reset.
+		// Zeus is back on the current account: resolved. The account is
+		// already swapped, and re-running the swap because the crew it now
+		// has to revive is still down would rotate a second time for
+		// nothing. The outcome word records WHICH resume this was: a swap's
+		// completion, or the no-swap resume after the window's own reset.
 		hit.HandledAt = now.Unix()
 		if hit.SwappedAt != 0 {
 			hit.Outcome = "rotated"
@@ -465,7 +642,7 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 			// Terminal only when the banner never said when the window
 			// reopens. With a parsed ResetAt the hit stays UNRESOLVED on
 			// purpose: the decide chain's exhausted-attempts gate holds it
-			// (skip) until the reset passes, then releases the no-swap nudge
+			// (skip) until the reset passes, then releases the no-swap resume
 			// — resolving here would close the one record that can wake the
 			// cell.
 			if hit.ResetAt != 0 {
@@ -559,11 +736,12 @@ func saveLimitRescueState(j *Job, hit LimitHit) error {
 // limitRescue is the per-cell pass, one job per tick, called from the
 // daemon's tick beside syncColor and inside the same !mirror block: a mirror
 // daemon must RECORD hits (the API handler is not gated) but must never
-// perform a machine-wide credential swap or type into a live pane.
+// perform a machine-wide credential swap or destroy and recreate a live
+// pane's process.
 //
 // The two halves of a rescue land on different ticks by design: a rotate
 // stamps SwappedAt and leaves HandledAt at zero, so the next pass that finds
-// the settle window elapsed performs the nudge and only then resolves the
+// the settle window elapsed performs the resume and only then resolves the
 // hit.
 //
 // What this owns is the effects — the store write, the deduped notification,
@@ -573,19 +751,20 @@ func saveLimitRescueState(j *Job, hit LimitHit) error {
 //
 // Two arms deliberately record NOTHING. A lock-busy rotate is a no-op, since
 // the lock is contended by every cell spawn and counting that as an attempt
-// parks a hit that never reached the pool; and a nudge that reached no pane
-// leaves the hit open, since resolving it would strand a cell whose account
-// moved and whose crew was never told. Both mean "try again next tick", and
-// in both the absence of a write is what says so.
+// parks a hit that never reached the pool; and a resume that never reached
+// zeus leaves the hit open, since resolving it would strand a cell whose
+// account moved and whose every claude is still latched onto the old one.
+// Both mean "try again next tick", and in both the absence of a write is
+// what says so.
 //
-// The nudge arm's write lands AFTER its tmux sends rather than before,
-// which is the one place this pass holds a record across seconds of work.
-// It has to: whether the hit may be resolved at all is not known until the
-// sends have been tried. What makes that safe is saveLimitRescueState
-// merging under a fresh read — a delivery landing during those sends folds
-// into the stored row and survives, and a delivery that started a NEW hit
-// makes the write abandon rather than stamp this rescue's counters onto
-// someone else's event.
+// The resume arm's write lands AFTER the respawn rather than before, which
+// is the one place this pass holds a record across seconds of work. It has
+// to: whether the hit may be resolved at all is not known until the respawn
+// has been tried. What makes that safe is saveLimitRescueState merging
+// under a fresh read — a delivery landing during the respawn folds into the
+// stored row and survives, and a delivery that started a NEW hit makes the
+// write abandon rather than stamp this rescue's counters onto someone
+// else's event.
 func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool) {
 	hit := ReadLimitHit(j)
 	if hit.At == 0 || hit.HandledAt != 0 {
@@ -614,7 +793,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	// gate holds a future reset); under a MANUAL pin it would return
 	// park-manual instead, and suppressing that is deliberate — the hit has
 	// already parked once, its notification already fired, and re-parking
-	// it would resolve the record and kill the pending reset nudge. The
+	// it would resolve the record and kill the pending reset resume. The
 	// skip also makes the wait's rotate-blindness explicit: a pool account
 	// that turns healthy mid-wait is not used — the attempts were spent,
 	// the window's own reset is nearer than another swap cycle, and
@@ -680,56 +859,67 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 			dlogErr("%s: persist limit-hit record failed: %v", j.Slug, saveErr)
 		}
 
-	case rescueNudge:
-		// Which nudge this is decides what the crew is told: a landed swap
-		// means a new credential is live; a zero SwappedAt on this arm can
-		// only be the reset re-arm, where the account never moved.
-		nudgeMsg := limitRescueNudgeMsg
+	case rescueResume:
+		// Which resume this is decides what zeus comes back to: a landed
+		// swap means a new credential is live; a zero SwappedAt on this arm
+		// can only be the reset re-arm, where the account never moved.
+		resumePrompt := limitRescueResumePrompt
 		if hit.SwappedAt == 0 {
-			nudgeMsg = limitResetNudgeMsg
+			resumePrompt = limitResetResumePrompt
 		}
-		nudged, err := nudgeCellAgents(j, all, nudgeMsg)
-		if err != nil || nudged == 0 {
-			// A hit resolved with NOBODY nudged is a permanently stranded
-			// cell: the account was swapped, the crew was never told, and a
-			// stalled cell makes no further API calls — so it can never
-			// produce another hook, and gate 2 would skip this hit forever.
-			// Empty is not exotic (an empty discovery snapshot, a zeus that
-			// died inside a surviving session, a cell whose only live panes
-			// are side threads), so the round is counted rather than
-			// resolved and a later tick tries again — but only up to
-			// limitRescueMaxAttempts of them, after which the hit parks. An
-			// unbounded open swapped hit is worse than a parked one: it
-			// re-arms the rotate gate every time a late delivery supersedes
-			// it, and it writes this event every 15s for as long as the
-			// session lives. A PARTIAL failure still resolves — that is what
-			// nudged > 0 buys.
+		resumed, err := resumeCellAgents(j, all, resumePrompt)
+		if err != nil || resumed == 0 {
+			// A hit resolved with zeus NOT resumed is a permanently stranded
+			// cell: the account was swapped, every claude in the cell is
+			// still latched onto the old one, and a stalled cell makes no
+			// further API calls — so it can never produce another hook, and
+			// gate 2 would skip this hit forever.
+			// Failing to reach zeus is not exotic (an empty discovery
+			// snapshot, a zeus that died inside a surviving session, a
+			// session whose only live panes are side threads, a pane that
+			// stopped holding a claude between the snapshot and the kill), so
+			// the round is counted rather than resolved and a later tick
+			// tries again — but only up to limitRescueMaxAttempts of them,
+			// after which the hit parks. An unbounded open swapped hit is
+			// worse than a parked one: it re-arms the rotate gate every time
+			// a late delivery supersedes it, and it writes this event every
+			// 15s for as long as the session lives.
 			hit = limitRescueApply(hit, action, "no-agents", "", now)
 			if saveErr := saveLimitRescueState(j, hit); saveErr != nil {
 				dlogErr("%s: persist limit-hit record failed: %v", j.Slug, saveErr)
 			}
 			if hit.HandledAt != 0 {
-				// Which nudge failed decides what carl is told: on the reset
+				// Which resume failed decides what carl is told: on the reset
 				// path no credential ever moved, and a notice claiming a
 				// switch would report a machine-wide change that never
 				// happened.
 				if hit.SwappedAt != 0 {
-					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — account switched but the cell's agents could not be reached")
-					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d nudge rounds reached no agent pane — account was switched, cell was not resumed", j.Slug, hit.Attempts)
+					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — account switched but the cell's zeus could not be resumed")
+					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d resume rounds reached no zeus pane — account was switched, cell was not resumed", j.Slug, hit.Attempts)
 				} else {
-					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — window reset but the cell's agents could not be reached")
-					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d nudge rounds reached no agent pane — window had reset, cell was not resumed", j.Slug, hit.Attempts)
+					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — window reset but the cell's zeus could not be resumed")
+					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d resume rounds reached no zeus pane — window had reset, cell was not resumed", j.Slug, hit.Attempts)
 				}
 				return
 			}
-			dlogEvent("error", "limit-rescue-failed", "%s: %s: nudge round %d reached no agent pane (%v)", j.Slug, reason, hit.Attempts, err)
+			// err is nil on every COUNTED-OUT round (identity, cwd, an
+			// unreadable thread set, a command that would not build, a
+			// refused respawn) — each of those logged its own specific cause
+			// where it fired. Rendering the nil here would print a bare
+			// "(<nil>)" and read as a missing zeus, which is the one thing it
+			// is not.
+			if err != nil {
+				dlogEvent("error", "limit-rescue-failed", "%s: %s: resume round %d found no zeus pane: %v", j.Slug, reason, hit.Attempts, err)
+			} else {
+				dlogEvent("error", "limit-rescue-failed", "%s: %s: resume round %d did not resume zeus — see the refusal logged above", j.Slug, reason, hit.Attempts)
+			}
 			return
 		}
 		hit = limitRescueApply(hit, action, "", "", now)
 		if err := saveLimitRescueState(j, hit); err != nil {
 			dlogErr("%s: persist limit-hit record failed: %v", j.Slug, err)
 		}
-		dlogEvent("info", "limit-rescue-done", "%s: %s (nudged %d agent pane(s))", j.Slug, reason, nudged)
+		dlogEvent("info", "limit-rescue-done", "%s: %s (zeus resumed)", j.Slug, reason)
 
 	case rescueParkManual:
 		hit = limitRescueApply(hit, action, "", "", now)
@@ -747,7 +937,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		// Worded for attempt 1, where the notification actually fires
 		// (notifyOnce keys on the hit, and the first park is the first
 		// chance): two more rotate attempts are still ahead, so the reset
-		// nudge is conditional, not promised. The time carries a date
+		// resume is conditional, not promised. The time carries a date
 		// whenever the target is not today — a bare "10:20pm" for a
 		// tomorrow target reads as tonight.
 		parkNote := "hit a usage limit — " + reason
@@ -757,7 +947,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 			if reset.Format("2006-01-02") != now.Local().Format("2006-01-02") {
 				form = "3:04pm on Jan 2"
 			}
-			parkNote += " — will keep retrying, and if no account appears, nudge the cell after the window resets at " + reset.Format(form)
+			parkNote += " — will keep retrying, and if no account appears, resume the cell after the window resets at " + reset.Format(form)
 		}
 		notifyOnce("kraken ⚠ "+j.Slug, parkNote)
 		dlogEvent("info", "limit-rescue-skipped", "%s: %s (attempt %d)", j.Slug, reason, hit.Attempts)

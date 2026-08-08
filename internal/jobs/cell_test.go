@@ -799,8 +799,8 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 	}
 	// package-wide, so this is also the tripwire for a third zeus spawn path
 	// appearing anywhere in the package rather than only in cell.go
-	if calls != 2 {
-		t.Fatalf("found %d spawnCommand calls in package jobs, want 2 (StartCell, ReactivateJob) — a new zeus spawn path must stage the brief too, so cover it here rather than re-aiming this guard", calls)
+	if calls != 3 {
+		t.Fatalf("found %d spawnCommand calls in package jobs, want 3 (StartCell, ReactivateJob, the limit rescue's zeus resume) — a new zeus spawn path must stage the brief too, so cover it here rather than re-aiming this guard", calls)
 	}
 }
 

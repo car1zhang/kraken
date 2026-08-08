@@ -62,7 +62,7 @@ import (
 // text in Details ("resets 4:50am (America/New_York)"), zero when no such
 // clause is parseable. Owned by the rescue pass like the attempt counters:
 // it is what lets a hit that parks with no rotation target stay unresolved
-// and be nudged back to life on the first tick after the window actually
+// and have its zeus resumed on the first tick after the window actually
 // reopens, instead of the cell sitting dead for hours past a reset the
 // banner itself named.
 //
@@ -282,14 +282,14 @@ func ReadLimitHit(j *Job) LimitHit {
 // hook-first hit, silently.
 //
 // Anything else — no record, a resolved one, or a different error — starts
-// a fresh unresolved record, with ONE thing carried
-// across: an unresolved swap watermark. A cell whose rescue has swapped but
-// not yet nudged is still emitting failures for a minute or two, and a
-// delivery landing past the dedupe window would otherwise zero SwappedAt,
-// clear the gate that says "already swapped, go and nudge", and re-arm the
-// rotate path — with Attempts back at zero, so the attempt cap never fires
-// either. That is uncapped machine-wide credential swapping, one pool
-// account per cycle, for as long as the cell lives.
+// a fresh unresolved record, with ONE thing carried across: an unresolved
+// swap watermark. A cell whose rescue has swapped but not yet resumed its
+// zeus is still emitting failures for a minute or two, and a delivery
+// landing past the dedupe window would otherwise zero SwappedAt, clear the
+// gate that says "already swapped, go and resume", and re-arm the rotate
+// path — with Attempts back at zero, so the attempt cap never fires either.
+// That is uncapped machine-wide credential swapping, one pool account per
+// cycle, for as long as the cell lives.
 //
 // Pure, so the whole decision is table-testable with no store and no clock.
 func mergeLimitHitDelivery(cur LimitHit, errorType, details, sessionID, agentID string, now time.Time) LimitHit {

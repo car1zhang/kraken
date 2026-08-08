@@ -42,11 +42,16 @@ func InterruptCell(j *Job, all []*core.Peer) error {
 
 // cellAgentPanes enumerates the panes that hold a cell's own agents, keyed by
 // pane id so each one is listed exactly once, with the value being the
-// FOREGROUND peer keystrokes for that pane must be addressed to. It is the
-// enumeration InterruptCell has always used, lifted out unchanged so the
-// usage-limit rescue's nudge (limitrescue.go) targets the identical set: both
-// verbs mean "everything working on this job", and two hand-maintained copies
-// of that definition would drift.
+// FOREGROUND peer keystrokes for that pane must be addressed to.
+//
+// InterruptCell is its only non-test caller. It was lifted out of that
+// function when the usage-limit rescue reached for the same set, on the
+// premise that "everything working on this job" meant the same thing to both
+// verbs — and that premise is now known to be false in the rescue's
+// direction: a resume needs a session id and a tmux teammate has none, so
+// the rescue targets zeus alone (limitrescue.go). The extraction is kept
+// because the enumeration is worth stating once and testing on its own, not
+// because a second caller is expected.
 //
 // The set is: every depth-0 claude/codex peer sharing the cell's tmux session
 // (a nested subagent shares its lead's pane, so the lead's pane already
@@ -54,12 +59,11 @@ func InterruptCell(j *Job, all []*core.Peer) error {
 // its tmux-backed teammates (in-process teammates have no pane and are
 // skipped) — minus the panes of j's own live side threads.
 //
-// The thread exclusion is the load-bearing part and is why this is a shared
-// function rather than a loop each caller writes: a thread's window lives in
-// the same tmux session and would otherwise be swept up, but carl branches a
-// thread precisely to ask ABOUT the job, and neither stopping the job nor
-// rescuing it is a reason to type into the conversation he is mid-way
-// through.
+// The thread exclusion is the load-bearing part, and Stop is the whole
+// reason for it: a thread's window lives in the same tmux session and would
+// otherwise be swept up, but carl branches a thread precisely to ask ABOUT
+// the job, and stopping the job is not a reason to interrupt the
+// conversation he is mid-way through.
 func cellAgentPanes(j *Job, all []*core.Peer) map[string]*core.Peer {
 	sess := CellSession(j)
 	zeus := CellZeus(j, all)

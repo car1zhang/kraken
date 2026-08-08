@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -27,8 +28,9 @@ import (
 //
 // Two boundaries are deliberately NOT crossed here, per the contract's own
 // note: rescueLimitedCell performs a real machine-wide credential swap and
-// nudgeCellAgents drives real tmux, so both are exercised through their
-// refusal and empty-set paths ONLY — never by performing a swap or a send.
+// resumeCellAgents SIGKILLs the real process in zeus' pane, so both are
+// exercised through their refusal paths ONLY (and, for the resume, the
+// respawnPeerPane seam) — never by performing a swap or a respawn.
 
 // edgeNow is a fixed, whole-second instant. Whole seconds matter: the record
 // stores unix SECONDS (At/SwappedAt/LastAttempt), so a now carrying
@@ -79,7 +81,7 @@ func TestEdgeLimitHitKeyIsKeyedOnTheImmutableID(t *testing.T) {
 // their only writer. The obligation slice A carries is that its marshal /
 // unmarshal round-trips them UNCHANGED — a record written by the rescue
 // pass and then folded by a later delivery must not silently lose the swap
-// watermark, which is the one thing standing between "nudge once" and "swap
+// watermark, which is the one thing standing between "resume once" and "swap
 // again".
 func TestEdgeLimitHitRoundTripsEveryField(t *testing.T) {
 	want := LimitHit{
@@ -549,14 +551,14 @@ func TestEdgeLimitRescueDecideGateChain(t *testing.T) {
 			mode:     "auto",
 			cellLive: true, targetAvailable: true, want: rescueSkip,
 		},
-		// gate 2 — already resolved, above the nudge gate
+		// gate 2 — already resolved, above the resume gate
 		{
 			name:     "gate 2: a handled hit never re-fires, even with a settled swap",
 			mutate:   func(h *LimitHit) { h.HandledAt = edgeNow.Unix() - 1; h.SwappedAt = settled },
 			mode:     "auto",
 			cellLive: true, targetAvailable: true, want: rescueSkip,
 		},
-		// gate 3 — wrong error type, above the nudge gate
+		// gate 3 — wrong error type, above the resume gate
 		{
 			name:     "gate 3: a non-rate_limit hit is skipped",
 			mutate:   func(h *LimitHit) { h.Error = "overloaded" },
@@ -575,7 +577,7 @@ func TestEdgeLimitRescueDecideGateChain(t *testing.T) {
 			mode:     "auto",
 			cellLive: true, targetAvailable: true, want: rescueSkip,
 		},
-		// gate 4 — dead cell, above the nudge gate
+		// gate 4 — dead cell, above the resume gate
 		{
 			name:     "gate 4: a dead cell is skipped",
 			mutate:   func(h *LimitHit) {},
@@ -583,17 +585,17 @@ func TestEdgeLimitRescueDecideGateChain(t *testing.T) {
 			cellLive: false, targetAvailable: true, want: rescueSkip,
 		},
 		{
-			name:     "gate 4 pre-empts gate 5: nothing to nudge in a dead cell",
+			name:     "gate 4 pre-empts gate 5: nothing to resume in a dead cell",
 			mutate:   func(h *LimitHit) { h.SwappedAt = settled },
 			mode:     "auto",
 			cellLive: false, targetAvailable: true, want: rescueSkip,
 		},
 		// gate 5 — the settle window, both sides of the boundary
 		{
-			name:     "gate 5 boundary: exactly limitRescueSettle after the swap nudges",
+			name:     "gate 5 boundary: exactly limitRescueSettle after the swap resumes",
 			mutate:   func(h *LimitHit) { h.SwappedAt = settled },
 			mode:     "auto",
-			cellLive: true, targetAvailable: true, want: rescueNudge,
+			cellLive: true, targetAvailable: true, want: rescueResume,
 		},
 		{
 			name:     "gate 5 boundary: one second short of the settle window skips",
@@ -602,29 +604,29 @@ func TestEdgeLimitRescueDecideGateChain(t *testing.T) {
 			cellLive: true, targetAvailable: true, want: rescueSkip,
 		},
 		{
-			name:     "gate 5: a swap far in the past still nudges",
+			name:     "gate 5: a swap far in the past still resumes",
 			mutate:   func(h *LimitHit) { h.SwappedAt = edgeNow.Add(-time.Hour).Unix() },
 			mode:     "auto",
-			cellLive: true, targetAvailable: true, want: rescueNudge,
+			cellLive: true, targetAvailable: true, want: rescueResume,
 		},
 		// gate 5 ABOVE gate 6 — the stated ordering obligation
 		{
-			name:     "gate 5 above gate 6: a settled swap nudges even in manual mode",
+			name:     "gate 5 above gate 6: a settled swap resumes even in manual mode",
 			mutate:   func(h *LimitHit) { h.SwappedAt = settled },
 			mode:     "manual",
-			cellLive: true, targetAvailable: true, want: rescueNudge,
+			cellLive: true, targetAvailable: true, want: rescueResume,
 		},
 		{
-			name:     "gate 5 above gate 7: a settled swap nudges even at the attempt cap",
+			name:     "gate 5 above gate 7: a settled swap resumes even at the attempt cap",
 			mutate:   func(h *LimitHit) { h.SwappedAt = settled; h.Attempts = limitRescueMaxAttempts },
 			mode:     "auto",
-			cellLive: true, targetAvailable: true, want: rescueNudge,
+			cellLive: true, targetAvailable: true, want: rescueResume,
 		},
 		{
-			name:     "gate 5 above gate 9: a settled swap nudges even with no target left",
+			name:     "gate 5 above gate 9: a settled swap resumes even with no target left",
 			mutate:   func(h *LimitHit) { h.SwappedAt = settled },
 			mode:     "auto",
-			cellLive: true, targetAvailable: false, want: rescueNudge,
+			cellLive: true, targetAvailable: false, want: rescueResume,
 		},
 		{
 			// gate 5's else-branch is SKIP, so an unsettled swap never
@@ -783,7 +785,7 @@ func TestEdgeLimitRescueDecideIsPureAndNonMutating(t *testing.T) {
 // notification.
 func TestEdgeLimitRescueActionsAreDistinct(t *testing.T) {
 	seen := map[limitRescueAction]bool{}
-	for _, a := range []limitRescueAction{rescueSkip, rescueRotate, rescueNudge, rescueParkManual, rescueParkNoTarget} {
+	for _, a := range []limitRescueAction{rescueSkip, rescueRotate, rescueResume, rescueParkManual, rescueParkNoTarget} {
 		if a == "" {
 			t.Errorf("an action constant is the empty string")
 		}
@@ -1068,7 +1070,7 @@ func TestEdgeRescueLimitedCellNoTargetNeverSwaps(t *testing.T) {
 	}
 }
 
-// --- cellAgentPanes / nudgeCellAgents: the empty and excluded sets ---
+// --- cellAgentPanes / resumeCellAgents: the empty and excluded sets ---
 
 // edgePeer builds the minimum peer shape the enumeration reads: a
 // foreground agent pane, the shape DiscoverAll produces for a pane's own
@@ -1087,9 +1089,18 @@ func edgePanesOf(m map[string]*core.Peer) map[string]bool {
 	return out
 }
 
-// The exclusions are what keep a nudge inside its own cell: another job's
-// session, a NESTED agent (depth > 0 — send-keys never reaches it), and a
-// shell pane with no agent in it at all.
+// cellAgentPanes is Stop's enumeration, and its exclusions are what keep
+// Stop — and anything else that acts on "everything working on this job" —
+// inside the cell it was aimed at. Each exclusion has its own stake, and
+// they are not the same size: another job's SESSION means acting on a pane
+// kraken was never asked about, which under a kill-based verb is another
+// job's process destroyed; a NESTED agent (depth > 0) has no pane of its
+// own, so anything addressed to it lands on the lead sharing that pane,
+// send-keys and respawn alike; and a shell pane holds no agent at all.
+//
+// (The limit rescue no longer reads this set — it resumes zeus alone, since
+// a teammate has no session id to resume — but the enumeration and its
+// exclusions still belong to InterruptCell, so they are still pinned here.)
 func TestEdgeCellAgentPanesExclusions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	j := &Job{Slug: "edge-panes", ID: 7, Repo: "monolith"}
@@ -1130,22 +1141,22 @@ func TestEdgeCellAgentPanesEmptyInputs(t *testing.T) {
 	}
 }
 
-// An empty target set is the ONE error nudgeCellAgents returns: there is
-// nobody to resume, and reporting zero-of-zero as success would let the
-// pass mark the hit handled with the crew still sitting on a dead account.
-// (A per-pane send failure is the opposite case — counted out, never fatal
-// — but it cannot be exercised without driving real tmux.)
-func TestEdgeNudgeCellAgentsEmptySetErrs(t *testing.T) {
+// No zeus pane is the ONE error resumeCellAgents returns: there is nobody
+// to resume, and reporting that as success would let the pass mark the hit
+// handled with the whole cell still sitting on a dead account. (A respawn
+// that FAILS is the opposite case — counted out, never fatal — see
+// TestEdgeResumeCellAgentsRefusedRespawnCountsOutToZero.)
+func TestEdgeResumeCellAgentsNoZeusErrs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	j := &Job{Slug: "edge-nudge-empty", ID: 9, Repo: "monolith"}
+	j := &Job{Slug: "edge-resume-empty", ID: 9, Repo: "monolith"}
 
 	t.Run("no peers at all", func(t *testing.T) {
-		n, err := nudgeCellAgents(j, nil, limitRescueNudgeMsg)
+		n, err := resumeCellAgents(j, nil, limitRescueResumePrompt)
 		if err == nil {
-			t.Fatalf("nudgeCellAgents(nil) = (%d, nil), want an error for an empty set", n)
+			t.Fatalf("resumeCellAgents(nil) = (%d, nil), want an error when there is no zeus", n)
 		}
 		if n != 0 {
-			t.Errorf("nudged = %d, want 0", n)
+			t.Errorf("resumed = %d, want 0", n)
 		}
 	})
 
@@ -1154,12 +1165,12 @@ func TestEdgeNudgeCellAgentsEmptySetErrs(t *testing.T) {
 			edgeAgentPeer("cell-other-1", "%1", "claude", 0),
 			edgeAgentPeer("carl-scratch", "%2", "claude", 0),
 		}
-		n, err := nudgeCellAgents(j, peers, limitRescueNudgeMsg)
+		n, err := resumeCellAgents(j, peers, limitRescueResumePrompt)
 		if err == nil {
-			t.Fatalf("nudgeCellAgents(other sessions only) = (%d, nil), want an error", n)
+			t.Fatalf("resumeCellAgents(other sessions only) = (%d, nil), want an error", n)
 		}
 		if n != 0 {
-			t.Errorf("nudged = %d, want 0", n)
+			t.Errorf("resumed = %d, want 0", n)
 		}
 	})
 }
@@ -1456,7 +1467,7 @@ func TestEdgeLimitRescueApplyRotateWithoutASwap(t *testing.T) {
 }
 
 // A rotate that failed must not clobber a watermark that is already there.
-// The gate chain makes this unreachable in normal flow (gate 5 would nudge
+// The gate chain makes this unreachable in normal flow (gate 5 would resume
 // first), which is exactly why it is worth pinning on the pure function: a
 // clobber here would send an already-swapped cell around for a second swap.
 func TestEdgeLimitRescueApplyFailedRotateKeepsAnExistingWatermark(t *testing.T) {
@@ -1498,28 +1509,28 @@ func TestEdgeLimitRescueApplyParkManualTouchesNoCounter(t *testing.T) {
 	}
 }
 
-// The nudge arm resolves the hit unconditionally — no counter of its own is
+// The resume arm resolves the hit unconditionally — no counter of its own is
 // consulted, so a record sitting at the attempt cap still resolves rather
 // than falling through to a park. The account is already swapped; re-running
 // the swap would be wrong.
-func TestEdgeLimitRescueApplyNudgeResolvesRegardlessOfCounters(t *testing.T) {
+func TestEdgeLimitRescueApplyResumeResolvesRegardlessOfCounters(t *testing.T) {
 	hit := edgeApplyHit()
 	hit.Attempts = limitRescueMaxAttempts
 	hit.LastAttempt = edgeNow.Add(-time.Second).Unix()
 	hit.SwappedAt = edgeNow.Add(-limitRescueSettle).Unix()
 	hit.SwappedTo = "new@example.com"
 
-	got := limitRescueApply(hit, rescueNudge, "", "", edgeNow)
+	got := limitRescueApply(hit, rescueResume, "", "", edgeNow)
 
 	if got.HandledAt != edgeNow.Unix() {
-		t.Fatalf("HandledAt = %d, want %d — a nudge resolves the hit", got.HandledAt, edgeNow.Unix())
+		t.Fatalf("HandledAt = %d, want %d — a resume resolves the hit", got.HandledAt, edgeNow.Unix())
 	}
 	if got.Outcome != "rotated" {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, "rotated")
 	}
 	// the watermark is the record of what actually happened to this cell
 	if got.SwappedAt != hit.SwappedAt || got.SwappedTo != hit.SwappedTo {
-		t.Errorf("the nudge overwrote the swap watermark: (%d, %q), want (%d, %q)", got.SwappedAt, got.SwappedTo, hit.SwappedAt, hit.SwappedTo)
+		t.Errorf("the resume overwrote the swap watermark: (%d, %q), want (%d, %q)", got.SwappedAt, got.SwappedTo, hit.SwappedAt, hit.SwappedTo)
 	}
 }
 
@@ -1535,7 +1546,7 @@ func TestEdgeLimitRescueApplyStampsUnixSeconds(t *testing.T) {
 	}{
 		{rescueRotate, "swapped", func(h LimitHit) []int64 { return []int64{h.SwappedAt, h.LastAttempt} }},
 		{rescueRotate, "no-target", func(h LimitHit) []int64 { return []int64{h.LastAttempt} }},
-		{rescueNudge, "", func(h LimitHit) []int64 { return []int64{h.HandledAt} }},
+		{rescueResume, "", func(h LimitHit) []int64 { return []int64{h.HandledAt} }},
 		{rescueParkManual, "manual", func(h LimitHit) []int64 { return []int64{h.HandledAt} }},
 		{rescueParkNoTarget, "no-target", func(h LimitHit) []int64 { return []int64{h.LastAttempt} }},
 	}
@@ -1564,7 +1575,7 @@ func TestEdgeLimitRescueApplyStampsUnixSeconds(t *testing.T) {
 // not modified in place. `limitRescue` owns the store write, so an apply that
 // also mutated would double-count on any retry of that write.
 func TestEdgeLimitRescueApplyIsPureAndNonMutating(t *testing.T) {
-	for _, action := range []limitRescueAction{rescueSkip, rescueRotate, rescueNudge, rescueParkManual, rescueParkNoTarget} {
+	for _, action := range []limitRescueAction{rescueSkip, rescueRotate, rescueResume, rescueParkManual, rescueParkNoTarget} {
 		t.Run(string(action), func(t *testing.T) {
 			hit := edgeApplyHit()
 			before := hit
@@ -1586,12 +1597,12 @@ func TestEdgeLimitRescueApplyIsPureAndNonMutating(t *testing.T) {
 // watermark. The consequence is the whole reason the amendment exists: a
 // late teammate delivery landing inside the dedupe window after a swap must
 // not send an already-swapped cell around for a SECOND swap instead of the
-// nudge it was owed.
+// resume it was owed.
 func TestEdgeRecordLimitHitFoldPreservesTheSwapWatermark(t *testing.T) {
 	st := useTestStore(t)
 	j := edgeStoreJob(t, st, "edge-fold-watermark")
 
-	// a mid-rescue record: swapped, unresolved, waiting for its nudge
+	// a mid-rescue record: swapped, unresolved, waiting for its resume
 	stored := LimitHit{
 		Error: "rate_limit", Details: "the first delivery's message",
 		At: edgeNow.Unix(), SessionID: "sess-a", AgentID: "agent-a", Deliveries: 2,
@@ -1624,10 +1635,10 @@ func TestEdgeRecordLimitHitFoldPreservesTheSwapWatermark(t *testing.T) {
 	}
 
 	// and the consequence, end to end: the folded record still decides to
-	// NUDGE once the settle window has passed — not to swap a second time
+	// RESUME once the settle window has passed — not to swap a second time
 	when := time.Unix(got.SwappedAt, 0).Add(limitRescueSettle)
-	if act, reason := limitRescueDecide(got, "auto", true, true, when); act != rescueNudge {
-		t.Fatalf("after the fold the decision is %q (%q), want %q — a second swap is exactly what Amendment 2 forbids", act, reason, rescueNudge)
+	if act, reason := limitRescueDecide(got, "auto", true, true, when); act != rescueResume {
+		t.Fatalf("after the fold the decision is %q (%q), want %q — a second swap is exactly what Amendment 2 forbids", act, reason, rescueResume)
 	}
 }
 
@@ -1743,41 +1754,58 @@ func TestEdgeMergeLimitRescueStateRefusesAcrossHits(t *testing.T) {
 	})
 }
 
-// --- Amendment 6: the nudge guard's second half ---
+// --- Amendment 6: the resume guard's second half ---
 
-// The guard is `err == nil && nudged > 0`, which means the empty set is not
-// the only way a nudge reaches nobody: a NON-empty set whose every send is
-// refused returns (0, nil), and a caller checking only the error would
-// resolve the hit with the crew still sitting on a dead account. This pins
-// the pair the guard has to read — the refusal path only, since a real send
-// would drive real tmux.
-func TestEdgeNudgeCellAgentsRefusedSendsCountOutToZero(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	j := &Job{Slug: "edge-nudge-refused", ID: 11, Repo: "monolith"}
+// The caller's guard is `err == nil && resumed > 0`, and the missing-zeus
+// error is not the only way a resume reaches nobody: a cell that HAS a zeus
+// whose respawn fails returns (0, nil), and a caller checking only the error
+// would resolve the hit with the whole cell still sitting on a dead account.
+// This pins the pair the guard has to read, through the respawnPeerPane seam
+// so no tmux server is involved.
+func TestEdgeResumeCellAgentsRefusedRespawnCountsOutToZero(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	j := &Job{Slug: "edge-resume-refused", ID: 11, Repo: "monolith"}
 	sess := CellSession(j)
-
-	// panes that cannot exist: core.SendMessage's checkSendTarget asks tmux
-	// for the pane's pid first, so every send is refused before a single key
-	// is typed anywhere
-	peers := []*core.Peer{
-		edgeAgentPeer(sess, "%999991", "claude", 0),
-		edgeAgentPeer(sess, "%999992", "claude", 0),
-	}
-	if len(cellAgentPanes(j, peers)) != 2 {
-		t.Fatalf("fixture: want 2 target panes, got %d", len(cellAgentPanes(j, peers)))
+	// the resume stages zeus' brief into the cell dir before it respawns
+	// anything, so the dir has to exist or the command never gets built
+	if err := os.MkdirAll(cellDir(j), 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
 	}
 
-	nudged, err := nudgeCellAgents(j, peers, limitRescueNudgeMsg)
+	origRespawn := respawnPeerPane
+	t.Cleanup(func() { respawnPeerPane = origRespawn })
+	tried := 0
+	respawnPeerPane = func(p *core.Peer, cmd string) error {
+		tried++
+		return fmt.Errorf("pane %s is gone", p.Pane)
+	}
+
+	// zeus by IDENTITY (its --name) with a real cwd: the resume refuses a
+	// merely-positional election and refuses an empty cwd, so a bare
+	// edgeAgentPeer would never reach the seam at all
+	zeus := edgeAgentPeer(sess, "%999991", "claude", 0)
+	zeus.Name = ZeusName(j)
+	zeus.CWD = home
+	peers := []*core.Peer{zeus}
+	if CellZeus(j, peers) == nil {
+		t.Fatal("fixture: want a zeus in the cell session, got none")
+	}
+
+	resumed, err := resumeCellAgents(j, peers, limitRescueResumePrompt)
 	if err != nil {
-		t.Fatalf("nudgeCellAgents = (%d, %v), want a nil error — a per-pane failure is counted out, never fatal", nudged, err)
+		t.Fatalf("resumeCellAgents = (%d, %v), want a nil error — a failed respawn is counted out, never fatal", resumed, err)
 	}
-	if nudged != 0 {
-		t.Fatalf("nudged = %d, want 0 — every send was refused", nudged)
+	if resumed != 0 {
+		t.Fatalf("resumed = %d, want 0 — the respawn failed", resumed)
 	}
-	// the pairing the guard depends on: err==nil does NOT imply anyone was
-	// reached, so `nudged > 0` has to be checked in its own right
-	if empty, emptyErr := nudgeCellAgents(j, nil, limitRescueNudgeMsg); emptyErr == nil || empty != 0 {
-		t.Fatalf("empty set = (%d, %v), want (0, error)", empty, emptyErr)
+	if tried != 1 {
+		t.Fatalf("the seam was called %d time(s), want exactly 1 — zeus and nobody else", tried)
+	}
+	// the pairing the guard depends on: err==nil does NOT imply zeus came
+	// back, so `resumed > 0` has to be checked in its own right
+	if empty, emptyErr := resumeCellAgents(j, nil, limitRescueResumePrompt); emptyErr == nil || empty != 0 {
+		t.Fatalf("no zeus = (%d, %v), want (0, error)", empty, emptyErr)
 	}
 }
 
@@ -1920,17 +1948,17 @@ func TestEdgeLimitHookTruncatesDetailsBeforePosting(t *testing.T) {
 	}
 }
 
-// --- Amendment 11: the nudge is bounded ---
+// --- Amendment 11: the resume is bounded ---
 
 // The bound this arm exists for is the one the re-review found: while a hit
 // sits swapped-but-open, a delivery past the dedupe window supersedes it and
 // re-arms the rotate gate with Attempts back at zero, so the attempt cap is
 // BYPASSED rather than exceeded and the pool drains an account per cycle.
-// The nudge arm therefore counts its failed rounds and parks, increment-then-
+// The resume arm therefore counts its failed rounds and parks, increment-then-
 // test exactly as rescueParkNoTarget does — so both sides of the cap want
 // pinning: below it the hit must stay OPEN so a later tick retries, at it the
 // hit must park.
-func TestEdgeLimitRescueApplyNudgeNoAgentsCapBoundary(t *testing.T) {
+func TestEdgeLimitRescueApplyResumeNoAgentsCapBoundary(t *testing.T) {
 	cases := []struct {
 		name         string
 		startAttempt int
@@ -1947,12 +1975,12 @@ func TestEdgeLimitRescueApplyNudgeNoAgentsCapBoundary(t *testing.T) {
 			hit := edgeApplyHit()
 			hit.Attempts = c.startAttempt
 			hit.LastAttempt = edgeNow.Add(-time.Hour).Unix()
-			// the account really did move before the nudge was attempted:
+			// the account really did move before the resume was attempted:
 			// a park must still record WHAT it moved to
 			hit.SwappedAt = edgeNow.Add(-limitRescueSettle).Unix()
 			hit.SwappedTo = "rescued@example.com"
 
-			got := limitRescueApply(hit, rescueNudge, "no-agents", "", edgeNow)
+			got := limitRescueApply(hit, rescueResume, "no-agents", "", edgeNow)
 
 			if got.Attempts != c.wantAttempts {
 				t.Fatalf("Attempts = %d, want %d (started at %d)", got.Attempts, c.wantAttempts, c.startAttempt)
@@ -1992,10 +2020,10 @@ func TestEdgeLimitRescueApplyNudgeNoAgentsCapBoundary(t *testing.T) {
 // TestEdgeLimitRescueApplyParkNoTargetResolvesAtExactlyTheCap already pins
 // for the other capped arm: the round that gives up reads exactly
 // limitRescueMaxAttempts, and the round before it must not have parked.
-func TestEdgeLimitRescueApplyNudgeParksAtExactlyTheCap(t *testing.T) {
+func TestEdgeLimitRescueApplyResumeParksAtExactlyTheCap(t *testing.T) {
 	at := edgeApplyHit()
 	at.Attempts = limitRescueMaxAttempts - 1
-	got := limitRescueApply(at, rescueNudge, "no-agents", "", edgeNow)
+	got := limitRescueApply(at, rescueResume, "no-agents", "", edgeNow)
 	if got.HandledAt == 0 {
 		t.Fatalf("a round from Attempts=%d left the hit open — it must park on the %dth", limitRescueMaxAttempts-1, limitRescueMaxAttempts)
 	}
@@ -2005,18 +2033,18 @@ func TestEdgeLimitRescueApplyNudgeParksAtExactlyTheCap(t *testing.T) {
 
 	before := edgeApplyHit()
 	before.Attempts = limitRescueMaxAttempts - 2
-	if got := limitRescueApply(before, rescueNudge, "no-agents", "", edgeNow); got.HandledAt != 0 {
+	if got := limitRescueApply(before, rescueResume, "no-agents", "", edgeNow); got.HandledAt != 0 {
 		t.Fatalf("a round from Attempts=%d parked: HandledAt=%d — the cap fires early", limitRescueMaxAttempts-2, got.HandledAt)
 	}
 }
 
 // `"no-agents"` is a string literal doing load-bearing work: it is the ONLY
-// value that sends the nudge arm down the counting path, and everything else
+// value that sends the resume arm down the counting path, and everything else
 // — including the `""` the resolving call site passes — resolves the hit.
 // An overloaded literal with no test is how a later refactor renames one
 // side and silently turns every failed round into a resolution, which is the
 // stranded-cell bug wearing the fix's clothes.
-func TestEdgeLimitRescueApplyNudgeOutcomeLiteralIsExact(t *testing.T) {
+func TestEdgeLimitRescueApplyResumeOutcomeLiteralIsExact(t *testing.T) {
 	// every one of these must take the RESOLVE path
 	for _, outcome := range []string{
 		"",              // what the reached-at-least-one-pane call site passes
@@ -2031,8 +2059,8 @@ func TestEdgeLimitRescueApplyNudgeOutcomeLiteralIsExact(t *testing.T) {
 		t.Run("outcome "+outcome, func(t *testing.T) {
 			hit := edgeApplyHit()
 			hit.Attempts = 1
-			hit.SwappedAt = edgeNow.Unix() - 60 // a landed swap: this nudge is the swap's completion
-			got := limitRescueApply(hit, rescueNudge, outcome, "", edgeNow)
+			hit.SwappedAt = edgeNow.Unix() - 60 // a landed swap: this resume is the swap's completion
+			got := limitRescueApply(hit, rescueResume, outcome, "", edgeNow)
 			if got.Outcome != "rotated" || got.HandledAt != edgeNow.Unix() {
 				t.Fatalf("= (HandledAt %d, Outcome %q), want (%d, %q) — only the exact literal counts a round", got.HandledAt, got.Outcome, edgeNow.Unix(), "rotated")
 			}
@@ -2042,13 +2070,13 @@ func TestEdgeLimitRescueApplyNudgeOutcomeLiteralIsExact(t *testing.T) {
 		})
 		t.Run("outcome "+outcome+" reset re-arm", func(t *testing.T) {
 			// The same resolve path with NO landed swap can only be the
-			// reset re-arm's nudge, and the outcome word must say so — a
+			// reset re-arm's resume, and the outcome word must say so — a
 			// "rotated" here would claim a credential change that never
 			// happened.
 			hit := edgeApplyHit()
 			hit.Attempts = limitRescueMaxAttempts
 			hit.ResetAt = edgeNow.Unix() - 300
-			got := limitRescueApply(hit, rescueNudge, outcome, "", edgeNow)
+			got := limitRescueApply(hit, rescueResume, outcome, "", edgeNow)
 			if got.Outcome != "resumed-after-reset" || got.HandledAt != edgeNow.Unix() {
 				t.Fatalf("= (HandledAt %d, Outcome %q), want (%d, %q)", got.HandledAt, got.Outcome, edgeNow.Unix(), "resumed-after-reset")
 			}
@@ -2062,7 +2090,7 @@ func TestEdgeLimitRescueApplyNudgeOutcomeLiteralIsExact(t *testing.T) {
 		withLiteral := limitRescueApply(hit, rescueParkNoTarget, "no-agents", "", edgeNow)
 		withEmpty := limitRescueApply(hit, rescueParkNoTarget, "", "", edgeNow)
 		if withLiteral != withEmpty {
-			t.Fatalf("park-no-target read the nudge arm's literal: %+v vs %+v", withLiteral, withEmpty)
+			t.Fatalf("park-no-target read the resume arm's literal: %+v vs %+v", withLiteral, withEmpty)
 		}
 	})
 	t.Run("rotate treats it as any other non-swap outcome", func(t *testing.T) {
@@ -2095,7 +2123,7 @@ func TestEdgeMergeLimitHitDeliveryCarriesTheSwapWatermark(t *testing.T) {
 		// late it lands, so the fresh branch is reached through a DIFFERENT
 		// error type. The carry must survive that hop and the hop back:
 		// unresolved-swapped → billing_error supersedes (carries) →
-		// rate_limit supersedes again (carries) → gate 5 nudges rather than
+		// rate_limit supersedes again (carries) → gate 5 resumes rather than
 		// swapping a second time.
 		hop := mergeLimitHitDelivery(swapped, "billing_error", "a different failure", "sess-mid", "", edgeNow.Add(-time.Minute))
 		if hop.Error != "billing_error" || hop.At != edgeNow.Add(-time.Minute).Unix() || hop.Deliveries != 1 {
@@ -2115,10 +2143,10 @@ func TestEdgeMergeLimitHitDeliveryCarriesTheSwapWatermark(t *testing.T) {
 			t.Fatalf("superseded record = %+v, want %+v — only the swap watermark crosses", got, want)
 		}
 		// the consequence, spelled out: the superseding record still belongs
-		// to gate 5, so it nudges rather than swapping a second time
+		// to gate 5, so it resumes rather than swapping a second time
 		when := time.Unix(got.SwappedAt, 0).Add(limitRescueSettle)
-		if act, reason := limitRescueDecide(got, "auto", true, true, when); act != rescueNudge {
-			t.Fatalf("after supersession the decision is %q (%q), want %q — the rotate gate re-armed", act, reason, rescueNudge)
+		if act, reason := limitRescueDecide(got, "auto", true, true, when); act != rescueResume {
+			t.Fatalf("after supersession the decision is %q (%q), want %q — the rotate gate re-armed", act, reason, rescueResume)
 		}
 	})
 
