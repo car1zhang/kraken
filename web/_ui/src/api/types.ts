@@ -315,8 +315,8 @@ export interface DaemonStatus {
 }
 
 /**
- * The phase constants in internal/jobs/update.go:23-31, plus `uptodate`
- * (jobs.UpdateUpToDate, read at internal/api/update.go:151).
+ * The phase constants in internal/jobs/update.go's const block (the whole
+ * list, `uptodate` included).
  *
  * `| string` keeps an unknown future phase from failing the decode, but it
  * also means a WRONG member here costs nothing at runtime and so cannot be
@@ -332,6 +332,7 @@ export type UpdatePhase =
   | "building"
   | "installing"
   | "restarting"
+  | "mac app"
   | "done"
   | "failed"
   | "uptodate"
@@ -361,6 +362,10 @@ export interface WebUpdate {
   build_sha?: string;
   /** when the availability check last ran, from UpdateAvail */
   checked_at?: number;
+  /** this run replaced the binary + kickstarted the daemon — set from the
+   *  `restarting` phase on, so a `failed` record with it true is a
+   *  mac-app-phase failure that still owes the mandatory page reload */
+  restarted?: boolean;
 }
 
 /** The phase constants in internal/jobs/shipios.go:36-43. Same caveat about

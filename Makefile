@@ -210,10 +210,14 @@ ios-testflight:
 # so Xcode can be opened on a fresh clone without a generate step — the one
 # asymmetry with ios/ is that no shared scheme is tracked; xcodebuild
 # auto-creates the `Kraken` scheme, so `-scheme Kraken` below still resolves.
-# project.yml stays the source of truth and this target keeps the two in step. The regenerate
-# usually rewrites project.pbxproj's bytes, so a `make mac` on main leaves the
-# tree dirty until the churn is committed or reverted — and `k update`'s
-# preflight refuses on a dirty tree, which is where that state actually bites.
+# project.yml stays the source of truth and this target keeps the two in step.
+# The regenerate MAY rewrite project.pbxproj's bytes (today's xcodegen emits
+# them byte-identically; a version bump can change that), and then a `make
+# mac` on main leaves the tree dirty until the churn is committed or reverted
+# — `k update`'s preflight refuses on a dirty tree, which is where that state
+# actually bites. install-mac below snapshots and restores around its own
+# regenerate for exactly that reason; this hand-run compile check leaves the
+# churn visible on purpose.
 #
 # No -derivedDataPath: the default DerivedData lives under ~/Library and so
 # nothing build-shaped lands in the working tree. install-mac below does pass
@@ -234,16 +238,42 @@ mac:
 # an existing directory moves the source INSIDE it. The dance is instead:
 # stage a full copy under a dot-name in /Applications (same filesystem, so the
 # renames below are cheap and atomic), rename any existing Kraken.app OUT of the
-# way, then rename the staged copy IN. A running Kraken.app keeps its files via
-# the moved-aside directory and is never touched; the old copy is removed only
-# after the new one is in place. Quitting the app first is still the right move
-# if you want the new build — this recipe deliberately does not kill it.
+# way, then rename the staged copy IN. The running app's bundle is never
+# rewritten in place — it is renamed aside and (once the swap has landed)
+# unlinked, which a running process survives on its open inodes. Quitting the
+# app first is still the right move if you want the new build — this recipe
+# deliberately does not kill it.
+#
+# The generated tracked files (all three of them — pbxproj, the Info.plist,
+# the workspace file) are snapshotted before xcodegen and restored after the
+# build, ios/ship-testflight.sh's guard extended to the full generated set:
+# today xcodegen regenerates them byte-identically, but that is luck, not a
+# guarantee — a `brew upgrade xcodegen` that changes one line of formatting
+# would otherwise leave a TRACKED file dirty, and a dirty tree here is two
+# dead buttons (PreflightUpdate refuses every later update, the ship script's
+# clean-tree gate refuses every later ship, neither with a board-reachable
+# remedy). This target runs unattended on every board UPDATE click, so the
+# guard is not optional. Mechanics borrowed from the script the hard way:
+# the trap is armed BEFORE the snapshots, the snapshots are guarded (a
+# missing generated file is xcodegen's to recreate, not a reason to die at
+# cp), the restores are equally guarded and never abort the trap body, and
+# the backups live in their own dir — NOT the -derivedDataPath dir, which
+# xcodebuild owns and could prune.
 install-mac:
 	@command -v xcodegen >/dev/null 2>&1 || { echo "xcodegen not found — brew install xcodegen"; exit 1; }
-	xcodegen generate --spec macos/project.yml
 	@set -e; \
 	dd=$$(mktemp -d /tmp/kraken-mac-build.XXXXXX); \
-	trap 'rm -rf "$$dd"' EXIT; \
+	bk=$$(mktemp -d /tmp/kraken-mac-gen-backup.XXXXXX); \
+	trap 'for f in project.pbxproj Generated-Info.plist contents.xcworkspacedata; do \
+	        [ -f "$$bk/$$f" ] && cp "$$bk/$$f" "$$(cat "$$bk/$$f.dest")" || true; \
+	      done; rm -rf "$$dd" "$$bk"' EXIT; \
+	for pair in "macos/Kraken.xcodeproj/project.pbxproj project.pbxproj" \
+	            "macos/Generated-Info.plist Generated-Info.plist" \
+	            "macos/Kraken.xcodeproj/project.xcworkspace/contents.xcworkspacedata contents.xcworkspacedata"; do \
+	  src=$${pair%% *}; name=$${pair##* }; \
+	  if [ -f "$$src" ]; then cp "$$src" "$$bk/$$name"; printf '%s' "$$src" > "$$bk/$$name.dest"; fi; \
+	done; \
+	xcodegen generate --spec macos/project.yml; \
 	xcodebuild build -project macos/Kraken.xcodeproj -scheme Kraken \
 	  -configuration Release -destination 'platform=macOS' -derivedDataPath "$$dd"; \
 	app="$$dd/Build/Products/Release/Kraken.app"; \
