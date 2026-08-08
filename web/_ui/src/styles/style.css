@@ -1739,6 +1739,20 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   50% { translate: 1px -1px; }
   100% { translate: 0 0; }
 }
+/* press-flash — the sfx module's one interaction one-shot (lib/sfx.ts adds
+   the class to whatever actionable element a click landed on and takes it
+   back off). Finite by design: the reduced-motion block kills it, and the
+   motion-policy pins never see it because it isn't infinite. Deliberately no
+   box-shadow in the keyframes: a running animation outranks every normal
+   declaration, so an animated shadow would blink .btn:hover's resting glow
+   off for the full 140ms — and .card/.btn.primary clip-path their outer
+   shadows away regardless. Brightness plus an inset accent outline stay
+   visible on clipped and unclipped surfaces alike and touch nothing at rest. */
+.press-flash { animation: pressflash 140ms var(--ease); }
+@keyframes pressflash {
+  0% { filter: brightness(1.6); outline: 1px solid var(--ac); outline-offset: -1px; }
+  100% { filter: none; outline: 1px solid transparent; outline-offset: -1px; }
+}
 .btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
 .btn.ghost:hover { background: color-mix(in srgb, var(--ac) 8%, transparent); border-color: var(--border-strong); color: var(--fg); box-shadow: none; }
 .btn.ghost.danger { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 45%, transparent); }
