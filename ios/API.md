@@ -56,11 +56,12 @@ imply `omitempty`. Two kinds of Swift Optional exist without one.
 **Absence on an older server** — `contract`, `stale`, `WebBoard.update`,
 `WebBoard.shipIOS`: all always present on a current server, missing from
 builds that predate them, where the absence is itself what the app checks
-for. **Blast-radius containment** — every field of `WebUpdate` and
-`WebShipIOS`, all of them always present on the wire, made Optional (with a
-hand-written `init(from:)`) purely so a drifted sub-key costs the ⟳ / ⇧
-control rather than the entire `/api/board` decode; see those structs'
-header comments in Models.swift.
+for. **Blast-radius containment** — every field `WebUpdate` and
+`WebShipIOS` model, all of them always present on the wire, made Optional
+(with a hand-written `init(from:)`) purely so a drifted sub-key costs the
+⟳ / ⇧ control rather than the entire `/api/board` decode; see those structs'
+header comments in Models.swift. (`restarted` is the one wire key WebUpdate
+deliberately does not model — see its row below.)
 
 Error responses: any non-2xx status returns `{"error": string}`. Board
 action endpoints (`webAction`-wrapped) additionally return `{"ok": true}`
@@ -93,7 +94,7 @@ present, zeroed when it doesn't apply.
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `phase` | string | always | `idle`\|`preflight`\|`fetching`\|`merging`\|`building`\|`installing`\|`restarting`\|`done`\|`failed`\|`uptodate`. `idle` when no run has ever happened (missing status file) |
+| `phase` | string | always | `idle`\|`preflight`\|`fetching`\|`merging`\|`building`\|`installing`\|`restarting`\|`mac app`\|`done`\|`failed`\|`uptodate`. `mac app` is the `make install-mac` step, deliberately after the restart so an Xcode failure finds the runtime already updated. `idle` when no run has ever happened (missing status file). Render unknown phases generically — the list is additive |
 | `from_sha` | string | always | the commit the in-flight/last run started from |
 | `to_sha` | string | always | the commit it moved to; `""` until the merge lands |
 | `behind` | number | always | commits `HEAD..origin/main`, from the daemon's 10-minute availability check |
@@ -102,6 +103,7 @@ present, zeroed when it doesn't apply.
 | `updated_at` | number | always | unix millis of the last phase transition |
 | `build_sha` | string | always | the running binary's ldflags-stamped short sha, `"dev"` unstamped |
 | `checked_at` | number | always | unix millis of the last availability check; `0` = never checked |
+| `restarted` | bool | always | this run replaced the binary and kickstarted the daemon (set from the `restarting` phase on) — a `failed` record with it true is a mac-app-phase failure whose runtime half already landed, and the web board still reloads on it. Not modeled in Models.swift: its two consumers are the SPA's embedded-bundle reload and the server's own behind-suppression, and the native app has neither an embedded bundle nor that count to correct |
 
 `webShipIOS` (api/shipios.go) — assembled by one function (`currentShipIOS`)
 shared with `GET /api/ship-ios/status`, so the board key and the poller's

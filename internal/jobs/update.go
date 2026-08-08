@@ -27,9 +27,16 @@ const (
 	UpdateBuilding   = "building"
 	UpdateInstalling = "installing"
 	UpdateRestarting = "restarting"
-	UpdateDone       = "done"
-	UpdateFailed     = "failed"
-	UpdateUpToDate   = "uptodate"
+	// UpdateMacApp is the `make install-mac` step (cmd_update.go carries the
+	// ordering rationale). The SPACE is deliberate, chosen knowing renames are
+	// contract breaks: both clients render the token as the button label
+	// (uppercased on web — "MAC APP… 12s"; raw on iOS) and nothing anywhere
+	// keys on the string, so the human-facing form wins over `uptodate`-style
+	// compression.
+	UpdateMacApp   = "mac app"
+	UpdateDone     = "done"
+	UpdateFailed   = "failed"
+	UpdateUpToDate = "uptodate"
 )
 
 // UpdateTerminal reports whether phase means "no run is in flight". It is the
@@ -60,6 +67,21 @@ type UpdateStatus struct {
 	Behind    int    `json:"behind"`
 	Error     string `json:"error"`
 	ElapsedMS int64  `json:"elapsed_ms"`
+	// Restarted records that THIS run replaced the binary and kickstarted the
+	// daemon. It exists because the mac-app phase can fail after that point,
+	// and a `failed` record alone would leave two readers guessing wrong: the
+	// SPA's mandatory post-restart reload (which must fire on failed-with-
+	// restart exactly as on done, or every open board keeps running the old
+	// bundle against the new server), and the API's behind-count suppression.
+	Restarted bool `json:"restarted"`
+	// MacAppSHA is the commit the mac app was last successfully installed at,
+	// CARRIED FORWARD across runs (the API's claim-write and the updater both
+	// preserve it). It is what lets an up-to-date runtime catch up a missed
+	// app build — a mac-phase failure leaves HEAD == origin/main, so without
+	// this every later click would answer "already up to date" while
+	// /Applications/Kraken.app stayed a build behind, with no board-side
+	// remedy.
+	MacAppSHA string `json:"mac_app_sha"`
 }
 
 // UpdateStatusPath is the run record the detached updater writes at every
@@ -107,8 +129,9 @@ const updateClaimGraceMS = 60_000
 //     unrelated reads as live indefinitely. daemon.go's ProcessIsKraken
 //     exists because this repo already shipped that exact bug once.
 //
-// A real run is ~40s; 15 minutes is far past any honest build (even with
-// --test) and far short of a human's patience for a wedged button.
+// A real run is a few minutes — ~40s to the restart, then the mac-app
+// rebuild's xcodebuild on top; 15 minutes is far past any honest build (even
+// with --test) and far short of a human's patience for a wedged button.
 const updateMaxRun = 15 * time.Minute
 
 // ReadUpdateStatus loads the run record defensively — a missing, unreadable,
@@ -298,6 +321,13 @@ type UpdatePreflightInfo struct {
 	// before anything mutates, and hands cmd_update.go an absolute path to
 	// prepend rather than a trust in launchd's PATH.
 	NpmPath string
+	// XcodegenPath is resolved for the mac-app phase (`make install-mac`
+	// calls a bare `xcodegen`, which launchd's PATH does not reach — the same
+	// story as go and npm). Unlike them it is resolved NON-fatally: an
+	// unresolvable xcodegen must not refuse the runtime update, so the field
+	// is empty in that case and the mac-app phase is what fails, loudly,
+	// after the runtime is already updated and restarted.
+	XcodegenPath string
 }
 
 // PreflightUpdate runs every cheap local check before anything mutates. It is
@@ -365,6 +395,8 @@ func PreflightUpdate() (UpdatePreflightInfo, error) {
 	if pf.NpmPath, err = lookToolchain("npm"); err != nil {
 		return pf, err
 	}
+	// Deliberately not an error path — see the field's comment.
+	pf.XcodegenPath, _ = lookToolchain("xcodegen")
 	return pf, nil
 }
 

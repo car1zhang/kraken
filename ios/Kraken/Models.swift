@@ -100,8 +100,9 @@ struct DaemonStatus: Decodable {
 // the daemon's 10-minute availability check and describe "is there anything
 // to update to" whether or not a run has ever happened.
 struct WebUpdate: Decodable {
-    /// idle|preflight|fetching|merging|building|installing|restarting|done|
-    /// failed|uptodate. `idle` when no run has ever happened.
+    /// idle|preflight|fetching|merging|building|installing|restarting|
+    /// mac app|done|failed|uptodate — render unknown values generically, the
+    /// list is additive. `idle` when no run has ever happened.
     let phase: String?
     let fromSHA: String?
     /// "" until the merge lands.

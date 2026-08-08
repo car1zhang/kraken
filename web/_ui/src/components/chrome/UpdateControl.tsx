@@ -199,7 +199,13 @@ export function useUpdateRun({
       if (!u) return;
       setState(u);
       setGap(0);
-      if (u.phase === "done") scheduleReload();
+      // `restarted` IS the reload condition: it means the binary under this
+      // page changed, which is the reload's entire justification. It covers
+      // the failure shape `done` alone could not (the mac-app phase failing
+      // AFTER the kickstart — without the reload this page's old bundle runs
+      // against the new server indefinitely) and it correctly exempts the
+      // mac-only catch-up run, whose `done` changed no binary at all.
+      if ((u.phase === "done" || u.phase === "failed") && u.restarted) scheduleReload();
     },
     [scheduleReload, setGap],
   );
@@ -331,7 +337,7 @@ export function useUpdateRun({
   let label = "UPDATE";
   let disabled = false;
   let title =
-    "update kraken — fast-forward main, rebuild, reinstall, restart the daemon" + build;
+    "update kraken — fast-forward main, rebuild, reinstall, restart the daemon, reinstall Kraken.app" + build;
   let banner: BannerModel | null = null;
   let action: "update" | "log" = "update";
 

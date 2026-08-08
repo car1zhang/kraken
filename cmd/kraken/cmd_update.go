@@ -67,11 +67,13 @@ func parseUpdateArgs(args []string) (updateOpts, error) {
 }
 
 const updateUsageText = `usage: k update [--force] [--dry-run] [--test] [--detached]
-  pull origin/main into the kraken checkout, rebuild, reinstall, and restart
-  the launchd job. Refuses on a dirty tree or a non-main branch; never
-  stashes, never merges anything but a fast-forward.
+  pull origin/main into the kraken checkout, rebuild, reinstall, restart the
+  launchd job, then reinstall Kraken.app (an already-current runtime still
+  catches the mac app up when a prior run missed it). Refuses on a dirty tree
+  or a non-main branch; never stashes, never merges anything but a
+  fast-forward.
 
-  --force      reinstall + restart even when already up to date
+  --force      full rebuild + reinstall + restart even when already up to date
   --dry-run    preflight + fetch and report only; changes nothing
   --test       run 'go test ./...' after the build, before installing
   --detached   spawned by the board's UPDATE button: inherit the run record
@@ -102,12 +104,18 @@ func cmdUpdate(args []string) {
 // lines still get written — they just have no terminal to be interactive on.
 func runUpdate(opts updateOpts, out io.Writer) error {
 	st := jobs.UpdateStatus{StartedAt: time.Now().UnixMilli(), PID: os.Getpid()}
+	// MacAppSHA survives from run to run — it is the record of the LAST
+	// successful mac-app install, not of this run — so it is read before this
+	// run's first write can clobber it. (The API's own claim-write preserves
+	// it for the detached case; this covers the CLI-started run too.)
+	prior := jobs.ReadUpdateStatus()
+	st.MacAppSHA = prior.MacAppSHA
 	if opts.detached {
 		// The API wrote phase=preflight the instant the button was clicked —
 		// that write is its mutex — and only then spawned us. Inherit its
 		// StartedAt so ElapsedMS measures the run the user actually watched,
 		// not the part of it that happened after fork+exec.
-		if prior := jobs.ReadUpdateStatus(); prior.StartedAt != 0 {
+		if prior.StartedAt != 0 {
 			st.StartedAt = prior.StartedAt
 		}
 	}
@@ -254,6 +262,44 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// update — same treatment the daemon's availability check gives it.
 	st.ToSHA, _ = updateGit(pf.Repo, "rev-parse", "--short", "origin/main")
 
+	// Every build tool runs under this environment, never the inherited one:
+	// the Makefile calls a BARE `go`, a BARE `npm` and a BARE `xcodegen`, and
+	// the PATH this process inherits from launchd leads to none of them.
+	// util.PrependToolDir carries the whole reasoning, including why widening
+	// the plist's PATH is not enough; a cell spawn shares it for the identical
+	// reason (internal/jobs/cell.go's cellSpawnEnv).
+	//
+	// Applied per tool rather than made variadic: ToolchainEnv is shared with
+	// the cell spawner, and PrependToolDir already no-ops when a dir is empty
+	// or already leads PATH — so tools sharing one homebrew prefix prepend it
+	// once, not once each, and an unresolved xcodegen's empty path is inert
+	// (the mac-app phase is what fails then, not the env plumbing).
+	env := util.ToolchainEnv(os.Environ(), pf.GoPath)
+	env = util.ToolchainEnv(env, pf.NpmPath)
+	env = util.ToolchainEnv(env, pf.XcodegenPath)
+
+	// installMacApp is the `mac app` phase: `make install-mac` — rebuild
+	// Kraken.app, swap it into /Applications. It runs LAST wherever it runs —
+	// after the restart on a full update, alone on a catch-up — because the
+	// runtime is the critical path and must never be hostage to Xcode: by the
+	// time this phase can fail, the runtime work of the run is already done,
+	// which is what `prefix` states to the user. A success records the sha so
+	// later runs know the app is current (see UpdateStatus.MacAppSHA); either
+	// failure names the retry, which the MacAppSHA catch-up makes truthful —
+	// a plain UPDATE click really does retry just this step.
+	installMacApp := func(atSHA, prefix string) error {
+		setPhase(jobs.UpdateMacApp)
+		if pf.XcodegenPath == "" {
+			return fail(fmt.Errorf("%sthe mac app was NOT rebuilt: xcodegen not found (brew install xcodegen, then click UPDATE again — it retries just the app build)", prefix))
+		}
+		util.LogEvent("update", "info", "update-mac", "rebuilding Kraken.app into /Applications")
+		if err := updateExec(pf.Repo, env, pf.MakePath, "install-mac"); err != nil {
+			return fail(fmt.Errorf("%sthe mac app install failed: %w (fix the build, then click UPDATE again — it retries just the app build)", prefix, err))
+		}
+		st.MacAppSHA = atSHA
+		return nil
+	}
+
 	if opts.dryRun {
 		fmt.Fprintf(out, "repo:   %s (main @ %s)\n", pf.Repo, pf.HeadSHA)
 		fmt.Fprintf(out, "remote: origin/main @ %s\n", st.ToSHA)
@@ -261,15 +307,37 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 		if behind == 0 {
 			fmt.Fprintln(out, "dry run: already up to date — nothing would be built")
 		} else {
-			fmt.Fprintln(out, "dry run: would fast-forward, build, install, and restart (nothing changed)")
+			fmt.Fprintln(out, "dry run: would fast-forward, build, install, restart, and reinstall Kraken.app (nothing changed)")
+		}
+		// The dry run is the one place a missing xcodegen can surface before
+		// a real run half-completes on it.
+		if pf.XcodegenPath == "" {
+			fmt.Fprintln(out, "dry run: xcodegen not found — the mac-app step of a real run would fail (brew install xcodegen)")
 		}
 		return nil
 	}
 
 	if behind == 0 && !opts.force {
-		setPhase(jobs.UpdateUpToDate)
-		util.LogEvent("update", "info", "update-done", "already up to date at "+pf.HeadSHA)
-		fmt.Fprintf(out, "already up to date (main @ %s) — nothing built, nothing restarted\n", pf.HeadSHA)
+		// An up-to-date RUNTIME can still owe a mac-app build: the mac phase
+		// is the only step after the merge, so its failure leaves HEAD at
+		// origin/main and a plain retry lands here. MacAppSHA is what breaks
+		// that trap — when the app was last installed at some other commit
+		// (or never), fall through to the mac phase alone instead of
+		// answering "up to date" about a binary while the app stays a build
+		// behind with no board-side remedy.
+		if st.MacAppSHA == pf.HeadSHA {
+			setPhase(jobs.UpdateUpToDate)
+			util.LogEvent("update", "info", "update-done", "already up to date at "+pf.HeadSHA)
+			fmt.Fprintf(out, "already up to date (main @ %s) — nothing built, nothing restarted\n", pf.HeadSHA)
+			return nil
+		}
+		fmt.Fprintf(out, "runtime already up to date (main @ %s); catching the mac app up\n", pf.HeadSHA)
+		if err := installMacApp(pf.HeadSHA, "runtime already current; "); err != nil {
+			return err
+		}
+		setPhase(jobs.UpdateDone)
+		util.LogEvent("update", "info", "update-done", "mac app caught up at "+pf.HeadSHA)
+		fmt.Fprintf(out, "Kraken.app reinstalled at %s (runtime was already current)\n", pf.HeadSHA)
 		return nil
 	}
 
@@ -315,20 +383,6 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// anything is installed) and gives the UI's BUILDING… a phase that really
 	// is the compile. The duplicate work is free — go's build cache makes
 	// install's own build step a no-op a second later.
-	// Every build tool runs under this environment, never the inherited one:
-	// the Makefile calls a BARE `go` and, since the board became a React app,
-	// a BARE `npm` too, and the PATH this process inherits from launchd leads
-	// to neither. util.PrependToolDir carries the whole reasoning, including
-	// why widening the plist's PATH is not enough; a cell spawn shares it for
-	// the identical reason (internal/jobs/cell.go's cellSpawnEnv).
-	//
-	// Applied twice rather than made variadic: ToolchainEnv is shared with the
-	// cell spawner, and PrependToolDir already no-ops when a dir is empty or
-	// already leads PATH — so go and npm sharing one homebrew prefix prepends
-	// it once, not twice.
-	env := util.ToolchainEnv(os.Environ(), pf.GoPath)
-	env = util.ToolchainEnv(env, pf.NpmPath)
-
 	setPhase(jobs.UpdateBuilding)
 	util.LogEvent("update", "info", "update-build", "building in "+pf.Repo)
 	if err := updateExec(pf.Repo, env, pf.MakePath, "build"); err != nil {
@@ -336,9 +390,12 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	}
 	if opts.test {
 		// After the build, before the install (Q3): a red suite must abort
-		// while ~/.local/bin/kraken is still the last known-good binary.
-		fmt.Fprintln(out, "running go test ./…")
-		if err := updateExec(pf.Repo, env, pf.GoPath, "test", "./..."); err != nil {
+		// while ~/.local/bin/kraken is still the last known-good binary. The
+		// fts5 tag is not optional — without it every store-opening test dies
+		// at migration (`no such module: fts5`, CLAUDE.md's Commands section),
+		// so an untagged --test could never pass.
+		fmt.Fprintln(out, "running go test -tags sqlite_fts5 ./…")
+		if err := updateExec(pf.Repo, env, pf.GoPath, "test", "-tags", "sqlite_fts5", "./..."); err != nil {
 			return fail(fmt.Errorf("tests failed: %w (nothing was installed; the running kraken is untouched)", err))
 		}
 	}
@@ -359,6 +416,10 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 		return fail(fmt.Errorf("make install failed: %w", err))
 	}
 
+	// Restarted rides in the record from here on: the binary is replaced and
+	// kickstarted, so a later failure (the mac phase) must still read as
+	// "reload owed" to the SPA and "behind is stale" to the API.
+	st.Restarted = true
 	setPhase(jobs.UpdateRestarting)
 	util.LogEvent("update", "info", "update-restart", "launchd job kickstarted onto the new binary")
 	// Brief settle before announcing done: the board reloads itself the
@@ -368,9 +429,26 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// connection error.
 	updateSleep(updateRestartSettle)
 
+	// The mac app, last (installMacApp's definition carries the why). The
+	// running Kraken.app is deliberately not killed or relaunched — the
+	// recipe renames the live bundle aside and swaps the new one in, never
+	// rewriting it in place, so nothing is SIGKILLed; the SPA inside it
+	// reloads itself when the record turns terminal-after-restart, and the
+	// shell BINARY only matters on the rare shell-code change — relaunch
+	// when one lands.
+	// The recorded sha is HEAD re-read after the merge, not st.ToSHA:
+	// origin/main's sha was read tolerantly (it may be ""), and a --force run
+	// on a checkout AHEAD of origin/main builds from a HEAD that origin/main's
+	// sha does not name. An empty re-read degrades to one spurious catch-up
+	// on the next click, which self-heals.
+	installedAt, _ := updateGit(pf.Repo, "rev-parse", "--short", "HEAD")
+	if err := installMacApp(installedAt, fmt.Sprintf("runtime updated %s → %s and restarted, but ", pf.HeadSHA, st.ToSHA)); err != nil {
+		return err
+	}
+
 	setPhase(jobs.UpdateDone)
 	util.LogEvent("update", "info", "update-done", fmt.Sprintf("updated %s → %s", pf.HeadSHA, st.ToSHA))
-	fmt.Fprintf(out, "updated %s → %s (%d commit(s)); launchd job restarted on the new binary\n", pf.HeadSHA, st.ToSHA, behind)
+	fmt.Fprintf(out, "updated %s → %s (%d commit(s)); launchd job restarted on the new binary; Kraken.app reinstalled\n", pf.HeadSHA, st.ToSHA, behind)
 	return nil
 }
 

@@ -67,9 +67,10 @@ func (g *fakeGit) ran(key string) bool {
 	return false
 }
 
-// fakeExec stands in for `make build`, `make install`, and `go test ./...`.
-// It keeps the env of the last call so a test can assert the build tools were
-// handed a PATH that leads to go (see TestRunUpdateBuildsWithGoOnPath).
+// fakeExec stands in for `make build`, `make install`, `make install-mac`,
+// and `go test -tags sqlite_fts5 ./...`. It keeps the env of the last call so
+// a test can assert the build tools were handed a PATH that leads to them
+// (see TestRunUpdatePutsGoOnThePathOfEveryBuildTool).
 type fakeExec struct {
 	calls   []string
 	lastEnv []string
@@ -132,12 +133,19 @@ func newUpdateHarness(t *testing.T) *updateHarness {
 		preflight: jobs.UpdatePreflightInfo{
 			Repo: filepath.Join(home, "Developer", "kraken"), Branch: "main",
 			HeadSHA: "aaa1111", GoPath: "/usr/local/go/bin/go", MakePath: "/usr/bin/make",
+			// npm's dir is deliberately DISTINCT from xcodegen's: with all
+			// three tools sharing one prefix, deleting any single prepend in
+			// runUpdate would leave the PATH assertions green — three
+			// distinct dirs make each prepend individually load-bearing.
+			NpmPath: "/opt/node/bin/npm", XcodegenPath: "/opt/homebrew/bin/xcodegen",
 		},
 	}
 	// The default remote is 3 commits ahead and a clean fast-forward; each
-	// test overrides only the answer it cares about.
+	// test overrides only the answer it cares about. The post-merge HEAD
+	// re-read (what MacAppSHA records) answers with the merged sha.
 	h.git.replies["rev-list --count HEAD..origin/main"] = "3"
 	h.git.replies["rev-parse --short origin/main"] = "bbb2222"
+	h.git.replies["rev-parse --short HEAD"] = "bbb2222"
 
 	origGit, origExec := updateGit, updateExec
 	origPre, origLock, origWrite, origSleep := updatePreflight, updateAcquireLock, updateWriteStatus, updateSleep
@@ -225,6 +233,12 @@ func TestUpdateUsageTextMentionsEveryFlag(t *testing.T) {
 func TestRunUpdateUpToDateBuildsNothing(t *testing.T) {
 	h := newUpdateHarness(t)
 	h.git.replies["rev-list --count HEAD..origin/main"] = "0"
+	// The mac app is current too — with it stale (or never installed) an
+	// up-to-date runtime deliberately still runs the mac catch-up, which is
+	// its own test below.
+	if err := jobs.WriteUpdateStatus(jobs.UpdateStatus{Phase: jobs.UpdateDone, StartedAt: 1, UpdatedAt: 1, MacAppSHA: "aaa1111"}); err != nil {
+		t.Fatalf("seed prior record: %v", err)
+	}
 
 	var buf strings.Builder
 	if err := runUpdate(updateOpts{}, &buf); err != nil {
@@ -340,11 +354,20 @@ func TestRunUpdatePutsGoOnThePathOfEveryBuildTool(t *testing.T) {
 			path = strings.TrimPrefix(kv, "PATH=")
 		}
 	}
-	if !strings.HasPrefix(path, "/usr/local/go/bin:") {
-		t.Fatalf("build tools ran with PATH=%q, want the resolved go's dir prepended", path)
-	}
-	if !strings.Contains(path, "/usr/bin") {
+	// Every resolved tool's dir must sit AHEAD of the inherited entries —
+	// the bare `go`/`npm`/`xcodegen` calls inside the Makefile are what the
+	// prepends exist for. Order among the prepended dirs is immaterial (each
+	// is resolved to an absolute path before its dir is prepended), so the
+	// assertion is position-relative, not prefix-exact.
+	inheritedAt := strings.Index(path, "/usr/bin:/bin")
+	if inheritedAt < 0 {
 		t.Fatalf("PATH=%q dropped the inherited entries — make/git/codesign still have to be findable", path)
+	}
+	for _, dir := range []string{"/usr/local/go/bin", "/opt/node/bin", "/opt/homebrew/bin"} {
+		at := strings.Index(path, dir)
+		if at < 0 || at > inheritedAt {
+			t.Fatalf("build tools ran with PATH=%q, want %s ahead of the inherited entries", path, dir)
+		}
 	}
 }
 
@@ -359,11 +382,12 @@ func TestRunUpdatePutsGoOnThePathOfEveryBuildTool(t *testing.T) {
 // web/_ui/dist, which web/embed.go embeds — so npm has exactly the same
 // launchd-PATH exposure go has, and both directories have to land on PATH.
 //
-// It exercises util.ToolchainEnv APPLIED TWICE, which is how runUpdate builds
-// the environment: ToolchainEnv is shared with the cell spawner and takes one
-// tool, so the updater chains it rather than widening a signature two callers
-// depend on. (util's own tests cover PrependToolDir's rules; what is pinned
-// here is that the updater actually ends up with BOTH tools on PATH.)
+// It exercises util.ToolchainEnv APPLIED PER TOOL (three chained calls in
+// runUpdate — go, npm, xcodegen): ToolchainEnv is shared with the cell
+// spawner and takes one tool, so the updater chains it rather than widening a
+// signature two callers depend on. (util's own tests cover PrependToolDir's
+// rules; what is pinned here is that the updater actually ends up with the
+// tools on PATH.)
 func TestUpdateEnvCarriesGoAndNpm(t *testing.T) {
 	pathOf := func(env []string) string {
 		for _, kv := range env {
@@ -588,7 +612,8 @@ func TestRunUpdatePhaseOrder(t *testing.T) {
 	}
 	want := []string{
 		jobs.UpdateFetching, jobs.UpdateMerging, jobs.UpdateBuilding,
-		jobs.UpdateInstalling, jobs.UpdateRestarting, jobs.UpdateDone,
+		jobs.UpdateInstalling, jobs.UpdateRestarting, jobs.UpdateMacApp,
+		jobs.UpdateDone,
 	}
 	if strings.Join(h.phases, ",") != strings.Join(want, ",") {
 		t.Fatalf("phases = %v, want %v", h.phases, want)
@@ -614,7 +639,7 @@ func TestRunUpdateTestFlagRunsTestsBetweenBuildAndInstall(t *testing.T) {
 	if err := runUpdate(updateOpts{test: true}, io.Discard); err != nil {
 		t.Fatalf("runUpdate --test: %v", err)
 	}
-	want := []string{"/usr/bin/make build", "/usr/local/go/bin/go test ./...", "/usr/bin/make install"}
+	want := []string{"/usr/bin/make build", "/usr/local/go/bin/go test -tags sqlite_fts5 ./...", "/usr/bin/make install", "/usr/bin/make install-mac"}
 	if strings.Join(h.exec.calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("exec order = %v, want %v", h.exec.calls, want)
 	}
@@ -622,7 +647,7 @@ func TestRunUpdateTestFlagRunsTestsBetweenBuildAndInstall(t *testing.T) {
 
 func TestRunUpdateFailedTestsInstallNothing(t *testing.T) {
 	h := newUpdateHarness(t)
-	h.exec.errs["/usr/local/go/bin/go test ./..."] = errors.New("exit status 1")
+	h.exec.errs["/usr/local/go/bin/go test -tags sqlite_fts5 ./..."] = errors.New("exit status 1")
 
 	err := runUpdate(updateOpts{test: true}, io.Discard)
 	if err == nil {
@@ -654,12 +679,128 @@ func TestRunUpdateMidRunFailureRecordsFailedPhase(t *testing.T) {
 	if st.Phase != jobs.UpdateFailed || !strings.Contains(st.Error, "make install failed") {
 		t.Fatalf("status = %+v, want failed carrying the install error", st)
 	}
-	// It failed inside `make install`, so the restart never happened and the
-	// run must not claim otherwise.
+	// It failed inside `make install`, so the restart never happened — and
+	// neither did the mac-app step, which sits after it — and the run must
+	// not claim otherwise.
 	for _, p := range h.phases {
-		if p == jobs.UpdateDone || p == jobs.UpdateRestarting {
+		if p == jobs.UpdateDone || p == jobs.UpdateRestarting || p == jobs.UpdateMacApp {
 			t.Fatalf("failed run passed through %q: %v", p, h.phases)
 		}
+	}
+}
+
+// --- the mac-app phase (runs LAST, so its failures find the runtime already
+// updated and restarted — the split the phase ordering exists for) ---
+
+func TestRunUpdateMacAppFailureComesAfterTheRestart(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.exec.errs["/usr/bin/make install-mac"] = errors.New("exit status 65")
+
+	if err := runUpdate(updateOpts{}, io.Discard); err == nil {
+		t.Fatal("runUpdate succeeded, want the install-mac failure")
+	}
+	st := jobs.ReadUpdateStatus()
+	if st.Phase != jobs.UpdateFailed {
+		t.Fatalf("phase = %q, want %q", st.Phase, jobs.UpdateFailed)
+	}
+	// The failure text must carry BOTH halves: the app did not update, and
+	// the runtime already did — a bare "install-mac failed" would read as the
+	// whole update having failed, which is exactly wrong.
+	if !strings.Contains(st.Error, "mac app install failed") || !strings.Contains(st.Error, "restarted") {
+		t.Fatalf("error = %q, want it to name the mac-app failure AND the completed restart", st.Error)
+	}
+	// The restart really did happen first.
+	restarted := false
+	for _, p := range h.phases {
+		if p == jobs.UpdateRestarting {
+			restarted = true
+		}
+	}
+	if !restarted {
+		t.Fatalf("phases = %v, want restarting before the mac-app failure", h.phases)
+	}
+}
+
+func TestRunUpdateRecordsTheRestartAndTheMacSHA(t *testing.T) {
+	h := newUpdateHarness(t)
+
+	if err := runUpdate(updateOpts{}, io.Discard); err != nil {
+		t.Fatalf("runUpdate: %v", err)
+	}
+	st := jobs.ReadUpdateStatus()
+	// Restarted is what the SPA's reload and the API's behind-suppression key
+	// on; MacAppSHA is what lets the next run know the app is current.
+	if !st.Restarted {
+		t.Fatalf("final record Restarted = false, want true: %+v", st)
+	}
+	if st.MacAppSHA != "bbb2222" {
+		t.Fatalf("MacAppSHA = %q, want the installed sha bbb2222", st.MacAppSHA)
+	}
+	_ = h
+}
+
+func TestRunUpdateUpToDateStillCatchesTheMacAppUp(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.git.replies["rev-list --count HEAD..origin/main"] = "0"
+	// The previous run installed the app at some OLDER commit (or failed at
+	// the mac phase, leaving this stale) — the exact trap: HEAD is current,
+	// the app is not, and `--force` is unreachable from the board.
+	if err := jobs.WriteUpdateStatus(jobs.UpdateStatus{Phase: jobs.UpdateFailed, StartedAt: 1, UpdatedAt: 1, MacAppSHA: "old0000"}); err != nil {
+		t.Fatalf("seed prior record: %v", err)
+	}
+
+	if err := runUpdate(updateOpts{}, io.Discard); err != nil {
+		t.Fatalf("runUpdate: %v", err)
+	}
+	// Only the app is rebuilt — no runtime build, install, or restart.
+	if strings.Join(h.exec.calls, "|") != "/usr/bin/make install-mac" {
+		t.Fatalf("exec calls = %v, want install-mac alone", h.exec.calls)
+	}
+	st := jobs.ReadUpdateStatus()
+	if st.Phase != jobs.UpdateDone || st.MacAppSHA != "aaa1111" {
+		t.Fatalf("final record = %+v, want done with MacAppSHA aaa1111 (the current HEAD)", st)
+	}
+	if st.Restarted {
+		t.Fatalf("catch-up run claims a restart that never happened: %+v", st)
+	}
+}
+
+func TestRunUpdateUpToDateSkipsTheMacAppWhenCurrent(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.git.replies["rev-list --count HEAD..origin/main"] = "0"
+	if err := jobs.WriteUpdateStatus(jobs.UpdateStatus{Phase: jobs.UpdateDone, StartedAt: 1, UpdatedAt: 1, MacAppSHA: "aaa1111"}); err != nil {
+		t.Fatalf("seed prior record: %v", err)
+	}
+
+	if err := runUpdate(updateOpts{}, io.Discard); err != nil {
+		t.Fatalf("runUpdate: %v", err)
+	}
+	if len(h.exec.calls) != 0 {
+		t.Fatalf("up-to-date run executed %v, want nothing", h.exec.calls)
+	}
+	if st := jobs.ReadUpdateStatus(); st.Phase != jobs.UpdateUpToDate || st.MacAppSHA != "aaa1111" {
+		t.Fatalf("final record = %+v, want uptodate with MacAppSHA carried forward", st)
+	}
+}
+
+func TestRunUpdateMissingXcodegenFailsTheMacPhaseNotTheUpdate(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.preflight.XcodegenPath = ""
+
+	if err := runUpdate(updateOpts{}, io.Discard); err == nil {
+		t.Fatal("runUpdate succeeded, want the missing-xcodegen failure")
+	}
+	// `make install-mac` must never have run — with no xcodegen the Makefile
+	// would die anyway, but the refusal must be ours, with the actionable
+	// sentence.
+	for _, call := range h.exec.calls {
+		if strings.Contains(call, "install-mac") {
+			t.Fatalf("install-mac ran without xcodegen: %v", h.exec.calls)
+		}
+	}
+	st := jobs.ReadUpdateStatus()
+	if !strings.Contains(st.Error, "xcodegen not found") || !strings.Contains(st.Error, "restarted") {
+		t.Fatalf("error = %q, want the xcodegen refusal after the completed restart", st.Error)
 	}
 }
 

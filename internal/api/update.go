@@ -125,6 +125,13 @@ type webUpdate struct {
 	UpdatedAt int64  `json:"updated_at"`
 	BuildSHA  string `json:"build_sha"`  // util.Build()
 	CheckedAt int64  `json:"checked_at"` // from UpdateAvail
+	// Restarted mirrors the run record's flag: this run replaced the binary
+	// and kickstarted the daemon. The SPA's mandatory post-update reload keys
+	// on it for the one shape `done` alone cannot express — a run that
+	// restarted and THEN failed (the mac-app phase), where skipping the
+	// reload would leave the open page's old bundle running against the new
+	// server indefinitely.
+	Restarted bool `json:"restarted"`
 }
 
 // currentUpdate merges the two independently-written sources behind the
@@ -148,7 +155,13 @@ func currentUpdate() webUpdate {
 	// write the corrected row with. Both terminal success phases count:
 	// `done` took the commits, `uptodate` proved there were none.
 	behind := av.Behind
-	if (st.Phase == jobs.UpdateDone || st.Phase == jobs.UpdateUpToDate) && st.UpdatedAt > av.CheckedAt {
+	// `failed && Restarted` joined the suppression when the mac-app phase
+	// arrived: that failure happens AFTER the merge landed, so the pre-run
+	// count is exactly as stale as it is after `done` — advertising it would
+	// paint "N BEHIND" against a binary that is current.
+	terminalAfterMerge := st.Phase == jobs.UpdateDone || st.Phase == jobs.UpdateUpToDate ||
+		(st.Phase == jobs.UpdateFailed && st.Restarted)
+	if terminalAfterMerge && st.UpdatedAt > av.CheckedAt {
 		behind = 0
 	}
 	return webUpdate{
@@ -161,6 +174,7 @@ func currentUpdate() webUpdate {
 		UpdatedAt: st.UpdatedAt,
 		BuildSHA:  util.Build(),
 		CheckedAt: av.CheckedAt,
+		Restarted: st.Restarted,
 	}
 }
 
@@ -220,7 +234,11 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UnixMilli()
-	if err := jobs.WriteUpdateStatus(jobs.UpdateStatus{Phase: jobs.UpdatePreflight, StartedAt: now, FromSHA: pf.HeadSHA}); err != nil {
+	// MacAppSHA is cross-run state — the last commit the mac app was
+	// installed at — and this claim-write replaces the whole record, so it is
+	// carried forward explicitly or the updater's catch-up logic would see a
+	// blank history on every board-started run.
+	if err := jobs.WriteUpdateStatus(jobs.UpdateStatus{Phase: jobs.UpdatePreflight, StartedAt: now, FromSHA: pf.HeadSHA, MacAppSHA: jobs.ReadUpdateStatus().MacAppSHA}); err != nil {
 		util.LogEvent("web", "error", "update", "update status write: "+err.Error())
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

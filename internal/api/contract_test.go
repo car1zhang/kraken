@@ -198,6 +198,7 @@ var webUpdateSpec = map[string]fieldSpec{
 	"updated_at": {kind: wireNumber, required: true},
 	"build_sha":  {kind: wireString, required: true},
 	"checked_at": {kind: wireNumber, required: true},
+	"restarted":  {kind: wireBool, required: true},
 }
 
 // updateReqSpec / updateStartRespSpec cover POST /api/update's request body
