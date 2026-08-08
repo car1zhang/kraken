@@ -1,0 +1,828 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		01637B3C9DB1F7707AA411C3 /* BoardScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B926C4C956353B6A38887D92 /* BoardScreen.swift */; };
+		0471364B489EF3DE06E3E1D3 /* CmdHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F8A8C8469B9FB71AC532EFF /* CmdHighlighter.swift */; };
+		0E77984E52E50667B23AF1F3 /* ThreadOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1810809F5C1EA8CA44A638 /* ThreadOverlay.swift */; };
+		1862DA8F61C1F85CBDBA9CCF /* SteerInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F4D87E51EDFDE66BC642F17 /* SteerInspector.swift */; };
+		1C518C7F3943947CA87432A1 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7E5568E4D0CCDA84F6BDC1 /* RootView.swift */; };
+		1C94240A9E5259605C1905AE /* BoardBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0346449CF82C885C18E7A72E /* BoardBar.swift */; };
+		20355EB1788B9B45BC05CC3A /* BoardDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071E496001DB328D42036351 /* BoardDrag.swift */; };
+		20FB05F7775D4F5AFACF8E55 /* ColumnView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 683D51B9027250A8C9362579 /* ColumnView.swift */; };
+		2213302F741404EA7B14113D /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71F5D2794B798146B0453D4 /* MarkdownParser.swift */; };
+		230052C840970695241D77F4 /* ChromeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53052EDDE6BFFDC8E3F2DC81 /* ChromeBar.swift */; };
+		2442D6E22BA80C811BBEE450 /* DreamScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 236B7214D37B3299C8F10FC0 /* DreamScreen.swift */; };
+		245EE624456EB087D1528C9B /* EditorForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7997642C83ADCB7CF6A2EDFD /* EditorForm.swift */; };
+		283EA102BD529539412EDBD9 /* UsagePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3036D186203E9EBC245A31E8 /* UsagePanel.swift */; };
+		2CCD39687F9243F260C75DE3 /* Background.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8546363F1CD622A509BE247F /* Background.swift */; };
+		405E4AA5953E7589A2240A1F /* Controls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BCF9CB9D90CBBA20D0783CE /* Controls.swift */; };
+		4063F343CBC608759D967D06 /* GraphPhysics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 798CEADC8CB2E9575CB75525 /* GraphPhysics.swift */; };
+		4681FA3D9E405E61B3E43916 /* IOSCompat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4979BC8E693F58228C3C6F5F /* IOSCompat.swift */; };
+		531EA3959A03744245A1E582 /* Palette.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45F58B7F91ECF48305735BB /* Palette.swift */; };
+		54C34895734DF5F2F546DE3D /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */; };
+		585D3FD3DE8FBCA29A64017D /* MarkdownHTMLMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88ECE7DB6AF2B0DD70D5AA99 /* MarkdownHTMLMac.swift */; };
+		5955B1E16EF856F2F28580ED /* Poller.swift in Sources */ = {isa = PBXBuildFile; fileRef = E94BD043270BB25F71248D54 /* Poller.swift */; };
+		5AD1552B37ED0D86DCD0BAA1 /* NotificationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB2B369C1C66E2C105247E88 /* NotificationEngine.swift */; };
+		5CBD318242BEE181DF00A019 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BAFCE2F524B0395C5B9606 /* ServerConfig.swift */; };
+		659F643FD8BCF79ACCF0A202 /* Glow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9AF12780558D130BA4A7A12 /* Glow.swift */; };
+		6D4B5F6A8668CF4FC3B389F3 /* TargetSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 511143E52A230DCFEA418CA2 /* TargetSmokeTests.swift */; };
+		6FF47B7B06B8716A04373815 /* Moves.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F90C7FAF30EDFBBA2B91984 /* Moves.swift */; };
+		7032652494BCCC4579A9ED8D /* OverlayRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2437BA3403AF1B5D435BF7AC /* OverlayRouter.swift */; };
+		71D5B518B07B2F4EED2BF7DD /* Fonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DF861A17EBE7D1B8981523F /* Fonts.swift */; };
+		7203A2E9280D958F5CB13001 /* ArtifactModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706067171A318710258ECF85 /* ArtifactModel.swift */; };
+		745C1162BDB5B73D75B6EDE1 /* BoardStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259CE622777A5E15C8708A17 /* BoardStore.swift */; };
+		75A071BE5C6CED98827EB30B /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = A9DBA67C9E55AAB12888ED6D /* Fonts */; };
+		7A8B8E572FE44195C3051331 /* InspectorAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055FE65C5E69872B5ECCEE65 /* InspectorAPI.swift */; };
+		80646AECD5754A44FD33141D /* JobCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F02F913B30AC91A4157FA40 /* JobCardView.swift */; };
+		822FB8EB385C04AC8B4477DF /* MacAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EB8024D45588A7CACA93CEB /* MacAPI.swift */; };
+		823F11BF02F2D14A7CB80A7F /* WebShellApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D521A39387F39F5A0D8DE85 /* WebShellApp.swift */; };
+		83612B69E342E685FF7845B4 /* Shapes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C8E72E94E5289623947E97A /* Shapes.swift */; };
+		84CA23199FC4CDE851AC2A6A /* ShipRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FDBFD4353EB6496427EC3DF /* ShipRun.swift */; };
+		8602BD41EBFC2D061B5181B1 /* HudContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B33BF137DEC27496370FCF /* HudContractTests.swift */; };
+		8650FC2D17BE9C38008EE56B /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BAFCE2F524B0395C5B9606 /* ServerConfig.swift */; };
+		86D99ECA835953A14BEF15D2 /* MacRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = F586EC7A140C1CCDFFF23FE2 /* MacRoute.swift */; };
+		871BB9FD5E753D270F942308 /* Panels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86E61A36B2D3C367FE951FF2 /* Panels.swift */; };
+		8DE7BD563979FCA37BA6ED1B /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5639A53794F29515A9F21BDB /* Composer.swift */; };
+		AE297D0FADBF09AB466ECA43 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA8587CFE1F0023DA53E96B2 /* Models.swift */; };
+		B265C8FACB45921EA8D2B4BF /* OverlayStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 718390C6D7F02601000CF3DD /* OverlayStack.swift */; };
+		B95BF790E09375448705323A /* HudEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F6C11C13DE1C96C12F894D6 /* HudEdgeTests.swift */; };
+		BB4768B36807F6DEA273C917 /* OverlayHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5833013F540FAD24B8F49287 /* OverlayHost.swift */; };
+		BBE6C706E57B8F0FAB7E5BC8 /* LogScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 765675FD8E1DFB8670C347B0 /* LogScreen.swift */; };
+		C493FF86A2FC1DA0C273960D /* UpdateRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C502E19C4E84C5A0B4BD85 /* UpdateRun.swift */; };
+		C6130A2264CB75512DB0558F /* JobSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */; };
+		CA5D2364D2454B4B929B63E6 /* ArchiveDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EAC50C36B526C7A8E53F /* ArchiveDrawer.swift */; };
+		D24FF279D794AE65171B21E0 /* MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2752CE6103F7D9DD09F5A874 /* MacApp.swift */; };
+		DDDC01B5081C236F69B6ED6A /* Cursors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A488029DACAAAF35774308C /* Cursors.swift */; };
+		DF6B8E30925C50A5D906E500 /* Motion.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3591B3097C90C4DD945B2CF /* Motion.swift */; };
+		E67795B11971898ACC1DBEDD /* Chips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57BED15F168BD63E08E20CAF /* Chips.swift */; };
+		EAE59BD9E7B5D8182CE4AB05 /* HudTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2BB4BA464CC5D4059D158BF /* HudTheme.swift */; };
+		EE29DA886ABCB8840EA17228 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = A9DBA67C9E55AAB12888ED6D /* Fonts */; };
+		F7E54D6213106F37088725D9 /* GraphScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0120D18E28971C2FD0DD7CAC /* GraphScreen.swift */; };
+		FBC43F9FFF258D1D27E0A2C6 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */; };
+		FDB84EA04BF8B73059652210 /* ArtifactViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2077D9EDB2B79D3B34A1CE17 /* ArtifactViewer.swift */; };
+		FDD50032DD013C488F0B01A3 /* GraphModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE08B75F6A8ADA3E9AB3E64 /* GraphModel.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8D7CC2668AB476DEE6D5D186 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0231E9A1A5F81B579E4C54D9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BF2DFF2E11C0D80B9A8F7C6B;
+			remoteInfo = KrakenMac;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0120D18E28971C2FD0DD7CAC /* GraphScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphScreen.swift; sourceTree = "<group>"; };
+		0346449CF82C885C18E7A72E /* BoardBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardBar.swift; sourceTree = "<group>"; };
+		055FE65C5E69872B5ECCEE65 /* InspectorAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorAPI.swift; sourceTree = "<group>"; };
+		071E496001DB328D42036351 /* BoardDrag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardDrag.swift; sourceTree = "<group>"; };
+		0A488029DACAAAF35774308C /* Cursors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cursors.swift; sourceTree = "<group>"; };
+		0F02F913B30AC91A4157FA40 /* JobCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobCardView.swift; sourceTree = "<group>"; };
+		171A991C5C3CE550A049B674 /* KrakenMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KrakenMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2077D9EDB2B79D3B34A1CE17 /* ArtifactViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactViewer.swift; sourceTree = "<group>"; };
+		236B7214D37B3299C8F10FC0 /* DreamScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamScreen.swift; sourceTree = "<group>"; };
+		2437BA3403AF1B5D435BF7AC /* OverlayRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayRouter.swift; sourceTree = "<group>"; };
+		259CE622777A5E15C8708A17 /* BoardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardStore.swift; sourceTree = "<group>"; };
+		260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobSearch.swift; sourceTree = "<group>"; };
+		2752CE6103F7D9DD09F5A874 /* MacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacApp.swift; sourceTree = "<group>"; };
+		3036D186203E9EBC245A31E8 /* UsagePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePanel.swift; sourceTree = "<group>"; };
+		3BCF9CB9D90CBBA20D0783CE /* Controls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Controls.swift; sourceTree = "<group>"; };
+		3EB8024D45588A7CACA93CEB /* MacAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAPI.swift; sourceTree = "<group>"; };
+		3F90C7FAF30EDFBBA2B91984 /* Moves.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Moves.swift; sourceTree = "<group>"; };
+		4979BC8E693F58228C3C6F5F /* IOSCompat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCompat.swift; sourceTree = "<group>"; };
+		511143E52A230DCFEA418CA2 /* TargetSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetSmokeTests.swift; sourceTree = "<group>"; };
+		52C502E19C4E84C5A0B4BD85 /* UpdateRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateRun.swift; sourceTree = "<group>"; };
+		53052EDDE6BFFDC8E3F2DC81 /* ChromeBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeBar.swift; sourceTree = "<group>"; };
+		5639A53794F29515A9F21BDB /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
+		57BED15F168BD63E08E20CAF /* Chips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chips.swift; sourceTree = "<group>"; };
+		5833013F540FAD24B8F49287 /* OverlayHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayHost.swift; sourceTree = "<group>"; };
+		5D521A39387F39F5A0D8DE85 /* WebShellApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebShellApp.swift; sourceTree = "<group>"; };
+		6631EAC50C36B526C7A8E53F /* ArchiveDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveDrawer.swift; sourceTree = "<group>"; };
+		683D51B9027250A8C9362579 /* ColumnView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColumnView.swift; sourceTree = "<group>"; };
+		6C8E72E94E5289623947E97A /* Shapes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shapes.swift; sourceTree = "<group>"; };
+		6F8A8C8469B9FB71AC532EFF /* CmdHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmdHighlighter.swift; sourceTree = "<group>"; };
+		706067171A318710258ECF85 /* ArtifactModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactModel.swift; sourceTree = "<group>"; };
+		718390C6D7F02601000CF3DD /* OverlayStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayStack.swift; sourceTree = "<group>"; };
+		765675FD8E1DFB8670C347B0 /* LogScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogScreen.swift; sourceTree = "<group>"; };
+		798CEADC8CB2E9575CB75525 /* GraphPhysics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphPhysics.swift; sourceTree = "<group>"; };
+		7997642C83ADCB7CF6A2EDFD /* EditorForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorForm.swift; sourceTree = "<group>"; };
+		7DF861A17EBE7D1B8981523F /* Fonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fonts.swift; sourceTree = "<group>"; };
+		7F6C11C13DE1C96C12F894D6 /* HudEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HudEdgeTests.swift; sourceTree = "<group>"; };
+		8546363F1CD622A509BE247F /* Background.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Background.swift; sourceTree = "<group>"; };
+		86E61A36B2D3C367FE951FF2 /* Panels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels.swift; sourceTree = "<group>"; };
+		88ECE7DB6AF2B0DD70D5AA99 /* MarkdownHTMLMac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHTMLMac.swift; sourceTree = "<group>"; };
+		9F4D87E51EDFDE66BC642F17 /* SteerInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerInspector.swift; sourceTree = "<group>"; };
+		9FDBFD4353EB6496427EC3DF /* ShipRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShipRun.swift; sourceTree = "<group>"; };
+		A1B33BF137DEC27496370FCF /* HudContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HudContractTests.swift; sourceTree = "<group>"; };
+		A2BB4BA464CC5D4059D158BF /* HudTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HudTheme.swift; sourceTree = "<group>"; };
+		A9AF12780558D130BA4A7A12 /* Glow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Glow.swift; sourceTree = "<group>"; };
+		A9DBA67C9E55AAB12888ED6D /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fonts; path = Kraken/Fonts; sourceTree = SOURCE_ROOT; };
+		AD1810809F5C1EA8CA44A638 /* ThreadOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadOverlay.swift; sourceTree = "<group>"; };
+		B683127C0D5897EB771C9080 /* KrakenMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KrakenMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B71F5D2794B798146B0453D4 /* MarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParser.swift; sourceTree = "<group>"; };
+		B926C4C956353B6A38887D92 /* BoardScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardScreen.swift; sourceTree = "<group>"; };
+		C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
+		C7BAFCE2F524B0395C5B9606 /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
+		CAE08B75F6A8ADA3E9AB3E64 /* GraphModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphModel.swift; sourceTree = "<group>"; };
+		D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		D45F58B7F91ECF48305735BB /* Palette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Palette.swift; sourceTree = "<group>"; };
+		DD7E5568E4D0CCDA84F6BDC1 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		E3DE3961371B84F45B398DAE /* KrakenWebShell.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KrakenWebShell.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E94BD043270BB25F71248D54 /* Poller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Poller.swift; sourceTree = "<group>"; };
+		EB2B369C1C66E2C105247E88 /* NotificationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationEngine.swift; sourceTree = "<group>"; };
+		F3591B3097C90C4DD945B2CF /* Motion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Motion.swift; sourceTree = "<group>"; };
+		F586EC7A140C1CCDFFF23FE2 /* MacRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRoute.swift; sourceTree = "<group>"; };
+		FA8587CFE1F0023DA53E96B2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		0DF1EF0E7203D7BF44A0303B /* Threads */ = {
+			isa = PBXGroup;
+			children = (
+				AD1810809F5C1EA8CA44A638 /* ThreadOverlay.swift */,
+			);
+			path = Threads;
+			sourceTree = "<group>";
+		};
+		1F36B66D880894011027670A /* KrakenWebShell */ = {
+			isa = PBXGroup;
+			children = (
+				5D521A39387F39F5A0D8DE85 /* WebShellApp.swift */,
+			);
+			path = KrakenWebShell;
+			sourceTree = "<group>";
+		};
+		28399B406D991BD3EFC5DEBF /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B683127C0D5897EB771C9080 /* KrakenMac.app */,
+				171A991C5C3CE550A049B674 /* KrakenMacTests.xctest */,
+				E3DE3961371B84F45B398DAE /* KrakenWebShell.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		572721080792A84C78A100BA /* Notifications */ = {
+			isa = PBXGroup;
+			children = (
+				EB2B369C1C66E2C105247E88 /* NotificationEngine.swift */,
+			);
+			path = Notifications;
+			sourceTree = "<group>";
+		};
+		5D6C0A77CD5A30A406697E93 /* Overlays */ = {
+			isa = PBXGroup;
+			children = (
+				5833013F540FAD24B8F49287 /* OverlayHost.swift */,
+				2437BA3403AF1B5D435BF7AC /* OverlayRouter.swift */,
+				718390C6D7F02601000CF3DD /* OverlayStack.swift */,
+			);
+			path = Overlays;
+			sourceTree = "<group>";
+		};
+		67B9EE23AAC4383157FBD674 /* Kraken */ = {
+			isa = PBXGroup;
+			children = (
+				D3BE5C8BF8CEF0C4320DEBF8 /* APIClient.swift */,
+				C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */,
+				CAE08B75F6A8ADA3E9AB3E64 /* GraphModel.swift */,
+				798CEADC8CB2E9575CB75525 /* GraphPhysics.swift */,
+				260BE899DDCBDAAD4B5F86A1 /* JobSearch.swift */,
+				B71F5D2794B798146B0453D4 /* MarkdownParser.swift */,
+				FA8587CFE1F0023DA53E96B2 /* Models.swift */,
+			);
+			name = Kraken;
+			path = ../ios/Kraken;
+			sourceTree = "<group>";
+		};
+		69D801412D083A1F447580DE /* Inspector */ = {
+			isa = PBXGroup;
+			children = (
+				6F8A8C8469B9FB71AC532EFF /* CmdHighlighter.swift */,
+				5639A53794F29515A9F21BDB /* Composer.swift */,
+				7997642C83ADCB7CF6A2EDFD /* EditorForm.swift */,
+				055FE65C5E69872B5ECCEE65 /* InspectorAPI.swift */,
+				86E61A36B2D3C367FE951FF2 /* Panels.swift */,
+				9F4D87E51EDFDE66BC642F17 /* SteerInspector.swift */,
+			);
+			path = Inspector;
+			sourceTree = "<group>";
+		};
+		6D8AEB8857398A8273BC4C36 = {
+			isa = PBXGroup;
+			children = (
+				A9DBA67C9E55AAB12888ED6D /* Fonts */,
+				ACAA0493A0D5C5A907F9A05F /* Kraken */,
+				67B9EE23AAC4383157FBD674 /* Kraken */,
+				C93EC389B7D923A056E8ACD8 /* KrakenMacTests */,
+				1F36B66D880894011027670A /* KrakenWebShell */,
+				28399B406D991BD3EFC5DEBF /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9F202C7E1954DD694270EE1F /* Chrome */ = {
+			isa = PBXGroup;
+			children = (
+				53052EDDE6BFFDC8E3F2DC81 /* ChromeBar.swift */,
+				9FDBFD4353EB6496427EC3DF /* ShipRun.swift */,
+				52C502E19C4E84C5A0B4BD85 /* UpdateRun.swift */,
+			);
+			path = Chrome;
+			sourceTree = "<group>";
+		};
+		ACAA0493A0D5C5A907F9A05F /* Kraken */ = {
+			isa = PBXGroup;
+			children = (
+				4979BC8E693F58228C3C6F5F /* IOSCompat.swift */,
+				2752CE6103F7D9DD09F5A874 /* MacApp.swift */,
+				F586EC7A140C1CCDFFF23FE2 /* MacRoute.swift */,
+				E94BD043270BB25F71248D54 /* Poller.swift */,
+				DD7E5568E4D0CCDA84F6BDC1 /* RootView.swift */,
+				C7BAFCE2F524B0395C5B9606 /* ServerConfig.swift */,
+				B0B9AE2B82F68501D936CBC9 /* Artifacts */,
+				DF8868AE684E17894927ABD7 /* Board */,
+				9F202C7E1954DD694270EE1F /* Chrome */,
+				69D801412D083A1F447580DE /* Inspector */,
+				572721080792A84C78A100BA /* Notifications */,
+				5D6C0A77CD5A30A406697E93 /* Overlays */,
+				C80136185A5BCDF90BCC3D38 /* Screens */,
+				C9D32D501649A0CE55BE188D /* Theme */,
+				0DF1EF0E7203D7BF44A0303B /* Threads */,
+			);
+			path = Kraken;
+			sourceTree = "<group>";
+		};
+		B0B9AE2B82F68501D936CBC9 /* Artifacts */ = {
+			isa = PBXGroup;
+			children = (
+				706067171A318710258ECF85 /* ArtifactModel.swift */,
+				2077D9EDB2B79D3B34A1CE17 /* ArtifactViewer.swift */,
+				88ECE7DB6AF2B0DD70D5AA99 /* MarkdownHTMLMac.swift */,
+			);
+			path = Artifacts;
+			sourceTree = "<group>";
+		};
+		C80136185A5BCDF90BCC3D38 /* Screens */ = {
+			isa = PBXGroup;
+			children = (
+				236B7214D37B3299C8F10FC0 /* DreamScreen.swift */,
+				0120D18E28971C2FD0DD7CAC /* GraphScreen.swift */,
+				765675FD8E1DFB8670C347B0 /* LogScreen.swift */,
+				3EB8024D45588A7CACA93CEB /* MacAPI.swift */,
+				3036D186203E9EBC245A31E8 /* UsagePanel.swift */,
+			);
+			path = Screens;
+			sourceTree = "<group>";
+		};
+		C93EC389B7D923A056E8ACD8 /* KrakenMacTests */ = {
+			isa = PBXGroup;
+			children = (
+				A1B33BF137DEC27496370FCF /* HudContractTests.swift */,
+				7F6C11C13DE1C96C12F894D6 /* HudEdgeTests.swift */,
+				511143E52A230DCFEA418CA2 /* TargetSmokeTests.swift */,
+			);
+			path = KrakenMacTests;
+			sourceTree = "<group>";
+		};
+		C9D32D501649A0CE55BE188D /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				8546363F1CD622A509BE247F /* Background.swift */,
+				3BCF9CB9D90CBBA20D0783CE /* Controls.swift */,
+				0A488029DACAAAF35774308C /* Cursors.swift */,
+				7DF861A17EBE7D1B8981523F /* Fonts.swift */,
+				A9AF12780558D130BA4A7A12 /* Glow.swift */,
+				A2BB4BA464CC5D4059D158BF /* HudTheme.swift */,
+				F3591B3097C90C4DD945B2CF /* Motion.swift */,
+				D45F58B7F91ECF48305735BB /* Palette.swift */,
+				6C8E72E94E5289623947E97A /* Shapes.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		DF8868AE684E17894927ABD7 /* Board */ = {
+			isa = PBXGroup;
+			children = (
+				6631EAC50C36B526C7A8E53F /* ArchiveDrawer.swift */,
+				0346449CF82C885C18E7A72E /* BoardBar.swift */,
+				071E496001DB328D42036351 /* BoardDrag.swift */,
+				B926C4C956353B6A38887D92 /* BoardScreen.swift */,
+				259CE622777A5E15C8708A17 /* BoardStore.swift */,
+				57BED15F168BD63E08E20CAF /* Chips.swift */,
+				683D51B9027250A8C9362579 /* ColumnView.swift */,
+				0F02F913B30AC91A4157FA40 /* JobCardView.swift */,
+				3F90C7FAF30EDFBBA2B91984 /* Moves.swift */,
+			);
+			path = Board;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		70992F9FEFE76665D047DA92 /* KrakenMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AE5D004135D8C4921750D3CE /* Build configuration list for PBXNativeTarget "KrakenMacTests" */;
+			buildPhases = (
+				DB522993337B8AD811C6CECD /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B200FFF04B2526E6017F8D53 /* PBXTargetDependency */,
+			);
+			name = KrakenMacTests;
+			packageProductDependencies = (
+			);
+			productName = KrakenMacTests;
+			productReference = 171A991C5C3CE550A049B674 /* KrakenMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		95A37206221FF58FB20F4BA9 /* KrakenWebShell */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EB2803B0621826DB30CF9A9A /* Build configuration list for PBXNativeTarget "KrakenWebShell" */;
+			buildPhases = (
+				47234F6BECEBDF2DFAB6F256 /* Sources */,
+				C8D56D012DDCFFD9E90CA818 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = KrakenWebShell;
+			packageProductDependencies = (
+			);
+			productName = KrakenWebShell;
+			productReference = E3DE3961371B84F45B398DAE /* KrakenWebShell.app */;
+			productType = "com.apple.product-type.application";
+		};
+		BF2DFF2E11C0D80B9A8F7C6B /* KrakenMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 567EA9FCD7D5D954138497F9 /* Build configuration list for PBXNativeTarget "KrakenMac" */;
+			buildPhases = (
+				6BC7A45632E165E7BEFCC6C0 /* Sources */,
+				F42CE9CF49D73AB2BD2F2D90 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = KrakenMac;
+			packageProductDependencies = (
+			);
+			productName = KrakenMac;
+			productReference = B683127C0D5897EB771C9080 /* KrakenMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		0231E9A1A5F81B579E4C54D9 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					70992F9FEFE76665D047DA92 = {
+						TestTargetID = BF2DFF2E11C0D80B9A8F7C6B;
+					};
+					95A37206221FF58FB20F4BA9 = {
+						DevelopmentTeam = DDUUFX5L3W;
+						ProvisioningStyle = Automatic;
+					};
+					BF2DFF2E11C0D80B9A8F7C6B = {
+						DevelopmentTeam = DDUUFX5L3W;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = DA1D96D39BA3EFC92FB89876 /* Build configuration list for PBXProject "Kraken" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 6D8AEB8857398A8273BC4C36;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 28399B406D991BD3EFC5DEBF /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BF2DFF2E11C0D80B9A8F7C6B /* KrakenMac */,
+				95A37206221FF58FB20F4BA9 /* KrakenWebShell */,
+				70992F9FEFE76665D047DA92 /* KrakenMacTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C8D56D012DDCFFD9E90CA818 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE29DA886ABCB8840EA17228 /* Fonts in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F42CE9CF49D73AB2BD2F2D90 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				75A071BE5C6CED98827EB30B /* Fonts in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		47234F6BECEBDF2DFAB6F256 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5CBD318242BEE181DF00A019 /* ServerConfig.swift in Sources */,
+				823F11BF02F2D14A7CB80A7F /* WebShellApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6BC7A45632E165E7BEFCC6C0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FBC43F9FFF258D1D27E0A2C6 /* APIClient.swift in Sources */,
+				CA5D2364D2454B4B929B63E6 /* ArchiveDrawer.swift in Sources */,
+				7203A2E9280D958F5CB13001 /* ArtifactModel.swift in Sources */,
+				FDB84EA04BF8B73059652210 /* ArtifactViewer.swift in Sources */,
+				2CCD39687F9243F260C75DE3 /* Background.swift in Sources */,
+				1C94240A9E5259605C1905AE /* BoardBar.swift in Sources */,
+				20355EB1788B9B45BC05CC3A /* BoardDrag.swift in Sources */,
+				01637B3C9DB1F7707AA411C3 /* BoardScreen.swift in Sources */,
+				745C1162BDB5B73D75B6EDE1 /* BoardStore.swift in Sources */,
+				E67795B11971898ACC1DBEDD /* Chips.swift in Sources */,
+				230052C840970695241D77F4 /* ChromeBar.swift in Sources */,
+				0471364B489EF3DE06E3E1D3 /* CmdHighlighter.swift in Sources */,
+				20FB05F7775D4F5AFACF8E55 /* ColumnView.swift in Sources */,
+				8DE7BD563979FCA37BA6ED1B /* Composer.swift in Sources */,
+				405E4AA5953E7589A2240A1F /* Controls.swift in Sources */,
+				DDDC01B5081C236F69B6ED6A /* Cursors.swift in Sources */,
+				54C34895734DF5F2F546DE3D /* DraftStore.swift in Sources */,
+				2442D6E22BA80C811BBEE450 /* DreamScreen.swift in Sources */,
+				245EE624456EB087D1528C9B /* EditorForm.swift in Sources */,
+				71D5B518B07B2F4EED2BF7DD /* Fonts.swift in Sources */,
+				659F643FD8BCF79ACCF0A202 /* Glow.swift in Sources */,
+				FDD50032DD013C488F0B01A3 /* GraphModel.swift in Sources */,
+				4063F343CBC608759D967D06 /* GraphPhysics.swift in Sources */,
+				F7E54D6213106F37088725D9 /* GraphScreen.swift in Sources */,
+				EAE59BD9E7B5D8182CE4AB05 /* HudTheme.swift in Sources */,
+				4681FA3D9E405E61B3E43916 /* IOSCompat.swift in Sources */,
+				7A8B8E572FE44195C3051331 /* InspectorAPI.swift in Sources */,
+				80646AECD5754A44FD33141D /* JobCardView.swift in Sources */,
+				C6130A2264CB75512DB0558F /* JobSearch.swift in Sources */,
+				BBE6C706E57B8F0FAB7E5BC8 /* LogScreen.swift in Sources */,
+				822FB8EB385C04AC8B4477DF /* MacAPI.swift in Sources */,
+				D24FF279D794AE65171B21E0 /* MacApp.swift in Sources */,
+				86D99ECA835953A14BEF15D2 /* MacRoute.swift in Sources */,
+				585D3FD3DE8FBCA29A64017D /* MarkdownHTMLMac.swift in Sources */,
+				2213302F741404EA7B14113D /* MarkdownParser.swift in Sources */,
+				AE297D0FADBF09AB466ECA43 /* Models.swift in Sources */,
+				DF6B8E30925C50A5D906E500 /* Motion.swift in Sources */,
+				6FF47B7B06B8716A04373815 /* Moves.swift in Sources */,
+				5AD1552B37ED0D86DCD0BAA1 /* NotificationEngine.swift in Sources */,
+				BB4768B36807F6DEA273C917 /* OverlayHost.swift in Sources */,
+				7032652494BCCC4579A9ED8D /* OverlayRouter.swift in Sources */,
+				B265C8FACB45921EA8D2B4BF /* OverlayStack.swift in Sources */,
+				531EA3959A03744245A1E582 /* Palette.swift in Sources */,
+				871BB9FD5E753D270F942308 /* Panels.swift in Sources */,
+				5955B1E16EF856F2F28580ED /* Poller.swift in Sources */,
+				1C518C7F3943947CA87432A1 /* RootView.swift in Sources */,
+				8650FC2D17BE9C38008EE56B /* ServerConfig.swift in Sources */,
+				83612B69E342E685FF7845B4 /* Shapes.swift in Sources */,
+				84CA23199FC4CDE851AC2A6A /* ShipRun.swift in Sources */,
+				1862DA8F61C1F85CBDBA9CCF /* SteerInspector.swift in Sources */,
+				0E77984E52E50667B23AF1F3 /* ThreadOverlay.swift in Sources */,
+				C493FF86A2FC1DA0C273960D /* UpdateRun.swift in Sources */,
+				283EA102BD529539412EDBD9 /* UsagePanel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DB522993337B8AD811C6CECD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8602BD41EBFC2D061B5181B1 /* HudContractTests.swift in Sources */,
+				B95BF790E09375448705323A /* HudEdgeTests.swift in Sources */,
+				6D4B5F6A8668CF4FC3B389F3 /* TargetSmokeTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B200FFF04B2526E6017F8D53 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BF2DFF2E11C0D80B9A8F7C6B /* KrakenMac */;
+			targetProxy = 8D7CC2668AB476DEE6D5D186 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		48D31A4450FCF1BB4A1D0F12 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenMacTests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraken.app/Contents/MacOS/Kraken";
+				TEST_TARGET_NAME = KrakenMac;
+			};
+			name = Debug;
+		};
+		53D6C375187CB6EFF1E18A96 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenMacTests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraken.app/Contents/MacOS/Kraken";
+				TEST_TARGET_NAME = KrakenMac;
+			};
+			name = Release;
+		};
+		6EDB0B575EF89A45097DD56E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DDUUFX5L3W;
+				INFOPLIST_FILE = "Generated-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenMac;
+				PRODUCT_MODULE_NAME = KrakenMac;
+				PRODUCT_NAME = Kraken;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		6FC8B8ACD2E0660D695D7E02 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DDUUFX5L3W;
+				INFOPLIST_FILE = "Generated-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenMac;
+				PRODUCT_MODULE_NAME = KrakenMac;
+				PRODUCT_NAME = Kraken;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+		7E129C340167FC2A3A5ABFC9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		C65FD17CA814BD22F26B2A78 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DDUUFX5L3W;
+				INFOPLIST_FILE = "Generated-WebShell-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenWebShell;
+				PRODUCT_NAME = "Kraken Web";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		F699F92A847CF9EEEDC190DC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		F6A2F755A70D9FD837671C21 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DDUUFX5L3W;
+				INFOPLIST_FILE = "Generated-WebShell-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.carl.KrakenWebShell;
+				PRODUCT_NAME = "Kraken Web";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		567EA9FCD7D5D954138497F9 /* Build configuration list for PBXNativeTarget "KrakenMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6FC8B8ACD2E0660D695D7E02 /* Debug */,
+				6EDB0B575EF89A45097DD56E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AE5D004135D8C4921750D3CE /* Build configuration list for PBXNativeTarget "KrakenMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				48D31A4450FCF1BB4A1D0F12 /* Debug */,
+				53D6C375187CB6EFF1E18A96 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DA1D96D39BA3EFC92FB89876 /* Build configuration list for PBXProject "Kraken" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F699F92A847CF9EEEDC190DC /* Debug */,
+				7E129C340167FC2A3A5ABFC9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EB2803B0621826DB30CF9A9A /* Build configuration list for PBXNativeTarget "KrakenWebShell" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F6A2F755A70D9FD837671C21 /* Debug */,
+				C65FD17CA814BD22F26B2A78 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 0231E9A1A5F81B579E4C54D9 /* Project object */;
+}

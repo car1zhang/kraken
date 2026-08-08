@@ -1,0 +1,155 @@
+name: Kraken
+options:
+  bundleIdPrefix: dev.carl
+  deploymentTarget:
+    macOS: "15.0"
+configs:
+  Debug: debug
+  Release: release
+targets:
+  KrakenMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      # The mac app's own sources. Fonts/ is excluded here and re-added below
+      # as a FOLDER so it survives as a directory inside the bundle.
+      - path: Kraken
+        excludes:
+          - Fonts
+      # A folder REFERENCE, not a group: xcodegen's default (a group) would add
+      # each .ttf as an individual resource, and the copy phase flattens those
+      # into Resources/ with no Fonts/ directory — at which point the
+      # ATSApplicationFontsPath below points at nothing and no bundled face
+      # registers. `type: folder` copies the directory wholesale, which is what
+      # that key needs.
+      - path: Kraken/Fonts
+        type: folder
+        buildPhase: resources
+      # Platform-agnostic sources REFERENCED out of the iOS app rather than
+      # duplicated (51-code-map.md: divergence is the trigger for duplication,
+      # not a default). These eight are Foundation/CoreGraphics/Observation
+      # only — verified this session: no UIKit import, no `@available`, no
+      # `#if os`. ios/ is read-only to this job; if one ever stops compiling on
+      # macOS it gets copied into macos/Kraken/ and dropped from this list.
+      #
+      # MarkdownHTML.swift is the ninth candidate and is DELIBERATELY ABSENT:
+      # its `themeCSSVariables()` reads `ThemeTint.resolve` and
+      # `KTheme.themeTintKey` out of ios/Kraken/Theme.swift, and Theme.swift is
+      # explicitly not referenced (51-code-map.md — iOS keeps liquid glass, the
+      # mac gets the HUD engine). Referencing it fails to compile with
+      # "cannot find 'ThemeTint' in scope" at MarkdownHTML.swift:117, measured.
+      # Wave 2's artifact viewer copies it into macos/Kraken/ and repoints its
+      # CSS variables at the HUD theme, which is what the shell has to emit
+      # anyway.
+      - path: ../ios/Kraken/Models.swift
+      - path: ../ios/Kraken/APIClient.swift
+      - path: ../ios/Kraken/GraphPhysics.swift
+      - path: ../ios/Kraken/GraphModel.swift
+      - path: ../ios/Kraken/MarkdownParser.swift
+      - path: ../ios/Kraken/JobSearch.swift
+      - path: ../ios/Kraken/DraftStore.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.carl.KrakenMac
+        # The shipped bundle is Kraken.app (that is what `make install-mac`
+        # puts in /Applications and what the Dock shows), but the Swift MODULE
+        # stays KrakenMac because 50-contract.md freezes `@testable import
+        # KrakenMac`. PRODUCT_MODULE_NAME defaults to PRODUCT_NAME, so it has
+        # to be pinned here or renaming the product silently renames the module
+        # and every blind-authored test stops resolving.
+        PRODUCT_NAME: Kraken
+        PRODUCT_MODULE_NAME: KrakenMac
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: DDUUFX5L3W  # same team as the iOS target
+        SWIFT_VERSION: "5.10"
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: "1.0"
+    info:
+      path: Generated-Info.plist
+      properties:
+        CFBundleDisplayName: Kraken
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The mac spelling of "register the TTFs in this bundle subdirectory".
+        # NOT the iOS-only UIAppFonts key (54-scope.md), which macOS ignores
+        # silently — the failure mode is fonts that simply never appear.
+        ATSApplicationFontsPath: Fonts
+        # kraken://board, kraken://board/<column>, kraken://job/<slug>,
+        # kraken://graph, kraken://log, kraken://dream, kraken://settings —
+        # parsed by MacRoute, handled via .onOpenURL.
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.carl.KrakenMac
+            CFBundleURLSchemes:
+              - kraken
+        # kraken serve binds plain HTTP on loopback. macOS ATS blocks that
+        # without a declaration; NSAllowsLocalNetworking is the narrow one —
+        # it permits local/loopback hosts only, unlike the iOS target's
+        # NSAllowsArbitraryLoads, which that app needs because its server is a
+        # tailnet IP rather than a local name.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+  # The WKWebView-shell EXPERIMENT (carl's manual-gate ask): a native titlebar
+  # strip over a web view pointed at kraken serve's own SPA, built as its own
+  # tiny app so the two renderings can be compared side by side. It shares
+  # ServerConfig.swift with the native app and nothing else.
+  KrakenWebShell:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: KrakenWebShell
+      - path: Kraken/ServerConfig.swift
+      # Same folder-reference reasoning as the native target above: the strip's
+      # wordmark wants Chakra Petch, and ATSApplicationFontsPath needs a real
+      # Fonts/ directory inside the bundle.
+      - path: Kraken/Fonts
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.carl.KrakenWebShell
+        PRODUCT_NAME: Kraken Web
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: DDUUFX5L3W
+        SWIFT_VERSION: "5.10"
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: "1.0"
+    info:
+      path: Generated-WebShell-Info.plist
+      properties:
+        CFBundleDisplayName: Kraken Web
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ATSApplicationFontsPath: Fonts
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+  KrakenMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: KrakenMacTests
+    dependencies:
+      - target: KrakenMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.carl.KrakenMacTests
+        SWIFT_VERSION: "5.10"
+        TEST_TARGET_NAME: KrakenMac
+        GENERATE_INFOPLIST_FILE: YES
+        # xcodegen derives TEST_HOST from the app TARGET's name, which is
+        # KrakenMac, while the app's PRODUCT_NAME is Kraken — so the default
+        # points at a KrakenMac.app that is never built and xcodebuild refuses
+        # with "Could not find test host". Pinned here to the real product.
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Kraken.app/Contents/MacOS/Kraken
+        BUNDLE_LOADER: $(TEST_HOST)
+schemes:
+  KrakenMac:
+    build:
+      targets:
+        KrakenMac: all
+        KrakenMacTests: [test]
+    test:
+      targets:
+        - KrakenMacTests

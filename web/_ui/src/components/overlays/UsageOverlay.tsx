@@ -103,10 +103,6 @@ export function UsageStatContent({ data }: { data: WebUsage | undefined }) {
     );
   }
   const pool = accounts.filter((a) => a !== main);
-  const weeklies = pool
-    .map((a) => readWindow(a.weekly)?.percent)
-    .filter((p): p is number => p !== undefined);
-  const worst = weeklies.length ? Math.max(...weeklies) : null;
   const ageS = num(data.age_seconds) ?? 0;
   const stale = !data.daemon_ok || ageS > 900;
   // manual-pin chip: absent on an older server (rotation_mode undefined there,
@@ -125,17 +121,7 @@ export function UsageStatContent({ data }: { data: WebUsage | undefined }) {
       {pool.length ? (
         <>
           <span className="u-sep">·</span>
-          <span className="u-pool">
-            pool {pool.length}
-            {worst !== null ? (
-              <>
-                {" · worst 7d "}
-                <span className={usageColorClass(worst)}>
-                  {Math.round(worst)}%
-                </span>
-              </>
-            ) : null}
-          </span>
+          <span className="u-pool">pool {pool.length}</span>
         </>
       ) : null}
       {manual ? (
