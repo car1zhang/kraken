@@ -177,6 +177,68 @@ func TestRunQuestionsSetRejectsMalformedStdin(t *testing.T) {
 	if err := runQuestionsSet([]string{"demo-job"}, strings.NewReader(`{"not":"an array"}`)); err == nil {
 		t.Fatal("want an error for a non-array stdin body")
 	}
+	if err := runQuestionsSet([]string{"demo-job"}, strings.NewReader(`{"questions":"not an array"}`)); err == nil {
+		t.Fatal("want an error for an envelope whose questions key is not an array")
+	}
+	if err := runQuestionsSet([]string{"demo-job"}, strings.NewReader(`{"questions":null}`)); err == nil {
+		t.Fatal("want an error for an envelope holding null")
+	}
+}
+
+// TestRunQuestionsSetAcceptsGetEnvelope pins the read-edit-set round trip:
+// `questions get` prints {"questions":[…]}, and `set` must accept that exact
+// envelope back rather than demanding the caller unwrap it — a zeus fed
+// `get`'s output straight into `set` and got "cannot unmarshal object" for
+// doing the obvious thing. The forwarded body must carry the INNER array,
+// byte-identical to the bare-array path.
+func TestRunQuestionsSetAcceptsGetEnvelope(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
+
+	stdin := strings.NewReader(`{"questions":[{"id":"Q1","text":"why?","importance":"P1"}]}`)
+	if err := runQuestionsSet([]string{"demo-job"}, stdin); err != nil {
+		t.Fatalf("runQuestionsSet: %v", err)
+	}
+	if gotBody["slug"] != "demo-job" {
+		t.Fatalf("slug = %v", gotBody["slug"])
+	}
+	qs, ok := gotBody["questions"].([]any)
+	if !ok || len(qs) != 1 {
+		t.Fatalf("questions = %v (want the unwrapped inner array)", gotBody["questions"])
+	}
+	q, ok := qs[0].(map[string]any)
+	if !ok || q["id"] != "Q1" || q["text"] != "why?" || q["importance"] != "P1" {
+		t.Fatalf("question = %v", qs[0])
+	}
+}
+
+// TestRunQuestionsSetRefusesForeignSlugEnvelope: `get`'s envelope never
+// carries a slug, so a body naming a DIFFERENT job than the command's arg is
+// a full POST body aimed elsewhere — and set is a bulk replace, so accepting
+// it would silently wipe the arg's job with another job's questions. A
+// matching slug stays accepted (harmless redundancy).
+func TestRunQuestionsSetRefusesForeignSlugEnvelope(t *testing.T) {
+	err := runQuestionsSet([]string{"demo-job"},
+		strings.NewReader(`{"slug":"other-job","questions":[{"id":"Q1"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "other-job") {
+		t.Fatalf("err = %v, want a refusal naming the mismatched slug", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
+	if err := runQuestionsSet([]string{"demo-job"},
+		strings.NewReader(`{"slug":"demo-job","questions":[{"id":"Q1"}]}`)); err != nil {
+		t.Fatalf("matching slug must stay accepted, got %v", err)
+	}
 }
 
 func TestRunQuestionsUpsertPostsOpAndQuestion(t *testing.T) {
