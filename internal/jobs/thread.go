@@ -414,21 +414,36 @@ func threadSnapshotTrusted(sess string, all []*core.Peer, live map[string]bool, 
 // Escape into a thread's pane, which is recoverable, whereas failing the whole
 // verb is not.
 func liveThreadPanesFor(j *Job) map[string]bool {
+	out, _ := liveThreadPanesForOK(j)
+	return out
+}
+
+// liveThreadPanesForOK is the readability-aware sibling, for the one caller
+// whose failure mode is NOT recoverable: the usage-limit rescue respawns a
+// pane with `-k`, so a thread pane wrongly absent from this set is carl's
+// side conversation SIGKILLed, not a stray Escape. ok is false only when the
+// store was asked and refused — no store wired and a job with no id are
+// ordinary "there are no threads" answers, not failures to read.
+//
+// The two exist rather than one strict function because fail-open is right
+// for Stop and wrong for a kill, and a single behaviour would have to be
+// wrong for one of them.
+func liveThreadPanesForOK(j *Job) (panes map[string]bool, ok bool) {
 	out := map[string]bool{}
 	st := ActiveStore()
 	if st == nil || j.ID == 0 {
-		return out
+		return out, true
 	}
 	threads, err := st.ListThreads(j.ID)
 	if err != nil {
-		return out
+		return out, false
 	}
 	for _, t := range threads {
 		if t.State == "live" && t.Pane != "" {
 			out[t.Pane] = true
 		}
 	}
-	return out
+	return out, true
 }
 
 // threadSpawnCommand renders the shell command a thread's window runs, for

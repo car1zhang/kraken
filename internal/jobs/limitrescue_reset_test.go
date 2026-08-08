@@ -10,7 +10,7 @@ import (
 // parseLimitReset and its staleness cap, the exhausted-attempts gate's reset
 // branch, the park that stays open, the unbounded same-error fold that keeps
 // the attempt counter honest under the transcript trigger's re-deliveries,
-// the fold's reset-clause details adoption, and the reset nudge's own
+// the fold's reset-clause details adoption, and the reset resume's own
 // failure allowance. Evidence behind the feature: four cells on 2026-08-06
 // sat 42m–10h37m dead past a reset their own banner named, because a
 // parked-no-target hit was terminal.
@@ -186,12 +186,12 @@ func TestLimitResetDecideHoldsThenReleases(t *testing.T) {
 	if action, _ := limitRescueDecide(hit, "auto", true, false, reset.Add(limitResetSettle-time.Second)); action != rescueSkip {
 		t.Errorf("inside settle: action = %q, want skip", action)
 	}
-	// Past reset + settle: the no-swap nudge.
+	// Past reset + settle: the no-swap resume.
 	action, reason := limitRescueDecide(hit, "auto", true, false, reset.Add(limitResetSettle))
-	if action != rescueNudge {
-		t.Fatalf("past reset+settle: action = %q (%s), want nudge", action, reason)
+	if action != rescueResume {
+		t.Fatalf("past reset+settle: action = %q (%s), want resume", action, reason)
 	}
-	// A dead cell still never gets nudged — gate 4 outranks the re-arm.
+	// A dead cell still never gets resumed — gate 4 outranks the re-arm.
 	if action, _ := limitRescueDecide(hit, "auto", false, false, reset.Add(time.Hour)); action != rescueSkip {
 		t.Errorf("dead cell past reset: action = %q, want skip", action)
 	}
@@ -230,11 +230,11 @@ func TestLimitResetParkStaysUnresolved(t *testing.T) {
 	}
 }
 
-// The reset re-arm arrives at its nudge with Attempts already spent by the
+// The reset re-arm arrives at its resume with Attempts already spent by the
 // parks, so the no-agents cap is path-relative: at the old absolute cap a
 // single empty discovery snapshot — "not exotic" per the code's own comment
 // — would have spent the re-arm's only shot and closed the hit forever.
-func TestLimitResetNudgeGetsItsOwnFailureAllowance(t *testing.T) {
+func TestLimitResetResumeGetsItsOwnFailureAllowance(t *testing.T) {
 	now := resetHitAnchor(t)
 	hit := LimitHit{
 		Error:    "rate_limit",
@@ -245,12 +245,12 @@ func TestLimitResetNudgeGetsItsOwnFailureAllowance(t *testing.T) {
 	}
 	// Two more failed rounds stay open (attempts 4 and 5); the sixth parks.
 	for i := 0; i < 2; i++ {
-		hit = limitRescueApply(hit, rescueNudge, "no-agents", "", now)
+		hit = limitRescueApply(hit, rescueResume, "no-agents", "", now)
 		if hit.HandledAt != 0 {
-			t.Fatalf("failed reset nudge %d resolved the hit: %+v", i+1, hit)
+			t.Fatalf("failed reset resume %d resolved the hit: %+v", i+1, hit)
 		}
 	}
-	hit = limitRescueApply(hit, rescueNudge, "no-agents", "", now)
+	hit = limitRescueApply(hit, rescueResume, "no-agents", "", now)
 	if hit.HandledAt == 0 || hit.Outcome != "parked-no-agents" {
 		t.Fatalf("after %d failed rounds = (HandledAt %d, Outcome %q), want parked-no-agents", hit.Attempts, hit.HandledAt, hit.Outcome)
 	}
@@ -258,9 +258,9 @@ func TestLimitResetNudgeGetsItsOwnFailureAllowance(t *testing.T) {
 	// The swap path keeps its absolute cap: swapped hits arrive with fewer
 	// attempts spent and must not inherit the doubled allowance.
 	swapped := LimitHit{Error: "rate_limit", At: now.Unix(), Attempts: limitRescueMaxAttempts - 1, SwappedAt: now.Unix()}
-	swapped = limitRescueApply(swapped, rescueNudge, "no-agents", "", now)
+	swapped = limitRescueApply(swapped, rescueResume, "no-agents", "", now)
 	if swapped.HandledAt == 0 || swapped.Outcome != "parked-no-agents" {
-		t.Fatalf("swap-path nudge at the cap = (HandledAt %d, Outcome %q), want parked-no-agents", swapped.HandledAt, swapped.Outcome)
+		t.Fatalf("swap-path resume at the cap = (HandledAt %d, Outcome %q), want parked-no-agents", swapped.HandledAt, swapped.Outcome)
 	}
 }
 
@@ -299,7 +299,7 @@ func TestLimitResetFoldAdoptsResetBearingDetails(t *testing.T) {
 
 // The end-to-end shape the re-arm exists for: a standing stall re-delivered
 // every ten minutes must accumulate parks on ONE record until the reset
-// releases the nudge — under the old windowed fold each re-delivery minted a
+// releases the resume — under the old windowed fold each re-delivery minted a
 // fresh record and the counter oscillated 0↔1 forever.
 func TestLimitResetSurvivesTranscriptRedeliveries(t *testing.T) {
 	st := useTestStore(t)
@@ -340,10 +340,10 @@ func TestLimitResetSurvivesTranscriptRedeliveries(t *testing.T) {
 	if hit.Attempts != limitRescueMaxAttempts || hit.HandledAt != 0 || hit.Outcome != "parked-until-reset" {
 		t.Fatalf("after three interleaved rounds = %+v, want an unresolved parked-until-reset at the cap", hit)
 	}
-	// The reset passes; the next decide releases the no-swap nudge.
+	// The reset passes; the next decide releases the no-swap resume.
 	after := time.Unix(hit.ResetAt, 0).Add(limitResetSettle)
-	if action, reason := limitRescueDecide(hit, "auto", true, false, after); action != rescueNudge {
-		t.Fatalf("past reset: action = %q (%s), want nudge", action, reason)
+	if action, reason := limitRescueDecide(hit, "auto", true, false, after); action != rescueResume {
+		t.Fatalf("past reset: action = %q (%s), want resume", action, reason)
 	}
 }
 

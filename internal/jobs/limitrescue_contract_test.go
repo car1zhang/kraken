@@ -866,7 +866,7 @@ func TestContractLimitRescueActionValues(t *testing.T) {
 	}{
 		{rescueSkip, "skip"},
 		{rescueRotate, "rotate"},
-		{rescueNudge, "nudge"},
+		{rescueResume, "resume"},
 		{rescueParkManual, "park-manual"},
 		{rescueParkNoTarget, "park-no-target"},
 	}
@@ -953,9 +953,9 @@ func TestContractLimitRescueDecideChain(t *testing.T) {
 			want: rescueSkip,
 		},
 		{
-			// gate 5, settled: the swap landed and the credential has had time
-			// to propagate, so this tick delivers the nudge
-			name: "gate 5: a settled swap nudges",
+			// gate 5, settled: the swap landed and was recorded a settle
+			// window ago, so this tick performs the resume
+			name: "gate 5: a settled swap resumes",
 			hit: with(func(h *LimitHit) {
 				h.SwappedAt = contractLimitNow.Add(-limitRescueSettle).Unix()
 				h.SwappedTo = "other@example.com"
@@ -963,12 +963,11 @@ func TestContractLimitRescueDecideChain(t *testing.T) {
 				h.LastAttempt = contractLimitNow.Add(-limitRescueSettle).Unix()
 			}),
 			mode: "auto", live: true, target: true,
-			want: rescueNudge,
+			want: rescueResume,
 		},
 		{
-			// gate 5, unsettled: a request 0.4s after the write still used the
-			// old token, so the nudge waits — enforced across ticks, never by
-			// sleeping inside one
+			// gate 5, unsettled: the swap is too fresh, so the resume waits —
+			// enforced across ticks, never by sleeping inside one
 			name: "gate 5: an unsettled swap waits",
 			hit: with(func(h *LimitHit) {
 				h.SwappedAt = contractLimitNow.Add(-limitRescueSettle + time.Second).Unix()
@@ -1077,43 +1076,43 @@ func TestContractLimitRescueDecideManualNeverRotates(t *testing.T) {
 }
 
 // TestContractLimitRescueDecideSwapOutranksManual is the second named
-// ordering: "gate 5 sits ABOVE gate 6 because once a swap has landed the nudge
+// ordering: "gate 5 sits ABOVE gate 6 because once a swap has landed the resume
 // must complete even if the mode changed in between — a swapped cell left
-// un-nudged is worse than either outcome on its own". It also has to outrank
+// un-resumed is worse than either outcome on its own". It also has to outrank
 // the two gates below 6, so an exhausted attempt count or an active backoff
-// cannot swallow the nudge either.
+// cannot swallow the resume either.
 func TestContractLimitRescueDecideSwapOutranksManual(t *testing.T) {
 	settled := contractLimitRotatable()
 	settled.SwappedAt = contractLimitNow.Add(-limitRescueSettle).Unix()
 	settled.SwappedTo = "other@example.com"
 
-	t.Run("manual mode set after the swap still nudges", func(t *testing.T) {
+	t.Run("manual mode set after the swap still resumes", func(t *testing.T) {
 		got, _ := limitRescueDecide(settled, "manual", true, true, contractLimitNow)
-		if got != rescueNudge {
-			t.Fatalf("decided %q, want nudge — a swapped cell must not be left un-nudged", got)
+		if got != rescueResume {
+			t.Fatalf("decided %q, want resume — a swapped cell must not be left un-resumed", got)
 		}
 	})
-	t.Run("exhausted attempts still nudge", func(t *testing.T) {
+	t.Run("exhausted attempts still resume", func(t *testing.T) {
 		h := settled
 		h.Attempts = limitRescueMaxAttempts
 		got, _ := limitRescueDecide(h, "auto", true, true, contractLimitNow)
-		if got != rescueNudge {
-			t.Fatalf("decided %q, want nudge", got)
+		if got != rescueResume {
+			t.Fatalf("decided %q, want resume", got)
 		}
 	})
-	t.Run("an active backoff still nudges", func(t *testing.T) {
+	t.Run("an active backoff still resumes", func(t *testing.T) {
 		h := settled
 		h.Attempts = 1
 		h.LastAttempt = contractLimitNow.Unix()
 		got, _ := limitRescueDecide(h, "auto", true, true, contractLimitNow)
-		if got != rescueNudge {
-			t.Fatalf("decided %q, want nudge", got)
+		if got != rescueResume {
+			t.Fatalf("decided %q, want resume", got)
 		}
 	})
-	t.Run("no target left in the pool still nudges", func(t *testing.T) {
+	t.Run("no target left in the pool still resumes", func(t *testing.T) {
 		got, _ := limitRescueDecide(settled, "auto", true, false, contractLimitNow)
-		if got != rescueNudge {
-			t.Fatalf("decided %q, want nudge — the swap already happened, the pool no longer matters", got)
+		if got != rescueResume {
+			t.Fatalf("decided %q, want resume — the swap already happened, the pool no longer matters", got)
 		}
 	})
 }
@@ -1142,7 +1141,7 @@ func TestContractLimitRescueDecideEarlyGatesOutrankLaterOnes(t *testing.T) {
 			want: rescueSkip,
 		},
 		{
-			// gate 2 above gate 5: the nudge already ran
+			// gate 2 above gate 5: the resume already ran
 			name: "handled outranks a settled swap",
 			hit: func() LimitHit {
 				h := swapped(contractLimitRotatable())
@@ -1152,7 +1151,7 @@ func TestContractLimitRescueDecideEarlyGatesOutrankLaterOnes(t *testing.T) {
 			want: rescueSkip,
 		},
 		{
-			// gate 4 above gate 5: nudging a dead cell reaches nothing
+			// gate 4 above gate 5: resuming a dead cell reaches nothing
 			name: "a dead cell outranks a settled swap",
 			hit:  swapped(contractLimitRotatable()), mode: "auto", live: false, target: true,
 			want: rescueSkip,
@@ -1225,10 +1224,17 @@ func TestContractLimitRescueDecideIsPure(t *testing.T) {
 
 // --- jobs.cellAgentPanes ---
 //
-// Contract row `jobs.cellAgentPanes`: "same-session depth-0 claude/codex
-// panes, plus zeus' pane and its tmux teammates, minus live side-thread
-// panes". The map's KEY is not frozen by the contract, so every assertion here
-// reads the VALUES' panes.
+// There is no `jobs.cellAgentPanes` row in the contract — v1's row said only
+// that `nudgeCellAgents` "targets exactly cellAgentPanes(j, all)", and the
+// enumeration itself is interrupt.go's own documented definition:
+// same-session depth-0 claude/codex panes, plus zeus' pane and its tmux
+// teammates, minus live side-thread panes. These cases pin THAT, which is
+// where the definition actually lives. The map's KEY is frozen by nothing,
+// so every assertion here reads the VALUES' panes.
+//
+// v2 note: the rescue no longer reads this set at all — it resumes zeus
+// alone, since a teammate has no session id to resume — so what remains
+// below covers InterruptCell's Stop targets, its only non-test caller.
 
 // contractLimitPaneSet lists the panes of every peer in a cellAgentPanes
 // result, sorted — key-agnostic by design.
@@ -1252,7 +1258,7 @@ func TestContractLimitCellAgentPanesEnumeration(t *testing.T) {
 	// a tmux teammate hangs off zeus rather than appearing in `all`
 	zeus.Teammates = []*core.Peer{
 		{Pane: "%5", Agent: "claude", Name: "hephaestus-slice-a"},
-		{Pane: "", Agent: "claude", Name: "in-process-teammate"}, // no pane: nothing to nudge
+		{Pane: "", Agent: "claude", Name: "in-process-teammate"}, // no pane: nothing to address
 	}
 	all := []*core.Peer{
 		zeus,
@@ -1272,8 +1278,8 @@ func TestContractLimitCellAgentPanesEnumeration(t *testing.T) {
 }
 
 // TestContractLimitCellAgentPanesDedupesByPane: a nested subagent shares its
-// lead's pane, so one pane must appear exactly once — the nudge is sent per
-// pane, and sending it twice types the message twice.
+// lead's pane, so one pane must appear exactly once — Stop's Escape is sent
+// per pane, and sending it twice interrupts that pane twice.
 func TestContractLimitCellAgentPanesDedupesByPane(t *testing.T) {
 	j := &Job{Slug: "dedupe"}
 	sess := CellSession(j)
@@ -1463,7 +1469,7 @@ func TestContractLimitHookPostsTheDocumentedFieldNames(t *testing.T) {
 // arms below are the ones that previously had no assertion anywhere.
 //
 // Dimension split for this batch: the NORMAL arms are mine (skip,
-// rotate/"swapped", nudge, park-manual). The rotate-with-a-failing-outcome
+// rotate/"swapped", resume, park-manual). The rotate-with-a-failing-outcome
 // arm and park-no-target's increment-then-test threshold are boundary/refusal
 // work and belong to the sibling author.
 
@@ -1530,9 +1536,9 @@ func TestContractLimitApplySkipReturnsHitUnchanged(t *testing.T) {
 
 // TestContractLimitApplyRotateSwapped is the first half of the two-phase
 // design: "sets SwappedAt = now, SwappedTo = toEmail, increments Attempts,
-// sets LastAttempt = now, and leaves HandledAt zero — the nudge on a later
+// sets LastAttempt = now, and leaves HandledAt zero — the resume on a later
 // tick is what resolves the hit". The HandledAt-stays-zero clause is the
-// load-bearing one: resolve here and the nudge never runs, leaving a cell
+// load-bearing one: resolve here and the resume never runs, leaving a cell
 // swapped onto a fresh account and still sitting on a dead turn.
 func TestContractLimitApplyRotateSwapped(t *testing.T) {
 	base := contractLimitApplyBase()
@@ -1551,26 +1557,26 @@ func TestContractLimitApplyRotateSwapped(t *testing.T) {
 		t.Errorf("LastAttempt = %d, want %d", got.LastAttempt, contractLimitNow.Unix())
 	}
 	if got.HandledAt != 0 {
-		t.Errorf("HandledAt = %d, want 0 — the swap does not resolve the hit, the nudge does", got.HandledAt)
+		t.Errorf("HandledAt = %d, want 0 — the swap does not resolve the hit, the resume does", got.HandledAt)
 	}
 	contractLimitApplyIdentityHeld(t, got, base)
 }
 
-// TestContractLimitApplyNudgeResolves is the second half: "rescueNudge sets
-// HandledAt = now and Outcome = 'rotated', and resolves the hit whether or
-// not every pane was reachable". Asserted across three plausible nudge
-// outcomes precisely because the row says the resolution does not depend on
-// them — re-running the swap would be wrong either way.
-func TestContractLimitApplyNudgeResolves(t *testing.T) {
+// TestContractLimitApplyResumeResolves is the second half: "rescueResume sets
+// HandledAt = now and Outcome = 'rotated' on any outcome that is not the
+// 'no-agents' literal". Asserted across three plausible resume outcomes
+// precisely because the row says the resolution does not depend on them —
+// re-running the swap would be wrong either way.
+func TestContractLimitApplyResumeResolves(t *testing.T) {
 	base := contractLimitApplyBase()
 	base.SwappedAt = contractLimitNow.Add(-limitRescueSettle).Unix()
 	base.SwappedTo = "rescued@example.com"
 	base.Attempts = 1
 	base.LastAttempt = base.SwappedAt
 
-	for _, outcome := range []string{"nudged", "partial", ""} {
+	for _, outcome := range []string{"resumed", "partial", ""} {
 		t.Run("outcome="+outcome, func(t *testing.T) {
-			got := limitRescueApply(base, rescueNudge, outcome, "", contractLimitNow)
+			got := limitRescueApply(base, rescueResume, outcome, "", contractLimitNow)
 			if got.HandledAt != contractLimitNow.Unix() {
 				t.Errorf("HandledAt = %d, want %d — the hit must be resolved", got.HandledAt, contractLimitNow.Unix())
 			}
@@ -1578,12 +1584,12 @@ func TestContractLimitApplyNudgeResolves(t *testing.T) {
 				t.Errorf("Outcome = %q, want %q", got.Outcome, "rotated")
 			}
 			// the swap watermark is history now, not state to clear, and the
-			// attempt counters describe rotates rather than nudges
+			// attempt counters describe rotates rather than resumes
 			if got.SwappedAt != base.SwappedAt || got.SwappedTo != base.SwappedTo {
-				t.Errorf("nudge disturbed the swap watermark: %d/%q, want %d/%q", got.SwappedAt, got.SwappedTo, base.SwappedAt, base.SwappedTo)
+				t.Errorf("resume disturbed the swap watermark: %d/%q, want %d/%q", got.SwappedAt, got.SwappedTo, base.SwappedAt, base.SwappedTo)
 			}
 			if got.Attempts != base.Attempts || got.LastAttempt != base.LastAttempt {
-				t.Errorf("nudge moved a rotate counter: Attempts %d LastAttempt %d, want %d / %d", got.Attempts, got.LastAttempt, base.Attempts, base.LastAttempt)
+				t.Errorf("resume moved a rotate counter: Attempts %d LastAttempt %d, want %d / %d", got.Attempts, got.LastAttempt, base.Attempts, base.LastAttempt)
 			}
 			contractLimitApplyIdentityHeld(t, got, base)
 		})
@@ -1621,7 +1627,7 @@ func TestContractLimitApplyParkManualTouchesNoCounter(t *testing.T) {
 // value, so an implementation reaching through a pointer field would show
 // here) and that repeated calls at one `now` are identical.
 func TestContractLimitApplyIsPure(t *testing.T) {
-	for _, action := range []limitRescueAction{rescueSkip, rescueRotate, rescueNudge, rescueParkManual} {
+	for _, action := range []limitRescueAction{rescueSkip, rescueRotate, rescueResume, rescueParkManual} {
 		t.Run(string(action), func(t *testing.T) {
 			hit := contractLimitApplyBase()
 			first := limitRescueApply(hit, action, "swapped", "x@example.com", contractLimitNow)
@@ -1640,7 +1646,7 @@ func TestContractLimitApplyIsPure(t *testing.T) {
 
 // TestContractLimitApplyTwoPhaseSequence walks the whole rescue through the
 // two pure functions, which is the only place the design's central claim is
-// visible end to end: a swap on one tick, a nudge on a LATER one, and the hit
+// visible end to end: a swap on one tick, a resume on a LATER one, and the hit
 // resolved exactly once. The middle step is the real assertion — immediately
 // after the swap the decision must still be `skip`, because the credential has
 // not propagated yet.
@@ -1669,15 +1675,15 @@ func TestContractLimitApplyTwoPhaseSequence(t *testing.T) {
 		t.Fatalf("the skip tick changed the record: %+v", got)
 	}
 
-	// tick 3, past it: the nudge runs and resolves the hit
+	// tick 3, past it: the resume runs and resolves the hit
 	tick3 := tick1.Add(limitRescueSettle)
 	action, _ = limitRescueDecide(hit, "auto", true, true, tick3)
-	if action != rescueNudge {
-		t.Fatalf("tick 3 decided %q, want nudge", action)
+	if action != rescueResume {
+		t.Fatalf("tick 3 decided %q, want resume", action)
 	}
-	hit = limitRescueApply(hit, action, "nudged", "", tick3)
+	hit = limitRescueApply(hit, action, "resumed", "", tick3)
 	if hit.HandledAt != tick3.Unix() || hit.Outcome != "rotated" {
-		t.Fatalf("after the nudge: %+v, want HandledAt=%d Outcome=rotated", hit, tick3.Unix())
+		t.Fatalf("after the resume: %+v, want HandledAt=%d Outcome=rotated", hit, tick3.Unix())
 	}
 	if hit.SwappedTo != "rescued@example.com" {
 		t.Errorf("SwappedTo = %q, want the swap remembered across the two ticks", hit.SwappedTo)
@@ -1715,8 +1721,8 @@ func TestContractLimitTimestampsAreUnixSeconds(t *testing.T) {
 	}
 	// SwappedAt + LastAttempt, via the rotate arm
 	rec = limitRescueApply(rec, rescueRotate, "swapped", "x@example.com", now)
-	// HandledAt, via the nudge arm
-	rec = limitRescueApply(rec, rescueNudge, "nudged", "", now)
+	// HandledAt, via the resume arm
+	rec = limitRescueApply(rec, rescueResume, "resumed", "", now)
 
 	for _, f := range []struct {
 		name string
@@ -1758,8 +1764,8 @@ func TestContractLimitSettleWindowSurvivesTheUnitRoundTrip(t *testing.T) {
 	if got, _ := limitRescueDecide(swapped, "auto", true, true, contractLimitNow.Add(limitRescueSettle-time.Second)); got != rescueSkip {
 		t.Errorf("one second short of the settle window the decision is %q, want skip", got)
 	}
-	if got, _ := limitRescueDecide(swapped, "auto", true, true, contractLimitNow.Add(limitRescueSettle)); got != rescueNudge {
-		t.Errorf("at the settle boundary the decision is %q, want nudge", got)
+	if got, _ := limitRescueDecide(swapped, "auto", true, true, contractLimitNow.Add(limitRescueSettle)); got != rescueResume {
+		t.Errorf("at the settle boundary the decision is %q, want resume", got)
 	}
 }
 
@@ -1770,7 +1776,7 @@ func TestContractLimitSettleWindowSurvivesTheUnitRoundTrip(t *testing.T) {
 // and SwappedTo". The consequence the amendment names is the one asserted
 // here: a late teammate delivery landing inside the dedupe window AFTER a swap
 // must not zero the watermark, or the next tick sends an already-swapped cell
-// around for a second swap instead of the nudge it was owed.
+// around for a second swap instead of the resume it was owed.
 func TestContractLimitRecordFoldPreservesTheSwapWatermark(t *testing.T) {
 	st := useTestStore(t)
 	j := contractLimitJob(t, st, "late")
@@ -1808,10 +1814,10 @@ func TestContractLimitRecordFoldPreservesTheSwapWatermark(t *testing.T) {
 		t.Fatalf("the fold changed more than Deliveries:\n got  %+v\n want %+v", got, want)
 	}
 
-	// ...and the decision that follows is still the nudge it was owed, not a
+	// ...and the decision that follows is still the resume it was owed, not a
 	// second rotate
-	if action, _ := limitRescueDecide(got, "auto", true, true, first.Add(time.Minute)); action != rescueNudge {
-		t.Fatalf("after the fold the decision is %q, want nudge — the swap watermark was lost", action)
+	if action, _ := limitRescueDecide(got, "auto", true, true, first.Add(time.Minute)); action != rescueResume {
+		t.Fatalf("after the fold the decision is %q, want resume — the swap watermark was lost", action)
 	}
 }
 
@@ -1822,8 +1828,8 @@ func TestContractLimitRecordFoldPreservesTheSwapWatermark(t *testing.T) {
 // Pure. Re-reads under the write and copies only the SIX rescue-owned fields
 // onto the stored record, so a delivery that landed while the pass was
 // working is neither clobbered nor allowed to clobber. This replaced the
-// "save before nudging" reorder, which Amendment 10 shows is mutually
-// exclusive with Amendment 6's guard — the nudge count is not knowable until
+// "save before resuming" reorder, which Amendment 10 shows is mutually
+// exclusive with Amendment 6's guard — the resume count is not knowable until
 // the sends return, so the write has to stay after them and the race is
 // closed here instead.
 
@@ -1889,11 +1895,11 @@ func TestContractLimitMergeSameHitTakesOnlyTheRescueFields(t *testing.T) {
 }
 
 // TestContractLimitMergeResolutionSurvives is the same arm exercised on the
-// nudge write specifically, because that is the write Amendment 10 could not
-// move earlier: the sends have to return before the count is known, so a
+// resume write specifically, because that is the write Amendment 10 could not
+// move earlier: the respawn has to return before the outcome is known, so a
 // delivery has a real window to land first. The resolution must still reach
-// the store, or the hit stays open and the next tick nudges a crew that has
-// already been told.
+// the store, or the hit stays open and the next tick SIGKILLs a zeus that
+// was already resumed seconds ago.
 func TestContractLimitMergeResolutionSurvives(t *testing.T) {
 	cur := contractLimitMergeStored()
 	cur.Deliveries = 12
@@ -1933,7 +1939,7 @@ func TestContractLimitMergeMissingRowWritesOursWholesale(t *testing.T) {
 // one that closes the race: "ok is false when the stored record is a DIFFERENT
 // hit (a fresh At) ... our counters describe an event the store has already
 // moved past, and stamping them onto the new one would tell a brand-new limit
-// it had already been swapped". That is precisely the sequence the nudge
+// it had already been swapped". That is precisely the sequence the resume
 // opens — the crew resumes, the new account is also exhausted, a hook starts a
 // fresh hit — and a merge here would mark that fresh hit as already rescued.
 func TestContractLimitMergeDifferentHitRefuses(t *testing.T) {
@@ -2294,25 +2300,25 @@ func TestContractLimitRescueSwapFailurePropagates(t *testing.T) {
 	}
 }
 
-// TestContractLimitApplyNudgeNormalPathSurvivesAmendment11 re-states, against
+// TestContractLimitApplyResumeNormalPathSurvivesAmendment11 re-states, against
 // the amended two-path arm, what this file already asserted about the
 // resolving path: any outcome that is not the failure sentinel resolves as
 // "rotated" and touches no counter. Amendment 11 added a second path keyed on
 // the outcome argument, so the assertion is now also that the normal path is
 // the DEFAULT — a future third sentinel must not silently capture "".
-func TestContractLimitApplyNudgeNormalPathSurvivesAmendment11(t *testing.T) {
+func TestContractLimitApplyResumeNormalPathSurvivesAmendment11(t *testing.T) {
 	base := contractLimitApplyBase()
 	base.SwappedAt = contractLimitNow.Add(-limitRescueSettle).Unix()
 	base.SwappedTo = "rescued@example.com"
 
-	for _, outcome := range []string{"", "nudged", "partial", "3 of 4"} {
+	for _, outcome := range []string{"", "resumed", "partial", "3 of 4"} {
 		t.Run("outcome="+outcome, func(t *testing.T) {
-			got := limitRescueApply(base, rescueNudge, outcome, "", contractLimitNow)
+			got := limitRescueApply(base, rescueResume, outcome, "", contractLimitNow)
 			if got.HandledAt != contractLimitNow.Unix() || got.Outcome != "rotated" {
 				t.Fatalf("got HandledAt=%d Outcome=%q, want %d/rotated", got.HandledAt, got.Outcome, contractLimitNow.Unix())
 			}
 			if got.Attempts != base.Attempts || got.LastAttempt != base.LastAttempt {
-				t.Errorf("counters moved: %d/%d, want %d/%d — a reached nudge is not an attempt", got.Attempts, got.LastAttempt, base.Attempts, base.LastAttempt)
+				t.Errorf("counters moved: %d/%d, want %d/%d — a reached resume is not an attempt", got.Attempts, got.LastAttempt, base.Attempts, base.LastAttempt)
 			}
 		})
 	}
@@ -2346,7 +2352,7 @@ func TestContractLimitRecordCarriesTheSwapForwardOnSupersession(t *testing.T) {
 		LastAttempt: first.Unix(),
 		SwappedAt:   first.Unix(),
 		SwappedTo:   "rescued@example.com",
-		// HandledAt stays zero: swapped, not yet nudged
+		// HandledAt stays zero: swapped, not yet resumed
 	}
 	raw, err := json.Marshal(swappedOpen)
 	if err != nil {
@@ -2375,11 +2381,11 @@ func TestContractLimitRecordCarriesTheSwapForwardOnSupersession(t *testing.T) {
 			got.SwappedAt, got.SwappedTo, swappedOpen.SwappedAt, swappedOpen.SwappedTo)
 	}
 
-	// ...and the consequence: the decision is still the nudge that swap is
+	// ...and the consequence: the decision is still the resume that swap is
 	// owed, not a second rotate. Without the carry-forward this reads
 	// `rotate` with Attempts at zero, which is the uncapped-swapping cycle.
-	if action, _ := limitRescueDecide(got, "auto", true, true, later.Add(limitRescueSettle)); action != rescueNudge {
-		t.Fatalf("after the supersession the decision is %q, want nudge — the swap watermark was lost", action)
+	if action, _ := limitRescueDecide(got, "auto", true, true, later.Add(limitRescueSettle)); action != rescueResume {
+		t.Fatalf("after the supersession the decision is %q, want resume — the swap watermark was lost", action)
 	}
 }
 
@@ -2387,8 +2393,8 @@ func TestContractLimitRecordCarriesTheSwapForwardOnSupersession(t *testing.T) {
 // the same condition (`cur.SwappedAt != 0 && cur.HandledAt == 0`): once a hit
 // has been resolved, its swap is history and must NOT be inherited. Inherited,
 // the new hit would come up already looking swapped and would go straight to a
-// nudge without ever rotating — a fresh limit answered by a message instead of
-// a new account.
+// resume without ever rotating — a fresh limit answered by a restart onto the
+// same exhausted account instead of by a new one.
 func TestContractLimitRecordDoesNotCarryAResolvedSwapForward(t *testing.T) {
 	st := useTestStore(t)
 	j := contractLimitJob(t, st, "supersede-resolved")
@@ -2489,7 +2495,7 @@ func TestContractLimitSaveRefusesADifferentHit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stale := limitRescueApply(opened, rescueNudge, "", "", now.Add(time.Second))
+	stale := limitRescueApply(opened, rescueResume, "", "", now.Add(time.Second))
 	if err := saveLimitRescueState(j, stale); err == nil {
 		t.Fatal("saveLimitRescueState returned nil — a write against a superseded hit must be reported, not silently applied")
 	}
