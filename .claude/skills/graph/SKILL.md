@@ -45,7 +45,10 @@ graph is not in git.
 
 **The batch size is in the job spec**, on a line reading `Per-run episode cap: N`. Use that N:
 `k graph pending --limit N` returns pending episodes as JSON: id, kind, ref, ts, and the reduced
-content. The daemon sizes N from how deep the pending queue actually is, so a night with a backlog
+content. Run `k graph stats` before taking the batch and again after the sweep: the two `pending`
+figures are the report's queue line, and both are MEASURED, never differenced from each other —
+the daemon keeps enqueuing new episodes while the cell runs, so `after + drained` is not `before`.
+The daemon sizes N from how deep the pending queue actually is, so a night with a backlog
 gets a bigger batch than a quiet one — do not substitute a number of your own. The one exception is
 `solo: true`, whose smaller-batch rule below still applies. **When the spec carries no such line,
 use 25.**
@@ -80,6 +83,8 @@ head; move the surviving tuples with code.
 ```
 ENTITY|<name>|<type>|<one-sentence description of what this IS>
 FACT|<source entity>|<predicate>|<target entity>|<the fact as a full sentence>|<strength 1-10>
+EPISODE|<episode id>     # crew tuple files only — opens each episode's block, tuples or none
+DONE|<episode count>     # crew tuple files only — the teammate's terminal append
 ```
 
 **The seed types**, which cover nearly everything in this corpus:
@@ -326,7 +331,33 @@ carl asked about one thing, and a diff he did not ask for is a diff he has no wa
 Extraction over a batch splits cleanly by episode, so it is real work for a crew: give each
 **hephaestus** teammate a disjoint slice of the batch and the tuple format above, and have each write
 its tuples to a scratch path outside the repo (`/tmp/…`, never a worktree-relative path) — a report
-that exists only as a chat reply is one that gets lost. Then YOU do step 3 across all of it:
+that exists only as a chat reply is one that gets lost. The brief says **appended per episode**
+(Bash heredoc appends — safe in a kraken cell, whose bash-lint blanks heredoc bodies before
+matching), never buffered for one terminal write: a mid-response connection drop destroys an
+unwritten buffer whole and repeats — one teammate died three times at the identical "writing the
+tuples now" boundary and delivered nothing in three hours, while a sibling that switched to
+per-episode appends after the same first death finished with no further loss. A per-episode append
+needs no BUFFER, but the file still needs its completion signal: EVERY episode in the slice gets
+an `EPISODE|<id>` line — one you extracted nothing from gets the line with nothing under it, or
+"never reached" and "nothing durable in it" become the same file — and the teammate's LAST append
+is a terminal `DONE|<episode count>` line counting every episode in the slice. This is the one
+place the imported `-s` wait below does not apply, since an append-built file is non-empty from
+its first episode: delete each tuple path immediately before you spawn a teammate ONTO it, then
+arm `grep -q '^DONE' <path> 2>/dev/null` per tuple file instead. Never delete a file you are
+re-briefing to complete — its blocks are the work you are completing: a re-brief for a missing id
+writes to its own `-B` path, watched the same way, and the lead reads both. Before closing
+ANYTHING, reconcile the file's `EPISODE|` ids and the `DONE` count against the slice you assigned
+— a missing id is re-briefed, never closed, and the ids are the check: a `DONE` count that
+disagrees with them is the teammate's arithmetic, not evidence about the file. A crash leaves
+every finished episode on disk, and what happens next
+depends on who continues: a RESUMED teammate re-reads its own file's tail before appending (a
+drop between a heredoc landing and its result arriving leaves it unable to know whether the
+append took), while a REPLACEMENT gets a fresh `-B` tuple path, with the watch re-armed on the
+`-B` path — the original never gets its `DONE`, and appending onto a dead teammate's file doubles
+its finished episodes, where a duplicated FACT line folds server-side into `occurrences + 1`, a
+fabricated second sighting with one source episode — and the lead's parse drops any repeated
+`EPISODE|<id>` block, keeping the LAST copy (an interrupted append is the earlier one), whatever
+else went wrong. Then YOU do step 3 across all of it:
 canonicalization is the one step that must see the whole batch at once, and a crew that each resolves
 its own slice produces four graphs that happen to share a database.
 
@@ -336,8 +367,9 @@ which has no `Write` tool at all, so a brief naming a report path is unsatisfiab
 the agent rationalises rather than saying so, while you wait on a file that is never coming.
 
 For how to WAIT on several report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait"
-bullet and the sub-bullets under it; it is the one specification of the protocol and it applies here
-unchanged.
+bullet and the sub-bullets under it; it is the one specification of the protocol, and it applies
+here with ONE exception, named in the Delegation paragraph above: a tuple file's watch is the
+`DONE` grep, not `-s`.
 
 `solo: true` on the job means no subagents at all: take a smaller batch and do it yourself.
 
@@ -352,6 +384,11 @@ specific, and it is the only place the cell's real paths appear:
   what the connectivity sweep linked and what it walked but refused (ingest mode only; sweep edges
   count toward the closing line's fact count), and any episode you closed without extracting from.
   That last section is the one that tells carl whether a quiet run was a clean one or a blind one.
+  An ingest report also states the QUEUE it left behind — the two `pending` figures from the
+  `k graph stats` calls step 1 has you run at both ends — because the cap is a fraction of the
+  backlog over most of its range (`clamp(pending/20, 25, 150)`), so a large queue drains slowly
+  and a report naming only what it drained reads as the queue being clear: one run drained its
+  full 115-episode cap and never said 2,192 remained pending.
   Previous nights' reports survive as flat copies at `~/Documents/pluto/<slug>-<id>.00-graph-report.md`
   (moved into `archive/` when their job is archived); the sweep reads the most recent few for the
   nodes already recorded as refused — the only cross-run state it has. So the sweep's refusals are
