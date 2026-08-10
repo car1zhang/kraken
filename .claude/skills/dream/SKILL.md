@@ -199,15 +199,25 @@ running notes there AS IT READS: the one-shot report rule concentrates the run's
 the final call, and a scout that died on a connection error at the literal write boundary — its last words were an
 announcement that it had everything and was writing the report — cost ~30K output tokens of
 finished analysis with zero salvage, where its staged views survived and were the only thing the
-respawn could reuse. Notes are working
+respawn could reuse (that pass did not yet know the transport-resume rule below). Notes are working
 files, not the report; the one-shot rule binds the report alone. And the shell-dialect rule from
 `.claude/skills/do/SKILL.md` step 4 binds YOU from your own first command, then goes into every
 scout brief — framed only as brief material, it was broken by the pass's own lead (a bare `===`
 echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
 by the next night's lead again; scouts hit the same aborts on their first command. Spawn them in
 waves rather than all at once; a few at a time, with the remainder running as slots free. Every
-transcript gets read; the pass simply takes as long as it takes. **A
-respawn after a kill gets a FRESH report path** (`<name>-B.md`, then `-C` and so on), and you check
+transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT
+error is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent
+resumable, and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`)
+continues it with its context intact and nothing re-paid — so fetch the messaging tools at the TOP
+of the fan-out, not mid-crisis, because a lead that has not loaded `SendMessage` has only
+"replace" available and cannot discover the cheaper move while stalled itself: one lead respawned
+two just-started scouts at full brief re-payment (~123K cache-write) before its first
+`ToolSearch`, then resumed every one of six later deaths at no loss. Any OTHER death — an output
+ceiling, a resume that does not take — is a respawn under the rule that follows (a hook-blocked
+report write is not a death: that case is specified below — report the refusal and stop). **A
+respawn — however the scout died — gets a FRESH report path** (`<name>-B.md`, then `-C` and so
+on), and you check
 the original path first — a killed scout may have finished its report before dying, and a respawn's
 heredoc fallback overwrites without the Write tool's read-first guard, so handing it the same path
 destroys the one copy of a finished report (a finished 22 KB report survived exactly this only
@@ -246,7 +256,17 @@ Bash calls earned"). Every one of those premises was false, several of them arti
 very file warns scouts about, and each cost its scout calls to disprove before it could start. The
 authority is what makes it expensive: a scout distrusts the digest because the brief told it to, and
 trusts the BRIEF, which nothing told it to distrust. Two rules follow. Every counter you quote into a
-brief is a hypothesis — write it as "the digest reports X; verify before building on it". And phrase
+brief is a hypothesis — write it as "the digest reports X; verify before building on it". One
+counter has now minted the same false finding two nights running: `Lines` counts TIMESTAMPED
+records inside the window — roughly half of a transcript's physical lines carry no parseable
+timestamp and are excluded — so quoted into a brief as "N lines" it reads as stale the moment the
+scout line-counts the file, and a 719-vs-1,112 "staleness" diagnosis was corroborated and shipped
+as a finding while the refutation sat in the field's own doc comment. Brief it as "N timestamped
+in-window records — about half a transcript's lines carry no timestamp, so `wc -l` reads at least
+double, and more when the window starts inside the file", never "N lines": a label that drops
+TIMESTAMPED sends the verifying scout to a record
+count that is ~2N even when the window covers the whole file, which re-derives the exact false
+finding. And phrase
 an anomaly as a question, not as a claim: "say what that shape means" got a scout to reject the
 implied reading and find the real cause, where "confirm that X" would have got X. The same sentence
 pasted into every brief is its own defect — when you suspect a cross-cutting cause, investigate it
