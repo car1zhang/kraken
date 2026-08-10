@@ -69,6 +69,34 @@ type SessionDigest struct {
 	Subagent        bool   // true for a subagents/agent-*.jsonl sidecar
 	Lines           int    // TIMESTAMPED records inside the window that parsed
 	FirstTS, LastTS int64  // unix millis, from in-file record timestamps
+	// AgentName is the transcript head's `agentName` ("athena-logic-3",
+	// "zeus-<slug>", …), empty when none — and Delegated is the token
+	// splitter's own three-arm file classification (isAgentTranscript):
+	// sidecar path, `agent-setting` head record, or a non-lead AgentName
+	// (so Subagent above is arm 1, and implies Delegated).
+	// Both exist because a digest identifies a session by its IN-WINDOW
+	// slice, and identity is a property of the whole file: a teammate that
+	// ran ~23 minutes and finished two minutes past a window's floor
+	// (measured 2026-08-09, three reviewers in one cell) digests as a
+	// newborn session with a dozen lines and a five-figure output count
+	// — an anomaly-shaped row that is really an ordinary reviewer's tail,
+	// which a consumer can only see when the row itself says whose tail.
+	AgentName string
+	Delegated bool
+	// FileFirstTS/FileLastTS bound the file's WHOLE dated record span, where
+	// FirstTS/LastTS bound only the window's. The gap between FileFirstTS and
+	// FirstTS is what says "this FILE begins long before the window" —
+	// without it a windowed tail and a genuinely new session are the same
+	// row. FILE, not agent, deliberately: a `--fork-session` transcript
+	// replays the parent's records at the parent's original timestamps, so
+	// a fork's FileFirstTS is the PARENT's start (the pair is ungated on
+	// ownership — dated replayed records are still dated records in this
+	// file). Two zero cases differ: FileFirstTS == 0 means the file has no
+	// dated record at all, while FirstTS == 0 with FileFirstTS set means
+	// nothing dated fell inside the window — the gap is then undefined, not
+	// astronomical. And Truncated below applies: a partial scan makes
+	// FileLastTS the last record REACHED, not the file's last.
+	FileFirstTS, FileLastTS int64
 	// Truncated marks a digest built from only PART of its file: the scan
 	// hit a line over mineScanBufMax or a mid-file read error and stopped
 	// there. Every count below is then a floor, not a total. This must never
@@ -229,8 +257,10 @@ type mineRecord struct {
 	// record. See tokenRecordOwned (tokens.go).
 	SessionID string `json:"session_id"`
 	// Operation/Content are the `queue-operation` record's fields, and
-	// Attachment is the `attachment` record's payload: the two shapes a
-	// message typed MID-TURN is stored as (it never becomes a `user` record).
+	// Attachment is the `attachment` record's payload: the two of the three
+	// shapes a message typed MID-TURN is stored as that these fields cover —
+	// the third is a `user` record written when the harness later delivers
+	// it, deduped by reducer.queuedAlready.
 	// reducer.line reads them; everything else ignores them.
 	Operation  string `json:"operation"`
 	Content    string `json:"content"`
@@ -301,6 +331,8 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 		ProjectDir:    project,
 		Category:      category,
 		Subagent:      filepath.Base(filepath.Dir(path)) == "subagents",
+		AgentName:     headAgentName(f),
+		Delegated:     isAgentTranscript(f, path),
 		ToolCounts:    map[string]int{},
 		ErrorCounts:   map[string]int{},
 		RepeatedCalls: map[string]int{},
@@ -376,6 +408,17 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 			}
 		}
 		ts := isoMillis(rec.Timestamp)
+		if ts > 0 {
+			// Whole-file span, deliberately ungated on the window (and on
+			// ownership — a fork's replayed records are still dated records in
+			// THIS file): see FileFirstTS.
+			if dg.FileFirstTS == 0 || ts < dg.FileFirstTS {
+				dg.FileFirstTS = ts
+			}
+			if ts > dg.FileLastTS {
+				dg.FileLastTS = ts
+			}
+		}
 		// A record with no parseable timestamp (custom-title, agent-name,
 		// mode, permission-mode, bridge-session, last-prompt, agent-setting —
 		// about half of all records) can't be dated and so can't be excluded:
@@ -725,7 +768,9 @@ func mineInputSummaryN(input json.RawMessage, window int) string {
 // message is routinely stored as BOTH a queue-operation and a
 // queued_command attachment (measured corpus-wide: 516 of 935 distinct
 // queued texts carry both records, 305 enqueue-only, 114 attachment-only),
-// so emitting both unconditionally would print most steers twice. The
+// and a queued message the harness delivers is stored a THIRD way, as the
+// delivered `user` record itself (see queuedAlready), so emitting each
+// record unconditionally would print most steers twice. The
 // dedupe is per-reducer, so a graph-ingest span boundary that splits a
 // message's two records can still store one steer as two episodes — a
 // duplicate, never a loss.
@@ -740,6 +785,11 @@ type reducer struct {
 	// the cost is currently theoretical and bounded by the handful of real
 	// mid-turn messages a session ever carries.
 	midTurnSeen map[string]struct{}
+	// delivered is queuedAlready's consume-once ledger: queued texts whose
+	// one delivered user record has already been suppressed. Separate from
+	// midTurnSeen on purpose — see queuedAlready for the measured
+	// over-suppression a shared set caused.
+	delivered map[string]struct{}
 }
 
 func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
@@ -763,9 +813,10 @@ func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
 	if ts := isoMillis(rec.Timestamp); ts > 0 && ts < since {
 		return
 	}
-	// A message typed while a turn is RUNNING never becomes a `user` record:
-	// it is stored as a `queue-operation` (enqueue) and/or an `attachment`
-	// carrying a `queued_command`, and dropping those silenced exactly the
+	// A message typed while a turn is RUNNING is stored as a `queue-operation`
+	// (enqueue) and/or an `attachment` carrying a `queued_command` — and is
+	// ALSO written as a `user` record if the harness later delivers it (see
+	// queuedAlready). Dropping the queue records silenced exactly the
 	// messages a mid-turn send is — course corrections. A reader of the
 	// reduced view saw the agent pivot with no visible prompt. The label is
 	// distinct from [user] because kraken's own daemon bumps (PR-watch and
@@ -787,12 +838,24 @@ func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
 		return // mode, file-history, system bookkeeping
 	}
 	if rec.Type == "user" {
+		// A queued message the harness later DELIVERS becomes a real user
+		// record with the same text — the enqueue and the delivered turn are
+		// one message twice, exactly like the enqueue/attachment double-write
+		// midTurnSeen already collapses, only across the queue/user boundary.
+		// Unchecked, a large queued prompt renders twice (measured
+		// 2026-08-09: one autonomous-loop prompt was ~6.4KB and its duplicate
+		// a third of the session's whole reduced view). The mid-turn emission
+		// keeps the earlier, queued position; ONE delivered copy is dropped
+		// per queued text — consume-once, see queuedAlready for why a bare
+		// membership test erased real repetition.
 		if text, ok := mineUserString(rec.Message.Content); ok {
-			writeUserish(out, text)
+			if !r.queuedAlready(text) {
+				writeUserish(out, text)
+			}
 			return
 		}
 		for _, b := range mineBlocks(rec.Message.Content) {
-			if b.Type == "text" {
+			if b.Type == "text" && !r.queuedAlready(b.Text) {
 				writeUserish(out, b.Text)
 			}
 			// tool_result blocks are the dropped mass — the call above
@@ -819,6 +882,37 @@ func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
 // harness's — quoted as [user mid-turn] it would enter the dream loop's
 // prompting feedback as words carl never typed.
 var backgroundAgentsNoticeRE = regexp.MustCompile(`^\d+ background agents? (?:was|were) stopped by the user`)
+
+// queuedAlready reports whether a user record is the DELIVERED copy of a
+// queued message — the same text emitted earlier as [user mid-turn] — and
+// consumes at most ONE delivery per queued text. The consume-once ledger
+// (delivered) is the load-bearing half: midTurnSeen persists for the whole
+// file, and a bare membership test suppressed EVERY later delivery of a
+// repeated queued text — measured corpus-wide (2026-08-09, 3,434
+// transcripts): 193 suppressed user records, of which 72 were second-and-later
+// genuine turns, worst case a stall nudge delivered 28 times in one file, of
+// which a bare test suppressed 26 — rendering three times (the two deliveries
+// that preceded its first enqueue, plus the mid-turn) where 28 turns happened
+// — erasing exactly the repetition shape the dream pass mines
+// the reduced view for. With the ledger, N queued deliveries of one text
+// render as 1 mid-turn + N-1 user sections: the true turn count. It never
+// touches midTurnSeen (only the queue channel populates it), so two genuine
+// user turns whose text was never queued still both render, and the
+// enqueue/attachment double-write dedupe is unaffected.
+func (r *reducer) queuedAlready(text string) bool {
+	t := strings.TrimSpace(text)
+	if _, queued := r.midTurnSeen[t]; !queued {
+		return false
+	}
+	if _, done := r.delivered[t]; done {
+		return false // the enqueue already paid for its one delivery
+	}
+	if r.delivered == nil {
+		r.delivered = make(map[string]struct{})
+	}
+	r.delivered[t] = struct{}{}
+	return true
+}
 
 // midTurn emits one queued mid-turn message as [user mid-turn] — or as
 // [teammate <id> mid-turn] when it carries a teammate envelope, the same
@@ -984,8 +1078,11 @@ const mineRedactKeep = 5
 // mineRedactKeep runes plus a redaction marker. It runs at both readers'
 // emission points — writeReduced and callSignature (via mineInputSummaryN)
 // for the reduced view, and callIdentity (same path) for the digest's
-// RepeatedCalls keys, the only transcript-derived free text SessionDigest
-// carries — because those outputs are what every dream reader and the graph
+// RepeatedCalls keys. Those are the digest's only transcript-derived free
+// text apart from AgentName, which is deliberately NOT routed through here:
+// an agentName is a name kraken or Claude Code mints (`zeus-<slug>`,
+// `athena-logic`), never user-pasted text, so it carries no credential
+// shape. The outputs that ARE redacted are what every dream reader and the graph
 // ingest copy out of a transcript: a secret pasted into a pane once would
 // otherwise be re-copied into a fresh transcript, and from there into
 // kraken.db, on every later sweep that touches the session. Redacting at

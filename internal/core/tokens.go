@@ -614,6 +614,23 @@ func isAgentTranscript(f *os.File, path string) bool {
 	return false
 }
 
+// headAgentName returns the transcript head's `agentName`, or "" when the
+// head window carries none (a sidecar, a manual claude, an unreadable head).
+// Same window, bounds and decode rule as isAgentTranscript — it exists so the
+// digest can NAME the agent where the splitter only classifies it, and it is
+// a separate scan rather than a second return value because isAgentTranscript
+// early-returns on `agent-setting` before any name appears.
+func headAgentName(f *os.File) string {
+	sc := bufio.NewScanner(io.NewSectionReader(f, 0, agentMarkerBytes))
+	sc.Buffer(make([]byte, 0, agentMarkerInit), agentMarkerBytes)
+	for i := 0; i < agentMarkerLines && sc.Scan(); i++ {
+		if rec := headMarkers(sc.Bytes()); rec.AgentName != "" {
+			return rec.AgentName
+		}
+	}
+	return ""
+}
+
 // headMarker is the two fields isAgentTranscript reads out of a head record.
 // Narrow on purpose, like tokenRecord: these lines are decoded for every
 // transcript that grew since the last pass, and the line they are decoded from

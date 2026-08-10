@@ -501,6 +501,86 @@ func TestMineTranscriptsSubagentAndCategory(t *testing.T) {
 	}
 }
 
+// TestMineTranscriptsSessionIdentity: a digest identifies a session by its
+// in-window slice, and identity is a property of the whole file — a teammate
+// that ran for half an hour and finished just past the window's floor digests
+// as a newborn session with a handful of lines and a large output count,
+// which is exactly the anomaly shape a consumer goes chasing. The row itself
+// must say whose tail it is (AgentName, Delegated — the token splitter's own
+// classification) and that the file started long before the window
+// (FileFirstTS vs FirstTS).
+func TestMineTranscriptsSessionIdentity(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+	old := since - 20*60_000 // dated records well before the window
+
+	cellDir := "-Users-carl--kraken-cells-demo-job-wt-kraken"
+	// A teammate root: agentName rides the head's first user record (the
+	// brief), as it does on the overwhelming majority of real teammate
+	// transcripts. Most of its records predate the window; only the tail is in.
+	mineWrite(t, projects, cellDir, "teammate.jsonl",
+		mineJSON(t, map[string]any{"type": "user", "timestamp": mineISO(old), "agentName": "athena-logic-3", "message": map[string]any{"role": "user", "content": "the review brief"}}),
+		mineAssistant(t, old+1000, "claude-opus-5", mineToolUse("t1", "Bash", map[string]any{"command": "go vet ./..."})),
+		mineAssistant(t, now-1000, "claude-opus-5", mineText("the confirm verdict")),
+	)
+	// The lead's root: kraken-minted zeus name, not delegated. A real zeus
+	// carries the name on a dedicated `agent-name` head record rather than
+	// riding the first user record — the second of the two real shapes.
+	mineWrite(t, projects, cellDir, "zeus.jsonl",
+		mineJSON(t, map[string]any{"type": "agent-name", "agentName": "zeus-demo-job"}),
+		mineJSON(t, map[string]any{"type": "user", "timestamp": mineISO(now - 2000), "message": map[string]any{"role": "user", "content": "the job spec"}}),
+		mineAssistant(t, now-1500, "claude-fable-5", mineText("starting")),
+	)
+	// A sidecar: no head agentName at all (0 of 60 measured carry one), so
+	// AgentName stays empty while the PATH arm marks it delegated — the one
+	// shape where the two fields disagree in the direction a consumer trips
+	// over.
+	mineWrite(t, projects, cellDir, filepath.Join("zeus", "subagents", "agent-idfix1.jsonl"),
+		mineAssistant(t, now-1200, "claude-opus-5", mineToolUse("t9", "Read", map[string]any{"file_path": "/y.go"})))
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+
+	tm := mineFindDigest(t, res, "teammate.jsonl")
+	if tm.AgentName != "athena-logic-3" {
+		t.Errorf("teammate AgentName = %q, want athena-logic-3", tm.AgentName)
+	}
+	if !tm.Delegated {
+		t.Error("teammate digest not marked Delegated")
+	}
+	if tm.FileFirstTS != old {
+		t.Errorf("teammate FileFirstTS = %d, want %d (the file's first dated record, outside the window)", tm.FileFirstTS, old)
+	}
+	if tm.FirstTS < since {
+		t.Errorf("teammate FirstTS = %d, want inside the window (>= %d) — the windowed span must not widen", tm.FirstTS, since)
+	}
+	if tm.FileFirstTS >= tm.FirstTS {
+		t.Errorf("FileFirstTS %d not before windowed FirstTS %d — the gap is the whole signal", tm.FileFirstTS, tm.FirstTS)
+	}
+	if tm.FileLastTS != tm.LastTS {
+		t.Errorf("FileLastTS = %d, LastTS = %d — a file whose tail is in the window ends where its window does", tm.FileLastTS, tm.LastTS)
+	}
+
+	zeus := mineFindDigest(t, res, "zeus.jsonl")
+	if zeus.AgentName != "zeus-demo-job" {
+		t.Errorf("zeus AgentName = %q", zeus.AgentName)
+	}
+	if zeus.Delegated {
+		t.Error("zeus digest marked Delegated — a kraken-minted lead name is the lead's")
+	}
+
+	side := mineFindDigest(t, res, "agent-idfix1.jsonl")
+	if side.AgentName != "" {
+		t.Errorf("sidecar AgentName = %q, want empty — sidecars carry no head agentName", side.AgentName)
+	}
+	if !side.Delegated {
+		t.Error("sidecar not marked Delegated — the path arm decides before any head read")
+	}
+}
+
 // TestMineTranscriptsSkipsStaleFiles: a file whose mtime predates the window
 // is a Skipped candidate, never opened.
 func TestMineTranscriptsSkipsStaleFiles(t *testing.T) {
@@ -816,6 +896,56 @@ func TestReduceTranscriptEmitsMidTurnSteers(t *testing.T) {
 	}
 	if strings.Contains(got, "[user mid-turn]\n<teammate-message") {
 		t.Errorf("queued teammate envelope attributed to carl:\n%s", got)
+	}
+}
+
+// TestReduceTranscriptDedupesDeliveredQueuedPrompt: a queued message the
+// harness later DELIVERS is stored a third way — as the delivered `user`
+// record itself, seconds after its enqueue — and rendering both prints one
+// message twice (a measured ~6.4KB autonomous-loop prompt's duplicate was a
+// third of its session's whole reduced view). ONE delivered copy is dropped
+// per queued text (consume-once — see queuedAlready): a bare membership test
+// suppressed every later delivery of a repeated queued text, and a stall
+// nudge queued and delivered 28 times rendered once, erasing exactly the
+// repetition shape the reduced view exists to carry. And the dedupe never
+// writes midTurnSeen, so two genuine user turns with the same never-queued
+// text still both render.
+func TestReduceTranscriptDedupesDeliveredQueuedPrompt(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	path := mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess.jsonl",
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 5000), "operation": "enqueue", "content": "QUEUED-THEN-DELIVERED-PROMPT"}),
+		mineUser(t, now-4900, "QUEUED-THEN-DELIVERED-PROMPT"),
+		mineUser(t, now-4000, "PLAIN-REPEATED-ASK"),
+		mineUser(t, now-3900, "PLAIN-REPEATED-ASK"),
+		// a nudge queued once and delivered three times: 1 mid-turn + the
+		// first delivery suppressed + 2 later deliveries rendered = 3 visible
+		// occurrences, matching the session's 3 real turns
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 3000), "operation": "enqueue", "content": "REPEATED-NUDGE-TEXT"}),
+		mineUser(t, now-2900, "REPEATED-NUDGE-TEXT"),
+		mineUser(t, now-2800, "REPEATED-NUDGE-TEXT"),
+		mineUser(t, now-2700, "REPEATED-NUDGE-TEXT"),
+	)
+
+	out, err := ReduceTranscript(path, since)
+	if err != nil {
+		t.Fatalf("ReduceTranscript: %v", err)
+	}
+	got := string(out)
+
+	if n := strings.Count(got, "QUEUED-THEN-DELIVERED-PROMPT"); n != 1 {
+		t.Errorf("queued-then-delivered prompt emitted %d times, want exactly 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "[user mid-turn]\nQUEUED-THEN-DELIVERED-PROMPT") {
+		t.Errorf("the surviving copy must be the queued position, which is when it was typed:\n%s", got)
+	}
+	if n := strings.Count(got, "PLAIN-REPEATED-ASK"); n != 2 {
+		t.Errorf("genuine repeated user turns emitted %d times, want 2 — user records must not populate the seen-set:\n%s", n, got)
+	}
+	if n := strings.Count(got, "REPEATED-NUDGE-TEXT"); n != 3 {
+		t.Errorf("repeated queued nudge emitted %d times, want 3 (1 mid-turn + 2 later deliveries) — the dedupe must consume once, not suppress the repetition:\n%s", n, got)
 	}
 }
 
