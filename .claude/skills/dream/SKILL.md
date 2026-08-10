@@ -153,7 +153,14 @@ distinct edits to one file both present as repetition; and `SyntheticErrors` cou
 `<synthetic>` assistant record, which on this machine is mostly USAGE-LIMIT BANNERS and null turns
 rather than transport failures — three scouts in one night independently re-derived this after
 their briefs relayed the counter as "API failures", so brief it as "session-interrupting records"
-and let the scout classify them. `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
+and let the scout classify them. Each row also says WHOSE session it is and how it sits in the
+window — `AgentName` (the head agentName: a teammate's `athena-…`/`hephaestus-…`, the lead's
+`zeus-…`), `Delegated` (the token splitter's lead-vs-delegated file classification), and
+`FileFirstTS`/`FileLastTS`, the file's whole dated span beside the windowed `FirstTS`/`LastTS` —
+read them BEFORE calling a row anomalous: a wide FileFirstTS-to-FirstTS gap means the row is an
+old session's TAIL, not a newborn (three ~23-minute reviewers whose last dozen records crossed a
+floor once digested as three anomalous midnight sessions, and the false premise went into a scout
+brief). `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
 — user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
 which is about an eighth of the bytes. Carl's MID-TURN messages — typed while a turn was running,
 the course corrections that matter most to the prompting-feedback output — are stored as queue
@@ -310,7 +317,12 @@ grep'd lines, twelve rows saying READ — and the lead's "97 READ / 9 SAMPLED" a
 arithmetic over false inputs, while its one verification habit checked that the LEAD had read its
 eleven reports, the link that was never the problem. So before trusting the aggregate, spot-check
 the scouts of at least the two LARGEST assignments against their own transcripts, and say in
-Coverage which scouts were spot-checked. The spot-check's test is PAGE COVERAGE, never tool
+Coverage which scouts were spot-checked. The spot-check needs a DENOMINATOR: compare the scout's
+read offsets against the staged file's own line count (a `wc -l` you run yourself), because offsets
+alone prove contiguity, not completion — a lead extracted both scouts' offset lists, never fetched
+either file's length, and certified "coverage spot-checks passed" on an instrument structurally
+unable to tell a scout that finished from one that stopped a page short (both happened to have
+finished; the check could not have known). The spot-check's test is PAGE COVERAGE, never tool
 choice: READ means the reads collectively reach the staged file's LAST line, so a `Read` capped
 at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row says — a brief
 that banned "a capped grep" while blessing "paged reads" was violated twice in one night by

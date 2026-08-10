@@ -59,11 +59,19 @@ design and the nightly job is a drain, not a race.
 For a `transcript` episode the content is a raw JSONL span and the ref is `path#start-end`. The span
 is the evidence; when you need more than the span carries, `k mine reduce --since 1 <path>` gives
 the whole session as user prose + tool calls + assistant text, which is about an eighth of the bytes.
-The `--since 1` is load-bearing, and it goes into every extraction teammate's brief: the flag takes
-unix MILLIS (so `1` is an epoch floor, not one day) and defaults to a 24-hour floor, while ingest
-reads BACKLOG episodes, which are old by definition — two teammates in one night independently
-burned a zero-byte invocation each rediscovering this, and their escalations never reached each
-other.
+The `--since 1` is load-bearing, and it goes into every extraction teammate's brief **as the
+verbatim line below, never a paraphrase**: the flag takes unix MILLIS (so `1` is an epoch floor,
+not one day) and defaults to a 24-hour floor, while ingest reads BACKLOG episodes, which are old by
+definition — two teammates in one night independently burned a zero-byte invocation each
+rediscovering this, and their escalations never reached each other. Stating the rule here and
+letting the lead transcribe it did not survive one week: the next ingest's lead composed its brief
+freehand as `--since <min ts across that session's episodes>` (episode `ts` values are sweep times,
+not record times), and all three teammates burned on it — one SILENTLY, because a floor that lands
+mid-file returns a large, plausible, wrong window with `exit=0` and nothing in the output saying
+so; only the epoch floor is immune to both failure shapes. The brief line: *Read a session's
+context with `k mine reduce --since 1 <session path>` — `--since 1` exactly, an epoch floor: any
+later floor returns zero bytes or, worse, a plausible wrong window, because episode `ts` values are
+sweep times, not record times.*
 Do not read raw transcript JSONL by hand when `reduce` will answer — you will spend the batch's whole
 budget on tool results nobody asked for.
 
@@ -120,6 +128,12 @@ Five rules about what a good tuple looks like:
 - **One gleaning pass.** After the first pass over an episode, ask once: what did I miss? Then stop.
   There is no second gleaning and no community-summary layer; both cost far more than they return at
   this graph's scale.
+- **Your file must not disagree with itself.** Strength is scored per fact, in isolation, and nothing
+  structural can see two facts collide — a claim shipped at strength 9 ten lines above a strength-8
+  fact recording reviewers killing that exact claim, past two validator passes, caught only by the
+  lead's manual read at canonicalization. Before writing the tuple file, check whether any fact in it
+  contradicts another; when one fact records the REFUTATION of another, emit the refutation and drop
+  the claim.
 
 ### 3. Canonicalize AFTER extraction, never during
 
@@ -360,6 +374,15 @@ fabricated second sighting with one source episode — and the lead's parse drop
 else went wrong. Then YOU do step 3 across all of it:
 canonicalization is the one step that must see the whole batch at once, and a crew that each resolves
 its own slice produces four graphs that happen to share a database.
+
+The decide-and-note default has one carve-out, and every extraction brief states it: **a defect in
+the BRIEF itself — an instruction that fails mechanically — is reported to the lead the moment it is
+found** (`SendMessage`, naming the broken instruction and the workaround), not parked in a closing
+line. A brief bug hits every slice at once, so a teammate that quietly works around it converts one
+shared defect into N private rediscoveries — measured twice now, three teammates in one night each
+independently diagnosing the same broken `--since` instruction and each parking it where the other
+two would never see it. Content judgments stay judgment calls in the closing line; the brief being
+wrong is the one thing that goes up immediately.
 
 Any agent that only READS — surveying what the graph already holds, say — is an unnamed subagent and
 must be spawned `general-purpose` or another type whose roster includes `Write`; **never `Explore`**,
