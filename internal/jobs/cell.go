@@ -1732,6 +1732,23 @@ func reactivateMode(state string, worktreeExists bool) (string, error) {
 	return "", fmt.Errorf("job has never started — start it from the board instead")
 }
 
+// doneReorient builds the done-state reactivation reorient line. The PR
+// clause reports only what the kraken-owned prs: record holds: an empty
+// record is not proof the job never shipped a PR (the tracker is gh-driven
+// and degrades; the repair pass can drop rows) and says nothing about the
+// job's path, so the text states the record and points at the governing
+// skill rather than asserting history or forbidding a PR — the old
+// unconditional boilerplate asserted merged PRs at an explanation job that
+// never opened one, and a careful zeus had to contradict its own resume
+// prompt to answer correctly.
+func doneReorient(j *Job, branch, branchDesc string) string {
+	prTail := " No PRs are recorded on this job — re-read the current repo state and the skill governing the phase you are resuming; that skill decides whether this job's path opens a PR at all."
+	if len(j.PRs) > 0 {
+		prTail = " Your earlier PRs are recorded on the job — re-read the current repo state and their merge state before acting, then ship adjustments as a new PR from the current branch (or as follow-up commits onto a PR for this branch that is still open)."
+	}
+	return "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + branch + " " + branchDesc + "." + prTail
+}
+
 // reactivatePrompt assembles the resumed claude's prompt from three pure
 // inputs: reorient (the mode-specific re-orientation text — resume vs
 // recreate, done vs not), message (carl's optional steering), and rebaseNote
@@ -1929,7 +1946,7 @@ func ReactivateJob(j *Job, session, message string) error {
 			branchDesc = "recreated from its pushed remote tip origin/" + branch
 		}
 		if j.State == "done" {
-			reorient = "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + branch + " " + branchDesc + ". Your earlier PRs are recorded on the job and already merged into the base, so re-read the current repo state before acting, then ship adjustments as a new PR from the current branch."
+			reorient = doneReorient(j, branch, branchDesc)
 		} else {
 			reorient = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + branch + " " + branchDesc + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
 		}

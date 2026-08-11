@@ -633,6 +633,37 @@ func TestReactivatePrompt(t *testing.T) {
 	}
 }
 
+// --- doneReorient ---
+
+// TestDoneReorientPRClauseIsConditional pins that the done-state
+// reactivation prompt only claims earlier PRs — and only orders a new PR —
+// when the job's kraken-owned prs: record actually holds one, and that
+// neither arm asserts more than the record supports: the no-PR arm reports
+// an empty record (never a job class, never a PR prohibition — an
+// implementation job can reach done with an empty record when the tracker
+// degraded), and the with-PR arm no longer claims the PRs merged.
+func TestDoneReorientPRClauseIsConditional(t *testing.T) {
+	base := &Job{Slug: "x", State: "done"}
+	noPRs := doneReorient(base, "carl/x-1", "freshly reset off origin/main")
+	if strings.Contains(noPRs, "Your earlier PRs") || strings.Contains(noPRs, "new PR from the current branch") {
+		t.Errorf("no-PR reorient claims PR history or orders a PR: %q", noPRs)
+	}
+	if !strings.Contains(noPRs, "No PRs are recorded on this job") {
+		t.Errorf("no-PR reorient missing the record statement: %q", noPRs)
+	}
+	if strings.Contains(noPRs, "explanation job") || strings.Contains(noPRs, "do not open a PR") {
+		t.Errorf("no-PR reorient infers a job class or forbids a PR: %q", noPRs)
+	}
+	withPRs := &Job{Slug: "x", State: "done", PRs: []JobPR{{URL: "https://github.com/o/r/pull/1", State: "merged"}}}
+	got := doneReorient(withPRs, "carl/x-1", "freshly reset off origin/main")
+	if !strings.Contains(got, "Your earlier PRs are recorded on the job") {
+		t.Errorf("with-PR reorient missing the PR clause: %q", got)
+	}
+	if strings.Contains(got, "No PRs are recorded") || strings.Contains(got, "already merged") {
+		t.Errorf("with-PR reorient carries the no-PR statement or the merged claim: %q", got)
+	}
+}
+
 // --- recreateFromRemote ---
 
 // TestRecreateFromRemoteMergedBranchFallsBack pins the merged-branch arm
