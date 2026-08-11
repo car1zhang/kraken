@@ -226,7 +226,16 @@ short form, with /info's overrides:
    pointer measurably does not deliver them (the same lead used `-f` in the phase that had only
    the pointer and `-s` in the phase with the text loaded): delete each report path before
    spawning, arm ONE background conjunctive until-loop over every path with `-s` (never `-f` —
-   true at byte zero), end the turn, and treat expiry as "one of them is missing".
+   true at byte zero), end the turn, and treat expiry as "one of them is missing". The nudging
+   half rides with the arming half, since the pointer to it goes unfollowed just as measurably:
+   an `idle (available)` ping is neither a completion signal nor a probe trigger — it fires at
+   every turn boundary, the armed watch already covers the report paths, and probing a path on
+   an idle ping RACES the very write it is checking for. A nudge is earned only by the watch
+   EXPIRING — and expiry earns the PROBE (the paths, then the pane, since a silent teammate needs
+   positive evidence of death before anything stronger) — and it asks ("if you already delivered,
+   reply with the path"), never asserts — a lead that probed on an idle ping sent a teammate a
+   false "you went idle without completing" while its own still-armed watch fired correctly
+   minutes later.
    Two evidence rules for what the research may CONCLUDE. A NEGATIVE result from an external
    API or service — a 404, an empty page, a zero-row answer — is not evidence until a known-good
    positive control has run in the same session/connection: one cell published four consecutive
