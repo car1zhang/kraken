@@ -104,8 +104,23 @@ The list is **open**. When something genuinely is not one of these, name a new t
 lowercase-hyphenated style and use it consistently across the batch — a type invented once and never
 reused is noise, so prefer the closest seed type unless the new one will recur.
 
-Five rules about what a good tuple looks like:
+Seven rules about what a good tuple looks like:
 
+- **Both endpoints of every FACT are ENTITIES — never the sentence's grammatical object.** An
+  endpoint must be a thing: declared in an `ENTITY|` line of the same file, or a name the graph
+  already holds. `FACT|PostgREST|caps|query pages|…` silently mints a bare node named `query pages`
+  with no type and no description (the add response's `nodes` list never mentions it), and phrase
+  endpoints have measured at HALF of a night's extracted facts across all three teammates at once —
+  a brief defect, not a lapse, whose hand-repair became the lead's single largest cost and whose
+  survivors are re-walked and re-refused by the sweep night after night. When the sentence's natural
+  target is a phrase ("an eight-day bound", "31 days", "abandoned rather than patched"), point the
+  edge at the real entity the fact is ABOUT — and when that entity is the SOURCE itself, never
+  write the self-edge: mint the missing thing and declare it (the example above repairs to
+  `ENTITY|PostgREST pagination cap|convention|PostgREST's 1000-row-per-page response cap` plus
+  `FACT|PostgREST|caps|PostgREST pagination cap|…`), or drop the fact — and let the sentence
+  carry the phrase. **Every extraction brief states this rule**;
+  the format line above reads as a grammar, and three independent teammates briefed without the rule
+  produced the same defect at the same rate.
 - **The fact sentence must stand alone.** "It is skipped under mirror" is unreadable a month later;
   "tokensPass is skipped under --mirror because mirror runs only state derivation and the block-event
   artifact sync" is a fact. It will be read cold, in another job's system prompt, by an agent with
