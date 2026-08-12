@@ -1061,7 +1061,22 @@ func TestWatchDecision(t *testing.T) {
 			bumpedSHA:           "sha1",
 			conflictState:       "clean",
 			wantBump:            true,
-			wantMessageContains: []string{"merge conflicts", "git rebase origin/main", "--force-with-lease"},
+			wantMessageContains: []string{"merge conflicts", "git rebase origin/main", "--force-with-lease", "[kraken pr-watch — automated notice, not a reply from carl]"},
+			wantLastCommentAt:   "2024-01-01T00:00:00Z",
+			wantBumpedSHA:       "sha1",
+			wantConflictState:   "conflicting",
+		},
+		{
+			// the base-less variant must carry the same provenance prefix —
+			// it was the second of the two PR-watch notices shipped without
+			// one, and both arrive on the pane's user channel.
+			name:                "fresh conflict with no base ref still carries the provenance prefix",
+			fetch:               prWatchFetch{State: "open", HeadSHA: "sha1", Mergeable: "conflicting"},
+			lastCommentAt:       "2024-01-01T00:00:00Z",
+			bumpedSHA:           "sha1",
+			conflictState:       "clean",
+			wantBump:            true,
+			wantMessageContains: []string{"merge conflicts with its base branch", "[kraken pr-watch — automated notice, not a reply from carl]"},
 			wantLastCommentAt:   "2024-01-01T00:00:00Z",
 			wantBumpedSHA:       "sha1",
 			wantConflictState:   "conflicting",
