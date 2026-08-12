@@ -371,7 +371,7 @@ struct ThreadDetailView: View {
                 // Glowing dot in a tinted capsule — the same treatment
                 // StateCapsule gives a job's state, since this row answers the
                 // same question about a thread.
-                let stateColor = isLive ? KTheme.solved : KTheme.text2
+                let stateColor = isLive ? KTheme.solved : KTheme.stopped
                 HStack(spacing: 6) {
                     Circle()
                         .fill(stateColor)

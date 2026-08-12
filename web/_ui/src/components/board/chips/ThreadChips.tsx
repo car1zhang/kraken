@@ -42,8 +42,10 @@ export function threadChipsVisible(job: WebJob): boolean {
  * reorganisation, so `.threads` is modal-only (style.css says so in as many
  * words).
  *
- * Live threads take the cyan --polling tone (a second conversation is actually
- * running); closed ones dim and stay as history.
+ * Live threads take --ok (green — a second conversation is actually running);
+ * closed ones take --stopped (red — paused, revivable). The card's compact
+ * count is deliberately neutral instead: a count is a count, styled like every
+ * other count badge in the row (style.css .thread-count).
  */
 export function ThreadChips({
   job,

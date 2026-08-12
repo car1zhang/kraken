@@ -2001,7 +2001,8 @@ struct JobDetailView: View {
 }
 
 /// One side-thread chip — "⑂ <title>", green while the thread's window is
-/// live, muted once it's closed. Same outlined-stroke treatment as PRChip
+/// live, red once it's closed (paused, revivable — the CLI's running/waiting
+/// status pairing). Same outlined-stroke treatment as PRChip
 /// above, so a job's chips all read as one family.
 /// Not private: the board card renders these too, in its own chip row (see
 /// JobCardView), so a job's branches read the same on the board as they do in
@@ -2010,7 +2011,7 @@ struct ThreadChip: View {
     let thread: WebThread
 
     var body: some View {
-        let color = thread.isLive ? KTheme.solved : KTheme.text2
+        let color = thread.isLive ? KTheme.solved : KTheme.stopped
         HStack(spacing: 4) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.data(9, weight: .semibold))

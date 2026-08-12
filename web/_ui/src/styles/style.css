@@ -32,6 +32,23 @@
      than a derivation because it is a fixed STATUS hue that must not follow
      the accent — the kit's own cyan palette values are what it takes. */
   --polling: #00e5ff;
+  /* "stopped" status (a thing that was running and no longer is — today the
+     closed side-thread chips and the thread overlay's closed pill) — red,
+     borrowing the HUE util/ansi.go's StatusColor gives a pane idle at its
+     prompt ("waiting" = Red; "stopped" is this surface's word, not a
+     Peer.Status value), mirrored by ios/Kraken/Theme.swift KTheme.stopped. A
+     primitive for --polling's exact reason: a fixed STATUS hue that must not
+     follow the accent. It sits nearly on top of --skill-aim's red, and that
+     overlap is DELIBERATE rather than unexamined. The red sector is crowded —
+     --ac2 pink (~313°), aim-red (0°) and --warn amber (~41°) fence it, so the
+     best-placed red gets ~23° of minimum separation, a fraction of the 44°
+     --skill-graph's note found for lime — but the argument that carries the
+     overlap is SHAPE, not geometry: a cmd chip is a bare /aim text token
+     while a thread chip carries the ⑂ glyph, a status dot and a name, so
+     even side by side in the steer modal they are different kinds of object
+     sharing a hue, never two states of one thing (the confusion
+     Theme.swift's `queued` note actually bans). */
+  --stopped: #ff5c5c;
 
   /* --- kit derivation recipes (README "Derivation recipes"), verbatim --- */
   --bg-board: color-mix(in srgb, var(--ac) 4%, var(--b0));
@@ -76,7 +93,6 @@
   --solved-soft: color-mix(in srgb, var(--ok) 13%, var(--b1));
   --revealed: var(--warn);
   --revealed-soft: color-mix(in srgb, var(--warn) 13%, var(--b1));
-  --polling-soft: color-mix(in srgb, var(--polling) 14%, var(--b1));
   --scanline-ink: var(--scan);
   --scrim: color-mix(in srgb, var(--b0) 72%, transparent);
   --drop-tint: color-mix(in srgb, var(--ac) 5%, transparent);
@@ -167,6 +183,7 @@
   --ok: #3e8f1e; --warn: #a36f00;
   --scan: rgba(20, 16, 40, 0.04);
   --polling: #00799c;
+  --stopped: #c22a2a;
   /* the kit: no glow in light mode, on anything */
   --glow: none; --glow-hot: none; --glow-ok: none; --glow-warn: none;
   --text-glow: none;
@@ -346,7 +363,7 @@ body {
    added HERE, never a local cursor declaration. */
 button, a, [role="button"], summary, label.check,
 .card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip,
-.thread-chip, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
+.thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
 input[type="checkbox"] {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, pointer;
@@ -361,6 +378,7 @@ input[type="checkbox"] {
 :root[data-theme="light"] .chip, :root[data-theme="light"] .ct-chip,
 :root[data-theme="light"] .dq-chip, :root[data-theme="light"] .fb-chip,
 :root[data-theme="light"] .ld-chip, :root[data-theme="light"] .thread-chip,
+:root[data-theme="light"] .thread-count,
 :root[data-theme="light"] .branch-btn, :root[data-theme="light"] .colorsel-row,
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
@@ -952,10 +970,10 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 /* side-thread chips: one per fork of zeus' session. On the card they sit
    among the crew tokens and the counts in the .chips row (band 2); .threads
    itself is modal-only now (#steer-threads), since threadsHTML went away with
-   the card's separate rows. A live
-   thread takes --polling (cyan — a second conversation is running, the same
-   hue the polling zeus pill and the CLI use); a closed one dims to the
-   hairline and stays as history. Deliberately NOT .chip — that class is
+   the card's separate rows. Status-colored, the CLI's running/waiting pairing
+   rather than the cyan they wore before: a live thread takes --ok (green — a
+   second conversation is running), a closed one --stopped (red — paused,
+   revivable from the overlay). Deliberately NOT .chip — that class is
    claimed by the delegated handler that opens an artifact panel (same reason
    .queue-cancel keeps its own class). */
 .threads { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; align-items: center; }
@@ -966,30 +984,35 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    the full title is on the chip's own title attribute either way. */
 .thread-chip {
   font: 9px var(--mono);
-  background: transparent; color: var(--polling);
-  border: 1px solid var(--polling-soft);
+  background: transparent; color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, var(--b1));
   padding: 2px 6px;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  /* no box-shadow here: --polling has no glow token, and these chips lift by
-     filling in rather than glowing (unlike .chip/.pr-chip) */
+  /* no box-shadow here: these chips lift by filling in rather than glowing
+     (unlike .chip/.pr-chip) */
   transition: background 80ms var(--ease), border-color 80ms var(--ease);
 }
-.thread-chip:hover { background: var(--polling-soft); border-color: var(--polling); color: var(--fg); }
+.thread-chip:hover { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: var(--ok); color: var(--fg); }
 .thread-chip .dot {
   display: inline-block; width: 5px; height: 5px;
-  background: var(--polling); margin-right: 5px; vertical-align: middle;
+  background: var(--ok); margin-right: 5px; vertical-align: middle;
 }
-.thread-chip.closed { color: var(--muted); border-color: var(--border-strong); opacity: 0.8; }
-.thread-chip.closed:hover { background: var(--raised); opacity: 1; border-color: var(--muted); color: var(--fg); }
-.thread-chip.closed .dot { background: var(--border-strong); }
+.thread-chip.closed { color: var(--stopped); border-color: color-mix(in srgb, var(--stopped) 30%, var(--b1)); }
+.thread-chip.closed:hover { background: color-mix(in srgb, var(--stopped) 12%, transparent); border-color: var(--stopped); color: var(--fg); }
+.thread-chip.closed .dot { background: var(--stopped); }
 /* the card's collapsed form of the same thing (S2's `compact`): a bare count,
    a SPAN rather than a button — the card's own click opens the modal that
-   holds the list — so it takes the resting chip look and no hover fill. */
+   holds the list — so it takes the resting chip look and no hover fill.
+   NEUTRAL, unlike the per-thread chips above: a count is a count, so it wears
+   the .ct-chip resting look every other count badge in the row wears, and the
+   status colors stay on the modal's full list where each chip IS one thread. */
 .thread-count {
   font: 9px var(--mono);
-  color: var(--polling); border: 1px solid var(--polling-soft);
+  color: var(--muted); border: 1px solid var(--border-strong);
   padding: 2px 6px; white-space: nowrap;
+  transition: border-color 80ms var(--ease), color 80ms var(--ease);
 }
+.card:hover .thread-count { color: var(--fg); border-color: var(--ac); }
 /* dashed rather than solid: an affordance rather than a thing that exists.
    Modal-only now — the card's chip row shows branches that EXIST and leaves
    starting one to the click-in. */
@@ -2601,8 +2624,11 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 
 /* ---- side-thread overlay (#thread-overlay — see openThread in app.js) ----
    Two modes in one panel: the branch dialog (#thread-new) and the thread
-   itself (#thread-view). Every color here is a token, so both palettes work;
-   the thread's own accent is --polling, matching its chips. */
+   itself (#thread-view). Every color here is a token, so both palettes work.
+   The chrome is --ac like every other panel's; --polling survives in this
+   section only on the user-turn conversation label, and the state pill and
+   the chips that open the overlay carry the live/closed status pair
+   (--ok / --stopped). */
 
 /* head: "⑂ t1" is the .panel-title (mono, with its own ▊), the thread's name
    sits beside it in the prose voice and doubles as the rename affordance */
@@ -2626,7 +2652,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   padding: 1px 7px; border: 1px solid currentColor;
 }
 .thread-pill.live { color: var(--ok); }
-.thread-pill.closed { color: var(--muted); }
+.thread-pill.closed { color: var(--stopped); }
 
 /* branch dialog: says plainly what the fork does and doesn't touch */
 .thread-banner {

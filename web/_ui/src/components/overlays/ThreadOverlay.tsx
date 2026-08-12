@@ -200,7 +200,12 @@ function ThreadBody({
   // which is safe only because head AND body are painted from this one
   // derivation: the two out-of-phase timers can disagree about the AGE of the
   // truth, never about what is on screen.
-  const live = read.data ? !!read.data.live : rec?.state === "live";
+  // The no-data-at-all fallback is live, not closed: a just-branched thread
+  // has no board row yet (titleOverride above exists for the same window) and
+  // rendering the pill red-"closed" for it asserts a state nobody measured —
+  // grey was an acceptable lie, --stopped red is not. A row that EXISTS and
+  // says closed still wins until the read lands.
+  const live = read.data ? !!read.data.live : rec ? rec.state === "live" : true;
   const pane = read.data?.pane || rec?.pane || "";
   const kept =
     typeof read.data?.counted === "number"
