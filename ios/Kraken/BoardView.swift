@@ -822,7 +822,7 @@ struct JobRouteKey: Hashable {
 ///
 /// A material rather than `ThemedCard`'s glass, and that is the distinction
 /// rather than an approximation of it: these three are status readouts that
-/// sit still while six columns of glass cards scroll past under them, and a
+/// sit still while five columns of glass cards scroll past under them, and a
 /// tinted glass strip layered over a tinted glass card is two lensings of the
 /// same background field with nothing between them. `ThemedCard` is for the
 /// things you scroll and tap; this is for the things that stay.
@@ -1032,8 +1032,8 @@ struct BoardView: View {
     // The pager is a view-aligned horizontal carousel rather than the paged
     // TabView it replaced: same one-column-per-page side-scroll (carl's
     // explicit requirement), but with the neighbouring columns peeking at
-    // both edges, so the board reads as six columns you are looking along
-    // rather than six unrelated screens. The page dots went with the
+    // both edges, so the board reads as five columns you are looking along
+    // rather than five unrelated screens. The page dots went with the
     // TabView — the only way to colour them was one of the global styling
     // proxies this redesign deletes wholesale, and an untinted system dot
     // row under a tinted board is worse than no dots at all. Position
@@ -1640,7 +1640,7 @@ struct BoardView: View {
         ))
     }
 
-    // The six columns as one view-aligned carousel — the paged TabView's
+    // The five columns as one view-aligned carousel — the paged TabView's
     // replacement. `containerRelativeFrame` is what keeps it one column per
     // page (each page is exactly the container's width) and `contentMargins`
     // is what lets the neighbours peek; `.viewAligned` is what makes a swipe
@@ -1922,8 +1922,8 @@ struct BoardView: View {
     /// column — see the slice brief for the exact action each pair maps to.
     private func isLegalCrossColumnDrop(from: BoardColumn, to: BoardColumn) -> Bool {
         switch (from, to) {
-        case (.draft, .queued), (.queued, .draft), (.blocked, .done),
-             (.queued, .working), (.working, .blocked), (.blocked, .working),
+        case (.draft, .working), (.blocked, .done),
+             (.working, .blocked), (.blocked, .working),
              (.done, .blocked), (.done, .working), (.done, .archived):
             return true
         default:
@@ -1938,14 +1938,14 @@ struct BoardView: View {
     private func performCrossColumnDrop(from: BoardColumn, to: BoardColumn, slug: String) {
         let job = vm.board?.jobs.first { $0.slug == slug }
         switch (from, to) {
-        case (.draft, .queued):
+        // Draft → working IS the submit: one POST that starts the cell and
+        // only answers once it is up, so this drop can hold for several
+        // seconds. `runBoardAction` already refreshes on success and surfaces
+        // a 409 (empty spec, unresolvable repo) as the board error.
+        case (.draft, .working):
             runBoardAction { try await APIClient.shared.queueJob(baseURL: serverURL, slug: slug) }
-        case (.queued, .draft):
-            runBoardAction { try await APIClient.shared.dequeueJob(baseURL: serverURL, slug: slug) }
         case (.blocked, .done):
             runBoardAction { try await APIClient.shared.markDone(baseURL: serverURL, slug: slug) }
-        case (.queued, .working):
-            runBoardAction { try await APIClient.shared.startJob(baseURL: serverURL, slug: slug) }
         case (.working, .blocked):
             runBoardAction { try await APIClient.shared.stopJob(baseURL: serverURL, slug: slug) }
         // The two sheet-presenting drops are the only ones that need the
@@ -2117,8 +2117,8 @@ private struct JobCardView: View {
         isSettled ? [] : (job.docQuestions ?? []).filter { !$0.isAnswered }
     }
 
-    /// The ROI badge is a BLOCKED-card control: on a working, queued, draft,
-    /// done or archived card it would answer a question that card doesn't pose,
+    /// The ROI badge is a BLOCKED-card control: on a working, draft, done or
+    /// archived card it would answer a question that card doesn't pose,
     /// and an estimate left from an earlier block would read as a current fact.
     ///
     /// "Reads as blocked" is `BoardTheme.column(for:)`, not `state == "blocked"`
@@ -2534,7 +2534,7 @@ private struct ArtifactCountChip: View {
 }
 
 /// The "table of contents" reached from the overview strip's chevron and from
-/// the board toolbar's magnifier: all six columns as sections, every job as a
+/// the board toolbar's magnifier: all five columns as sections, every job as a
 /// compact row, tapping one opens JobDetail. Reads `vm` (the shared
 /// @Observable board view model) directly rather than a snapshot, so it stays
 /// in sync as JobDetail actions refresh the board underneath it — no separate

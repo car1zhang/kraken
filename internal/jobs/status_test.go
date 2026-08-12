@@ -234,23 +234,28 @@ func TestDeriveState(t *testing.T) {
 		},
 		{
 			name: "errored job reads as draft",
-			j:    &Job{Err: "bad frontmatter", State: "working", Ready: true},
+			j:    &Job{Err: "bad frontmatter", State: "working"},
 			live: true,
 			want: "draft",
 		},
 		{
-			name: "not ready, never started -> draft",
-			j:    &Job{Ready: false, State: ""},
+			name: "never started -> draft",
+			j:    &Job{State: ""},
 			want: "draft",
 		},
 		{
-			name: "ready, never started -> queued",
-			j:    &Job{Ready: true, State: ""},
-			want: "queued",
+			// the state between "not submitted" and "running" is gone: a
+			// never-started job is a draft whatever the cell probe says,
+			// since a job with no cell has nothing to probe.
+			name:   "never started, and live/active say otherwise -> still draft",
+			j:      &Job{State: ""},
+			live:   true,
+			active: true,
+			want:   "draft",
 		},
 		{
 			name: "started but cell not live: dead cell reads blocked",
-			j:    &Job{Ready: true, State: "blocked"},
+			j:    &Job{State: "blocked"},
 			live: false,
 			want: "blocked",
 		},
@@ -258,21 +263,21 @@ func TestDeriveState(t *testing.T) {
 			// a gone cell must never echo a stale "working" — that's how the
 			// status-investigation self-decapitation sat invisible on the board
 			name:   "started but cell not live, job file says working: still blocked",
-			j:      &Job{Ready: true, State: "working"},
+			j:      &Job{State: "working"},
 			live:   false,
 			active: false, // irrelevant while !live
 			want:   "blocked",
 		},
 		{
 			name:   "live and active -> working",
-			j:      &Job{Ready: true, State: "blocked"},
+			j:      &Job{State: "blocked"},
 			live:   true,
 			active: true,
 			want:   "working",
 		},
 		{
 			name:   "live and not active -> blocked",
-			j:      &Job{Ready: true, State: "working"},
+			j:      &Job{State: "working"},
 			live:   true,
 			active: false,
 			want:   "blocked",

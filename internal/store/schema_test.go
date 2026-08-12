@@ -24,13 +24,33 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v20: put back jobs.ready and the prereqs table, both of which
+	// v20 dropped and both of which every version through v19 really had.
+	// board_order's queued rows are not restored: v20's DELETE removes rows
+	// rather than a shape, and this helper reproduces SHAPES — a test that
+	// wants queued rows in a pre-v20 database inserts them itself.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 20 {
+		for _, stmt := range []string{
+			`ALTER TABLE jobs ADD COLUMN ready INTEGER NOT NULL DEFAULT 0`,
+			`CREATE TABLE prereqs (
+				job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+				prereq_slug TEXT NOT NULL,
+				gated       INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (job_id, prereq_slug)
+			)`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v20) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v19: drop kg_recall. Nothing to put back — v19 is a single
 	// additive CREATE over a v18 shape that had no such table, so the drop is
 	// the whole reversal (the v18 arm below owns the bare-CREATE-vs-IF-NOT-
 	// EXISTS reasoning this arm exists to serve).
-	//
-	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
-	// migrate() applies them.
 	if target < 19 {
 		if _, err := s.db.Exec(`DROP TABLE kg_recall`); err != nil {
 			t.Fatalf("downgrade to v%d (undo v19): %v", target, err)
@@ -1584,7 +1604,7 @@ func TestMigrateV11RekeysBoardOrderAndEvents(t *testing.T) {
 	for i, slug := range []string{"live", archivedName, "twice", "vanished"} {
 		if _, err := s.db.Exec(
 			`INSERT INTO board_order ("column", position, slug) VALUES (?, ?, ?)`,
-			"queued", i, slug,
+			"draft", i, slug,
 		); err != nil {
 			t.Fatalf("seed board_order %q: %v", slug, err)
 		}
@@ -1607,15 +1627,15 @@ func TestMigrateV11RekeysBoardOrderAndEvents(t *testing.T) {
 		t.Fatalf("GetBoardOrder: %v", err)
 	}
 	want := []int64{activeID, namedID, newID}
-	if len(order["queued"]) != len(want) {
-		t.Fatalf("queued = %v, want %v (the unmappable slug dropped)", order["queued"], want)
+	if len(order["draft"]) != len(want) {
+		t.Fatalf("draft = %v, want %v (the unmappable slug dropped)", order["draft"], want)
 	}
 	for i, id := range want {
-		if order["queued"][i] != id {
-			t.Fatalf("queued[%d] = %d, want %d (order preserved, positions repacked)", i, order["queued"][i], id)
+		if order["draft"][i] != id {
+			t.Fatalf("draft[%d] = %d, want %d (order preserved, positions repacked)", i, order["draft"][i], id)
 		}
 	}
-	if order["queued"][2] == oldID {
+	if order["draft"][2] == oldID {
 		t.Fatal("the OLDER archived generation won the slug tie; newest must win")
 	}
 
@@ -1774,12 +1794,16 @@ func TestMigrateV11AgainstRealDuplicateShapes(t *testing.T) {
 
 	downgradeFreshDB(t, s, 10)
 
-	// The live table carries a stale `helper-catalog` row in the queued column
+	// The live table carries a stale `helper-catalog` row in a board column
 	// belonging to no ACTIVE job at the time it was written — reproduced here.
+	// The column is `draft` rather than the `queued` the real rows sat in:
+	// migrate() walks all the way to v20 now, and v20 DELETEs every queued
+	// row, so seeding this fixture there would leave nothing to assert on.
+	// The rekey under test does not read the column name.
 	for i, slug := range []string{"asdf", "helper-catalog", "sadfsa"} {
 		if _, err := s.db.Exec(
 			`INSERT INTO board_order ("column", position, slug) VALUES (?, ?, ?)`,
-			"queued", i, slug,
+			"draft", i, slug,
 		); err != nil {
 			t.Fatalf("seed board_order %q: %v", slug, err)
 		}
@@ -1793,21 +1817,114 @@ func TestMigrateV11AgainstRealDuplicateShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBoardOrder: %v", err)
 	}
-	if len(order["queued"]) != 3 {
-		t.Fatalf("queued = %v, want all three mappable rows kept", order["queued"])
+	if len(order["draft"]) != 3 {
+		t.Fatalf("draft = %v, want all three mappable rows kept", order["draft"])
 	}
 	// asdf: no active job, no archived_name match ("asdf" archives to "asdf"
 	// for the FIRST one only), so the rule that fires depends on which — but
 	// whichever it is, it must be ONE of the five and it must be deterministic.
-	if order["queued"][0] != asdf[0] {
-		t.Errorf("asdf resolved to %d, want %d — the single archived_name match", order["queued"][0], asdf[0])
+	if order["draft"][0] != asdf[0] {
+		t.Errorf("asdf resolved to %d, want %d — the single archived_name match", order["draft"][0], asdf[0])
 	}
 	// helper-catalog: the ACTIVE job wins over the archived one, always
-	if order["queued"][1] != hcLive {
-		t.Errorf("helper-catalog resolved to %d, want the ACTIVE job %d", order["queued"][1], hcLive)
+	if order["draft"][1] != hcLive {
+		t.Errorf("helper-catalog resolved to %d, want the ACTIVE job %d", order["draft"][1], hcLive)
 	}
 	// sadfsa: no active job; the first archived took the bare name
-	if order["queued"][2] != saOld {
-		t.Errorf("sadfsa resolved to %d, want %d", order["queued"][2], saOld)
+	if order["draft"][2] != saOld {
+		t.Errorf("sadfsa resolved to %d, want %d", order["draft"][2], saOld)
+	}
+}
+
+// --- v19 -> v20: the queued status is retired ---
+
+// TestSchemaV19ToV20RetiresQueued covers the whole of migrations[20] on a
+// database shaped like a real v19 one: jobs.ready and the prereqs table both
+// go, every board_order row for the vanished queued column goes with them,
+// and — the part a "drop three things" migration gets wrong silently — the
+// rows it must NOT touch survive intact.
+//
+// The surviving-rows half is the reason this asserts on two columns rather
+// than one. `DELETE FROM board_order WHERE "column" = 'queued'` and
+// `DELETE FROM board_order` differ by a clause, both leave the queued column
+// empty, and only a fixture holding a second column can tell them apart.
+func TestSchemaV19ToV20RetiresQueued(t *testing.T) {
+	s := openTest(t)
+	id, err := s.CreateJob(&Job{Slug: "legacy-ready", Repo: "kraken"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	other, err := s.CreateJob(&Job{Slug: "legacy-other", Repo: "kraken"})
+	if err != nil {
+		t.Fatalf("CreateJob other: %v", err)
+	}
+	downgradeFreshDB(t, s, 19)
+
+	// a v19-shaped database: a ready job, a prereq row, and board_order rows
+	// in both the doomed column and a surviving one.
+	if _, err := s.db.Exec(`UPDATE jobs SET ready = 1 WHERE id = ?`, id); err != nil {
+		t.Fatalf("seed jobs.ready: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO prereqs (job_id, prereq_slug, gated) VALUES (?, ?, 1)`, id, "legacy-other",
+	); err != nil {
+		t.Fatalf("seed prereqs: %v", err)
+	}
+	// board_order keys on jobs.id from v12 onward, which a v19 fixture is
+	// well past — so these rows carry ids, not slugs.
+	for _, row := range []struct {
+		column string
+		jobID  int64
+	}{
+		{"queued", id},
+		{"draft", other},
+	} {
+		if _, err := s.db.Exec(
+			`INSERT INTO board_order ("column", position, job_id) VALUES (?, 0, ?)`,
+			row.column, row.jobID,
+		); err != nil {
+			t.Fatalf("seed board_order %s/%d: %v", row.column, row.jobID, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v19: %v", err)
+	}
+
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d after migrate, want %d", version, schemaVersion)
+	}
+
+	// jobs.ready is gone as a COLUMN — a select naming it must fail, which is
+	// a stronger claim than "it reads as 0".
+	if err := s.db.QueryRow(`SELECT ready FROM jobs WHERE id = ?`, id).Scan(new(int)); err == nil {
+		t.Fatal("jobs.ready still selectable after v20")
+	}
+	// the prereqs table is gone
+	if _, err := s.db.Exec(`SELECT 1 FROM prereqs`); err == nil {
+		t.Fatal("prereqs table still present after v20")
+	}
+	// the job rows themselves survived the column drop
+	got, err := s.GetJobBySlug("legacy-ready")
+	if err != nil {
+		t.Fatalf("GetJobBySlug after v20: %v", err)
+	}
+	if got.ID != id || got.Repo != "kraken" {
+		t.Fatalf("job row mangled by v20: %+v", got)
+	}
+
+	order, err := s.GetBoardOrder()
+	if err != nil {
+		t.Fatalf("GetBoardOrder: %v", err)
+	}
+	if len(order["queued"]) != 0 {
+		t.Fatalf("queued board_order rows survived v20: %v", order["queued"])
+	}
+	if len(order["draft"]) != 1 || order["draft"][0] != other {
+		t.Fatalf("draft board_order = %v, want [%d] — v20 must delete ONLY the queued rows", order["draft"], other)
 	}
 }

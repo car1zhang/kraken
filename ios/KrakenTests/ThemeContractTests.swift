@@ -439,10 +439,10 @@ final class ThemeContractTests: XCTestCase {
     // MARK: - BoardTheme.color(forState:)
     //
     // "Behaviour byte-for-byte preserved: ... working→solved, blocked→counter,
-    // queued→KTheme.queued, draft/done/archived→text2 ... NO state hue follows
-    // the tint" — amendment 2026-08-07 r2: KTheme.queued is a fixed token
-    // carrying the old accent literals, so meaning colors never re-tint,
-    // without exception.
+    // draft/done/archived→text2 ... NO state hue follows the tint" — amendment
+    // 2026-08-07 r2: meaning colors never re-tint, without exception. The
+    // queued arm of that row went with the queued state itself; the tokens
+    // asserted below are the ones that survive it.
     //
     // Compared as resolved RGB in both traits rather than by `==` on the token:
     // the obligation is that the two render identically, and a re-derived
@@ -467,39 +467,38 @@ final class ThemeContractTests: XCTestCase {
                                 contractUI(KTheme.solved), "working→solved")
         contractAssertSameColor(contractUI(BoardTheme.color(forState: "blocked")),
                                 contractUI(KTheme.counter), "blocked→counter")
-        contractAssertSameColor(contractUI(BoardTheme.color(forState: "queued")),
-                                contractUI(KTheme.queued), "queued→KTheme.queued")
         for state in ["draft", "done", "archived"] {
             contractAssertSameColor(contractUI(BoardTheme.color(forState: state)),
                                     contractUI(KTheme.text2), "\(state)→text2")
         }
     }
 
-    // The r2 amendment's whole point: the queued hue must NOT move with the
-    // stored tint (under a pink tint a tint-following queued sat 3° from
-    // blocked's counter hue). Asserted under the most adversarial tint rather
-    // than the default.
-    func testQueuedStateColorIgnoresTheStoredTint() {
-        contractStoreTint("pink")
-        contractAssertSameColor(contractUI(BoardTheme.color(forState: "queued")),
-                                contractUI(KTheme.queued), "queued under pink tint")
-        contractStoreTint("amber")
-        contractAssertSameColor(contractUI(BoardTheme.color(forState: "queued")),
-                                contractUI(KTheme.queued), "queued under amber tint")
+    // The r2 amendment's whole point: a state hue must NOT move with the
+    // stored tint. It was written for queued, which was the one state hue
+    // ever derived from the accent (under a pink tint it sat 3° from
+    // blocked's counter hue); queued is retired, so the claim is carried by
+    // the two hues that remain. Asserted under the most adversarial tints
+    // rather than the default.
+    func testStateColorsIgnoreTheStoredTint() {
+        for tint in ["pink", "amber"] {
+            contractStoreTint(tint)
+            contractAssertSameColor(contractUI(BoardTheme.color(forState: "working")),
+                                    contractUI(KTheme.solved), "working under \(tint) tint")
+            contractAssertSameColor(contractUI(BoardTheme.color(forState: "blocked")),
+                                    contractUI(KTheme.counter), "blocked under \(tint) tint")
+        }
     }
 
-    // The three live states are the board's whole read-at-a-glance promise
-    // (52-testing-plan.md: "working/blocked/queued map to three distinguishable
-    // hues in both appearances"). Equal pairs would satisfy the mapping test
-    // above only if two KTheme tokens had collapsed onto one color.
-    func testWorkingBlockedAndQueuedStayThreeDistinctColors() {
+    // The live states are the board's whole read-at-a-glance promise
+    // (52-testing-plan.md: the live states "map to distinguishable hues in
+    // both appearances" — it named three while queued was one of them). An
+    // equal pair would satisfy the mapping test above only if two KTheme
+    // tokens had collapsed onto one color.
+    func testWorkingAndBlockedStayDistinctColors() {
         for style in [UIUserInterfaceStyle.dark, .light] {
             let working = contractRGB(contractUI(BoardTheme.color(forState: "working")), style)
             let blocked = contractRGB(contractUI(BoardTheme.color(forState: "blocked")), style)
-            let queued = contractRGB(contractUI(BoardTheme.color(forState: "queued")), style)
             XCTAssertNotEqual(working, blocked, "working vs blocked, style \(style.rawValue)")
-            XCTAssertNotEqual(working, queued, "working vs queued, style \(style.rawValue)")
-            XCTAssertNotEqual(blocked, queued, "blocked vs queued, style \(style.rawValue)")
         }
     }
 

@@ -21,7 +21,7 @@ type webJobColorReq struct {
 // purely cosmetic.
 //
 // First, editability. The form save is gated on editableJob (no lifecycle in
-// flight: drafts, queued, done), because rewriting repo/base/spec under a
+// flight: drafts and done jobs), because rewriting repo/base/spec under a
 // running cell desyncs it from the contract it is working to. Colour cannot
 // desync anything — and a LIVE cell is precisely when recolouring is useful,
 // since the whole point is that zeus' prompt bar matches the board. So this

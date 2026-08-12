@@ -19,16 +19,20 @@ import (
 )
 
 // kraken serve — the one long-lived kraken process (launchd-managed,
-// installed by make install). It hosts the scheduler poll: queue startable
-// jobs under the cell cap, derive each started job's working/blocked state
-// from live pod activity, watch cells for unhealthy zeuses (auto-retrying
-// with backoff), watch PRs for auto-reap, and write a heartbeat the viewer
-// renders. It owns no state that can't be re-derived from files + discovery
-// — the in-memory dedup maps only suppress duplicate notifications, and
-// losing them on restart merely re-notifies once.
+// installed by make install). It hosts the scheduler poll: derive each
+// started job's working/blocked state from live pod activity, watch cells for
+// unhealthy zeuses (auto-retrying with backoff), watch PRs, and write a
+// heartbeat the viewer renders.
+//
+// It STARTS nothing on its own initiative — submitting a job starts
+// its cell in that same HTTP request (jobs.SubmitJob), so there is no queue
+// pass and no cell cap; the tick's only start attempt is the one it makes for
+// a dream or graph job it just created itself, and that attempt is
+// single-shot. It owns no state that can't be re-derived from files +
+// discovery — the in-memory dedup maps only suppress duplicate
+// notifications, and losing them on restart merely re-notifies once.
 
 const (
-	CellCap        = 15
 	DaemonInterval = 15 * time.Second
 	// usage polling is throttled to every usageEvery-th tick (~5 min): each
 	// account fetch is a real network call, and usage windows don't move
@@ -48,9 +52,25 @@ const (
 )
 
 type DaemonStatus struct {
-	PID       int    `json:"pid"`
-	StartedAt int64  `json:"started_at"`
-	LastTick  int64  `json:"last_tick"`
+	PID       int   `json:"pid"`
+	StartedAt int64 `json:"started_at"`
+	LastTick  int64 `json:"last_tick"`
+	// LastError is VESTIGIAL and is kept only for wire compatibility, the
+	// same call webBoard.CellCap gets (api/board.go's legacyCellCap) and for
+	// the same reason: `last_error` is on the wire, and both clients model it.
+	//
+	// It has no writer left. tick() returns a nil error on every path — the
+	// queue pass was the only thing that ever produced one, and the one start
+	// the tick still makes (a dream/graph job it created itself) reports its
+	// failure per job, to the event log and a notification, rather than
+	// through this one global string that no client renders per job.
+	//
+	// Kept rather than removed because omitting a key is a breaking change
+	// and this one buys nothing: it is `omitempty`, so an empty value is
+	// already absent from every payload, and a client reading it sees exactly
+	// what it saw on a healthy tick before. It goes when the clients drop it.
+	// Do not add new writers — a per-job surface is the right home for a
+	// per-job failure.
 	LastError string `json:"last_error,omitempty"`
 	Cells     int    `json:"cells"`
 	// Stale is this daemon process' own self-check (see selfcheck.go) — true
@@ -258,41 +278,6 @@ var probeOnline = func() bool {
 	return true
 }
 
-// publishedStartErrors is the queue pass' StartErrors map, published for the
-// web handler to read (slug → the reason that job's last start attempt
-// failed). The daemon writes, the handler reads — the same division the
-// account-usage snapshot and inProcessDaemonStatus already draw.
-//
-// A FRESH map is stored every tick and the stored one is never mutated in
-// place. That is the L5 lesson from DaemonStatus directly above: a reader
-// that Loads the pointer and holds it was otherwise racing the next tick's
-// writes to the very map its pointer pointed at.
-var publishedStartErrors atomic.Pointer[map[string]string]
-
-// StartErrorFor reports why the daemon's last attempt to start this job's
-// cell failed, empty when the last attempt succeeded, none has been made, or
-// no daemon has ticked in this process.
-//
-// Keyed by slug because only ACTIVE jobs are ever started and jobs_active_slug
-// makes those unique — the same reason the wire can keep addressing jobs by
-// slug at all.
-func StartErrorFor(slug string) string {
-	m := publishedStartErrors.Load()
-	if m == nil {
-		return ""
-	}
-	return (*m)[slug]
-}
-
-// publishStartErrors stores a copy of the queue pass' errors for the handler.
-func publishStartErrors(src map[string]string) {
-	cp := make(map[string]string, len(src))
-	for k, v := range src {
-		cp[k] = v
-	}
-	publishedStartErrors.Store(&cp)
-}
-
 // daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
 // one; tick runs a single scheduler pass.
 type daemonState struct {
@@ -304,22 +289,6 @@ type daemonState struct {
 	// DESIGN: the repair criterion never drops a create-vouched or
 	// family-branch record, so repeating it finds nothing new to drop.
 	Repaired map[string]bool
-	// StartErrors is the reason each job's last StartCell attempt failed,
-	// keyed by job slug (active slugs are unique, and only active jobs are
-	// ever started). Cleared the moment a start succeeds.
-	//
-	// This exists because a queued job that cannot start was, until now,
-	// COMPLETELY silent on the board. The failure was written to
-	// ~/.kraken/logs and to DaemonStatus.LastError — which is one global
-	// string for the whole tick, not per job, and which web/static/app.js
-	// has never rendered at all. A real job sat queued through 24 identical
-	// failed start attempts over nine minutes with nothing on screen, and
-	// the eventual fix was to rename the job. The board now carries this on
-	// the job's own card (webJob.StartError).
-	//
-	// In-memory only, like Notified/Poked above: a restarted daemon simply
-	// re-attempts the start and re-learns the error on its next tick.
-	StartErrors map[string]string
 	// PRHeads memoizes viewPRHead's successful URL → headRefName lookups.
 	// Heads are immutable once a PR exists, so this is a positive cache with
 	// no invalidation, consulted before every gh pr view call and shared
@@ -355,7 +324,6 @@ type daemonState struct {
 func newDaemon() *daemonState {
 	return &daemonState{
 		Notified:          map[string]int64{},
-		StartErrors:       map[string]string{},
 		Poked:             map[string]int64{},
 		Repaired:          map[string]bool{},
 		PRHeads:           map[string]string{},
@@ -514,7 +482,7 @@ func RunServeTicks(opts ServeOpts) {
 		// `kraken serve` starting while an import is already mid-sweep.
 		writeDaemonStatusFile(st)
 	}
-	dlogEvent("info", "daemon-start", "serve ticks up (pid %d, cap %d cells, tick %s, mirror %v)", st.PID, CellCap, DaemonInterval, opts.Mirror)
+	dlogEvent("info", "daemon-start", "serve ticks up (pid %d, tick %s, mirror %v)", st.PID, DaemonInterval, opts.Mirror)
 	for {
 		cells, err := d.tick(opts.Mirror)
 		next := st
@@ -1073,74 +1041,58 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 
 	// dream loop: at most one corroboration pass per local calendar day (see
 	// kickDream — the first wall-clock cadence in this binary). Gated on
-	// !mirror because creating a real job row is exactly the class of side
-	// effect a read-only scheduler variant must never have, and it sits
-	// between auto-archive and the queue pass so the job it creates is
-	// startable on THIS tick: the queue loop below iterates `jobs`, captured
-	// at the top of the tick, so a freshly created job has to be folded into
-	// that slice by hand to avoid waiting out a whole DaemonInterval.
+	// !mirror because creating a real job row — and, below, STARTING its cell
+	// — is exactly the class of side effect a read-only scheduler variant must
+	// never have.
+	//
+	// These two are the ONLY starts the daemon makes. Every other job on the
+	// board starts from carl's own submit, synchronously inside that request;
+	// these two have no human in the loop by construction, so the creator
+	// starts what it created, here, on the same tick it created it. The
+	// attempt is single-shot on purpose: a failure notifies loudly and leaves
+	// a DRAFT on the board, which carl can submit by hand, rather than a
+	// background retry loop re-attempting a broken start every 15s forever
+	// with nothing on screen (which is precisely what the queue pass did).
 	if !mirror {
-		if created := kickDream(now); created != nil {
-			jobs = append(jobs, created)
-			bySlug[created.Slug] = created
-		}
-		// graph ingest: same once-per-local-day cadence and same fold-into-
-		// this-tick's-slice reason as the dream job above; kickGraph itself
-		// declines when the pending queue is empty or a graph job is already
-		// active.
-		if created := kickGraph(ActiveStore(), now); created != nil {
-			jobs = append(jobs, created)
-			bySlug[created.Slug] = created
-		}
-	}
-
-	// queue: start startable jobs under the cap. StartCell writes "working"
-	// itself once the cell is up. Skipped entirely under mirror — mirror is
-	// a read-only scheduler variant, never a second real scheduler racing
-	// the live daemon/serve to start the same job's cell.
-	var firstErr error
-	if !mirror {
-		for _, j := range jobs {
-			if cells >= CellCap {
-				break
-			}
-			if !startable(j, bySlug) {
-				continue
-			}
-			repo, err := ResolveRepo(j.Repo)
-			if err != nil {
-				// surfaces on the board as repo?; notify once per job version.
-				// Keyed on j.Slug, not j.File — see the "err:" dedup above.
-				key := "repo:" + j.Slug
-				if mt := j.ModTime.Unix(); d.Notified[key] != mt {
-					notify("kraken: job error", j.Slug+": "+err.Error())
-					d.Notified[key] = mt
-				}
-				continue
-			}
-			if err := StartCell(j, repo); err != nil {
-				dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
-				// Per job, not just firstErr: two jobs failing in one tick
-				// each keep their own reason, and the board shows each on
-				// its own card. firstErr stays as it was — it feeds the
-				// daemon's single global status line, which is a different
-				// (and much weaker) signal.
-				d.StartErrors[j.Slug] = err.Error()
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			delete(d.StartErrors, j.Slug)
+		if created := kickDream(now); created != nil && d.startCreatedJob(created) {
 			cells++
-			dlogEvent("info", "cell-start", "started %s (cell %s, %d/%d cells)", j.Slug, CellSession(j), cells, CellCap)
-			notify("kraken ▶ "+j.Slug, "cell started")
+		}
+		// graph ingest: same once-per-local-day cadence and same
+		// start-what-you-created rule as the dream job above; kickGraph itself
+		// declines when the pending queue is empty or a graph job is already
+		// running.
+		if created := kickGraph(ActiveStore(), now); created != nil && d.startCreatedJob(created) {
+			cells++
 		}
 	}
-	// Published even under mirror (where the loop above never runs), so a
-	// mirror board shows an empty set rather than a stale one.
-	publishStartErrors(d.StartErrors)
-	return cells, firstErr
+	return cells, nil
+}
+
+// startCreatedJob submits a job the tick just created for itself (dream,
+// graph) and reports whether the cell came up. Success logs and notifies
+// exactly as the old queue pass did; failure logs, notifies, and returns
+// false — the job stays draft, and nothing retries it.
+//
+// It goes through SubmitJob rather than calling StartCell directly so the
+// creators get the same validation carl's own submit gets: a dream job whose
+// spec came out empty, or whose repo no longer resolves, is refused here with
+// a reason instead of spawning a cell with an empty prompt.
+//
+// A failure deliberately does NOT become the tick's returned error. That
+// return feeds DaemonStatus.LastError — one global string for the whole tick,
+// which no client renders per job — and the reason is already on the two
+// surfaces that carry it per job: the event log and a notification. The old
+// queue pass drew the same line for the same failure, letting a ResolveRepo
+// miss notify and `continue` without touching firstErr.
+func (d *daemonState) startCreatedJob(j *Job) bool {
+	if err := SubmitJob(j); err != nil {
+		dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
+		notify("kraken ⚠ "+j.Slug, "created but could not start: "+err.Error())
+		return false
+	}
+	dlogEvent("info", "cell-start", "started %s (cell %s)", j.Slug, CellSession(j))
+	notify("kraken ▶ "+j.Slug, "cell started")
+	return true
 }
 
 // gateRetry decides whether a due auto-retry poke for rkey ("retry:"+slug)

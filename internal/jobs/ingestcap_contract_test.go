@@ -104,10 +104,11 @@ func TestKgcontractCreateGraphJobStatesTheCapForIngest(t *testing.T) {
 	if got, want := kgcontractOneCapLine(t, j.Body), kgcontractCapPrefix+" 87"; got != want {
 		t.Errorf("cap line = %q, want %q", got, want)
 	}
-	// The job is still an ordinary ready ingest job — the cap is an addition,
-	// not a replacement for anything the queue pass or the cell already reads.
-	if !j.Ready || j.Err != "" {
-		t.Errorf("job = {ready:%v err:%q}, want a ready job with no parse error", j.Ready, j.Err)
+	// The job is still an ordinary submittable ingest job — the cap is an
+	// addition, not a replacement for anything the tick's submit or the cell
+	// already reads.
+	if j.State != "" || j.Err != "" {
+		t.Errorf("job = {state:%q err:%q}, want a draft with no parse error", j.State, j.Err)
 	}
 	if !strings.Contains(j.Body, ".claude/skills/graph/SKILL.md") {
 		t.Errorf("spec no longer points at the skill by path:\n%s", j.Body)
@@ -227,8 +228,8 @@ func TestKgcontractKickGraphStormGuardsSurviveTheCap(t *testing.T) {
 	if j == nil {
 		t.Fatal("a pending queue produced no job")
 	}
-	if !j.Ready {
-		t.Errorf("job = %+v, want a ready one the queue pass can start", j)
+	if j.State != "" || j.Err != "" {
+		t.Errorf("job = %+v, want a clean draft the tick can submit", j)
 	}
 	// One pending episode is a backlog of 1: the floor, stated in the job.
 	if got, want := kgcontractOneCapLine(t, j.Body), kgcontractCapPrefix+" 25"; got != want {
@@ -240,9 +241,18 @@ func TestKgcontractKickGraphStormGuardsSurviveTheCap(t *testing.T) {
 		t.Fatalf("a second kick on the same local day created %q", j2.Slug)
 	}
 
-	// Guard 3: none while an active graph-* job exists — the next day, with
-	// the queue still pending and yesterday's job unfinished.
+	// Guard 3: none while a RUNNING graph-* job exists. A leftover DRAFT is
+	// not one — its start failed, and declining for it would wedge the queue
+	// silently — so the guard has to be armed by putting the job into a state
+	// where a cell exists.
+	row, err := st.GetJobBySlug(j.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateJobFields(row.ID, row.Rev, map[string]any{"state": "working"}); err != nil {
+		t.Fatal(err)
+	}
 	if j3 := kickGraph(st, now.Add(24*time.Hour)); j3 != nil {
-		t.Fatalf("a kick with an active graph job created %q", j3.Slug)
+		t.Fatalf("a kick with a running graph job created %q", j3.Slug)
 	}
 }

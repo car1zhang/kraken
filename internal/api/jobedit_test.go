@@ -205,7 +205,7 @@ func TestWebJobSaveMTimeLock(t *testing.T) {
 // standing CI failure would re-bump on the very next pass since BumpedSHA
 // reset to "" reads as first-sight-not-yet-seeded again.
 func TestSerializeJobFilePreservesPRs(t *testing.T) {
-	f := jobFormFields{Slug: "x", Repo: "kraken", Ready: true}
+	f := jobFormFields{Slug: "x", Repo: "kraken"}
 	prs := []jobs.JobPR{
 		{URL: "https://github.com/example/repo/pull/1", State: "merged"},
 		{

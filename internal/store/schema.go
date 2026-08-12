@@ -58,7 +58,10 @@ import (
 // per-session record of which graph facts have already been injected into a
 // conversation, which is what makes mid-conversation recall inject a given
 // memory at most once per session (see schemaV19 and store/recall.go).
-const schemaVersion = 19
+// Version 20 retires the queued status: jobs.ready is dropped, the prereqs
+// table is dropped with the feature it served, and every board_order row for
+// the vanished "queued" column is deleted (see schemaV20).
+const schemaVersion = 20
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -97,7 +100,7 @@ CREATE TABLE jobs (
 	archived_at   INTEGER NULL,               -- unix millis; NULL means not archived
 	archived_name TEXT NULL,                  -- NULL means not archived
 	-- L6: file mode's jobs.Job.Err (ParseJob's parse-failure detail, which
-	-- pins a job to "draft" in deriveState regardless of ready/state) had no
+	-- pins a job to "draft" in deriveState whatever its state says) had no
 	-- store-mode equivalent — a store-backed job with garbage raw content
 	-- saved clean instead of pinning to draft like an unparseable file does.
 	-- Added by editing schemaV1 in place rather than a new migrations[2]
@@ -1126,6 +1129,34 @@ CREATE TABLE kg_recall (
 );
 `
 
+// schemaV20 retires the queued status. Three drops, no hook — every one of
+// them is expressible in SQL, and none of them needs a value carried forward:
+//
+//   - jobs.ready: the flag the board's draft→queued drag used to flip and the
+//     daemon's queue pass used to read. Submit now starts the cell in the same
+//     request, so there is no interval in which a job is "ready but not
+//     started" for a column to hold. Dropped rather than left standing: a
+//     column nothing reads is a column the next reader assumes still means
+//     something. schemaV3's precedent — go-sqlite3 bundles a SQLite with
+//     native ALTER TABLE ... DROP COLUMN, and ready carried no index and no
+//     CHECK, so the drop is the whole step.
+//   - the prereqs table: prereqs existed only to park a ready job until its
+//     dependencies finished, and startable() — the one reader — is gone with
+//     the queue pass (Q1). No active job carries a row, so nothing is lost;
+//     the DROP is what stops the table reading as a live feature.
+//   - board_order rows for the queued column: board_order has no CHECK on
+//     "column" and nothing else ever prunes it, so a stale queued ordering
+//     would sit in the table forever, invisible and unreachable. Rows for
+//     every OTHER column are untouched.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v19.
+const schemaV20 = `
+ALTER TABLE jobs DROP COLUMN ready;
+DROP TABLE prereqs;
+DELETE FROM board_order WHERE "column" = 'queued';
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1183,9 +1214,13 @@ type migrationStep struct {
 // schemaV18);
 // migrations[19] adds kg_recall (no hook — a brand-new table has nothing to
 // migrate forward, and an absent row correctly means "never delivered to this
-// session"; see schemaV19).
+// session"; see schemaV19);
+// migrations[20] retires the queued status — drops jobs.ready, drops the
+// prereqs table, and deletes every board_order row for the queued column (no
+// hook — all three are plain SQL, and none of the dropped state has a forward
+// home; see schemaV20).
 // Future schema changes append
-// migrations[20], migrations[21], ... rather than editing an existing
+// migrations[21], migrations[22], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1208,6 +1243,7 @@ var migrations = map[int]migrationStep{
 	17: {sql: schemaV17},
 	18: {sql: schemaV18},
 	19: {sql: schemaV19},
+	20: {sql: schemaV20},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

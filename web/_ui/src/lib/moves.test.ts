@@ -1,16 +1,19 @@
 // The MOVES table is the board's highest-consequence data structure: each of
-// its ten entries starts a cell, stops an agent, or archives real work, and an
-// eleventh entry that "seemed reasonable" would be a silent state change on a
-// user's job. So this file enumerates ALL 30 (from, to) pairs and asserts the
-// exact ten, rather than spot-checking the ones that were easy to think of.
+// its entries starts a cell, stops an agent, or archives real work, and one
+// more that "seemed reasonable" would be a silent state change on a user's
+// job. So this file enumerates ALL (from, to) pairs and asserts the exact
+// listed set, rather than spot-checking the ones that were easy to think of.
+//
+// Three entries left with the queued column: draft→queued (the booking),
+// queued→draft (/api/dequeue) and queued→working (/api/start). One replaced
+// them — draft→working, posting the same /api/queue URL, which is now the
+// synchronous submit.
 
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../api/client.ts", () => ({
   queueJob: vi.fn(async () => ({ ok: true })),
-  dequeueJob: vi.fn(async () => ({ ok: true })),
   doneJob: vi.fn(async () => ({ ok: true })),
-  startJob: vi.fn(async () => ({ ok: true })),
   stopJob: vi.fn(async () => ({ ok: true })),
   archiveJob: vi.fn(async () => ({ ok: true })),
   reactivateJob: vi.fn(async () => ({ ok: true })),
@@ -26,10 +29,8 @@ const DROP_TARGETS: DropColumn[] = [...COLUMNS, ARCHIVED];
 
 /** The table from artifacts/53-port-checklist.md, transcribed by hand. */
 const LISTED: Array<[Column, DropColumn, string]> = [
-  ["draft", "queued", "/api/queue"],
-  ["queued", "draft", "/api/dequeue"],
+  ["draft", "working", "/api/queue"],
   ["blocked", "done", "/api/done"],
-  ["queued", "working", "/api/start"],
   ["working", "blocked", "/api/stop"],
   ["blocked", "working", "steer:unblock"],
   ["done", "blocked", "/api/reactivate"],
@@ -73,8 +74,8 @@ describe("resolveMove", () => {
         expect(resolveMove(from, to)).toBeNull();
       }
     }
-    // 5 columns × 6 targets − 5 same-column − 9 listed = 16
-    expect(unlisted).toHaveLength(16);
+    // 4 columns × 5 targets − 4 same-column − 7 listed = 9
+    expect(unlisted).toHaveLength(9);
   });
 
   it("never invents a nearest-legal fallback for a bogus target", () => {
@@ -88,9 +89,7 @@ describe("resolveMove", () => {
 
 describe("post moves", () => {
   it.each([
-    ["draft", "queued", "queueJob"],
-    ["queued", "draft", "dequeueJob"],
-    ["queued", "working", "startJob"],
+    ["draft", "working", "queueJob"],
     ["working", "blocked", "stopJob"],
     ["blocked", "done", "doneJob"],
     ["done", "blocked", "reactivateJob"],
@@ -126,8 +125,8 @@ describe("MOVES adjacency", () => {
   });
 
   it("isLegalTarget agrees with the table, and is false with nothing in the air", () => {
-    expect(isLegalTarget(null, "queued")).toBe(false);
-    expect(isLegalTarget("draft", "queued")).toBe(true);
+    expect(isLegalTarget(null, "working")).toBe(false);
+    expect(isLegalTarget("draft", "working")).toBe(true);
     expect(isLegalTarget("draft", "draft")).toBe(false);
     expect(isLegalTarget("draft", ARCHIVED)).toBe(false);
     expect(isLegalTarget("done", ARCHIVED)).toBe(true);

@@ -14,19 +14,15 @@ import (
 )
 
 // viewer_jobs.go — the J-toggled job board inside k v: every job with state,
-// repo, prereqs and live cell, plus daemon health in the header. Claudes
+// repo, crew and live cell, plus daemon health in the header. Claudes
 // that aren't part of a job stay in the sessions view, untouched.
 
 // buildJobRows derives the selectable rows: the board, in the same lifecycle
 // order the web board uses (sortJobs — live cells first, then actionable,
 // then paperwork).
 func buildJobRows(js []*jobs.Job) []*jobs.Job {
-	bySlug := map[string]*jobs.Job{}
-	for _, j := range js {
-		bySlug[j.Slug] = j
-	}
 	board := append([]*jobs.Job(nil), js...)
-	jobs.SortJobs(board, bySlug)
+	jobs.SortJobs(board)
 	return board
 }
 
@@ -124,17 +120,18 @@ func (m *viewerModel) buildJobLines() []viewLine {
 	}
 	var lines []viewLine
 	head := daemonHeader(m.daemonSt, m.daemonOK)
-	head += util.Paint(true, util.Dim, fmt.Sprintf(" · cells %d/%d", m.liveCells(), jobs.CellCap))
+	// live count only: there is no cap any more (the queue pass that enforced
+	// one is gone), so a "N/M" here would name a limit nothing applies.
+	head += util.Paint(true, util.Dim, fmt.Sprintf(" · cells %d", m.liveCells()))
 	lines = append(lines, viewLine{text: head, row: -1}, viewLine{row: -1})
 	if len(m.jrows) == 0 {
 		lines = append(lines, viewLine{text: "no jobs in " + jobs.PlutoDir() + " ({{name}} in a pluto note creates one)", row: -1})
 		return lines
 	}
 
-	bySlug := m.jobsBySlug()
 	now := time.Now()
 	lines = append(lines, viewLine{text: util.Paint(true, util.Cyan, "JOBS"), row: -1})
-	header := []string{"  #", "STATE", "JOB", "REPO", "PREREQS", "CREW", "CELL", "ART", "AGE"}
+	header := []string{"  #", "STATE", "JOB", "REPO", "CREW", "CELL", "ART", "AGE"}
 	for i, h := range header {
 		header[i] = util.Paint(true, util.Cyan, h)
 	}
@@ -147,7 +144,7 @@ func (m *viewerModel) buildJobLines() []viewLine {
 		if idx == m.cursor {
 			marker = "▸"
 		}
-		state := jobs.DisplayState(j, bySlug)
+		state := jobs.DisplayState(j)
 		// muted detail suffix: an unhealthy live cell or an unparseable job
 		// gets its reason surfaced right on the state cell — cheap, since
 		// both are already computed for the board (healthBySlug, j.Err) and
@@ -187,7 +184,6 @@ func (m *viewerModel) buildJobLines() []viewLine {
 			util.Paint(color, jobs.JobStateColor(state), "● "+state) + stateMark,
 			util.Paint(color, slugColor(j), j.Slug),
 			repo,
-			jobs.PrereqCell(j, bySlug, color),
 			crew,
 			cell,
 			art,
@@ -231,7 +227,7 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 		if j == nil {
 			return m, nil
 		}
-		state := jobs.DisplayState(j, m.jobsBySlug())
+		state := jobs.DisplayState(j)
 		if state != "blocked" {
 			m.note, m.noteIsErr = "a steers a blocked job — select one", true
 			return m, nil
@@ -245,26 +241,25 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 		if j == nil {
 			return m, nil
 		}
-		bySlug := m.jobsBySlug()
-		state := jobs.DisplayState(j, bySlug)
-		if state != "queued" {
-			m.note, m.noteIsErr = j.Slug+" is "+state+" — only queued jobs start", true
+		// One pre-check, and it is an ACCIDENT GUARD rather than validation:
+		// jobs.SubmitJob owns every real refusal (unparseable, done, already
+		// started, empty spec, unresolvable repo) and its message is the one
+		// the board shows too, so duplicating any of them here is how the two
+		// paths drifted apart before — the viewer used to gate on "queued" and
+		// call StartCell directly, which is exactly how it came to skip the
+		// empty-spec check the board's queue action made.
+		//
+		// What this guard is for is the keystroke itself. `s` used to move a
+		// job between two columns; it now cuts a git worktree and spawns a
+		// cell, on whatever row the cursor happens to be sitting on, with no
+		// confirmation step. Refusing it anywhere but the draft column costs
+		// nothing and turns a mistyped key on a live job into a status line.
+		if state := jobs.DisplayState(j); state != "draft" {
+			m.note, m.noteIsErr = j.Slug+" is "+state+" — s starts a draft", true
 			return m, nil
 		}
-		if unmet := jobs.UnmetPrereqs(j, bySlug); len(unmet) > 0 {
-			var names []string
-			for _, p := range unmet {
-				names = append(names, p.Job)
-			}
-			m.note, m.noteIsErr = j.Slug+" has unmet prereqs: "+strings.Join(names, ", "), true
-			return m, nil
-		}
-		return m, m.jobsActionCmd("starting "+j.Slug, func() (string, error) {
-			repo, err := jobs.ResolveRepo(j.Repo)
-			if err != nil {
-				return "", err
-			}
-			if err := jobs.StartCell(j, repo); err != nil {
+		return m, m.jobsActionCmd("submitting "+j.Slug, func() (string, error) {
+			if err := jobs.SubmitJob(j); err != nil {
 				return "", err
 			}
 			return "started " + j.Slug + " (" + jobs.CellSession(j) + ")", nil

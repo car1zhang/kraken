@@ -128,12 +128,15 @@ final class RouterContractTests: XCTestCase {
 
     /// The board columns this suite exercises `board/<col>` with. The frozen
     /// contract names the route shape (`board/<col>`) but not the column
-    /// vocabulary; these are the `BoardColumn` cases already relied on by the
-    /// committed `BoardDragStateTests`, so they are real columns rather than
-    /// invented ones. A route naming a column that does not exist would be an
-    /// unknown route, which the contract says must no-op — so the assertions
-    /// below (board tab, no new pending flags) hold either way.
-    private static let routerContractColumns = ["draft", "queued", "working", "blocked", "solved"]
+    /// vocabulary; the first four are the `BoardColumn` cases already relied
+    /// on by the committed `BoardDragStateTests`, so they are real columns
+    /// rather than invented ones. A route naming a column that does not exist
+    /// would be an unknown route, which the contract says must no-op — so the
+    /// assertions below (board tab, no new pending flags) hold either way.
+    /// `solved` never was a column; `queued` was one until the queued state
+    /// was retired, and stays on this list precisely as the retired name a
+    /// stale deep link or an old notification can still deliver.
+    private static let routerContractColumns = ["draft", "working", "blocked", "done", "solved", "queued"]
 
     /// Per-job action suffixes spot-checked under `job/<slug>/...`. Same
     /// reasoning: the contract freezes `job/...` as preserved without

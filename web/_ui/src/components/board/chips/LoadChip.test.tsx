@@ -111,7 +111,7 @@ describe("LoadChip", () => {
     // The badge answers "is this one worth unblocking right now", which no
     // other column poses — and a stale estimate on a running card would read
     // as a current fact.
-    for (const col of ["draft", "queued", "working", "done"] as Column[]) {
+    for (const col of ["draft", "working", "done"] as Column[]) {
       expect(renderChip(blocked({ state: col, load: load(2, 8) }), col)).toBeNull();
       expect(loadChipVisible(blocked({ state: col, load: load(2, 8) }), col)).toBe(false);
     }
@@ -148,7 +148,6 @@ function stubActions(): BoardActions {
     onOpenThread: vi.fn(),
     onAnswerQuestion: vi.fn(),
     onRetry: vi.fn(),
-    onDequeue: vi.fn(),
     onOpenTmux: vi.fn(),
     onSaveFeedback: vi.fn(async () => null),
     onDeleteFeedback: vi.fn(),

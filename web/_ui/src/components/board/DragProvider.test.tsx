@@ -10,9 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../api/client.ts", () => ({
   queueJob: vi.fn(async () => ({ ok: true })),
-  dequeueJob: vi.fn(async () => ({ ok: true })),
   doneJob: vi.fn(async () => ({ ok: true })),
-  startJob: vi.fn(async () => ({ ok: true })),
   stopJob: vi.fn(async () => ({ ok: true })),
   archiveJob: vi.fn(async () => ({ ok: true })),
   reactivateJob: vi.fn(async () => ({ ok: true })),
@@ -27,6 +25,7 @@ import { bucketJobs } from "../../lib/format.ts";
 import type { BoardModel, Column } from "../../hooks/useBoard.ts";
 import { makeBoard as makeWebBoard, makeJob } from "../../test/fixtures.ts";
 import {
+  DragCtx,
   DragProvider,
   SortableColumn,
   useColumnDrop,
@@ -118,9 +117,40 @@ function Board() {
   return (
     <DragProvider board={board} onOpenSteer={() => {}}>
       <Col column="draft" jobs={board.byColumn.draft} />
-      <Col column="queued" jobs={board.byColumn.queued} />
+      <Col column="working" jobs={board.byColumn.working} />
       <Col column="done" jobs={board.byColumn.done} />
       <Drawer />
+    </DragProvider>
+  );
+}
+
+/**
+ * The same board, but with the drag STATE stated rather than reached: the
+ * inner provider overrides what the cards read for `submittingKeys`, while the
+ * outer one still supplies the real DndContext and sensors, so the gesture
+ * below is a real dnd-kit gesture against a card the board says is mid-submit.
+ *
+ * Reaching that state honestly would mean completing a draft→working drop
+ * through dnd-kit's pointer path, which needs element rects jsdom does not
+ * have — the same reason this whole file asserts that a drag starts rather
+ * than where a card lands. useDragReorder.test.tsx owns the state machine that
+ * fills the set in; what belongs here is what a card DOES with it.
+ */
+function BoardWithSubmitting({ keys }: { keys: string[] }) {
+  const board = makeModel(JOBS);
+  return (
+    <DragProvider board={board} onOpenSteer={() => {}}>
+      <DragCtx.Provider
+        value={{
+          activeKey: null,
+          orderJobs: (_column, jobs) => jobs,
+          isTarget: () => false,
+          submittingKeys: new Set(keys),
+        }}
+      >
+        <Col column="draft" jobs={board.byColumn.draft} />
+        <Col column="working" jobs={board.byColumn.working} />
+      </DragCtx.Provider>
     </DragProvider>
   );
 }
@@ -153,10 +183,10 @@ describe("DragProvider", () => {
 
   it("lights up only the legal targets while a card is in the air", () => {
     render(<Board />);
-    expect(screen.getByTestId("col-queued").className).not.toContain("droptarget");
+    expect(screen.getByTestId("col-working").className).not.toContain("droptarget");
     pressAndDrag(screen.getByTestId("card-d1"));
-    // draft → queued is the only legal destination for a draft card
-    expect(screen.getByTestId("col-queued").className).toContain("droptarget");
+    // draft → working (the submit) is the only legal destination for a draft card
+    expect(screen.getByTestId("col-working").className).toContain("droptarget");
     expect(screen.getByTestId("col-done").className).not.toContain("droptarget");
     expect(screen.getByTestId("drawer").className).not.toContain("droptarget");
     // and never its own column: a reorder shows itself by the cards shifting
@@ -181,5 +211,25 @@ describe("DragProvider", () => {
       (e) => e.textContent,
     );
     expect(slugs).toEqual(["d1", "d2"]);
+  });
+
+  // REGRESSION PIN. A card mid-submit is DRAWN in WORKING while every source
+  // of truth still files the job as a draft, so a drag started on it resolves
+  // `from` out of byColumn as "draft" and acts on a pair the pointer is not
+  // over: dropped inside WORKING it would submit the same job twice, and a
+  // same-column reorder would post an order carrying a slug the server does
+  // not have in that column. Refusing the gesture is what makes both
+  // unreachable — the shipped version left the card draggable.
+  it("refuses to drag a card whose submit is in flight", () => {
+    render(<BoardWithSubmitting keys={["d1"]} />);
+    pressAndDrag(screen.getByTestId("card-d1"));
+    expect(setDragging).not.toHaveBeenCalledWith(true);
+  });
+
+  it("leaves every OTHER card draggable while one submit is in flight", () => {
+    // per-card, not board-global: the same keying the hook is pinned on
+    render(<BoardWithSubmitting keys={["d1"]} />);
+    pressAndDrag(screen.getByTestId("card-d2"));
+    expect(setDragging).toHaveBeenCalledWith(true);
   });
 });

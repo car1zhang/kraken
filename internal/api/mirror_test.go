@@ -16,7 +16,12 @@ import (
 // mirrorGatedRoutes mirrors mirrorGatedActions' action-name → route mapping
 // (register.go), for a single table-driven sweep.
 var mirrorGatedRoutes = []string{
-	"/api/start", "/api/kill", "/api/stop", "/api/steer",
+	// /api/queue is the SUBMIT (the URL is kept for shipped iOS builds; the
+	// action behind it starts the cell synchronously). It used to be the one
+	// ungated exception, safe only while it flipped a DB field and nothing
+	// else; it now reaches a real worktree and a real tmux server, so it is
+	// gated like everything else here.
+	"/api/queue", "/api/kill", "/api/stop", "/api/steer",
 	"/api/question", "/api/retry", "/api/done", "/api/reactivate",
 	"/api/doc-question",
 	// feedback/questions: gated inline in their own handlers (not
@@ -70,10 +75,11 @@ var mirrorGatedGlobalRoutes = []string{"/api/update", "/api/ship-ios"}
 // preserved-artifact file moves under PlutoDir).
 var mirrorPlutoRoutes = []string{"/api/archive", "/api/unarchive", "/api/delete"}
 
-// mirrorUngatedRoutes are webAction-wrapped routes that must stay fully live
-// under mirror mode — DB-local moves that never reach a real tmux pane or a
-// real pluto file.
-var mirrorUngatedRoutes = []string{"/api/queue", "/api/dequeue"}
+// retiredRoutes are paths that must no longer be registered at all: both
+// existed only to move a job into or out of the queued column, and neither
+// has a reachable state left. A mux that still answered them would let a
+// stale client take a move the board cannot express.
+var retiredRoutes = []string{"/api/dequeue", "/api/start"}
 
 func postJSON(t *testing.T, mux http.Handler, path string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
@@ -163,22 +169,23 @@ func TestMirrorModeOffLeavesGatedRoutesLive(t *testing.T) {
 	}
 }
 
-// TestMirrorModeNeverGatesDBLocalRoutes covers the one route mirrorGatedActions
-// deliberately excludes — dequeue only flips a DB field back and never
-// touches tmux or a real pluto file, so it must stay live regardless of
-// mirror mode.
-func TestMirrorModeNeverGatesDBLocalRoutes(t *testing.T) {
-	SetMirrorMode(true)
-	t.Cleanup(func() { SetMirrorMode(false) })
+// TestRetiredRoutesAreUnregistered replaces the old DB-local-exception test.
+// There is no ungated action left: /api/queue is the submit and is gated with
+// the rest, while /api/dequeue and /api/start are gone outright. A 404 here
+// is the whole assertion — an unregistered path falls through to the mux's
+// own NotFound, which is what a stale client must get rather than a silent
+// success.
+func TestRetiredRoutesAreUnregistered(t *testing.T) {
+	SetMirrorMode(false)
 
 	mux := http.NewServeMux()
 	Register(mux)
 
-	for _, path := range mirrorUngatedRoutes {
+	for _, path := range retiredRoutes {
 		t.Run(path, func(t *testing.T) {
 			rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
-			if rec.Code == http.StatusForbidden {
-				t.Fatalf("%s: got 403 under mirror mode — this route must stay DB-local and ungated", path)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("%s: status = %d, want 404 — the route must not be registered", path, rec.Code)
 			}
 		})
 	}

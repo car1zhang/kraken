@@ -2,7 +2,6 @@ package store
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 )
 
@@ -10,7 +9,7 @@ func TestJobCRUDRoundTrip(t *testing.T) {
 	s := openTest(t)
 	j := &Job{
 		Slug: "roundtrip", Repo: "kraken", Base: "main",
-		Ready: true, Solo: false, Model: "opus",
+		Solo: false, Model: "opus",
 		Body: "do the thing", State: "", Outcome: "", Session: "",
 	}
 	id, err := s.CreateJob(j)
@@ -28,7 +27,7 @@ func TestJobCRUDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if got.ID != id || got.Repo != "kraken" || got.Base != "main" || !got.Ready || got.Model != "opus" || got.Body != "do the thing" {
+	if got.ID != id || got.Repo != "kraken" || got.Base != "main" || got.Model != "opus" || got.Body != "do the thing" {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
 
@@ -128,40 +127,27 @@ func TestJobErrColumnRoundTrips(t *testing.T) {
 }
 
 // TestLoadJobsWithChildren covers L12: one call returns every active
-// job plus a prereqs/PRs map keyed by job id, matching what ListJobs +
-// per-job ListPrereqs/ListPRs would have returned separately.
+// job plus a PRs map keyed by job id, matching what ListJobs +
+// per-job ListPRs would have returned separately.
 func TestLoadJobsWithChildren(t *testing.T) {
 	s := openTest(t)
-	id1, err := s.CreateJob(&Job{Slug: "with-children-a"})
-	if err != nil {
+	if _, err := s.CreateJob(&Job{Slug: "with-children-a"}); err != nil {
 		t.Fatalf("CreateJob 1: %v", err)
 	}
 	id2, err := s.CreateJob(&Job{Slug: "with-children-b"})
 	if err != nil {
 		t.Fatalf("CreateJob 2: %v", err)
 	}
-	if err := s.ReplacePrereqs(id1, []Prereq{{Slug: "dep-x", Gated: true}}); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.UpsertPR(id2, "https://github.com/x/y/pull/1", "open"); err != nil {
 		t.Fatal(err)
 	}
 
-	rows, prereqs, prs, err := s.LoadJobsWithChildren()
+	rows, prs, err := s.LoadJobsWithChildren()
 	if err != nil {
 		t.Fatalf("LoadJobsWithChildren: %v", err)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("want 2 rows, got %d: %+v", len(rows), rows)
-	}
-	if !reflect.DeepEqual(prereqs[id1], []Prereq{{Slug: "dep-x", Gated: true}}) {
-		t.Fatalf("prereqs[id1] = %+v", prereqs[id1])
-	}
-	if len(prereqs[id2]) != 0 {
-		t.Fatalf("prereqs[id2] = %+v, want empty", prereqs[id2])
-	}
-	if len(prs[id1]) != 0 {
-		t.Fatalf("prs[id1] = %+v, want empty", prs[id1])
 	}
 	if len(prs[id2]) != 1 || prs[id2][0].URL != "https://github.com/x/y/pull/1" {
 		t.Fatalf("prs[id2] = %+v", prs[id2])
@@ -176,25 +162,22 @@ func TestLoadArchivedJobsWithChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.ReplacePrereqs(id, []Prereq{{Slug: "dep-y"}}); err != nil {
+	if err := s.UpsertPR(id, "https://github.com/x/y/pull/7", "merged"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ArchiveJob(id); err != nil {
 		t.Fatalf("ArchiveJob: %v", err)
 	}
 
-	rows, prereqs, prs, err := s.LoadArchivedJobsWithChildren()
+	rows, prs, err := s.LoadArchivedJobsWithChildren()
 	if err != nil {
 		t.Fatalf("LoadArchivedJobsWithChildren: %v", err)
 	}
 	if len(rows) != 1 || rows[0].ID != id {
 		t.Fatalf("rows = %+v", rows)
 	}
-	if !reflect.DeepEqual(prereqs[id], []Prereq{{Slug: "dep-y"}}) {
-		t.Fatalf("prereqs[id] = %+v", prereqs[id])
-	}
-	if len(prs[id]) != 0 {
-		t.Fatalf("prs[id] = %+v, want empty", prs[id])
+	if len(prs[id]) != 1 || prs[id][0].URL != "https://github.com/x/y/pull/7" {
+		t.Fatalf("prs[id] = %+v", prs[id])
 	}
 }
 
@@ -446,7 +429,7 @@ func TestListJobsToleratesRawNullColumns(t *testing.T) {
 func TestCreateArchivedJobInsertsAndUpserts(t *testing.T) {
 	s := openTest(t)
 	j := &Job{
-		Slug: "helper-catalog", Repo: "kraken", Ready: true,
+		Slug: "helper-catalog", Repo: "kraken",
 		Body: "spec text", State: "done", Outcome: "closed",
 		ArchivedAt: 1000, ArchivedName: "helper-catalog",
 	}

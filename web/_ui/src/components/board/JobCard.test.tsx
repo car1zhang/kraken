@@ -25,7 +25,6 @@ function stubActions(): BoardActions {
     onOpenThread: vi.fn(),
     onAnswerQuestion: vi.fn(),
     onRetry: vi.fn(),
-    onDequeue: vi.fn(),
     onOpenTmux: vi.fn(),
     onSaveFeedback: vi.fn(async () => null),
     onDeleteFeedback: vi.fn(),
@@ -435,9 +434,9 @@ describe("the card's question surface is the count chip and nothing else", () =>
 // at the review round: "the `--state` inline custom property is REMOVED with the
 // span — the span was its only reader … the pinning test goes with it as
 // obsoleted maintenance." The state channel that replaced it shrank again at
-// carl's post-gate ask: only the SETTLED columns render a `.status` token now
-// (`◌ queued` / `✓ done`, pinned in the blind suites); a live card's state is
-// its column.
+// carl's post-gate ask: only the SETTLED column renders a `.status` token now
+// (`✓ done`, pinned in the blind suites — `◌ queued` went with the queued
+// column); a live card's state is its column.
 
 // ---------------------------------------------------------------------------
 // JOB COLOUR — the 3px left accent bar, and the card's only colour channel.
@@ -550,10 +549,13 @@ describe("the card click fallback", () => {
     expect(actions.onOpenArtifact).not.toHaveBeenCalled();
   });
 
+  // Re-pointed at the tmux button when the queued ✕ went away with the queued
+  // column — the ✕ was this test's control, and every button on the card
+  // shares the one stopPropagation rule it is really about.
   it("does not fire from a control inside the card", async () => {
-    const { actions } = renderCard(job({ state: "queued" }));
-    await userEvent.click(screen.getByTitle("cancel — return to draft (spec is kept)"));
-    expect(actions.onDequeue).toHaveBeenCalledWith("demo");
+    const { actions } = renderCard(job({ state: "draft", live: true, cell: "c" }));
+    await userEvent.click(screen.getByTitle("raise zeus' pane in Ghostty"));
+    expect(actions.onOpenTmux).toHaveBeenCalledWith("demo");
     expect(actions.onOpenEditor).not.toHaveBeenCalled();
   });
 });
@@ -651,22 +653,9 @@ describe("AskUserQuestion", () => {
   });
 });
 
-// A queued job that cannot start used to show NOTHING on its card. The reason
-// went to ~/.kraken/logs and to daemon.last_error — which is one string for
-// the whole tick rather than per job, and which the board never rendered — so
-// a real job sat queued through 24 identical failed starts over nine minutes
-// with no explanation on screen, and the workaround was to rename it.
-describe("start_error", () => {
-  it("renders the daemon's reason on a queued card", () => {
-    const msg =
-      "worktree ~/.kraken/cells/helper-catalog/wt-monolith already exists — clean it up first";
-    renderCard(job({ slug: "helper-catalog", state: "queued", start_error: msg }));
-    expect(screen.getByText("start failed")).toBeTruthy();
-    expect(screen.getByText(msg)).toBeTruthy();
-  });
-
-  it("shows nothing when the field is absent", () => {
-    const { container } = renderCard(job({ slug: "helper-catalog", state: "queued" }));
-    expect(container.querySelector(".start-error")).toBeNull();
-  });
-});
+// The `start_error` describe stood here, pinning the warn-ruled block a queued
+// card rendered when the daemon's last attempt to start it had failed. Both
+// tests are obsoleted pins: the key is off the wire with the queued state.
+// A start no longer happens on a tick nobody watched — it is the answer to a
+// submit carl is waiting on, so the reason comes back as that request's own
+// 409 and lands in the chrome's status corner, which Chrome.test.tsx covers.

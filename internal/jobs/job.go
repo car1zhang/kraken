@@ -19,21 +19,19 @@ import (
 
 // A Job is one <slug>.job.md file in the pluto dir: the durable record of a
 // unit of work. The frontmatter is a deliberately tiny YAML subset (scalars,
-// one block scalar, a list of prereq maps) parsed by hand — and parsed
-// STRICTLY: any construct the parser doesn't fully understand (unknown or
-// duplicate keys, bad booleans, stray lines, malformed prereqs) marks the job
-// Err. An erred job never runs, and the error is surfaced on the board.
-// Parsing never crashes —
-// strict means loud, not fragile.
+// one block scalar, a list of PR maps) parsed by hand — and parsed STRICTLY:
+// any construct the parser doesn't fully understand (unknown or duplicate
+// keys, bad booleans, stray lines, malformed prs entries) marks the job Err.
+// An erred job never runs, and the error is surfaced on the board. Parsing
+// never crashes — strict means loud, not fragile.
 type Job struct {
 	Slug string `json:"slug"`
 	File string `json:"file"`
 	Repo string `json:"repo"`
 	// Base is the ref the cell's worktree branches from; empty means the
 	// default (origin/main, falling back to main).
-	Base  string `json:"base,omitempty"`
-	Ready bool   `json:"ready"`
-	Solo  bool   `json:"solo"`
+	Base string `json:"base,omitempty"`
+	Solo bool   `json:"solo"`
 	// Model is the Claude model zeus runs on (`claude --model <value>`),
 	// hand-authored like solo. Consumed exactly once per cell start
 	// (StartCell/ReactivateJob) — never re-read mid-run, so a live cell's
@@ -49,8 +47,7 @@ type Job struct {
 	// as Model: hand-authored, kraken never writes it on its own. Empty
 	// means NO colour, not "pick one" — every surface renders exactly what
 	// it rendered before the field existed.
-	Color   string   `json:"color,omitempty"`
-	Prereqs []Prereq `json:"prereqs,omitempty"`
+	Color string `json:"color,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
 	State   string `json:"state,omitempty"`
@@ -109,11 +106,6 @@ type Job struct {
 	// meaningful to a client.
 	ID  int64 `json:"-"`
 	Rev int64 `json:"-"`
-}
-
-type Prereq struct {
-	Job   string `json:"job"`
-	Gated bool   `json:"gated,omitempty"`
 }
 
 // JobPR is one PR shipped from a job's cell branch: url + state
@@ -225,9 +217,9 @@ func (j *Job) boolField(key, val string) bool {
 // to own, and claude itself errors visibly in the pane on an unknown model.
 var modelTokenRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// validStates: kraken itself writes working/blocked/done; draft and queued
-// are derived for display and never written to a job file, so hand-authoring
-// either is a dead end rather than a valid starting point. A hand-mangled
+// validStates: kraken itself writes working/blocked/done; draft is derived
+// for display and never written to a job file, so hand-authoring it is a dead
+// end rather than a valid starting point. A hand-mangled
 // state must error rather than silently reading as never-started.
 var validStates = map[string]bool{
 	"working": true, "blocked": true, "done": true,
@@ -301,7 +293,15 @@ func ParseJob(name string, data []byte) *Job {
 		case "base":
 			j.Base = val
 		case "ready":
-			j.Ready = j.boolField(k, val)
+			// retired field: the queued status is gone, and with it the flag
+			// that used to hand a draft to the daemon's queue pass — submit
+			// starts the cell in the same request now. Existing pluto job
+			// files (and every store row's composed frontmatter written before
+			// the cutover) still carry a ready: line, so the key keeps being
+			// CONSUMED here and its value discarded, exactly like
+			// type/skip-doc/auto-approve below. Deleting the case would send
+			// the default: arm every one of those files into Err and pin the
+			// whole corpus to draft.
 		case "solo":
 			j.Solo = j.boolField(k, val)
 		case "model":
@@ -364,11 +364,21 @@ func ParseJob(name string, data []byte) *Job {
 				}
 			}
 		case "prereqs":
-			switch val {
-			case "[]", "":
-				j.Prereqs = parsePrereqs(j, fm, &i)
-			default:
-				j.addErr(fmt.Sprintf("bad prereqs value %q", val))
+			// retired feature (Q1): prereqs existed only to park a ready job
+			// until its dependencies finished, and the queue pass that read
+			// them is gone. Same accept-and-ignore treatment as ready: above,
+			// with one extra step — a prereqs: key can be followed by an
+			// INDENTED block ("  - job: x" / "    gated: true", or the
+			// template's indented comment lines), and every line of it has to
+			// be consumed too or the parser's stray-indented-line arm would
+			// err the job the moment the key stopped being parsed.
+			for i+1 < len(fm) {
+				next := fm[i+1]
+				indented := strings.HasPrefix(next, " ") || strings.HasPrefix(next, "\t")
+				if !indented && strings.TrimSpace(next) != "" && !strings.HasPrefix(next, "-") {
+					break // next top-level key
+				}
+				i++
 			}
 		case "prs":
 			switch val {
@@ -388,7 +398,7 @@ func ParseJob(name string, data []byte) *Job {
 }
 
 // parsePRs consumes indented "- url: x" items (with a "state: open|merged|closed"
-// continuation line) following a prs: key at fm[*i]. Strict like parsePrereqs:
+// continuation line) following a prs: key at fm[*i]. Strict:
 // a half-read entry would silently break the tracker's dedup and re-notify, so
 // anything not fully understood errors the job.
 func parsePRs(j *Job, fm []string, i *int) []JobPR {
@@ -460,73 +470,6 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 	return out
 }
 
-// parsePrereqs consumes indented "- job: x" items (with optional "gated: true"
-// continuation lines) following a prereqs: key at fm[*i]. Anything under
-// prereqs it can't fully understand errors the job — a half-read prereq could
-// silently skip a gate.
-func parsePrereqs(j *Job, fm []string, i *int) []Prereq {
-	var out []Prereq
-	for *i+1 < len(fm) {
-		line := fm[*i+1]
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			*i++
-			continue
-		}
-		if line[0] != ' ' && line[0] != '\t' && !strings.HasPrefix(line, "-") {
-			return out // next top-level key
-		}
-		if strings.HasPrefix(trimmed, "- ") || trimmed == "-" {
-			*i++
-			item := stripComment(strings.TrimPrefix(trimmed, "-"))
-			var p Prereq
-			if k, v, ok := strings.Cut(item, ":"); ok && strings.TrimSpace(k) == "job" {
-				p.Job = strings.TrimSpace(v)
-			} else if item != "" {
-				j.addErr(fmt.Sprintf("bad prereq item %q", core.TruncateOneLine(item, 24)))
-			}
-			// continuation lines: indented key: value pairs under this item
-			// (tab indentation counts — a tab-indented gated: true silently
-			// dropped would defeat the human gate)
-			for *i+1 < len(fm) {
-				next := strings.TrimSpace(fm[*i+1])
-				indented := len(fm[*i+1]) > 0 && (fm[*i+1][0] == ' ' || fm[*i+1][0] == '\t')
-				if !indented || next == "" || strings.HasPrefix(next, "- ") {
-					break
-				}
-				*i++
-				if strings.HasPrefix(next, "#") {
-					continue
-				}
-				k, v, ok := strings.Cut(next, ":")
-				if !ok {
-					j.addErr(fmt.Sprintf("bad prereq line %q", core.TruncateOneLine(next, 24)))
-					continue
-				}
-				switch strings.TrimSpace(k) {
-				case "job":
-					if p.Job == "" {
-						p.Job = stripComment(v)
-					}
-				case "gated":
-					p.Gated = j.boolField("gated", stripComment(v))
-				default:
-					j.addErr("unknown prereq key " + strings.TrimSpace(k))
-				}
-			}
-			if p.Job != "" {
-				out = append(out, p)
-			} else {
-				j.addErr("prereq missing job")
-			}
-			continue
-		}
-		*i++
-		j.addErr(fmt.Sprintf("bad prereq line %q", core.TruncateOneLine(trimmed, 24)))
-	}
-	return out
-}
-
 // JobTemplate is the fill-in skeleton for a new job — kept in lockstep with
 // the {{name}} expansion in ~/.config/nvim/lua/config/pluto.lua (the nvim
 // authoring path) and the spec doc.
@@ -536,10 +479,6 @@ func JobTemplate(slug string) string {
 		"repo: monolith            # substring-matched against existing repos (alphabetic tiebreak);\n" +
 		"                          # no match → job errors, surfaced in the viewer\n" +
 		"# base: origin/main       # optional: ref the worktree branches from (default origin/main, else main)\n" +
-		"ready: false              # flip to true to queue\n" +
-		"prereqs: []               # - job: other-slug\n" +
-		"                          #   gated: true   → when it completes, you review its outcome\n" +
-		"                          #                   in the TUI and release this job (human gate)\n" +
 		"solo: false               # true → zeus works alone: no teammate crew at all, prose-only doc (no diagram agents)\n" +
 		"# model: opus             # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
 		"                          # applied once at cell start, default = " + core.ZeusModel + "\n" +
@@ -597,7 +536,6 @@ func LoadJobsFromFiles() []*Job {
 	// file JobBySlug resolves — surfaced as an Err either way, but stable
 	sort.SliceStable(jobs, func(a, b int) bool { return jobs[a].Slug < jobs[b].Slug })
 	markSlugIssues(jobs)
-	markPrereqCycles(jobs)
 	return jobs
 }
 
@@ -652,9 +590,9 @@ func JobBySlug(jobs []*Job, slug string) *Job {
 
 // LoadJobBySlug parses exactly one job file, for a caller (the pr-hook verb)
 // that only knows its own slug and runs once per zeus tool call — the full
-// LoadJobs() sweep (every file in the dir, plus slug-collision and
-// prereq-cycle bookkeeping across the whole board) is wasted work at that
-// call rate. Fast path reads "<slug>.job.md" directly; a mismatch (the
+// LoadJobs() sweep (every file in the dir, plus slug-collision bookkeeping
+// across the whole board) is wasted work at that call rate. Fast path reads
+// "<slug>.job.md" directly; a mismatch (the
 // file's own `job:` frontmatter overrides the filename) falls back to a full
 // LoadJobs()+JobBySlug scan.
 func LoadJobBySlug(slug string) *Job {
@@ -684,81 +622,19 @@ func LoadJobBySlug(slug string) *Job {
 	return JobBySlug(LoadJobs(), slug)
 }
 
-// --- DAG ---
-
-// markPrereqCycles flags every job on a prereq cycle: a cycle can never
-// become ready and would otherwise just look permanently "waits on X".
-func markPrereqCycles(jobs []*Job) {
-	bySlug := map[string]*Job{}
-	for _, j := range jobs {
-		bySlug[j.Slug] = j
-	}
-	const (
-		white = 0
-		gray  = 1
-		black = 2
-	)
-	state := map[string]int{}
-	onCycle := map[string]bool{}
-	var visit func(slug string, stack []string)
-	visit = func(slug string, stack []string) {
-		j := bySlug[slug]
-		if j == nil || state[slug] == black {
-			return
-		}
-		if state[slug] == gray {
-			// mark everyone from the first occurrence of slug in the stack
-			for i := len(stack) - 1; i >= 0; i-- {
-				onCycle[stack[i]] = true
-				if stack[i] == slug {
-					break
-				}
-			}
-			return
-		}
-		state[slug] = gray
-		for _, p := range j.Prereqs {
-			visit(p.Job, append(stack, slug))
-		}
-		state[slug] = black
-	}
-	for _, j := range jobs {
-		visit(j.Slug, nil)
-	}
-	for slug := range onCycle {
-		j := bySlug[slug]
-		if j.Err == "" {
-			j.Err = "prereq cycle"
-		}
-	}
-}
-
-// UnmetPrereqs returns j's prereqs whose job is not done (missing prereq
-// files count as unmet — a typo must block, not unblock).
-func UnmetPrereqs(j *Job, bySlug map[string]*Job) []Prereq {
-	var unmet []Prereq
-	for _, p := range j.Prereqs {
-		dep := bySlug[p.Job]
-		if dep == nil || dep.State != "done" {
-			unmet = append(unmet, p)
-		}
-	}
-	return unmet
-}
-
-// DisplayState derives the job-board's five-state model: a terminal "done"
+// DisplayState derives the job-board's four-state model: a terminal "done"
 // wins even over a parse error (a job that finished successfully before
 // picking up an unrelated error still shows done). Otherwise an erred job
-// (even one that's Ready) surfaces as "draft" — the board's draft column
-// shows the error detail. A kraken-managed State always wins next. Otherwise
-// !Ready is "draft", and everything else — unmet prereqs, a gated prereq
-// waiting on human release, or a ready job with no cell yet — collapses to
-// "queued": ready-but-not-yet-startable is still just queued.
+// surfaces as "draft" — the board's draft column shows the error detail. A
+// kraken-managed State always wins next. Otherwise the job has never started,
+// which is exactly "draft": since submit starts the cell synchronously there
+// is no longer any state between "carl hasn't submitted it" and "it is
+// running".
 //
 // Shared precedence (kept in lockstep with deriveState in status.go): done
 // wins first, then an error reads as draft, then any kraken-managed state
-// wins, then !Ready reads as draft, else queued.
-func DisplayState(j *Job, bySlug map[string]*Job) string {
+// wins, else draft.
+func DisplayState(j *Job) string {
 	if j.State == "done" {
 		return "done"
 	}
@@ -768,31 +644,7 @@ func DisplayState(j *Job, bySlug map[string]*Job) string {
 	if j.State != "" {
 		return j.State
 	}
-	if !j.Ready {
-		return "draft"
-	}
-	return "queued"
-}
-
-// startable reports whether j is ready for kraken to auto-start into a cell
-// right now: no error, ready, never started, every prereq met, and no prereq
-// is gated. A gated prereq — even one whose dep is done — parks the job for a
-// human to release by hand (the board's manual start action); startable()
-// must return false there so the daemon never auto-starts a gated job,
-// matching the pre-five-state gate-review-never-auto-starts rule.
-func startable(j *Job, bySlug map[string]*Job) bool {
-	if j.Err != "" || !j.Ready || j.State != "" {
-		return false
-	}
-	if len(UnmetPrereqs(j, bySlug)) > 0 {
-		return false
-	}
-	for _, p := range j.Prereqs {
-		if p.Gated {
-			return false
-		}
-	}
-	return true
+	return "draft"
 }
 
 // --- state write-back ---

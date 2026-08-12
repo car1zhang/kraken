@@ -81,10 +81,15 @@ export function Chrome({
   //
   // The failure text is shown for a BOUNDED window. useBoard clears lastError
   // only on the next SUCCESSFUL mutation, so one refused drag would otherwise
-  // pin "✕ job is not queued" over the corner indefinitely — and the corner is
+  // pin "✕ already started" over the corner indefinitely — and the corner is
   // the board's only "am I still ticking" signal. Vanilla's was the opposite
   // extreme: post() wrote the error and its own refresh() overwrote it with the
   // clock milliseconds later, too fast to read.
+  //
+  // This corner is now where a refused SUBMIT lands — the 409 from a
+  // draft→working drop, whose body IS the reason. The window is measured from
+  // when the text is SET, i.e. from the answer rather than from the drag, so
+  // the seconds the request spends in flight do not eat into it.
   const clock = new Date().toLocaleTimeString();
   const errSince = useRef(0);
   const lastErrText = useRef<string | null>(null);

@@ -7,7 +7,7 @@ import (
 // The board's column order is kraken-owned presentation state, kept
 // separate from job files: jobs know nothing about where they render within
 // a column. Store-backed (store.GetBoardOrder/SetBoardColumn), keyed by the
-// five display states (draft/queued/working/blocked/done). The legacy
+// four display states (draft/working/blocked/done). The legacy
 // ~/.kraken/order.json file this replaced is still read directly by
 // `kraken import`'s one-shot migration (import.go's own defaultOrderPath).
 //

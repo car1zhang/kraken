@@ -445,7 +445,7 @@ func upsertActiveJobRow(st *store.Store, j *Job, modTime time.Time) (int64, erro
 		millis := modTime.UnixMilli()
 		row := &store.Job{
 			Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-			Ready: j.Ready, Solo: j.Solo, Model: j.Model, Color: j.Color,
+			Solo: j.Solo, Model: j.Model, Color: j.Color,
 			Body: j.Body, State: j.State, Outcome: j.Outcome,
 			Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),
 			CreatedAt: millis, UpdatedAt: millis,
@@ -472,16 +472,8 @@ func upsertActiveJobRow(st *store.Store, j *Job, modTime time.Time) (int64, erro
 	return existing.ID, nil
 }
 
-// syncJobChildren replaces id's prereqs (delete+reinsert, so it's exactly
-// what the file says) and upserts every PR the file records.
+// syncJobChildren upserts every PR the file records.
 func syncJobChildren(st *store.Store, id int64, j *Job) error {
-	prereqs := make([]store.Prereq, 0, len(j.Prereqs))
-	for _, p := range j.Prereqs {
-		prereqs = append(prereqs, store.Prereq{Slug: p.Job, Gated: p.Gated})
-	}
-	if err := st.ReplacePrereqs(id, prereqs); err != nil {
-		return err
-	}
 	for _, p := range j.PRs {
 		if err := st.UpsertPR(id, p.URL, p.State); err != nil {
 			return err
@@ -507,7 +499,7 @@ func syncJobChildren(st *store.Store, id int64, j *Job) error {
 func jobFieldsMap(j *Job) map[string]any {
 	return map[string]any{
 		"slug": j.Slug, "repo": j.Repo, "base": j.Base,
-		"ready": j.Ready, "solo": j.Solo, "model": j.Model, "color": j.Color,
+		"solo": j.Solo, "model": j.Model, "color": j.Color,
 		"body": j.Body, "state": j.State, "outcome": j.Outcome,
 		"session": j.Session, "teardown": j.Teardown, "run": runValue(j.Run),
 	}
@@ -533,10 +525,6 @@ func jobFieldsChanged(existing *store.Job, fields map[string]any) bool {
 			}
 		case "base":
 			if existing.Base != v.(string) {
-				return true
-			}
-		case "ready":
-			if existing.Ready != v.(bool) {
 				return true
 			}
 		case "solo":
@@ -627,7 +615,7 @@ func importArchivedJobs(st *store.Store, files []parsedJobFile, dryRun bool) (St
 func upsertArchivedJobRow(st *store.Store, j *Job, archivedAtMillis int64) (int64, error) {
 	row := &store.Job{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-		Ready: j.Ready, Solo: j.Solo, Model: j.Model, Color: j.Color,
+		Solo: j.Solo, Model: j.Model, Color: j.Color,
 		Body: j.Body, State: j.State, Outcome: j.Outcome,
 		Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),
 		ArchivedAt: archivedAtMillis, ArchivedName: j.ArchivedName,

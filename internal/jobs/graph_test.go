@@ -398,8 +398,8 @@ func TestCreateGraphJobBothModes(t *testing.T) {
 			if j.ID == 0 || j.Slug != "graph-"+c.name {
 				t.Fatalf("job = %+v", j)
 			}
-			if !j.Ready {
-				t.Error("job is not ready — the queue pass would never start it")
+			if j.State != "" {
+				t.Errorf("a freshly created graph job must be a draft, got state %q — the tick submits it and SubmitJob refuses a started job", j.State)
 			}
 			if j.Err != "" {
 				t.Errorf("job has a parse error: %s", j.Err)
@@ -515,7 +515,7 @@ func TestKickGraphGuards(t *testing.T) {
 	if j == nil {
 		t.Fatal("pending queue produced no job")
 	}
-	if j.Slug != "graph-2026-07-31" || !j.Ready {
+	if j.Slug != "graph-2026-07-31" || j.State != "" {
 		t.Fatalf("job = %+v", j)
 	}
 	if !strings.Contains(j.Body, ".claude/skills/graph/SKILL.md") {
@@ -526,8 +526,26 @@ func TestKickGraphGuards(t *testing.T) {
 	if j2 := kickGraph(st, now.Add(time.Hour)); j2 != nil {
 		t.Fatalf("second kick same day created %q", j2.Slug)
 	}
-	// Next day, queue still pending, yesterday's job still ACTIVE: blocked.
-	if j3 := kickGraph(st, now.Add(24*time.Hour)); j3 != nil {
-		t.Fatalf("kick with an active graph job created %q", j3.Slug)
+	// Next day, queue still pending, and yesterday's job left as a DRAFT: its
+	// start failed, so it will never drain anything on its own. Declining for
+	// it would stop the ingest queue forever with nothing on screen saying
+	// why — so the kick goes ahead.
+	j3 := kickGraph(st, now.Add(24*time.Hour))
+	if j3 == nil {
+		t.Fatal("a stuck graph DRAFT blocked tonight's kick — only a running one may")
+	}
+
+	// Now put that job into a state where a cell actually exists. The day
+	// after, the guard declines: two cells writing k graph add concurrently
+	// doubles the extraction spend on one queue.
+	row, err := st.GetJobBySlug(j3.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateJobFields(row.ID, row.Rev, map[string]any{"state": "working"}); err != nil {
+		t.Fatal(err)
+	}
+	if j4 := kickGraph(st, now.Add(48*time.Hour)); j4 != nil {
+		t.Fatalf("kick with a RUNNING graph job created %q", j4.Slug)
 	}
 }

@@ -304,11 +304,14 @@ func TestContractIrisBriefPinsTheThreeRules(t *testing.T) {
 	if strings.TrimSpace(brief) == "" {
 		t.Fatal("irisBrief() is empty")
 	}
-	// "ready: false" is the never-queue rule, "kraken slack ack" the ack
-	// obligation, "## Source" the provenance section every job body it writes
-	// must carry, and IrisModel the model tier stated as the resolved id.
+	// "you never start" is the never-start rule (it used to be the literal
+	// `ready: false`, back when the rule was about a FLAG iris had to leave
+	// switched off; there is no flag now, so the rule is stated as what iris
+	// is for), "kraken slack ack" the ack obligation, "## Source" the
+	// provenance section every job body it writes must carry, and IrisModel
+	// the model tier stated as the resolved id.
 	for _, want := range []string{
-		"ready: false",
+		"you never start",
 		"kraken slack ack",
 		"## Source",
 		core.IrisModel,
@@ -320,7 +323,7 @@ func TestContractIrisBriefPinsTheThreeRules(t *testing.T) {
 	// starting a job is carl's move, stated in the brief that is in context
 	// every turn rather than only in a skill read once
 	if !strings.Contains(strings.ToLower(brief), "carl") {
-		t.Error("irisBrief() never names carl — the brief must say whose move queueing/starting is")
+		t.Error("irisBrief() never names carl — the brief must say whose move starting is")
 	}
 }
 
@@ -460,27 +463,28 @@ func TestContractEnsureIrisNoOpWhenUnconfigured(t *testing.T) {
 }
 
 // TestContractIrisDraftShapeIsNeverStartable is the never-auto-starts
-// guarantee, asserted where startable() actually lives (it is unexported, so
-// the api-side draft test can only reach DisplayState). A row in exactly the
-// shape /api/job/draft's CREATE row produces — ready false, no state, no
-// parse error — must not be picked up by the daemon's queue pass, which is
-// what makes "iris drafts, carl starts" structural rather than a convention.
+// guarantee. It used to assert that startable() rejected an iris draft; that
+// predicate is gone with the queue pass, and what replaced it is stronger:
+// nothing auto-starts at all, so "iris drafts, carl starts" no longer rests
+// on a flag the daemon consults. What is left to pin here is the shape — a
+// row in exactly the form /api/job/draft's CREATE produces reads as a DRAFT,
+// which is the state the board renders with a submit affordance and nothing
+// else. If a future draft route ever wrote a state, this fails.
 func TestContractIrisDraftShapeIsNeverStartable(t *testing.T) {
-	draft := &Job{Slug: "csv-export-timeout", Repo: "kraken", Ready: false, State: "", Body: "from a slack dm"}
-	bySlug := map[string]*Job{draft.Slug: draft}
+	draft := &Job{Slug: "csv-export-timeout", Repo: "kraken", State: "", Body: "from a slack dm"}
 
-	if startable(draft, bySlug) {
-		t.Fatal("an iris draft is startable — the queue pass would start a job carl never approved")
-	}
-	if got := DisplayState(draft, bySlug); got != "draft" {
+	if got := DisplayState(draft); got != "draft" {
 		t.Fatalf("DisplayState = %q, want draft", got)
 	}
-	// the control: the ONLY difference between the two is ready, so the
-	// assertion above is measuring that field rather than something else
-	// about the fixture
-	approved := &Job{Slug: "csv-export-timeout", Repo: "kraken", Ready: true, Body: "from a slack dm"}
-	if !startable(approved, map[string]*Job{approved.Slug: approved}) {
-		t.Fatal("the control job is not startable either — the fixture proves nothing")
+	if draft.Started() {
+		t.Fatal("an iris draft reads as started — carl's submit is what starts a job")
+	}
+	// the control: a started job is distinguishable from this one, so the
+	// assertion above is measuring state rather than something else about
+	// the fixture
+	started := &Job{Slug: "csv-export-timeout", Repo: "kraken", State: "working", Body: "from a slack dm"}
+	if !started.Started() || DisplayState(started) != "working" {
+		t.Fatal("the control job does not read as started — the fixture proves nothing")
 	}
 }
 

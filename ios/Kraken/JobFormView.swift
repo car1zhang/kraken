@@ -1,14 +1,5 @@
 import SwiftUI
 
-/// One editable prereq row for the Form UI. Wraps Prereq with a stable UUID
-/// identity so ForEach/add/remove behave correctly independent of content
-/// (two prereq rows can legitimately have the same slug mid-edit).
-private struct PrereqRow: Identifiable {
-    let id = UUID()
-    var job: String
-    var gated: Bool
-}
-
 /// Autosave's compact status readout — idle until the first real edit after
 /// load, then syncing/synced/failed as each debounced saveform round-trips.
 private enum SyncState: Equatable {
@@ -32,14 +23,12 @@ struct JobFormView: View {
 
     @State private var repo = ""
     @State private var base = ""
-    @State private var ready = false
     @State private var solo = false
     @State private var model = ""
     // The job's color as last known from the server — "" means none. Only
     // ever seeds JobColorStrip (which owns the picking, the POST and its own
     // error row); the form's own save payload never carries it.
     @State private var color = ""
-    @State private var prereqRows: [PrereqRow] = []
     @State private var spec = ""
     @State private var mtime: Int64 = 0
     // Defaults to false on purpose: the form (and autosave, gated on
@@ -55,7 +44,6 @@ struct JobFormView: View {
     // A failure to fetch/decode the form itself. Non-nil only when `loaded`
     // is false — gates the whole form behind its own retry screen.
     @State private var fetchError: String?
-    @State private var slugSuggestions: [String] = []
     @State private var repoSuggestions: [String] = []
 
     @State private var isLoading = true
@@ -67,17 +55,17 @@ struct JobFormView: View {
     // Monotonic id for the task above: Task is a struct (no identity), so a
     // finishing closure needs this to know it's still the *latest* task
     // before nilling autosaveTask — a stale closure clearing a newer task
-    // would re-open the canQueueForm debounce gap it exists to close.
+    // would re-open the canSubmitForm debounce gap it exists to close.
     @State private var autosaveGeneration = 0
-    @State private var isQueueing = false
+    @State private var isSubmitting = false
     // Surfaced inline near the sync status, separate from loadError (the
     // job's own parse problem) and fetchError (a failed initial load) — this
-    // is specifically a failed queue attempt, e.g. the server's 409 on an
+    // is specifically a failed submit attempt, e.g. the server's 409 on an
     // empty spec.
-    @State private var queueError: String?
+    @State private var submitError: String?
     // Attachment upload errors and a brief post-insert confirmation, shown
-    // near the spec editor — separate from loadError/queueError since this
-    // is neither a parse problem nor a queue failure.
+    // near the spec editor — separate from loadError/submitError since this
+    // is neither a parse problem nor a submit failure.
     @State private var attachmentError: String?
     @State private var insertedConfirmation: String?
     @State private var isUploading = false
@@ -128,7 +116,7 @@ struct JobFormView: View {
         Form {
             if isNew {
                 kSection {
-                    Text("Created — fill in the spec below; it autosaves as you type. Queue arms once it's synced.")
+                    Text("Created — fill in the spec below; it autosaves as you type. Start arms once it's synced.")
                         .font(.voice(12))
                         .foregroundStyle(KTheme.text2)
                 }
@@ -177,56 +165,9 @@ struct JobFormView: View {
                 .listRowBackground(Color.clear)
             }
             kSection("Flags") {
-                Toggle("Ready (queue on save)", isOn: $ready)
-                    .font(.voice(13))
-                    .foregroundStyle(KTheme.text)
                 Toggle("Solo (no subagent crew)", isOn: $solo)
                     .font(.voice(13))
                     .foregroundStyle(KTheme.text)
-            }
-            kSection("Prereqs") {
-                ForEach($prereqRows) { $row in
-                    HStack {
-                        TextField("job-slug", text: $row.job)
-                            .autocorrectionDisabled()
-                            .font(.data(12))
-                            .kField()
-                        Text("gated")
-                            .font(.data(10))
-                            .foregroundStyle(row.gated ? KTheme.counter : KTheme.text2)
-                        Toggle("", isOn: $row.gated)
-                            .labelsHidden()
-                            .fixedSize()
-                        Button {
-                            prereqRows.removeAll { $0.id == row.id }
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(KTheme.text2)
-                    }
-                }
-                if !slugSuggestions.isEmpty {
-                    Menu {
-                        ForEach(slugSuggestions, id: \.self) { s in
-                            Button(s) { prereqRows.append(PrereqRow(job: s, gated: false)) }
-                        }
-                    } label: {
-                        Label("Add prereq", systemImage: "plus.circle")
-                    }
-                    .buttonStyle(.plain)
-                    .font(.data(12))
-                    .foregroundStyle(KTheme.text2)
-                } else {
-                    Button {
-                        prereqRows.append(PrereqRow(job: "", gated: false))
-                    } label: {
-                        Label("Add prereq", systemImage: "plus.circle")
-                    }
-                    .buttonStyle(.plain)
-                    .font(.data(12))
-                    .foregroundStyle(KTheme.text2)
-                }
             }
             kSection("Spec") {
                 if editable {
@@ -260,8 +201,8 @@ struct JobFormView: View {
             if syncState != .idle {
                 kSection { syncStatusRow }
             }
-            if let queueError, !queueError.isEmpty {
-                kSection { Text(queueError).font(.voice(12)).foregroundStyle(KTheme.counter) }
+            if let submitError, !submitError.isEmpty {
+                kSection { Text(submitError).font(.voice(12)).foregroundStyle(KTheme.counter) }
             }
         }
         .kListStyle()
@@ -271,21 +212,24 @@ struct JobFormView: View {
             ToolbarItem(placement: .cancellationAction) {
                 SheetCloseButton(label: "Cancel") { dismiss() }
             }
-            // Explicit, tap-only arming — no auto-queue on type. Disabled
+            // Explicit, tap-only arming — no auto-start on type. Disabled
             // until the spec has real content and the latest edit has
             // actually landed server-side (not mid-flight, not failed), so a
-            // tap can never race a still-syncing keystroke.
+            // tap can never race a still-syncing keystroke. It also stays
+            // disabled for as long as the submit itself is in flight, which
+            // is now seconds rather than an instant: the POST starts the cell
+            // before it answers.
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    queueTapped()
+                    submitTapped()
                 } label: {
-                    Label("Queue", systemImage: "play.fill")
+                    Label("Start", systemImage: "play.fill")
                 }
                 .labelStyle(.iconOnly)
-                .accessibilityLabel("Queue")
+                .accessibilityLabel("Start")
                 .buttonStyle(.glassProminent)
                 .tint(KTheme.accent)
-                .disabled(!canQueueForm || isQueueing)
+                .disabled(!canSubmitForm || isSubmitting)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button {
@@ -299,11 +243,10 @@ struct JobFormView: View {
                 .disabled(isUploading)
             }
         }
-        // autosaveSnapshotKey covers every field except `ready`, which gets
-        // its own immediate flush below — toggling "queue on save" should
-        // act right away rather than wait out the debounce.
+        // autosaveSnapshotKey covers every autosaved field. It used to exempt
+        // `ready`, which took an immediate flush of its own; that flag went
+        // with the queued state, so there is one debounce path again.
         .onChange(of: autosaveSnapshotKey) { scheduleAutosave() }
-        .onChange(of: ready) { flushAutosave() }
     }
 
     /// The repo/model suggestion strips: KChip-shaped capsules on glass.
@@ -361,13 +304,14 @@ struct JobFormView: View {
         .foregroundStyle(color)
     }
 
-    // Gates the toolbar Queue button: editable, real spec content, no image
+    // Gates the toolbar Start button: editable, real spec content, no image
     // upload pending insert, and no autosave still in flight or waiting out
     // its debounce (autosaveTask non-nil covers the debounce gap; the
     // syncState checks cover the in-flight request itself and a just-failed
     // one) — a tap can only ever fire against a spec the server has already
-    // accepted.
-    private var canQueueForm: Bool {
+    // accepted. That matters more than it did: the tap now starts the cell
+    // rather than parking the job in a queue for the daemon to pick up.
+    private var canSubmitForm: Bool {
         guard editable, !spec.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard !isUploading else { return false }
         guard autosaveTask == nil else { return false }
@@ -377,15 +321,13 @@ struct JobFormView: View {
         }
     }
 
-    // Every autosaved field except `ready` (see the dedicated onChange
-    // above) — a snapshot string so a single onChange can watch them all at
-    // once, the same idiom SpecSection uses for its `.task(id:)` key.
-    // `color` is deliberately NOT here: it doesn't ride on saveform's
-    // full-replace payload at all, it posts to its own endpoint on tap, so
-    // including it would fire a pointless (and cell-gated) form save.
+    // Every autosaved field — a snapshot string so a single onChange can
+    // watch them all at once, the same idiom SpecSection uses for its
+    // `.task(id:)` key. `color` is deliberately NOT here: it doesn't ride on
+    // saveform's full-replace payload at all, it posts to its own endpoint on
+    // tap, so including it would fire a pointless (and cell-gated) form save.
     private var autosaveSnapshotKey: String {
-        let prereqsPart = prereqRows.map { "\($0.job)=\($0.gated)" }.joined(separator: ",")
-        return "\(repo)|\(base)|\(model)|\(solo)|\(prereqsPart)|\(spec)"
+        "\(repo)|\(base)|\(model)|\(solo)|\(spec)"
     }
 
     private func load() async {
@@ -395,16 +337,13 @@ struct JobFormView: View {
             let f = try await APIClient.shared.fetchJobForm(baseURL: baseURL, slug: slug)
             repo = f.repo
             base = f.base
-            ready = f.ready
             solo = f.solo
             model = f.model ?? ""
             color = f.color ?? ""
-            prereqRows = f.prereqs.map { PrereqRow(job: $0.job, gated: $0.gated) }
             spec = f.spec
             mtime = f.mtime
             editable = f.editable
             loadError = f.err.isEmpty ? nil : f.err
-            slugSuggestions = f.slugs ?? []
             repoSuggestions = f.repos ?? []
             syncState = .idle
             loaded = true
@@ -456,8 +395,9 @@ struct JobFormView: View {
     }
 
     // Immediate path: same cancel-and-replace, but no debounce delay — used
-    // for the Ready toggle (queueing shouldn't wait out the debounce) and
-    // for the Done button flushing any pending edit before closing.
+    // by the Start button, which must not fire against a spec still sitting
+    // behind the debounce timer, and by Done flushing a pending edit before
+    // closing.
     private func flushAutosave() {
         guard editable else { return }
         autosaveTask?.cancel()
@@ -477,10 +417,8 @@ struct JobFormView: View {
     private func performAutosave() async {
         syncState = .syncing
         let req = JobFormSaveRequest(
-            slug: slug, repo: repo, base: base,
-            ready: ready, solo: solo,
+            slug: slug, repo: repo, base: base, solo: solo,
             model: model.trimmingCharacters(in: .whitespaces),
-            prereqs: prereqRows.map { Prereq(job: $0.job, gated: $0.gated) },
             spec: spec, mtime: 0
         )
         do {
@@ -495,32 +433,34 @@ struct JobFormView: View {
         }
     }
 
-    // The toolbar's Queue action: flushes any pending edit via the same
-    // immediate-save path the Ready toggle uses, waits for that specific
-    // save to land, then queues — matching the web's queue-then-close
-    // behavior. A 409 (e.g. an empty spec slipping through a race, or a
-    // server-side rule the client doesn't know about) surfaces inline next
-    // to the sync status rather than dismissing.
-    private func queueTapped() {
-        guard canQueueForm, !isQueueing else { return }
-        queueError = nil
-        isQueueing = true
+    // The toolbar's Start action: flushes any pending edit through the
+    // immediate-save path, waits for that specific save to land, then
+    // submits — matching the web's submit-then-close behavior. The submit
+    // itself starts the cell before it answers, so this Task is live for
+    // seconds; `isSubmitting` keeps the button disabled for exactly that
+    // long. A 409 (an empty spec slipping through a race, an unresolvable
+    // repo, a server-side rule the client doesn't know about) surfaces
+    // inline next to the sync status rather than dismissing.
+    private func submitTapped() {
+        guard canSubmitForm, !isSubmitting else { return }
+        submitError = nil
+        isSubmitting = true
         flushAutosave()
         let pending = autosaveTask
         Task {
             await pending?.value
             if case .failed(let message) = syncState {
-                isQueueing = false
-                queueError = "autosave failed, can't queue: \(message)"
+                isSubmitting = false
+                submitError = "autosave failed, can't start: \(message)"
                 return
             }
             do {
                 try await APIClient.shared.queueJob(baseURL: baseURL, slug: slug)
-                isQueueing = false
+                isSubmitting = false
                 onSaved()
             } catch {
-                isQueueing = false
-                queueError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+                isSubmitting = false
+                submitError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
             }
         }
     }

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,7 +20,7 @@ import (
 // empty-spec queue guard tests below.
 func writeTestJobBody(t *testing.T, slug, extraFrontmatter, body string) {
 	t.Helper()
-	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\nready: false\n" +
+	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\n" +
 		extraFrontmatter + "---\n\n" + body
 	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
@@ -81,7 +82,7 @@ func TestAnswerableSingleDigit(t *testing.T) {
 // check (see webDone's doc comment).
 func TestWebDoneValidation(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJob(t, "draft-job", "ready: false\n")
+	writeTestJob(t, "draft-job", "")
 	if err := webDone(webReq{Slug: "draft-job"}); err == nil || !strings.Contains(err.Error(), "hasn't started") {
 		t.Fatalf("expected 'hasn't started' error, got %v", err)
 	}
@@ -108,93 +109,78 @@ func TestWebSteerEmptyMessage(t *testing.T) {
 	}
 }
 
-// --- webQueue: server-side empty-spec guard ---
+// --- webSubmit: the one start surface (POST /api/queue) ---
+//
+// webQueue/webDequeue are gone, and so are their tests: the pair described a
+// reversible flag flip, and there is no flag and nothing to reverse. What
+// replaced them is one handler that hands the job to jobs.SubmitJob and
+// returns its error verbatim, so the tests here cover the handler's own two
+// jobs — resolve the slug, and route through the seam exactly once — while
+// SubmitJob's refusal order is pinned in the jobs package where it lives.
 
-func TestWebQueueEmptySpec(t *testing.T) {
+// useSubmitSeam swaps submitJobFn for the duration of one test and returns
+// the recorder. Without it every case below would need a git worktree, a
+// tmux server and the rotation gate.
+func useSubmitSeam(t *testing.T, err error) *[]string {
+	t.Helper()
+	var got []string
+	prev := submitJobFn
+	submitJobFn = func(j *jobs.Job) error {
+		got = append(got, j.Slug)
+		return err
+	}
+	t.Cleanup(func() { submitJobFn = prev })
+	return &got
+}
+
+func TestWebSubmitCallsTheSeamOnce(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJobBody(t, "queue-empty-spec", "", "")
-	if err := webQueue(webReq{Slug: "queue-empty-spec"}); err == nil || !strings.Contains(err.Error(), "empty spec") {
-		t.Fatalf("expected 'empty spec' error, got %v", err)
+	writeTestJobBody(t, "submit-ok", "", "Some real spec content.\n")
+	got := useSubmitSeam(t, nil)
+
+	if err := webSubmit(webReq{Slug: "submit-ok"}); err != nil {
+		t.Fatalf("submit with a real spec should succeed, got %v", err)
+	}
+	if len(*got) != 1 || (*got)[0] != "submit-ok" {
+		t.Fatalf("start calls = %v, want exactly one for submit-ok", *got)
 	}
 }
 
-func TestWebQueueWithSpec(t *testing.T) {
+func TestWebSubmitSurfacesTheSeamError(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJobBody(t, "queue-with-spec", "", "Some real spec content.\n")
-	if err := webQueue(webReq{Slug: "queue-with-spec"}); err != nil {
-		t.Fatalf("queue with a real spec should succeed, got %v", err)
-	}
-	j := jobs.JobBySlug(jobs.LoadJobs(), "queue-with-spec")
-	if j == nil || !j.Ready {
-		t.Fatalf("expected job to be re-parsed as ready, got %+v", j)
+	writeTestJobBody(t, "submit-fails", "", "a real spec\n")
+	useSubmitSeam(t, errors.New("submit-fails has an empty spec — write one before submitting"))
+
+	err := webSubmit(webReq{Slug: "submit-fails"})
+	if err == nil || !strings.Contains(err.Error(), "empty spec") {
+		t.Fatalf("want SubmitJob's own text surfaced verbatim, got %v", err)
 	}
 }
 
-// --- webDequeue: queued→draft reverse move ---
+func TestWebSubmitUnknownSlug(t *testing.T) {
+	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
+	got := useSubmitSeam(t, nil)
 
-func TestWebDequeue(t *testing.T) {
-	cases := []struct {
-		name        string
-		slug        string
-		frontmatter string
-		asDraft     bool   // true: use writeTestJobBody (ready: false); false: writeTestJob (ready: true)
-		wantErrSub  string // empty means success
-	}{
-		{"queued job dequeues", "dequeue-ready", "", false, ""},
-		{"draft job refused", "dequeue-draft", "", true, "queued"},
-		{"started job refused", "dequeue-working", "state: working\n", false, "kill"},
-		{"done job refused", "dequeue-done", "state: done\n", false, "queued"},
-		{"unparseable job refused", "dequeue-bad", "ready: false\n", false, "unparseable"},
+	if err := webSubmit(webReq{Slug: "no-such-job"}); err == nil {
+		t.Fatal("an unknown slug must be refused")
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-			if c.asDraft {
-				writeTestJobBody(t, c.slug, c.frontmatter, "some spec\n")
-			} else {
-				writeTestJob(t, c.slug, c.frontmatter)
-			}
-			err := webDequeue(webReq{Slug: c.slug})
-			if c.wantErrSub == "" {
-				if err != nil {
-					t.Fatalf("expected dequeue to succeed, got %v", err)
-				}
-				j := jobs.JobBySlug(jobs.LoadJobs(), c.slug)
-				if j == nil || j.Ready {
-					t.Fatalf("expected ready to flip false on disk, got %+v", j)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), c.wantErrSub) {
-				t.Fatalf("expected error containing %q, got %v", c.wantErrSub, err)
-			}
-		})
+	if len(*got) != 0 {
+		t.Fatalf("start attempted for an unresolved slug: %v", *got)
 	}
 }
 
-// TestWebQueueDequeueRoundTrip exercises queue→dequeue→queue through the
-// real job file, confirming each move's on-disk effect survives a re-parse
-// before the next move is attempted.
-func TestWebQueueDequeueRoundTrip(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJobBody(t, "roundtrip", "", "a real spec\n")
-	if err := webQueue(webReq{Slug: "roundtrip"}); err != nil {
-		t.Fatalf("initial queue: %v", err)
+// The submit is mirror-gated. queue/dequeue were the one deliberate
+// exception to "a mirror board is read-only" — safe only because flipping a
+// sandbox DB field reached nothing outside it. Starting a cell reaches a real
+// worktree and a real tmux server, so the exception had to go with them.
+func TestSubmitIsMirrorGated(t *testing.T) {
+	if !mirrorGatedActions["submit"] {
+		t.Fatal("submit is not mirror-gated — a mirror board would start real cells")
 	}
-	if j := jobs.JobBySlug(jobs.LoadJobs(), "roundtrip"); j == nil || !j.Ready {
-		t.Fatalf("expected ready after queue, got %+v", j)
-	}
-	if err := webDequeue(webReq{Slug: "roundtrip"}); err != nil {
-		t.Fatalf("dequeue: %v", err)
-	}
-	if j := jobs.JobBySlug(jobs.LoadJobs(), "roundtrip"); j == nil || j.Ready {
-		t.Fatalf("expected ready false after dequeue, got %+v", j)
-	}
-	if err := webQueue(webReq{Slug: "roundtrip"}); err != nil {
-		t.Fatalf("re-queue: %v", err)
-	}
-	if j := jobs.JobBySlug(jobs.LoadJobs(), "roundtrip"); j == nil || !j.Ready {
-		t.Fatalf("expected ready true after re-queue, got %+v", j)
+	for _, gone := range []string{"queue", "dequeue", "start"} {
+		if mirrorGatedActions[gone] {
+			t.Errorf("retired action %q is still listed in mirrorGatedActions", gone)
+		}
 	}
 }
 
@@ -217,10 +203,10 @@ func postReorder(t *testing.T, column string, slugs []string) *httptest.Response
 func TestWebReorderHappyPath(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-a", Repo: "monolith", Ready: true, Body: "spec\n"})
-	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-b", Repo: "monolith", Ready: true, Body: "spec\n"})
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-a", Repo: "monolith", Body: "spec\n"})
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-b", Repo: "monolith", Body: "spec\n"})
 
-	rec := postReorder(t, "queued", []string{"reorder-b", "reorder-a"})
+	rec := postReorder(t, "draft", []string{"reorder-b", "reorder-a"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -231,7 +217,7 @@ func TestWebReorderHappyPath(t *testing.T) {
 	if !resp["ok"] {
 		t.Fatalf("expected ok: true, got %v", resp)
 	}
-	got := jobs.LoadBoardOrder()["queued"]
+	got := jobs.LoadBoardOrder()["draft"]
 	want := []string{"reorder-b", "reorder-a"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("stored order = %v, want %v", got, want)
@@ -260,29 +246,49 @@ func TestWebReorderUnknownColumn(t *testing.T) {
 func TestWebReorderDropsDepartedSlug(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-queued", Repo: "monolith", Ready: false, Body: "spec\n"})         // ready: false -> draft
-	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-actually-queued", Repo: "monolith", Ready: true, Body: "spec\n"}) // ready: true -> queued
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-draft", Repo: "monolith", Body: "spec\n"})                     // no state -> draft
+	mustCreateStoreJob(t, st, store.Job{Slug: "reorder-working", Repo: "monolith", State: "working", Body: "spec\n"}) // started -> not draft
 
-	rec := postReorder(t, "queued", []string{"reorder-actually-queued", "reorder-queued"})
+	rec := postReorder(t, "draft", []string{"reorder-draft", "reorder-working"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	got := jobs.LoadBoardOrder()["queued"]
-	if len(got) != 1 || got[0] != "reorder-actually-queued" {
-		t.Fatalf("stored order = %v, want only the actually-queued slug", got)
+	got := jobs.LoadBoardOrder()["draft"]
+	if len(got) != 1 || got[0] != "reorder-draft" {
+		t.Fatalf("stored order = %v, want only the slug that is actually a draft", got)
 	}
 }
 
-// --- POST /api/start ---
-
-func TestWebStartRejectsNonQueued(t *testing.T) {
+// The queued column is gone from reorderColumns with the status it named:
+// a client that still posts it gets the same 409 any other unknown column
+// gets, rather than silently writing an order nothing will ever render.
+func TestWebReorderQueuedColumnRetired(t *testing.T) {
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	writeTestJobBody(t, "start-draft", "", "spec\n")
-	err := webStart(webReq{Slug: "start-draft"})
-	if err == nil || !strings.Contains(err.Error(), "only queued jobs can be started") {
-		t.Fatalf("expected 'only queued jobs' error, got %v", err)
+	t.Setenv("HOME", t.TempDir())
+	rec := postReorder(t, "queued", []string{"x"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body %s", rec.Code, rec.Body.String())
+	}
+	if reorderColumns["queued"] {
+		t.Fatal("reorderColumns still accepts queued")
+	}
+	for _, want := range []string{"draft", "working", "blocked", "done"} {
+		if !reorderColumns[want] {
+			t.Errorf("reorderColumns lost %q", want)
+		}
+	}
+	if len(reorderColumns) != 4 {
+		t.Errorf("reorderColumns = %v, want exactly the four board columns", reorderColumns)
 	}
 }
+
+// --- POST /api/start, POST /api/dequeue: gone ---
+//
+// Both routes existed only to move a job into or out of the queued column.
+// webStart was the manual start for a job the queue pass would not take
+// (a gated prereq, or the cap being full), and webDequeue was the reverse
+// drag. Neither has a reachable state left, so both handlers and both routes
+// were deleted; TestRegisterRoutes pins that the mux 404s them.
 
 // --- POST /api/stop ---
 

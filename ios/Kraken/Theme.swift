@@ -307,17 +307,19 @@ enum KTheme {
     static let accentSoft = Color(uiColor: accentSoftUI)
 
     // --- meaning colours: NOT tint-derived, by design ---
-    // `queued` is the QUEUED state's hue, and it carries the literals the
-    // accent used to have before the accent became tint-derived — so under
-    // the default violet tint nothing moved, and under every other tint
-    // queued stays violet. It is a token of its own rather than an alias of
-    // `accent` because a tint-following queued collapses into a neighbouring
-    // state: the pink tint lands 3° from `counter` (blocked), green 3° from
-    // `solved` (working), amber 2° from `revealed` and cyan on top of
-    // `polling`. A user picking a theme colour must not be able to make two
-    // states indistinguishable.
-    static let queuedUI = dyn(light: 0x6B3FE0, dark: 0x9E7BFF)
-    static let queued = Color(uiColor: queuedUI)
+    // `fixedViolet` carries the literals the accent had before the accent
+    // became tint-derived — so under the default violet tint nothing moved,
+    // and under every other tint this stays violet. It was the QUEUED state's
+    // hue until that state was retired; its one surviving reader is the graph
+    // canvas's `convention` node type (see graphTypeColorUI), which needs the
+    // pre-tint violet to match the web board pixel for pixel. It is a token of
+    // its own rather than an alias of `accent` because a tint-following violet
+    // collapses into a neighbouring meaning: the pink tint lands 3° from
+    // `counter`, green 3° from `solved`, amber 2° from `revealed` and cyan on
+    // top of `polling`. A user picking a theme colour must not be able to make
+    // two meanings indistinguishable.
+    static let fixedVioletUI = dyn(light: 0x6B3FE0, dark: 0x9E7BFF)
+    static let fixedViolet = Color(uiColor: fixedVioletUI)
     static let counterUI = dyn(light: 0xC0105F, dark: 0xFF4D9D)
     static let counter = Color(uiColor: counterUI)
     static let counterSoftUI = dyn(light: 0xFBDFEC, dark: 0x3D1428)
@@ -347,7 +349,7 @@ enum KTheme {
     // (counter pink, aim-red, revealed amber), and a status capsule with a ⑂
     // glyph and a title never reads as a bare /aim text chip — different
     // kinds of object sharing a hue, not two states of one thing, which is
-    // the confusion `queued`'s note above actually bans.
+    // the confusion `fixedViolet`'s note above actually bans.
     static let stoppedUI = dyn(light: 0xC22A2A, dark: 0xFF5C5C)
     static let stopped = Color(uiColor: stoppedUI)
 
@@ -444,10 +446,10 @@ enum KTheme {
     /// only); it is written down here so the next reader does not take the
     /// resemblance for a guarantee.
     ///
-    /// `convention` takes `queuedUI`, NOT `accentUI`, and that is the one
+    /// `convention` takes `fixedVioletUI`, NOT `accentUI`, and that is the one
     /// place this map deliberately reads differently from its source: web's
     /// `TYPE_COLOR_VARS` names `--accent`, but web's `--accent` is a FIXED
-    /// violet while ours became tint-derived. Pointing it at `queuedUI` —
+    /// violet while ours became tint-derived. Pointing it at `fixedVioletUI` —
     /// which carries the pre-tint accent literals — is what keeps the two
     /// boards the same pixel. Following the tint here would also collide the
     /// type with its neighbours: a cyan tint would make `convention`
@@ -465,7 +467,7 @@ enum KTheme {
     /// `Color(uiColor:)` at the call site.
     static func graphTypeColorUI(_ type: String) -> UIColor {
         switch type {
-        case "convention": return queuedUI
+        case "convention": return fixedVioletUI
         case "component": return pollingUI
         case "failure-mode": return revealedUI
         case "decision": return solvedUI
@@ -550,19 +552,19 @@ extension UIFont {
 
 // MARK: - state → color
 
-/// The five kanban columns — draft/queued/working/blocked/done — mirroring
-/// the server's five job states 1:1 (review was folded into blocked), plus
-/// ARCHIVED as a sixth pager page (the web board shows archived jobs in a
+/// The four kanban columns — draft/working/blocked/done — mirroring the
+/// server's four job states 1:1 (review was folded into blocked; QUEUED was
+/// retired outright once submit started the cell synchronously), plus
+/// ARCHIVED as a fifth pager page (the web board shows archived jobs in a
 /// collapsible drawer instead; on the phone an extra page is cheaper).
 enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
-    case draft, queued, working, blocked, done, archived
+    case draft, working, blocked, done, archived
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .draft: return "DRAFT"
-        case .queued: return "QUEUED"
         case .working: return "WORKING"
         case .blocked: return "BLOCKED"
         case .done: return "DONE"
@@ -570,12 +572,11 @@ enum BoardColumn: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// Truncated for the always-visible overview strip, where six columns
-    /// have to fit in one row.
+    /// Truncated for the always-visible overview strip, where every column
+    /// has to fit in one row.
     var shortTitle: String {
         switch self {
         case .draft: return "DRAFT"
-        case .queued: return "QUEUE"
         case .working: return "WORK"
         case .blocked: return "BLOCK"
         case .done: return "DONE"
@@ -589,7 +590,6 @@ enum BoardTheme {
     // prefix matching. See BoardColumn's doc comment.
     private static let columnStates: [BoardColumn: [String]] = [
         .draft: ["draft"],
-        .queued: ["queued"],
         .working: ["working"],
         .blocked: ["blocked"],
         .done: ["done"],
@@ -610,19 +610,16 @@ enum BoardTheme {
     }
 
     /// State → color. working=active (green), blocked=attention (red),
-    /// queued=neutral (violet), draft/done/archived=muted.
+    /// draft/done/archived=muted.
     ///
-    /// NO state colour follows the theme tint — see `KTheme.queued`, which is
-    /// a fixed token carrying the pre-tint accent literals precisely so this
-    /// switch cannot re-tint. Every entry here is a MEANING hue.
+    /// NO state colour follows the theme tint: every entry here is a MEANING
+    /// hue, and a meaning never re-tints.
     static func color(forState state: String) -> Color {
         switch state {
         case "working":
             return KTheme.solved
         case "blocked":
             return KTheme.counter
-        case "queued":
-            return KTheme.queued
         case "draft", "done", "archived":
             return KTheme.text2
         default:
@@ -825,8 +822,8 @@ struct KChip: View {
 /// leading CAPSULE that is the job's COLOR channel and nothing else.
 ///
 /// The bar is the job's color and NOTHING else — no state, and no flagged
-/// override. An uncolored job is grey whether it is draft, queued, working,
-/// blocked or done, so the bar answers "which job is this", never "how is it
+/// override. An uncolored job is grey whether it is draft, working, blocked
+/// or done, so the bar answers "which job is this", never "how is it
 /// going" or "does this need me". State stays fully readable from the card's
 /// column and its state capsule, which use BoardTheme.color(forState:); a
 /// pending question still shows its own flag icon in the card's title row and

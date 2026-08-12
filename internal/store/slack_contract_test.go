@@ -240,11 +240,22 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// terms — which is also why the list must name LATER migrations' tables
 	// too (linear_issues, v18): migrate() from 16 replays every step above
 	// it, and a leftover table fails that step's bare CREATE.
+	// v20 is the exception to "every table added at or after v17 gone": it
+	// DROPS rather than adds, so replaying it needs its targets PRESENT —
+	// jobs.ready and the prereqs table, both of which a genuine v16 database
+	// had and this fresh one no longer does.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS slack_inbox`,
 		`DROP TABLE IF EXISTS slack_marks`,
 		`DROP TABLE IF EXISTS linear_issues`,
 		`DROP TABLE IF EXISTS kg_recall`,
+		`ALTER TABLE jobs ADD COLUMN ready INTEGER NOT NULL DEFAULT 0`,
+		`CREATE TABLE prereqs (
+			job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+			prereq_slug TEXT NOT NULL,
+			gated       INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (job_id, prereq_slug)
+		)`,
 		`PRAGMA user_version = 16`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {

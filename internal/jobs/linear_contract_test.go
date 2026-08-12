@@ -83,6 +83,32 @@ func contractCfg() core.LinearConfig {
 	return core.LinearConfig{APIKey: "lin_api_x", DefaultRepo: "kraken", States: []string{"Today"}}
 }
 
+// contractFrontmatterRetiredKey names the first retired key (ready/prereqs)
+// the composed text sets in its FRONTMATTER, or "" for none. Scoping to the
+// frontmatter is the point: a ticket's title or description may contain
+// either word — adversarial fixtures in this file deliberately do — and only
+// a key on an unindented frontmatter line is a claim the composer made.
+func contractFrontmatterRetiredKey(text string) string {
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return ""
+	}
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "---" {
+			return ""
+		}
+		key, _, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "ready", "prereqs":
+			return strings.TrimSpace(key)
+		}
+	}
+	return ""
+}
+
 func contractSeedSync(t *testing.T, st *store.Store, s LinearSync) {
 	t.Helper()
 	raw, err := json.Marshal(s)
@@ -350,8 +376,8 @@ func TestContractLinearPollCreatesDraftJobFromNewIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug(%s): %v", slug, err)
 	}
-	if j.Ready {
-		t.Fatal("created job is ready; R4/Q1 says it lands as a DRAFT")
+	if j.State != "" {
+		t.Fatalf("created job has state %q; R4/Q1 says it lands as a DRAFT", j.State)
 	}
 	if j.Repo != contractCfg().DefaultRepo {
 		t.Fatalf("job repo = %q, want cfg.DefaultRepo %q", j.Repo, contractCfg().DefaultRepo)
@@ -552,7 +578,7 @@ func TestContractLinearPollIgnoresNonMatchingState(t *testing.T) {
 // its linear_issues row stamped at lastEvent.
 func contractKnownIssue(t *testing.T, st *store.Store, slug, state string, body string, lastEvent time.Time) *store.Job {
 	t.Helper()
-	j := mustCreateJob(t, st, store.Job{Slug: slug, Repo: "kraken", Ready: state != "", State: state, Body: body})
+	j := mustCreateJob(t, st, store.Job{Slug: slug, Repo: "kraken", State: state, Body: body})
 	if err := st.PutLinearIssue(&store.LinearIssueRow{
 		IssueID:     "uuid-142",
 		Identifier:  "ENG-142",
@@ -871,8 +897,8 @@ func TestContractComposeLinearBodyRoundTripsParseJob(t *testing.T) {
 			if parsed.Err != "" {
 				t.Fatalf("composed text does not ParseJob clean (%s):\n%s", parsed.Err, text)
 			}
-			if parsed.Ready {
-				t.Fatalf("parsed ready = true, want false (drafts only):\n%s", text)
+			if parsed.State != "" {
+				t.Fatalf("parsed state = %q, want empty (drafts only):\n%s", parsed.State, text)
 			}
 			if want := linearSlug(tc.identifier, tc.title); parsed.Slug != want {
 				t.Fatalf("parsed slug = %q, want the frontmatter job: to carry linearSlug %q", parsed.Slug, want)
@@ -885,8 +911,11 @@ func TestContractComposeLinearBodyRoundTripsParseJob(t *testing.T) {
 			if strings.TrimSpace(parsed.Body) == "" {
 				t.Fatalf("parsed body is empty:\n%s", text)
 			}
-			if len(parsed.Prereqs) != 0 {
-				t.Fatalf("parsed prereqs = %#v, want the empty list", parsed.Prereqs)
+			// scoped to the FRONTMATTER: a ticket's own title or description
+			// is free to contain the word (several fixtures here do exactly
+			// that on purpose), and only a frontmatter key would be a claim.
+			if key := contractFrontmatterRetiredKey(text); key != "" {
+				t.Fatalf("composed frontmatter carries a retired %q key:\n%s", key, text)
 			}
 		})
 	}

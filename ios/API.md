@@ -7,7 +7,7 @@ consumes. Source of truth is the Go code — the handlers and wire types in
 (`internal/jobs/{daemon,job,status}.go`, `internal/core/peer.go`); this doc
 transcribes it, it does not define it independently.
 
-**Current contract**: `apiContract = 5` (internal/api/board.go — the Go
+**Current contract**: `apiContract = 6` (internal/api/board.go — the Go
 constant + `contract_test.go` bump lands in the same commit as this doc, per
 CLAUDE.md's API-contract rule), mirrored by `APIClient.expectedContract`
 (APIClient.swift). `/api/health` and
@@ -22,7 +22,13 @@ doc phase now runs purely from zeus' own read of the job spec text, never a
 stored flag) and `doc_questions_err` was removed from `/api/board`'s job
 objects (questions moved from a strictly-parsed `questions.yaml` file to
 relational rows in `kraken.db` — there is nothing left that can fail to
-parse).
+parse). v6 bumped when the **queued status was retired**: `ready` and
+`prereqs` were removed from the job form GET/POST shapes, and `start_error`
+and `prereqs` from `/api/board`'s job objects. Submitting a job now starts its
+cell inside the request (`POST /api/queue`, URL kept — see below), so there is
+no flag to set, no dependency gate to configure, and no background failure to
+report out of band. `state`'s value domain lost `queued` with them:
+draft · working · blocked · done (+ `archived`).
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
 retyped, renamed, or removed. Additive keys never bump it: old clients
@@ -79,7 +85,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 |---|---|---|---|
 | `daemon` | object (`daemonStatus`) | always | see below |
 | `daemon_ok` | bool | always | |
-| `cell_cap` | number | always | |
+| `cell_cap` | number | always | **VESTIGIAL since v6** — nothing enforces a cap any more (the daemon's queue pass was its only reader and went with the queued status). Held at the value shipped clients have always seen rather than zeroed, because `cellCap` is a NON-OPTIONAL member of the iOS `Board` model and a 0 renders as "a cap of none". Do not add new readers; it goes when the existing ones stop |
 | `live_cells` | number | always | |
 | `jobs` | array (`webJob`) | always (`[]` not `null`) | within a display state, jobs render in the manual reorder's order (see `POST /api/reorder` below) — no separate order field, the array position IS the display order |
 | `contract` | number | always | == `apiContract` |
@@ -136,18 +142,26 @@ the new build" would be false at exactly the moment it is shown.
 | `cells` | number | always |
 | `stale` | bool | omitempty |
 
+`last_error` is **VESTIGIAL since v6** — the same call `cell_cap` gets, for the
+same reason. It has no writer left: the tick returns no error now that the
+queue pass is gone, and the one start it still makes (a dream or graph job it
+created itself) reports its failure per job, to the event log and a
+notification, rather than through one global string no client renders per job.
+The key stays because omitting one is a breaking change and removing it buys
+nothing — being `omitempty`, it was already absent from every healthy tick's
+payload, so a client sees exactly what it has always seen.
+
 `webJob` (web.go):
 
 | key | type | optionality | notes |
 |---|---|---|---|
 | `slug` | string | always | archived jobs: numbered archive file base. **Not unique across `jobs`** — the archive numbers a name against its own contents only, so a slug freed by archiving and then reused by a new active job appears TWICE (archived entries come last). Key by `(slug, archived)`, never bare `slug` |
 | `repo` | string | always | |
-| `state` | string | always | draft/queued/working/blocked/done/archived |
+| `state` | string | always | draft/working/blocked/done/archived. `queued` was removed in v6 with the status itself |
 | `err` | string | omitempty | |
 | `outcome` | string | omitempty | |
 | `cell` | string | omitempty | tmux session name |
 | `live` | bool | always | |
-| `prereqs` | array (`webPrereq`) | omitempty | |
 | `artifacts` | array (`webArtifact`) | omitempty | |
 | `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes) |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
@@ -168,9 +182,14 @@ the new build" would be false at exactly the moment it is shown.
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 | `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
 | `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive carl's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
-| `start_error` | string | omitempty | the reason the daemon's last `StartCell` attempt for this job failed — free-text prose from the returned error, e.g. `worktree …/wt-monolith already exists`. Populated for jobs in the `queued` display state ONLY; absent everywhere else, and absent on a queued job means the last attempt succeeded or none has been made yet. It is per-job, unlike the board-level `daemon.last_error`, which carries whichever failure happened to be last across all jobs. Render it on the queued card: without it a job that cannot start looks identical to one merely waiting its turn, and the only record is `~/.kraken/logs`. Additive, no contract bump |
 
-`webPrereq`: `job` (string, always), `gated` (bool, always), `done` (bool, always).
+`start_error` and `prereqs` were REMOVED from this shape in v6. `start_error`
+was a side channel for a failure the board could not otherwise see: the daemon
+started queued jobs in the background, so the reason one would not start
+reached nobody. A start is a foreground HTTP request now — the reason comes
+back as `POST /api/queue`'s own 409 body — and a key that can only ever be
+empty is one a client keeps rendering affordances for. `prereqs` went with the
+feature.
 
 `jobPR`: `url` (string, always), `state` (string, always: `open` \| `merged` \| `closed`). The PR number for display derives from the url's trailing `/pull/<n>`.
 
@@ -324,7 +343,7 @@ Three rules for any client rendering this:
 - **The badge is a BLOCKED-card control.** Both clients render it only where a
   card reads as blocked, and only when the object is present. The question it
   answers — "is this one worth unblocking right now" — is not one a working,
-  queued, draft, done or archived card poses, and an estimate left over from an
+  draft, done or archived card poses, and an estimate left over from an
   earlier block reads as a current fact on a running card.
 
 The band the badge is coloured by is derived from that float, closed-open, and
@@ -352,22 +371,38 @@ reachable through VoiceOver alone. The app therefore renders it as a small
 muted `<age> ago` label BESIDE the badge; the badge text itself is pinned
 identical across clients and never absorbs it.
 
-### `POST /api/queue` `/api/dequeue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
+### `POST /api/queue` `/api/done` `/api/retry` `/api/kill` `/api/archive` `/api/unarchive` `/api/delete`
 
 Request: `webReq` — `slug` (string, required), `text` (string, omitempty, unused by these).
 Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure (409 for validation conflicts).
 
-`/api/queue` refuses (409) a job whose spec body is empty — "queued" is
-supposed to mean there's real content for a cell to pick up, so an empty
-spec never reaches the daemon.
+**`/api/queue` is the SUBMIT** — the draft→working move, and the one start
+surface in the whole system. The URL is deliberately unchanged (shipped iOS
+builds post to it for what they call the draft→queued drag), but what it does
+is not: it starts the job's cell inside this request and answers only once the
+cell is up. A `200` means the cell is live and the job reads `working`; a `409`
+carries the exact reason and leaves the job a draft. It refuses, in order, a
+job that is unparseable, done, already started, has an empty spec, or whose
+`repo:` does not resolve — one refusal set (`jobs.SubmitJob`), shared with the
+TUI's `s` key and the daemon's own dream/graph starts.
 
-`/api/dequeue` is the queued→draft reverse move: legal only for a job that
-is queued (or ready-but-blocked-on-prereqs, which `DisplayState` also shows
-as queued) and has never started a cell — there's nothing to tear down yet,
-so it's just a `ready` flip back to `false`. The server re-derives state
-itself rather than trusting the board's snapshot, so a stale board can't
-cancel a job that has since actually started: that case 409s with a message
-naming `/api/kill` as the correct recovery instead.
+Clients that used to render an in-flight "queued" column should render the
+pending POST on the dragged card and return it to draft on a 409: the request
+is now as long as a cell start takes.
+
+**Raise the request timeout for this call.** A cell start cuts a git worktree,
+opens a tmux session and spawns claude; it routinely outruns a default
+per-request timeout. The iOS app's shared `URLSession` is configured at
+`timeoutIntervalForRequest = 5` (APIClient.swift), which this call cannot ride
+— it uses a dedicated session with a longer cap instead. A client-side timeout
+here is **not a failed start**: the server does not cancel on disconnect, so
+the cell comes up anyway and the next `/api/board` poll shows the job
+`working`. A client that renders the timeout as a failure and puts the card
+back in draft is telling the user the opposite of what happened.
+
+`/api/dequeue` and `/api/start` are **GONE** (404). `dequeue` was the
+queued→draft reverse move and `start` the manual start for a job the queue
+pass would not take; neither addresses a state that exists.
 
 ### `POST /api/question`
 
@@ -862,17 +897,12 @@ session (e.g. `/do`) rather than being typed as plain conversation text.
 Request: `webReq` — `slug` (string), `text` (string, omitempty: optional steering message folded into the resume prompt).
 Response: same as above.
 
-### `POST /api/start`
+### `POST /api/start` — REMOVED in v6
 
-Request: `webReq` — `slug` (string, required), `text` unused.
-Response: same as `/api/queue` etc above.
-
-Boots a queued job's cell immediately, by hand — same validation (job must
-currently display as `queued`, every prereq's dependency done — gated or
-not), same `StartCell` mechanics the daemon's own auto-start uses. Since
-this is carl acting by hand, it doubles as the manual release for a job
-parked behind a *gated* prereq (an already-done dependency flagged for
-human sign-off) and bypasses the daemon's `CellCap` entirely.
+The route is unregistered and answers 404. It was the manual start for a job
+the daemon's queue pass would not take — one parked behind a gated prereq, or
+held off by the cell cap. None of those exist: `POST /api/queue` starts a job
+by hand, synchronously, and it is the only way any job starts.
 
 ### `POST /api/stop`
 
@@ -894,19 +924,19 @@ Request (`reorderReq`):
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `column` | string | always | one of `draft`\|`queued`\|`working`\|`blocked`\|`done` |
+| `column` | string | always | one of `draft`\|`working`\|`blocked`\|`done`. `queued` was removed in v6 and now 409s as an unrecognized column |
 | `slugs` | array of string | always (`[]` ok) | the column's full intended slug order |
 
 Response: `{"ok": true}` on success; non-2xx `{"error": string}` on failure
 (409 for an unrecognized `column`). Posted slugs whose current
 `DisplayState` no longer matches `column` — a concurrent transition
-mid-drag, e.g. a queued job that started — are silently dropped from the
-saved order rather than failing the whole request.
+mid-drag, e.g. a draft submitted from another client — are silently
+dropped from the saved order rather than failing the whole request.
 
 ### `GET /api/draft?slug=` / `POST /api/draft` → `webDraft` (draft.go)
 
 Per-job prompt-composer draft text, kept in an in-memory store on the `k web`
-process — additive (contract stays 2), nothing here is written to disk, so
+process — additive (never bumps the contract), nothing here is written to disk, so
 drafts are lost across a `k web` restart. Last-save-event-wins: no merge,
 no history, a POST simply overwrites whatever was there. The stored draft is
 cleared automatically on the success path of `/api/steer`, `/api/reactivate`,
@@ -937,7 +967,7 @@ Ten routes over the `kg_*` tables (internal/api/graph.go, plus
 internal/api/recall.go), in the order register.go wires them: `graph`,
 `graph/stats`, `graph/node`, `graph/fact`, `graph/episode`, `graph/pending`,
 `graph/search`, `graph/recall`, `graph/add`, `graph/episode-done`.
-**All additive — `apiContract` stays 5.** Every one is a NEW PATH, never a
+**All additive — none of them bumps `apiContract`.** Every one is a NEW PATH, never a
 key added to, retyped in, or removed from an existing shape, so a client that
 predates them decodes nothing differently.
 
@@ -1121,8 +1151,8 @@ No `kg_recall` interaction: dereferencing a fact the agent was already handed
 is not a delivery, so it must not spend that fact's once-per-session budget.
 
 Errors: 400 (missing or non-positive-integer `id`), 404 (no fact with that id),
-405, 500 (no store wired, or a read failed). Additive route — `apiContract`
-stays 5.
+405, 500 (no store wired, or a read failed). Additive route — it never bumps
+`apiContract`.
 
 ### `GET /api/graph/episode?id=N` — `k graph get`-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
 
@@ -1150,7 +1180,7 @@ produced nothing, which is an ordinary answer.
 No `kg_recall` interaction, for the same reason as the fact route.
 
 Errors: 400 (missing or non-positive-integer `id`), 404 (no episode with that
-id), 405, 500. Additive route — `apiContract` stays 5.
+id), 405, 500. Additive route — it never bumps `apiContract`.
 
 ### `POST /api/graph/search`
 
@@ -1177,7 +1207,7 @@ gate first, then (only when at least one fact fails it) a literal
 the gate — including the ones exempted from it for touching a node the query
 named (see `weak` below); `0` with a non-empty `facts` means the graph had nothing on-topic
 and the entries are nearest-neighbour context, not answers. Additive keys on
-a route no iOS client decodes — `apiContract` stays 5.
+a route no iOS client decodes — they never bump `apiContract`.
 
 `nodes` is the set of entities the matched facts touch, sorted by id (so the
 response is deterministic for a fixed corpus). It is here because
@@ -1363,7 +1393,7 @@ embedding API — this is the only path in the binary that ships a raw user
 prompt off the machine. The BM25 leg searches the unredacted query, which
 never leaves kraken.db.
 
-Additive: `apiContract` stays 5. Gated under `--mirror` (it writes).
+Additive: it never bumps `apiContract`. Gated under `--mirror` (it writes).
 
 Errors: 400 (bad JSON, unknown field), 405, 413, 500 (no store wired).
 
@@ -1403,28 +1433,33 @@ Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
 zeus' own read of the job spec text (does it invoke `/aim`/`/info`, or ask
 for a doc/spec/explanation in words) — never a stored flag on the job.
 
+`ready` and `prereqs` are gone (v6, breaking) — from this GET and from the
+`saveform` POST alike. Submitting a job is what starts its cell, so there is
+no flag to set; prereqs went with the feature (a job waits for nothing but
+carl). Both keys are still ACCEPTED in a job's raw frontmatter text
+(`/api/job/raw`, `/api/job/save`) and silently discarded, because every job
+file written before the cutover carries them — but `POST /api/job/draft`
+refuses either LOUDLY, since an agent writing one would otherwise be told
+"200" for a line the server threw away.
+
 | key | type | optionality | notes |
 |---|---|---|---|
 | `slug` | string | always | |
 | `repo` | string | always | |
 | `base` | string | always | |
-| `ready` | bool | always | |
 | `solo` | bool | always | |
 | `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default for zeus (`claude-fable-5`); applied once at cell start. Governs the cell's own claudes — zeus and its side threads; the teammates zeus spawns are opus regardless |
 | `color` | string | always | the job's color — one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan`, or `""` for no color. Read-only here: it is written by `POST /api/job/color`, never by `saveform` |
-| `prereqs` | array (`Prereq`) | always (`[]` not `null`) | |
 | `spec` | string | always | |
 | `mtime` | number | always | |
 | `editable` | bool | always | |
 | `err` | string | always | "" when clean |
-| `slugs` | array of string \| null | always present key, value may be `null` | other job slugs, for prereq datalist |
+| `slugs` | array of string \| null | always present key, value may be `null` | the other active jobs' slugs. It fed the prereq datalist originally and survives that feature's removal as a plain autocompletion source |
 | `repos` | array of string \| null | always present key, value may be `null` | |
-
-`Prereq`: `job` (string, always), `gated` (bool, `omitempty` on the wire — absent means false).
 
 ### `POST /api/job/saveform` → map literal (web.go `webJobSaveForm`)
 
-Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `ready` (bool), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default for zeus, `claude-fable-5`), `prereqs` (array of `Prereq`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) — see the form-GET note above.
+Request: `jobFormFields` — `slug` (string), `repo` (string), `base` (string, optional to send — no `omitempty` tag, absence just decodes as ""), `solo` (bool), `model` (string, optional to send — claude model for zeus, "" = kraken's default for zeus, `claude-fable-5`), `spec` (string, optional to send), `mtime` (number|string via `mtimeToken`), `force` (bool, optional to send — skips the mtime conflict check when true). `skip_doc` is gone (v5, breaking) and `ready`/`prereqs` are gone (v6, breaking) — see the form-GET note above.
 
 **`color` is NOT part of this request and must never be added to it.** This
 endpoint is a FULL REPLACE: a field a client omits is written as its zero
@@ -1546,7 +1581,7 @@ Response: `{"jobs": [webJobListItem]}`. The array is always present and never nu
 | `state` | string | always |
 | `summary` | string | always |
 
-- `state` is `jobs.DisplayState` — the same string the board renders (`draft`, `queued`, `working`, `blocked`, `done`), not the stored `state` column, which is empty for a queued job.
+- `state` is `jobs.DisplayState` — the same string the board renders (`draft`, `working`, `blocked`, `done`), not the stored `state` column. The two differ on an ERRED job: its stored state is empty but it displays (and is editable) as `draft`.
 - `summary` is the job body's **first non-empty line**, one-lined and capped at **120 runes** (a leading markdown `#` is dropped). Empty for a job with no body — a real answer, so the key still rides.
 - ARCHIVED jobs are absent entirely: they are out of the active namespace, and iris has no business resurrecting one.
 
@@ -1554,7 +1589,7 @@ Errors: 405 (non-GET), 500 (no store wired). A GET is a read, so it stays reacha
 
 ### `POST /api/job/draft`
 
-The Slack intake bot's only write on a job — it creates a draft, or amends an existing draft/queued one. Not called by the iOS app or the web UI (carl uses `/api/job/saveform` and `/api/job/save`); its client is the `kraken job draft` cell verb.
+The Slack intake bot's only write on a job — it creates a draft, or amends an existing one that has not started. Not called by the iOS app or the web UI (carl uses `/api/job/saveform` and `/api/job/save`); its client is the `kraken job draft` cell verb.
 
 This route is the **safety surface** of the whole Slack feature, so its refusals are the specification rather than validation niceties: iris is a claude turning arbitrary Slack text into kraken jobs, and the property that makes that safe is that it can only ever produce a DRAFT. **Nothing is written on any refusal.**
 
@@ -1573,20 +1608,22 @@ Refusal matrix (every row writes nothing):
 | `slug` empty after slugify | 400 |
 | `content` empty | 400 |
 | the job text does not parse | 400, carrying the parser's own error text (no salvage write — this route never does the raw editor's body+err save) |
-| **create** (no active job with the slug): `ready: true` | 400 — iris drafts stay `ready: false`; queueing is carl's move |
-| **create**: any non-empty `state:` | 400 — `state` is kraken's |
+| a `ready:` or `prereqs:` key in the FRONTMATTER (either path) | 400, naming the key as retired. Both are accept-and-ignore in the parser — the corpus of job files carries them, and erroring there would pin the whole board to draft — so this route refuses them itself. Silently swallowing one would answer 200 for a line the server discarded, and iris would report a start that never happened. Scoped to the frontmatter: a spec body may discuss prereqs in prose |
+| **create** (no active job with the slug): any non-empty `state:` | 400 — `state` is kraken's |
 | **create**: empty body | 400 |
-| **create**, all guards passed | row created from the parsed fields + its prereqs |
+| **create**, all guards passed | row created from the parsed fields |
 | **edit** (the job exists): stored state is `working`, `blocked` or `done` | 409 — stricter than the editor's own `editableJob` gate, which lets a done job through for a respec |
-| **edit**: submitted `ready` differs from the stored value | 400, loudly — never silently rewritten, since a silent rewrite would let iris believe it queued something |
 | **edit**: any non-empty `state:` | 400 |
 | **edit**: empty body | 400 |
 | **edit**: `mtime` present, non-zero, and not the row's rev | 409 conflict |
-| **edit**, all guards passed | writes ONLY `{repo, base, solo, model, body}`; `ready`, `state`, every kraken-owned field (`session`, `run`, `prs`, `color`, `outcome`, `teardown`) **and the stored prereqs** keep their stored values, and the slug never changes |
+| **edit**, all guards passed | writes ONLY `{repo, base, solo, model, body}`; `state` and every kraken-owned field (`session`, `run`, `prs`, `color`, `outcome`, `teardown`) keep their stored values, and the slug never changes |
 
-An edit **never syncs prereqs** — the one place this route is narrower than the field list alone suggests. A prereq, especially a gated one, is the board's human-release gate: it is what parks a ready job until carl lets it go. An edit here is a whole-text replace, so a submitted body that merely omits the `prereqs:` line would clear that gate and make a queued job auto-startable on the daemon's next pass — iris starting a job by another route, which is the single outcome this endpoint exists to prevent. Prereqs are still set on the **create** path, where there is no stored gate to erase.
+There is no longer any way for this route to start a job, and that is now
+STRUCTURAL rather than enforced: starting a job means submitting it on the
+board, and nothing here reaches that. The route's remaining job is to keep
+iris out of the fields kraken owns.
 
-Other errors: 405 (non-POST), 409 (slug taken by a concurrent create), 413 (body over 1 MiB), 500 (no store wired; the write failed; or — on the create path only — the job WAS created and then its reload or prereq write failed, in which case the error text says so explicitly and a retry must NOT be sent as a create: it would land on the edit path, which never sets prereqs). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
+Other errors: 405 (non-POST), 409 (slug taken by a concurrent create), 413 (body over 1 MiB), 500 (no store wired; the write failed; or — on the create path only — the job WAS created and then its reload failed, in which case the error text says so explicitly). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
 
 ---
 
@@ -2140,4 +2177,4 @@ only (405 otherwise). `name` must exactly match the saved-name format
 (`img-NNN.<png|jpg|gif|webp>`); 404 on any path-traversal attempt, malformed
 name, unresolvable slug, or missing file — resolution goes through
 `api.UploadPath`, which does not require an active job (an upload outlives
-its job's own draft/queued/etc. state changes, same lifecycle as artifacts).
+its job's own draft/working/etc. state changes, same lifecycle as artifacts).

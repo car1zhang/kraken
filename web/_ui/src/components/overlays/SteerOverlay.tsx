@@ -946,15 +946,11 @@ export function specMetaHTML(d: JobForm): string {
     ["model", esc(d.model || "claude-fable-5")],
     ["solo", d.solo ? "✓" : "✗"],
   ];
-  const prereqs = d.prereqs || [];
-  if (prereqs.length) {
-    // wide: prereq lists run long, so the row spans both meta columns
-    rows.push([
-      "prereqs",
-      prereqs.map((p) => esc(p.job) + (p.gated ? " gated ⚑" : "")).join(", "),
-      "wide",
-    ]);
-  }
+  // The `prereqs` row stood here — a "wide" row spanning both meta columns,
+  // since a prereq list runs long. The field is off the wire: prereqs gated
+  // the QUEUE, and a job reaching this modal is a live cell that was started
+  // by hand. The `wide` modifier is still honoured below and still styled, so
+  // the next long row costs nothing to add.
   return `<div class="spec-meta">${rows
     .map(
       ([k, v, w]) =>

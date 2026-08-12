@@ -735,7 +735,7 @@ struct JobSectionCard<Content: View>: View {
 /// One action on the job sheet's floating bar.
 ///
 /// The bar's job is placement only. Which actions EXIST is decided by the
-/// `canQueue`/`canKill`/… flags below, each of which mirrors a server 409 and
+/// `canSubmit`/`canKill`/… flags below, each of which mirrors a server 409 and
 /// is unchanged by the redesign; this type just carries a visible action's
 /// label, icon, tint and closure so the bar can decide whether it draws as the
 /// prominent primary, as a glass icon button, or as a row in the overflow
@@ -791,7 +791,7 @@ struct JobDetailView: View {
     private var column: BoardColumn { BoardTheme.column(for: job) }
     private var isUnhealthy: Bool { !(job.health ?? "").isEmpty }
     private var isEditable: Bool {
-        !job.live && [BoardColumn.draft, .queued, .done].contains(column)
+        !job.live && [BoardColumn.draft, .done].contains(column)
     }
     // Server refuses a retry once the cell is confirmed gone or stuck at a
     // startup prompt — mirrors app.js's `!/is gone|startup prompt/.test(health)`.
@@ -804,14 +804,9 @@ struct JobDetailView: View {
     private var canKill: Bool {
         job.live && [BoardColumn.working, .blocked].contains(column)
     }
-    // webQueue 409s on an unparseable job even though it renders in draft.
-    private var canQueue: Bool {
+    // webSubmit 409s on an unparseable job even though it renders in draft.
+    private var canSubmit: Bool {
         column == .draft && (job.err ?? "").isEmpty
-    }
-    // webDequeue 409s once the cell has actually started, so this only shows
-    // for a job that's queued but still waiting — not yet live.
-    private var canDequeue: Bool {
-        !isArchived && !job.live && column == .queued
     }
     // review was folded into blocked — mark-done now lives there, alongside
     // the inline pending-question buttons rendered in the Form itself (see
@@ -838,7 +833,7 @@ struct JobDetailView: View {
     // archived — a live one shows Kill instead (kill returns it to draft,
     // which then archives cleanly).
     private var canArchive: Bool {
-        !isArchived && !job.live && [BoardColumn.draft, .queued, .done].contains(column)
+        !isArchived && !job.live && [BoardColumn.draft, .done].contains(column)
     }
     // Reactivate only where the server can actually resume: a done job
     // whose zeus session id was recorded.
@@ -857,12 +852,12 @@ struct JobDetailView: View {
         let known = Set(served.map(\.tid))
         return served + branchedThreads.filter { !known.contains($0.tid) }
     }
-    // Whether the floating bar renders at all. The same ten flags
+    // Whether the floating bar renders at all. The same nine flags
     // `visibleActions` is built from, so the two can only ever agree: if this
     // is true the bar has at least one action, and if it is false there is
     // nothing to float.
     private var hasAnyAction: Bool {
-        canQueue || canDequeue || canRetry || canMarkDone || canSteer || isEditable || canKill
+        canSubmit || canRetry || canMarkDone || canSteer || isEditable || canKill
             || canArchive || canReactivate || isArchived
     }
 
@@ -951,19 +946,6 @@ struct JobDetailView: View {
                 // stale outcome in its file — it reads as never-completed
                 if let outcome = job.outcome, !outcome.isEmpty, column == .done || isArchived {
                     JobSectionCard("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
-                }
-                if let prereqs = job.prereqs, !prereqs.isEmpty {
-                    JobSectionCard("Prereqs") {
-                        ForEach(prereqs, id: \.job) { p in
-                            HStack {
-                                Text(p.job).font(.data(12)).foregroundStyle(KTheme.text)
-                                Spacer()
-                                Text(p.done ? "done" : (p.gated ? "gated" : "pending"))
-                                    .font(.data(10))
-                                    .foregroundStyle(p.done ? KTheme.solved : (p.gated ? KTheme.counter : KTheme.revealed))
-                            }
-                        }
-                    }
                 }
                 if job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty {
                     JobSectionCard("Roster") {
@@ -1404,9 +1386,9 @@ struct JobDetailView: View {
     /// today is reachable after the restyle under exactly the same rule.
     ///
     /// The priority is "what is this job waiting for": a live cell wants
-    /// steering, a draft wants queueing, a done job wants reactivating, an
-    /// archived one wants restoring. Reversible bookkeeping (dequeue, mark
-    /// done, retry, edit, archive) sorts under those, and the two destructive
+    /// steering, a draft wants submitting, a done job wants reactivating, an
+    /// archived one wants restoring. Reversible bookkeeping (mark done,
+    /// retry, edit, archive) sorts under those, and the two destructive
     /// actions sort last so a mis-tap can't reach them from the prominent
     /// slot.
     private var visibleActions: [JobActionItem] {
@@ -1419,8 +1401,8 @@ struct JobDetailView: View {
                 tint: isBlockedColumn ? KTheme.revealed : KTheme.accent
             ) { showingSteer = true })
         }
-        if canQueue {
-            out.append(JobActionItem(id: "queue", title: "Queue", icon: "play.fill", tint: KTheme.accent) {
+        if canSubmit {
+            out.append(JobActionItem(id: "submit", title: "Start", icon: "play.fill", tint: KTheme.accent) {
                 runAction { try await APIClient.shared.queueJob(baseURL: baseURL, slug: job.slug) }
             })
         }
@@ -1436,14 +1418,6 @@ struct JobDetailView: View {
                 icon: "tray.and.arrow.up", tint: KTheme.accent
             ) {
                 runAction { try await APIClient.shared.unarchiveJob(baseURL: baseURL, slug: job.slug) }
-            })
-        }
-        if canDequeue {
-            out.append(JobActionItem(
-                id: "dequeue", title: "Cancel Queue",
-                icon: "xmark.circle", tint: KTheme.text2
-            ) {
-                runAction { try await APIClient.shared.dequeueJob(baseURL: baseURL, slug: job.slug) }
             })
         }
         if canMarkDone {

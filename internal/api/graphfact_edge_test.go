@@ -419,12 +419,15 @@ func TestFxeGraphDereferenceStaysUngatedInMirrorMode(t *testing.T) {
 	}
 }
 
-// Obligation: "apiContract stays 5 (additive routes never bump it)." Two new
-// keys and two new routes are additive by construction; a bump here would
-// make every installed iOS build refuse the board.
+// Obligation: "the dereference routes never bump apiContract." Two new keys
+// and two new routes are additive by construction; a bump for THEM would make
+// every installed iOS build refuse the board. The number tracked here is
+// whatever the contract currently is (6 since the queued status was retired,
+// which is a real break and nothing to do with these routes) — this test
+// moves only when a DIFFERENT change moves it, and never on its own account.
 func TestFxeGraphDereferenceDoesNotBumpTheContract(t *testing.T) {
-	if apiContract != 5 {
-		t.Errorf("apiContract = %d, want 5 — the dereference routes are additive", apiContract)
+	if apiContract != 6 {
+		t.Errorf("apiContract = %d, want 6 — the dereference routes are additive and must not move it", apiContract)
 	}
 	if graphFactSiblingCap != 10 {
 		t.Errorf("graphFactSiblingCap = %d, want 10", graphFactSiblingCap)

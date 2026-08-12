@@ -355,10 +355,10 @@ func TestContractJobListShape(t *testing.T) {
 	if _, err := st.CreateJob(&store.Job{Slug: "csv-export-timeout", Repo: "kraken", Body: "\n\nFix the CSV export timeout\n\nMore detail below.\n"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if _, err := st.CreateJob(&store.Job{Slug: "queued-thing", Repo: "kraken", Ready: true, Body: "Ship the thing\n"}); err != nil {
+	if _, err := st.CreateJob(&store.Job{Slug: "second-draft", Repo: "kraken", Body: "Ship the thing\n"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if _, err := st.CreateJob(&store.Job{Slug: "running-thing", Repo: "kraken", Ready: true, State: "working", Body: "Already running\n"}); err != nil {
+	if _, err := st.CreateJob(&store.Job{Slug: "running-thing", Repo: "kraken", State: "working", Body: "Already running\n"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
 	if _, err := st.CreateJob(&store.Job{Slug: "wordy", Repo: "kraken", Body: strings.Repeat("w", 400) + "\n"}); err != nil {
@@ -415,15 +415,15 @@ func TestContractJobListShape(t *testing.T) {
 		if j == nil {
 			t.Fatalf("job %s vanished from the store view", slug)
 		}
-		if want := jobs.DisplayState(j, byJob); row.State != want {
+		if want := jobs.DisplayState(j); row.State != want {
 			t.Errorf("job %s state = %q, want DisplayState %q", slug, row.State, want)
 		}
 	}
 	if bySlug["csv-export-timeout"].State != "draft" {
-		t.Errorf("an unready job reads as %q, want draft", bySlug["csv-export-timeout"].State)
+		t.Errorf("an unstarted job reads as %q, want draft", bySlug["csv-export-timeout"].State)
 	}
-	if bySlug["queued-thing"].State != "queued" {
-		t.Errorf("a ready, unstarted job reads as %q, want queued", bySlug["queued-thing"].State)
+	if bySlug["second-draft"].State != "draft" {
+		t.Errorf("a second unstarted job reads as %q, want draft — there is no state between draft and working", bySlug["second-draft"].State)
 	}
 	if bySlug["running-thing"].State != "working" {
 		t.Errorf("a working job reads as %q, want working", bySlug["running-thing"].State)
@@ -444,12 +444,13 @@ func TestContractJobListShape(t *testing.T) {
 
 // --- POST /api/job/draft ---
 
-// contractSlackJobText composes a job file body iris would submit.
-func contractSlackJobText(slug, repo, base, model string, ready, solo bool, prereq, body string) string {
-	readyVal, soloVal := "false", "false"
-	if ready {
-		readyVal = "true"
-	}
+// contractSlackJobText composes a job file body iris would submit. It emits
+// neither `ready:` nor `prereqs:`: the route refuses both outright now (they
+// name a feature that is gone, and silently ignoring them would let a caller
+// believe it had queued something), so a helper that emitted either would
+// make every test below a test of that refusal.
+func contractSlackJobText(slug, repo, base, model string, solo bool, body string) string {
+	soloVal := "false"
 	if solo {
 		soloVal = "true"
 	}
@@ -459,14 +460,9 @@ func contractSlackJobText(slug, repo, base, model string, ready, solo bool, prer
 	if base != "" {
 		out += "base: " + base + "\n"
 	}
-	out += "ready: " + readyVal + "\n" +
-		"solo: " + soloVal + "\n"
+	out += "solo: " + soloVal + "\n"
 	if model != "" {
 		out += "model: " + model + "\n"
-	}
-	out += "prereqs: []\n"
-	if prereq != "" {
-		out += "  - job: " + prereq + "\n"
 	}
 	out += "---\n\n" + body + "\n"
 	return out
@@ -474,9 +470,9 @@ func contractSlackJobText(slug, repo, base, model string, ready, solo bool, prer
 
 // TestContractJobDraftCreatesADraftNobodyStarts is the create half of the
 // route's whole point: iris turns a Slack message into a board card, and the
-// card sits in draft until carl moves it. Every field it is allowed to set
-// lands; ready stays false and state stays empty, which is exactly what
-// keeps the queue pass' startable() from ever picking it up.
+// card sits in draft until carl submits it. Every field it is allowed to set
+// lands, and state stays empty — and with the queue pass gone there is no
+// longer anything on the machine that could pick a draft up on its own.
 func TestContractJobDraftCreatesADraftNobodyStarts(t *testing.T) {
 	st := useTestStore(t)
 	contractSlackNoCreds(t)
@@ -487,7 +483,7 @@ func TestContractJobDraftCreatesADraftNobodyStarts(t *testing.T) {
 	}
 
 	body := "Bob reports the CSV export times out over 50k rows.\n\n## Source\n\n- **From:** bobby (`U0BOB`) in #engineering\n- **Message:** the csv export times out\n"
-	content := contractSlackJobText("csv-export-timeout", "kraken", "origin/main", "claude-opus-5", false, true, "dep-thing", body)
+	content := contractSlackJobText("csv-export-timeout", "kraken", "origin/main", "claude-opus-5", true, body)
 
 	rec := contractSlackPost(t, mux, "/api/job/draft", map[string]any{
 		"slug": "csv-export-timeout", "content": content,
@@ -518,22 +514,11 @@ func TestContractJobDraftCreatesADraftNobodyStarts(t *testing.T) {
 	if !strings.Contains(sr.Body, "## Source") {
 		t.Errorf("body = %q, want the provenance section preserved", sr.Body)
 	}
-	if sr.Ready {
-		t.Error("the created job is ready — iris drafts stay ready:false")
-	}
 	if sr.State != "" {
 		t.Errorf("state = %q, want empty on a fresh draft", sr.State)
 	}
 	if sr.Err != "" {
 		t.Errorf("Err = %q, want a clean parse", sr.Err)
-	}
-
-	prereqs, err := st.ListPrereqs(sr.ID)
-	if err != nil {
-		t.Fatalf("ListPrereqs: %v", err)
-	}
-	if len(prereqs) != 1 || prereqs[0].Slug != "dep-thing" {
-		t.Errorf("prereqs = %+v, want the one declared in the content", prereqs)
 	}
 
 	// board-visible as a draft, through the same view the board renders
@@ -546,11 +531,11 @@ func TestContractJobDraftCreatesADraftNobodyStarts(t *testing.T) {
 	if j == nil {
 		t.Fatal("the created draft is not on the board")
 	}
-	if got := jobs.DisplayState(j, byJob); got != "draft" {
+	if got := jobs.DisplayState(j); got != "draft" {
 		t.Fatalf("DisplayState = %q, want draft", got)
 	}
-	if j.Ready || j.State != "" || j.Err != "" {
-		t.Fatalf("a job in this shape could be auto-started: ready=%v state=%q err=%q", j.Ready, j.State, j.Err)
+	if j.State != "" || j.Err != "" {
+		t.Fatalf("a job in this shape is not a clean draft: state=%q err=%q", j.State, j.Err)
 	}
 
 	// and it shows up on the list route iris reads for board context
@@ -561,11 +546,10 @@ func TestContractJobDraftCreatesADraftNobodyStarts(t *testing.T) {
 }
 
 // TestContractJobDraftEditsOnlyTheAuthoredFields is the edit half: iris may
-// extend a draft-or-queued job's body (a follow-up message about work
-// already carded), and everything kraken owns about that row must come back
-// out exactly as it went in. `ready` in particular is preserved from the
-// STORE, not taken from the submitted text — iris cannot promote a job by
-// editing it.
+// extend a DRAFT job's body (a follow-up message about work already carded),
+// and everything kraken owns about that row must come back out exactly as it
+// went in. There is no longer a `ready` flag for iris to promote a job with:
+// starting a job is submitting it, and this route has no submit.
 func TestContractJobDraftEditsOnlyTheAuthoredFields(t *testing.T) {
 	st := useTestStore(t)
 	contractSlackNoCreds(t)
@@ -573,7 +557,7 @@ func TestContractJobDraftEditsOnlyTheAuthoredFields(t *testing.T) {
 
 	id, err := st.CreateJob(&store.Job{
 		Slug: "csv-export-timeout", Repo: "kraken", Base: "origin/main",
-		Ready: true, Solo: false, Model: "", Color: "cyan",
+		Solo: false, Model: "", Color: "cyan",
 		Body: "original spec\n", Session: "sess-abc", Run: 2, Outcome: "",
 	})
 	if err != nil {
@@ -588,7 +572,7 @@ func TestContractJobDraftEditsOnlyTheAuthoredFields(t *testing.T) {
 	}
 
 	newBody := "original spec\n\n## Source\n\n- **From:** bobby (`U0BOB`) in a DM\n- **Message:** also breaks for xlsx\n"
-	content := contractSlackJobText("csv-export-timeout", "monolith", "origin/develop", "claude-opus-5", true, true, "", newBody)
+	content := contractSlackJobText("csv-export-timeout", "monolith", "origin/develop", "claude-opus-5", true, newBody)
 
 	rec := contractSlackPost(t, mux, "/api/job/draft", map[string]any{
 		"slug": "csv-export-timeout", "content": content, "mtime": before.Rev,
@@ -623,9 +607,6 @@ func TestContractJobDraftEditsOnlyTheAuthoredFields(t *testing.T) {
 	}
 
 	// nothing kraken owns moved
-	if after.Ready != before.Ready {
-		t.Errorf("ready = %v, want the stored %v — this route never rewrites it", after.Ready, before.Ready)
-	}
 	if after.State != before.State {
 		t.Errorf("state = %q, want the stored %q", after.State, before.State)
 	}
@@ -646,14 +627,58 @@ func TestContractJobDraftEditsOnlyTheAuthoredFields(t *testing.T) {
 		t.Errorf("prs = %+v, want the stored PR list untouched", prs)
 	}
 
-	// the edit is board-visible and the card still reads as queued
+	// the edit is board-visible and the card still reads as a draft
 	all := jobs.LoadJobs()
 	byJob := map[string]*jobs.Job{}
 	for _, j := range all {
 		byJob[j.Slug] = j
 	}
-	if got := jobs.DisplayState(byJob["csv-export-timeout"], byJob); got != "queued" {
-		t.Errorf("DisplayState after edit = %q, want queued (unchanged)", got)
+	if got := jobs.DisplayState(byJob["csv-export-timeout"]); got != "draft" {
+		t.Errorf("DisplayState after edit = %q, want draft (unchanged)", got)
+	}
+}
+
+// TestContractJobDraftRefusesRetiredKeys: `ready:` and `prereqs:` are refused
+// LOUDLY on this route rather than ignored, which is the same call the old
+// ready-change guard made and for the same reason. ParseJob deliberately
+// swallows both (the corpus of job files on disk carries them, and erroring
+// there would pin the whole board to draft), so without an explicit refusal
+// here an author sending `ready: true` would get a 200 and report to carl
+// that the job was queued while nothing at all had happened.
+func TestContractJobDraftRefusesRetiredKeys(t *testing.T) {
+	useTestStore(t)
+	contractSlackNoCreds(t)
+	mux := contractSlackMux(t)
+
+	for _, c := range []struct{ name, line string }{
+		{"ready true", "ready: true\n"},
+		{"ready false", "ready: false\n"},
+		{"prereqs empty", "prereqs: []\n"},
+		{"prereqs block", "prereqs:\n  - job: dep\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			content := "---\njob: retired-key\nrepo: kraken\n" + c.line + "---\n\na real spec\n"
+			rec := contractSlackPost(t, mux, "/api/job/draft", map[string]any{
+				"slug": "retired-key", "content": content,
+			})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400 — body %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "retired key") {
+				t.Errorf("refusal = %s, want it to name the key as retired", rec.Body.String())
+			}
+		})
+	}
+
+	// the word appearing in the SPEC BODY is not a refusal: a spec is free to
+	// discuss prereqs in prose, and a route that refused that would be
+	// unfixable without deleting the sentence.
+	content := "---\njob: prose-ok\nrepo: kraken\n---\n\nCheck the prereqs: none, ready: to go.\n"
+	rec := contractSlackPost(t, mux, "/api/job/draft", map[string]any{
+		"slug": "prose-ok", "content": content,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("body prose refused: status %d, body %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -669,7 +694,7 @@ func TestContractJobDraftEditsADraftWithoutAnMTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	content := contractSlackJobText("quiet-draft", "kraken", "", "", false, false, "", "first note\n\nsecond note\n")
+	content := contractSlackJobText("quiet-draft", "kraken", "", "", false, "first note\n\nsecond note\n")
 
 	rec := contractSlackPost(t, mux, "/api/job/draft", map[string]any{
 		"slug": "quiet-draft", "content": content,
@@ -684,7 +709,7 @@ func TestContractJobDraftEditsADraftWithoutAnMTime(t *testing.T) {
 	if !strings.Contains(after.Body, "second note") {
 		t.Fatalf("body = %q, want the edit applied", after.Body)
 	}
-	if after.Ready {
-		t.Error("the edit promoted a draft to ready")
+	if after.State != "" {
+		t.Errorf("the edit moved the job's state to %q — this route never starts anything", after.State)
 	}
 }

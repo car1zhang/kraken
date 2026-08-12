@@ -26,9 +26,10 @@ import (
 //   - /api/board's HTTP handler itself (webBoard's marshaled shape is
 //     covered directly; wiring it through discovery/daemon state would drag
 //     in tmux/process-table dependencies this file avoids).
-//   - webAction-wrapped endpoints (/api/queue, /api/dequeue, /api/done,
+//   - webAction-wrapped endpoints (/api/queue — the submit, /api/done,
 //     /api/retry, /api/kill, /api/archive, /api/unarchive, /api/delete,
-//     /api/question, /api/steer, /api/reactivate, /api/start, /api/stop):
+//     /api/question, /api/steer, /api/reactivate, /api/stop; /api/dequeue and
+//     /api/start were removed in v6 and are unregistered):
 //     all share the trivial {"ok": true} success shape or {"error": string}
 //     failure shape, already covered by the generic error-response
 //     convention documented in ios/API.md.
@@ -249,15 +250,19 @@ var shipIOSStartRespSpec = map[string]fieldSpec{
 }
 
 var webJobSpec = map[string]fieldSpec{
-	"slug":          {kind: wireString, required: true},
-	"repo":          {kind: wireString, required: true},
-	"state":         {kind: wireString, required: true},
-	"err":           {kind: wireString, required: false},
-	"outcome":       {kind: wireString, required: false},
-	"color":         {kind: wireString, required: false},
-	"cell":          {kind: wireString, required: false},
-	"live":          {kind: wireBool, required: true},
-	"prereqs":       {kind: wireArray, required: false},
+	"slug":    {kind: wireString, required: true},
+	"repo":    {kind: wireString, required: true},
+	"state":   {kind: wireString, required: true},
+	"err":     {kind: wireString, required: false},
+	"outcome": {kind: wireString, required: false},
+	"color":   {kind: wireString, required: false},
+	"cell":    {kind: wireString, required: false},
+	"live":    {kind: wireBool, required: true},
+	// no "prereqs" and no "start_error": both left this shape in v6, and this
+	// map is what the shape suite enforces — assertShape rejects a key the
+	// map does not name, so their ABSENCE here is the pin. A documented-but-
+	// optional entry for a key nothing emits would let either one return
+	// silently.
 	"artifacts":     {kind: wireArray, required: false},
 	"detail":        {kind: wireString, required: false},
 	"question":      {kind: wireObject, required: false},
@@ -288,19 +293,12 @@ var webJobSpec = map[string]fieldSpec{
 	// load_at along with the numbers, so webJobLoadFrom serves no object for
 	// it. What the API does refuse with a 400 is a HALF pair, exactly one of
 	// the two zero. Additive: a key ADDED to an existing
-	// shape, which old clients ignore, so apiContract does NOT bump for it
-	// (TestAPIContractUnchanged still pins 5). Listed here because assertShape
-	// rejects any key the spec doesn't document.
+	// shape, which old clients ignore, so it never bumps apiContract. Listed
+	// here because assertShape rejects any key the spec doesn't document — an
+	// addition that skips this map fails the suite rather than sliding
+	// through undocumented, which is the whole point of transcribing
+	// ios/API.md.
 	"load": {kind: wireObject, required: false},
-	// why the last StartCell attempt for this job failed — populated for
-	// queued jobs only, omitempty, so absent means "the last attempt worked,
-	// or none was made". Additive: a key ADDED to an existing shape, which
-	// old clients ignore, so apiContract does NOT bump for it
-	// (TestAPIContractUnchanged still pins 5). It is listed here because
-	// assertShape rejects any key the spec doesn't document — an addition
-	// that skips this map fails the suite rather than sliding through
-	// undocumented, which is the whole point of transcribing ios/API.md.
-	"start_error": {kind: wireString, required: false},
 }
 
 // webTokensSpec covers board.go's webTokens, webJob's "tokens" object — one
@@ -465,7 +463,7 @@ func TestJobLoadEndpointWireShape(t *testing.T) {
 
 // --- Slack intake bot: /api/slack/inbox, /api/slack/ack, /api/slack/status
 // (slack.go) and /api/job/list, /api/job/draft (jobdraft.go). Five new PATHS,
-// no existing shape touched, so apiContract stays 5 — these specs are here
+// no existing shape touched, so none of them bumps apiContract — these specs are here
 // because assertShape rejects any key ios/API.md hasn't documented, which is
 // what makes an addition that skips this file fail the suite rather than
 // slide through undocumented. ---
@@ -625,7 +623,9 @@ func TestSlackEndpointWireShapes(t *testing.T) {
 func TestJobDraftEndpointWireShapes(t *testing.T) {
 	useTestStore(t)
 
-	content := "---\njob: contract-draft\nrepo: kraken\nready: false\nprereqs: []\nsolo: false\n---\n\ncsv export times out for big orgs\n"
+	// no ready:/prereqs: — the route refuses both outright now, so a fixture
+	// carrying either would 400 before any shape existed to assert on.
+	content := "---\njob: contract-draft\nrepo: kraken\nsolo: false\n---\n\ncsv export times out for big orgs\n"
 	body := mustJSON(t, map[string]any{"slug": "contract-draft", "content": content})
 	rec := httptest.NewRecorder()
 	jobDraftHandler(rec, httptest.NewRequest(http.MethodPost, "/api/job/draft", bytes.NewReader(body)))
@@ -721,7 +721,6 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 	wj := webJob{
 		Slug: "x", Repo: "monolith", State: "blocked", Live: true,
 		Err: "e", Outcome: "o", Color: "purple", Cell: "cell-x",
-		Prereqs:   []webPrereq{{Job: "y", Gated: true, Done: false}},
 		Artifacts: []webArtifact{{Name: "a", URL: "/api/artifact/x/cell/a"}},
 		Detail:    "zeus said something",
 		Question: &webQuestion{
@@ -750,8 +749,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 			Sessions: 154, UpdatedAt: 1785124027359,
 			ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 		},
-		Load:       &webJobLoad{Unblock: 2, Scope: 8, Note: "one decision: which store keys the row", At: 1769040000000},
-		StartError: "worktree already exists — clean it up first",
+		Load: &webJobLoad{Unblock: 2, Scope: 8, Note: "one decision: which store keys the row", At: 1769040000000},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -761,14 +759,8 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 }
 
 // --- webJob's array-element types, marshaled and checked directly: webJob's
-// own spec above only asserts "prereqs"/"artifacts"/"roster" are arrays, not
+// own spec above only asserts "artifacts"/"roster" are arrays, not
 // what their elements look like (web.go, job.go) ---
-
-var webPrereqSpec = map[string]fieldSpec{
-	"job":   {kind: wireString, required: true},
-	"gated": {kind: wireBool, required: true},
-	"done":  {kind: wireBool, required: true},
-}
 
 var webArtifactSpec = map[string]fieldSpec{
 	"name": {kind: wireString, required: true},
@@ -788,21 +780,6 @@ var webAgentSpec = map[string]fieldSpec{
 var jobPRSpec = map[string]fieldSpec{
 	"url":   {kind: wireString, required: true},
 	"state": {kind: wireString, required: true},
-}
-
-// prereqSpec covers job.go's jobs.Prereq, the form-editor's element type (distinct
-// from webPrereq above: no computed "done", and "gated" is omitempty).
-var prereqSpec = map[string]fieldSpec{
-	"job":   {kind: wireString, required: true},
-	"gated": {kind: wireBool, required: false},
-}
-
-func TestWebPrereqWireShape(t *testing.T) {
-	data, err := json.Marshal(webPrereq{Job: "y", Gated: true, Done: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertShape(t, "webPrereq", data, webPrereqSpec)
 }
 
 func TestWebArtifactWireShape(t *testing.T) {
@@ -922,19 +899,9 @@ func TestJobPRWireShape(t *testing.T) {
 	assertShape(t, "jobs.JobPR", data, jobPRSpec)
 }
 
-func TestPrereqWireShape(t *testing.T) {
-	data, err := json.Marshal(jobs.Prereq{Job: "y", Gated: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertShape(t, "jobs.Prereq (gated)", data, prereqSpec)
-
-	data, err = json.Marshal(jobs.Prereq{Job: "y"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertShape(t, "jobs.Prereq (empty optionals)", data, prereqSpec)
-}
+// webPrereq and jobs.Prereq had wire-shape tests here. Both types are gone
+// with the feature (Q1), and so are the shapes: the job form no longer
+// carries a prereqs array in either direction, which is the v6 break.
 
 // --- webQuestion / webQuestionItem / webQuestionOption (web.go) ---
 
@@ -1377,14 +1344,15 @@ var jobRawSpec = map[string]fieldSpec{
 }
 
 var jobFormSpec = map[string]fieldSpec{
-	"slug":     {kind: wireString, required: true},
-	"repo":     {kind: wireString, required: true},
-	"base":     {kind: wireString, required: true},
-	"ready":    {kind: wireBool, required: true},
+	"slug": {kind: wireString, required: true},
+	"repo": {kind: wireString, required: true},
+	"base": {kind: wireString, required: true},
+	// no "ready", no "prereqs": both left this shape in apiContract v6, and
+	// assertShape refuses an UNEXPECTED key as well as a missing one, so
+	// their absence from this map is what pins them off the wire.
 	"solo":     {kind: wireBool, required: true},
 	"model":    {kind: wireString, required: true},
 	"color":    {kind: wireString, required: true},
-	"prereqs":  {kind: wireArray, required: true},
 	"spec":     {kind: wireString, required: true},
 	"mtime":    {kind: wireNumber, required: true},
 	"editable": {kind: wireBool, required: true},
@@ -2197,8 +2165,7 @@ func TestDreamWireShape(t *testing.T) {
 // --- the knowledge graph's ten routes (graph.go, recall.go) ---
 //
 // All additive: each is a NEW PATH, never a key added to, retyped in, or
-// removed from an existing shape, so apiContract does NOT bump for them and
-// TestAPIContractUnchanged below still pins 5.
+// removed from an existing shape, so none of them ever bumps apiContract.
 //
 // None of these are modeled in Models.swift or APIClient.swift on purpose —
 // the iOS graph screen is a WKWebView onto the web board's own #/graph route
@@ -2879,16 +2846,17 @@ func TestGraphSearchWireShape(t *testing.T) {
 	assertShape(t, "POST /api/graph/search", rec.Body.Bytes(), graphSearchRespSpec)
 }
 
-// TestAPIContractUnchanged pins apiContract at the value the dream loop's
-// routes did NOT move it to. Every endpoint that shipped with them is
-// additive — a whole new path, never a key retyped, renamed or removed on an
-// existing one — and additive shapes never bump the contract (old clients
-// ignore what they don't know). A literal here rather than a comparison
-// against itself: a future change that genuinely IS breaking has to come here
-// and change this number deliberately, in the same commit as
-// expectedContract in APIClient.swift.
+// TestAPIContractUnchanged pins apiContract at the value only a BREAKING
+// change may move. Additive endpoints — a whole new path, never a key
+// retyped, renamed or removed on an existing one — never bump it, since old
+// clients ignore what they don't know. v6 is a real break and is the reason
+// the number moved: `ready` and `prereqs` left the job form's GET and POST
+// shapes, and `start_error` and `prereqs` left /api/board's job objects.
+// A literal here rather than a comparison against itself: a future change
+// that genuinely IS breaking has to come here and change this number
+// deliberately, in the same commit as expectedContract in APIClient.swift.
 func TestAPIContractUnchanged(t *testing.T) {
-	if apiContract != 5 {
-		t.Fatalf("apiContract = %d, want 5 — bump this ONLY alongside ios/API.md and APIClient.swift's expectedContract, and only for a breaking change", apiContract)
+	if apiContract != 6 {
+		t.Fatalf("apiContract = %d, want 6 — bump this ONLY alongside ios/API.md and APIClient.swift's expectedContract, and only for a breaking change", apiContract)
 	}
 }

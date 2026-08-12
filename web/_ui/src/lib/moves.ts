@@ -15,11 +15,9 @@
 
 import {
   archiveJob,
-  dequeueJob,
   doneJob,
   queueJob,
   reactivateJob,
-  startJob,
   stopJob,
 } from "../api/client.ts";
 import type { Column } from "../hooks/useBoard.ts";
@@ -69,6 +67,15 @@ export interface ReorderMove {
 
 export type Move = PostMove | SteerMove | ReorderMove;
 
+/**
+ * The submit endpoint, named so the drag layer can recognise the ONE move that
+ * takes seconds without matching a string literal of its own. Compared against
+ * `PostMove.endpoint`, which is the same string the closure posts to — that
+ * pairing is what keeps "which move is the slow one" from drifting away from
+ * "which move posts to /api/queue".
+ */
+export const SUBMIT_ENDPOINT = "/api/queue";
+
 const post = (endpoint: string, run: (slug: string) => Promise<unknown>): PostMove => ({
   kind: "post",
   endpoint,
@@ -76,20 +83,23 @@ const post = (endpoint: string, run: (slug: string) => Promise<unknown>): PostMo
 });
 
 /**
- * The ten legal drops, from → to. Every pair the vanilla board handled, and
- * nothing else. Two of them (blocked→working, done→working) deliberately hold
- * a `steer` rather than a `post`: the board must not assert a state change it
- * has no message to justify.
+ * The legal drops, from → to. Two of them (blocked→working, done→working)
+ * deliberately hold a `steer` rather than a `post`: the board must not assert a
+ * state change it has no message to justify.
+ *
+ * `draft → working` is the SUBMIT, and it is the only entry here whose POST is
+ * slow: `/api/queue` no longer parks the job for a later daemon tick — it cuts
+ * the worktree and spawns the cell before it answers, which takes seconds and
+ * can be refused (a 409 whose text is the reason). The URL is kept for every
+ * client that already posts it; only its meaning moved. The old queued row —
+ * queued→draft's `/api/dequeue` and queued→working's `/api/start` — is gone
+ * with the column: there is no parked state left to cancel or to release.
  */
 export const TRANSITIONS: Readonly<
   Record<Column, Readonly<Partial<Record<DropColumn, Move>>>>
 > = {
   draft: {
-    queued: post("/api/queue", (slug) => queueJob(slug)),
-  },
-  queued: {
-    draft: post("/api/dequeue", (slug) => dequeueJob(slug)),
-    working: post("/api/start", (slug) => startJob(slug)),
+    working: post(SUBMIT_ENDPOINT, (slug) => queueJob(slug)),
   },
   working: {
     blocked: post("/api/stop", (slug) => stopJob(slug)),

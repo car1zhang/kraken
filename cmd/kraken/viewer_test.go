@@ -325,16 +325,18 @@ func TestClipLine(t *testing.T) {
 	}
 }
 
-// TestBuildJobLinesFiveStates renders one job per board state (draft ·
-// queued · working · blocked · done) and checks each state label shows up
-// as its own selectable row, keyed to its position in m.jrows.
-func TestBuildJobLinesFiveStates(t *testing.T) {
+// TestBuildJobLinesFourStates renders one job per board state (draft ·
+// working · blocked · done) and checks each state label shows up as its own
+// selectable row, keyed to its position in m.jrows. There is no queued state
+// any more: a job with no kraken-managed state reads draft until submit
+// starts its cell, which writes working in the same request.
+func TestBuildJobLinesFourStates(t *testing.T) {
 	js := []*jobs.Job{
-		{Slug: "d1", Ready: false}, // never started, not ready
-		{Slug: "q1", Ready: true},  // ready, never started
-		{Slug: "w1", Ready: true, State: "working"},
-		{Slug: "b1", Ready: true, State: "blocked"},
-		{Slug: "done1", Ready: true, State: "done"},
+		{Slug: "d1"}, // never started
+		{Slug: "d2"}, // ditto — draft is the only pre-start state now
+		{Slug: "w1", State: "working"},
+		{Slug: "b1", State: "blocked"},
+		{Slug: "done1", State: "done"},
 	}
 	m := &viewerModel{
 		view: "jobs", loaded: true, width: 100, height: 40,
@@ -351,7 +353,7 @@ func TestBuildJobLinesFiveStates(t *testing.T) {
 		}
 	}
 	text := joined.String()
-	for _, want := range []string{"draft", "queued", "working", "blocked", "done"} {
+	for _, want := range []string{"draft", "working", "blocked", "done"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("board missing state %q:\n%s", want, text)
 		}
@@ -373,8 +375,8 @@ func TestBuildJobLinesFiveStates(t *testing.T) {
 }
 
 func TestJobRowKeyAnchorsCursorAcrossRefresh(t *testing.T) {
-	a := &jobs.Job{Slug: "a", Ready: true}
-	b := &jobs.Job{Slug: "b", Ready: true}
+	a := &jobs.Job{Slug: "a"}
+	b := &jobs.Job{Slug: "b"}
 	m := &viewerModel{
 		view: "jobs", loaded: true, width: 100, height: 40,
 		rawJobs: []*jobs.Job{a, b}, liveSessionSet: map[string]bool{}, healthBySlug: map[string]string{},
@@ -383,7 +385,7 @@ func TestJobRowKeyAnchorsCursorAcrossRefresh(t *testing.T) {
 	m.setCursor(1) // b
 	// next snapshot: same jobs, new *jobs.Job values (as a fresh LoadJobs() would
 	// produce) — the cursor must still follow slug "b"
-	m.rawJobs = []*jobs.Job{{Slug: "a", Ready: true}, {Slug: "b", Ready: true}}
+	m.rawJobs = []*jobs.Job{{Slug: "a"}, {Slug: "b"}}
 	m.rebuild()
 	if m.cursor != 1 || m.jselected().Slug != "b" {
 		t.Errorf("cursor should follow job b, got %d (%v)", m.cursor, m.jselected())

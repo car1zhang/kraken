@@ -39,7 +39,7 @@ import { reorderColumn } from "../api/client.ts";
 import type { WebBoard, WebJob } from "../api/types.ts";
 import { jobKey } from "../lib/jobKey.ts";
 import { columnSlugs, predictReorderedJobs } from "../lib/predictReorder.ts";
-import { ARCHIVED, resolveMove } from "../lib/moves.ts";
+import { ARCHIVED, SUBMIT_ENDPOINT, resolveMove } from "../lib/moves.ts";
 import type { DropColumn, SteerMode } from "../lib/moves.ts";
 import { COLUMNS } from "./useBoard.ts";
 import type { BoardModel, Column } from "./useBoard.ts";
@@ -148,7 +148,7 @@ export const boardCollisionDetection: CollisionDetection = (args) => {
 /**
  * There is exactly ONE override slot, not one per column — a deliberate
  * simplification with a known, self-healing cost. Drop in DRAFT and then drop
- * in QUEUED before the first POST lands (two drags inside one localhost
+ * in BLOCKED before the first POST lands (two drags inside one localhost
  * round-trip), and the second override replaces the first: DRAFT's settle
  * callback then finds a different column and no-ops, so DRAFT snaps back to
  * the pre-drag server order until the next 3s poll corrects it. Cosmetic, and
@@ -167,6 +167,31 @@ interface Override {
   disagreements: number;
 }
 
+// ------------------------------------------------------------ in-flight submit
+
+/**
+ * One card the board is showing somewhere the server has not put it yet.
+ *
+ * Submit used to be a parking write that answered instantly and left the job
+ * in QUEUED for a daemon tick to pick up; the column was the progress
+ * indicator. It now cuts a worktree and spawns a tmux session before it
+ * answers, so the request holds for seconds — and with no queued column the
+ * card would otherwise sit motionless in DRAFT for all of them, indicating
+ * nothing, with a second drag able to fire a second submit at the same job.
+ *
+ * So the card is RELOCATED into WORKING for the duration and marked in flight.
+ * The job object is carried here rather than looked up by key, because for
+ * those same seconds the job exists in no column the board would find it in:
+ * the draft list still holds it (the server has not moved it) but the working
+ * list does not.
+ */
+interface Submitting {
+  /** jobKey of the card, never a bare slug. */
+  key: string;
+  /** The card to draw in WORKING while the POST is in flight. */
+  job: WebJob;
+}
+
 // ------------------------------------------------------------ the hook
 
 export interface DragReorderOptions {
@@ -182,7 +207,12 @@ export interface DragReorderOptions {
     mode: SteerMode,
     opts: { requireText: boolean },
   ) => void;
-  /** Transient bottom-center notice. Only a reverted reorder uses it. */
+  /**
+   * Transient bottom-center notice. Two callers: a reverted reorder, and a
+   * submit refused locally because that same card's POST is still running.
+   * Both are cases where the gesture did something other than what it looked
+   * like, and neither has a server answer to park in the status corner.
+   */
   onToast?: (message: string) => void;
   /**
    * The jobKeys the board is currently RENDERING, when a search is narrowing
@@ -216,10 +246,20 @@ export interface DragReorderModel {
   onDragOver: (e: DragOverEvent) => void;
   onDragEnd: (e: DragEndEvent) => void;
   onDragCancel: () => void;
-  /** Applies the optimistic order, if this column has one. Identity otherwise. */
+  /**
+   * A column's cards in RENDER order: the optimistic reorder if this column
+   * has one, and any in-flight submits relocated out of DRAFT into WORKING.
+   * Identity when neither applies.
+   */
   orderJobs: (column: Column, jobs: WebJob[]) => WebJob[];
   /** True while a card is in the air and `to` is a legal destination for it. */
   isTarget: (to: DropColumn) => boolean;
+  /**
+   * jobKeys of every card whose submit POST is still running. A SET rather
+   * than one key: submits of different jobs run concurrently, and each clears
+   * on its own answer.
+   */
+  submittingKeys: ReadonlySet<string>;
 }
 
 export function useDragReorder({
@@ -232,6 +272,27 @@ export function useDragReorder({
   const [from, setFrom] = useState<Column | null>(null);
   const [over, setOver] = useState<DropColumn | null>(null);
   const [override, setOverride] = useState<Override | null>(null);
+  /**
+   * A LIST, not a single slot — one entry per card whose submit POST is still
+   * running, and the whole point is that they are independent.
+   *
+   * A single slot made the in-flight state board-global: the guard below read
+   * "is anything submitting" rather than "is THIS card submitting", so a
+   * second, different draft dropped during the seconds the first one takes was
+   * dropped with no POST and nothing on screen — an ordinary two-drag sequence
+   * silently losing one of them. Worse, nothing here aborts: a POST that never
+   * resolves never clears the slot, so one hung request disabled the board's
+   * only start affordance permanently rather than just its own card's.
+   *
+   * Concurrent submits of DIFFERENT jobs are safe to let through — the server
+   * serialises them, and StartCell's already-live and worktree guards turn a
+   * genuine duplicate into a clean 409 rather than a second cell.
+   */
+  const [submitting, setSubmitting] = useState<readonly Submitting[]>([]);
+  const submittingKeys = useMemo(
+    () => new Set(submitting.map((s) => s.key)),
+    [submitting],
+  );
 
   // Read inside async continuations that must see the CURRENT value rather
   // than the one closed over at drag start.
@@ -261,23 +322,48 @@ export function useDragReorder({
 
   const orderJobs = useCallback(
     (column: Column, jobs: WebJob[]): WebJob[] => {
-      if (!override || override.column !== column) return jobs;
-      const bySlug = new Map(jobs.map((j) => [j.slug, j] as const));
-      const out: WebJob[] = [];
-      for (const s of override.slugs) {
-        const j = bySlug.get(s);
-        if (j) {
-          out.push(j);
-          bySlug.delete(s);
+      let out = jobs;
+      if (override && override.column === column) {
+        const bySlug = new Map(jobs.map((j) => [j.slug, j] as const));
+        const ordered: WebJob[] = [];
+        for (const s of override.slugs) {
+          const j = bySlug.get(s);
+          if (j) {
+            ordered.push(j);
+            bySlug.delete(s);
+          }
+        }
+        // A job the override has never heard of (created between the drop and
+        // now) goes last rather than being dropped. It lives there for at most
+        // one poll — the override is cleared by the very next payload.
+        for (const j of jobs) if (bySlug.has(j.slug)) ordered.push(j);
+        out = ordered;
+      }
+      // The in-flight submits, applied AFTER the reorder: the reorder is about
+      // where a card sits inside the order the server holds, and this is about
+      // which column shows it at all, which is the later question. Both can be
+      // live at once — a reorder in DRAFT settles on its own clock.
+      if (submitting.length > 0) {
+        if (column === "draft") {
+          out = out.filter((j) => !submittingKeys.has(jobKey(j)));
+        } else if (column === "working") {
+          // The dedupe is load-bearing, not defensive. mutate() refetches
+          // BEFORE the await returns, so there is at least one render in which
+          // the payload already carries the job as working and its entry is
+          // still here — without this the card would appear twice, and React
+          // would key-collide on jobKey while it did.
+          const add = submitting.filter(
+            (s) => !out.some((j) => jobKey(j) === s.key),
+          );
+          // Newest first, in front of the column: several can be in flight at
+          // once, and the order they were dropped in is the only order that
+          // means anything while none of them has a server position yet.
+          if (add.length > 0) out = [...add.map((s) => s.job).reverse(), ...out];
         }
       }
-      // A job the override has never heard of (created between the drop and
-      // now) goes last rather than being dropped. It lives there for at most
-      // one poll — the override is cleared by the very next payload.
-      for (const j of jobs) if (bySlug.has(j.slug)) out.push(j);
       return out;
     },
-    [override],
+    [override, submitting, submittingKeys],
   );
 
   // The override's exit. The POST has landed; the question is whether the
@@ -470,9 +556,50 @@ export function useDragReorder({
       // Cross-column transitions are PESSIMISTIC: await, then refetch on both
       // outcomes. mutate() does that and parks the failure text in the
       // tick-stat corner, exactly as the vanilla post() did.
+      if (move.endpoint === SUBMIT_ENDPOINT) {
+        // The one slow post. Hold the card in WORKING, marked in flight, for
+        // as long as the request takes; clear on BOTH outcomes and let the
+        // board's own payload be the answer — success has already moved the
+        // job there, and a refusal leaves it in DRAFT with mutate()'s error
+        // text in the status corner. Nothing here writes a state of its own,
+        // so a 409 needs no bounce-back logic: dropping the relocation IS the
+        // bounce.
+        //
+        // A second submit of THIS card is refused locally rather than sent —
+        // the card is drawn in WORKING and marked non-draggable while its POST
+        // runs, so a duplicate can only come from a stale render, and this POST
+        // spawns a tmux session, which is the one thing on the board worth
+        // being sure happens once.
+        //
+        // Per CARD, never board-wide: a different draft dropped meanwhile is a
+        // separate start carl asked for and it goes through. And the refusal
+        // is AUDIBLE, because the alternative is the failure this whole
+        // in-flight state exists to prevent — a start-shaped gesture that
+        // leaves no trace of having been declined.
+        if (submittingKeys.has(active.key)) {
+          onToast?.(`${job.slug} is already starting`);
+          void refetch();
+          return;
+        }
+        setSubmitting((prev) => [...prev, { key: active.key, job }]);
+        void mutate(() => move.run(job.slug)).finally(() =>
+          setSubmitting((prev) => prev.filter((s) => s.key !== active.key)),
+        );
+        return;
+      }
       void mutate(() => move.run(job.slug));
     },
-    [byKey, commitReorder, finishDrag, mutate, onOpenSteer, refetch, resolveOver],
+    [
+      byKey,
+      commitReorder,
+      finishDrag,
+      mutate,
+      onOpenSteer,
+      onToast,
+      refetch,
+      resolveOver,
+      submittingKeys,
+    ],
   );
 
   const onDragCancel = useCallback(() => {
@@ -503,5 +630,6 @@ export function useDragReorder({
     onDragCancel,
     orderJobs,
     isTarget,
+    submittingKeys,
   };
 }

@@ -41,9 +41,10 @@ const docAnswerMaxLen = 4000
 // obviously suggests:
 //   - kill (webKill → KillJob → teardownCell), stop (webStop → InterruptCell),
 //     steer (webSteer → core.SendMessage), question (webAnswerQuestion →
-//     sendDigit), retry (webRetry → RetryCell → core.SendMessage), start
-//     (webStart → StartCell) and reactivate (webReactivate → ReactivateJob)
-//     all shell out to a live tmux session or spawn/tear one down.
+//     sendDigit), retry (webRetry → RetryCell → core.SendMessage), submit
+//     (webSubmit → jobs.SubmitJob → StartCell) and reactivate
+//     (webReactivate → ReactivateJob) all shell out to a live tmux session
+//     or spawn/tear one down.
 //   - done (webDone → DoneJob) force-tears-down the cell's tmux session and
 //     worktree exactly like kill does — it is NOT in the brief's example
 //     list of gated actions, but DoneJob's own force=true teardownCell call
@@ -57,16 +58,18 @@ const docAnswerMaxLen = 4000
 //     they run in mirror mode only when PlutoDir is a sandbox copy.
 //   - doc-question (webAnswerDocQuestion → store.AnswerQuestion) is now a
 //     pure DB row UPDATE with no tmux/pane/file involved at all — gated
-//     anyway, same "mirror board is read-only, full stop" policy that keeps
-//     webQueue/webDequeue as the one deliberate exception below.
+//     anyway, same "mirror board is read-only, full stop" policy the whole
+//     table follows.
 //
-// webQueue and webDequeue stay UNGATED: each only flips the ready DB field
-// and never touches any file outside the sandbox DB. Under mirror the tick
-// never starts a queued job (jobs.ServeOpts.Mirror skips StartCell), so a
-// mirror-queued job simply sits in the queued column — which is exactly
-// what draft→queued parity testing needs to show.
+// There is no exception left. queue/dequeue used to be one: each only flipped
+// the ready DB field, never touched a file outside the sandbox DB, and the
+// mirror tick's own StartCell skip is what kept a mirror-queued job sitting
+// harmlessly in the queued column. Submitting a job STARTS its cell in the
+// request now — real worktree, real tmux session, real rotation gate — so the
+// property that made the exception safe is gone, and "submit" is gated like
+// everything else that reaches the machine.
 var mirrorGatedActions = map[string]bool{
-	"start":        true,
+	"submit":       true,
 	"kill":         true,
 	"stop":         true,
 	"steer":        true,
@@ -129,54 +132,40 @@ func webAction(name string, f func(webReq) error) http.HandlerFunc {
 	}
 }
 
-// webQueue is the draft→queued drag: flip ready in the job file. The daemon
-// takes it from there.
-func webQueue(req webReq) error {
-	j, bySlug, err := webJobFor(req.Slug)
-	if err != nil {
-		return err
-	}
-	if j.Err != "" {
-		return fmt.Errorf("%s is unparseable (%s) — fix the file first", j.Slug, j.Err)
-	}
-	if state := jobs.DisplayState(j, bySlug); state != "draft" {
-		return fmt.Errorf("%s is %s — only drafts can be queued", j.Slug, state)
-	}
-	spec, _ := splitBodyLog(j.Body)
-	if strings.TrimSpace(spec) == "" {
-		return fmt.Errorf("%s has an empty spec — write one before queueing", j.Slug)
-	}
-	if err := jobs.WriteJobFields(j, "ready", "true"); err != nil {
-		return err
-	}
-	return nil
-}
+// submitJobFn is the start seam for this layer, mirroring jobs.SubmitJob's
+// own submitStartCell: a handler test swaps it so the whole route — routing,
+// mirror gate, slug lookup, the webAction wrapper's 409 encoding — can be
+// exercised without a git worktree, a tmux server, or the rotation gate. The
+// production value is jobs.SubmitJob and there is no second real start path.
+var submitJobFn = jobs.SubmitJob
 
-// webDequeue is the queued→draft reverse move: it's legal precisely because
-// no cell exists yet for a queued-but-not-started job, so there's nothing to
-// tear down — just flip ready back off. The server re-derives the display
-// state itself rather than trusting the browser's (possibly stale) column,
-// so a board that hasn't refreshed can't cancel a job that has since
-// actually started; the 409 in that case names kill as the correct recovery
-// instead. Note DisplayState collapses a ready job still waiting on unmet or
-// gated prereqs to "queued" too — those are dequeueable by the same logic,
-// since they likewise have no cell yet.
-func webDequeue(req webReq) error {
-	j, bySlug, err := webJobFor(req.Slug)
+// webSubmit is the draft→working drag, and it is the whole start surface: it
+// starts the job's cell inside this request and only answers once the cell is
+// up or the attempt has failed.
+//
+// It used to be webQueue, which flipped a `ready` flag and left the daemon's
+// queue pass to notice up to a tick later — so a 200 meant "the flag is set",
+// and whether a cell ever came up was a separate question answered on some
+// later poll, through a side channel (webJob.start_error) invented precisely
+// because the answer was otherwise invisible. Now a 200 means the cell is
+// live and the job reads working, and a 409 carries the exact reason with the
+// job still draft. There is nothing left to publish out of band.
+//
+// The route is still /api/queue (Q4): shipped iOS builds post to that URL for
+// their draft→queued drag, and keeping it is what makes those builds start
+// jobs correctly against a server that no longer has a queued column.
+//
+// Every refusal lives in jobs.SubmitJob rather than here, and its error text
+// surfaces verbatim — the viewer's `s` key and the daemon's own dream/graph
+// starts go through the same function, and a validation split across the
+// callers is exactly how the old queue action came to refuse an empty spec
+// while the other two start paths did not.
+func webSubmit(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
 	if err != nil {
 		return err
 	}
-	if j.Err != "" {
-		return fmt.Errorf("%s is unparseable (%s) — fix the file first", j.Slug, j.Err)
-	}
-	state := jobs.DisplayState(j, bySlug)
-	if j.Started() && j.State != "done" {
-		return fmt.Errorf("%s already started — kill instead", j.Slug)
-	}
-	if state != "queued" {
-		return fmt.Errorf("%s is %s — only queued jobs can be cancelled", j.Slug, state)
-	}
-	return jobs.WriteJobFields(j, "ready", "false")
+	return submitJobFn(j)
 }
 
 // webDone is the blocked→done drag: complete the job with the fixed
@@ -420,35 +409,6 @@ func webReactivate(req webReq) error {
 	return nil
 }
 
-// webStart boots a queued job's cell immediately by hand — the board's
-// manual start action: same validation (queued, prereqs met), same
-// StartCell mechanics the daemon's own auto-start uses. Since this is carl
-// acting by hand, it doubles as the manual release for a gated prereq
-// (UnmetPrereqs only counts a dependency as unmet while it isn't done —
-// being gated doesn't block this path, only the daemon's own startable()
-// auto-start check) and bypasses the daemon's CellCap entirely.
-func webStart(req webReq) error {
-	j, bySlug, err := webJobFor(req.Slug)
-	if err != nil {
-		return err
-	}
-	if state := jobs.DisplayState(j, bySlug); state != "queued" {
-		return fmt.Errorf("%s is %s — only queued jobs can be started", j.Slug, state)
-	}
-	if unmet := jobs.UnmetPrereqs(j, bySlug); len(unmet) > 0 {
-		var names []string
-		for _, p := range unmet {
-			names = append(names, p.Job)
-		}
-		return fmt.Errorf("%s has unmet prereqs: %s", j.Slug, strings.Join(names, ", "))
-	}
-	repo, err := jobs.ResolveRepo(j.Repo)
-	if err != nil {
-		return fmt.Errorf("job %s: %v", j.Slug, err)
-	}
-	return jobs.StartCell(j, repo)
-}
-
 // webStop interrupts a working cell: one Escape to every in-flight agent
 // pane (jobs.InterruptCell), stopping short of a teardown — the daemon's own
 // roll-call reads the idled cell as blocked on its next tick, no job state
@@ -473,12 +433,12 @@ type reorderReq struct {
 	Slugs  []string `json:"slugs"`
 }
 
-var reorderColumns = map[string]bool{"draft": true, "queued": true, "working": true, "blocked": true, "done": true}
+var reorderColumns = map[string]bool{"draft": true, "working": true, "blocked": true, "done": true}
 
 // webReorderHandler persists a manual drag-reorder within one board column.
 // Posted slugs are filtered to those whose CURRENT DisplayState actually
-// matches the column before saving — a concurrent transition (a queued job
-// started mid-drag, say) just silently drops that slug from the stored
+// matches the column before saving — a concurrent transition (a draft
+// submitted mid-drag, say) just silently drops that slug from the stored
 // order rather than 409ing the whole reorder.
 func webReorderHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -505,7 +465,7 @@ func webReorderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	filtered := make([]string, 0, len(req.Slugs))
 	for _, s := range req.Slugs {
-		if j := bySlug[s]; j != nil && jobs.DisplayState(j, bySlug) == req.Column {
+		if j := bySlug[s]; j != nil && jobs.DisplayState(j) == req.Column {
 			filtered = append(filtered, s)
 		}
 	}

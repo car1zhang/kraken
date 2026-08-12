@@ -168,7 +168,7 @@ func TestAppendJobPR(t *testing.T) {
 	if reparsed.Body != orig.Body {
 		t.Fatal("appendJobPR mutated the body")
 	}
-	if reparsed.Repo != "monolith" || !reparsed.Ready {
+	if reparsed.Repo != "monolith" || reparsed.Slug != "yelp-dedupe" {
 		t.Fatal("appendJobPR clobbered other frontmatter")
 	}
 

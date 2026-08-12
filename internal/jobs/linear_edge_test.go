@@ -345,17 +345,16 @@ func TestEdgeComposeLinearBodyParsesForAdversarialIssues(t *testing.T) {
 			if parsed.Repo != cfg.DefaultRepo {
 				t.Errorf("parsed repo = %q, want %q (A1: the repo line renders cfg.DefaultRepo)", parsed.Repo, cfg.DefaultRepo)
 			}
-			if parsed.Ready {
-				t.Error("parsed ready = true, want false — Linear jobs are created as drafts (Q1)")
-			}
 			if parsed.State != "" {
-				t.Errorf("parsed state = %q, want empty — ticket text must not pre-start the job", parsed.State)
+				t.Errorf("parsed state = %q, want empty — a Linear job lands as a draft (Q1) and ticket text must not pre-start it", parsed.State)
 			}
-			if len(parsed.Prereqs) != 0 {
-				t.Errorf("parsed prereqs = %+v, want none", parsed.Prereqs)
+			// FRONTMATTER only: these fixtures are adversarial ticket text and
+			// several carry the words in the description on purpose.
+			if key := contractFrontmatterRetiredKey(body); key != "" {
+				t.Errorf("composed frontmatter carries a retired %q key:\n%s", key, body)
 			}
 			if strings.TrimSpace(parsed.Body) == "" {
-				t.Errorf("parsed body is empty — startable() does not check for one, so a cell would spawn with an empty prompt:\n%s", body)
+				t.Errorf("parsed body is empty — SubmitJob would refuse it as an empty spec:\n%s", body)
 			}
 		})
 	}

@@ -141,7 +141,7 @@ func TestTickFirstTickSyncsAlreadyBlockedJobArtifacts(t *testing.T) {
 	}
 	sj := mustCreateJob(t, st, store.Job{
 		Slug: "already-blocked", Repo: "fake-repo",
-		Ready: true, State: "blocked",
+		State: "blocked",
 	})
 	j := JobBySlug(LoadJobs(), sj.Slug)
 	if j == nil {
@@ -210,8 +210,8 @@ func TestStopServeTicksIdempotent(t *testing.T) {
 func TestAutoArchivePass(t *testing.T) {
 	st := useTestStore(t)
 	old := time.Now().Add(-25 * time.Hour).UnixMilli()
-	mustCreateJob(t, st, store.Job{Slug: "stale", Repo: "x", Ready: true, State: "done", UpdatedAt: old})
-	mustCreateJob(t, st, store.Job{Slug: "fresh", Repo: "x", Ready: true, State: "done"})
+	mustCreateJob(t, st, store.Job{Slug: "stale", Repo: "x", State: "done", UpdatedAt: old})
+	mustCreateJob(t, st, store.Job{Slug: "fresh", Repo: "x", State: "done"})
 
 	jobs := LoadJobs()
 	archived := autoArchivePass(jobs, map[string]bool{}, time.Now())
@@ -845,15 +845,22 @@ func TestBranchFamily(t *testing.T) {
 
 // --- mirror mode (kraken serve --mirror, ServeOpts.Mirror) ---
 
-// TestTickMirrorNeverStartsACell covers the mirror tick's core contract: a
-// startable (ready, never-started) job sits in the sandbox DB exactly like
-// it would for the real scheduler, but d.tick(true) must never queue it —
-// no StartCell call, so no cell dir/worktree/tmux session ever gets
-// created, and the job's own state stays untouched (still not started).
+// TestTickMirrorNeverStartsACell covers the mirror tick's core contract. A
+// never-started job sits in the sandbox DB exactly like it would for the real
+// scheduler, and d.tick(true) must leave it entirely alone: no StartCell
+// call, so no cell dir/worktree/tmux session ever gets created, and the job's
+// own state stays untouched.
+//
+// With the queue pass gone this is narrower than it was, and deliberately
+// kept: the tick's remaining start path is the dream/graph one, which is
+// behind the same !mirror gate, so a mirror tick that ever started anything
+// would be a second real scheduler racing the live daemon — the thing this
+// test exists to prevent. A draft is the shape that would have been swept up
+// first.
 func TestTickMirrorNeverStartsACell(t *testing.T) {
 	st := useTestStore(t)
 	sj := mustCreateJob(t, st, store.Job{
-		Slug: "mirror-queued", Repo: "fake-repo", Ready: true,
+		Slug: "mirror-draft", Repo: "fake-repo",
 	})
 
 	d := newDaemon()
@@ -869,7 +876,7 @@ func TestTickMirrorNeverStartsACell(t *testing.T) {
 		t.Fatalf("mirror tick started the job (state %q) — StartCell must never run under mirror", j.State)
 	}
 	if fresh, err := st.GetJobBySlug(sj.Slug); err != nil || fresh.State != "" {
-		t.Fatalf("job state = %q, err %v — want it to remain queued (empty state)", fresh.State, err)
+		t.Fatalf("job state = %q, err %v — want it to remain a draft (empty state)", fresh.State, err)
 	}
 	if _, err := os.Stat(cellDir(j)); !os.IsNotExist(err) {
 		t.Fatalf("cell dir %s exists after a mirror tick — no cell should ever be created", cellDir(j))

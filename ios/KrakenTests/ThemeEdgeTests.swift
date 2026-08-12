@@ -391,7 +391,7 @@ final class ThemeEdgeTests: XCTestCase {
     // their own — can tint a shell row.
 
     func testShellRoleOverridesEveryStatus() {
-        let statuses = ["running", "working", "blocked", "queued", "done",
+        let statuses = ["running", "working", "blocked", "done",
                         "failed", "error", "archived", "draft", "", "no-such-status"]
         for status in statuses {
             XCTAssertEqual(
@@ -409,7 +409,7 @@ final class ThemeEdgeTests: XCTestCase {
     // function is not constant.
     func testSessionColourIsNotConstantOutsideTheShellRole() {
         let roles = ["agent", "main", "worker", "session", ""]
-        let statuses = ["running", "working", "blocked", "queued", "done", "failed"]
+        let statuses = ["running", "working", "blocked", "done", "failed"]
         var differs = false
         for role in roles {
             for status in statuses where SessionTheme.color(forStatus: status, role: role) != KTheme.text2 {

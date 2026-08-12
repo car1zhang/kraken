@@ -20,7 +20,6 @@ type Job struct {
 	Slug         string
 	Repo         string
 	Base         string
-	Ready        bool
 	Solo         bool
 	Model        string
 	Color        string
@@ -37,7 +36,7 @@ type Job struct {
 	ArchivedName string
 	// Err (L6) mirrors file mode's ParseJob-derived parse-failure detail:
 	// non-empty pins the job to "draft" in deriveState regardless of
-	// ready/state, same as an unparseable job file does. Persisted by the
+	// state, same as an unparseable job file does. Persisted by the
 	// editor's store-mode save paths (api/jobedit.go) whenever the saved
 	// content fails to parse; cleared the moment a later save parses clean.
 	Err string
@@ -77,7 +76,7 @@ func (j *Job) Archived() bool { return j.ArchivedAt != 0 }
 // a blank field rather than error the whole query — repo rule: "degrade to
 // blank fields, never errors". archived_at/archived_name are genuinely
 // nullable and scanned via sql.Null* below, so they're left bare.
-var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), ready, solo,
+var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), solo,
 	COALESCE(model,''), COALESCE(color,''), COALESCE(body,''), state, COALESCE(outcome,''),
 	COALESCE(session,''), COALESCE(teardown,''), run, rev, COALESCE(created_at,0),
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,''),
@@ -89,7 +88,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var archivedAt sql.NullInt64
 	var archivedName sql.NullString
 	err := row.Scan(
-		&j.ID, &j.Slug, &j.Repo, &j.Base, &j.Ready, &j.Solo, &j.Model, &j.Color,
+		&j.ID, &j.Slug, &j.Repo, &j.Base, &j.Solo, &j.Model, &j.Color,
 		&j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
@@ -122,10 +121,10 @@ func (s *Store) CreateJob(j *Job) (int64, error) {
 		j.Rev = 1
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO jobs (slug, repo, base, ready, solo, model, color,
+		`INSERT INTO jobs (slug, repo, base, solo, model, color,
 			body, state, outcome, session, teardown, run, rev, created_at, updated_at, err)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.Color,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color,
 		j.Body, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.Rev,
 		j.CreatedAt, j.UpdatedAt, j.Err,
 	)
@@ -206,74 +205,67 @@ func queryJobsTx(x execer, query string, args ...any) ([]*Job, error) {
 }
 
 // LoadJobsWithChildren returns every active job (ListJobs' own query) plus
-// every one's prereqs and PRs, ALL read inside one transaction (L12) — a
-// single consistent snapshot, rather than the 1+2N separate queries
-// (ListJobs, then ListPrereqs+ListPRs per job) LoadJobs used to issue,
-// where a write landing between any two of them could make the loaded
-// board mix state from two different moments (a job's own columns read
-// from before a concurrent save, its prereqs from after, say). Read-only,
-// so the transaction is always rolled back rather than committed — there's
-// nothing to persist, and Rollback is cheaper than Commit for a query-only
-// transaction.
-func (s *Store) LoadJobsWithChildren() (rows []*Job, prereqs map[int64][]Prereq, prs map[int64][]PR, err error) {
+// every one's PRs, ALL read inside one transaction (L12) — a single
+// consistent snapshot, rather than the 1+N separate queries (ListJobs, then
+// ListPRs per job) LoadJobs used to issue, where a write landing between any
+// two of them could make the loaded board mix state from two different
+// moments (a job's own columns read from before a concurrent save, its PRs
+// from after, say). Read-only, so the transaction is always rolled back
+// rather than committed — there's nothing to persist, and Rollback is
+// cheaper than Commit for a query-only transaction.
+func (s *Store) LoadJobsWithChildren() (rows []*Job, prs map[int64][]PR, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load jobs with children: %w", err)
+		return nil, nil, fmt.Errorf("load jobs with children: %w", err)
 	}
 	defer tx.Rollback()
-	rows, prereqs, prs, err = loadJobsWithChildrenTx(tx, `SELECT `+jobColumns+` FROM jobs WHERE archived_at IS NULL ORDER BY id`)
+	rows, prs, err = loadJobsWithChildrenTx(tx, `SELECT `+jobColumns+` FROM jobs WHERE archived_at IS NULL ORDER BY id`)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	return rows, prereqs, prs, nil
+	return rows, prs, nil
 }
 
 // LoadArchivedJobsWithChildren mirrors LoadJobsWithChildren for the
 // archive: same single-transaction snapshot, ListArchivedJobs' own query
 // and ordering.
-func (s *Store) LoadArchivedJobsWithChildren() (rows []*Job, prereqs map[int64][]Prereq, prs map[int64][]PR, err error) {
+func (s *Store) LoadArchivedJobsWithChildren() (rows []*Job, prs map[int64][]PR, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load archived jobs with children: %w", err)
+		return nil, nil, fmt.Errorf("load archived jobs with children: %w", err)
 	}
 	defer tx.Rollback()
-	rows, prereqs, prs, err = loadJobsWithChildrenTx(tx, `SELECT `+jobColumns+` FROM jobs WHERE archived_at IS NOT NULL ORDER BY archived_name`)
+	rows, prs, err = loadJobsWithChildrenTx(tx, `SELECT `+jobColumns+` FROM jobs WHERE archived_at IS NOT NULL ORDER BY archived_name`)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	return rows, prereqs, prs, nil
+	return rows, prs, nil
 }
 
 // loadJobsWithChildrenTx is the shared body of LoadJobsWithChildren/
 // LoadArchivedJobsWithChildren: run query against tx, then read every
-// resulting row's prereqs and PRs, all within the same transaction.
-func loadJobsWithChildrenTx(tx *sql.Tx, query string) ([]*Job, map[int64][]Prereq, map[int64][]PR, error) {
+// resulting row's PRs, all within the same transaction.
+func loadJobsWithChildrenTx(tx *sql.Tx, query string) ([]*Job, map[int64][]PR, error) {
 	rows, err := queryJobsTx(tx, query)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	prereqs := make(map[int64][]Prereq, len(rows))
 	prs := make(map[int64][]PR, len(rows))
 	for _, j := range rows {
-		p, err := listPrereqsTx(tx, j.ID)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		prereqs[j.ID] = p
 		r, err := listPRsTx(tx, j.ID)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		prs[j.ID] = r
 	}
-	return rows, prereqs, prs, nil
+	return rows, prs, nil
 }
 
 // jobFieldColumns is the set of columns UpdateFields is allowed to touch —
 // an allowlist so a caller-supplied key can never smuggle arbitrary SQL
 // into the generated statement.
 var jobFieldColumns = map[string]bool{
-	"slug": true, "repo": true, "base": true, "ready": true,
+	"slug": true, "repo": true, "base": true,
 	"solo": true, "model": true, "color": true, "body": true, "state": true,
 	"outcome": true, "session": true, "teardown": true, "run": true, "err": true,
 }
@@ -296,8 +288,8 @@ func (s *Store) UpdateJobFields(id, rev int64, fields map[string]any) (int64, er
 
 // updateJobFieldsTx is UpdateJobFields' actual body, written against the
 // execer interface (store.go) so SaveJobEdit (L10) can run it inside a
-// caller-owned transaction alongside replacePrereqsTx/PR-sync instead of
-// its own implicit one — same SQL, same error contract, either way.
+// caller-owned transaction alongside the PR sync instead of its own implicit
+// one — same SQL, same error contract, either way.
 func updateJobFieldsTx(x execer, id, rev int64, fields map[string]any) (int64, error) {
 	if len(fields) == 0 {
 		return 0, fmt.Errorf("update job %d: no fields given", id)
@@ -437,11 +429,11 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 			run = 1
 		}
 		res, err := s.db.Exec(
-			`INSERT INTO jobs (slug, repo, base, ready, solo, model, color,
+			`INSERT INTO jobs (slug, repo, base, solo, model, color,
 				body, state, outcome, session, teardown, run, rev, created_at, updated_at,
 				archived_at, archived_name)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.Color,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			rev, created, archivedAt, archivedAt, j.ArchivedName,
 		)
@@ -465,10 +457,10 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 			run = 1
 		}
 		if _, err := s.db.Exec(
-			`UPDATE jobs SET slug = ?, repo = ?, base = ?, ready = ?, solo = ?,
+			`UPDATE jobs SET slug = ?, repo = ?, base = ?, solo = ?,
 				model = ?, color = ?, body = ?, state = ?, outcome = ?, session = ?,
 				teardown = ?, run = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
-			j.Slug, j.Repo, j.Base, j.Ready, j.Solo, j.Model, j.Color,
+			j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			archivedAt, archivedAt, id,
 		); err != nil {
@@ -605,7 +597,7 @@ func (s *Store) UnarchiveJob(id int64) error {
 	return tx.Commit()
 }
 
-// DeleteJob permanently removes a job row. Prereqs, PRs, uploads, and
+// DeleteJob permanently removes a job row. PRs, uploads, and
 // artifacts cascade via their FK ON DELETE CASCADE; events/drafts key on
 // job_slug only and are wholly untouched, same as the file store today (an
 // archived job's fossil events aren't deleted with it). feedback carries

@@ -160,10 +160,15 @@ export const fetchShipStatus = (signal?: AbortSignal) =>
 const slugAction = (path: string) => (slug: string) =>
   postJSON(path, { slug });
 
+/**
+ * SUBMIT. The URL is the old queue one and the name follows it, but the
+ * request is no longer a parking write: the server cuts the worktree and
+ * spawns the cell before it answers, so this call is measured in seconds and
+ * refuses with a 409 whose body carries the reason. `/api/dequeue` and
+ * `/api/start` are gone from the server — nothing here may post them.
+ */
 export const queueJob = slugAction("/api/queue");
-export const dequeueJob = slugAction("/api/dequeue");
 export const doneJob = slugAction("/api/done");
-export const startJob = slugAction("/api/start");
 export const stopJob = slugAction("/api/stop");
 export const retryJob = slugAction("/api/retry");
 export const killJob = slugAction("/api/kill");

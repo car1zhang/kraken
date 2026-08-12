@@ -149,8 +149,8 @@ func TestKgedgeCreateGraphJobCapLineEdges(t *testing.T) {
 			if !found {
 				t.Errorf("%q is not a line of its own in:\n%s", want, j.Body)
 			}
-			if !j.Ready {
-				t.Error("job is not ready — the queue pass would never start it")
+			if j.State != "" {
+				t.Errorf("job must be created as a draft for the tick to submit, got state %q", j.State)
 			}
 			if j.Err != "" {
 				t.Errorf("job has a parse error: %s", j.Err)
@@ -278,9 +278,18 @@ func TestKgedgeKickGraphStormGuardsSurviveTheCap(t *testing.T) {
 	if j := kickGraph(st, now.Add(11*time.Hour)); j != nil {
 		t.Errorf("a second kick on the same local day created %q", j.Slug)
 	}
-	// A new day with the previous job still ACTIVE: blocked by the active-job
-	// guard rather than by the date.
+	// A new day with the previous job RUNNING: blocked by the running-job
+	// guard rather than by the date. The guard reads state working/blocked
+	// rather than "not done", so it has to be armed — a leftover draft is a
+	// FAILED start, and declining for one would wedge the ingest queue.
+	row, err := st.GetJobBySlug(first.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateJobFields(row.ID, row.Rev, map[string]any{"state": "working"}); err != nil {
+		t.Fatal(err)
+	}
 	if j := kickGraph(st, now.Add(24*time.Hour)); j != nil {
-		t.Errorf("a kick with an active graph-* job created %q", j.Slug)
+		t.Errorf("a kick with a running graph-* job created %q", j.Slug)
 	}
 }

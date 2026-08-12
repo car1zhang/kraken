@@ -1,4 +1,4 @@
-// The board's five columns, in display order.
+// The board's four columns, in display order.
 //
 // This lives in its own leaf module — importing nothing — to break a real
 // import cycle. COLUMNS used to be declared in hooks/useBoard.ts, which was
@@ -13,6 +13,9 @@
 // Keeping the vocabulary in a module with no imports of its own makes that
 // class of failure impossible rather than merely absent.
 
-export const COLUMNS = ["draft", "queued", "working", "blocked", "done"] as const;
+// QUEUED is gone: submit is synchronous, so a job is either a draft nobody has
+// submitted or a cell that is already starting. There is no waiting-for-a-tick
+// state left for a column to hold.
+export const COLUMNS = ["draft", "working", "blocked", "done"] as const;
 
 export type Column = (typeof COLUMNS)[number];

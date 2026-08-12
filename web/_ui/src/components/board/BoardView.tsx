@@ -51,8 +51,6 @@ export interface BoardActions {
   onAnswerQuestion(slug: string, optionIndex: number): void | Promise<Error | null>;
   /** POST /api/retry. */
   onRetry(slug: string): void;
-  /** POST /api/dequeue — the queued card's ✕. */
-  onDequeue(slug: string): void;
   /** POST /api/peers/open {slug} — raises zeus' pane in Ghostty. */
   onOpenTmux(slug: string): void;
   /** POST /api/feedback {id, feedback}. Resolves to the failure, or null. */
@@ -96,8 +94,10 @@ export interface BoardViewProps {
 }
 
 /**
- * The board: five columns plus the archive drawer under DONE. Port of
- * renderBoardDOM (app.js:814).
+ * The board: four columns plus the archive drawer under DONE. Port of
+ * renderBoardDOM (app.js:814), minus the QUEUED column — submit is
+ * synchronous, so there is no parked state between draft and working for a
+ * column to hold.
  *
  * The buckets are read straight off BoardModel — which builds them with
  * bucketJobs, so they carry the rule that an unhealthy cell is BLOCKED
@@ -124,7 +124,7 @@ export interface BoardViewProps {
  * else. Every list below comes from the `search` model App hands in; `board` is
  * passed on untouched, which is what keeps the drag layer — reading
  * `board.byColumn` for both its drop table and its reorder body — seeing whole
- * columns while the screen shows a subset. All five columns still render under
+ * columns while the screen shows a subset. All four columns still render under
  * any query: there is no status filter, so the grid template never changes.
  */
 export function BoardView({

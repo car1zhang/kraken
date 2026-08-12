@@ -20,7 +20,7 @@ import { loadBadgeTitle, loadRatioText, loadROI } from "../../../lib/format.ts";
  *      `load` key, for the cleared both-zero state, and for a half-estimate.
  *
  * The badge answers "is this one worth unblocking right now", which is not a
- * question a working/queued/draft/done/archived card poses, and an estimate
+ * question a working/draft/done/archived card poses, and an estimate
  * left on a card that has since started running reads as a current fact.
  */
 export function loadChipVisible(job: WebJob, col: Column): boolean {

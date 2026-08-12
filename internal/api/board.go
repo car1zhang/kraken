@@ -35,17 +35,21 @@ import (
 // flag) and doc_questions_err was removed from /api/board's job objects
 // (questions moved from a strictly-parsed questions.yaml file to relational
 // rows in kraken.db — there is nothing left that can fail to parse).
-const apiContract = 5
+// v6: the queued status was retired. `ready` and `prereqs` left the job form
+// GET/POST shapes (the feature they configured is gone: submitting a job
+// starts its cell in the same request, so there is no flag to set and nothing
+// to gate on), `start_error` and `prereqs` left /api/board's job objects, and
+// `state`'s value domain lost "queued" — draft · working · blocked · done.
+const apiContract = 6
+
+// legacyCellCap is the number webBoard.CellCap is served at. See that field's
+// doc comment: nothing enforces a cap any more, and this exists only so
+// shipped clients whose `cellCap` is non-optional keep decoding the board.
+const legacyCellCap = 15
 
 type webArtifact struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
-}
-
-type webPrereq struct {
-	Job   string `json:"job"`
-	Gated bool   `json:"gated"`
-	Done  bool   `json:"done"`
 }
 
 // webQuestionOption/webQuestionItem/webQuestion mirror status.go's
@@ -390,22 +394,16 @@ type webJob struct {
 	// card exactly as it did before colours existed. Additive, so
 	// apiContract stays put.
 	Color string `json:"color,omitempty"`
-	// StartError is why the daemon's last attempt to start this job's cell
-	// failed, empty when the last attempt succeeded or none was made. Set
-	// only for a job in the queued display state — a job that is working has
-	// nothing to explain, and a stale reason on a running card would read as
-	// a current fault.
-	//
-	// It exists because this failure used to be invisible. The reason went to
-	// ~/.kraken/logs and to DaemonStatus.LastError, which is ONE string for
-	// the whole tick rather than per job, and which app.js has never
-	// rendered. A job sat queued through 24 identical failed starts over nine
-	// minutes showing nothing at all. Additive, so apiContract stays put.
-	StartError string        `json:"start_error,omitempty"`
-	Cell       string        `json:"cell,omitempty"`
-	Live       bool          `json:"live"`
-	Prereqs    []webPrereq   `json:"prereqs,omitempty"`
-	Artifacts  []webArtifact `json:"artifacts,omitempty"`
+	// start_error and prereqs used to sit here and are gone in v6. start_error
+	// was a side channel for a failure the board could not otherwise see: the
+	// daemon's queue pass started jobs in the background, so the reason a
+	// queued job would not start reached nobody. A start is a foreground HTTP
+	// request now — the reason comes back in that request's own 409 — and a
+	// key that can only ever be empty is a key a client keeps rendering
+	// affordances for. prereqs went with the feature (Q1).
+	Cell      string        `json:"cell,omitempty"`
+	Live      bool          `json:"live"`
+	Artifacts []webArtifact `json:"artifacts,omitempty"`
 	// Detail is the cell's last words: for a live started cell, the full
 	// text of the last assistant text block of zeus' transcript, capped at
 	// 4000 chars.
@@ -506,12 +504,23 @@ type webJob struct {
 }
 
 type webBoard struct {
-	Daemon    jobs.DaemonStatus `json:"daemon"`
-	DaemonOK  bool              `json:"daemon_ok"`
-	CellCap   int               `json:"cell_cap"`
-	LiveCells int               `json:"live_cells"`
-	Jobs      []webJob          `json:"jobs"`
-	Contract  int               `json:"contract"`
+	Daemon   jobs.DaemonStatus `json:"daemon"`
+	DaemonOK bool              `json:"daemon_ok"`
+	// CellCap is VESTIGIAL and is served only for wire compatibility. Nothing
+	// enforces a cap any more: the daemon's queue pass was the only reader of
+	// jobs.CellCap and it is gone with the queued status, so the number below
+	// describes nothing kraken will actually do.
+	//
+	// The key stays because `cellCap` is a NON-OPTIONAL member of the iOS
+	// app's Board model: removing it would fail the decode of the WHOLE board
+	// on every installed build, not merely blank one header. It is
+	// deliberately held at the value shipped clients have always seen rather
+	// than zeroed, since a client renders it as "cells N/M" and a 0 there
+	// reads as a cap of none. It goes when the clients stop reading it.
+	CellCap   int      `json:"cell_cap"`
+	LiveCells int      `json:"live_cells"`
+	Jobs      []webJob `json:"jobs"`
+	Contract  int      `json:"contract"`
 	// Stale is this k web process' own self-check (see selfcheck.go) — the
 	// daemon's equivalent rides Daemon.Stale.
 	Stale bool `json:"stale"`
@@ -609,22 +618,6 @@ func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
 func sortedArtifacts(out []webArtifact) []webArtifact {
 	sort.SliceStable(out, func(a, b int) bool { return out[a].Name < out[b].Name })
 	return out
-}
-
-// queuedStartError returns the daemon's last start failure for j, but only
-// while j is actually queued.
-//
-// The state gate is the whole subtlety. The daemon clears a job's entry the
-// moment a start succeeds, but a job can also leave the queued state without
-// any start attempt at all — carl dequeues it, or edits it back to draft — and
-// the stale reason would then sit on a card that is no longer trying to start
-// anything, reading as a current fault. Scoping the read to the displayed
-// state means the message is on screen exactly while it is true.
-func queuedStartError(j *jobs.Job, displayState string) string {
-	if displayState != "queued" {
-		return ""
-	}
-	return jobs.StartErrorFor(j.Slug)
 }
 
 // plutoFlatArtifacts scans PlutoDir for j's <slug>-<id>.<name> flat copies —
@@ -925,7 +918,7 @@ func buildWebBoard() webBoard {
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
 	activeStore := jobs.ActiveStore()
-	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: jobs.CellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS()}
+	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS()}
 	order := jobs.LoadBoardOrder()
 	// One query for the WHOLE board's token rows, read before the loop and
 	// indexed by slug — never a per-job GetJobTokens, which would be ~74
@@ -934,22 +927,17 @@ func buildWebBoard() webBoard {
 	tokens := jobTokensIndex(activeStore)
 	byState := map[string][]webJob{}
 	for _, j := range js {
-		var prereqs []webPrereq
-		for _, p := range j.Prereqs {
-			dep := bySlug[p.Job]
-			prereqs = append(prereqs, webPrereq{Job: p.Job, Gated: p.Gated, Done: dep != nil && dep.State == "done"})
-		}
 		// Computed once: this loop runs for every job on a payload rebuilt
-		// roughly every two seconds, and StartError needs the same answer.
-		displayState := jobs.DisplayState(j, bySlug)
+		// roughly every two seconds, and the byState bucketing below needs the
+		// same answer.
+		displayState := jobs.DisplayState(j)
 		wj := webJob{
 			Slug: j.Slug, Repo: j.Repo,
 			State: displayState, Err: j.Err, Outcome: j.Outcome,
-			Color:      jobs.EffectiveColor(j),
-			StartError: queuedStartError(j, displayState),
-			Prereqs:    prereqs, Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
-			ModTime: j.ModTime.Unix(),
-			PRs:     j.PRs,
+			Color:     jobs.EffectiveColor(j),
+			Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
+			ModTime:   j.ModTime.Unix(),
+			PRs:       j.PRs,
 			// DocQuestions/Feedback: one uniform path straight off the store,
 			// live or dead, any state — no file, no cell-dir liveness check
 			// (see jobQuestions/jobFeedback). Never set for archived jobs,
@@ -1018,7 +1006,7 @@ func buildWebBoard() webBoard {
 	// in the stored order land on top (slug-sorted, since js already is),
 	// then stored members in their saved order — the flat array's
 	// within-state order IS the wire contract, no new key needed.
-	for _, state := range []string{"draft", "queued", "working", "blocked", "done"} {
+	for _, state := range []string{"draft", "working", "blocked", "done"} {
 		group := byState[state]
 		// slug -> queue, not a single value: duplicate-slug job files (both
 		// erred into draft) must each keep their own card, so consume one
@@ -1035,7 +1023,7 @@ func buildWebBoard() webBoard {
 		}
 	}
 	// archived jobs ride the same list under state "archived": no cell, no
-	// prereqs, no derivation — just the file, its artifacts, and the two
+	// derivation — just the file, its artifacts, and the two
 	// actions (unarchive, delete) keyed on the archive file base
 	for _, a := range jobs.LoadArchivedJobs() {
 		board.Jobs = append(board.Jobs, archivedWebJob(a, activeStore, tokens))
