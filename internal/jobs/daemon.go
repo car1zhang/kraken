@@ -1296,6 +1296,14 @@ func (d *daemonState) trackPRs(j *Job) {
 	}
 }
 
+// prWatchPrefix opens EVERY message the PR watcher types into a pane. It is
+// one symbol on purpose: the four bump variants below each inline it into
+// their format string, and a reword that reached three of four would leave
+// one machine notice reading as carl again — the hazard the prefix exists
+// to close. The tests pin the wire text per-variant, independently of this
+// constant, so a drift there still fails.
+const prWatchPrefix = "[kraken pr-watch — automated notice, not a reply from carl]"
+
 // watchDecision is watchPRs' pure core: given one open PR's freshly fetched
 // state and its currently recorded watermarks, decides whether to bump zeus'
 // pane and what the new watermarks should be.
@@ -1347,7 +1355,7 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 			// The PR number is substituted from the url ({owner}/{repo} gh
 			// expands itself; a bare N it does not).
 			parts = append(parts, fmt.Sprintf(
-				"[kraken pr-watch — automated notice, not a reply from carl] %s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
+				prWatchPrefix+" %s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
 				url, url, url[strings.LastIndex(url, "/")+1:]))
 			newLastCommentAt = f.LastCommentAt
 		}
@@ -1370,7 +1378,7 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 		// sibling cells each adopted the same cross-team breakage as their
 		// own work the same evening, duplicating a fix hours apart.
 		parts = append(parts, fmt.Sprintf(
-			"[kraken pr-watch — automated notice, not a reply from carl] %s has failing CI on %s (at least %s) — run `gh pr checks %s` to see the full current rollup and fix it. If the failure reproduces on pristine origin/main it is inherited, not yours: note that on the PR and report it in your pane instead of adopting the cross-team fix",
+			prWatchPrefix+" %s has failing CI on %s (at least %s) — run `gh pr checks %s` to see the full current rollup and fix it. If the failure reproduces on pristine origin/main it is inherited, not yours: note that on the PR and report it in your pane instead of adopting the cross-team fix",
 			url, f.HeadSHA, strings.Join(f.FailingChecks, ", "), url))
 		newBumpedSHA = f.HeadSHA
 	case firstSight && f.HeadSHA != "":
@@ -1379,13 +1387,18 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 
 	switch {
 	case f.Mergeable == "conflicting" && conflictState != "conflicting":
+		// Same provenance prefix as the comment and CI bumps above — the
+		// conflict bump was the one PR-watch notice without it, arriving on
+		// the same user channel with the same read-as-carl hazard the
+		// comment block above the CI bump spells out, and a cell has
+		// visibly hedged on whether this message was carl or a machine.
 		if f.BaseRef != "" {
 			parts = append(parts, fmt.Sprintf(
-				"%s has merge conflicts with %s — run git fetch origin && git rebase origin/%s in your worktree, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				prWatchPrefix+" %s has merge conflicts with %s — run git fetch origin && git rebase origin/%s in your worktree, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
 				url, f.BaseRef, f.BaseRef))
 		} else {
 			parts = append(parts, fmt.Sprintf(
-				"%s has merge conflicts with its base branch — fetch, rebase onto the base, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				prWatchPrefix+" %s has merge conflicts with its base branch — fetch, rebase onto the base, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
 				url))
 		}
 		newConflictState = "conflicting"
