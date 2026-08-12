@@ -38,9 +38,16 @@ import (
 const graphContextFacts = 5
 
 // graphContextBytes caps the whole block including its header (Q5). The brief
-// has a 12,000-byte ceiling of its own (TestZeusBriefStaysLean) and every byte
+// has a 13,500-byte ceiling of its own (TestZeusBriefStaysLean) and every byte
 // here is a byte of attention spent before the job's own spec.
-const graphContextBytes = 600
+//
+// 682 = 600 (the original cap) + 42 (the header's new advertisement line
+// "full fact for any [F#]: k graph get F<id>\n", measured) + 40 (5 lines ×
+// 8 bytes of per-line handle growth: "F" + up to 6 digits + a space). The
+// bump is not extra room — it PRESERVES fact capacity, so any fact set that
+// fit under 600 with the old `[E<id>, seen Nx]` line still fits now that each
+// line also carries its edge id.
+const graphContextBytes = 682
 
 // graphFactRunes one-lines and caps a single fact sentence. A fact longer
 // than this is a fact that was written as a paragraph, and the block is a
@@ -270,7 +277,12 @@ func cachedSpecVector(st *store.Store, jobID int64) []float32 {
 // than instruction, and zeus has to be able to weigh it against what it finds
 // in the repo. The leading newline separates it from whatever the brief's own
 // last line was.
-const graphContextHeader = "\nKnown from past work (may be stale — verify before relying):\n"
+//
+// The second line is the deref advertisement: every fact line below is a
+// SUMMARY (clause-cut at graphFactRunes), so the block has to say where the
+// whole sentence lives. It names the verb once, in the header, rather than
+// per line — the handle's `F` prefix is the pointer back to it.
+const graphContextHeader = "\nKnown from past work (may be stale — verify before relying):\nfull fact for any [F#]: k graph get F<id>\n"
 
 // renderGraphBlock formats the kept facts, honouring the byte cap on FACT
 // BOUNDARIES only — a half-sentence with an episode id after it reads as a
@@ -300,8 +312,8 @@ func renderGraphBlock(edges []store.GraphEdge) (string, []int64) {
 			// em-dash-heavy prose is 540+ bytes, and breaking on it zeroed
 			// the whole block while four shorter facts ranked below it fit
 			// fine (review finding). Note the two caps are therefore not
-			// independent: ~2 full-length ASCII facts fill 600 bytes, so
-			// graphContextFacts=5 is a ceiling only shorter facts reach.
+			// independent: ~2 full-length ASCII facts fill graphContextBytes,
+			// so graphContextFacts=5 is a ceiling only shorter facts reach.
 			continue
 		}
 		b.WriteString(line)
@@ -313,19 +325,33 @@ func renderGraphBlock(edges []store.GraphEdge) (string, []int64) {
 	return b.String(), rendered
 }
 
-// factLine renders one fact. The episode id and the sighting count are what
-// make the claim weighable: a fact seen once in one transcript and a fact
-// seen in eleven independent episodes are different kinds of evidence, and
-// the id is where zeus goes to check.
+// factLine renders one fact as `- <summary> [F<edge> E<episode>, seen Nx]`.
+// The sighting count is what makes the claim weighable — a fact seen once in
+// one transcript and a fact seen in eleven independent episodes are different
+// kinds of evidence — and the two ids are the two things zeus can go and read:
+// F is the fact itself, whose full untruncated sentence the summary below may
+// have cut, and E is the provenance episode the extraction came from. Both
+// dereference through `k graph get`, which the header advertises.
+//
+// The summary is core.ClauseCut rather than core.TruncateOneLine: this line is
+// prose a model reads, so it ends at a clause or word boundary and says so
+// with a trailing "…". The keep-gate upstream still runs TruncateOneLine for
+// its renderability and duplicate-wording judgments — those ask whether there
+// is a fact here at all, not how it reads.
 func factLine(e store.GraphEdge) string {
-	fact := core.TruncateOneLine(e.Fact, graphFactRunes)
-	// A fact sentence written with its own terminator must not gain a second
-	// one; one written without gets the one the block's format promises.
-	fact = strings.TrimRight(fact, " .")
+	fact := core.ClauseCut(e.Fact, graphFactRunes)
+	if !strings.HasSuffix(fact, "…") {
+		// A fact sentence written with its own terminator must not gain a
+		// second one; one written without gets the one the block's format
+		// promises. A cut summary already ends in its own terminator — the
+		// ellipsis — and a period after it would claim the sentence finished.
+		fact = strings.TrimRight(fact, " .") + "."
+	}
 	occ := e.Occurrences
 	if occ < 1 {
 		occ = 1 // a stored edge was seen at least once, whatever the column says
 	}
-	return "- " + fact + ". [E" + strconv.FormatInt(e.EpisodeID, 10) +
+	return "- " + fact + " [F" + strconv.FormatInt(e.ID, 10) +
+		" E" + strconv.FormatInt(e.EpisodeID, 10) +
 		", seen " + strconv.FormatInt(occ, 10) + "x]\n"
 }

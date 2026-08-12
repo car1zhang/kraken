@@ -446,8 +446,11 @@ specific, and it is the only place the cell's real paths appear:
   whose subject is extraction content and whose category headings ("ephemeral work state") a
   later run globbing for refused nodes would mis-parse; reports from before this format simply
   lack the section, which reads as zero recorded refusals, not as an error.
-- **Read and write the graph with `k graph pending|search|add|done|stats`.** Never open `kraken.db`
-  directly — `kraken serve` is its single writer, and a second handle would run migrations.
+- **Read and write the graph with `k graph pending|search|add|done|get|stats`.** `k graph get F<id>`
+  dereferences a handle from an injected fact line (`[F1091 E148111, seen 1x]`) back to the full
+  untruncated fact, and `k graph get E<id>` to the episode it was extracted from. Never open
+  `kraken.db` directly — `kraken serve` is its single writer, and a second handle would run
+  migrations.
 - **This job opens no PR.** The graph lives in `kraken.db`; nothing here belongs in git. If you find a
   real bug in kraken while doing this, say so in the report and leave it — that is a job of its own.
   The one exception is carl steering this job into a repo change ("bake that into the skill"): his

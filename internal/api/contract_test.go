@@ -2194,7 +2194,7 @@ func TestDreamWireShape(t *testing.T) {
 	assertShape(t, "/api/dream element", resp.Reports[0], webDreamReportSpec)
 }
 
-// --- the knowledge graph's eight routes (graph.go, recall.go) ---
+// --- the knowledge graph's ten routes (graph.go, recall.go) ---
 //
 // All additive: each is a NEW PATH, never a key added to, retyped in, or
 // removed from an existing shape, so apiContract does NOT bump for them and
@@ -2394,6 +2394,185 @@ var webGraphFactSpec = map[string]fieldSpec{
 	"occurrences": {kind: wireNumber, required: true},
 	"valid_until": {kind: wireNumber, required: true},
 	"weak":        {kind: wireBool, required: true},
+}
+
+// --- the dereference pair: GET /api/graph/fact, GET /api/graph/episode ---
+//
+// The two reads `k graph get` follows a `[F# E#]` handle with. Additive paths
+// like every route above, so apiContract still does not move; not modeled in
+// Models.swift or APIClient.swift either, since the iOS graph screen consumes
+// only /api/graph and /api/graph/node.
+
+// graphFactGetSpec. "episode" is required-but-nullable rather than omitempty
+// on purpose: an edge whose episode row is gone serves an explicit null, and
+// that is a different claim from a key that vanished — "kraken cannot say
+// where this came from" versus "this server does not report provenance".
+var graphFactGetSpec = map[string]fieldSpec{
+	"fact":     {kind: wireObject, required: true},
+	"src":      {kind: wireObject, required: true},
+	"dst":      {kind: wireObject, required: true},
+	"episode":  {kind: wireObject, required: true, nullable: true},
+	"siblings": {kind: wireObject, required: true},
+}
+
+var graphFactSiblingsSpec = map[string]fieldSpec{
+	"src": {kind: wireArray, required: true},
+	"dst": {kind: wireArray, required: true},
+}
+
+var graphEpisodeGetSpec = map[string]fieldSpec{
+	"episode": {kind: wireObject, required: true},
+	"edges":   {kind: wireArray, required: true},
+}
+
+// webGraphFactFullSpec: no omitempty anywhere, and both time axes ride in
+// FULL — valid_from beside valid_until (world time), created_at beside
+// expired_at (system time). That is what separates this shape from
+// webGraphFact, which a ranked search result trims because a list is scanned
+// rather than studied. A spec entry appearing for "weak" here would be the
+// first sign a relevance verdict had leaked onto a route with no query to
+// judge against.
+var webGraphFactFullSpec = map[string]fieldSpec{
+	"id":          {kind: wireNumber, required: true},
+	"src":         {kind: wireString, required: true},
+	"dst":         {kind: wireString, required: true},
+	"predicate":   {kind: wireString, required: true},
+	"fact":        {kind: wireString, required: true},
+	"strength":    {kind: wireNumber, required: true},
+	"occurrences": {kind: wireNumber, required: true},
+	"valid_from":  {kind: wireNumber, required: true},
+	"valid_until": {kind: wireNumber, required: true},
+	"created_at":  {kind: wireNumber, required: true},
+	"expired_at":  {kind: wireNumber, required: true},
+	"episode":     {kind: wireNumber, required: true},
+}
+
+// webGraphSiblingFactSpec: webGraphFact minus "weak" (no query, so no verdict)
+// — and, like webGraphFact, without the system-time stamps, since siblings come
+// from NeighborEdges and are live-only.
+var webGraphSiblingFactSpec = map[string]fieldSpec{
+	"id":          {kind: wireNumber, required: true},
+	"src":         {kind: wireString, required: true},
+	"dst":         {kind: wireString, required: true},
+	"predicate":   {kind: wireString, required: true},
+	"fact":        {kind: wireString, required: true},
+	"strength":    {kind: wireNumber, required: true},
+	"occurrences": {kind: wireNumber, required: true},
+	"valid_until": {kind: wireNumber, required: true},
+}
+
+// webGraphEpisodeRefSpec. "content" is deliberately absent — the fact bundle
+// carries a provenance POINTER, and a spec entry for content would be the
+// first sign kilobytes of reduced transcript had started riding along with
+// every dereferenced sentence.
+var webGraphEpisodeRefSpec = map[string]fieldSpec{
+	"id":   {kind: wireNumber, required: true},
+	"kind": {kind: wireString, required: true},
+	"ref":  {kind: wireString, required: true},
+}
+
+// TestGraphDereferenceWireShapes drives both dereference handlers against a
+// store seeded through the documented add path, so every shape below is one
+// the handlers themselves produced rather than a struct marshaled in a test.
+func TestGraphDereferenceWireShapes(t *testing.T) {
+	st := useTestStore(t)
+	epID, added, err := st.AddEpisode(store.Episode{
+		Kind: "transcript", Ref: "/x/y.jsonl#0-400", Content: "some reduced text",
+		Hash: "deref-h1", TS: 1769040000000,
+	})
+	if err != nil || !added {
+		t.Fatalf("AddEpisode: id=%d added=%v err=%v", epID, added, err)
+	}
+
+	// Two edges sharing the src endpoint, so the dereferenced fact has a real
+	// sibling to render rather than only an empty list.
+	addBody := mustJSON(t, map[string]any{
+		"episode_id": epID,
+		"nodes": []any{
+			map[string]any{"name": "kraken", "type": "system", "description": "the CLI", "aliases": []string{"k"}},
+		},
+		"edges": []any{
+			map[string]any{"src": "kraken", "dst": "zeus", "predicate": "spawns",
+				"fact": "kraken spawns zeus in a cell", "strength": 8},
+			map[string]any{"src": "kraken", "dst": "carl", "predicate": "serves",
+				"fact": "kraken serves carl the board", "strength": 7},
+		},
+	})
+	rec := httptest.NewRecorder()
+	graphAddHandler(rec, httptest.NewRequest(http.MethodPost, "/api/graph/add", bytes.NewReader(addBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/graph/add: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var addResp struct {
+		Edges []struct {
+			ID int64 `json:"id"`
+		} `json:"edges"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &addResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(addResp.Edges) != 2 {
+		t.Fatalf("add results: got %d edges, want 2", len(addResp.Edges))
+	}
+	edgeID := addResp.Edges[0].ID
+
+	rec = httptest.NewRecorder()
+	graphFactHandler(rec, httptest.NewRequest(http.MethodGet,
+		"/api/graph/fact?id="+strconv.FormatInt(edgeID, 10), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/graph/fact: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/graph/fact", rec.Body.Bytes(), graphFactGetSpec)
+	var factResp struct {
+		Fact     json.RawMessage `json:"fact"`
+		Src      json.RawMessage `json:"src"`
+		Dst      json.RawMessage `json:"dst"`
+		Episode  json.RawMessage `json:"episode"`
+		Siblings json.RawMessage `json:"siblings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &factResp); err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "GET /api/graph/fact .fact", factResp.Fact, webGraphFactFullSpec)
+	// Both endpoints are webGraphNode — the same type the viewer and the
+	// inspector serve — so a rename on either side fails here too.
+	assertShape(t, "GET /api/graph/fact .src", factResp.Src, webGraphNodeSpec)
+	assertShape(t, "GET /api/graph/fact .dst", factResp.Dst, webGraphNodeSpec)
+	assertShape(t, "GET /api/graph/fact .episode", factResp.Episode, webGraphEpisodeRefSpec)
+	assertShape(t, "GET /api/graph/fact .siblings", factResp.Siblings, graphFactSiblingsSpec)
+	var siblings struct {
+		Src []json.RawMessage `json:"src"`
+		Dst []json.RawMessage `json:"dst"`
+	}
+	if err := json.Unmarshal(factResp.Siblings, &siblings); err != nil {
+		t.Fatal(err)
+	}
+	if len(siblings.Src) != 1 {
+		t.Fatalf("siblings.src: got %d, want 1 (the other edge on the shared src, minus the fact itself)", len(siblings.Src))
+	}
+	assertShape(t, "GET /api/graph/fact .siblings.src[0]", siblings.Src[0], webGraphSiblingFactSpec)
+
+	rec = httptest.NewRecorder()
+	graphEpisodeHandler(rec, httptest.NewRequest(http.MethodGet,
+		"/api/graph/episode?id="+strconv.FormatInt(epID, 10), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/graph/episode: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/graph/episode", rec.Body.Bytes(), graphEpisodeGetSpec)
+	var epResp struct {
+		Episode json.RawMessage   `json:"episode"`
+		Edges   []json.RawMessage `json:"edges"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &epResp); err != nil {
+		t.Fatal(err)
+	}
+	// The episode route DOES inline content — pulling the provenance text is
+	// its purpose — so it serves the full webGraphEpisode, not the pointer.
+	assertShape(t, "GET /api/graph/episode .episode", epResp.Episode, webGraphEpisodeSpec)
+	if len(epResp.Edges) != 2 {
+		t.Fatalf("episode edges: got %d, want 2", len(epResp.Edges))
+	}
+	assertShape(t, "GET /api/graph/episode .edges[0]", epResp.Edges[0], webGraphFactFullSpec)
 }
 
 // TestGraphWireShapesMarshaled pins the element types directly. The envelope

@@ -114,21 +114,28 @@ func contractRecallFact(n int64) store.GraphEdge {
 // renderGraphBlock's byte race — the one shape amendment 3 is about.
 //
 // It is renderGraphBlock's own worked example, built to its stated arithmetic:
-// exactly graphFactRunes runes (so TruncateOneLine returns it untouched — it
-// only truncates ABOVE the limit), of which everything but the two content
-// words is a 3-byte em dash. The two words are "byte" and "pass", both ≥
+// exactly graphFactRunes runes (so the summary cut returns it untouched — it
+// only cuts ABOVE the limit), of which everything but the two content words is
+// a FOUR-byte padding rune. The two words are "byte" and "pass", both ≥
 // core.GraphTermMinRunes and both present in contractRecallSpec, so the
 // lexical arm scores exactly the overlap of 2 the gate demands: this fact is
 // relevant beyond question, and the only reason it does not render is its
 // width. The episode id and sighting count are wide too — they are part of the
 // line the cap measures, and the margin is worth having.
 //
+// The padding was a 3-byte em dash while the cap was 600 (522-byte fact →
+// 660-byte block). Under 682 that FITS, so it is four bytes now: 9 + 171×4 =
+// 693 bytes of fact, a 725-byte line, 831 with the header. The rune is a
+// SYMBOL rather than a letter on purpose — core.ContentTerms splits on
+// non-letters, so a 4-byte ideograph would glue onto "pass" and cost the
+// fixture the very lexical overlap it is built to have.
+//
 // The test using it asserts the arithmetic rather than trusting it.
 func contractRecallWideFact() store.GraphEdge {
 	return store.GraphEdge{
 		ID:          1,
 		EpisodeID:   987654321,
-		Fact:        "byte pass" + strings.Repeat("—", graphFactRunes-len("byte pass")),
+		Fact:        "byte pass" + strings.Repeat("\U0001D11E", graphFactRunes-len("byte pass")),
 		Occurrences: 4321,
 	}
 }
@@ -315,8 +322,8 @@ func TestContractRecallRendersTheSpawnBlockByteForByte(t *testing.T) {
 	if !strings.HasPrefix(got, graphContextHeader) {
 		t.Errorf("block does not open with the shared header:\n%s", got)
 	}
-	if !strings.Contains(got, "[E10, seen 1x]") {
-		t.Errorf("block does not carry the shared fact line's episode id and sighting count:\n%s", got)
+	if !strings.Contains(got, "[F1 E10, seen 1x]") {
+		t.Errorf("block does not carry the shared fact line's ids and sighting count:\n%s", got)
 	}
 }
 
@@ -382,13 +389,15 @@ func TestContractRecallMarksWhatItDelivered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecalledEdgeIDs: %v", err)
 	}
-	// Episode ids are the block's own handle on a fact (factLine renders
-	// "[E<episode>, seen <n>x]"), and edge() sets EpisodeID = ID*10.
+	// The line handle carries BOTH ids (factLine renders
+	// "[F<edge> E<episode>, seen <n>x]"), and edge() sets EpisodeID = ID*10 —
+	// so the marker below pins the edge id and its episode together, which is
+	// the tie this test is about.
 	for _, id := range []int64{1, 2} {
 		if !ids[id] {
 			t.Errorf("edge %d was rendered into the block but not recorded in kg_recall (set %v)", id, ids)
 		}
-		if marker := "[E" + strconv.FormatInt(id*10, 10) + ","; !strings.Contains(got, marker) {
+		if marker := "[F" + strconv.FormatInt(id, 10) + " E" + strconv.FormatInt(id*10, 10) + ","; !strings.Contains(got, marker) {
 			t.Errorf("edge %d is recorded as delivered but its line %q is not in the block:\n%s", id, marker, got)
 		}
 	}
@@ -430,10 +439,10 @@ func TestContractRecallMarksOnlyTheRenderedIDs(t *testing.T) {
 	if got == "" {
 		t.Fatal("Recall injected nothing though the narrow fact fits well inside the cap")
 	}
-	if strings.Contains(got, "[E987654321,") {
+	if strings.Contains(got, "[F1 E987654321,") {
 		t.Fatalf("the wide fact rendered after all; the byte cap did not skip it:\n%s", got)
 	}
-	if !strings.Contains(got, "[E20,") {
+	if !strings.Contains(got, "[F2 E20,") {
 		t.Errorf("the narrow fact did not render:\n%s", got)
 	}
 
@@ -506,10 +515,10 @@ func TestContractRecallHonoursExistingRecallRows(t *testing.T) {
 	if got == "" {
 		t.Fatal("Recall injected nothing though edge 2 had never been delivered")
 	}
-	if strings.Contains(got, "[E10,") {
+	if strings.Contains(got, "[F1 E10,") {
 		t.Errorf("an already-delivered edge was injected again:\n%s", got)
 	}
-	if !strings.Contains(got, "[E20,") {
+	if !strings.Contains(got, "[F2 E20,") {
 		t.Errorf("the undelivered edge is missing from the block:\n%s", got)
 	}
 }
@@ -566,7 +575,7 @@ func TestContractRecallMarksNothingForACallerThatIsGone(t *testing.T) {
 	if got == "" {
 		t.Fatal("the retry injected nothing — the canceled call burned the session's facts after all")
 	}
-	if !strings.Contains(got, "[E10,") || !strings.Contains(got, "[E20,") {
+	if !strings.Contains(got, "[F1 E10,") || !strings.Contains(got, "[F2 E20,") {
 		t.Errorf("the retry is missing facts the canceled call should have left untouched:\n%s", got)
 	}
 }
@@ -674,7 +683,8 @@ func contractRecallHookContext(t *testing.T, got map[string]any) (event, context
 // pins that the verb echoes whatever hook_event_name it is handed, including a
 // name kraken no longer installs.
 func TestContractRunRecallHookEmitsAdditionalContext(t *testing.T) {
-	const block = "\nKnown from past work (may be stale — verify before relying):\n- something true. [E7, seen 3x]\n"
+	const block = "\nKnown from past work (may be stale — verify before relying):\n" +
+		"full fact for any [F#]: k graph get F<id>\n- something true. [F3 E7, seen 3x]\n"
 	for _, event := range []string{"UserPromptSubmit", "Stop"} {
 		t.Run(event, func(t *testing.T) {
 			srv := contractRecallHookServe(t, block)

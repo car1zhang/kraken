@@ -40,9 +40,10 @@ var mirrorGatedRoutes = []string{
 	// mirrorGated at registration rather than inline — unlike
 	// feedback/questions/load these are POST-only routes, so there is no GET
 	// on the same path that a route wrapper would take down with them. Its
-	// four reads (/api/graph, /api/graph/stats, /api/graph/node,
-	// /api/graph/pending) and /api/graph/search stay open: search is a POST
-	// only because a query is arbitrary user text, and it writes nothing.
+	// six GET reads (/api/graph, /api/graph/stats, /api/graph/node,
+	// /api/graph/fact, /api/graph/episode, /api/graph/pending) and
+	// /api/graph/search stay open: search is a POST only because a query is
+	// arbitrary user text, and it writes nothing.
 	// /api/graph/recall is the one that reads like search and is gated
 	// anyway — it records every fact it delivers in kg_recall.
 	"/api/graph/add", "/api/graph/episode-done", "/api/graph/recall",

@@ -12,7 +12,7 @@ import (
 // hook payload here; the response is the block that hook emits as
 // additionalContext.
 //
-// Its own file rather than an eighth handler in graph.go because it is the one
+// Its own file rather than a tenth handler in graph.go because it is the one
 // graph route whose caller is neither a human nor the extraction agent: it is
 // machinery running inside somebody else's conversation, and the failure
 // posture that follows from that (never an error status, never anything but a

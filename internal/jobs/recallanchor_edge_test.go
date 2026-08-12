@@ -341,7 +341,7 @@ func TestEdgeAnchorGraphContextThreadsAnchorsFromTheSeam(t *testing.T) {
 	if got == "" {
 		t.Fatal("an anchored fact was not injected — the seam's anchors did not reach the keep-gate")
 	}
-	if !strings.Contains(got, "[E10, seen 1x]") {
+	if !strings.Contains(got, "[F1 E10, seen 1x]") {
 		t.Errorf("the anchored fact's provenance is missing:\n%s", got)
 	}
 	if !strings.HasPrefix(got, graphContextHeader) {

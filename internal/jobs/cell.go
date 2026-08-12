@@ -584,7 +584,7 @@ func StartCell(j *Job, repo string) error {
 	// job, or "" — which is the common case and the one that matters: a job
 	// with no match gets a byte-identical brief. It is concatenated HERE
 	// rather than inside zeusBrief because two tests pin that function
-	// (TestZeusBriefDoesNotRestateSkills, TestZeusBriefStaysLean's 12,000-byte
+	// (TestZeusBriefDoesNotRestateSkills, TestZeusBriefStaysLean's 13,500-byte
 	// ceiling), and retrieved facts are variable-length and job-dependent:
 	// folding them in would make the lean ceiling start failing on graph
 	// content rather than on the policy creep it exists to catch.

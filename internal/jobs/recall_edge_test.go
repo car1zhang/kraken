@@ -439,7 +439,7 @@ func TestEdgeRecallSkipsAnOversizedFactRatherThanBreaking(t *testing.T) {
 	if len(got) > graphContextBytes {
 		t.Errorf("block is %d bytes, over the %d-byte cap", len(got), graphContextBytes)
 	}
-	if !strings.Contains(got, "[E20, seen 1x]") {
+	if !strings.Contains(got, "[F2 E20, seen 1x]") {
 		t.Errorf("the short fact behind the oversized one did not land:\n%s", got)
 	}
 	// Every emitted line is whole: a half sentence with an episode id after

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -265,8 +266,8 @@ func TestContractAnchorGraphContextThreadsAnchors(t *testing.T) {
 	if got == "" {
 		t.Fatal("an anchored fact was not injected on the spawn path — graphContext must thread the seam's anchors into the gate")
 	}
-	if !strings.Contains(got, "[E10,") {
-		t.Errorf("the block does not carry the anchored fact's episode id:\n%s", got)
+	if !strings.Contains(got, "[F1 E10,") {
+		t.Errorf("the block does not carry the anchored fact's ids:\n%s", got)
 	}
 	if !strings.HasPrefix(got, graphContextHeader) {
 		t.Errorf("the block does not open with the shared header:\n%s", got)
@@ -293,8 +294,8 @@ func TestContractAnchorRecallInjectsAnchoredFacts(t *testing.T) {
 	if got == "" {
 		t.Fatal("an anchored fact was not injected — Recall must thread the seam's anchors the same way graphContext does")
 	}
-	if !strings.Contains(got, "[E10,") {
-		t.Errorf("the block does not carry the anchored fact's episode id:\n%s", got)
+	if !strings.Contains(got, "[F1 E10,") {
+		t.Errorf("the block does not carry the anchored fact's ids:\n%s", got)
 	}
 	if rec.calls != 1 {
 		t.Errorf("retrieval ran %d times, want 1", rec.calls)
@@ -353,10 +354,10 @@ func TestContractAnchorRecallHonoursTheSkipSetOnAnchoredFacts(t *testing.T) {
 	if got == "" {
 		t.Fatal("Recall injected nothing though the second anchored fact had never been delivered")
 	}
-	if strings.Contains(got, "[E10,") {
+	if strings.Contains(got, "[F1 E10,") {
 		t.Errorf("an already-delivered anchored fact was injected again:\n%s", got)
 	}
-	if !strings.Contains(got, "[E20,") {
+	if !strings.Contains(got, "[F2 E20,") {
 		t.Errorf("the undelivered anchored fact is missing from the block:\n%s", got)
 	}
 }
@@ -380,8 +381,9 @@ func TestContractAnchorSearchFactsReturnsEdgesAndAnchors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert dst: %v", err)
 	}
-	if _, added, err := st.InsertEdge(store.GraphEdge{SrcID: src, DstID: dst, Predicate: "served-as",
-		Fact: "the cofounder signed the charter in autumn", EpisodeID: 3, Strength: 8}); err != nil || !added {
+	edgeID, added, err := st.InsertEdge(store.GraphEdge{SrcID: src, DstID: dst, Predicate: "served-as",
+		Fact: "the cofounder signed the charter in autumn", EpisodeID: 3, Strength: 8})
+	if err != nil || !added {
 		t.Fatalf("insert edge: added=%v err=%v", added, err)
 	}
 
@@ -412,7 +414,9 @@ func TestContractAnchorSearchFactsReturnsEdgesAndAnchors(t *testing.T) {
 	if got == "" {
 		t.Error("a \"who is <name>\" firing against a seeded store injected nothing")
 	}
-	if !strings.Contains(got, "[E3,") {
-		t.Errorf("the injected block does not carry the seeded fact:\n%s", got)
+	// The handle carries the store-assigned edge id, so it is read back from
+	// InsertEdge rather than assumed to be 1.
+	if marker := "[F" + strconv.FormatInt(edgeID, 10) + " E3,"; !strings.Contains(got, marker) {
+		t.Errorf("the injected block does not carry the seeded fact's handle %q:\n%s", marker, got)
 	}
 }

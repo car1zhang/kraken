@@ -40,14 +40,21 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dream", dreamHandler)
 	// The knowledge graph. Every one of these is an exact pattern, so none
 	// shadows another and none is a subtree — the same property that lets
-	// "/api/feedback" and "/api/feedback/sweep" coexist above. The four reads
-	// stay open under --mirror (a read is a read; search is a POST only
-	// because a query is arbitrary user text, and it writes nothing); the
-	// three writes are gated with the same 403 every other agent-side write
-	// gets.
+	// "/api/feedback" and "/api/feedback/sweep" coexist above, and the reason
+	// "/api/graph/episode" and "/api/graph/episode-done" are two routes rather
+	// than a collision. The six GET reads plus POST /api/graph/search stay
+	// open under --mirror (a read is a read; search is a POST only because a
+	// query is arbitrary user text, and it writes nothing); the three writes
+	// are gated with the same 403 every other agent-side write gets.
 	mux.HandleFunc("/api/graph", graphHandler)
 	mux.HandleFunc("/api/graph/stats", graphStatsHandler)
 	mux.HandleFunc("/api/graph/node", graphNodeHandler)
+	// The dereference pair behind `k graph get`: an injected memory line's
+	// [F# E#] handle back to the whole fact, or to the episode it came from.
+	// Ungated with the other reads — following a handle records nothing, so
+	// there is nothing for a mirror to refuse.
+	mux.HandleFunc("/api/graph/fact", graphFactHandler)
+	mux.HandleFunc("/api/graph/episode", graphEpisodeHandler)
 	mux.HandleFunc("/api/graph/pending", graphPendingHandler)
 	mux.HandleFunc("/api/graph/search", graphSearchHandler)
 	// Recall is a THIRD write despite reading like a search: it records what
