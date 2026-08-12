@@ -54,6 +54,81 @@ func cellDir(j *Job) string {
 	return filepath.Join(cellsRoot(), cellName(j))
 }
 
+// formerCellName is cellName under one of the job's earlier slugs. Empty for
+// a slug that slugifies to nothing, which a caller must skip rather than join
+// — a bare "-<id>" would name a directory belonging to no job.
+func formerCellName(j *Job, former string) string {
+	s := util.Slugify(former)
+	if s == "" {
+		return ""
+	}
+	return s + "-" + strconv.FormatInt(j.ID, 10)
+}
+
+// cellNameCandidate is one name a job's runtime state may be filed under: the
+// slugified slug (which is what the @kraken-job marker and the tmux window
+// carry) and the cellName built from it (which the dir and session carry).
+type cellNameCandidate struct {
+	Slug string // util.Slugify of the job slug
+	Name string // cellName: Slug + "-" + id
+}
+
+// cellNameCandidates is the ONE list every former-name probe derives from —
+// dirs, tmux sessions, and marker values — current name first, then one per
+// former slug, deduped.
+//
+// One list rather than three parallel ones because the daemon's self-heal has
+// to go BACKWARDS: given the session a cell was found under, it needs the
+// marker value that session should be carrying. Three independently built
+// lists would have to agree by index, which is exactly the coupling that
+// silently breaks the first time one of them skips an entry the others keep.
+func cellNameCandidates(j *Job) []cellNameCandidate {
+	out := []cellNameCandidate{{Slug: util.Slugify(j.Slug), Name: cellName(j)}}
+	seen := map[string]bool{out[0].Name: true}
+	for _, f := range j.FormerSlugs {
+		name := formerCellName(j, f)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, cellNameCandidate{Slug: util.Slugify(f), Name: name})
+	}
+	return out
+}
+
+// cellDirCandidates lists every directory this job's cell could be sitting in:
+// the current name first, then one per former slug. A rename NEVER moves the
+// cell dir — renaming a worktree under a running agent breaks its pane, and
+// the ruling is permanent (cutover.go states it) — so after a rename the live
+// cell is still on disk under the name it was created with, and every read
+// path has to probe for it.
+//
+// Current first is the ordering contract, not a preference: a job renamed
+// away from a name that a LATER cell of its own then took back would otherwise
+// resolve to the older directory.
+func cellDirCandidates(j *Job) []string {
+	cands := cellNameCandidates(j)
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, filepath.Join(cellsRoot(), c.Name))
+	}
+	return out
+}
+
+// existingCellDir is the cell dir that actually EXISTS, current name first.
+// It falls back to the current name when none of them does, so a caller that
+// is about to create something still gets the name a fresh cell should carry
+// — the probe answers "where is it", and "nowhere yet" has to answer with the
+// place it will be.
+func existingCellDir(j *Job) string {
+	for _, d := range cellDirCandidates(j) {
+		if _, err := os.Stat(d); err == nil {
+			return d
+		}
+	}
+	return cellDir(j)
+}
+
 // legacyCellDir is the pre-id naming: the bare slugified slug. Nothing
 // CREATES this any more — it exists so readers that must still find state
 // written before the cutover can look there too. Its one live caller is
@@ -71,7 +146,7 @@ func legacyCellDir(j *Job) string {
 // LegacyCellWorktree is CellWorktree under the pre-id cell naming. Same
 // read-only, find-what-was-already-written purpose as legacyCellDir.
 func LegacyCellWorktree(j *Job, repo string) string {
-	return filepath.Join(legacyCellDir(j), "wt-"+filepath.Base(repo))
+	return cellWorktreeIn(legacyCellDir(j), repo)
 }
 
 // checkCellIdentity refuses a job that cannot name a cell safely. It is
@@ -104,7 +179,25 @@ func checkCellIdentity(j *Job) error {
 // up as the PROJECT label and editor root inside the cell, so it must read as
 // the repo, not as "wt".
 func CellWorktree(j *Job, repo string) string {
-	return filepath.Join(cellDir(j), "wt-"+filepath.Base(repo))
+	return cellWorktreeIn(cellDir(j), repo)
+}
+
+// cellWorktreeIn is the ONE spelling of a worktree's directory name, the way
+// cellArtifactsIn is the one spelling of the artifacts subdirectory. The
+// derivation used to be re-typed at each of the places that need it — the two
+// name functions below and above, ExistingWorktree's probe, JobProjectDirs'
+// bases, ReactivateJob's create — and a creator and a probe that disagreed
+// about this string is a worktree nothing can find.
+func cellWorktreeIn(dir, repo string) string {
+	return filepath.Join(dir, "wt-"+filepath.Base(repo))
+}
+
+// worktreeNamesIn is both names a cell's worktree may carry inside dir, the
+// current one first: wt-<repo>, then the bare "wt" of cells created before
+// worktrees were named for their repo. Probes iterate it; creators take
+// cellWorktreeIn, since nothing writes the legacy name any more.
+func worktreeNamesIn(dir, repo string) []string {
+	return []string{cellWorktreeIn(dir, repo), filepath.Join(dir, "wt")}
 }
 
 // baseRef resolves the ref a cell's worktree branches from: the job's base:
@@ -141,14 +234,20 @@ func refExists(repo, ref string) bool {
 // ExistingWorktree finds the cell's worktree on disk, tolerating the legacy
 // bare "wt" name from cells created before worktrees were named wt-<repo>.
 // Empty means no worktree exists.
+//
+// It probes every cell-dir candidate (cellDirCandidates), current name first,
+// because a rename leaves a live cell's worktree exactly where it was: this is
+// the function teardown, StartCell's already-exists refusal and the dirt check
+// all resolve through, and each of them reading "no worktree" for a renamed
+// live cell is its own distinct wrong answer — a leaked checkout, a spurious
+// start, a discarded dirty tree.
 func ExistingWorktree(j *Job, repo string) string {
-	wt := CellWorktree(j, repo)
-	if _, err := os.Stat(wt); err == nil {
-		return wt
-	}
-	legacy := filepath.Join(cellDir(j), "wt")
-	if _, err := os.Stat(legacy); err == nil {
-		return legacy
+	for _, dir := range cellDirCandidates(j) {
+		for _, wt := range worktreeNamesIn(dir, repo) {
+			if _, err := os.Stat(wt); err == nil {
+				return wt
+			}
+		}
 	}
 	return ""
 }
@@ -166,8 +265,100 @@ func CellSession(j *Job) string {
 	return "cell-" + cellName(j)
 }
 
+// FindCellSession returns the live tmux session holding this job's cell, and
+// whether one was found at all: the current name when it is live, else the
+// session a former slug would have named. A rename converges the session name
+// straight away (rename.go's convergeCellTmux), so the former arm covers the
+// two cases where it did not — the convergence failed, or this tick landed in
+// the gap between the store commit and the tmux call.
+//
+// The bool is what the dead-cell watch keys on. Reading a renamed-but-not-yet-
+// converged cell as GONE would notify carl that a running job's cell had
+// vanished, which is exactly the alert he has previously acted on with a
+// teardown that destroyed a day's uncommitted work.
+func FindCellSession(j *Job, live map[string]bool) (string, bool) {
+	for _, sess := range cellSessionCandidates(j) {
+		if live[sess] {
+			return sess, true
+		}
+	}
+	return "", false
+}
+
+// ProbeCellSession answers what can be ESTABLISHED about a job's cell right
+// now, rather than what a snapshot happened to contain. FindCellSession reads
+// a map somebody else built; this one goes and asks, and reports whether the
+// answer is worth anything.
+//
+// Three outcomes, because a caller that must not act on a guess needs to tell
+// them apart:
+//
+//	(sess, true)  — sess exists and is this job's cell.
+//	("",  true)   — tmux answered, and holds none of this job's names: the
+//	                cell is CONFIRMED gone.
+//	("",  false)  — tmux could not be asked at all. Absence proves nothing.
+//
+// The third case is the reason this function exists. LiveSessions() folds an
+// unreachable tmux into an EMPTY map, which is byte-identical to a machine
+// with no sessions — so "not in the snapshot" cannot distinguish a dead cell
+// from an unanswered question, and a caller that writes irreversible state on
+// that distinction (the viewer's abandon verb) would orphan a live agent on a
+// bad tmux call. Each candidate absent from the snapshot is additionally
+// re-probed with core.SessionAlive, the same positive-evidence rule the
+// daemon applies before flagging a cell gone.
+func ProbeCellSession(j *Job) (string, bool) {
+	live, err := listSessionTimes()
+	if err != nil {
+		return "", false
+	}
+	for _, sess := range cellSessionCandidates(j) {
+		if _, ok := live[sess]; ok || core.SessionAlive(sess) {
+			return sess, true
+		}
+	}
+	return "", true
+}
+
+// cellSessionCandidates lists every tmux session name this job's cell could
+// be running under, current first — the session-name sibling of
+// cellDirCandidates, and derived from the same list for the same reason.
+func cellSessionCandidates(j *Job) []string {
+	cands := cellNameCandidates(j)
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, "cell-"+c.Name)
+	}
+	return out
+}
+
+// markerSlugForSession returns the @kraken-job value a cell running under sess
+// should be carrying — the slugified name that produced that session name — or
+// the current slugified slug when sess is none of this job's. It is what lets
+// the daemon's self-heal verify a cell it found under an OLD name before
+// renaming it to the new one.
+func markerSlugForSession(j *Job, sess string) string {
+	for _, c := range cellNameCandidates(j) {
+		if "cell-"+c.Name == sess {
+			return c.Slug
+		}
+	}
+	return util.Slugify(j.Slug)
+}
+
+// CellArtifacts is the cell's deliverables dir, resolved through
+// existingCellDir so a renamed live cell keeps syncing and serving the
+// artifacts it is still writing into the directory it was created in. The two
+// CREATE paths (StartCell, ReactivateJob) deliberately do NOT go through here
+// — they mkdir under the current name, since a cell being made now should
+// carry the job's current name.
 func CellArtifacts(j *Job) string {
-	return filepath.Join(cellDir(j), "artifacts")
+	return cellArtifactsIn(existingCellDir(j))
+}
+
+// cellArtifactsIn is the one spelling of the artifacts subdirectory, so the
+// resolving reader above and the creating writers cannot disagree about it.
+func cellArtifactsIn(dir string) string {
+	return filepath.Join(dir, "artifacts")
 }
 
 // AllArtifactPaths lists a job's artifacts from both homes: the live cell's
@@ -249,6 +440,14 @@ func CellBranch(j *Job) string {
 //
 // The legacy names are matched, never created: branchForRun is the only
 // writer and it always emits the id form.
+//
+// A RENAMED job's earlier names are matched too, on exactly the same
+// reasoning one level along: a rename does not touch git — there is no
+// `git branch -m` anywhere in this feature — so every branch the job has ever
+// pushed, and every open PR's head, still carries an older slug. Dropping
+// those names would make the repair pass stop recognising the job's own PRs
+// the moment it is renamed, which is the same silent PR-detachment the legacy
+// half exists to prevent.
 func branchFamily(j *Job) map[string]bool {
 	maxRun := j.Run
 	if maxRun < 1 {
@@ -260,17 +459,36 @@ func branchFamily(j *Job) map[string]bool {
 	if maxRun > 64 {
 		maxRun = 64
 	}
-	slug := util.Slugify(j.Slug)
 	fam := make(map[string]bool, maxRun*2)
-	for r := 1; r <= maxRun; r++ {
-		fam[branchForRun(j, r)] = true
-		if r >= 2 {
-			fam[fmt.Sprintf("carl/%s-r%d", slug, r)] = true
-		} else {
-			fam["carl/"+slug] = true
+	addBranchRuns(fam, cellName(j), maxRun)
+	addBranchRuns(fam, util.Slugify(j.Slug), maxRun)
+	for _, f := range j.FormerSlugs {
+		if name := formerCellName(j, f); name != "" {
+			addBranchRuns(fam, name, maxRun)
+		}
+		if s := util.Slugify(f); s != "" {
+			addBranchRuns(fam, s, maxRun)
 		}
 	}
 	return fam
+}
+
+// addBranchRuns adds carl/<base> and carl/<base>-r2..rN to fam — one name's
+// whole run history, in branchForRun's own spelling. Extracted so the current
+// name, the pre-cutover bare-slug name and every former name are all
+// enumerated by ONE rule: three hand-written loops is three chances for the
+// families to disagree about what -rN looks like.
+func addBranchRuns(fam map[string]bool, base string, maxRun int) {
+	if base == "" {
+		return
+	}
+	for r := 1; r <= maxRun; r++ {
+		if r >= 2 {
+			fam[fmt.Sprintf("carl/%s-r%d", base, r)] = true
+		} else {
+			fam["carl/"+base] = true
+		}
+	}
 }
 
 // ensureUsableBranch makes CellBranch(j) safe to (re)create the worktree on
@@ -338,9 +556,25 @@ func setCellWindowColor(j *Job) {
 // reads as no sessions. One tmux call covers both liveness and freshness —
 // callers that only need liveness use the LiveSessions() wrapper below.
 func liveSessionTimes() map[string]time.Time {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name} #{session_created}").Output()
+	live, err := listSessionTimes()
 	if err != nil {
 		return map[string]time.Time{}
+	}
+	return live
+}
+
+// listSessionTimes is liveSessionTimes with the tmux failure SURFACED rather
+// than folded into an empty map. Almost every caller wants the fold — a
+// snapshot is advisory and an unreachable tmux legitimately reads as "nothing
+// live" for a board render. ProbeCellSession is the exception, because it has
+// to answer whether a cell is CONFIRMED dead, and an empty map is the exact
+// signature of both "no sessions exist" and "tmux could not be asked": one is
+// evidence, the other is the absence of it, and stamping a job on the second
+// is how a live agent gets orphaned.
+func listSessionTimes() (map[string]time.Time, error) {
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name} #{session_created}").Output()
+	if err != nil {
+		return nil, err
 	}
 	live := map[string]time.Time{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -357,7 +591,7 @@ func liveSessionTimes() map[string]time.Time {
 		}
 		live[name] = time.Unix(secs, 0)
 	}
-	return live
+	return live, nil
 }
 
 // LiveSessions snapshots current tmux session names; a thin bool-only view
@@ -418,12 +652,20 @@ func zeusSpawnArgv(j *Job, resume ...string) []string {
 // and its initial prompt. Both are kraken-owned and live beside the worktree
 // in the cell dir (never in CellArtifacts — they are plumbing, not
 // deliverables), and both are rewritten on every spawn. See spawnCommand.
+//
+// existingCellDir rather than cellDir, and it is load-bearing rather than
+// tidy: stagedCommand os.WriteFile's these with no MkdirAll, so a path under a
+// directory that does not exist is a FAILED SPAWN. A renamed job's cell dir is
+// still under its old name (a rename moves no directory), which would make the
+// limit rescue's respawn — the one spawn that happens to an already-running
+// cell — fail outright on every renamed job. For a never-renamed job this
+// resolves to cellDir either way.
 func zeusBriefPath(j *Job) string {
-	return filepath.Join(cellDir(j), "zeus-brief.md")
+	return filepath.Join(existingCellDir(j), "zeus-brief.md")
 }
 
 func spawnPromptPath(j *Job) string {
-	return filepath.Join(cellDir(j), "zeus-prompt.md")
+	return filepath.Join(existingCellDir(j), "zeus-prompt.md")
 }
 
 // spawnInput is one content-driven argument of a spawn command: the flag it
@@ -569,7 +811,10 @@ func StartCell(j *Job, repo string) error {
 	if err != nil {
 		return fmt.Errorf("job %s: pick branch: %v", j.Slug, err)
 	}
-	for _, d := range []string{cellDir(j), CellArtifacts(j)} {
+	// cellDir, not existingCellDir: a cell being created now carries the job's
+	// CURRENT name. The probe exists for reading a cell that already exists
+	// under an older one.
+	for _, d := range []string{cellDir(j), cellArtifactsIn(cellDir(j))} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
@@ -1069,16 +1314,72 @@ func listBranchPRs(dir, branch string) ([]JobPR, bool) {
 }
 
 // VerifyCellSession confirms a tmux session is the cell kraken created for
-// this job (via the @kraken-job marker) before killing it.
-func VerifyCellSession(sess, slug string) error {
-	out, err := exec.Command("tmux", "show-options", "-t", sess, "-v", "@kraken-job").Output()
-	if err != nil {
+// this job (via the @kraken-job marker) before killing it. slugs is every name
+// the marker may legitimately carry, most-current first; a session marked with
+// any of them is this job's.
+//
+// More than one name because the marker is stamped at SPAWN and a rename
+// restamps it best-effort (rename.go's convergeCellTmux): a cell whose
+// convergence failed and was never healed still carries an older slug, and a
+// teardown that refuses on that would leave carl with a cell he cannot kill
+// from the board at all. The check is still a real one — an unmarked session,
+// or one marked for a name that is not this job's, is refused exactly as
+// before.
+func VerifyCellSession(sess string, slugs ...string) error {
+	got, marked := cellSessionMarker(sess)
+	if !marked {
 		return fmt.Errorf("session %s has no @kraken-job marker — not killing it; investigate manually", sess)
 	}
-	if got := strings.TrimSpace(string(out)); got != slug {
-		return fmt.Errorf("session %s is marked for job %q, not %q — not killing it; investigate manually", sess, got, slug)
+	for _, s := range slugs {
+		if got == s {
+			return nil
+		}
 	}
-	return nil
+	want := "(none given)"
+	if len(slugs) > 0 {
+		want = strconv.Quote(slugs[0])
+	}
+	return fmt.Errorf("session %s is marked for job %q, not %s — not killing it; investigate manually", sess, got, want)
+}
+
+// cellSessionMarker reads a session's @kraken-job marker: its value, and
+// whether the session carries one AT ALL. Absence covers both shapes tmux
+// answers an unset user option with — a non-zero exit and an empty value —
+// because every caller's question is "is there evidence here", not "which
+// tmux is installed".
+//
+// Absence is a real steady state rather than a suspicious one: StartCell
+// stamps the marker with a DISCARDED error, and every cell spawned before the
+// marker existed has none. The two callers weigh that differently on purpose
+// (see VerifyCellSession, which refuses, and convergeCellTmux's
+// verifyConvergeTarget, which accepts the session NAME as evidence instead),
+// which is why reading it is split out from judging it.
+func cellSessionMarker(sess string) (string, bool) {
+	out, err := exec.Command("tmux", "show-options", "-t", sess, "-v", "@kraken-job").Output()
+	if err != nil {
+		return "", false
+	}
+	got := strings.TrimSpace(string(out))
+	return got, got != ""
+}
+
+// CellMarkerSlugs is every @kraken-job value a cell of this job may carry:
+// the current slugified slug first, then one per former slug. The order is
+// the one VerifyCellSession reports on a mismatch, so the current name is what
+// a refusal names.
+//
+// Exported for the one caller outside this package: cmd/kraken's abandon verb
+// verifies a session before killing it exactly as teardownCell does, and a
+// single-slug call there refuses every renamed cell whose marker restamp
+// failed — with a message ("investigate manually") the viewer gives no way to
+// act on.
+func CellMarkerSlugs(j *Job) []string {
+	cands := cellNameCandidates(j)
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.Slug)
+	}
+	return out
 }
 
 // ownTmuxSession names the tmux session the current process runs inside, ""
@@ -1129,8 +1430,15 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if err := checkCellIdentity(j); err != nil {
 		return fmt.Errorf("cannot tear down cell: %w", err)
 	}
-	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
-		return err
+	// every name this cell could be running under, not just the current one:
+	// a renamed cell whose tmux convergence failed is still the session this
+	// process may be living inside, and self-decapitation is the failure this
+	// guard exists for.
+	own := ownTmuxSession()
+	for _, s := range cellSessionCandidates(j) {
+		if err := guardSelfTeardown(s, own); err != nil {
+			return err
+		}
 	}
 	if !force {
 		if wt := ExistingWorktree(j, repo); wt != "" {
@@ -1139,9 +1447,11 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 			}
 		}
 	}
-	sess := CellSession(j)
-	if live[sess] {
-		if err := VerifyCellSession(sess, util.Slugify(j.Slug)); err != nil {
+	// FindCellSession, so a renamed cell still running under an earlier name
+	// is killed rather than left behind as an orphaned session with a live
+	// zeus in it — the whole point of teardown being all-or-nothing.
+	if sess, ok := FindCellSession(j, live); ok {
+		if err := VerifyCellSession(sess, CellMarkerSlugs(j)...); err != nil {
 			return err
 		}
 		if err := exec.Command("tmux", "kill-session", "-t", sess).Run(); err != nil {
@@ -1179,8 +1489,14 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	}
 	// the cell dir (doc source, artifacts) goes too: artifacts were
 	// preserved into pluto before teardown, and the mid-run log in the job
-	// file is the durable trail
-	os.RemoveAll(cellDir(j))
+	// file is the durable trail.
+	//
+	// existingCellDir, because a renamed job's dir is still under the name it
+	// was created with — removing cellDir(j) would delete nothing and leave a
+	// whole worktree-less cell tree behind with nothing that ever collects it.
+	// checkCellIdentity above is what keeps this from ever resolving to
+	// something that belongs to no job.
+	os.RemoveAll(existingCellDir(j))
 	// the colour watermark lived in that dir, and its in-memory half
 	// (colorFallback, written only when the file couldn't be) did NOT — drop
 	// it here so both halves of one record expire together. Miss this and a
@@ -1232,8 +1548,19 @@ func acceptTrustPrompts(sess string) {
 // lookup reads a still-starting agent as "gone", which is how a trust dialog
 // once became "zeus process is gone".
 func CellZeus(j *Job, all []*core.Peer) *core.Peer {
-	sess := CellSession(j)
-	threadPrefix := ThreadNamePrefix(j)
+	// every session name and every thread prefix the job has held: a rename
+	// respawns nothing, so a renamed cell may still be running under an older
+	// session name with threads still named for an older prefix — and both
+	// halves of this election have to see them. Missing the session name finds
+	// no zeus at all (a live cell reading as "zeus process is gone"); missing
+	// the thread prefix elects a THREAD as zeus, which is the failure the
+	// filter below exists for.
+	sessions := cellSessionCandidates(j)
+	inCell := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		inCell[s] = true
+	}
+	threadPrefixes := threadNamePrefixes(j)
 	// side threads (thread.go) are claudes at depth 0 in this very session, so
 	// the positional fallback below would happily elect one as zeus during the
 	// window where zeus' own session file isn't written yet — stampSession
@@ -1250,10 +1577,10 @@ func CellZeus(j *Job, all []*core.Peer) *core.Peer {
 	threadPanes := liveThreadPanesFor(j)
 	var inSess []*core.Peer
 	for _, p := range all {
-		if p.TmuxSession != sess {
+		if !inCell[p.TmuxSession] {
 			continue
 		}
-		if strings.HasPrefix(p.Name, threadPrefix) || threadPanes[p.Pane] {
+		if hasAnyPrefix(p.Name, threadPrefixes) || threadPanes[p.Pane] {
 			continue
 		}
 		if p.Name == ZeusName(j) && p.Depth == 0 {
@@ -1321,8 +1648,23 @@ func CellHealth(j *Job, all []*core.Peer) string {
 		return "zeus process is gone — restart the cell (kill the session, then start it again from the board after cleanup)"
 	}
 	// found positionally but not yet named: claude is still starting — a
-	// lingering startup prompt needs a human, plain slowness needs patience
-	if zeus.Name != ZeusName(j) {
+	// lingering startup prompt needs a human, plain slowness needs patience.
+	//
+	// The comparison is against every zeus name this job has held, not just
+	// the current one. Zeus keeps the --name it was spawned with and a rename
+	// respawns nothing, so a current-name-only test fails FOREVER on a renamed
+	// live cell — CellZeus' positional fallback still finds the process, so
+	// this returned "" and the cell read as healthy while the transcript was
+	// never opened. Four things went quiet with it, all for exactly the cells
+	// the live-rename feature exists for: the daemon's health notification and
+	// its auto-retry, the usage-limit rescue's TRANSCRIPT trigger (the arm
+	// that covers cells whose settings.json predates the StopFailure hook),
+	// the board and viewer health lines, and RetryCell's specific nudge.
+	//
+	// Still a name check, and still this job's OWN names — the still-starting
+	// meaning is preserved exactly: a positionally-found nameless zeus reads
+	// as starting, and a peer named for another job still returns "".
+	if !isZeusName(j, zeus.Name) {
 		if zeus.Status == "question" {
 			return "cell agent is stuck on a startup prompt — k o " + CellSession(j) + " to answer it"
 		}
@@ -1395,7 +1737,15 @@ func RetryableHealth(reason string) bool {
 // can't be poked — that's reported, not papered over. Shared by the web
 // board's retry and the viewer's health rows.
 func RetryCell(j *Job) error {
-	if !j.Started() || j.State == "done" || !LiveSessions()[CellSession(j)] {
+	if !j.Started() || j.State == "done" {
+		return fmt.Errorf("%s has no live cell to retry", j.Slug)
+	}
+	// FindCellSession rather than the current name alone: a renamed cell whose
+	// tmux convergence failed is live under an older session name, and reading
+	// it as gone here refuses the nudge for exactly the stalled cell the nudge
+	// exists for. Below the two cheap tests above, which keep the tmux
+	// shell-out off every call that was never going to reach it.
+	if _, live := FindCellSession(j, LiveSessions()); !live {
 		return fmt.Errorf("%s has no live cell to retry", j.Slug)
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
@@ -1441,9 +1791,17 @@ func KillJob(j *Job) ([]string, error) {
 		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down", perr)
 	}
 	// guard before the intent write: a refused self-teardown must not leave a
-	// dangling marker on a live cell for the daemon to act on later
-	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
-		return msgs, err
+	// dangling marker on a live cell for the daemon to act on later. Every
+	// session candidate, exactly as teardownCell loops them — a renamed cell
+	// whose convergence failed is running under an OLD name, so the current
+	// name alone lets a kill issued from inside that very session past this
+	// guard, write the marker, and only then be refused by teardownCell: the
+	// dangling marker this ordering exists to prevent.
+	own := ownTmuxSession()
+	for _, s := range cellSessionCandidates(j) {
+		if err := guardSelfTeardown(s, own); err != nil {
+			return msgs, err
+		}
 	}
 	if err := WriteJobFields(j, "teardown", "kill"); err != nil {
 		return msgs, fmt.Errorf("teardown-intent write failed: %v — not tearing down", err)
@@ -1675,9 +2033,15 @@ func DoneJob(j *Job, outcome string) ([]string, error) {
 		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down (teardown deletes the source)", perr)
 	}
 	// guard before the intent write: a refused self-teardown must not leave a
-	// dangling marker on a live cell for the daemon to act on later
-	if err := guardSelfTeardown(CellSession(j), ownTmuxSession()); err != nil {
-		return msgs, err
+	// dangling marker on a live cell for the daemon to act on later. Every
+	// session candidate, exactly as teardownCell loops them — see KillJob's
+	// note: the current name alone lets a done issued from inside a renamed,
+	// unconverged cell write the marker before the inner guard refuses it.
+	own := ownTmuxSession()
+	for _, s := range cellSessionCandidates(j) {
+		if err := guardSelfTeardown(s, own); err != nil {
+			return msgs, err
+		}
 	}
 	if err := WriteJobFields(j, "teardown", "done:"+outcome); err != nil {
 		return msgs, fmt.Errorf("teardown-intent write failed: %v — not tearing down", err)
@@ -1857,9 +2221,14 @@ func ReactivateJob(j *Job, session, message string) error {
 	if session == "" {
 		return fmt.Errorf("%s has no recorded zeus session (done before kraken stamped session ids) — the board's reactivate action can't resume it without one", j.Slug)
 	}
+	// The CURRENT name is what a reactivated cell comes up under, further down.
+	// The already-live REFUSAL is a different question and has to ask about
+	// every name the cell could be running under: a renamed cell whose tmux
+	// convergence failed is live under an older session name, and missing it
+	// here would start a SECOND claude session on the one worktree.
 	sess := CellSession(j)
-	if LiveSessions()[sess] {
-		return fmt.Errorf("cell %s is already live (k o %s to jump in)", sess, sess)
+	if liveSess, ok := FindCellSession(j, LiveSessions()); ok {
+		return fmt.Errorf("cell %s is already live (k o %s to jump in)", liveSess, liveSess)
 	}
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
@@ -1893,7 +2262,16 @@ func ReactivateJob(j *Job, session, message string) error {
 			return fmt.Errorf("job %s: restore artifacts: %v", j.Slug, err)
 		}
 	}
-	for _, d := range []string{cellDir(j), CellArtifacts(j)} {
+	// existingCellDir rather than cellDir, and the difference only ever shows
+	// on a RENAMED job whose cell dir survived under an earlier name (the
+	// mid-run resume path — a torn-down cell has no dir, so this resolves to
+	// the current name and behaves exactly as it always has). Creating a
+	// second, EMPTY dir under the new name beside a surviving one would make
+	// it the dir CellArtifacts resolves to from then on, and the next
+	// teardown's true-mirror sync would read that empty dir as "every artifact
+	// was deleted" and wipe the stored rows.
+	reDir := existingCellDir(j)
+	for _, d := range []string{reDir, cellArtifactsIn(reDir)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
@@ -1934,7 +2312,17 @@ func ReactivateJob(j *Job, session, message string) error {
 			}
 			branch, startPoint = CellBranch(j), base
 		}
-		wt = CellWorktree(j, repo)
+		// under reDir, the dir the staging above already chose — NOT
+		// CellWorktree's current-name dir. On a renamed job whose old cell dir
+		// survived, those are two different directories, and creating the
+		// worktree in the second one splits the cell in half: `git worktree
+		// add` makes the current-name dir as a side effect, existingCellDir
+		// then flips to it (current-first is the ordering contract), and
+		// CellArtifacts resolves to a new EMPTY artifacts dir while the
+		// restored artifacts sit in the old one — at which point
+		// syncCellArtifacts takes its dir-missing skip branch and the mirror
+		// goes quiet with nothing reporting it. One dir per cell, chosen once.
+		wt = cellWorktreeIn(reDir, repo)
 		out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, branch, startPoint).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))

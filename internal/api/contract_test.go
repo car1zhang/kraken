@@ -1451,6 +1451,92 @@ func TestJobSaveFormWireShape(t *testing.T) {
 	}
 }
 
+// jobRenameReqSpec / jobRenameRespSpec cover POST /api/job/rename
+// (jobrename.go). Both request keys are literally required rather than merely
+// non-omitempty: an empty `slug` or `to` is a 400, and the body is decoded
+// with unknown fields rejected, so there is deliberately no third key to
+// document.
+//
+// The response is NOT the bare ack its one-field siblings serve. `slug` rides
+// back because the stored slug is `util.Slugify(to)` rather than the string
+// the caller sent, and both clients re-point their open editor at it
+// synchronously instead of reloading — an ack alone would leave them pointing
+// at a slug that no longer resolves. `skipped` and `notes` are both omitempty
+// and both report what a SUCCESSFUL rename could not finish, split by what the
+// reader has to do about it: `skipped` names preserved artifact files still
+// sitting under the old prefix because a file already occupied the new name
+// (source paths, the files to move by hand), while `notes` carries best-effort
+// steps that FAILED with their cause — an artifact rename that errored outright
+// rather than colliding, a tmux convergence call, the zeus notice on a live
+// cell. The empty case is the normal one for each, which is why the presence of
+// either is worth reading. Both are additive: apiContract stays 5.
+var jobRenameReqSpec = map[string]fieldSpec{
+	"slug": {kind: wireString, required: true},
+	"to":   {kind: wireString, required: true},
+}
+
+var jobRenameRespSpec = map[string]fieldSpec{
+	"ok":      {kind: wireBool, required: true},
+	"slug":    {kind: wireString, required: true},
+	"skipped": {kind: wireArray, required: false},
+	"notes":   {kind: wireArray, required: false},
+}
+
+// jobRenameErrSpec is the refusal envelope — the standard {"error": string}
+// every refusal on this surface serves, pinned here because a rename refusal
+// is the one a client RENDERS verbatim (the gates say things like "reserved
+// prefix" and "unarchive it first" that only jobs.RenameJob can phrase).
+var jobRenameErrSpec = map[string]fieldSpec{
+	"error": {kind: wireString, required: true},
+}
+
+// TestJobRenameWireShape drives the real handler, so the shapes above are
+// pinned as SERVED rather than as marshaled structs. Store mode: a rename is a
+// store transaction, and useTestStore sandboxes HOME so the pluto artifact
+// sweep and the cell lookups all land in a throwaway dir with no tmux session
+// anywhere — the tmux convergence branch is skipped by construction.
+func TestJobRenameWireShape(t *testing.T) {
+	st := useTestStore(t)
+	if _, err := st.CreateJob(&store.Job{Slug: "contract-rename"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	reqData, err := json.Marshal(webJobRenameReq{Slug: "contract-rename", To: "contract-renamed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webJobRenameReq", reqData, jobRenameReqSpec)
+
+	body := mustJSON(t, map[string]any{"slug": "contract-rename", "to": "contract-renamed"})
+	rec := httptest.NewRecorder()
+	webJobRename(rec, httptest.NewRequest(http.MethodPost, "/api/job/rename", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/job/rename: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/job/rename", rec.Body.Bytes(), jobRenameRespSpec)
+
+	// the served slug is the STORED one, which is what the clients re-point to
+	var resp struct {
+		Slug string `json:"slug"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Slug != "contract-renamed" {
+		t.Errorf("slug = %q, want %q", resp.Slug, "contract-renamed")
+	}
+
+	// a refusal: the reserved-prefix gate, which no client may work around.
+	// 409 with the refusal text verbatim — the shape a client renders inline.
+	body = mustJSON(t, map[string]any{"slug": "contract-renamed", "to": "dream-2026-08-12"})
+	rec = httptest.NewRecorder()
+	webJobRename(rec, httptest.NewRequest(http.MethodPost, "/api/job/rename", bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("POST /api/job/rename (reserved prefix): status %d, want 409, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/job/rename (refusal)", rec.Body.Bytes(), jobRenameErrSpec)
+}
+
 // --- GET /api/feedback and GET /api/questions (feedback.go/questions.go) —
 // custom envelopes, not the standard {"ok"}/{"error"} shape, so each gets
 // its own spec exercised through the real handler. POST forms all resolve

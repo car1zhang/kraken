@@ -2081,6 +2081,50 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 #editor-slug:hover { border-color: var(--ac); }
 #editor-slug:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
+
+/* ---- rename control (RenameControl.tsx) ----
+   Two pieces in two places: the trigger is a plain .btn.ghost up in the
+   .panel-head, which needs nothing here, and this is the row it opens in the
+   panel BODY. It lives in the body rather than the head because .panel-head is
+   pinned to one nowrap line — an input that grows, plus a preview line under
+   it, cannot be a head control. Shared by the editor and the steer modal, so
+   these are classes and not #ids (each surface passes its own id for tests). */
+.rename-row { display: flex; flex-direction: column; gap: 5px; }
+.rename-line { display: flex; gap: 8px; align-items: center; }
+/* the same field the new-job slug input is, since it is the same kind of
+   typing — a name, monospace, with the notched corner the panel uses */
+.rename-input {
+  flex: 1; min-width: 0; font: 11px var(--mono);
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
+  border: 1px solid var(--border-strong); padding: 6px 10px;
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+}
+.rename-input:hover { border-color: var(--ac); }
+.rename-input:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
+.rename-line .btn { flex: none; }
+.rename-hint { font: 10px var(--mono); color: var(--muted); line-height: 1.4; }
+/* the slugified preview is the payload of that line — it reads at full
+   contrast while the prose around it stays muted */
+.rename-hint .slug { color: var(--fg); }
+/* a refusal, in the same hue every destructive/failed control in this sheet
+   uses */
+.rename-hint.err { color: var(--ac2); }
+/* the `skipped` notice: amber rather than --ac2, because the rename COMMITTED
+   and this is the one line in the row that is not a failure — it is work left
+   over, and it outlives the input that produced it (see RenameRow) */
+.rename-hint.warn { color: var(--warn); }
+/* the `notes` block, deliberately a different hue from .warn above it: those
+   are files to move, these are steps that BROKE. It shares the failure hue
+   with .err rather than inventing a third, and cannot be confused with it —
+   .err only ever renders while the input row is OPEN (a refusal means no
+   rename happened), while this only appears after a rename committed. */
+.rename-hint.fail { color: var(--ac2); }
+/* full paths and causes, one per line and never clipped: the whole point of
+   both lists is that carl can act on the thing each line names */
+.rename-skipped { margin: 4px 0; padding-left: 14px; word-break: break-all; }
+/* one dismiss under BOTH blocks, so it reads as clearing the notice rather
+   than as belonging to whichever list happens to be last */
+.rename-dismiss { align-self: flex-start; }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
 .editor-form label { display: flex; flex-direction: column; gap: 4px; font: 600 9px var(--display); letter-spacing: 0.16em; color: var(--muted); }
 .f-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }

@@ -47,8 +47,17 @@ func prAttachHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "url is not a github pull request url"})
 		return
 	}
-	j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
-	if j == nil {
+	// webJobFor, not JobBySlug: this slug is not a caller's choice — it is
+	// BAKED into the cell's settings.json at spawn (jobs/cell.go's
+	// prHookCommand) and installHookSettings runs only at spawn, so a job
+	// renamed mid-run keeps posting its old name for the rest of that cell's
+	// life. Resolving current-only would 404 every `gh pr create` in it, and
+	// the loss is silent to everyone but the hook's own stderr — the PR then
+	// reappears on the card only when the daemon's branch-repair pass gets to
+	// it. webJobFor tries the current slug first, so a live job named X always
+	// beats a renamed job that used to be X.
+	j, _, ferr := webJobFor(req.Slug)
+	if ferr != nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 		return
 	}

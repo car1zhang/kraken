@@ -65,29 +65,45 @@ func InterruptCell(j *Job, all []*core.Peer) error {
 // the job, and stopping the job is not a reason to interrupt the
 // conversation he is mid-way through.
 func cellAgentPanes(j *Job, all []*core.Peer) map[string]*core.Peer {
-	sess := CellSession(j)
+	// every session name the job has held: a renamed cell whose tmux
+	// convergence has not landed is still running under an older one, and a
+	// Stop that matched nothing would report "no live agent panes" for a cell
+	// carl is watching work.
+	sessions := cellSessionCandidates(j)
+	inCell := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		inCell[s] = true
+	}
+	// the NAME key beside the pane one, on CellZeus' reasoning: the recorded
+	// panes come from the store and a row whose pane was cleared would sail
+	// past a pane-only exclusion. A thread of a renamed job answers to a
+	// former prefix, so all of them are checked.
+	threadPrefixes := threadNamePrefixes(j)
 	zeus := CellZeus(j, all)
 	threads := liveThreadPanesFor(j)
+	excluded := func(p *core.Peer) bool {
+		return threads[p.Pane] || hasAnyPrefix(p.Name, threadPrefixes)
+	}
 
 	targets := map[string]*core.Peer{} // pane -> foreground peer to send through
 	for _, p := range all {
-		if p.TmuxSession != sess || p.Depth != 0 || p.Pane == "" {
+		if !inCell[p.TmuxSession] || p.Depth != 0 || p.Pane == "" {
 			continue
 		}
 		if p.Agent != "claude" && p.Agent != "codex" {
 			continue
 		}
-		if threads[p.Pane] {
+		if excluded(p) {
 			continue
 		}
 		targets[p.Pane] = p
 	}
 	if zeus != nil {
-		if zeus.Pane != "" && !threads[zeus.Pane] {
+		if zeus.Pane != "" && !excluded(zeus) {
 			targets[zeus.Pane] = zeus
 		}
 		for _, m := range zeus.Teammates {
-			if m.Pane == "" || threads[m.Pane] {
+			if m.Pane == "" || excluded(m) {
 				continue // in-process teammate: no pane to reach
 			}
 			targets[m.Pane] = m

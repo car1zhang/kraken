@@ -902,6 +902,50 @@ struct ThreadActionResponse: Decodable {
     let tid: String?
 }
 
+// POST /api/job/rename's body. Here rather than beside its one call site in
+// APIClient.swift, which is where the single-call-site RULE would have put it:
+// ReorderRequest is the precedent for that placement and it is `private`,
+// while these two are not — RenameJobResponse cannot be, because it is what
+// `renameJob` RETURNS, and the pair belongs together. ThreadActionRequest
+// above is the closer match: one call site, internal, in this file. The
+// API-contract rule in CLAUDE.md names Models.swift as one of the three files
+// a wire change lands in, which settles it.
+//
+// `to` is the free text the user typed, NOT a slug: the server slugifies it
+// and the response says what it stored.
+struct RenameJobRequest: Encodable {
+    let slug: String
+    let to: String
+}
+
+// POST /api/job/rename's answer. `slug` is the name the server actually
+// stored and the only thing a caller may re-point to — the typed text is a
+// request, never the result. `skipped` is ABSENT rather than empty when
+// nothing was left behind (the Go side omits it), which is why it is the one
+// Optional here; every entry is the SOURCE path of a preserved artifact copy
+// that KEPT THE OLD NAME because something already sat at the new one — never
+// the destination that blocked it, which is the file a reader must not act on
+// — and it holds true name conflicts ONLY, a copy whose rename failed outright
+// going to `notes` instead. The rename itself committed either way, so it is
+// something to render rather than a failure.
+//
+// `notes` is the other half and is Optional for the same omitted-when-empty
+// reason: the post-commit steps that FAILED, each carrying its cause — a
+// preserved copy whose rename failed outright, a tmux convergence step that
+// did not take, a zeus notice that did not deliver. None of them can fail a
+// rename (they all run after the row has moved), which is why they need
+// saying: there is no refusal to read them off.
+//
+// Two lists rather than one because the reader's move differs: a `skipped`
+// entry is a file to move or delete, a `notes` entry is something that broke.
+// Decoded by RenameDecodeTests.
+struct RenameJobResponse: Decodable {
+    let ok: Bool
+    let slug: String
+    let skipped: [String]?
+    let notes: [String]?
+}
+
 // GET /api/thread/read's body: the thread's conversation (inherited pre-fork
 // history included, see ReadBlock.inherited), plus the liveness/pane the
 // view needs to decide whether a pane capture and a composer make sense.

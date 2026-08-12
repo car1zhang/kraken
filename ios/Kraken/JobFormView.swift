@@ -9,15 +9,64 @@ private enum SyncState: Equatable {
     case failed(String)
 }
 
+/// `util.Slugify` (internal/util/util.go), ported for the rename control's
+/// live preview — lowercase, keep [a-z0-9], collapse every other run into a
+/// single "-", trim.
+///
+/// A PREVIEW, never a decision: the server slugifies the text it is sent and
+/// its answer is what gets stored and re-pointed to, so a disagreement here
+/// costs a wrong preview and never a wrong rename. TWO are known and left
+/// alone, both pinned in ios/KrakenTests/JobSlugTests.swift:
+///
+///  - Swift iterates GRAPHEME CLUSTERS where Go iterates runes, so a
+///    decomposed "e" plus a combining accent is one non-ASCII Character here
+///    (yielding "") where Go sees two runes (yielding "e").
+///  - `lowercased()` applies FULL case mapping where Go's `strings.ToLower`
+///    applies SIMPLE mapping, so U+0130 (İ) expands to "i" + U+0307, which
+///    then clusters and disappears: "İstanbul" previews as "stanbul" where
+///    the server stores "istanbul".
+///
+/// Both fail in the DISARM direction — the Rename button is gated on a
+/// non-empty preview, so the worst either can do is refuse a name the server
+/// would have accepted. Neither can store one: `renameTapped` sends the raw
+/// typed text and re-points to `res.slug`.
+enum JobSlug {
+    static func slugify(_ s: String) -> String {
+        var out = ""
+        // starts true, which is why a leading separator is never written at
+        // all and only a trailing one can survive to the trim below
+        var lastDash = true
+        for ch in s.lowercased() {
+            // after lowercasing, ASCII letter-or-digit IS [a-z0-9]
+            if ch.isASCII, ch.isLetter || ch.isNumber {
+                out.append(ch)
+                lastDash = false
+            } else if !lastDash {
+                out.append("-")
+                lastDash = true
+            }
+        }
+        while out.hasSuffix("-") { out.removeLast() }
+        while out.hasPrefix("-") { out.removeFirst() }
+        return out
+    }
+}
+
 /// Structured spec editor: SwiftUI Form bound to GET /api/job/form,
 /// saved back via POST /api/job/saveform. Used both for editing an existing
 /// job (from JobDetailView) and, chained after creation, for a brand new one
 /// (from NewJobSheet).
 struct JobFormView: View {
+    /// The slug this form was OPENED on. Everything reads `currentSlug`
+    /// instead, which a successful rename re-points — see below.
     let slug: String
     let baseURL: String
     let isNew: Bool
     var onSaved: () -> Void
+    /// A rename landed, carrying the new slug. Defaulted so the two existing
+    /// call sites keep compiling; JobDetailView fills it to refresh the board
+    /// underneath this sheet.
+    var onRenamed: (String) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
 
@@ -70,12 +119,56 @@ struct JobFormView: View {
     @State private var insertedConfirmation: String?
     @State private var isUploading = false
 
+    // ---- rename ------------------------------------------------------------
+    // The re-point, held here rather than by mutating `slug` (a `let` set at
+    // init): after a successful rename every path below — load, autosave,
+    // colour, uploads, queue — addresses the job by its NEW name in the same
+    // render pass, with no reload and no dismissal. nil means never renamed.
+    @State private var renamedSlug: String?
+    @State private var isRenameOpen = false
+    @State private var renameText = ""
+    @State private var renameError: String?
+    @State private var isRenaming = false
+    // The two lists a completed rename leaves behind, straight off the
+    // response. Both outlive the input that produced them — the rename
+    // COMMITTED, so there is no refusal on screen to read them off, the server
+    // only logs them, and the only person who can act is the one being told.
+    // Cleared together by Dismiss, or by opening a fresh rename.
+    //
+    // `renameSkipped` holds SOURCE paths of preserved copies that kept the old
+    // name because something already occupies the new one — true name
+    // conflicts only.
+    @State private var renameSkipped: [String] = []
+    // `renameNotes` holds the post-commit steps that FAILED, each with its
+    // cause: a preserved copy whose rename failed outright, a tmux convergence
+    // step that did not take, a zeus notice that did not deliver. Kept
+    // separate from the list above rather than merged, because the reader's
+    // move differs — those are files to move, these are things that broke.
+    @State private var renameNotes: [String] = []
+
+    /// The name every request from this form carries.
+    private var currentSlug: String { renamedSlug ?? slug }
+
+    /// The visibility rule: any EXISTING job, whatever the form lock says.
+    ///
+    /// Identity is not a form field — saveform refuses a job whose cell is in
+    /// flight because the file belongs to the crew, while renaming works on a
+    /// live cell and is most useful there — so this is deliberately not gated
+    /// on `editable`. The new-job row is excluded because its slug is what the
+    /// creation the user just completed was FOR.
+    ///
+    /// Archived needs no arm of its own: this control lives inside `form`,
+    /// which renders only after GET /api/job/form has SUCCEEDED, and an
+    /// archived job has no job file to answer with — it lands on `failedLoad`
+    /// instead, where there is no rename button to press.
+    private var showRename: Bool { !isNew }
+
     var body: some View {
         Group {
             if isLoading {
                 ProgressView()
                     .tint(KTheme.accent)
-                    .navigationTitle(slug)
+                    .navigationTitle(currentSlug)
             } else if !loaded {
                 failedLoad
             } else {
@@ -103,7 +196,7 @@ struct JobFormView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { ThemeBackgroundView() }
-        .navigationTitle(slug)
+        .navigationTitle(currentSlug)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -127,6 +220,9 @@ struct JobFormView: View {
                         .font(.voice(12))
                         .foregroundStyle(KTheme.revealed)
                 }
+            }
+            if showRename {
+                kSection("Name") { renameRows }
             }
             kSection("Repo") {
                 TextField("repo", text: $repo)
@@ -159,7 +255,7 @@ struct JobFormView: View {
                 // neither full-replaces the job file nor applies saveform's
                 // cell-in-flight gate. Same picker JobDetailView shows —
                 // see JobColorStrip's header for why it is shared.
-                JobColorStrip(baseURL: baseURL, slug: slug, serverColor: color) { saved in
+                JobColorStrip(baseURL: baseURL, slug: currentSlug, serverColor: color) { saved in
                     color = saved
                 }
                 .listRowBackground(Color.clear)
@@ -178,7 +274,7 @@ struct JobFormView: View {
                     .listRowBackground(Color.clear)
                 if editable {
                     ImageAttachmentBar(
-                        baseURL: baseURL, slug: slug,
+                        baseURL: baseURL, slug: currentSlug,
                         isUploading: $isUploading,
                         onUploaded: { insertAttachment($0) },
                         onError: { attachmentError = $0 }
@@ -206,7 +302,7 @@ struct JobFormView: View {
             }
         }
         .kListStyle()
-        .navigationTitle(slug)
+        .navigationTitle(currentSlug)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -247,6 +343,181 @@ struct JobFormView: View {
         // `ready`, which took an immediate flush of its own; that flag went
         // with the queued state, so there is one debounce path again.
         .onChange(of: autosaveSnapshotKey) { scheduleAutosave() }
+    }
+
+    /// The rename control: the current name with a Rename button, which swaps
+    /// in an input, a live slug preview and any refusal — plus, after a
+    /// success, the two post-rename lists, which are the rows here that
+    /// outlive the input that produced them.
+    ///
+    /// Deliberately in the FORM rather than the toolbar: the toolbar's three
+    /// slots are taken by Cancel/Queue/Done, and a rename wants its preview
+    /// line beside it anyway. The preview is what makes a typed "My Job!"
+    /// unsurprising — the server's slugifier, not this one, decides.
+    @ViewBuilder
+    private var renameRows: some View {
+        if !renameSkipped.isEmpty {
+            // Outside the isRenameOpen branch on purpose: it is reported by a
+            // rename that already CLOSED the input, and it stays until read.
+            //
+            // Every path listed is the file that STAYED — the source, still
+            // under the old name, which is the one a human can act on. The
+            // server sends sources for exactly that reason
+            // (jobs.RenameResult.Skipped), and it sends true name CONFLICTS
+            // only: a preserved copy whose rename failed outright is in the
+            // notes block below instead, so this sentence can state the cause
+            // without hedging.
+            //
+            // "at the matching new-name path in the same directory" is doing
+            // real work: the blocker itself is not on the wire (the server
+            // sends the source, deliberately), so this is what lets carl find
+            // the file in the way without being handed one this view invented.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("renamed, but \(renameSkipped.count) preserved artifact \(renameSkipped.count == 1 ? "copy" : "copies") kept the old name — something already sits at the matching new-name path in the same directory. \(renameSkipped.count == 1 ? "The path below is that copy, still under the old name; move or delete it by hand:" : "The paths below are those copies, still under the old name; move or delete them by hand:")")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.revealed)
+                ForEach(renameSkipped, id: \.self) { path in
+                    Text(path)
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.text2)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        if !renameNotes.isEmpty {
+            // A separate row in the FAILURE colour, not `revealed` amber like
+            // the list above: those are files to move, these are steps that
+            // BROKE, each carrying its own cause. Folding them together is
+            // exactly what the server stopped doing — a failed move used to be
+            // reported as a conflict, under a sentence that was false about it.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("the rename itself landed; \(renameNotes.count) \(renameNotes.count == 1 ? "step" : "steps") after it did not:")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.counter)
+                ForEach(renameNotes, id: \.self) { note in
+                    Text(note)
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.text2)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        if !renameSkipped.isEmpty || !renameNotes.isEmpty {
+            // One Dismiss for the whole notice: both lists come from one
+            // response and there is no state in which clearing half of them
+            // means anything.
+            Button("Dismiss") {
+                renameSkipped = []
+                renameNotes = []
+            }
+            .buttonStyle(.plain)
+            .font(.data(12))
+            .foregroundStyle(KTheme.accent)
+        }
+        if isRenameOpen {
+            TextField("new name", text: $renameText)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .font(.data(13))
+                .kField()
+                .listRowBackground(Color.clear)
+                .onChange(of: renameText) {
+                    // the refusal described the text that WAS there
+                    renameError = nil
+                }
+            if let renameError {
+                Text(renameError).font(.voice(11)).foregroundStyle(KTheme.counter)
+            } else if renamePreview.isEmpty {
+                Text("a name needs at least one letter or digit")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.text2)
+            } else {
+                Text("→ slug will be \(renamePreview) · branch, PRs and history stay attached")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.text2)
+            }
+            HStack(spacing: 12) {
+                Button("Rename") { renameTapped() }
+                    .buttonStyle(.plain)
+                    .font(.data(12, weight: .semibold))
+                    .foregroundStyle(renamePreview.isEmpty || isRenaming ? KTheme.text2 : KTheme.accent)
+                    .disabled(renamePreview.isEmpty || isRenaming)
+                Button("Cancel") {
+                    isRenameOpen = false
+                    renameError = nil
+                }
+                .buttonStyle(.plain)
+                .font(.data(12))
+                .foregroundStyle(KTheme.text2)
+                .disabled(isRenaming)
+            }
+        } else {
+            HStack {
+                Text(currentSlug)
+                    .font(.data(13))
+                    .foregroundStyle(KTheme.text)
+                Spacer()
+                Button {
+                    // seeded with the current slug, so the common edit is a
+                    // word rather than a retype
+                    renameText = currentSlug
+                    renameError = nil
+                    renameSkipped = []
+                    renameNotes = []
+                    isRenameOpen = true
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .buttonStyle(.plain)
+                .font(.data(12))
+                .foregroundStyle(KTheme.accent)
+            }
+        }
+    }
+
+    private var renamePreview: String { JobSlug.slugify(renameText) }
+
+    /// POSTs the rename and re-points this form at the name the SERVER
+    /// confirmed — never at `renamePreview`, which is a guess about what the
+    /// server would do. A refusal keeps the input open on the old slug with
+    /// the typed text intact, so the sentence can be read beside what caused
+    /// it.
+    ///
+    /// The pending autosave is flushed and AWAITED first, the same
+    /// discipline `queueTapped` applies for the same reason: an edit still
+    /// sitting behind the 600ms debounce belongs to the job under the name it
+    /// was typed under, and landing it before the identity moves is the only
+    /// ordering that cannot lose it. (`performAutosave` reads `currentSlug`
+    /// at call time, so a debounce that fired AFTER the re-point would in
+    /// fact address the new name and still land — this is belt and braces
+    /// against that ordering rather than the whole of it, and it also means
+    /// an autosave failure is visible before the rename rather than after.)
+    private func renameTapped() {
+        guard !renamePreview.isEmpty, !isRenaming else { return }
+        isRenaming = true
+        renameError = nil
+        renameSkipped = []
+        renameNotes = []
+        let from = currentSlug
+        flushAutosave()
+        let pending = autosaveTask
+        Task {
+            await pending?.value
+            do {
+                let res = try await APIClient.shared.renameJob(baseURL: baseURL, slug: from, to: renameText)
+                isRenaming = false
+                isRenameOpen = false
+                // Neither list is a failure of the rename: it committed either
+                // way. One is files to move, the other is steps that broke.
+                renameSkipped = res.skipped ?? []
+                renameNotes = res.notes ?? []
+                renamedSlug = res.slug
+                onRenamed(res.slug)
+            } catch {
+                isRenaming = false
+                renameError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 
     /// The repo/model suggestion strips: KChip-shaped capsules on glass.
@@ -334,7 +605,7 @@ struct JobFormView: View {
         isLoading = true
         fetchError = nil
         do {
-            let f = try await APIClient.shared.fetchJobForm(baseURL: baseURL, slug: slug)
+            let f = try await APIClient.shared.fetchJobForm(baseURL: baseURL, slug: currentSlug)
             repo = f.repo
             base = f.base
             solo = f.solo
@@ -417,7 +688,7 @@ struct JobFormView: View {
     private func performAutosave() async {
         syncState = .syncing
         let req = JobFormSaveRequest(
-            slug: slug, repo: repo, base: base, solo: solo,
+            slug: currentSlug, repo: repo, base: base, solo: solo,
             model: model.trimmingCharacters(in: .whitespaces),
             spec: spec, mtime: 0
         )
@@ -455,7 +726,7 @@ struct JobFormView: View {
                 return
             }
             do {
-                try await APIClient.shared.queueJob(baseURL: baseURL, slug: slug)
+                try await APIClient.shared.queueJob(baseURL: baseURL, slug: currentSlug)
                 isSubmitting = false
                 onSaved()
             } catch {

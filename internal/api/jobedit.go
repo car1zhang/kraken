@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"kraken/internal/core"
 	"kraken/internal/jobs"
 	"kraken/internal/store"
 	"kraken/internal/util"
@@ -17,6 +18,16 @@ import (
 func webJobFor(slug string) (*jobs.Job, map[string]*jobs.Job, error) {
 	js := jobs.LoadJobs()
 	j := jobs.JobBySlug(js, slug)
+	if j == nil {
+		// A slug naming no active job may still be a job's FORMER name: the
+		// cell verbs (/api/questions, /api/feedback, /api/job/load) and the
+		// hooks are all called by processes that learned their slug when they
+		// spawned, so a rename mid-run would otherwise 404 every one of them
+		// until the cell restarted. jobs.LoadJobBySlug tries the current slug
+		// first and only then the former-slug index, so a live job named X
+		// always beats a renamed job that used to be X.
+		j = jobs.LoadJobBySlug(slug)
+	}
 	if j == nil {
 		return nil, nil, fmt.Errorf("no job %q", slug)
 	}
@@ -71,9 +82,18 @@ func composeRawJobContent(j *jobs.Job) string {
 // store.UpdateJobFields expects (jobFieldColumns' allowlist) — the raw
 // save's store-mode path, mirroring the raw file save's "whatever the user
 // submitted overwrites the whole record" semantics field-for-field.
+//
+// "slug" is deliberately NOT in this map. A slug is the job's identity — the
+// cell dir, the tmux session, the branch family, the pluto artifact prefix and
+// every peer job's prereq reference are all derived from it — so moving it is
+// POST /api/job/rename's whole job (jobrename.go), gates and follow-through
+// included. Writing it here instead moved the column and nothing else, which
+// is why the raw save now refuses a changed job: line outright rather than
+// silently dropping it: a save that keeps the old name while the editor shows
+// the new one is the same lie in the other direction.
 func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	return map[string]any{
-		"slug": p.Slug, "repo": p.Repo, "base": p.Base,
+		"repo": p.Repo, "base": p.Base,
 		"solo": p.Solo, "model": p.Model, "color": p.Color,
 		"body": p.Body, "state": p.State, "outcome": p.Outcome,
 		"session": p.Session, "teardown": p.Teardown, "run": int64(p.Run),
@@ -200,6 +220,19 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 			Solo: parsed.Solo, Model: parsed.Model,
 			Color: parsed.Color, Body: parsed.Body,
 		}); err != nil {
+			// ErrSlugTaken is a name clash the caller can fix by typing a
+			// different one, so it is a 409 like the pre-check above and never
+			// the generic 500. The pre-check does not cover it: it tests only
+			// ACTIVE slugs, while CreateJob also refuses an active job's FORMER
+			// slug (the rename reservation, store/jobs.go) — a name no board
+			// client can see, which is exactly why the refusal has to say so
+			// rather than read as a server fault.
+			if errors.Is(err, store.ErrSlugTaken) {
+				webJSON(w, http.StatusConflict, map[string]string{
+					"error": slug + " is taken — an active job already uses that name or reserved it as a former name by being renamed away from it",
+				})
+				return
+			}
 			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -264,8 +297,29 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — its file belongs to the crew right now"})
 		return
 	}
+	// One parse for both storage modes, hoisted above the branch because the
+	// job: line is checked before anything is written. ParseJob falls back to
+	// the NAME it is given when the job: line is absent or empty, and the name
+	// here is this job's own slug — so an untouched or blank job: line yields
+	// parsed.Slug == j.Slug and saves exactly as it always did. A line that
+	// says something else is the only case this catches.
+	parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(req.Content))
+	if parsed.Slug != j.Slug {
+		// Refused rather than applied: a slug is identity (cell dir, tmux
+		// session, branch family, pluto prefix, every peer's prereq
+		// reference), and the raw save writes columns. It is refused rather
+		// than IGNORED for the same reason — a save that quietly keeps the old
+		// name while the editor shows the new one is a lie the next reader
+		// inherits. The echo is bounded (jobcolor.go's rule): the value comes
+		// from the body, so an unbounded quote would let a client choose the
+		// size of the response.
+		webJSON(w, http.StatusConflict, map[string]string{
+			"error": "job: line says " + core.TruncateOneLine(parsed.Slug, 40) + " but this job is " +
+				j.Slug + " — rename it with POST /api/job/rename, which moves the cell, the branch family and every prereq reference with it",
+		})
+		return
+	}
 	if st := jobs.ActiveStore(); st != nil {
-		parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(req.Content))
 		// unparseable content still saves (drafts may be mid-thought) but,
 		// mirroring file mode's contract exactly, only the body changes —
 		// jobFieldsFromParsed(parsed) would otherwise write whatever
@@ -293,10 +347,11 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 			webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
 			return
 		}
-		if errors.Is(err, store.ErrSlugTaken) {
-			webJSON(w, http.StatusConflict, map[string]string{"error": "slug " + parsed.Slug + " is already taken by another active job"})
-			return
-		}
+		// There is no ErrSlugTaken arm here any more: this save cannot move a
+		// slug at all (jobFieldsFromParsed carries no "slug", and a job: line
+		// that differs was refused above), so the store's unique-index backstop
+		// has nothing here to fire on. A collision is /api/job/rename's and
+		// /api/job/create's refusal now.
 		if err != nil {
 			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -314,7 +369,11 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fi, _ := os.Stat(j.File)
-	parsed := jobs.ParseJob(filepath.Base(j.File), []byte(req.Content))
+	// warn comes from the SAME parse the job: check above ran — one parse of
+	// one string, and the name it was given (j.Slug + the suffix) differs from
+	// this file's basename only for a file whose job: line renames it, which
+	// is now refused before reaching here. Err does not depend on the name at
+	// all.
 	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
 }
@@ -467,8 +526,17 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
-	if j == nil {
+	// webJobFor rather than JobBySlug: the editor autosaves on a 600ms debounce
+	// and FLUSHES that pending save when its body unmounts, which is exactly
+	// what a rename does to it (the overlay re-keys on the new slug). That
+	// flush still carries the OLD slug, so a current-only lookup would 404 it
+	// and the last edits typed before the rename would vanish with the note
+	// rendered onto an already-unmounted body. Resolving through the former
+	// slug lands them on the same job under its new name, which is the honest
+	// outcome; req.Slug is overwritten from the resolved job below, so nothing
+	// downstream sees the stale name.
+	j, _, ferr := webJobFor(req.Slug)
+	if ferr != nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 		return
 	}

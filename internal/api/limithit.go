@@ -66,8 +66,15 @@ func limitHitHandler(w http.ResponseWriter, r *http.Request) {
 	// command string, so an unknown slug here means the request is malformed
 	// (a stale hook from a torn-down job, a hand-typed POST), not that the
 	// caller asked about a resource it merely doesn't have yet.
-	j := jobs.JobBySlug(jobs.LoadJobs(), req.Slug)
-	if j == nil {
+	// webJobFor, not JobBySlug: the slug the StopFailure hook posts was baked
+	// into this cell's settings.json at spawn (jobs/cell.go's limitHookCommand)
+	// and is never rewritten mid-run, so a renamed job would refuse its own
+	// hook for the rest of that cell's life — and losing this arm costs the
+	// rescue its FAST trigger, leaving only the transcript arm, whose lag
+	// CLAUDE.md measures in hours of a dead cell. The current slug is tried
+	// first, so a live job named X always beats a renamed job that used to be X.
+	j, _, ferr := webJobFor(req.Slug)
+	if ferr != nil {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "no such job"})
 		return
 	}

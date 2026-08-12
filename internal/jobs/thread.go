@@ -54,6 +54,49 @@ import (
 // collide, and ends in "-" so a prefix match can't span into another tid.
 func ThreadNamePrefix(j *Job) string { return "thread-" + util.Slugify(j.Slug) + "-" }
 
+// threadNamePrefixes is every prefix a thread of THIS job may be running
+// under: the current one first, then one per former slug. A thread's --name is
+// fixed at spawn and a rename does not respawn anything, so after a rename the
+// job's own live threads still answer to an older prefix.
+//
+// It exists because all three exclusions ThreadNamePrefix serves fail in the
+// same direction when they miss a thread, and each failure is the one its own
+// comment calls the worst outcome available: staleThreadTIDs closes a LIVE row
+// (un-skipping its pane in the roll call, orphaning kill/send, and letting a
+// revive start a second claude on one session id), CellZeus elects the thread
+// as zeus (stamping a thread's session id into the job and pointing carl's
+// steer messages at it), and Stop interrupts the very conversation carl
+// branched to have.
+func threadNamePrefixes(j *Job) []string {
+	out := []string{ThreadNamePrefix(j)}
+	seen := map[string]bool{out[0]: true}
+	for _, f := range j.FormerSlugs {
+		s := util.Slugify(f)
+		if s == "" {
+			continue
+		}
+		p := "thread-" + s + "-"
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// hasAnyPrefix reports whether name starts with any of prefixes. A tiny
+// helper, but it is what keeps the three prefix exclusions from each spelling
+// the loop out and drifting.
+func hasAnyPrefix(name string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // ThreadAgentName is the claude --name a thread runs under: the prefix plus
 // its tid. This is the identity every verify-before-acting check compares
 // against — a pane whose claude answers to this name is this thread, and any
@@ -70,12 +113,16 @@ func ThreadAgentName(j *Job, tid string) string { return ThreadNamePrefix(j) + t
 // some milliseconds AFTER tmux returns — so a single shared path would let a
 // second branch (or a revive) overwrite the file between the first window
 // opening and its claude reading it, handing one thread another's identity.
+// Both resolve through existingCellDir for zeusBriefPath's reason: stagedCommand
+// writes these files without creating their directory, so branching a thread
+// off a RENAMED job would fail on a cell dir that is still under the job's
+// earlier name.
 func threadBriefPath(j *Job, tid string) string {
-	return filepath.Join(cellDir(j), "thread-"+tid+"-brief.md")
+	return filepath.Join(existingCellDir(j), "thread-"+tid+"-brief.md")
 }
 
 func threadPromptPath(j *Job, tid string) string {
-	return filepath.Join(cellDir(j), "thread-"+tid+"-prompt.md")
+	return filepath.Join(existingCellDir(j), "thread-"+tid+"-prompt.md")
 }
 
 // threadStore resolves the store every thread verb needs. Threads live ONLY in
@@ -242,18 +289,32 @@ func threadPeer(all []*core.Peer, pane, agentName string) *core.Peer {
 // recorded pane under its own name, some claude in the cell session is running
 // its session id, or its recorded pane holds a claude too young to be named.
 func liveThreadClaude(j *Job, all []*core.Peer, t store.Thread) *core.Peer {
-	if p := threadPeer(all, t.Pane, ThreadAgentName(j, t.TID)); p != nil {
+	// former names on all three signals, for staleThreadTIDs' reason read from
+	// the other end: this is the guard a REVIVE consults, and a renamed job's
+	// live thread that reads as gone here is the second claude on one session
+	// id this file exists to make impossible.
+	prefixes, sessions := threadNamePrefixes(j), cellSessionCandidates(j)
+	if p := anyThreadPeer(all, t.Pane, prefixes, t.TID); p != nil {
 		return p
 	}
-	sess, zeusName := CellSession(j), ZeusName(j)
 	if t.SessionID != "" {
+		inCell := map[string]bool{}
+		for _, s := range sessions {
+			inCell[s] = true
+		}
 		for _, p := range all {
-			if p.Agent == "claude" && p.TmuxSession == sess && p.SessionID == t.SessionID && p.Name != zeusName {
+			// The zeus exclusion goes through the CANDIDATE set, not the one
+			// current name: a renamed cell's zeus still answers to
+			// zeus-<former slug>, and this exclusion is what keeps a zeus
+			// whose GUESSED session id happens to be the thread's (they share
+			// a worktree) from standing in for a dead thread's claude. The
+			// widening is strictly safe — no thread name starts with "zeus-".
+			if p.Agent == "claude" && inCell[p.TmuxSession] && p.SessionID == t.SessionID && !isZeusName(j, p.Name) {
 				return p
 			}
 		}
 	}
-	return startingClaudeInPane(all, t.Pane, sess)
+	return anyStartingClaudeInPane(all, t.Pane, sessions)
 }
 
 // zeusForkTarget resolves the peer a new thread forks from, or the refusal
@@ -284,7 +345,15 @@ func zeusForkTarget(j *Job, all []*core.Peer) (*core.Peer, error) {
 // gone kill target needs nothing (the window is already dead), while a gone
 // send target needs a revive first.
 func threadTarget(j *Job, t store.Thread, all []*core.Peer, verb string) (*core.Peer, error) {
-	p := threadPeer(all, t.Pane, ThreadAgentName(j, t.TID))
+	// every prefix the job has held, exactly as staleThreadTIDs and
+	// liveThreadClaude match them. A thread's --name is fixed at spawn and a
+	// rename respawns nothing, so a pre-rename thread answers to
+	// thread-<old slug>-<tid> forever — and with the current prefix alone
+	// staleThreadTIDs correctly keeps its row live while kill and send both
+	// lose their target, wedging the thread with no exit for the rest of the
+	// cell's life. Orphan kill/send is this file's own worst outcome, and this
+	// is the one door it arrives through.
+	p := anyThreadPeer(all, t.Pane, threadNamePrefixes(j), t.TID)
 	if p == nil {
 		where := t.Pane
 		if where == "" {
@@ -310,24 +379,50 @@ func threadTarget(j *Job, t store.Thread, all []*core.Peer, verb string) (*core.
 // blocked job into "working", kill/send lose their target, and ReviveThread
 // would start a second claude on the one session id.
 func staleThreadTIDs(j *Job, threads []store.Thread, all []*core.Peer, now time.Time) []string {
-	prefix, sess := ThreadNamePrefix(j), CellSession(j)
+	// every name the job has held, on both keys: a rename respawns nothing, so
+	// a live thread of a renamed job still answers to an older prefix and sits
+	// in a session still called by an older name. Missing either would close a
+	// live row, which is the outcome this file's header calls the worst one in
+	// it.
+	prefixes, sessions := threadNamePrefixes(j), cellSessionCandidates(j)
 	var out []string
 	for _, t := range threads {
 		if t.State != "live" {
 			continue
 		}
-		if threadPeer(all, t.Pane, prefix+t.TID) != nil {
+		if anyThreadPeer(all, t.Pane, prefixes, t.TID) != nil {
 			continue
 		}
 		if now.Sub(threadStartedAt(t)) < threadStartGrace {
 			continue // still booting: no session file, so no name to match yet
 		}
-		if startingClaudeInPane(all, t.Pane, sess) != nil {
+		if anyStartingClaudeInPane(all, t.Pane, sessions) != nil {
 			continue // a nameless claude is in the pane kraken opened for it
 		}
 		out = append(out, t.TID)
 	}
 	return out
+}
+
+// anyThreadPeer is threadPeer over every name tid may be running under. PURE.
+func anyThreadPeer(all []*core.Peer, pane string, prefixes []string, tid string) *core.Peer {
+	for _, prefix := range prefixes {
+		if p := threadPeer(all, pane, prefix+tid); p != nil {
+			return p
+		}
+	}
+	return nil
+}
+
+// anyStartingClaudeInPane is startingClaudeInPane over every session name the
+// cell may be running under. PURE.
+func anyStartingClaudeInPane(all []*core.Peer, pane string, sessions []string) *core.Peer {
+	for _, sess := range sessions {
+		if p := startingClaudeInPane(all, pane, sess); p != nil {
+			return p
+		}
+	}
+	return nil
 }
 
 // emptySnapshotConfirm is how long a WHOLLY empty snapshot — no panes and no
@@ -495,8 +590,13 @@ func BranchThread(j *Job, title, seed string) (store.Thread, error) {
 	if err != nil {
 		return store.Thread{}, err
 	}
-	sess := CellSession(j)
-	if !LiveSessions()[sess] {
+	// FindCellSession, the way ReconcileThreads below already resolves it: a
+	// renamed cell whose tmux convergence failed is live under an older
+	// session name, and the branch has to open its window in the session that
+	// actually exists — refusing here (or, worse, opening a window in a name
+	// tmux does not know) for a cell carl is looking at is the whole hole.
+	sess, live := FindCellSession(j, LiveSessions())
+	if !live {
 		return store.Thread{}, fmt.Errorf("%s has no live cell to branch — start or reactivate it first", j.Slug)
 	}
 	wt := threadWorktree(j)
@@ -659,9 +759,12 @@ func ReviveThread(j *Job, tid string) (store.Thread, error) {
 	if t.SessionID == "" {
 		return store.Thread{}, fmt.Errorf("thread %s of %s has no recorded session — nothing to resume", tid, j.Slug)
 	}
-	sess := CellSession(j)
+	// FindCellSession, for BranchThread's reason: the revived window has to
+	// open in the session that is actually running, which on a renamed cell
+	// whose convergence failed is still the old name.
+	sess, live := FindCellSession(j, LiveSessions())
 	wt := threadWorktree(j)
-	if !LiveSessions()[sess] || wt == "" {
+	if !live || wt == "" {
 		return store.Thread{}, fmt.Errorf("%s's cell is gone — reactivate the job, then revive", j.Slug)
 	}
 	// verify before acting, in the other direction: if this thread's claude is
@@ -783,7 +886,16 @@ func ReconcileThreads(j *Job, all []*core.Peer, live map[string]bool) error {
 		return nil
 	}
 	emptyFor := noteEmptySnapshot(len(all) == 0 && len(live) == 0, time.Now())
-	if !threadSnapshotTrusted(CellSession(j), all, live, emptyFor) {
+	// the session the cell is ACTUALLY live under, which after a rename whose
+	// convergence has not landed yet is an older name. Handing the current
+	// name to a check whose whole job is "is this snapshot solid enough to
+	// close rows off" would answer "the session is gone, its windows went with
+	// it" about a session that is running.
+	sess := CellSession(j)
+	if found, ok := FindCellSession(j, live); ok {
+		sess = found
+	}
+	if !threadSnapshotTrusted(sess, all, live, emptyFor) {
 		return nil // an untrustworthy snapshot closes nothing; the next tick retries
 	}
 	threads, err := st.ListThreads(j.ID)

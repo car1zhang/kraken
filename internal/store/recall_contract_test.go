@@ -72,16 +72,24 @@ func contractRecallCount(t *testing.T, s *Store) int64 {
 // schema v19
 // ---------------------------------------------------------------------------
 
-// TestContractRecallSchemaVersionAtLeast19 pins the contract's stated
-// version as a FLOOR. Recall's own slice appended exactly one migration and
-// reached 19; the exact-equality pin it originally carried was a claim about
-// that slice which every LATER schema change would falsify while saying
-// nothing about recall — v20 (the queued-status retirement) is the first such
-// change. What still matters here is that kg_recall's migration landed, which
-// is what >= 19 says, plus the fresh-open agreement below.
-func TestContractRecallSchemaVersionAtLeast19(t *testing.T) {
+// TestContractRecallSchemaVersionIs19 pins the version recall's table landed
+// at: migrations[19] must still be schemaV19, so an in-place edit that
+// renumbered it (or dropped it) fails here rather than in some later
+// migration's error.
+//
+// It used to pin schemaVersion == 19 outright, which was true only while v19
+// was the newest step — every migration appended after it broke this test
+// while breaking nothing about recall (both sides of a rebase independently
+// retired the equality pin: v20, the queued-status retirement, and v21, the
+// rename feature, each landed on top of it). What the contract actually asked
+// for is that recall's migration IS step 19 and that a fresh store comes out
+// at whatever the current version is, both of which are checked below.
+func TestContractRecallSchemaVersionIs19(t *testing.T) {
+	if migrations[19].sql != schemaV19 {
+		t.Fatalf("migrations[19] is not schemaV19 (contract: recall's table arrives at v19)")
+	}
 	if schemaVersion < 19 {
-		t.Fatalf("schemaVersion = %d, want >= 19 (contract: Slice A appends schemaV19)", schemaVersion)
+		t.Fatalf("schemaVersion = %d, want at least 19 (recall's migration must be reachable)", schemaVersion)
 	}
 	s := openTest(t)
 	var version int

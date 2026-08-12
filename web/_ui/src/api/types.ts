@@ -581,6 +581,37 @@ export interface CaptureResult {
   content: string;
 }
 
+/**
+ * `POST /api/job/rename`'s answer.
+ *
+ * `slug` is the SERVER's slugified name and is the only thing a client may
+ * re-point to — the typed text is a request, never the result.
+ *
+ * `skipped` is omitted when empty, and every entry is the SOURCE path of a
+ * preserved artifact copy that KEPT THE OLD NAME because something already
+ * sat at the new one — never the destination that blocked it, which is the
+ * file a reader must not act on. It is a note rather than a failure (the
+ * rename itself committed), and it holds true name conflicts ONLY: a copy
+ * whose rename failed outright is not a conflict and is reported in `notes`.
+ *
+ * `notes` is omitted when empty too, and is the other half of the same story:
+ * the post-commit steps that FAILED, each carrying its cause — a preserved
+ * copy whose rename failed outright (permissions, a full disk), a tmux
+ * convergence step that did not take, a zeus notice that did not deliver.
+ * None of them can fail a rename (they all run after the row has moved), which
+ * is exactly why they need saying: there is no refusal to read them off, and
+ * this response is the only surface where they are not merely a log line.
+ *
+ * The two lists are separate because the reader's move differs: a `skipped`
+ * entry is a file to move or delete, a `notes` entry is something that broke.
+ */
+export interface RenameResult {
+  ok: true;
+  slug: string;
+  skipped?: string[];
+  notes?: string[];
+}
+
 /** Every non-2xx response body across the whole API. */
 export interface WireError {
   error: string;

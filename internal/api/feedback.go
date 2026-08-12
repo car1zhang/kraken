@@ -434,6 +434,16 @@ func resolveJobBySlug(slug string) *jobs.Job {
 	if j := jobs.JobBySlug(jobs.LoadJobs(), slug); j != nil {
 		return j
 	}
+	// A slug naming no ACTIVE job may still be one's FORMER name: a cell that
+	// was renamed mid-run keeps calling `kraken feedback` with the slug it
+	// spawned with. Tried after the current-slug lookup (so a live job named X
+	// always beats a renamed job that used to be X) and before the archived
+	// namespace, which is unchanged: an archived job is matched by its numbered
+	// ARCHIVE name (feedbackJobKey), not by a bare slug an active job could
+	// also have held.
+	if j := jobs.LoadJobBySlug(slug); j != nil {
+		return j
+	}
 	return jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), slug)
 }
 

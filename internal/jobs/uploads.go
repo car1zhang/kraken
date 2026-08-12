@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,6 +68,12 @@ func SaveUpload(slug, ext string, data []byte) (name, path string, err error) {
 // still exists under that slug) and the materialized uploads dir — a
 // missing dir is not an error, and an empty-slugifying slug is a no-op
 // rather than a RemoveAll on the shared uploads root.
+//
+// It sweeps every FORMER name's dir too. An uploads dir is materialized at
+// SAVE time under whatever the job was called then, and a rename moves
+// nothing, so a renamed job's images sit in one directory per name it has
+// held — each still keyed by this job's id, which is what makes removing them
+// safe: no other generation of the name can own a dir carrying this id.
 func RemoveUploads(slug string) error {
 	sr, err := ActiveStore().GetJobBySlug(slug)
 	if err != nil {
@@ -79,9 +86,22 @@ func RemoveUploads(slug string) error {
 	if err := ActiveStore().DeleteUploadsForJob(sr.ID); err != nil {
 		return err
 	}
-	dir := UploadsDir(slug, sr.ID)
-	if dir == "" {
-		return nil
+	// Best-effort across ALL of them, errors joined rather than returned on
+	// the first: the dirs are independent, so abandoning the sweep on one
+	// failure leaves the remaining former-name dirs behind for a reason that
+	// has nothing to do with them — and those are exactly the ones no later
+	// call will name, since a future RemoveUploads reaches them only through
+	// this same loop. ArchiveJob's sibling sweep ignores its errors outright;
+	// this one reports them, but it still finishes.
+	var errs []error
+	for _, s := range append([]string{slug}, sr.FormerSlugs...) {
+		dir := UploadsDir(s, sr.ID)
+		if dir == "" {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return os.RemoveAll(dir)
+	return errors.Join(errs...)
 }

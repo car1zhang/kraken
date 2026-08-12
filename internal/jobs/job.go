@@ -98,6 +98,18 @@ type Job struct {
 	// moot in practice — the client-visible form is api's own *webJobLoad,
 	// and nothing marshals jobs.Job itself.
 	Load store.JobLoad `json:"load"`
+	// FormerSlugs is every name this job has been renamed away from
+	// (store.Job.FormerSlugs, schema v20), empty for a never-renamed job and
+	// for every file-backed one. It is what keeps a renamed job's old names
+	// resolving: the cell-dir and worktree probes, the branch family, the
+	// transcript project dirs and the tmux session lookup all derive one
+	// candidate per entry, because a rename deliberately moves almost none of
+	// those (see rename.go).
+	//
+	// `json:"-"` on purpose: it is provenance for kraken's own resolvers, not
+	// a client-visible field, and adding it to the wire would put a second
+	// spelling of a job's identity in front of clients that key on the slug.
+	FormerSlugs []string `json:"-"`
 	// ID and Rev are storage-internal, populated only when this Job was
 	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
 	// store row id, Rev the optimistic-concurrency counter WriteJobFields/
@@ -595,10 +607,22 @@ func JobBySlug(jobs []*Job, slug string) *Job {
 // "<slug>.job.md" directly; a mismatch (the
 // file's own `job:` frontmatter overrides the filename) falls back to a full
 // LoadJobs()+JobBySlug scan.
+//
+// Store path only: a slug that matches no active job falls back to former-slug
+// resolution, which is what makes a renamed job's OLD name keep working from
+// inside its own cell. Everything a live cell knows about itself was written
+// at spawn — the brief, the hooks' baked-in slug, zeus' own habit of typing
+// its job name — and a rename deliberately rewrites none of it, so the old
+// name is the name those callers still use. The CURRENT-slug lookup runs
+// first and always wins: a name that is somebody's current slug must resolve
+// to that job, never to whoever used to hold it.
 func LoadJobBySlug(slug string) *Job {
 	slug = strings.TrimSuffix(slug, JobSuffix)
 	if st := ActiveStore(); st != nil {
 		sr, err := st.GetJobBySlug(slug)
+		if err != nil {
+			sr, err = st.GetJobByFormerSlug(slug)
+		}
 		if err != nil {
 			return nil
 		}

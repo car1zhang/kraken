@@ -40,6 +40,7 @@
 		785AF8572E807A8E277DC29A /* ThreadDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206A1135B73AB2755CE6925E /* ThreadDetailView.swift */; };
 		7F53B4F4BE9C944368D05543 /* MarkdownHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */; };
 		8811D0B613988D4DDB702C85 /* RouterEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3F798576EC055BA3C40C7D /* RouterEdgeTests.swift */; };
+		8C51E66B10F9E6ED69609303 /* RenameDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C16F5D0D283D5BEF12F36F0 /* RenameDecodeTests.swift */; };
 		8DCE80061C02793DEFC49C0D /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71F5D2794B798146B0453D4 /* MarkdownParser.swift */; };
 		8ED3FDEA37C23328E9AD32CF /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */; };
 		9282F86F2CAE74267B89F9FE /* LogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6910162E5A6297105AD0E5B /* LogView.swift */; };
@@ -64,6 +65,7 @@
 		E02C46E50115B9116776E0B1 /* RouterContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FBFC7931A192704FAE6B80A /* RouterContractTests.swift */; };
 		E149A36208DBCD99F3E07B86 /* DreamDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36ABC2966905BF6437BFD422 /* DreamDecodeTests.swift */; };
 		E5BFF171714FFC0C434F9A65 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 30AD1C4AA4F495A6E7C94EC0 /* AppIcon.icon */; };
+		E6CF1B542DE15415A389334F /* JobSlugTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94CC3BF17C01E2B4E96D318 /* JobSlugTests.swift */; };
 		E90ED536371BDF30AF7E5382 /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AD0EAC25E6D5338647D5729 /* SessionDetailView.swift */; };
 		F6A845FB71E25D9C0516DF8D /* JobDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C99F884263C78D3B9FD03D5D /* JobDetailView.swift */; };
 /* End PBXBuildFile section */
@@ -88,6 +90,7 @@
 /* Begin PBXFileReference section */
 		07DC03F331A02353F8207836 /* HighlightingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightingTextEditor.swift; sourceTree = "<group>"; };
 		0B256477B621D4DB3400A33C /* ThemeEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEdgeTests.swift; sourceTree = "<group>"; };
+		0C16F5D0D283D5BEF12F36F0 /* RenameDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenameDecodeTests.swift; sourceTree = "<group>"; };
 		0F3F798576EC055BA3C40C7D /* RouterEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouterEdgeTests.swift; sourceTree = "<group>"; };
 		0FF4F5DDD93D7F61A6937F4F /* GraphEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphEdgeTests.swift; sourceTree = "<group>"; };
 		13EB64CF007B6D1931AEA902 /* GraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphView.swift; sourceTree = "<group>"; };
@@ -133,6 +136,7 @@
 		C1D8A88B0EA9C4AE14FABA9A /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
 		C5E28FB088DDAA43E812172C /* UsageDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDecodeTests.swift; sourceTree = "<group>"; };
 		C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobSearchTests.swift; sourceTree = "<group>"; };
+		C94CC3BF17C01E2B4E96D318 /* JobSlugTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobSlugTests.swift; sourceTree = "<group>"; };
 		C99F884263C78D3B9FD03D5D /* JobDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobDetailView.swift; sourceTree = "<group>"; };
 		CAE08B75F6A8ADA3E9AB3E64 /* GraphModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphModel.swift; sourceTree = "<group>"; };
 		CB3A1EB438C4B5849E436152 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
@@ -186,11 +190,13 @@
 				293D85471DBEA8068CCF542E /* GraphPhysicsRegressionTests.swift */,
 				210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */,
 				C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */,
+				C94CC3BF17C01E2B4E96D318 /* JobSlugTests.swift */,
 				CC4FC03A0B554A14A50EF04A /* LoadEstimateTests.swift */,
 				CC93070711163F66A743C086 /* LoadScaleContractTests.swift */,
 				EC262B7E759627F240CDC193 /* LoadScaleEdgeTests.swift */,
 				AF39E397D495995DF61C69ED /* MarkdownHTMLParityTests.swift */,
 				8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */,
+				0C16F5D0D283D5BEF12F36F0 /* RenameDecodeTests.swift */,
 				2FBFC7931A192704FAE6B80A /* RouterContractTests.swift */,
 				0F3F798576EC055BA3C40C7D /* RouterEdgeTests.swift */,
 				6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */,
@@ -379,11 +385,13 @@
 				B053868480F7111D24D592B6 /* GraphPhysicsRegressionTests.swift in Sources */,
 				0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */,
 				3E96D0AC7206FFE89D0113E6 /* JobSearchTests.swift in Sources */,
+				E6CF1B542DE15415A389334F /* JobSlugTests.swift in Sources */,
 				CF68901B3F0A081B1A09DA21 /* LoadEstimateTests.swift in Sources */,
 				0A06A7F4222255504BED7606 /* LoadScaleContractTests.swift in Sources */,
 				2C3EE0868D401528E49F016E /* LoadScaleEdgeTests.swift in Sources */,
 				9A8EFAF4AA6DBDC088CF875F /* MarkdownHTMLParityTests.swift in Sources */,
 				AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */,
+				8C51E66B10F9E6ED69609303 /* RenameDecodeTests.swift in Sources */,
 				E02C46E50115B9116776E0B1 /* RouterContractTests.swift in Sources */,
 				8811D0B613988D4DDB702C85 /* RouterEdgeTests.swift in Sources */,
 				4B8AC3B17AEE418F8CE1BB80 /* ShipIOSDecodeTests.swift in Sources */,

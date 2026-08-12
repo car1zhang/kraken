@@ -43,12 +43,68 @@ import (
 
 func ZeusName(j *Job) string { return "zeus-" + util.Slugify(j.Slug) }
 
+// ZeusNameCandidates is every --name a zeus of THIS job may be running under:
+// the current one first, then one per former slug. The zeus-side sibling of
+// threadNamePrefixes, and it exists for the identical reason — zeus' --name is
+// fixed at spawn (cell.go's zeusSpawnArgv) and a rename respawns nothing, so
+// after a rename the cell's live zeus answers to an older name forever.
+//
+// Derived from cellNameCandidates so the job's name history has ONE source
+// here too: a second independently-built list would have to agree with the
+// dir, session and marker lists by construction, which is the coupling
+// cellNameCandidates' own comment exists to refuse.
+//
+// A CANDIDATE set rather than dropping the name check, because the comparison
+// this feeds doubles as CellHealth's "found positionally, not yet named —
+// still starting" gate: a name-agnostic pass would report a nameless
+// still-booting claude, or another job's agent, as this cell's zeus. Every
+// name here is one this job itself minted.
+//
+// Exported for the callers outside this package, the same way CellMarkerSlugs
+// is: cmd/kraken's viewer resolves zeus by name for its enter and answer
+// verbs (viewer_jobs.go's peerNamedAny), and a single-name match there finds
+// NO zeus on a renamed live cell — so `enter` refuses to open the pane, `a`
+// refuses to open the composer, and the answer SEND path refuses after carl
+// has typed his answer and discards it.
+func ZeusNameCandidates(j *Job) []string {
+	cands := cellNameCandidates(j)
+	out := make([]string, 0, len(cands))
+	seen := make(map[string]bool, len(cands))
+	for _, c := range cands {
+		if c.Slug == "" {
+			continue
+		}
+		name := "zeus-" + c.Slug
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// isZeusName reports whether name is one of this job's zeus names. The one
+// spelling of that question, so the callers that ask it cannot drift apart.
+func isZeusName(j *Job, name string) bool {
+	for _, n := range ZeusNameCandidates(j) {
+		if name == n {
+			return true
+		}
+	}
+	return false
+}
+
 // docFragmentsDir holds one rendered <svg> fragment per diagram placeholder,
 // each written by a dedicated hermes teammate — staged here until a
 // lint-clean fragment gets wrapped into its own standalone diagram card
 // under CellArtifacts.
+//
+// existingCellDir, like the other cell-dir plumbing paths: a renamed job's
+// cell dir is still under its earlier name, and the brief must name the
+// directory zeus' hermes teammates can actually reach.
 func docFragmentsDir(j *Job) string {
-	return filepath.Join(cellDir(j), "doc", "fragments")
+	return filepath.Join(existingCellDir(j), "doc", "fragments")
 }
 
 // The three asset paths below are worktree-relative because zeus' cwd IS the
