@@ -83,8 +83,14 @@ func EffectiveColor(j *Job) string {
 // StartCell needing to know this file exists. "Almost" because the record
 // has a second, in-memory half (colorFallback) that no os.RemoveAll can
 // reach — teardownCell pairs this deletion with forgetColorDelivery.
+//
+// existingCellDir, so a renamed cell keeps ONE watermark: written under
+// cellDir it would land in a directory teardown never removes (teardown
+// removes the dir the cell actually lives in), and the record would outlive
+// the cell it describes — exactly the lifetime this file is placed here to
+// get right.
 func colorWatermarkPath(j *Job) string {
-	return filepath.Join(cellDir(j), "color.applied")
+	return filepath.Join(existingCellDir(j), "color.applied")
 }
 
 // readColorWatermark returns the colour last delivered to this cell's zeus.
@@ -104,11 +110,11 @@ func readColorWatermark(j *Job) string {
 // and the next tick retries — the same "state only advances on a confirmed
 // write" discipline watchPRs' watermarks follow.
 func writeColorWatermark(j *Job, name string) error {
-	dir := cellDir(j)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	path := colorWatermarkPath(j)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return util.AtomicWrite(colorWatermarkPath(j), name)
+	return util.AtomicWrite(path, name)
 }
 
 // colorSyncDecision is syncCellColor's gate chain as a pure function over

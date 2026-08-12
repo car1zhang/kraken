@@ -218,8 +218,9 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 		if j == nil {
 			return m, nil
 		}
-		// drill into the cell: zeus pane
-		if p := m.peerNamed(jobs.ZeusName(j)); p != nil {
+		// drill into the cell: zeus pane. Every name the job has held —
+		// a renamed cell's zeus still carries its spawn-time one.
+		if p := m.peerNamedAny(jobs.ZeusNameCandidates(j)); p != nil {
 			return m, m.jobsActionCmd("opening "+j.Slug, func() (string, error) { return openSelectedPeer(p) })
 		}
 		m.note, m.noteIsErr = "no live cell for "+j.Slug, true
@@ -232,7 +233,10 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 			m.note, m.noteIsErr = "a steers a blocked job — select one", true
 			return m, nil
 		}
-		if m.peerNamed(jobs.ZeusName(j)) == nil {
+		// candidate-aware for the reason the send path below is: refusing
+		// here on a renamed cell means carl cannot answer the very block he
+		// is looking at, and the composer never opens to tell him why.
+		if m.peerNamedAny(jobs.ZeusNameCandidates(j)) == nil {
 			m.note, m.noteIsErr = "no live cell for "+j.Slug, true
 			return m, nil
 		}
@@ -306,15 +310,45 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 
 // abandonJob kills a job's cell session (verified) but keeps the worktree for
 // autopsy, stamping state abandoned.
+//
+// The session is resolved and verified against every name the job has held —
+// jobs.ProbeCellSession and jobs.CellMarkerSlugs — because a renamed cell
+// whose tmux convergence failed is still running under an older session name,
+// and a current-name-only read answers wrongly twice over: it misses the
+// session, and it verifies against a marker the pane does not carry.
+//
+// The three outcomes ProbeCellSession distinguishes are exactly the three this
+// verb needs, and collapsing any two of them breaks it in one direction or the
+// other:
+//
+//   - A live session is verified, killed, and the job stamped.
+//   - A CONFIRMED-dead cell is stamped with no kill. That is the verb's whole
+//     purpose rather than an edge case: abandon means keep the worktree for
+//     autopsy, and the alternatives (Kill, Done) both run teardownCell, which
+//     `git worktree remove`s and deletes the cell dir. Refusing here would
+//     leave a job whose session died with no path anywhere that clears it and
+//     preserves the tree — the daemon's cell-gone handling DETECTS the state
+//     and notifies; recovery stays carl's explicit reactivate/done/kill.
+//   - An unanswered tmux is refused. "abandoned" is not in jobs.Started(), so
+//     once stamped the daemon's cell loop never looks at the job again; doing
+//     that on the strength of a failed tmux call leaves a live zeus nothing
+//     will ever collect. Absence of evidence is the one case that must not act.
 func abandonJob(j *jobs.Job) (string, error) {
-	sess := jobs.CellSession(j)
-	if jobs.LiveSessions()[sess] {
-		if err := jobs.VerifyCellSession(sess, util.Slugify(j.Slug)); err != nil {
+	sess, known := jobs.ProbeCellSession(j)
+	if !known {
+		return "", fmt.Errorf("cannot reach tmux to check %s's cell — not stamping it abandoned while a live session may still be out there; state left at %s", j.Slug, j.State)
+	}
+	if sess == "" {
+		if err := jobs.WriteJobState(j, "abandoned"); err != nil {
 			return "", err
 		}
-		if err := exec.Command("tmux", "kill-session", "-t", sess).Run(); err != nil {
-			return "", fmt.Errorf("tmux kill-session: %v", err)
-		}
+		return "abandoned " + j.Slug + " — cell session already gone, worktree kept for autopsy", nil
+	}
+	if err := jobs.VerifyCellSession(sess, jobs.CellMarkerSlugs(j)...); err != nil {
+		return "", err
+	}
+	if err := exec.Command("tmux", "kill-session", "-t", sess).Run(); err != nil {
+		return "", fmt.Errorf("tmux kill-session: %v", err)
 	}
 	if err := jobs.WriteJobState(j, "abandoned"); err != nil {
 		return "", err
@@ -330,10 +364,21 @@ func (m *viewerModel) jobsBySlug() map[string]*jobs.Job {
 	return bySlug
 }
 
-func (m *viewerModel) peerNamed(name string) *core.Peer {
-	for _, p := range m.rawPeers {
-		if p.Name == name && p.Messageable && p.Depth == 0 {
-			return p
+// peerNamedAny finds the messageable depth-0 peer answering to any of names,
+// trying them in order. It replaced a single-name peerNamed because all three
+// of that function's callers resolve a job's ZEUS, and zeus keeps the --name
+// it was spawned with: after a rename the live agent answers to an older name
+// forever, so one name was never enough to find it.
+//
+// Order matters and is the caller's: jobs.ZeusNameCandidates puts the current
+// name first, so a cell that has converged is matched on its first try and the
+// former names are only ever reached by a cell that has not.
+func (m *viewerModel) peerNamedAny(names []string) *core.Peer {
+	for _, name := range names {
+		for _, p := range m.rawPeers {
+			if p.Name == name && p.Messageable && p.Depth == 0 {
+				return p
+			}
 		}
 	}
 	return nil
@@ -381,7 +426,11 @@ func (m *viewerModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.note, m.noteIsErr = "empty answer — cancelled", true
 			return m, nil
 		}
-		zeus := m.peerNamed(jobs.ZeusName(j))
+		// the costliest of the three to get wrong: carl has already typed the
+		// answer, and a nil zeus here discards it with a message that reads
+		// like a stale snapshot. On a renamed cell the single-name lookup
+		// missed EVERY time, so the text was never recoverable by refreshing.
+		zeus := m.peerNamedAny(jobs.ZeusNameCandidates(j))
 		if zeus == nil {
 			m.note, m.noteIsErr = "no live cell for "+j.Slug+" — rerun refresh", true
 			return m, nil

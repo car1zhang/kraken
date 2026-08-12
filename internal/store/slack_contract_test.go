@@ -249,6 +249,7 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 		`DROP TABLE IF EXISTS slack_marks`,
 		`DROP TABLE IF EXISTS linear_issues`,
 		`DROP TABLE IF EXISTS kg_recall`,
+		`DROP TABLE IF EXISTS job_former_slugs`,
 		`ALTER TABLE jobs ADD COLUMN ready INTEGER NOT NULL DEFAULT 0`,
 		`CREATE TABLE prereqs (
 			job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

@@ -44,6 +44,16 @@ type Job struct {
 	// load_* columns), written through SetJobLoad and never through
 	// UpdateJobFields — see both methods' doc comments.
 	Load JobLoad
+	// FormerSlugs is every name this job has been renamed away from (schema
+	// v20's job_former_slugs), empty for the never-renamed job that every job
+	// is until someone renames it. Order is unspecified: nothing ranks them,
+	// and the resolvers that use them try all of them.
+	//
+	// It is filled by the row loads below rather than scanned, since it is a
+	// second table — attachFormerSlugs (rename.go) is the one place that reads
+	// it, so a load path that forgets it is a job whose old names silently
+	// stop resolving rather than a compile error.
+	FormerSlugs []string
 }
 
 // JobLoad is one job's triage estimate: how much effort unblocking it costs
@@ -106,7 +116,24 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 // job's assigned ID is returned; Slug must be free among active jobs
 // (enforced by jobs_active_slug) or this returns the underlying UNIQUE
 // constraint error.
+//
+// It must ALSO be free of every active job's FORMER slugs (schema v20), and
+// that reservation is this method's, not the index's — SQLite cannot express
+// "unique across two tables". Without it a new job could take a name a live
+// job was renamed away from, and both would then resolve through the same old
+// name: the renamed job's own alias fallback would start answering with the
+// new job, which is the collision every id-scoped name in this codebase exists
+// to prevent, reintroduced through the one door ids do not cover.
+//
+// The reservation LAPSES with its owner, exactly as the slug itself does: an
+// ARCHIVED job's former slugs reserve nothing, since archiving frees the
+// current slug too.
 func (s *Store) CreateJob(j *Job) (int64, error) {
+	if taken, err := formerSlugTakenBy(s.db, j.Slug, 0); err != nil {
+		return 0, fmt.Errorf("create job %s: %w", j.Slug, err)
+	} else if taken != 0 {
+		return 0, fmt.Errorf("create job %s: %q is a former name of job %d: %w", j.Slug, j.Slug, taken, ErrSlugTaken)
+	}
 	now := time.Now().UnixMilli()
 	if j.CreatedAt == 0 {
 		j.CreatedAt = now
@@ -152,6 +179,11 @@ func (s *Store) GetJobBySlug(slug string) (*Job, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get job by slug %s: %w", slug, err)
 	}
+	former, err := formerSlugsFor(s.db, j.ID)
+	if err != nil {
+		return nil, err
+	}
+	j.FormerSlugs = former
 	return j, nil
 }
 
@@ -165,6 +197,11 @@ func (s *Store) GetJobByID(id int64) (*Job, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get job by id %d: %w", id, err)
 	}
+	former, err := formerSlugsFor(s.db, j.ID)
+	if err != nil {
+		return nil, err
+	}
+	j.FormerSlugs = former
 	return j, nil
 }
 
@@ -188,20 +225,38 @@ func (s *Store) queryJobs(query string, args ...any) ([]*Job, error) {
 // LoadJobsWithChildren (L12) can compose it inside a caller-owned read
 // transaction.
 func queryJobsTx(x execer, query string, args ...any) ([]*Job, error) {
-	rows, err := x.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list jobs: %w", err)
-	}
-	defer rows.Close()
-	var out []*Job
-	for rows.Next() {
-		j, err := scanJob(rows)
+	out, err := func() ([]*Job, error) {
+		rows, err := x.Query(query, args...)
 		if err != nil {
-			return nil, fmt.Errorf("scan job: %w", err)
+			return nil, fmt.Errorf("list jobs: %w", err)
 		}
-		out = append(out, j)
+		// closed before the follow-up query below rather than deferred to the
+		// end: x may be a *sql.Tx, which holds ONE connection, so issuing a
+		// second query while these rows are still open is a self-deadlock
+		// waiting to happen rather than a second round trip.
+		defer rows.Close()
+		var out []*Job
+		for rows.Next() {
+			j, err := scanJob(rows)
+			if err != nil {
+				return nil, fmt.Errorf("scan job: %w", err)
+			}
+			out = append(out, j)
+		}
+		return out, rows.Err()
+	}()
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	// former slugs come from a second table, so they are attached here rather
+	// than scanned — one query for the whole result set. Every multi-row load
+	// in this package funnels through this function (ListJobs,
+	// ListArchivedJobs, loadJobsWithChildrenTx), which is what keeps the board
+	// from being the one board whose renamed jobs forget their old names.
+	if err := attachFormerSlugs(x, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // LoadJobsWithChildren returns every active job (ListJobs' own query) plus
@@ -579,6 +634,23 @@ func (s *Store) UnarchiveJob(id int64) error {
 	}
 	if err == nil {
 		return fmt.Errorf("unarchive job %d (slug %s): %w", id, slug, ErrSlugTaken)
+	}
+	// The same refusal against an active job's FORMER slugs, and it closes the
+	// one remaining door into the two-active-jobs-answer-one-name state that
+	// CreateJob's and RenameJob's reservations otherwise seal. Reachable
+	// entirely through supported board actions: archive B holding "foo",
+	// create A as "foo" (legal — jobs_active_slug is partial over active
+	// rows), rename A to "bar" so "foo" becomes A's former slug, unarchive B.
+	// Nothing above notices, because no ACTIVE job holds "foo" — and from then
+	// on A's live cell's baked hook commands (kraken pr-hook foo, kraken
+	// limit-hook foo, k load set foo) resolve to B, cross-attributing A's PR,
+	// limit-hit and load records to a stranger, silently.
+	formerOwner, err := formerSlugTakenBy(tx, slug, id)
+	if err != nil {
+		return fmt.Errorf("unarchive job %d: %w", id, err)
+	}
+	if formerOwner != 0 {
+		return fmt.Errorf("unarchive job %d: slug %s is taken by an active job (%d) as a former name: %w", id, slug, formerOwner, ErrSlugTaken)
 	}
 
 	now := time.Now().UnixMilli()

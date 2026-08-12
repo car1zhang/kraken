@@ -763,6 +763,11 @@ struct JobDetailView: View {
     @State private var showingKillConfirm = false
     @State private var showingDeleteConfirm = false
     @State private var showingEdit = false
+    // The edit sheet renamed this job. `job` is frozen for this sheet's whole
+    // lifetime, so its slug is stale from that moment on — see the edit
+    // sheet's onDismiss, which closes the detail rather than showing a name
+    // the board no longer has.
+    @State private var wasRenamed = false
     @State private var showingSteer = false
     @State private var showingReactivate = false
     @State private var showingSteerToast = false
@@ -1188,12 +1193,28 @@ struct JobDetailView: View {
             }
         }
         .sheet(isPresented: $showingEdit) {
+            // A rename inside the sheet re-points the FORM in place, but this
+            // view's `job` is a frozen value whose identity just changed and
+            // nothing here can rewrite it — so the detail re-points the only
+            // honest way it can: it closes back to the board, which the
+            // onUpdate() above has already refreshed under the renamed name.
+            // Closing on the sheet's dismissal rather than on the rename
+            // itself is what lets the form stay open and usable afterwards.
+            if wasRenamed { dismiss() }
+        } content: {
             NavigationStack {
-                JobFormView(slug: job.slug, baseURL: baseURL, isNew: false) {
-                    showingEdit = false
-                    onUpdate()
-                    dismiss()
-                }
+                JobFormView(
+                    slug: job.slug, baseURL: baseURL, isNew: false,
+                    onSaved: {
+                        showingEdit = false
+                        onUpdate()
+                        dismiss()
+                    },
+                    onRenamed: { _ in
+                        wasRenamed = true
+                        onUpdate()
+                    }
+                )
             }
         }
         .sheet(isPresented: $showingBranchThread) {

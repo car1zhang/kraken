@@ -68,12 +68,45 @@ func ArchivedJobByName(jobs []*Job, name string) *Job {
 	return nil
 }
 
+// moveSkip is one file movePrefixed did NOT move: where it still is, where it
+// was headed, and why it stayed.
+//
+// Src is the load-bearing field. Every caller's message tells a human about a
+// file that kept its old name, and that file is the SOURCE — reporting the
+// destination named the blocker instead, so acting on the sentence literally
+// meant deleting the wrong file while the stranded copy stayed stranded.
+//
+// Err separates the two skips, which are different problems with different
+// remedies and used to be indistinguishable: nil means the destination was
+// already occupied (a genuine name conflict — resolve it by hand), non-nil
+// means the rename itself failed (permissions, ENAMETOOLONG, a full disk) and
+// carries the reason that was previously discarded.
+type moveSkip struct {
+	Src, Dst string
+	Err      error
+}
+
+// Conflict reports whether this skip is a destination that already existed,
+// as opposed to a rename that failed. The two are worth telling apart at
+// every call site: a conflict is carl's to resolve, a failure is kraken's to
+// report with its cause.
+func (s moveSkip) Conflict() bool { return s.Err == nil }
+
+// String is the one rendering of a skip for a human, so the three callers
+// that log one cannot describe the same situation three ways.
+func (s moveSkip) String() string {
+	if s.Err != nil {
+		return fmt.Sprintf("%s (move to %s failed: %v)", s.Src, s.Dst, s.Err)
+	}
+	return fmt.Sprintf("%s (%s already exists)", s.Src, s.Dst)
+}
+
 // movePrefixed renames every non-dir file in fromDir named
 // fromPrefix.<rest> to toDir/toPrefix.<rest>, skipping job files (the job
 // file itself moves separately) and never overwriting: a conflicting
 // target leaves the source in place and reports it, since silently
 // clobbering either side would lose a deliverable.
-func movePrefixed(fromDir, fromPrefix, toDir, toPrefix string) (moved, skipped []string) {
+func movePrefixed(fromDir, fromPrefix, toDir, toPrefix string) (moved []string, skipped []moveSkip) {
 	entries, err := os.ReadDir(fromDir)
 	if err != nil {
 		return nil, nil
@@ -84,13 +117,14 @@ func movePrefixed(fromDir, fromPrefix, toDir, toPrefix string) (moved, skipped [
 			continue
 		}
 		rest := strings.TrimPrefix(name, fromPrefix+".")
+		src := filepath.Join(fromDir, name)
 		dst := filepath.Join(toDir, toPrefix+"."+rest)
 		if _, err := os.Stat(dst); err == nil {
-			skipped = append(skipped, dst)
+			skipped = append(skipped, moveSkip{Src: src, Dst: dst})
 			continue
 		}
-		if err := os.Rename(filepath.Join(fromDir, name), dst); err != nil {
-			skipped = append(skipped, dst)
+		if err := os.Rename(src, dst); err != nil {
+			skipped = append(skipped, moveSkip{Src: src, Dst: dst, Err: err})
 			continue
 		}
 		moved = append(moved, dst)
@@ -116,8 +150,14 @@ func ArchiveJob(j *Job, live map[string]bool) (string, error) {
 	if j.Started() && j.State != "done" {
 		return "", fmt.Errorf("%s has a cell in flight (state %s) — kill it first (kill returns the job to draft), then archive", j.Slug, j.State)
 	}
-	if live[CellSession(j)] {
-		return "", fmt.Errorf("%s still has a live cell session %s — kill it first", j.Slug, CellSession(j))
+	// FindCellSession rather than the current name alone. Archiving is
+	// destructive — it removes every uploads dir, moves the preserved
+	// artifacts into archive/, and frees the slug — and a renamed cell whose
+	// tmux convergence failed is live under an OLDER session name, so the
+	// current-name read walks this refusal past a running zeus and leaves it
+	// in a worktree belonging to a job no longer in the active namespace.
+	if sess, ok := FindCellSession(j, live); ok {
+		return "", fmt.Errorf("%s still has a live cell session %s — kill it first", j.Slug, sess)
 	}
 	// Release the cell's git worktree registration BEFORE the row moves.
 	// Archiving frees the slug, so from here on another job may legitimately
@@ -139,7 +179,15 @@ func ArchiveJob(j *Job, live map[string]bool) (string, error) {
 	if err := st.DeleteUploadsForJob(j.ID); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: uploads not deleted for %s: %v\n", j.Slug, err)
 	}
-	os.RemoveAll(UploadsDir(j.Slug, j.ID))
+	// every name the job has held: a rename materializes a fresh uploads dir
+	// under the new name and moves nothing, so the images of a renamed job are
+	// spread across one dir per name. All of them carry this job's id, so none
+	// can belong to another generation of a shared name.
+	for _, s := range append([]string{j.Slug}, j.FormerSlugs...) {
+		if dir := UploadsDir(s, j.ID); dir != "" {
+			os.RemoveAll(dir)
+		}
+	}
 	// Preserved pluto artifacts are still real files even though the job
 	// row is store-backed (Q12 — live cells serve straight off disk, and
 	// api/board.go lists preserved copies from the pluto/archive dirs), so
@@ -169,7 +217,10 @@ func ArchiveJob(j *Job, live map[string]bool) (string, error) {
 			skipped = append(skipped, legacySkipped...)
 		}
 		for _, s := range skipped {
-			fmt.Fprintf(os.Stderr, "kraken: artifact not moved (target exists or move failed): %s\n", s)
+			// s.String() names the file that STAYED and why — the old form
+			// printed the destination, which is the blocker rather than the
+			// stranded copy, and could not say which of the two skips it was.
+			fmt.Fprintf(os.Stderr, "kraken: artifact not moved: %s\n", s)
 		}
 	}
 	j.ArchivedName = name
@@ -351,7 +402,7 @@ func UnarchiveJob(a *Job) error {
 	}
 	if err := ActiveStore().UnarchiveJob(a.ID); err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
-			return fmt.Errorf("slug %s is taken by an active job — archive or rename that one first", slug)
+			return fmt.Errorf("%s", unarchiveTakenReason(slug))
 		}
 		return fmt.Errorf("unarchive %s: %w", a.ArchivedName, err)
 	}
@@ -364,9 +415,40 @@ func UnarchiveJob(a *Job) error {
 	prefix := cellName(a)
 	_, skipped := movePrefixed(ArchiveDir(), prefix, PlutoDir(), prefix)
 	for _, s := range skipped {
-		fmt.Fprintf(os.Stderr, "kraken: artifact not moved (target exists or move failed): %s\n", s)
+		fmt.Fprintf(os.Stderr, "kraken: artifact not moved: %s\n", s)
 	}
 	return nil
+}
+
+// unarchiveTakenReason turns the store's one ErrSlugTaken into the refusal
+// that names a remedy that WORKS, by re-asking which of the two reservations
+// blocked the unarchive. The store returns a single sentinel for both, and its
+// own message reports a numeric job id the board never shows.
+//
+// The two remedies genuinely differ, which is the whole reason for the split.
+// A slug held as another job's CURRENT name is freed by archiving OR renaming
+// that job. A slug held as another job's FORMER name is freed by archiving it
+// alone: a rename ADDS to the former set rather than clearing it, and renaming
+// that job back onto the contested name is itself refused (RenameJob gate 5,
+// "belongs to an archived job") — so the old advice sent carl round a loop
+// with no exit.
+//
+// The probes run in the store's own order, current before former, so a slug
+// that is somehow both reports the arm that actually fired. If neither
+// resolves — the state changed under us, or the store is unreachable — the
+// generic sentence is the honest answer rather than a guess at which.
+func unarchiveTakenReason(slug string) string {
+	st := ActiveStore()
+	if st == nil {
+		return fmt.Sprintf("slug %s is taken by an active job", slug)
+	}
+	if _, err := st.GetJobBySlug(slug); err == nil {
+		return fmt.Sprintf("slug %s is taken by an active job — archive or rename that one first", slug)
+	}
+	if owner, err := st.GetJobByFormerSlug(slug); err == nil && owner != nil {
+		return fmt.Sprintf("slug %s is reserved: the active job %s was renamed away from it, and a former name stays reserved for as long as that job is active — archive %s first (renaming it again will NOT free the name)", slug, owner.Slug, owner.Slug)
+	}
+	return fmt.Sprintf("slug %s is taken by an active job", slug)
 }
 
 // DeleteArchivedJob permanently removes an archived job: its store row and

@@ -24,14 +24,23 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v21: drop job_former_slugs (its index goes with the table).
+	// Nothing to put back — v21 is a single additive CREATE over a v20 shape
+	// that had no such table, so the drop is the whole reversal (the v18 arm
+	// below owns the bare-CREATE-vs-IF-NOT-EXISTS reasoning).
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 21 {
+		if _, err := s.db.Exec(`DROP TABLE job_former_slugs`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v21): %v", target, err)
+		}
+	}
 	// Reverse v20: put back jobs.ready and the prereqs table, both of which
 	// v20 dropped and both of which every version through v19 really had.
 	// board_order's queued rows are not restored: v20's DELETE removes rows
 	// rather than a shape, and this helper reproduces SHAPES — a test that
 	// wants queued rows in a pre-v20 database inserts them itself.
-	//
-	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
-	// migrate() applies them.
 	if target < 20 {
 		for _, stmt := range []string{
 			`ALTER TABLE jobs ADD COLUMN ready INTEGER NOT NULL DEFAULT 0`,

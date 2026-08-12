@@ -804,7 +804,15 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		return
 	}
 	target, mainEmail, _ := selectRescueTarget(now)
-	action, reason := limitRescueDecide(hit, RotationMode(), live[CellSession(j)], target != "", now)
+	// FindCellSession rather than live[CellSession(j)]: !cellLive is an
+	// unconditional rescueSkip, so on a renamed cell whose tmux convergence
+	// has not landed the rescue does nothing at all — the hit is recorded and
+	// never acted on. Every other current-name-only read left in this package
+	// costs a card rendering wrong for one tick; this one costs a cell sitting
+	// dead until something else notices, which is the failure mode the whole
+	// rescue exists to end.
+	_, cellLive := FindCellSession(j, live)
+	action, reason := limitRescueDecide(hit, RotationMode(), cellLive, target != "", now)
 	if action == rescueSkip {
 		return
 	}

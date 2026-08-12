@@ -58,9 +58,9 @@ const tokensIdleBatch = 8
 // owns that dir and kraken only ever reads it. A number that vanished at
 // teardown would defeat the entire point, which is retrospective cost.
 //
-// FOUR BASE dirs, not one, along two independent legacy axes — and every one
-// of them is load-bearing, because a base that is missing here reports as a
-// clean zero rather than as an error:
+// Four base dirs per name it has held, not one, along two independent legacy
+// axes — and every one of them is load-bearing, because a base that is missing
+// here reports as a clean zero rather than as an error:
 //
 //   - wt-<repo> vs a bare "wt": cells created before worktrees were named
 //     wt-<repo> used a bare "wt" (see ExistingWorktree's own comment), which
@@ -138,12 +138,29 @@ func JobProjectDirs(j *Job, repo string) ([]string, error) {
 	// live cell is actually writing into. The bare-"wt" variant of each is
 	// listed beside it; ProjectDirName-level dedup below collapses any pair
 	// that happens to munge identically.
-	for _, wt := range []string{
-		CellWorktree(j, repo),
-		filepath.Join(cellDir(j), "wt"),
-		LegacyCellWorktree(j, repo),
-		filepath.Join(legacyCellDir(j), "wt"),
-	} {
+	worktrees := append(
+		worktreeNamesIn(cellDir(j), repo),
+		worktreeNamesIn(legacyCellDir(j), repo)...,
+	)
+	// The same four bases per FORMER slug, appended after the current ones.
+	// Claude Code buckets a transcript by the agent's startup cwd and a rename
+	// moves no worktree, so every transcript a renamed job has ever written —
+	// including the ones its live cell is appending to RIGHT NOW — is filed
+	// under an older name. Dropping them would not merely lose history: the
+	// watermark write below is REPLACE-ALL, so a shrunk dir list deletes those
+	// files' offsets and re-sums them from byte zero into counters that only
+	// accumulate, permanently inflating the job's number.
+	for _, f := range j.FormerSlugs {
+		name := formerCellName(j, f)
+		if name == "" {
+			continue
+		}
+		dir := filepath.Join(cellsRoot(), name)
+		legacy := filepath.Join(cellsRoot(), util.Slugify(f))
+		worktrees = append(worktrees, worktreeNamesIn(dir, repo)...)
+		worktrees = append(worktrees, worktreeNamesIn(legacy, repo)...)
+	}
+	for _, wt := range worktrees {
 		name := core.ProjectDirName(wt)
 		if seen[name] {
 			continue

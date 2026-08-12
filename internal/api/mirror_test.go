@@ -41,6 +41,13 @@ var mirrorGatedRoutes = []string{
 	// route's own gate wraps only the /color it types into a live pane, not
 	// its write.
 	"/api/job/load",
+	// job rename: the same inline gate (jobrename.go), and it rides this table
+	// rather than needing a bespoke test because the gate sits ahead of the body
+	// decode — mirror ON gives the shared 403, mirror OFF falls through to the
+	// handler's own 400 for the missing "to" field, neither needing a store nor
+	// a real job. It is gated at all because it renames a live tmux session and
+	// moves preserved artifact files under PlutoDir.
+	"/api/job/rename",
 	// The knowledge graph's three WRITES (graph.go, recall.go), gated via
 	// mirrorGated at registration rather than inline — unlike
 	// feedback/questions/load these are POST-only routes, so there is no GET
@@ -150,9 +157,10 @@ func TestMirrorModePlutoRoutesConditional(t *testing.T) {
 // TestMirrorModeOffLeavesGatedRoutesLive covers the converse: with mirror
 // mode off (the default, and every non-mirror kraken serve/web process),
 // the same routes must reach their normal handler — proven here by getting
-// past the 403 entirely and into the handler's own validation error (409,
-// since "nonexistent" never resolves to a real job) rather than being
-// blocked at the gate.
+// past the 403 entirely and into the handler's own 4xx (409 for the
+// job-addressing routes, since "nonexistent" never resolves to a real job;
+// 400 where the body itself is refused first, as /api/job/rename's missing
+// "to" is) rather than being blocked at the gate.
 func TestMirrorModeOffLeavesGatedRoutesLive(t *testing.T) {
 	SetMirrorMode(false)
 

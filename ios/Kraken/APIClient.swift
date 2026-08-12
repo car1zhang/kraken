@@ -422,6 +422,19 @@ actor APIClient {
         try await post(baseURL: baseURL, path: "/api/job/saveform", body: form)
     }
 
+    /// Renames a job. `slug` is its CURRENT name; `to` is free text the server
+    /// slugifies. Its own endpoint rather than a saveform field for
+    /// setJobColor's reason and one more: saveform full-replaces the job file
+    /// and is refused outright while a cell is in flight, whereas identity is
+    /// not a form field and a live cell is exactly where renaming is useful.
+    ///
+    /// A refusal (a taken slug, a reserved dream-/graph- prefix, an archived
+    /// job's name, another active job's former name) comes back as the
+    /// endpoint's own 409 sentence, which the caller shows beside the input.
+    func renameJob(baseURL: String, slug: String, to: String) async throws -> RenameJobResponse {
+        try await post(baseURL: baseURL, path: "/api/job/rename", body: RenameJobRequest(slug: slug, to: to))
+    }
+
     /// Sets (or, with an empty string, clears) a job's color. Its own
     /// endpoint rather than a saveform field — see JobColorRequest — so it
     /// never full-replaces the rest of the job file and works on a live cell.

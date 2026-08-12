@@ -106,6 +106,10 @@ func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 		// just wrote, so a caller holding a *Job sees its own write without a
 		// reload.
 		Load: sr.Load,
+		// FormerSlugs carries across whole, like Load: it has no frontmatter
+		// spelling either, so a file-backed job always reads as never renamed
+		// — which is true, since renaming is a store-only verb.
+		FormerSlugs: sr.FormerSlugs,
 	}
 	if sr.Archived() {
 		j.ArchivedName = sr.ArchivedName

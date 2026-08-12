@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MutableRefObject,
 } from "react";
 import {
   archiveJob,
@@ -27,6 +28,15 @@ import { FieldSelect } from "./FieldSelect.tsx";
 import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { jobKey } from "../../lib/jobKey.ts";
+import {
+  RenameButton,
+  RenameRow,
+  renameControlVisible,
+  useRenameControl,
+  type RenameControlState,
+} from "./RenameControl.tsx";
+// useRenameControl is called by EditorOverlay, above the keyed body — see the
+// comment on the hoist there.
 import { CmdComposer } from "./CmdComposer.tsx";
 import { DocQuestions } from "./DocQuestions.tsx";
 import {
@@ -79,6 +89,14 @@ export interface EditorOverlayProps {
   onClose: () => void;
   /** A `create` succeeded — the caller re-points `slug` at the new job. */
   onCreated: (slug: string) => void;
+  /**
+   * A `rename` succeeded — the caller re-points `slug` at the SAME job under
+   * its new name, exactly as `onCreated` re-points at a new one.
+   *
+   * Optional, and the control is HIDDEN without it rather than rendering an
+   * unwired button — see renameControlVisible, which owns that argument.
+   */
+  onRenamed?: (slug: string) => void;
   /**
    * The ↺ button. Reactivate is a COMPOSER flow, not a one-shot post, so it
    * hands off to the steer modal in reactivate mode (optional message folded
@@ -152,6 +170,34 @@ export function EditorOverlay(props: EditorOverlayProps) {
   // published by the body so a Files drop anywhere on the panel reaches it, and
   // left unset while the form is read-only so a locked job refuses the drop
   const sink = useRef<((files: FileList | File[]) => void) | null>(null);
+  /**
+   * Published by the body the same way, and read only by the rename control:
+   * cancel the pending 600ms autosave and land it NOW.
+   *
+   * It has to cross this boundary because the two halves sit on opposite sides
+   * of it — the debounce belongs to the body, and the rename control has to
+   * outlive the body (see below) — and it is a ref rather than a prop for the
+   * same reason `fileSink` is: the direction is upward.
+   */
+  const flushAutosave = useRef<(() => Promise<void>) | null>(null);
+  const beforeRename = useCallback(async () => {
+    await flushAutosave.current?.();
+  }, []);
+  /**
+   * The rename control lives HERE, above the keyed body, and that placement is
+   * load-bearing rather than tidy: a successful rename re-points `slug`, which
+   * remounts `EditorBody` in the same commit the response lands in. State held
+   * inside the body would be destroyed before it could be rendered — and one
+   * piece of it, the `skipped` notice, is the only record anywhere that a
+   * preserved artifact copy was left behind under the old name.
+   */
+  const rename = useRenameControl(props.slug, props.onRenamed, {
+    // `open` is what resets the control between jobs: this component is never
+    // unmounted, so a closed editor must not carry a half-typed rename or a
+    // read notice into the next job it is opened for.
+    open: props.open,
+    beforeSubmit: beforeRename,
+  });
   return (
     <Overlay
       id="editor-overlay"
@@ -162,7 +208,13 @@ export function EditorOverlay(props: EditorOverlayProps) {
     >
       {/* keyed on slug: reopening for another job is a fresh mount, which is
           openEditor's wholesale reset expressed once */}
-      <EditorBody key={props.slug ?? "__new__"} {...props} fileSink={sink} />
+      <EditorBody
+        key={props.slug ?? "__new__"}
+        {...props}
+        fileSink={sink}
+        flushAutosave={flushAutosave}
+        rename={rename}
+      />
     </Overlay>
   );
 }
@@ -172,11 +224,18 @@ function EditorBody({
   job,
   onClose,
   onCreated,
+  onRenamed,
   onReactivate,
   onOpenArtifact,
   mutate,
   fileSink,
-}: EditorOverlayProps & { fileSink: FileSink }) {
+  flushAutosave,
+  rename,
+}: EditorOverlayProps & {
+  fileSink: FileSink;
+  flushAutosave: MutableRefObject<(() => Promise<void>) | null>;
+  rename: RenameControlState;
+}) {
   const isNew = !slug;
   const [newSlug, setNewSlug] = useState("");
   const [note, setNote] = useState("");
@@ -276,6 +335,17 @@ function EditorBody({
 
   const autosave = useDebouncedCallback(() => void save(), 600);
   const { call: scheduleSave, cancel: cancelSave } = autosave;
+
+  // Published upward for the rename control, which posts from ABOVE this body
+  // and would otherwise re-point the overlay while a debounced save is still
+  // sitting in the window — the flush that fires on the resulting unmount
+  // posts the old slug into a 404 and paints its failure into a DOM that is
+  // already gone. Cancel first, exactly as doQueue does, so the pending timer
+  // cannot fire a second identical save behind this one.
+  flushAutosave.current = async () => {
+    cancelSave();
+    await save();
+  };
 
   // Any change to any field is a change to the payload. Watching the values
   // replaces the vanilla delegated input/change listener on #editor-form, and
@@ -466,6 +536,12 @@ function EditorBody({
     }
   }, [newSlug, onCreated]);
 
+  // Identity, not a form field — so it is armed for an EXISTING non-archived
+  // job whatever `readOnly` says. See renameControlVisible. The state itself
+  // is the overlay's (it has to outlive this body's remount); only the
+  // visibility rule, which needs `job` and `isNew`, is decided here.
+  const showRename = renameControlVisible(job, isNew, onRenamed);
+
   const showReactivate =
     !!job && !job.archived && job.state === "done" && !!job.reactivatable;
 
@@ -541,6 +617,10 @@ function EditorBody({
         <span className="panel-title" id="editor-title">
           {title}
         </span>
+        {/* beside the title, which is the job's identity surface — and BEFORE
+            the hint, so "cell in flight — fields locked" reads as a statement
+            about the form rather than about this button */}
+        <RenameButton id="editor-rename" state={rename} visible={showRename} />
         <span className="stat dim" id="editor-hint">
           {hint}
         </span>
@@ -603,6 +683,11 @@ function EditorBody({
             create
           </button>
         </div>
+
+        {/* First in the body, directly under the head button that opens it —
+            a rename is about the thing the title names, so it sits above the
+            artifacts, questions and form rather than below them. */}
+        <RenameRow id="editor-rename-row" state={rename} />
 
         {/* The job's artifacts. This modal is the ONLY way to reach a done or
             archived job's docs: the board card carries a bare count and a

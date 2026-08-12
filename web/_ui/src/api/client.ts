@@ -16,6 +16,7 @@ import type {
   DreamReports,
   JobForm,
   LogPage,
+  RenameResult,
   ThreadOp,
   ThreadRead,
   UploadResult,
@@ -265,6 +266,20 @@ export const setRotationMode = (mode: "auto" | "manual") =>
  */
 export const setJobColor = (slug: string, color: string) =>
   postJSON("/api/job/color", { slug, color });
+
+/**
+ * Rename a job. `slug` is its CURRENT name and `to` is the free text carl
+ * typed — the server slugifies it and answers with the name it actually
+ * stored, which is what every caller re-points to.
+ *
+ * Deliberately NOT routed through the shared mutation path, for `createJob`'s
+ * reason: a refusal here is the whole message (taken, reserved prefix, an
+ * archived job's name, another job's former name) and it belongs beside the
+ * input that caused it, where `mutate` would funnel it into the clock corner
+ * and hand the caller a bare null.
+ */
+export const renameJob = (slug: string, to: string) =>
+  postJSON<RenameResult>("/api/job/rename", { slug, to });
 
 // ------------------------------------------------- update / ship
 //

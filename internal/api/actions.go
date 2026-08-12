@@ -194,6 +194,27 @@ func webDone(req webReq) error {
 	return nil
 }
 
+// cellSessionIfLive answers both halves of the question the steer, stop and
+// answer-question routes ask before they act: is this job's cell actually
+// running, and under WHICH tmux session name.
+//
+// jobs.FindCellSession rather than LiveSessions()[jobs.CellSession(j)]: a job
+// renamed mid-run keeps running in the session it spawned under until the
+// rename's tmux convergence lands (jobs/rename.go), and where convergence
+// failed outright it stays there. Reading that cell as gone would refuse
+// carl's steer, his Stop and his answer on a job the board shows as working —
+// a refusal with no way out but a hand-typed tmux rename. The name it returns
+// is the one to quote back in a hint, since it is the session that exists.
+//
+// The started/done test runs first so a job with no cell at all still costs no
+// tmux call, exactly as the inline condition it replaced did.
+func cellSessionIfLive(j *jobs.Job) (string, bool) {
+	if !j.Started() || j.State == "done" {
+		return "", false
+	}
+	return jobs.FindCellSession(j, jobs.LiveSessions())
+}
+
 // webAnswerQuestion is the blocked→working move for an interactive
 // AskUserQuestion prompt: the browser posts the 1-based option index as a
 // single digit, delivered as a literal keystroke — that's how Claude Code's
@@ -208,13 +229,19 @@ func webAnswerQuestion(req webReq) error {
 	if len(digit) != 1 || digit[0] < '1' || digit[0] > '9' {
 		return fmt.Errorf("answer must be a single digit 1-9")
 	}
-	if !j.Started() || j.State == "done" || !jobs.LiveSessions()[jobs.CellSession(j)] {
+	sess, cellLive := cellSessionIfLive(j)
+	if !cellLive {
 		return fmt.Errorf("%s has no live cell to answer", j.Slug)
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	zeus, transcript := cellZeusTranscript(j, all)
+	// the FOUND session name in every hint, not CellSession(j): on a renamed
+	// cell whose tmux convergence has not landed, the current name is a session
+	// that does not exist, so `k o <that>` would fail for carl at exactly the
+	// moment the message is telling him to go look. jobs.CellZeus already
+	// elects across the same candidate set, so the two agree.
 	if zeus == nil {
-		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, jobs.CellSession(j))
+		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, sess)
 	}
 	if transcript == "" {
 		return fmt.Errorf("%s has no pending question — refresh the board", j.Slug)
@@ -224,7 +251,7 @@ func webAnswerQuestion(req webReq) error {
 		return fmt.Errorf("%s has no pending question — refresh the board", j.Slug)
 	}
 	if !answerableSingleDigit(pq) {
-		return fmt.Errorf("this question needs the pane — answer with k o %s", jobs.CellSession(j))
+		return fmt.Errorf("this question needs the pane — answer with k o %s", sess)
 	}
 	if err := sendDigit(zeus, digit); err != nil {
 		return fmt.Errorf("send digit: %v", err)
@@ -318,13 +345,15 @@ func webSteer(req webReq) error {
 	if text == "" {
 		return fmt.Errorf("empty message")
 	}
-	if !j.Started() || j.State == "done" || !jobs.LiveSessions()[jobs.CellSession(j)] {
+	sess, cellLive := cellSessionIfLive(j)
+	if !cellLive {
 		return fmt.Errorf("%s has no live cell to steer", j.Slug)
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	zeus := jobs.CellZeus(j, all)
 	if zeus == nil {
-		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, jobs.CellSession(j))
+		// the found name, not CellSession(j) — see webAnswerQuestion
+		return fmt.Errorf("%s: zeus not found — k o %s to investigate", j.Slug, sess)
 	}
 	if err := core.SendMessage(zeus, text); err != nil {
 		return fmt.Errorf("delivery failed: %v", err)
@@ -418,7 +447,7 @@ func webStop(req webReq) error {
 	if err != nil {
 		return err
 	}
-	if !j.Started() || j.State == "done" || !jobs.LiveSessions()[jobs.CellSession(j)] {
+	if _, cellLive := cellSessionIfLive(j); !cellLive {
 		return fmt.Errorf("%s has no live cell to stop", j.Slug)
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())

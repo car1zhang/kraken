@@ -1419,13 +1419,95 @@ Errors: 404 (no such job), 500 (ReadFile failure).
 
 ### `POST /api/job/create` → same shape as `/api/job/raw`
 
-Request: `{"slug": string}`. Errors: 405 (non-POST), 400 (bad slug), 409 (slug already exists), 500 (WriteFile failure).
+Request: `{"slug": string}`. Errors: 405 (non-POST), 400 (bad slug), 409 (name taken), 500 (WriteFile failure).
+
+A 409 covers two takings, not one: an active job already holds the slug, or an
+active job RESERVED it by being renamed away from it (`POST /api/job/rename`
+keeps a job's former names off limits for as long as that job is active, so a
+new job cannot start answering to a name a live cell is still calling by).
+The second is invisible to a client — former names are not on the wire — so it
+is reported as a refusal to be read, never as a 500.
 
 ### `POST /api/job/save` (web-UI-only)
 
 Request: `{"slug": string, "content": string, "mtime": number|string}` (mtime via `mtimeToken`, 0/""/null skips the optimistic-lock check).
 Response: `{"ok": true, "mtime": number, "warn": string}` (warn is `""` when the saved content parses cleanly — always present, it's a map literal).
-Errors: 404 (no such job), 409 (not editable, or mtime mismatch), 500.
+Errors: 404 (no such job), 409 (not editable, mtime mismatch, or a changed `job:` line — see below), 500.
+
+**The `job:` line is read-only here.** A save whose frontmatter names a slug
+other than the job's own is refused with a 409 whose message points at
+`POST /api/job/rename`; an unchanged or empty `job:` line saves exactly as
+before. A slug is identity — the cell dir, the tmux session, the branch family,
+the pluto artifact prefix and every peer job's prereq reference derive from it —
+so moving it through a field map moved the column and nothing else. It is
+refused rather than silently ignored: a save that keeps the old name while the
+editor shows the new one is the same divergence in the other direction.
+
+### `POST /api/job/rename` → map literal (api/jobrename.go `webJobRename`)
+
+Renames one active job. Its own route for the two reasons `/api/job/color` and
+`/api/job/load` have one — no `editableJob` gate, so a LIVE cell can be renamed,
+and no full-replace body to wipe a field a client predates — plus one of its
+own: a slug is identity rather than a field, so a rename must never ride in as a
+side effect of an unrelated edit.
+
+Request: `{"slug": string, "to": string}`. `slug` names the job by its
+**current** name; `to` is the new one, stored slugified (`util.Slugify`), so the
+response's `slug` is what to re-point to rather than the string sent. Both keys
+are required and an empty either way is a 400. The body is decoded with
+**unknown fields rejected** — `slug`, `to`, and nothing else.
+
+Response: `{"ok": true, "slug": string, "skipped"?: [string], "notes"?: [string]}`.
+Both lists are omitted when empty, and both describe a rename that SUCCEEDED —
+neither is an error, and neither should be rendered as one. They are two keys
+because they ask two different things of the reader.
+
+`skipped` names preserved pluto artifact copies that kept the old prefix because
+a file already occupied the new name. Every entry is the **source** path — the
+file still sitting under the old name, the one to move or delete by hand — never
+the blocker at the destination.
+
+`notes` carries best-effort steps that FAILED, each with its cause. Three kinds
+reach it, and only the first is about files: a preserved copy whose rename
+errored outright (permissions, a name over the filesystem's limit, a full disk)
+— not a conflict, nothing sits at its destination, so it is deliberately not in
+`skipped`, and it is still stranded under the old prefix where the card cannot
+show it; a `tmux` convergence step on a LIVE cell that did not land, leaving the
+session under its old name until the daemon reconverges it; and the one-line
+notice typed at zeus failing to deliver. Kraken retries the tmux ones on its own
+— except a convergence refused because the session carries another job's marker,
+which the retry will refuse the same way forever and needs a look — and the
+notice costs only a missing pane message, so a note is worth showing but never
+worth blocking on. Every note is also written to the event log, which is
+the durable record — the response is simply the only surface carl is looking at
+when he renames.
+
+Errors: 400 (bad json; an unrecognized field; an empty `slug` or `to`), 404 (no
+such job — resolved by CURRENT slug only, since renaming *by* a stale name means
+the caller does not know the job's name), 409 (every refusal: a `to` that
+slugifies to nothing, either name under the reserved `dream-`/`graph-` prefixes,
+an archived job, a target taken by another active job or by an archived one, or
+a target that is another active job's former name — the refusal text rides back
+verbatim and is meant to be rendered inline), 413 (body over 1 MiB). Gated under
+`--mirror` with the standard plain-text 403: this route renames a real tmux
+session and moves real files under `~/Documents/pluto`. **Additive, no contract
+bump** — no key on any existing shape changes, and `webJob` gains nothing (a
+job's former names are deliberately not on the wire).
+
+**Old names keep resolving.** The slug-taking verb routes — `/api/questions`,
+`/api/feedback`, `/api/job/load`, the cell-side hooks `/api/pr-attach` and
+`/api/limit-hit`, and `/api/job/saveform` — fall back to former-slug resolution
+when a slug names no active job, so a cell that spawned before the rename keeps
+working with the name it was given. A current slug always wins over a former
+one: a new job that takes the old name is the job that answers for it.
+
+The two hooks are the reason the fallback exists at all: their slug is baked
+into the cell's `.claude/settings.json` when it spawns and is never rewritten
+mid-run, so without the fallback a renamed job would lose PR auto-attach and
+the usage-limit rescue's fast trigger for the rest of that cell's life.
+`/api/job/saveform` is on the list for the editor's autosave: a save already in
+flight when the rename lands still carries the old slug, and it must reach the
+job it was typed into rather than 404 the edits away.
 
 ### `GET /api/job/form?slug=` → map literal (web.go `webJobForm`)
 
@@ -1470,7 +1552,7 @@ recoloring a running job is exactly when the picker is useful.
 
 Response (success): `{"ok": true, "mtime": number, "warn": string}`.
 Response (409 conflict, unforced mtime mismatch): `{"error": string, "conflict": true}` — the `conflict` key distinguishes a stale-mtime 409 from other 409s (e.g. "cell in flight") that don't carry it.
-Errors: 404 (no such job), 409 (not editable, or mtime conflict), 500.
+Errors: 404 (no job resolves under that slug — current OR former, see "Old names keep resolving" above), 409 (not editable, or mtime conflict), 500.
 
 ### `POST /api/job/color` → map literal (api/jobcolor.go `webJobColor`)
 
@@ -1832,7 +1914,8 @@ Request (`prAttachReq`): `slug` (string, required), `url` (string, required
 Response: `{"ok": true, "attached": bool}` — `attached` is `false` when the
 PR was already recorded (idempotent re-attach).
 Errors: 400 (bad JSON, missing slug, or `url` doesn't match the GitHub PR
-URL shape), 404 (no such job), 500 (write failure).
+URL shape), 404 (no job resolves under that slug — current OR former, since
+the hook posts the slug baked into the cell at spawn), 500 (write failure).
 
 ### `POST /api/limit-hit` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
 
@@ -1876,7 +1959,10 @@ The unknown-slug 400 is where this route deliberately differs from
 is a hook kraken itself installed with the job's own slug baked into the
 command string, so an unknown slug here means the request is malformed — a
 stale hook left by a torn-down job, or a hand-typed POST — rather than a
-caller asking about a resource the server merely doesn't have yet.
+caller asking about a resource the server merely doesn't have yet. "Unknown"
+includes former names before it is reached: a job renamed mid-run still
+answers to the name baked into its cell, so the refusal only fires for a slug
+that names no active job under any name it has held.
 
 Every accepted delivery writes exactly one `limit-hit` event naming the error
 type **verbatim**, including types the rescue never acts on, because that log

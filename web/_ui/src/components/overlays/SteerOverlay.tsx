@@ -43,6 +43,13 @@ import { QuestionBlock } from "../board/chips/QuestionBlock.tsx";
 import { ThreadChips } from "../board/chips/ThreadChips.tsx";
 import { CmdComposer } from "./CmdComposer.tsx";
 import { DocQuestions } from "./DocQuestions.tsx";
+import {
+  RenameButton,
+  RenameRow,
+  renameControlVisible,
+  useRenameControl,
+  type RenameControlState,
+} from "./RenameControl.tsx";
 import { TokensPanel } from "./TokensPanel.tsx";
 import {
   AttChips,
@@ -134,6 +141,16 @@ export interface SteerOverlayProps {
    */
   job: WebJob | undefined;
   onClose: () => void;
+  /**
+   * A rename succeeded — the caller re-points `slug` at the SAME job under its
+   * new name.
+   *
+   * The one optional callback on this interface, and it does NOT re-open the
+   * unfilled-slot hazard the block below describes: the rename control is
+   * hidden outright without it (renameControlVisible), so an unwired
+   * integrator loses a visible button rather than gaining a broken one.
+   */
+  onRenamed?: (slug: string) => void;
   /** See Overlay.tsx. */
   mutate: Mutate;
 
@@ -172,6 +189,18 @@ export function SteerOverlay(props: SteerOverlayProps) {
   // published by the body so a Files drop anywhere on the panel reaches it —
   // see panelDropHandlers
   const sink = useRef<((files: FileList | File[]) => void) | null>(null);
+  /**
+   * Held here rather than in the body for EditorOverlay's reason, which
+   * applies verbatim: a successful rename re-points `slug`, the body is keyed
+   * on it, so it remounts in the same commit the response lands in — and the
+   * `skipped` notice the response may carry is the only record anywhere that a
+   * preserved artifact copy was left behind under the old name.
+   */
+  const rename = useRenameControl(props.slug, props.onRenamed, {
+    // see EditorOverlay's: this component is never unmounted either, so the
+    // overlay closing is what resets the control between jobs
+    open: props.open,
+  });
   return (
     <Overlay
       id="steer-overlay"
@@ -181,7 +210,12 @@ export function SteerOverlay(props: SteerOverlayProps) {
       {...panelDropHandlers(sink)}
     >
       {props.slug ? (
-        <SteerBody key={props.slug + props.mode} {...props} fileSink={sink} />
+        <SteerBody
+          key={props.slug + props.mode}
+          {...props}
+          fileSink={sink}
+          rename={rename}
+        />
       ) : null}
     </Overlay>
   );
@@ -199,11 +233,13 @@ function SteerBody({
   requireText = false,
   job,
   onClose,
+  onRenamed,
   mutate,
   onOpenArtifact,
   onOpenThread,
   fileSink,
-}: SteerOverlayProps & { fileSink: FileSink }) {
+  rename,
+}: SteerOverlayProps & { fileSink: FileSink; rename: RenameControlState }) {
   const jobSlug = slug as string;
   const [text, setText] = useState("");
   const [note, setNote] = useState("");
@@ -271,10 +307,18 @@ function SteerBody({
   const captured = useRef(false);
   useEffect(() => {
     if (!captured.current) {
-      // the baseline is taken on the first pass, not compared against — the
-      // vanilla equivalent ran inside the 3s poll, never at open time
+      // The baseline is taken on the first pass, not compared against — the
+      // vanilla equivalent ran inside the 3s poll, never at open time.
+      //
+      // Capture is LAZY, matching EditorBody's: a job that is not in the board
+      // payload yet has no state to baseline against, and `undefined` is not
+      // one. A rename is exactly that case — this body remounts on the new
+      // slug immediately, while the board still carries the old one for up to
+      // one poll — so an eager capture would read the job's ARRIVAL as a state
+      // change and close the modal seconds after every successful rename.
+      if (!job) return;
       captured.current = true;
-      openState.current = job?.state;
+      openState.current = job.state;
       return;
     }
     if (!job || job.state !== openState.current) onClose();
@@ -396,6 +440,14 @@ function SteerBody({
       onClose();
     }
   }, [cancelDraft, jobSlug, mutate, onClose]);
+
+  // Q5's answer: the rename lives on BOTH surfaces. A live working/blocked
+  // card routes here and never to the editor, so without this copy the control
+  // would be reachable only while the cell is down — the same argument the
+  // colour strip below the title already carries.
+  // The state is the overlay's (it outlives this body's remount — see the
+  // hoist there); only the visibility rule, which needs `job`, is decided here.
+  const showRename = renameControlVisible(job, false, onRenamed);
 
   const liveCol = liveDisplayColumn(job);
   const killable =
@@ -545,6 +597,7 @@ function SteerBody({
             steer, unblock and reactivate alike) and touches nothing else: a
             pick POSTs the colour and never sends a steer message. */}
         <ColorPicker slug={jobSlug} color={job?.color} mutate={mutate} />
+        <RenameButton id="steer-rename" state={rename} visible={showRename} />
         <span className="spacer"></span>
         <button
           className="btn tmux-open open-tmux"
@@ -578,6 +631,10 @@ function SteerBody({
         </button>
       </div>
       <div className="panel-body answer-body">
+        {/* above the context block, directly under the head button that opens
+            it — the same placement the editor gives it, and the same reason:
+            it is about the job the title names, not about the cell's state */}
+        <RenameRow id="steer-rename-row" state={rename} />
         <div className="steer-context" id="steer-context" hidden={!showContext}>
           {/* `crew`, not `steer-crew`: .crew is the class on this element
               itself, exactly as .threads is on #steer-threads, and style.css

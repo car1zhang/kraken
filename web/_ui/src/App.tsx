@@ -280,6 +280,18 @@ export function App() {
         onOpenArtifact={(url, name, key) => setArtifact({ url, name, key })}
         onOpenThread={(slug, tid) => setThread({ slug, tid })}
         onClose={() => setSteer(null)}
+        // The rename's re-point, and the ONE reason it belongs up here: the
+        // open overlay's identity is App's state, not the modal's, so a modal
+        // that renamed itself in place would keep being handed the old slug on
+        // the very next render. Synchronous — the mode and requireText the
+        // modal opened with survive, only the name moves. The board still
+        // carries the old slug until the poll after this, which is why the
+        // refetch is kicked here and why both bodies capture their staleness
+        // baseline lazily.
+        onRenamed={(slug) => {
+          setSteer((s) => (s ? { ...s, slug } : s));
+          void board.refetch();
+        }}
         mutate={mutate}
       />
 
@@ -289,6 +301,13 @@ export function App() {
         job={jobFor(editor?.slug)}
         onClose={() => setEditor(null)}
         onCreated={(slug) => setEditor({ slug })}
+        // Byte-for-byte the create re-point: same state, same shape, and the
+        // same effect on the body below, which is keyed on `slug` and so
+        // remounts against the name the server just confirmed.
+        onRenamed={(slug) => {
+          setEditor({ slug });
+          void board.refetch();
+        }}
         onReactivate={(slug) => {
           setEditor(null);
           openSteer(slug, "reactivate", { requireText: true });

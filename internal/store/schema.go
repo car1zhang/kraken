@@ -61,7 +61,11 @@ import (
 // Version 20 retires the queued status: jobs.ready is dropped, the prereqs
 // table is dropped with the feature it served, and every board_order row for
 // the vanished "queued" column is deleted (see schemaV20).
-const schemaVersion = 20
+// Version 21 adds job_former_slugs, the record of every name a job has been
+// renamed AWAY from, which is what keeps a renamed job's old CLI names,
+// branches, cell dirs and transcript paths resolving (see schemaV21 and
+// store/rename.go).
+const schemaVersion = 21
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1157,6 +1161,61 @@ DROP TABLE prereqs;
 DELETE FROM board_order WHERE "column" = 'queued';
 `
 
+// schemaV21 adds job_former_slugs: one row per name a job has been renamed
+// AWAY from. One brand-new table, no hook — nothing anywhere records a rename
+// today, so an EMPTY table is exactly right for every pre-existing job (none
+// of them has ever been renamed), which is schemaV7/V15/V17/V18/V19's
+// situation.
+//
+// Purely additive: no existing table, column or row is touched.
+//
+// WHY IT IS PERSISTED AT ALL, since a rename could just move everything: a
+// job's runtime names are DERIVED from its slug — the cell dir, the tmux
+// session, the branch family, the ~/.claude/projects transcript dirs Claude
+// Code buckets by startup cwd — and most of those cannot be moved while the
+// cell is live (renaming a worktree under a running agent breaks its pane;
+// the transcript dirs are Claude Code's, not kraken's). So a rename moves
+// almost nothing and this table is what lets every resolver keep PROBING the
+// old names. Losing a row does not corrupt anything, it silently detaches a
+// job from its own history — which is why the row is written in the same
+// transaction as the slug change rather than afterwards.
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - PRIMARY KEY (job_id, slug) IS the dedupe: renaming A→B→A→B must leave
+//     ONE (id,"A") row rather than a second, so RenameJob upserts against it.
+//     There is no id column because nothing addresses a former-slug row
+//     individually.
+//   - job_id LEADS the key, because the per-job read (every job row load
+//     carries its former slugs) is the frequent one and a composite key can
+//     only be seeked on a PREFIX of its columns — schemaV9's feedback_ts
+//     argument, applied before the fact.
+//   - job_former_slugs_slug is the index for the OTHER direction, the
+//     resolution `GetJobByFormerSlug` does: given an old name, find the active
+//     job that used to hold it. Without it that lookup is a full scan.
+//   - NO foreign key and no cascade, the rule job_tokens and every kg_* table
+//     state: a hard-deleted job's rows are harmless fossils, and a cascade
+//     firing here buys nothing (the row's whole meaning is "this name once
+//     belonged to that id", which stays true).
+//   - renamed_at is unix millis and is READ, not decorative:
+//     GetJobByFormerSlug orders by it so that when two active jobs somehow
+//     share a former slug — reachable only for rows written before the
+//     reservation in CreateJob/RenameJob existed — the most recent rename
+//     wins rather than an arbitrary row.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v20, long past
+// the point where editing an earlier step would ever run again.
+const schemaV21 = `
+CREATE TABLE job_former_slugs (
+	job_id     INTEGER NOT NULL,
+	slug       TEXT    NOT NULL,
+	renamed_at INTEGER NOT NULL DEFAULT 0, -- unix millis: when the job left this name
+	PRIMARY KEY (job_id, slug)
+);
+CREATE INDEX job_former_slugs_slug ON job_former_slugs(slug);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1218,9 +1277,13 @@ type migrationStep struct {
 // migrations[20] retires the queued status — drops jobs.ready, drops the
 // prereqs table, and deletes every board_order row for the queued column (no
 // hook — all three are plain SQL, and none of the dropped state has a forward
-// home; see schemaV20).
+// home; see schemaV20);
+// migrations[21] adds job_former_slugs (no hook — a brand-new table has
+// nothing to migrate forward, and an EMPTY table correctly means "no job has
+// ever been renamed", which is true of every job that predates the feature;
+// see schemaV21).
 // Future schema changes append
-// migrations[21], migrations[22], ... rather than editing an existing
+// migrations[22], migrations[23], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1244,6 +1307,7 @@ var migrations = map[int]migrationStep{
 	18: {sql: schemaV18},
 	19: {sql: schemaV19},
 	20: {sql: schemaV20},
+	21: {sql: schemaV21},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

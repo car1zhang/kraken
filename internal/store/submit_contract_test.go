@@ -59,12 +59,18 @@ func contractUserVersion(t *testing.T, s *Store) int {
 }
 
 // TestSubmitContractSchemaVersionIsTwenty: the migration that drops the retired
-// job columns and prunes the queued board order is version 20. A literal here
-// rather than a comparison against itself — the next schema change has to come
-// to this line deliberately.
+// job columns and prunes the queued board order is version 20 — pinned as
+// migrations[20] still being that step, plus the version having reached it.
+// It opened as a schemaVersion == 20 equality, which the very next appended
+// migration (v21, the rename feature's former-slug table, joined at the
+// rebase) broke while breaking nothing about the queued retirement —
+// recall_contract_test.go documents retiring the same fragility the same way.
 func TestSubmitContractSchemaVersionIsTwenty(t *testing.T) {
-	if schemaVersion != 20 {
-		t.Fatalf("schemaVersion = %d, want 20", schemaVersion)
+	if migrations[20].sql != schemaV20 {
+		t.Fatalf("migrations[20] is not schemaV20 — the queued retirement must arrive at v20")
+	}
+	if schemaVersion < 20 {
+		t.Fatalf("schemaVersion = %d, want at least 20", schemaVersion)
 	}
 }
 

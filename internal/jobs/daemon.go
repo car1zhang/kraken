@@ -605,9 +605,25 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		if !j.Started() || j.State == "done" {
 			continue
 		}
-		isLive := live[CellSession(j)]
+		// FindCellSession, not live[CellSession(j)]: a renamed cell whose tmux
+		// convergence has not landed yet is still running under an earlier
+		// name, and reading it as not-live would flip a working job to
+		// blocked, fire the dead-cell alert, and hand the roll call a session
+		// no pane is in.
+		sess, isLive := FindCellSession(j, live)
 		if isLive {
 			cells++
+			// self-heal: found under a FORMER name, so the rename's own
+			// convergence failed (or this tick beat it). Re-running it is
+			// idempotent and is what stops the cell sitting under the old name
+			// indefinitely — every later resolver would otherwise keep paying
+			// the former-name probe for a session tmux could simply rename.
+			// mirror never touches a pane belonging to the real deployment.
+			if !mirror && sess != CellSession(j) {
+				for _, note := range convergeCellTmux(j, sess, markerSlugForSession(j, sess)) {
+					dlogErr("%s: cell rename convergence: %s", j.Slug, note)
+				}
+			}
 			// eager session stamp: zeus' session id lands in the job file
 			// within a tick of the cell coming up (and re-lands if it ever
 			// changes), so even a job whose cell later dies uncleanly stays
@@ -654,8 +670,13 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			// probe agrees. A cell that is genuinely gone costs one probe per
 			// tick until the flag is set; a snapshot artifact costs one probe
 			// and self-corrects next tick.
+			// the re-probe covers EVERY name the cell may be running under,
+			// for the reason FindCellSession exists: a renamed cell that has
+			// not converged is alive under an older session name, and alerting
+			// on it would be the same false "cell is gone" carl has previously
+			// acted on with a teardown that destroyed uncommitted work.
 			key := "gone:" + j.Slug
-			if d.Notified[key] == 0 && !core.SessionAlive(CellSession(j)) {
+			if d.Notified[key] == 0 && !anyCellSessionAlive(j) {
 				if !mirror {
 					notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
 				}
@@ -796,7 +817,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			// a session just created is at least as fresh as its own
 			// creation — covers pre-first-transcript startup before any pane
 			// or team-config signal exists yet
-			if created, ok := times[CellSession(j)]; ok && now.Sub(created) < sessionCreateGrace {
+			if created, ok := times[sess]; ok && now.Sub(created) < sessionCreateGrace {
 				active = true
 			} else {
 				zeus := CellZeus(j, all)
@@ -812,7 +833,11 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				if zeus != nil && zeus.SessionID != "" && !zeus.SessionIDGuessed {
 					sessionID = zeus.SessionID
 				}
-				active = cellActive(CellSession(j), all, core.TeamMembersForLead(sessionID), core.PaneShowsQuestion, threadPanes)
+				// the session the cell was actually FOUND under: a
+				// not-yet-converged renamed cell has every one of its panes in
+				// the old session, so passing the current name would empty the
+				// roll call and read a working job as blocked.
+				active = cellActive(sess, all, core.TeamMembersForLead(sessionID), core.PaneShowsQuestion, threadPanes)
 			}
 		}
 		st := deriveState(j, isLive, active)
