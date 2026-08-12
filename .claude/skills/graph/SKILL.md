@@ -92,6 +92,7 @@ head; move the surviving tuples with code.
 ENTITY|<name>|<type>|<one-sentence description of what this IS>
 FACT|<source entity>|<predicate>|<target entity>|<the fact as a full sentence>|<strength 1-10>
 EPISODE|<episode id>     # crew tuple files only — opens each episode's block, tuples or none
+NOTE|<one line, no | or newlines>   # crew tuple files only — refusal categories and judgment calls, one NOTE per line, just before DONE
 DONE|<episode count>     # crew tuple files only — the teammate's terminal append
 ```
 
@@ -140,11 +141,12 @@ Five rules about what a good tuple looks like:
 Extract with the names the episode actually uses. Only once the batch is extracted, resolve those
 names against what already exists. **The existing vocabulary comes from ONE full-graph read** — the
 same `/api/graph` pull the sweep below spells out — whose `nodes` list is the complete inventory of
-canonical NAMES. Aliases are deliberately not joined on that route (they are visible one node at a
-time via `/api/graph/node?id=N`), so a name absent from the inventory may still be an alias of an
-existing node: let the resolve that `k graph add` performs catch those, and send a `description`
-only for a node you are confident is genuinely new — an alias-resolved write OVERWRITES the
-existing node's gloss and re-queues its embedding. `k graph search` cannot supply the vocabulary:
+canonical NAMES **and each node's registered `aliases`** — match an extracted name against BOTH
+before calling it new, since an alias-blind match table has printed literal registered aliases as
+`NEW` (the label that mints a duplicate node) while the server would have resolved them silently.
+A name matching neither may still be a new spelling of an existing thing: judge it, and send a
+`description` only for a node you are confident is genuinely new — an alias-resolved write
+OVERWRITES the existing node's gloss and re-queues its embedding. `k graph search` cannot supply the vocabulary:
 it is ranked retrieval with no way to enumerate (a degree-zero node is structurally absent from its
 results, since the route builds its node list from returned edges) — two extraction teammates
 briefed with only `search` burned ~80 probe calls rebuilding the node list by union, recovered two
@@ -157,7 +159,12 @@ how a graph converges on its own first guesses.
 
 Resolution is **resolve-then-add**: an incoming name that matches an existing node's name or alias
 merges into it, and a genuinely new name creates a node. When two names are the same thing, add the
-loser as an **alias** rather than a second node.
+loser as an **alias** rather than a second node — and **register every same-referent resolution you
+derive by judgment as an alias in the same run's payload** (the winning node's `aliases` list; the
+add merges alias lists, it never replaces them). An unregistered resolution is a merge stored only
+in a report's prose: one night registered seven aliases and the next registered zero, so the night
+after re-derived the identical merges from scratch — tonight's judgment is tomorrow's string match
+only if you write it down where the inventory can serve it back.
 
 **An LLM judge is a merge VETO, never a merge PROPOSER.** Use judgment to REFUSE a merge the string
 match proposed — `kraken serve` and `kraken cutover` are not one component, `athena-logic` and
@@ -353,7 +360,17 @@ tuples now" boundary and delivered nothing in three hours, while a sibling that 
 per-episode appends after the same first death finished with no further loss. A per-episode append
 needs no BUFFER, but the file still needs its completion signal: EVERY episode in the slice gets
 an `EPISODE|<id>` line — one you extracted nothing from gets the line with nothing under it, or
-"never reached" and "nothing durable in it" become the same file — and the teammate's LAST append
+"never reached" and "nothing durable in it" become the same file — and the teammate's closing
+judgment travels IN the file too: refusal categories and judgment calls are appended as `NOTE|`
+lines immediately BEFORE the terminal line, never delivered as a chat reply after it, because the
+`DONE` grep is what releases the lead and a stop-on-acceptance races any reply still in flight (a
+teammate's refusal reasoning has been lost whole to a stop landing seconds after its terminal
+append, unrecoverable). `NOTE|` lines are RUN-level, not episode content: they sit after every
+`EPISODE|` block, one line each with no `|` or newline in the text (four `|`s would give a NOTE
+the same arity as a `FACT` under a field-split parse), they are exempt from the repeated-block
+dedupe below, the conversion script skips them (it reads `ENTITY|`/`FACT|` only), and the LEAD
+reads them — they are what fills the report's refusals and judgment-calls sections for that
+slice. Then the teammate's LAST append
 is a terminal `DONE|<episode count>` line counting every episode in the slice. This is the one
 place the imported `-s` wait below does not apply, since an append-built file is non-empty from
 its first episode: delete each tuple path immediately before you spawn a teammate ONTO it, then
@@ -381,8 +398,8 @@ found** (`SendMessage`, naming the broken instruction and the workaround), not p
 line. A brief bug hits every slice at once, so a teammate that quietly works around it converts one
 shared defect into N private rediscoveries — measured twice now, three teammates in one night each
 independently diagnosing the same broken `--since` instruction and each parking it where the other
-two would never see it. Content judgments stay judgment calls in the closing line; the brief being
-wrong is the one thing that goes up immediately.
+two would never see it. Content judgments stay judgment calls in the tuple file's `NOTE|` lines;
+the brief being wrong is the one thing that goes up immediately.
 
 Any agent that only READS — surveying what the graph already holds, say — is an unnamed subagent and
 must be spawned `general-purpose` or another type whose roster includes `Write`; **never `Explore`**,
@@ -412,9 +429,16 @@ specific, and it is the only place the cell's real paths appear:
   backlog over most of its range (`clamp(pending/20, 25, 150)`), so a large queue drains slowly
   and a report naming only what it drained reads as the queue being clear: one run drained its
   full 115-episode cap and never said 2,192 remained pending.
-  Previous nights' reports survive as flat copies at `~/Documents/pluto/<slug>-<id>.00-graph-report.md`
-  (moved into `archive/` when their job is archived); the sweep reads the most recent few for the
-  nodes already recorded as refused — the only cross-run state it has. So the sweep's refusals are
+  Previous nights' reports survive as flat copies at `~/Documents/pluto/<slug>-<id>.00-graph-report.md`,
+  moved into `archive/` when their job is archived — carl's archive action, or the daemon's
+  auto-archive a day after a job goes done — so at any given run each past report may sit in
+  either directory: **glob flat and `archive/` both**, dedupe by filename (a failed move can
+  leave the same report in both), and take the most recent few INGEST reports across the union
+  (a revision-mode report has no refusals section and would silently spend one of the slots).
+  A flat-only glob has come up empty against a dozen archived reports, leaving the sweep to
+  re-walk every node past nights had already recorded as refused. The sweep
+  reads those recent reports for the nodes already recorded as refused — the only cross-run state
+  it has. So the sweep's refusals are
   written machine-readably: a `## Sweep refusals` section — heading always present, bare node
   names exactly as `/api/graph` spells them, one per line, no bullets and no prose; a run with
   zero refusals leaves the heading with no lines under it (never `None`, which a later run would
@@ -438,6 +462,14 @@ specific, and it is the only place the cell's real paths appear:
 
   `graph updated: <set root>/00-graph-report.md (N episodes, M nodes, K facts)`
 
-  and STOP (end the turn). Use `0` where a count is zero — never omit the clause. Kraken derives
-  blocked from your silence and shows your last words on the board.
+  and STOP (end the turn). Use `0` where a count is zero — never omit the clause. The denominators
+  are fixed, because two consecutive nights counted them differently and the board line stopped
+  being comparable: N is episodes closed this run; M is the `nodes` delta between step 1's two
+  `k graph stats` calls (bare endpoint nodes are created without appearing in any add response's
+  `nodes` list, so summing `added` flags undercounts); K is edges CREATED this run — sum
+  `added: true` across your add responses, extraction plus sweep, counted at creation even if a
+  later step invalidated one (never a `live_edges` delta, which invalidations deflate) — and a
+  re-sighted fold
+  creates no edge and never counts toward K; folds belong in the report, not this line. Kraken
+  derives blocked from your silence and shows your last words on the board.
 - Never declare the job done — accepting is carl's move, never yours.
