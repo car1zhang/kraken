@@ -293,7 +293,14 @@ export function App() {
         onCreated={(slug) => setEditor({ slug })}
         onReactivate={(slug) => {
           setEditor(null);
-          openSteer(slug, "reactivate", { requireText: true });
+          // NO requireText: SteerOverlay's mode table says a done→working drag
+          // is the ONLY caller that sets it — the card's and editor's ↺ buttons
+          // open reactivate with the message optional ("leave empty to just
+          // wake it", the composer's own placeholder). This passed true from
+          // the React port until 2026-08: an empty send then dead-ended on a
+          // small "message is empty" note that contradicted the placeholder,
+          // which read as the reactivate button doing nothing at all.
+          openSteer(slug, "reactivate");
         }}
         // The editor is the only surface a settled job's artifacts are
         // reachable from now that the card carries a bare count, so leaving
