@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,14 +12,15 @@ import (
 	"kraken/internal/util"
 )
 
-// cmd_graph.go — `k graph pending|add|done|search|stats`: the cell-side
+// cmd_graph.go — `k graph pending|add|done|search|get|stats`: the cell-side
 // verbs for the knowledge graph, proxying to kraken serve's /api/graph*
 // routes (internal/api/graph.go). `pending`, `add` and `done` are the
 // extraction agent's loop — take a batch, write back what it found, close
 // each episode it processed; `search` is the retrieval read any agent can
-// use; `stats` is the growth curve.
+// use; `get` dereferences one injected `[F# E#]` handle back to the full
+// fact (or the episode) it was cut down from; `stats` is the growth curve.
 //
-// The five op names and their flags are the spellings
+// The six op names and their flags are the spellings
 // .claude/skills/graph/SKILL.md hands the extraction agent, so they are a
 // contract with that file, not a local naming choice.
 //
@@ -42,7 +44,7 @@ import (
 // qfGet/qfPost.
 func cmdGraph(args []string) {
 	if len(args) == 0 {
-		util.Die("usage: k graph pending|add|done|search|stats ...")
+		util.Die("usage: k graph pending|add|done|search|get|stats ...")
 	}
 	op, rest := args[0], args[1:]
 	switch op {
@@ -71,6 +73,10 @@ func cmdGraph(args []string) {
 			util.Die("%v", err)
 		}
 		fmt.Print(text)
+	case "get":
+		if err := runGraphGet(rest, os.Stdout); err != nil {
+			util.Die("%v", err)
+		}
 	case "stats":
 		out, err := runGraphStats(rest)
 		if err != nil {
@@ -78,7 +84,7 @@ func cmdGraph(args []string) {
 		}
 		writeStdout(out)
 	default:
-		util.Die("usage: k graph pending|add|done|search|stats ... (unknown op %q)", op)
+		util.Die("usage: k graph pending|add|done|search|get|stats ... (unknown op %q)", op)
 	}
 }
 
@@ -386,6 +392,89 @@ func runGraphSearch(args []string) (string, error) {
 		return fmt.Sprintf("nothing strongly matched %q\n", query) + b.String(), nil
 	}
 	return b.String(), nil
+}
+
+const graphGetUsage = "usage: k graph get <handle>... (F<edge-id>, bare <edge-id>, or E<episode-id>)"
+
+// parseGraphHandle reads one handle as it appears in an injected fact line —
+// `[F1091 E148111, seen 1x]` — and says which route dereferences it.
+//
+// `F<id>` and a bare `<id>` are both the EDGE, because the two spellings
+// arrive from two different readers: an agent copying the handle out of the
+// block it was given types the `F`, while a human who already has an edge id
+// in hand types the number. `E<id>` is the episode — a different route and a
+// different object, which is why the prefix is part of the parse rather than
+// a flag.
+//
+// The prefixes are case-insensitive: the handle is transcribed by hand out of
+// prose, and rejecting `f1091` would fail a caller who named the right fact.
+// Everything else — empty, a lone `F`, a float, zero, negative, a non-number
+// — is a usage error naming the offending arg, never a silent fallback to
+// some other id: dereferencing the WRONG fact is worse than refusing.
+func parseGraphHandle(arg string) (episode bool, id int64, err error) {
+	s := strings.TrimSpace(arg)
+	digits := s
+	if s != "" {
+		switch s[0] {
+		case 'F', 'f':
+			digits = s[1:]
+		case 'E', 'e':
+			episode, digits = true, s[1:]
+		}
+	}
+	n, convErr := strconv.ParseInt(digits, 10, 64)
+	if convErr != nil || n <= 0 {
+		return false, 0, fmt.Errorf("bad handle %q: want F<edge-id>, a bare edge id, or E<episode-id> (%s)", arg, graphGetUsage)
+	}
+	return episode, n, nil
+}
+
+// runGraphGet is `k graph get <handle>...`: GET /api/graph/fact?id=N per edge
+// handle, GET /api/graph/episode?id=N per episode handle, each response body
+// printed verbatim in argument order.
+//
+// It exists because the facts injected into a cell's context are CUT — a
+// clause-cut summary plus a handle — so the handle is the only way back to
+// the sentence the graph actually stored, and to the episode that sourced it.
+// The body is never decoded here: this verb has no opinion about the bundle's
+// shape, so a field added server-side needs no change on this side, exactly
+// as `pending` and `stats` pass their JSON straight through.
+//
+// Multiple handles are one call rather than a loop the caller writes, since
+// reading a line's `[F# E#]` pair is the common case. The FIRST failure stops
+// the run and returns: bodies already written stay written, and printing the
+// remaining handles after an error would bury it mid-stream.
+func runGraphGet(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("%s", graphGetUsage)
+	}
+	for _, arg := range args {
+		episode, id, err := parseGraphHandle(arg)
+		if err != nil {
+			return err
+		}
+		route := "/api/graph/fact?id="
+		if episode {
+			route = "/api/graph/episode?id="
+		}
+		body, err := qfGet(route + strconv.FormatInt(id, 10))
+		if err != nil {
+			return err
+		}
+		if _, err := out.Write(body); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+		// One newline BETWEEN bundles, and only when the server didn't
+		// already end with one — kraken serve's encoder does, so this is
+		// the guard for a server that ever stops, not a reformat of what it
+		// sent. Two handles must never print as one run-together line.
+		if !bytes.HasSuffix(body, []byte("\n")) {
+			if _, err := io.WriteString(out, "\n"); err != nil {
+				return fmt.Errorf("write output: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 const graphStatsUsage = "usage: k graph stats"

@@ -933,10 +933,10 @@ GET/POST).
 
 ## Knowledge graph
 
-Eight routes over the `kg_*` tables (internal/api/graph.go, plus
+Ten routes over the `kg_*` tables (internal/api/graph.go, plus
 internal/api/recall.go), in the order register.go wires them: `graph`,
-`graph/stats`, `graph/node`, `graph/pending`, `graph/search`, `graph/recall`,
-`graph/add`, `graph/episode-done`.
+`graph/stats`, `graph/node`, `graph/fact`, `graph/episode`, `graph/pending`,
+`graph/search`, `graph/recall`, `graph/add`, `graph/episode-done`.
 **All additive — `apiContract` stays 5.** Every one is a NEW PATH, never a
 key added to, retyped in, or removed from an existing shape, so a client that
 predates them decodes nothing differently.
@@ -953,16 +953,24 @@ client-side force simulation on either — but WebGL inside a sheet fights the
 sheet's gestures, sigma's labels are sized for a desktop, and the
 rail/canvas/rail layout does not fit a phone. The remaining five routes
 (`stats`, `pending`, `search`, `add`, `episode-done`) stay web- and
-`k graph`-only.
+`k graph`-only. The two dereference reads — `graph/fact` and `graph/episode` —
+are narrower still: they are `k graph get`-only, with no web UI caller either,
+since their reader is an agent following an injected
+`[F<edge id> E<episode id>]` handle rather than a person clicking a canvas.
+Neither is modeled in Models.swift or APIClient.swift.
 
 The `stats` object's keys are snake_case (`live_edges`,
 `missing_embeddings`) like the rest of this API. (They were briefly camelCase
 during the parallel build; renamed before anything shipped, so no client ever
 saw the old spelling.)
 
-**Mirror mode**: the four reads plus `POST /api/graph/search` stay reachable
+**Mirror mode**: the six GET reads plus `POST /api/graph/search` stay reachable
 under `--mirror` (search is a POST only because a query is arbitrary user
-text, not because it writes). `POST /api/graph/recall`,
+text, not because it writes). `GET /api/graph/fact` and
+`GET /api/graph/episode` are ungated for the same reason as the other reads,
+and pointedly so: following a handle touches `kg_recall` not at all —
+dereferencing a fact the agent was already handed is not a delivery, so there
+is nothing for a mirror to refuse. `POST /api/graph/recall`,
 `POST /api/graph/add` and `POST /api/graph/episode-done` are gated with the
 usual 403 `disabled in mirror mode` — recall reads like a search but records
 what it delivered.
@@ -1038,6 +1046,111 @@ array, never `null`.
 Errors: 400 (missing or non-positive-integer `id`), 404 (no node with that
 id — a named node that does not exist is an answer, not an empty result),
 405, 500.
+
+### `GET /api/graph/fact?id=N` — `k graph get`-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+The fact dereference: one edge in **full**, its two endpoint entities, the
+episode it came from, and what else those entities are known for. Reached from
+a cell as `k graph get F<edge id>` (or a bare edge id).
+
+Its reason to exist is the injected memory block. A fact rendered into an
+agent's context arrives clause-cut to 180 runes and carries a handle —
+`[F<edge id> E<episode id>, seen Nx]` — precisely so the summary can be short;
+this route is what turns that handle back into the whole thing.
+
+Response:
+`{"fact": webGraphFactFull, "src": webGraphNode, "dst": webGraphNode, "episode": webGraphEpisodeRef|null, "siblings": {"src": [webGraphSiblingFact], "dst": [webGraphSiblingFact]}}`.
+
+An **invalidated** edge still dereferences — a handle cited in a brief written
+last month may name a fact kraken has since unlearned, and a 404 would leave
+the reader unable to tell "kraken never said this" from "kraken stopped
+believing it". `expired_at` on the bundle says which.
+
+`webGraphFactFull`:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | the edge id — the `F<id>` half of the handle |
+| `src` | string | always | endpoint **name**, falling back to `"#<id>"` when the node row is missing. The fact IS the answer here; a missing gloss never drops or 500s it |
+| `dst` | string | always | as `src` |
+| `predicate` | string | always | |
+| `fact` | string | always | the stored sentence **byte-exact** — untruncated, never clause-cut. Getting past the injected block's 180-rune cut is the whole point of following a handle |
+| `strength` | number | always | the extractor's 1-10 confidence |
+| `occurrences` | number | always | distinct episodes independently stating this fact |
+| `valid_from` | number | always | **world** time, unix millis |
+| `valid_until` | number | always | **world** time; `0` = still true |
+| `created_at` | number | always | **system** time — when kraken learned it |
+| `expired_at` | number | always | **system** time; `0` = live |
+| `episode` | number | always | the episode id this fact was extracted from — the `E<id>` half of the handle |
+
+Both time axes ride in full here, unlike `webGraphFact` on `/api/graph/search`,
+which trims them: a ranked list is scanned, a dereferenced fact is studied.
+There is no `weak` key — that is a relevance verdict, and there is no query on
+this route to be relevant to; publishing `false` would assert one that was
+never computed.
+
+`src` and `dst` are `webGraphNode`, the same type `GET /api/graph` serves, with
+`aliases` populated via the node's alias rows and `x`/`y` always `0` — the same
+"a fact bundle is a list to read, not a canvas to draw" reasoning
+`/api/graph/search` states. A missing node row degrades to
+`{"id": <id>, "name": "#<id>"}` (every other key at its zero value) rather than
+a 404: the caller named a **fact**, and the fact exists.
+
+`episode` is a provenance **pointer** — `{"id", "kind", "ref"}` and nothing
+else. `content` is deliberately absent: an episode is a reduced transcript span
+measured in kilobytes, and inlining it into every fact dereference would drown
+the one sentence the caller asked for in the material it came from. Pull the
+text by asking for it, on `/api/graph/episode`. An edge whose episode row is
+absent serves an explicit `null` rather than an empty object.
+
+`siblings` are the **live** edges touching each endpoint (via the same
+`occurrences DESC, id` neighbour read the search expansion uses), **excluding
+the dereferenced edge itself** — it is already the response's `fact`, and
+repeating it would spend a slot saying nothing. Capped at **10 per endpoint**,
+so a hub endpoint cannot turn a targeted dereference into a dump. Both lists
+are always arrays, never `null`. A **self-loop** fact (`src == dst`) has one
+endpoint and therefore one sibling list, served under both keys.
+
+`webGraphSiblingFact` is `webGraphFact` minus `weak` (no query, so no verdict)
+— and, like `webGraphFact`, without the system-time stamps, since siblings come
+from `NeighborEdges` and are live-only: `id`, `src`, `dst`, `predicate`,
+`fact`, `strength`, `occurrences`, `valid_until`. Endpoints are names with the
+same `"#<id>"` fallback.
+
+No `kg_recall` interaction: dereferencing a fact the agent was already handed
+is not a delivery, so it must not spend that fact's once-per-session budget.
+
+Errors: 400 (missing or non-positive-integer `id`), 404 (no fact with that id),
+405, 500 (no store wired, or a read failed). Additive route — `apiContract`
+stays 5.
+
+### `GET /api/graph/episode?id=N` — `k graph get`-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+The episode dereference: one provenance unit **with its text**, and every fact
+extracted from it. Reached from a cell as `k graph get E<episode id>` — the
+other half of the injected handle.
+
+Response: `{"episode": webGraphEpisode, "edges": [webGraphFactFull]}`.
+
+`content` **does** inline here, unlike in the fact bundle's episode pointer:
+pulling the provenance text is this route's entire purpose, and the caller
+asked for it by id rather than receiving it as a side effect. The `episode`
+object is the same `webGraphEpisode` `GET /api/graph/pending` serves (`id`,
+`kind`, `ref`, `content`, `ts`; `hash` and `state` deliberately absent).
+
+`edges` is every fact from that episode, **live and invalidated both**, in
+ascending id order — the order the extractor stated them in, which is the
+closest thing to the source text's own order. The question this route answers
+is what the episode *produced*, not what survives of it, so `expired_at` is not
+filtered; each element carries its own stamp. Endpoint names are resolved in
+one bulk node read with the same `"#<id>"` fallback. Always an array, never
+`null` — an episode that yielded no facts is a span that HAS been read and
+produced nothing, which is an ordinary answer.
+
+No `kg_recall` interaction, for the same reason as the fact route.
+
+Errors: 400 (missing or non-positive-integer `id`), 404 (no episode with that
+id), 405, 500. Additive route — `apiContract` stays 5.
 
 ### `POST /api/graph/search`
 

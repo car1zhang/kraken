@@ -15,8 +15,8 @@ import (
 )
 
 // graph.go — the knowledge graph's HTTP surface: the viewer's read, the
-// inspector's per-node read, the retrieval read, and the extraction agent's
-// write.
+// inspector's per-node read, the two dereference reads behind `k graph get`,
+// the retrieval read, and the extraction agent's write.
 //
 // Every route here is a NEW PATH rather than a key added to, retyped in, or
 // removed from an existing shape, so `apiContract` stays 5. That is the bump
@@ -36,10 +36,10 @@ import (
 // Split of writes vs reads under --mirror: /api/graph/add and
 // /api/graph/episode-done are mirror-gated at registration (register.go),
 // the same "a mirror board is read-only, full stop" policy questions,
-// feedback, watchlist and job/load follow. The four reads stay open — a read
-// is a read, and POST /api/graph/search is a read despite its verb (it is a
-// POST only because a query string is user text that has no business in a
-// URL).
+// feedback, watchlist and job/load follow. The six GET reads plus
+// POST /api/graph/search stay open — a read is a read, and search is a read
+// despite its verb (it is a POST only because a query string is user text
+// that has no business in a URL).
 
 // --- viewer payload: GET /api/graph ---
 
@@ -355,6 +355,377 @@ func graphNodeHandler(w http.ResponseWriter, r *http.Request) {
 			X: x, Y: y, Aliases: aliases,
 		},
 		"edges": edges,
+	})
+}
+
+// --- dereference: GET /api/graph/fact, GET /api/graph/episode ---
+//
+// The two reads behind `k graph get`. An injected memory line carries a
+// HANDLE — `[F<edge id> E<episode id>, seen Nx]` — precisely so the summary in
+// the block can be short; these routes are what turn that handle back into the
+// whole thing. Neither touches kg_recall: dereferencing a fact the agent was
+// already handed is not a delivery, so it must not spend that fact's
+// once-per-session budget.
+//
+// Both are GETs with an id in the query string rather than POSTs with a body,
+// because unlike /api/graph/search there is no arbitrary user text here — an
+// integer id has every business in a URL.
+
+// graphFactSiblingCap bounds the sibling list PER ENDPOINT. The caller is an
+// agent that followed a handle to read one fact in full; ten neighbours per
+// side is enough to see what else kraken believes about those two entities
+// without turning a targeted dereference into the hub dump a `carl` or
+// `kraken` endpoint would otherwise produce.
+const graphFactSiblingCap = 10
+
+// webGraphFactFull is one edge in FULL — every column that means anything to a
+// reader, which is what separates it from webGraphFact (the search result,
+// which drops both system-time stamps and valid_from because a ranked list is
+// scanned rather than studied) and from webGraphEdge (the viewer's shape,
+// whose endpoints are ids because the canvas draws lines between nodes it
+// already has).
+//
+// `fact` is the stored sentence BYTE-EXACT: untruncated, never clause-cut. The
+// whole point of following a handle is to get past the injected summary's
+// 180-rune cut, so a route that truncated again would answer a question nobody
+// asked.
+//
+// Endpoints are NAMES, as on webGraphFact and for the same reason: the reader
+// is a human or an agent, neither of which can resolve an integer. A missing
+// node row degrades to `#<id>` via graphEndpointName rather than dropping or
+// failing the fact — the fact IS the answer here even more than it is on
+// search.
+//
+// No key is omitempty. 0 is a real answer on every stamp — `valid_until` 0 is
+// "still true", `expired_at` 0 is "live", `created_at` 0 would be a row
+// written before the column existed — and an absent key would be
+// indistinguishable from it.
+type webGraphFactFull struct {
+	ID          int64  `json:"id"`
+	Src         string `json:"src"`
+	Dst         string `json:"dst"`
+	Predicate   string `json:"predicate"`
+	Fact        string `json:"fact"`
+	Strength    int64  `json:"strength"`
+	Occurrences int64  `json:"occurrences"`
+	ValidFrom   int64  `json:"valid_from"`
+	ValidUntil  int64  `json:"valid_until"`
+	CreatedAt   int64  `json:"created_at"`
+	ExpiredAt   int64  `json:"expired_at"`
+	Episode     int64  `json:"episode"`
+}
+
+// webGraphSiblingFact is a neighbour of the dereferenced fact: `webGraphFact`
+// minus `weak` — and, like `webGraphFact`, without the system-time stamps,
+// since siblings come from `NeighborEdges` and are live-only.
+//
+// `weak` is absent because there is no QUERY on this route — a relevance
+// verdict needs something to be relevant TO, and publishing a `false` here
+// would assert one that was never computed. `expired_at`/`created_at` are
+// absent because siblings come from store.NeighborEdges, which is live-only by
+// contract, so `expired_at` would be 0 on every element — a column with one
+// value is not information.
+type webGraphSiblingFact struct {
+	ID          int64  `json:"id"`
+	Src         string `json:"src"`
+	Dst         string `json:"dst"`
+	Predicate   string `json:"predicate"`
+	Fact        string `json:"fact"`
+	Strength    int64  `json:"strength"`
+	Occurrences int64  `json:"occurrences"`
+	ValidUntil  int64  `json:"valid_until"`
+}
+
+// webGraphEpisodeRef is the fact bundle's provenance POINTER: which episode
+// this fact came from, and nothing else.
+//
+// `content` is deliberately NOT here, unlike webGraphEpisode. An episode is a
+// reduced transcript span — kilobytes of it — and inlining that into every
+// fact dereference would drown the one sentence the caller asked for in the
+// material it was extracted from. A caller that wants the provenance text asks
+// for it by name, on the episode route, which is exactly what the `id` here is
+// for.
+type webGraphEpisodeRef struct {
+	ID   int64  `json:"id"`
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+}
+
+func webGraphFactFullFrom(e store.GraphEdge, nodes map[int64]store.GraphNode) webGraphFactFull {
+	return webGraphFactFull{
+		ID:        e.ID,
+		Src:       graphEndpointName(nodes, e.SrcID),
+		Dst:       graphEndpointName(nodes, e.DstID),
+		Predicate: e.Predicate, Fact: e.Fact,
+		Strength: e.Strength, Occurrences: e.Occurrences,
+		ValidFrom: e.ValidFrom, ValidUntil: e.ValidUntil,
+		CreatedAt: e.CreatedAt, ExpiredAt: e.ExpiredAt,
+		Episode: e.EpisodeID,
+	}
+}
+
+func webGraphSiblingFactFrom(e store.GraphEdge, nodes map[int64]store.GraphNode) webGraphSiblingFact {
+	return webGraphSiblingFact{
+		ID:        e.ID,
+		Src:       graphEndpointName(nodes, e.SrcID),
+		Dst:       graphEndpointName(nodes, e.DstID),
+		Predicate: e.Predicate, Fact: e.Fact,
+		Strength: e.Strength, Occurrences: e.Occurrences,
+		ValidUntil: e.ValidUntil,
+	}
+}
+
+// graphNodeMap reads the named nodes in ONE bulk call and keys them by id, so
+// every endpoint on a response is glossed by one query rather than one per
+// edge. Ids with no row are simply absent from the map, which is what
+// graphEndpointName's `#<id>` fallback is for.
+func graphNodeMap(st *store.Store, ids []int64) (map[int64]store.GraphNode, error) {
+	rows, err := st.GetNodes(ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]store.GraphNode, len(rows))
+	for _, n := range rows {
+		out[n.ID] = n
+	}
+	return out, nil
+}
+
+// graphEndpointNode renders one endpoint of the dereferenced fact as the
+// viewer's webGraphNode. x/y stay 0 — the "not positioned" contract
+// POST /api/graph/search already documents — because a fact bundle is a thing
+// to read, not a canvas to draw, and joining the layout table here would be a
+// query for an answer nothing uses.
+//
+// A missing node row is not a 404 and not a dropped key: the caller named a
+// FACT, and the fact exists. It degrades to the id plus the `#<id>` gloss, and
+// every other field serializes as its zero value.
+func graphEndpointNode(nodes map[int64]store.GraphNode, id int64, aliases []string) webGraphNode {
+	n := nodes[id] // absent = zero value, which is exactly the degraded shape
+	return webGraphNode{
+		ID: id, Name: graphEndpointName(nodes, id),
+		Type: n.Type, Description: n.Description,
+		Aliases: aliases,
+	}
+}
+
+// graphParseID is the id-parse both dereference routes share, in
+// graphNodeHandler's exact shape: a missing id and an unparseable one are
+// different sentences, and `what` names the kind of row the caller was after so
+// a mistyped edge id does not read as a node error.
+func graphParseID(w http.ResponseWriter, r *http.Request, what string) (int64, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("id"))
+	if raw == "" {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
+		return 0, false
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad id " + strconv.Quote(raw) + " — want a positive integer " + what + " id"})
+		return 0, false
+	}
+	return id, true
+}
+
+// graphSiblings returns the LIVE edges touching one endpoint, minus the edge
+// being dereferenced, capped at graphFactSiblingCap and keeping
+// store.NeighborEdges' `occurrences DESC, id` order — so the cap keeps the
+// most-corroborated neighbours rather than an arbitrary ten.
+//
+// The dereferenced edge is excluded because it is already the response's
+// `fact`; leaving it in would make the bundle assert the same row twice and
+// spend one of the ten slots saying nothing.
+func graphSiblings(st *store.Store, nodeID, exclude int64) ([]store.GraphEdge, error) {
+	rows, err := st.NeighborEdges([]int64{nodeID})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.GraphEdge, 0, graphFactSiblingCap)
+	for _, e := range rows {
+		if e.ID == exclude {
+			continue
+		}
+		if len(out) >= graphFactSiblingCap {
+			break
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// graphFactHandler serves GET /api/graph/fact?id=N — one fact in full, its two
+// endpoint entities, the episode it came from, and what else those entities
+// are known for.
+//
+// An INVALIDATED edge still dereferences, and that is the point rather than an
+// oversight: a handle cited in a brief written last month may name a fact
+// kraken has since unlearned, and answering 404 would leave the reader unable
+// to tell "kraken never said this" from "kraken stopped believing it". The
+// bundle carries `expired_at`, so the answer says which.
+func graphFactHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+		return
+	}
+	id, ok := graphParseID(w, r, "edge")
+	if !ok {
+		return
+	}
+	st, ok := graphStore(w)
+	if !ok {
+		return
+	}
+	// GetEdges SKIPS ids with no row rather than erroring, so an empty result
+	// is how "no such fact" arrives here — a 404, not a 200 with a null fact,
+	// because the caller named one specific edge.
+	edges, err := st.GetEdges([]int64{id})
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(edges) == 0 {
+		webJSON(w, http.StatusNotFound, map[string]string{"error": "no fact with id " + strconv.FormatInt(id, 10)})
+		return
+	}
+	e := edges[0]
+
+	srcSibs, err := graphSiblings(st, e.SrcID, e.ID)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// A SELF-LOOP fact has one endpoint, so it has one sibling list; it rides
+	// under both keys rather than being computed twice, which is both the
+	// cheaper answer and the honest one (the two lists could not differ).
+	dstSibs := srcSibs
+	if e.DstID != e.SrcID {
+		dstSibs, err = graphSiblings(st, e.DstID, e.ID)
+		if err != nil {
+			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	// One node read for every name this response renders — the two endpoints
+	// plus both sibling lists' endpoints — rather than one per fact.
+	ids := []int64{e.SrcID, e.DstID}
+	for _, s := range srcSibs {
+		ids = append(ids, s.SrcID, s.DstID)
+	}
+	for _, s := range dstSibs {
+		ids = append(ids, s.SrcID, s.DstID)
+	}
+	nodes, err := graphNodeMap(st, ids)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	srcAliases, err := st.NodeAliases(e.SrcID)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	dstAliases := srcAliases
+	if e.DstID != e.SrcID {
+		dstAliases, err = st.NodeAliases(e.DstID)
+		if err != nil {
+			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	// An edge whose episode row is gone — or an episode id of 0, which no
+	// episode ever has — serves `null` rather than an empty object: "kraken
+	// cannot say where this came from" and "it came from episode 0" are
+	// different claims.
+	var epRef *webGraphEpisodeRef
+	ep, err := st.GetEpisode(e.EpisodeID)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if ep != nil {
+		epRef = &webGraphEpisodeRef{ID: ep.ID, Kind: ep.Kind, Ref: ep.Ref}
+	}
+
+	srcFacts := make([]webGraphSiblingFact, 0, len(srcSibs))
+	for _, s := range srcSibs {
+		srcFacts = append(srcFacts, webGraphSiblingFactFrom(s, nodes))
+	}
+	dstFacts := make([]webGraphSiblingFact, 0, len(dstSibs))
+	for _, s := range dstSibs {
+		dstFacts = append(dstFacts, webGraphSiblingFactFrom(s, nodes))
+	}
+
+	webJSON(w, http.StatusOK, map[string]any{
+		"fact":    webGraphFactFullFrom(e, nodes),
+		"src":     graphEndpointNode(nodes, e.SrcID, srcAliases),
+		"dst":     graphEndpointNode(nodes, e.DstID, dstAliases),
+		"episode": epRef,
+		"siblings": map[string]any{
+			"src": srcFacts,
+			"dst": dstFacts,
+		},
+	})
+}
+
+// graphEpisodeHandler serves GET /api/graph/episode?id=N — one provenance unit
+// with its text, and every fact extracted from it.
+//
+// `content` DOES inline here, unlike in the fact bundle's episode pointer:
+// pulling the provenance text is this route's entire purpose, and the caller
+// asked for it by id rather than receiving it as a side effect.
+//
+// The edge list is live AND invalidated (store.EdgesForEpisode does not filter
+// expired_at), because the question is what this episode produced, not what
+// survives of it.
+func graphEpisodeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+		return
+	}
+	id, ok := graphParseID(w, r, "episode")
+	if !ok {
+		return
+	}
+	st, ok := graphStore(w)
+	if !ok {
+		return
+	}
+	ep, err := st.GetEpisode(id)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if ep == nil {
+		webJSON(w, http.StatusNotFound, map[string]string{"error": "no episode with id " + strconv.FormatInt(id, 10)})
+		return
+	}
+	edges, err := st.EdgesForEpisode(id)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	ids := make([]int64, 0, len(edges)*2)
+	for _, e := range edges {
+		ids = append(ids, e.SrcID, e.DstID)
+	}
+	nodes, err := graphNodeMap(st, ids)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// An episode that yielded no facts serves `[]`, never null: it is a span
+	// that HAS been read and produced nothing, which is an ordinary answer and
+	// a different one from a client that failed to decode a list.
+	facts := make([]webGraphFactFull, 0, len(edges))
+	for _, e := range edges {
+		facts = append(facts, webGraphFactFullFrom(e, nodes))
+	}
+	webJSON(w, http.StatusOK, map[string]any{
+		"episode": webGraphEpisode{ID: ep.ID, Kind: ep.Kind, Ref: ep.Ref, Content: ep.Content, TS: ep.TS},
+		"edges":   facts,
 	})
 }
 

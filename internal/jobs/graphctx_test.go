@@ -106,8 +106,8 @@ func TestGraphContextLexicalGate(t *testing.T) {
 	if got == "" {
 		t.Fatal("a fact sharing several content words with the spec was rejected")
 	}
-	if !strings.Contains(got, "[E20, seen 5x]") {
-		t.Errorf("block does not carry the episode id and sighting count:\n%s", got)
+	if !strings.Contains(got, "[F2 E20, seen 5x]") {
+		t.Errorf("block does not carry the fact id, episode id and sighting count:\n%s", got)
 	}
 	if !strings.HasPrefix(got, graphContextHeader) {
 		t.Errorf("block does not open with the hedged header:\n%s", got)
@@ -142,7 +142,7 @@ func TestGraphContextCosineGate(t *testing.T) {
 		Embedding: core.EncodeVector([]float32{0.5, 0.866025404, 0})} // cos = 0.50
 
 	withFacts(t, []store.GraphEdge{near})
-	if got := graphContext(&Job{ID: 7, Body: spec}); !strings.Contains(got, "[E11") {
+	if got := graphContext(&Job{ID: 7, Body: spec}); !strings.Contains(got, "[F1 E11") {
 		t.Errorf("a fact at cosine 0.90 (floor %v) was rejected: %q", graphCosineFloor, got)
 	}
 	withFacts(t, []store.GraphEdge{far})
@@ -337,25 +337,28 @@ func TestSearchFactsAgainstARealStore(t *testing.T) {
 }
 
 // TestFactLineShape pins the rendered line, since the format is what tells
-// zeus the block is evidence rather than instruction — an episode id it can
-// check and a count it can weigh.
+// zeus the block is evidence rather than instruction — two ids it can
+// dereference (F, the fact itself; E, the episode it came from) and a count it
+// can weigh. The edge ids below differ from the episode ids on purpose: with
+// both slots fed the same number a line rendering one id twice would still
+// pass.
 func TestFactLineShape(t *testing.T) {
 	for _, c := range []struct {
 		in   store.GraphEdge
 		want string
 	}{
-		{store.GraphEdge{EpisodeID: 4, Fact: "a fact with its own period.", Occurrences: 3},
-			"- a fact with its own period. [E4, seen 3x]\n"},
-		{store.GraphEdge{EpisodeID: 5, Fact: "a fact without one", Occurrences: 1},
-			"- a fact without one. [E5, seen 1x]\n"},
+		{store.GraphEdge{ID: 41, EpisodeID: 4, Fact: "a fact with its own period.", Occurrences: 3},
+			"- a fact with its own period. [F41 E4, seen 3x]\n"},
+		{store.GraphEdge{ID: 51, EpisodeID: 5, Fact: "a fact without one", Occurrences: 1},
+			"- a fact without one. [F51 E5, seen 1x]\n"},
 		// A stored edge was seen at least once whatever the column says; a
 		// "seen 0x" line would read as a fact nobody ever observed.
-		{store.GraphEdge{EpisodeID: 6, Fact: "a fact with a zeroed count", Occurrences: 0},
-			"- a fact with a zeroed count. [E6, seen 1x]\n"},
+		{store.GraphEdge{ID: 61, EpisodeID: 6, Fact: "a fact with a zeroed count", Occurrences: 0},
+			"- a fact with a zeroed count. [F61 E6, seen 1x]\n"},
 		// Multi-line facts are one-lined: the block is a list, and a newline
 		// inside a line breaks the format the reader is parsing by eye.
-		{store.GraphEdge{EpisodeID: 7, Fact: "a fact\nsplit over lines", Occurrences: 2},
-			"- a fact split over lines. [E7, seen 2x]\n"},
+		{store.GraphEdge{ID: 71, EpisodeID: 7, Fact: "a fact\nsplit over lines", Occurrences: 2},
+			"- a fact split over lines. [F71 E7, seen 2x]\n"},
 	} {
 		if got := factLine(c.in); got != c.want {
 			t.Errorf("factLine(%q) = %q, want %q", c.in.Fact, got, c.want)
@@ -369,12 +372,18 @@ func TestFactLineShape(t *testing.T) {
 //
 // Reaching it takes MULTI-BYTE text, and that is the point rather than an
 // awkward fixture. factLine caps a fact at graphFactRunes RUNES while the
-// budget is in BYTES, so an ASCII fact always fits (180 runes ≈ 210 bytes,
-// well under 600) — but 180 CJK runes are 540 bytes, and with the header and
-// the provenance suffix that clears the cap. A byte budget over a rune cap is
-// exactly where a "can't happen" branch turns out to be reachable.
+// budget is in BYTES, so an ASCII fact always fits (180 runes ≈ 200 bytes,
+// well under 682) — but 180 FOUR-byte runes are 720 bytes, and with the
+// 106-byte header and the 18-byte provenance suffix that is 847, well clear of
+// the cap. A byte budget over a rune cap is exactly where a "can't happen"
+// branch turns out to be reachable.
+//
+// Three-byte CJK (540 bytes) was enough while the cap was 600; at 682 it lands
+// at 106 + 2 + 540 + 1 + 18 = 667 and FITS, so the fixture is four-byte runes
+// now — the same widening the cap bump was sized to absorb for real facts.
 func TestRenderGraphBlockRefusesAHeaderAlone(t *testing.T) {
-	long := store.GraphEdge{EpisodeID: 1, Occurrences: 1, Fact: strings.Repeat("知", graphFactRunes)}
+	long := store.GraphEdge{ID: 1, EpisodeID: 1, Occurrences: 1,
+		Fact: strings.Repeat("\U0001D11E", graphFactRunes)}
 	if got, _ := renderGraphBlock([]store.GraphEdge{long}); got != "" {
 		t.Errorf("a fact too long to fit produced a header-only block:\n%q", got)
 	}

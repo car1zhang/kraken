@@ -469,6 +469,53 @@ func (s *Store) NeighborEdges(nodeIDs []int64) ([]GraphEdge, error) {
 	return out, rows.Err()
 }
 
+// EdgesForEpisode returns every edge extracted from ONE episode — LIVE AND
+// INVALIDATED both — ordered by id ascending.
+//
+// `expired_at` is deliberately NOT filtered, which is the difference between
+// this read and NeighborEdges above. Its caller is the dereference read behind
+// `k graph get E<id>`, and the question there is "what did this episode
+// say?", not "what is still believed": a fact kraken has since unlearned is
+// part of that episode's output, and hiding it would make the provenance unit
+// look like it produced less than it did.
+//
+// Ascending id rather than NeighborEdges' `occurrences DESC, id`: an episode's
+// edges are one extraction turn's output, and insertion order is the order the
+// extractor stated them in — the closest thing to the source text's own
+// order.
+//
+// The embedding column is elided, exactly as NeighborEdges elides it — see
+// the note on the query below.
+//
+// An unknown episode id — or one that yielded no facts — is (nil, nil) rather
+// than an error. A span with nothing extractable in it is an ordinary answer,
+// the same stance PendingEpisodes and GetEdges take.
+func (s *Store) EdgesForEpisode(episodeID int64) ([]GraphEdge, error) {
+	// embedding is deliberately NOT selected, for NeighborEdges' reason: no
+	// consumer of a dereferenced edge reads vectors (the API route renders
+	// names, the fact sentence and the stamps), and hydrating a kilobyte of
+	// float32 per row so the caller can print sentences is pure waste. The
+	// literal x'' keeps the column count and the scan target unchanged, so the
+	// Embedding field simply stays zero.
+	rows, err := s.db.Query(`SELECT id, src_id, dst_id, predicate, fact, episode_id, strength, occurrences,
+		valid_from, valid_until, x'' , created_at, expired_at
+		FROM kg_edges WHERE episode_id = ? ORDER BY id`, episodeID)
+	if err != nil {
+		return nil, fmt.Errorf("edges for episode: %w", err)
+	}
+	defer rows.Close()
+	var out []GraphEdge
+	for rows.Next() {
+		var e GraphEdge
+		if err := rows.Scan(&e.ID, &e.SrcID, &e.DstID, &e.Predicate, &e.Fact, &e.EpisodeID, &e.Strength,
+			&e.Occurrences, &e.ValidFrom, &e.ValidUntil, &e.Embedding, &e.CreatedAt, &e.ExpiredAt); err != nil {
+			return nil, fmt.Errorf("edges for episode scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // AnchorCandidate is one node reduced to what a NAME ANCHOR needs: the strings
 // a query could name it by, and the live degree that decides whether naming it
 // means anything. Plain data — the matching judgment lives in core, next to the

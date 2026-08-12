@@ -208,7 +208,7 @@ Commands:
                       Both numbers or neither — a half estimate has no ratio,
                       and 'clear' is how an estimate is removed. get prints
                       the pair as JSON ({"load": null} when unestimated).
-  k graph pending|add|done|search|stats ...
+  k graph pending|add|done|search|get|stats ...
                       cell-side verbs for the knowledge graph, proxied the
                       same way as 'k questions'. pending [--limit N] prints
                       the episodes still awaiting extraction as JSON, oldest
@@ -219,8 +219,11 @@ Commands:
                       <episode id> closes one episode, including one nothing
                       was extracted from; search "<query>" [--limit N] prints
                       the matching facts as triples ready to paste into
-                      context; stats prints the node/edge/episode counts as
-                      JSON.
+                      context; get <handle>... dereferences a handle from an
+                      injected fact line — F<edge id> or a bare edge id for
+                      the full untruncated fact, E<episode id> for the
+                      episode it came from — printing each bundle as JSON;
+                      stats prints the node/edge/episode counts as JSON.
   k watchlist get|add|update|remove ...
                       cell-side verb the nightly dream pass uses to track
                       recurring observations, proxied the same way. A watch

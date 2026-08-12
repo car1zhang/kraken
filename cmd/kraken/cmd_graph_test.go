@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// cmd_graph_test.go — `k graph pending|add|done|search|stats`'s testable core,
+// cmd_graph_test.go — `k graph pending|add|done|search|get|stats`'s testable core,
 // covering the same behavior contract cmd_load_test.go pins for the load
 // verb: a read prints server JSON verbatim, a write posts the body it was
 // handed unchanged, a 4xx surfaces the server's own sentence, and bad args

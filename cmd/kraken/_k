@@ -176,6 +176,7 @@ _k() {
                     'add:write one extraction turn (--json <path>, or stdin)'
                     'done:close one episode, including one nothing was extracted from'
                     'search:print the facts matching a query, as triples'
+                    'get:dereference [F#]/E# handles to the full fact or episode, as JSON'
                     'stats:print the node/edge/episode counts, as JSON'
                 )
                 _describe -t ops 'op' ops
