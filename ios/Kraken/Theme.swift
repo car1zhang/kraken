@@ -336,6 +336,20 @@ enum KTheme {
     static let polling = Color(uiColor: pollingUI)
     static let pollingSoftUI = dyn(light: 0xD9F2F7, dark: 0x0E2E33)
     static let pollingSoft = Color(uiColor: pollingSoftUI)
+    // "stopped" status (a thing that was running and no longer is — today the
+    // closed side-thread chips and ThreadDetailView's closed pill) — red,
+    // borrowing the HUE util/ansi.go's StatusColor gives an idle pane
+    // ("waiting" = Red; "stopped" is this surface's word) and matching the
+    // web board's --stopped hexes exactly — the red half only; the live half
+    // stays `solved` above, whose hexes differ from web's --ok.
+    // A true red, distinct from the pink `counter` above, and NEARLY THE SAME
+    // red as aim-red below on purpose: no red clears every fenced neighbour
+    // (counter pink, aim-red, revealed amber), and a status capsule with a ⑂
+    // glyph and a title never reads as a bare /aim text chip — different
+    // kinds of object sharing a hue, not two states of one thing, which is
+    // the confusion `queued`'s note above actually bans.
+    static let stoppedUI = dyn(light: 0xC22A2A, dark: 0xFF5C5C)
+    static let stopped = Color(uiColor: stoppedUI)
 
     // Per-skill colors: /info /aim /do /pr each get their own hue so a spec
     // full of pipeline commands reads as a colored pipeline, both in the
