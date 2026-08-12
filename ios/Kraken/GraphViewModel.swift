@@ -291,9 +291,9 @@ final class GraphViewModel: ObservableObject {
         // report a broken screen that is working.
     }
 
-    /// The selected entity. The detail read wins where it has an answer (it is
-    /// the only source of aliases); the payload node is the fallback while it
-    /// is in flight, or after it failed.
+    /// The selected entity. The detail read wins where it has an answer (it
+    /// serves the node's edge list pre-cut server-side); the payload node —
+    /// aliases included — is the fallback while it is in flight or failed.
     var selectedNode: GraphNode? {
         guard let selectedID else { return nil }
         if let node = detail?.node, node.id == selectedID { return node }

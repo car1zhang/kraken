@@ -694,8 +694,9 @@ export function GraphView({ active }: GraphViewProps) {
   }, [ready]);
 
   // --------------------------------------------------------------- derived
-  // The detail read wins where it has an answer (it is the only source of
-  // aliases), and the board payload is the fallback while it is in flight.
+  // The detail read wins where it has an answer (it serves the node's edge
+  // list pre-cut server-side), and the board payload — which carries aliases
+  // too, plus every edge globally — is the fallback while it is in flight.
   const sel = detail?.node ?? (selected ? byKey.get(selected) : undefined);
   // The inspector is deliberately UNFILTERED — the mockup shows an invalidated
   // fact on a node while the rail sits on "current only". The rail says what

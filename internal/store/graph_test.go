@@ -131,6 +131,38 @@ func TestResolveNodeViaAlias(t *testing.T) {
 	}
 }
 
+func TestAllNodeAliases(t *testing.T) {
+	s := openGraphStore(t)
+	a, err := s.UpsertNode(GraphNode{Name: "tokensPass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.UpsertNode(GraphNode{Name: "kraken serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two aliases added out of order: the map's lists come back sorted, the
+	// same ORDER BY the per-node NodeAliases read pins.
+	if err := s.AddAlias(a, "token pass"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddAlias(a, "the token counter"); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.AllNodeAliases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := all[a]; len(got) != 2 || got[0] != "the token counter" || got[1] != "token pass" {
+		t.Fatalf("aliases[%d] = %v, want [the token counter, token pass]", a, got)
+	}
+	// An alias-less node is ABSENT from the map (nil slice on lookup), which
+	// is what lets the API's omitempty drop the key rather than emit [].
+	if got, ok := all[b]; ok || got != nil {
+		t.Fatalf("aliases[%d] = %v (present %v), want absent", b, got, ok)
+	}
+}
+
 func TestInsertEdgeRepeatSighting(t *testing.T) {
 	s := openGraphStore(t)
 	a, _ := s.UpsertNode(GraphNode{Name: "carl"})

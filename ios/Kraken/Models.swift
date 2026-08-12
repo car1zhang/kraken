@@ -1498,10 +1498,11 @@ struct GraphNode: Codable, Identifiable, Equatable {
     let description: String
     let x: Double
     let y: Double
-    // Present ONLY on GET /api/graph/node — the board payload omits aliases
-    // outright rather than sending empty arrays, since joining them would be
-    // one query per node on the hottest read the graph has. nil therefore
-    // means "this came from the viewer payload", not "this entity has none".
+    // Populated by GET /api/graph/node, and by GET /api/graph via one bulk
+    // join (the nightly ingest's canonicalization inventory reads that
+    // route and was alias-blind without it). A node with no aliases omits
+    // the key rather than sending an empty array, so nil means "none
+    // recorded", never a distinct route shape.
     let aliases: [String]?
 }
 

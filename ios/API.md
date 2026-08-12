@@ -986,7 +986,7 @@ Response: `{"nodes": [webGraphNode], "edges": [webGraphEdge], "stats": webGraphS
 | `description` | string | always | the short gloss of what the concept IS, independent of any edge |
 | `x` | number | always | server-computed layout position; **`0` when layout has not run for this node yet**, which the client places itself |
 | `y` | number | always | as `x` |
-| `aliases` | array of string | omitempty | **never present on this route** — aliases are an inspector detail, and joining them would be one query per node on the hottest read here. Populated only by `GET /api/graph/node` |
+| `aliases` | array of string | omitempty | populated here via one bulk join (the nightly graph ingest reads this route as its canonicalization inventory, and an alias-blind inventory re-derived the same merges night after night), and by `GET /api/graph/node`. A node with no aliases omits the key rather than sending an empty array |
 
 `webGraphEdge`:
 

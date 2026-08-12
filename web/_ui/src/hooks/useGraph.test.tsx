@@ -102,9 +102,9 @@ describe("useGraphNode", () => {
     expect(mockGet).toHaveBeenCalledWith("/api/graph/node?id=7", expect.anything());
   });
 
-  // The panel already has a name, a type, a description and the node's facts
-  // from the board payload; a failed detail read costs the aliases and
-  // nothing else, so it must not surface as an error state.
+  // The panel already has a name, a type, a description, aliases and the
+  // node's facts from the board payload; a failed detail read costs only the
+  // pre-cut per-node edge list, so it must not surface as an error state.
   it("resolves to undefined on failure rather than throwing", async () => {
     mockGet.mockRejectedValue(new Error("404 Not Found"));
     const { result } = renderHook(() => useGraphNode(7));
