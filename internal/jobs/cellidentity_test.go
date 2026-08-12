@@ -237,53 +237,12 @@ func TestRunCutoverRenamesAndIsRerunnable(t *testing.T) {
 }
 
 // --- start-failure surfacing ---
-
-// A queued job that cannot start used to be entirely silent on the board: the
-// reason went to ~/.kraken/logs and to DaemonStatus.LastError, which is one
-// string for the whole tick and which app.js never rendered. These pin that
-// each job keeps its OWN reason and that a success clears it.
-func TestStartErrorsArePerJobAndClearOnSuccess(t *testing.T) {
-	d := map[string]string{}
-
-	d["helper-catalog"] = "worktree already exists"
-	d["other-job"] = "repo not found"
-	publishStartErrors(d)
-
-	if got := StartErrorFor("helper-catalog"); got != "worktree already exists" {
-		t.Errorf("helper-catalog: got %q", got)
-	}
-	if got := StartErrorFor("other-job"); got != "repo not found" {
-		t.Errorf("other-job: got %q — two jobs failing in one tick must keep separate reasons", got)
-	}
-	if got := StartErrorFor("never-failed"); got != "" {
-		t.Errorf("a job that never failed reports %q, want empty", got)
-	}
-
-	// a later successful start deletes the entry, and republishing reflects it
-	delete(d, "helper-catalog")
-	publishStartErrors(d)
-	if got := StartErrorFor("helper-catalog"); got != "" {
-		t.Errorf("after a successful start the reason is still %q", got)
-	}
-	if got := StartErrorFor("other-job"); got != "repo not found" {
-		t.Errorf("clearing one job cleared another: %q", got)
-	}
-}
-
-// publishStartErrors must store a COPY. The daemon keeps mutating its own map
-// every tick, and a reader that holds the published pointer would otherwise be
-// racing those writes — the L5 lesson DaemonStatus already carries.
-func TestPublishStartErrorsSnapshots(t *testing.T) {
-	live := map[string]string{"a": "boom"}
-	publishStartErrors(live)
-
-	live["a"] = "mutated"
-	live["b"] = "added later"
-
-	if got := StartErrorFor("a"); got != "boom" {
-		t.Errorf("published value changed under the reader: got %q, want %q", got, "boom")
-	}
-	if got := StartErrorFor("b"); got != "" {
-		t.Errorf("a key added after publishing leaked into the snapshot: %q", got)
-	}
-}
+//
+// The StartErrors side channel is gone with the queue pass, and so are the two
+// tests that pinned it (per-job reasons, and publishing a snapshot rather than
+// the daemon's live map). Both existed only because a start happened in the
+// BACKGROUND, a tick after the click, with no request left to answer: the
+// reason had to be parked somewhere a later board poll could find it. Submit
+// starts the cell inside the POST now, so a failure is that request's own
+// error — SubmitJob returns it, webSubmit surfaces it verbatim as the 409
+// body, and there is nothing left to publish or to snapshot.

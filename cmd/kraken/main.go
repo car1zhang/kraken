@@ -125,11 +125,13 @@ Commands:
   k serve [-p port] [--tailnet] [-addr host:port]
                       the one long-lived kraken process (launchd runs this at
                       login via make install): opens ~/.kraken/kraken.db, runs
-                      the scheduler tick loop (queues ready jobs (≤5 cells),
-                      derives working/blocked from cell activity, tracks each
-                      job's PRs — merge = notification + board chip, never
-                      teardown) + nightly backup rotation as background
-                      goroutines, and serves the web UI/API (default
+                      the scheduler tick loop (derives working/blocked from
+                      cell activity, tracks each job's PRs — merge =
+                      notification + board chip, never teardown; it starts
+                      nothing on its own but the nightly dream/graph jobs it
+                      creates itself, since submitting a job on the board is
+                      what starts its cell) + nightly backup rotation as
+                      background goroutines, and serves the web UI/API (default
                       127.0.0.1:7777) in the foreground: jobs as a kanban
                       board, artifacts rendered in the browser, AskUserQuestion
                       prompts answered inline; GET/POST /api/peers* let a
@@ -260,9 +262,10 @@ Commands:
                       plus the mtime lock token; draft <slug> [--mtime N]
                       reads the full job text from stdin and creates or amends
                       a DRAFT. The route is guarded server-side: it refuses
-                      ready: true, any state:, an unparseable body, and any
-                      job past draft/queued — iris drafts, and queueing stays
-                      carl's move on the board.
+                      any state:, the retired ready:/prereqs: keys, an
+                      unparseable body, and any started job — iris drafts, and
+                      submitting (which starts the cell) stays carl's move on
+                      the board.
   k mine digest|reduce [--since <unix-millis>] ...
                       the nightly dream pass' mechanical read of claude's own
                       transcripts under ~/.claude/projects — a pure local file

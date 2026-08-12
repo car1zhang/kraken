@@ -34,7 +34,7 @@ const JOBS: WebJob[] = [
     detail: "research pass over yesterday's transcripts",
   }),
   makeJob({ slug: "yelp-dedupe", repo: "monolith", state: "blocked", live: true }),
-  makeJob({ slug: "asr-wer-metrics", repo: "monolith", state: "queued" }),
+  makeJob({ slug: "asr-wer-metrics", repo: "monolith", state: "draft" }),
   makeJob({
     slug: "search-index-2",
     display_slug: "search-index",
@@ -70,7 +70,7 @@ describe("useJobSearch", () => {
     expect(slugs(result.current.byColumn.working)).toEqual(["search-jobs"]);
     expect(slugs(result.current.byColumn.done)).toEqual(["dream-2026-07-29"]);
     expect(result.current.byColumn.blocked).toEqual([]);
-    expect(result.current.byColumn.queued).toEqual([]);
+    expect(result.current.byColumn.draft).toEqual([]);
     expect(slugs(result.current.archived)).toEqual(["search-index-2"]);
     // matched counts the archive too — the readout is about the board, and a
     // match hiding in the drawer is exactly the one carl needs told about.

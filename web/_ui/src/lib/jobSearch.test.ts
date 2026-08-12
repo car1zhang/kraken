@@ -56,7 +56,7 @@ const yelp = makeJob({
   live: true,
   detail: "need a call on the dedupe threshold — 0.82 too loose?",
 });
-const asr = makeJob({ slug: "asr-wer-metrics", repo: "monolith", state: "queued" });
+const asr = makeJob({ slug: "asr-wer-metrics", repo: "monolith", state: "draft" });
 const archivedIndex = makeJob({
   slug: "search-index-2",
   display_slug: "search-index",

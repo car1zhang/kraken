@@ -5,16 +5,14 @@
 // everything below it is what posts to a real server.
 
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type { DragEndEvent, DragOverEvent, DragStartEvent } from "@dnd-kit/core";
 import { TouchSensor } from "@dnd-kit/core";
 
 vi.mock("../api/client.ts", () => ({
   queueJob: vi.fn(async () => ({ ok: true })),
-  dequeueJob: vi.fn(async () => ({ ok: true })),
   doneJob: vi.fn(async () => ({ ok: true })),
-  startJob: vi.fn(async () => ({ ok: true })),
   stopJob: vi.fn(async () => ({ ok: true })),
   archiveJob: vi.fn(async () => ({ ok: true })),
   reactivateJob: vi.fn(async () => ({ ok: true })),
@@ -162,16 +160,14 @@ beforeEach(() => {
 describe("cross-column transitions", () => {
   const BOARD = [
     job("d1", "draft"),
-    job("q1", "queued"),
+    job("d2", "draft"),
     job("w1", "working"),
     job("b1", "blocked"),
     job("z1", "done"),
   ];
 
   it.each([
-    ["d1", "draft", "queued", "queueJob"],
-    ["q1", "queued", "draft", "dequeueJob"],
-    ["q1", "queued", "working", "startJob"],
+    ["d1", "draft", "working", "queueJob"],
     ["w1", "working", "blocked", "stopJob"],
     ["b1", "blocked", "done", "doneJob"],
     ["z1", "done", "blocked", "reactivateJob"],
@@ -196,7 +192,7 @@ describe("cross-column transitions", () => {
       requireText: false,
     });
     expect(view.spies.mutate).not.toHaveBeenCalled();
-    expect(client.startJob).not.toHaveBeenCalled();
+    expect(client.queueJob).not.toHaveBeenCalled();
     expect(view.spies.refetch).toHaveBeenCalled();
   });
 
@@ -212,14 +208,14 @@ describe("cross-column transitions", () => {
 
   it("resolves the drop column from a CARD id, not just a column id", async () => {
     const view = setup(BOARD);
-    await drag(view, "d1", "q1"); // dropped between cards in QUEUED
+    await drag(view, "d1", "w1"); // dropped between cards in WORKING
     expect(client.queueJob).toHaveBeenCalledWith("d1");
   });
 
   it("does nothing for a pair outside the table", async () => {
     const view = setup(BOARD);
     await drag(view, "d1", columnDropId("done")); // draft → done: unlisted
-    for (const fn of ["queueJob", "startJob", "doneJob", "archiveJob"] as const) {
+    for (const fn of ["queueJob", "doneJob", "archiveJob"] as const) {
       expect(client[fn]).not.toHaveBeenCalled();
     }
     expect(view.spies.mutate).not.toHaveBeenCalled();
@@ -244,6 +240,154 @@ describe("cross-column transitions", () => {
     expect(view.spies.setDragging).not.toHaveBeenCalledWith(true);
     expect(view.spies.mutate).not.toHaveBeenCalled();
     expect(client.doneJob).not.toHaveBeenCalled();
+  });
+});
+
+// ------------------------------------------------------- the in-flight submit
+//
+// REGRESSION PINS for a defect this slice shipped and this round fixes: the
+// in-flight state was a single nullable slot, so it read as "IS ANYTHING
+// submitting" rather than "is THIS CARD submitting". Two consequences, both
+// silent, and both reachable in ordinary use now that the window is seconds
+// wide rather than instant:
+//
+//   1. a second, DIFFERENT draft dropped during the wait was swallowed — no
+//      POST, no toast, no status text, the card just slid back to DRAFT
+//   2. nothing aborts these requests, so a POST that never resolved held the
+//      slot forever and disabled starting ANY job until a reload
+//
+// The pins below are about the KEYING, so each one distinguishes per-card
+// from board-global: a same-card assertion that passes under both proves
+// nothing on its own.
+
+describe("the in-flight submit is per CARD, not per board", () => {
+  const BOARD = [
+    job("d1", "draft"),
+    job("d2", "draft"),
+    job("w1", "working"),
+  ];
+
+  // vi.clearAllMocks() clears CALLS but keeps implementations, so a hanging
+  // queueJob left installed would wedge every later test in this file.
+  afterEach(() => {
+    (client.queueJob as Mock).mockImplementation(async () => ({ ok: true }));
+  });
+
+  /**
+   * A queueJob that hangs until the test releases it — the whole subject here
+   * is the window between the POST and its answer, which the default
+   * insta-resolving mock closes before a second drag can happen.
+   */
+  function hangingQueue() {
+    const settlers: Array<{
+      resolve: () => void;
+      reject: (e: Error) => void;
+    }> = [];
+    (client.queueJob as Mock).mockImplementation(
+      () =>
+        new Promise<unknown>((resolve, reject) => {
+          settlers.push({ resolve: () => resolve({ ok: true }), reject });
+        }),
+    );
+    return settlers;
+  }
+
+  it("holds only the submitted card, and lets a DIFFERENT draft through", async () => {
+    const settlers = hangingQueue();
+    const view = setup(BOARD);
+
+    await drag(view, "d1", columnDropId("working"));
+    expect(client.queueJob).toHaveBeenCalledWith("d1");
+    expect(view.result.current.submittingKeys.has("d1")).toBe(true);
+    expect(view.result.current.submittingKeys.has("d2")).toBe(false);
+
+    // the second drag, while d1's POST is still hanging
+    await drag(view, "d2", columnDropId("working"));
+    expect(client.queueJob).toHaveBeenCalledWith("d2");
+    expect(client.queueJob).toHaveBeenCalledTimes(2);
+    expect(view.result.current.submittingKeys.has("d1")).toBe(true);
+    expect(view.result.current.submittingKeys.has("d2")).toBe(true);
+    expect(view.spies.onToast).not.toHaveBeenCalled();
+
+    await act(async () => {
+      for (const s of settlers) s.resolve();
+    });
+    expect(view.result.current.submittingKeys.size).toBe(0);
+  });
+
+  it("refuses a duplicate submit of the SAME card, audibly", async () => {
+    hangingQueue();
+    const view = setup(BOARD);
+
+    await drag(view, "d1", columnDropId("working"));
+    expect(client.queueJob).toHaveBeenCalledTimes(1);
+
+    await drag(view, "d1", columnDropId("working"));
+    // no second POST for the same card…
+    expect(client.queueJob).toHaveBeenCalledTimes(1);
+    // …and the refusal SAYS so, rather than looking like a dropped gesture
+    expect(view.spies.onToast).toHaveBeenCalledWith("d1 is already starting");
+  });
+
+  it("clears the card on a REJECTED post, so a refused start can be retried", async () => {
+    const settlers = hangingQueue();
+    const view = setup(BOARD);
+
+    await drag(view, "d1", columnDropId("working"));
+    expect(view.result.current.submittingKeys.has("d1")).toBe(true);
+
+    await act(async () => {
+      settlers[0]!.reject(new Error("job already started"));
+    });
+    // mutate() swallows the throw into an Error return, and the entry clears
+    // either way — a card stuck in flight after a 409 would be permanently
+    // unstartable, which is the same wedge as the hung POST
+    expect(view.result.current.submittingKeys.has("d1")).toBe(false);
+
+    (client.queueJob as Mock).mockImplementation(async () => ({ ok: true }));
+    await drag(view, "d1", columnDropId("working"));
+    expect(client.queueJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("relocates every in-flight card out of DRAFT and into WORKING", async () => {
+    const settlers = hangingQueue();
+    const view = setup(BOARD);
+    await drag(view, "d1", columnDropId("working"));
+    await drag(view, "d2", columnDropId("working"));
+
+    const drafts = view.result.current.orderJobs("draft", [
+      job("d1", "draft"),
+      job("d2", "draft"),
+    ]);
+    expect(drafts.map((j) => j.slug)).toEqual([]);
+
+    const working = view.result.current.orderJobs("working", [
+      job("w1", "working"),
+    ]);
+    // newest drop first, then the column the server actually holds
+    expect(working.map((j) => j.slug)).toEqual(["d2", "d1", "w1"]);
+
+    await act(async () => {
+      for (const s of settlers) s.resolve();
+    });
+  });
+
+  it("does not double-render a card the payload has already moved to WORKING", async () => {
+    const settlers = hangingQueue();
+    const view = setup(BOARD);
+    await drag(view, "d1", columnDropId("working"));
+
+    // the payload landed mid-flight: the server now files d1 as working, and
+    // the entry is still here for a render or two
+    const working = view.result.current.orderJobs("working", [
+      job("d1", "working"),
+      job("w1", "working"),
+    ]);
+    expect(working.map((j) => j.slug)).toEqual(["d1", "w1"]);
+
+    await act(async () => {
+      for (const s of settlers) s.resolve();
+    });
   });
 });
 

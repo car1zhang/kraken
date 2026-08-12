@@ -538,8 +538,10 @@ var rotationGate = RotationGate
 
 // StartCell creates a job's cell: worktree off the base ref, tmux session,
 // zeus pane, identity marker, state write. Callers have validated the job
-// (parseable, ready, unstarted, prereqs met) — this owns mechanics only, and
-// is shared by the board's start action (webStart) and the daemon.
+// (parseable, unstarted, non-empty spec) — this owns mechanics only. Its one
+// caller is SubmitJob (submit.go), which is the single start surface every
+// door funnels through; the `working` write is StartCell's own, made only
+// once the cell is actually up, so a failure here leaves the job draft.
 func StartCell(j *Job, repo string) error {
 	// Loud refusal before anything is created — see checkCellIdentity. A job
 	// with no store id would otherwise silently produce ~/.kraken/cells/<slug>-0.
@@ -1192,7 +1194,7 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 // --- cell health ---
 
 // acceptTrustPrompts answers claude's folder-trust dialog in a cell's fresh
-// (single) pane. The worktree is kraken-made from a repo carl queued a job
+// (single) pane. The worktree is kraken-made from a repo carl submitted a job
 // on — that IS the trust decision — and an unanswered dialog blocks startup
 // entirely: no session file, no name, no work, and a cell that reads as
 // broken.
@@ -1418,10 +1420,12 @@ func RetryCell(j *Job) error {
 }
 
 // KillJob tears a live job's cell down completely and returns the job to
-// draft: state cleared AND ready flipped false — leaving ready: true would
-// hand the job straight back to the daemon's queue loop. Artifacts are
-// preserved first; the worktree goes too (a draft re-queued later needs a
-// clean StartCell).
+// draft by clearing state — the only field that ever made it not-a-draft.
+// (It used to clear a `ready` flag too, since leaving that set would have
+// handed the job straight back to the daemon's queue loop; there is no such
+// flag and no such loop now, and nothing restarts a job but carl.) Artifacts
+// are preserved first; the worktree goes too (a draft re-submitted later
+// needs a clean StartCell).
 func KillJob(j *Job) ([]string, error) {
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
@@ -1447,7 +1451,7 @@ func KillJob(j *Job) ([]string, error) {
 	if err := teardownCell(j, repo, LiveSessions(), true); err != nil {
 		return msgs, fmt.Errorf("%v (job left in state %s)", err, j.State)
 	}
-	if err := WriteJobFields(j, "state", "", "ready", "false", "teardown", ""); err != nil {
+	if err := WriteJobFields(j, "state", "", "teardown", ""); err != nil {
 		return msgs, fmt.Errorf("cell torn down, but state write failed: %v", err)
 	}
 	return append(msgs, "killed "+j.Slug+" — back to draft"), nil
@@ -1618,7 +1622,7 @@ func preserveArtifacts(j *Job, repo string) ([]string, error) {
 func teardownFinalFields(marker string) ([]string, bool) {
 	switch {
 	case marker == "kill":
-		return []string{"state", "", "ready", "false", "teardown", ""}, true
+		return []string{"state", "", "teardown", ""}, true
 	case marker == "done":
 		return []string{"state", "done", "teardown", ""}, true
 	case strings.HasPrefix(marker, "done:"):
@@ -2011,7 +2015,7 @@ func ReactivateJob(j *Job, session, message string) error {
 }
 
 // S2: the k-migrate section (OldJobState, MigrateTerminal, MigrateInFlight,
-// MigrateQueued — the pre-five-state model's one-time state-migration
+// MigrateQueued — a superseded state model's one-time state-migration
 // helpers) lived here and is gone: dead code, no callers anywhere in the
 // tree since `k migrate` itself was retired. See jobs/store.go's own
 // comment for the matching note on its former mention.

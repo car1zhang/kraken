@@ -19,7 +19,7 @@ import (
 // the retrieval read, and the extraction agent's write.
 //
 // Every route here is a NEW PATH rather than a key added to, retyped in, or
-// removed from an existing shape, so `apiContract` stays 5. That is the bump
+// removed from an existing shape, so none of them bumps `apiContract`. That is the bump
 // policy stated in ios/API.md's header and pinned by
 // TestAPIContractUnchanged in contract_test.go, both read this session: a
 // client that predates these routes never calls them and decodes nothing

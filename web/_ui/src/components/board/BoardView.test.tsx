@@ -22,7 +22,6 @@ const stubActions = (): BoardActions => ({
   onOpenThread: vi.fn(),
   onAnswerQuestion: vi.fn(),
   onRetry: vi.fn(),
-  onDequeue: vi.fn(),
   onOpenTmux: vi.fn(),
   onSaveFeedback: vi.fn(async () => null),
   onDeleteFeedback: vi.fn(),
@@ -83,22 +82,20 @@ beforeEach(() => {
 });
 
 describe("columns", () => {
-  it("renders all five, in order, whether or not they hold anything", () => {
-    const { container } = renderBoard([job({ slug: "a", state: "queued" })]);
+  it("renders all four, in order, whether or not they hold anything", () => {
+    const { container } = renderBoard([job({ slug: "a", state: "draft" })]);
     expect(cols(container).map((c) => c.getAttribute("data-col"))).toEqual([...COLUMNS]);
   });
 
   it("buckets each job by its state", () => {
     const { container } = renderBoard([
       job({ slug: "d", state: "draft" }),
-      job({ slug: "q", state: "queued" }),
       job({ slug: "w", state: "working", live: true }),
       job({ slug: "b", state: "blocked", live: true }),
       job({ slug: "x", state: "done" }),
     ]);
     for (const [col, slug] of [
       ["draft", "d"],
-      ["queued", "q"],
       ["working", "w"],
       ["blocked", "b"],
       ["done", "x"],
@@ -109,12 +106,15 @@ describe("columns", () => {
   });
 
   it("shows the · placeholder in an empty column, and the count in every head", () => {
-    const { container } = renderBoard([job({ slug: "q", state: "queued" })]);
+    // BLOCKED is the probe column now that QUEUED is gone — DRAFT cannot be
+    // one, since an empty draft column renders the new-job button rather than
+    // the placeholder (the very next test).
+    const { container } = renderBoard([job({ slug: "b", state: "blocked", live: true })]);
     expect(colFor(container, "working").querySelector(".empty")).not.toBeNull();
-    expect(colFor(container, "queued").querySelector(".empty")).toBeNull();
-    expect(colFor(container, "queued").querySelector(".col-head .n")).toHaveTextContent("1");
+    expect(colFor(container, "blocked").querySelector(".empty")).toBeNull();
+    expect(colFor(container, "blocked").querySelector(".col-head .n")).toHaveTextContent("1");
     expect(colFor(container, "working").querySelector(".col-head .n")).toHaveTextContent("0");
-    expect(colFor(container, "queued").classList.contains("has-cards")).toBe(true);
+    expect(colFor(container, "blocked").classList.contains("has-cards")).toBe(true);
     expect(colFor(container, "working").classList.contains("has-cards")).toBe(false);
   });
 
@@ -247,7 +247,11 @@ const searchFixture = (): WebJob[] => [
   }),
   job({ slug: "job-load-categorizing", repo: "kraken", state: "done" }),
   job({ slug: "yelp-dedupe", repo: "monolith", state: "blocked", live: true }),
-  job({ slug: "asr-wer-metrics", repo: "monolith", state: "queued" }),
+  // was queued; BLOCKED now, so the suite keeps a column that a "search" query
+  // empties completely — the 0/N head and the placeholder fallback below both
+  // need one, and DRAFT cannot be it (an empty draft column renders the
+  // new-job button instead of the placeholder)
+  job({ slug: "asr-wer-metrics", repo: "monolith", state: "blocked", live: true }),
   job({
     slug: "search-index-2",
     display_slug: "search-index",
@@ -289,16 +293,16 @@ describe("the search bar", () => {
     expect(container.querySelector(".bb-read")).toHaveTextContent("3 of 6 jobs");
   });
 
-  it("still renders all five columns, with `shown/total` heads", async () => {
+  it("still renders all four columns, with `shown/total` heads", async () => {
     const { container } = renderBoard(searchFixture());
     await userEvent.type(searchInput(container), "search");
     expect(cols(container).map((c) => c.getAttribute("data-col"))).toEqual([...COLUMNS]);
     expect(colFor(container, "working").querySelector(".col-head .n")).toHaveTextContent("1/1");
     expect(colFor(container, "done").querySelector(".col-head .n")).toHaveTextContent("1/2");
-    expect(colFor(container, "queued").querySelector(".col-head .n")).toHaveTextContent("0/1");
+    expect(colFor(container, "blocked").querySelector(".col-head .n")).toHaveTextContent("0/2");
     // an emptied column falls back to the board's own placeholder, and DRAFT
     // keeps its button rather than gaining one
-    expect(colFor(container, "queued").querySelector(".empty")).not.toBeNull();
+    expect(colFor(container, "blocked").querySelector(".empty")).not.toBeNull();
     expect(colFor(container, "draft").querySelector(".empty")).toBeNull();
     expect(colFor(container, "draft").querySelector("#new-job")).not.toBeNull();
   });
@@ -390,7 +394,7 @@ describe("the search bar", () => {
 
     const next = [
       ...searchFixture(),
-      job({ slug: "search-rewrite", repo: "monolith", state: "queued" }),
+      job({ slug: "search-rewrite", repo: "monolith", state: "draft" }),
     ];
     rerender(<BoardHarness board={model(next)} actions={actions} />);
 

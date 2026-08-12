@@ -320,9 +320,9 @@ func runDreamPass(now time.Time, prev DreamRun) (*Job, DreamRun, bool) {
 	return j, DreamRun{Date: today, SweptTo: nowMS, Job: slug}, true
 }
 
-// CreateDreamJob writes the night's job row and returns it loaded, ready to
-// be queued. It is this codebase's first programmatic job creator, and it
-// mirrors webJobCreate's store-mode shape on purpose: build the job's TEXT,
+// CreateDreamJob writes the night's job row and returns it loaded, for the
+// caller to submit. It is this codebase's first programmatic job creator, and
+// it mirrors webJobCreate's store-mode shape on purpose: build the job's TEXT,
 // ParseJob it, and create the row from the parsed fields — so the row can
 // never disagree with what the same text would have produced had a human
 // pasted it into the board's editor. A parse error is a bug in
@@ -341,14 +341,15 @@ func CreateDreamJob(st *store.Store, slug string, since, until int64, clamped bo
 		return nil, fmt.Errorf("dream job %s does not parse: %s", slug, parsed.Err)
 	}
 	if strings.TrimSpace(parsed.Body) == "" {
-		// startable() does NOT check for a body — only the board's queue
-		// action does — so an empty one would start a cell with an empty
-		// prompt. Belt and braces on top of the template below.
+		// SubmitJob refuses an empty spec too, so this is belt and braces on
+		// top of the template below — but it fails the CREATE rather than the
+		// start, which is the difference between "no job tonight, said loudly"
+		// and "a permanently unstartable draft on the board".
 		return nil, fmt.Errorf("dream job %s has an empty body", slug)
 	}
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-		Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model,
+		Solo: parsed.Solo, Model: parsed.Model,
 		Body: parsed.Body,
 	}); err != nil {
 		return nil, err
@@ -360,9 +361,10 @@ func CreateDreamJob(st *store.Store, slug string, since, until int64, clamped bo
 	return loadJobFull(st, sr)
 }
 
-// dreamJobContent renders the night's job file text. ready: true — the whole
-// point is that the queue pass starts it unattended — and solo: false, so
-// zeus gets the scout crew the skill's semantic pass depends on.
+// dreamJobContent renders the night's job file text. solo: false, so zeus
+// gets the scout crew the skill's semantic pass depends on. Nothing in the
+// frontmatter asks for a start: the tick that created this job submits it
+// itself on the same pass (daemon.go's startCreatedJob).
 //
 // The body says as little as possible: the procedure lives in the skill, and
 // the only things the skill cannot know are the window's two edges. It is
@@ -374,9 +376,7 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 	return "---\n" +
 		"job: " + slug + "\n" +
 		"repo: kraken\n" +
-		"ready: true\n" +
 		"solo: false\n" +
-		"prereqs: []\n" +
 		"---\n" +
 		"\n" +
 		"Run tonight's corroboration pass.\n" +

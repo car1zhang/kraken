@@ -22,7 +22,6 @@ vi.mock("../../api/client.ts", () => ({
   saveJobForm: vi.fn(() => Promise.resolve({ ok: true, mtime: 8 })),
   createJob: vi.fn((slug: string) => Promise.resolve({ ...form, slug })),
   queueJob: vi.fn(() => Promise.resolve({ ok: true })),
-  dequeueJob: vi.fn(() => Promise.resolve({ ok: true })),
   archiveJob: vi.fn(() => Promise.resolve({ ok: true })),
   uploadImage: vi.fn(),
   answerDocQuestion: vi.fn(() => Promise.resolve({ ok: true })),
@@ -34,7 +33,6 @@ vi.mock("../../api/client.ts", () => ({
 import {
   createJob,
   deleteFeedback,
-  dequeueJob,
   editFeedback,
   fetchJobForm,
   queueJob,
@@ -164,7 +162,8 @@ describe("EditorOverlay modes", () => {
     expect(document.getElementById("f-base")).toBeDisabled();
     expect(document.getElementById("f-model")).toBeDisabled();
     expect(document.getElementById("f-solo")).toBeDisabled();
-    expect(document.getElementById("f-add-prereq")).toBeDisabled();
+    // `f-add-prereq` was in this list until the prereq block went away with
+    // the queue it gated.
     expect(document.getElementById("editor-att-btn")).toBeDisabled();
     // the spec stays READONLY rather than disabled, so it is still
     // selectable/copyable
@@ -177,7 +176,7 @@ describe("EditorOverlay modes", () => {
   });
 });
 
-describe("the queue affordance is derived, not snapshotted", () => {
+describe("the submit affordance is derived, not snapshotted", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
@@ -188,11 +187,11 @@ describe("the queue affordance is derived, not snapshotted", () => {
   it("an empty-spec draft shows the button, disabled, with a hint", async () => {
     mount();
     await waitFor(() =>
-      expect(document.getElementById("editor-queue")).not.toHaveAttribute("hidden"),
+      expect(document.getElementById("editor-submit")).not.toHaveAttribute("hidden"),
     );
-    expect(document.getElementById("editor-queue")).toBeDisabled();
+    expect(document.getElementById("editor-submit")).toBeDisabled();
     expect(document.getElementById("editor-hint")?.textContent).toBe(
-      "write a spec to queue",
+      "write a spec to start",
     );
   });
 
@@ -204,17 +203,17 @@ describe("the queue affordance is derived, not snapshotted", () => {
     );
     await user.type(document.getElementById("editor-text") as HTMLTextAreaElement, "do it");
     await waitFor(() =>
-      expect(document.getElementById("editor-queue")).not.toBeDisabled(),
+      expect(document.getElementById("editor-submit")).not.toBeDisabled(),
     );
     expect(document.getElementById("editor-hint")?.textContent).toBe(
-      "synced ✓ — queueable",
+      "synced ✓ — ready to start",
     );
   });
 
   it("a job MISSING from the board is treated as a fresh draft, not as unarmable", async () => {
     // this is the bug the reactive derivation fixed: a job created seconds ago
     // is not in the board payload yet, and the one-shot snapshot left it
-    // permanently unqueueable until a close/reopen
+    // permanently unsubmittable until a close/reopen
     const user = userEvent.setup();
     mount({ job: undefined });
     await waitFor(() =>
@@ -222,7 +221,7 @@ describe("the queue affordance is derived, not snapshotted", () => {
     );
     await user.type(document.getElementById("editor-text") as HTMLTextAreaElement, "x");
     await waitFor(() =>
-      expect(document.getElementById("editor-queue")).not.toBeDisabled(),
+      expect(document.getElementById("editor-submit")).not.toBeDisabled(),
     );
   });
 
@@ -241,7 +240,7 @@ describe("the queue affordance is derived, not snapshotted", () => {
         "synced — won't run: no repo",
       ),
     );
-    expect(document.getElementById("editor-queue")).toBeDisabled();
+    expect(document.getElementById("editor-submit")).toBeDisabled();
   });
 
   it("a board-level err disarms it too", async () => {
@@ -252,27 +251,19 @@ describe("the queue affordance is derived, not snapshotted", () => {
     );
     await user.type(document.getElementById("editor-text") as HTMLTextAreaElement, "x");
     await waitFor(() => expect(saveJobForm).toHaveBeenCalled());
-    expect(document.getElementById("editor-queue")).toBeDisabled();
+    expect(document.getElementById("editor-submit")).toBeDisabled();
   });
 
-  it("a QUEUED job offers the reverse move instead of the forward one", async () => {
-    mount({ job: job({ state: "queued" }) });
-    await waitFor(() =>
-      expect(document.getElementById("editor-dequeue")).not.toHaveAttribute("hidden"),
-    );
-    expect(document.getElementById("editor-queue")).toHaveAttribute("hidden");
-    expect(document.getElementById("editor-hint")?.textContent).toBe(
-      "queued — cancel returns it to draft",
-    );
-  });
-
-  it("a working job offers neither", async () => {
+  // "a QUEUED job offers the reverse move instead of the forward one" stood
+  // here, pinning `editor-dequeue` and the "queued — cancel returns it to
+  // draft" hint. Both are obsoleted: there is no queued state and no reverse
+  // move, only a submit that has been answered or has not.
+  it("a working job offers no submit", async () => {
     mount({ job: job({ state: "working", live: true }) });
     await waitFor(() =>
       expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
     );
-    expect(document.getElementById("editor-queue")).toHaveAttribute("hidden");
-    expect(document.getElementById("editor-dequeue")).toHaveAttribute("hidden");
+    expect(document.getElementById("editor-submit")).toHaveAttribute("hidden");
   });
 });
 
@@ -309,34 +300,12 @@ describe("autosave", () => {
     expect(body).toMatchObject({ slug: "j", spec: "hi", mtime: 0 });
   });
 
-  it("drops empty prereq rows from the payload", async () => {
-    const user = userEvent.setup();
-    mount();
-    await waitFor(() => expect(document.getElementById("f-add-prereq")).not.toBeNull());
-    await user.click(screen.getByText("+ add"));
-    await waitFor(() => expect(saveJobForm).toHaveBeenCalled());
-    const body = (saveJobForm as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      prereqs: unknown[];
-    };
-    expect(body.prereqs).toEqual([]);
-  });
-
-  it("a removed prereq row lands immediately in the payload", async () => {
-    (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
-      Promise.resolve({ ...form, prereqs: [{ job: "dep", gated: true }] }),
-    );
-    const user = userEvent.setup();
-    mount();
-    await waitFor(() =>
-      expect(document.querySelector(".prereq-row .rm")).not.toBeNull(),
-    );
-    await user.click(document.querySelector(".prereq-row .rm") as HTMLElement);
-    await waitFor(() => expect(saveJobForm).toHaveBeenCalled());
-    const body = (saveJobForm as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      prereqs: unknown[];
-    };
-    expect(body.prereqs).toEqual([]);
-  });
+  // Two prereq tests stood here — "drops empty prereq rows from the payload"
+  // and "a removed prereq row lands immediately in the payload". Both are
+  // obsoleted pins: the block is gone from the form and the key is off the
+  // POST shape entirely. Nothing in this file replaces them — that the form
+  // now sends neither `ready` nor `prereqs` is a SPEC assertion and belongs to
+  // the blind suites, not to the implementer's own file.
 });
 
 describe("editor stale-close, with the LAZY baseline", () => {
@@ -399,7 +368,7 @@ describe("editor stale-close, with the LAZY baseline", () => {
       <EditorOverlay
         open
         slug="j"
-        job={job({ state: "queued" })}
+        job={job({ state: "working" })}
         onClose={onClose}
         onCreated={noop}
         onReactivate={noop}
@@ -410,43 +379,11 @@ describe("editor stale-close, with the LAZY baseline", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("dequeue rebases the baseline so our OWN action does not close the editor", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-    const { rerender } = render(
-      <EditorOverlay
-        open
-        slug="j"
-        job={job({ state: "queued" })}
-        onClose={onClose}
-        onCreated={noop}
-        onReactivate={noop}
-        onOpenArtifact={noop}
-        mutate={mutate}
-      />,
-    );
-    await waitFor(() =>
-      expect(document.getElementById("editor-dequeue")).not.toHaveAttribute("hidden"),
-    );
-    await user.click(screen.getByText("✕ cancel queue"));
-    await waitFor(() => expect(dequeueJob).toHaveBeenCalledWith("j"));
-
-    // the board now reports draft — the state WE asked for
-    rerender(
-      <EditorOverlay
-        open
-        slug="j"
-        job={job({ state: "draft" })}
-        onClose={onClose}
-        onCreated={noop}
-        onReactivate={noop}
-        onOpenArtifact={noop}
-        mutate={mutate}
-      />,
-    );
-    expect(onClose).not.toHaveBeenCalled();
-    expect(document.getElementById("editor-queue")).not.toHaveAttribute("hidden");
-  });
+  // "dequeue rebases the baseline so our OWN action does not close the editor"
+  // stood here. It is obsoleted with the button it drove: dequeue was the one
+  // action in this modal that moved the job BACKWARDS and so had to rebase the
+  // stale baseline before posting. Submit moves it forwards and CLOSES the
+  // modal on success, so the baseline has nothing left to protect.
 });
 
 describe("editor head actions", () => {
@@ -664,8 +601,7 @@ describe("an archived job", () => {
     mountArchived({ reactivatable: true });
     expect(document.getElementById("editor-form")).toHaveAttribute("hidden");
     expect(document.getElementById("editor-archive")).toHaveAttribute("hidden");
-    expect(document.getElementById("editor-queue")).toHaveAttribute("hidden");
-    expect(document.getElementById("editor-dequeue")).toHaveAttribute("hidden");
+    expect(document.getElementById("editor-submit")).toHaveAttribute("hidden");
     expect(document.getElementById("editor-reactivate")).toHaveAttribute("hidden");
   });
 

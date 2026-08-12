@@ -109,7 +109,7 @@ func watchOneLine(s string) string { return strings.Join(strings.Fields(s), " ")
 // THE KEYS ARE FROZEN to what they were when this rode a flat table: `id` is
 // now the EDGE id and `observation` is that edge's fact sentence, but no key
 // was added, renamed or retyped, so the web DREAM view and the iOS app decode
-// this unchanged and `apiContract` stays 5. src/dst/predicate deliberately
+// this unchanged and `apiContract` does not bump. src/dst/predicate deliberately
 // stay OFF this wire — a key added to an existing shape is a contract bump
 // (graph.go's header states the policy), and the graph routes already expose
 // linkage for anything that wants it.

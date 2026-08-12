@@ -273,18 +273,18 @@ func scanPendingQuestion(transcript string) *PendingQuestion {
 
 // --- state derivation ---
 
-// deriveState maps a job to the five-state board model: draft · queued ·
+// deriveState maps a job to the four-state board model: draft ·
 // working · blocked · done.
 //
 // Shared precedence (kept in lockstep with DisplayState in job.go): done
 // wins first, then an error reads as draft, then any kraken-managed state
-// wins, then !Ready reads as draft, else queued.
+// wins, else draft.
 //
 // Truth table:
 //   - j.State == "done"                        → "done"
 //   - j.Err != ""                               → "draft" (unparseable job; error is the detail)
-//   - j.State == "" && !j.Ready                 → "draft" (not ready, never started)
-//   - j.State == "" && j.Ready                  → "queued" (ready, never started)
+//   - j.State == ""                             → "draft" (never started — submit is what starts a
+//     cell, in the same request, so there is no state between not-submitted and running)
 //   - started (state working/blocked) but !live → "blocked" (the cell is gone — a dead cell
 //     always needs carl; echoing a stale "working" is how the status-investigation
 //     self-decapitation sat invisible on the board)
@@ -305,10 +305,7 @@ func deriveState(j *Job, live bool, active bool) string {
 		return "draft"
 	}
 	if j.State == "" {
-		if !j.Ready {
-			return "draft"
-		}
-		return "queued"
+		return "draft"
 	}
 	if !live {
 		return "blocked"

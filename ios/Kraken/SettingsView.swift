@@ -268,7 +268,7 @@ struct SettingsView: View {
 /// They lived in the board's daemon bar until the nav restructure, and nothing
 /// about their behaviour changed in the move — only where they sit. They are
 /// Mac-side maintenance, and the daemon bar is a status readout carl glances
-/// at six columns' worth of times a day.
+/// at five columns' worth of times a day.
 ///
 /// The ship run's BANNER stayed on the board, where a run in flight is news
 /// whether or not anyone is in Settings; `messageArea` is this screen's own

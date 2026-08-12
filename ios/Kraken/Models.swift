@@ -243,7 +243,6 @@ struct WebJob: Decodable, Identifiable {
     let outcome: String?
     let cell: String?
     let live: Bool
-    let prereqs: [WebPrereq]?
     // The cell's last words / blocked reason — freeform prose, markdown-rendered.
     let detail: String?
     // A pending interactive question (e.g. an AskUserQuestion tool call)
@@ -323,14 +322,9 @@ struct WebJob: Decodable, Identifiable {
     // bump; render through BoardTheme.jobColor, which degrades an unknown
     // name from a newer server to "no color".
     let color: String?
-    // Why the daemon's last StartCell attempt for this job failed — free-text
-    // prose from the error it returned, populated for QUEUED jobs only and
-    // absent once a start succeeds. Distinct from `err` (the job file's own
-    // recorded error) and from DaemonStatus.lastError, which is board-wide:
-    // whichever failure happened to be last across every job. Without this a
-    // job that cannot start is indistinguishable from one merely waiting its
-    // turn. Additive key, absent on older servers, so no contract bump.
-    let startError: String?
+    // `start_error` is gone with the queued state (v6): a start is now the
+    // synchronous answer to POST /api/queue, so a failure surfaces as that
+    // call's own 409 rather than as a field on a job parked in a queue.
 
     // Identity is (slug, archived), NOT the bare slug — the same pairing
     // `jobKey` uses in web/static/app.js, and for the same reason. An archived
@@ -348,7 +342,7 @@ struct WebJob: Decodable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, state, err, outcome, cell, live
-        case prereqs, detail, question, wakeup
+        case detail, question, wakeup
         case zeusStatus = "zeus_status"
         case roster, artifacts, health, mtime
         case archived
@@ -363,7 +357,6 @@ struct WebJob: Decodable, Identifiable {
         case tokens
         case load
         case color
-        case startError = "start_error"
     }
 }
 
@@ -934,12 +927,6 @@ struct ThreadReadResponse: Decodable {
     }
 }
 
-struct WebPrereq: Decodable {
-    let job: String
-    let gated: Bool
-    let done: Bool
-}
-
 // WebQuestion mirrors job.go's pending-question shape: one tool call id and
 // one or more questions, each with its own header and answer options.
 struct WebQuestion: Decodable {
@@ -955,9 +942,9 @@ struct WebQuestion: Decodable {
 struct WebQuestionItem: Decodable {
     let question: String
     let header: String
-    // `multi_select` follows the same omitempty-is-Optional convention as
-    // Prereq.gated above (a Go `false` may be entirely absent on the wire),
-    // so it's decoded defensively rather than via the synthesized initializer.
+    // `multi_select` follows this file's omitempty-is-Optional convention (a
+    // Go `false` may be entirely absent on the wire), so it's decoded
+    // defensively rather than via the synthesized initializer.
     let multiSelect: Bool
     let options: [WebQuestionOption]
 
@@ -1031,12 +1018,16 @@ struct JobForm: Decodable {
     let slug: String
     let repo: String
     let base: String
-    let ready: Bool
     let solo: Bool
     // model is Optional for wire tolerance: an older server's payload
     // simply lacks the key, which must decode as the default.
     // skip_doc is gone (v5, breaking): the doc phase now runs purely from
     // zeus' own read of the job spec text, never a stored flag.
+    // `ready` and `prereqs` are gone (v6, breaking) with the queued state:
+    // there is no queue to arm into and no gate to wait on — submit starts
+    // the cell synchronously. Non-optional here while they lasted, which is
+    // exactly why their removal is a contract bump rather than an additive
+    // one: a v6 server's payload would fail this type's decode outright.
     let model: String?
     // The job's color, "" when unset — read-only: it comes back on the form
     // GET so the picker can show the current selection, but it is written by
@@ -1044,7 +1035,6 @@ struct JobForm: Decodable {
     // here for the same wire tolerance as `model`: an older server's payload
     // simply lacks the key.
     let color: String?
-    let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
     let editable: Bool
@@ -1053,52 +1043,32 @@ struct JobForm: Decodable {
     let repos: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case slug, repo, base, ready, solo
+        case slug, repo, base, solo
         case model
         case color
-        case prereqs, spec, mtime, editable, err, slugs, repos
-    }
-}
-
-// Prereq mirrors job.go's Prereq{Job, Gated}. `gated` is `omitempty` on the
-// wire (absent means false); modeled as a plain non-optional `var` here
-// (rather than Bool?) since callers edit it directly in a Toggle and the
-// server accepts an explicit `false` just as happily as an absent key.
-struct Prereq: Codable {
-    let job: String
-    var gated: Bool
-
-    enum CodingKeys: String, CodingKey { case job, gated }
-
-    init(job: String, gated: Bool) {
-        self.job = job
-        self.gated = gated
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        job = try c.decode(String.self, forKey: .job)
-        gated = try c.decodeIfPresent(Bool.self, forKey: .gated) ?? false
+        case spec, mtime, editable, err, slugs, repos
     }
 }
 
 // JobFormSaveRequest mirrors jobFormFields for POST /api/job/saveform.
-// skip_doc is gone (v5, breaking) — see JobForm above.
+// skip_doc is gone (v5, breaking); ready and prereqs are gone (v6, breaking)
+// — see JobForm above. The server IGNORES unknown keys on this route (plain
+// json decode, no DisallowUnknownFields), so a re-added field would be
+// silently dropped — worse than a refusal; the loud retired-key refusal
+// lives on POST /api/job/draft only.
 struct JobFormSaveRequest: Encodable {
     let slug: String
     let repo: String
     let base: String
-    let ready: Bool
     let solo: Bool
     let model: String
-    let prereqs: [Prereq]
     let spec: String
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
-        case slug, repo, base, ready, solo
+        case slug, repo, base, solo
         case model
-        case prereqs, spec, mtime
+        case spec, mtime
     }
 }
 

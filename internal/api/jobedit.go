@@ -28,8 +28,8 @@ func webJobFor(slug string) (*jobs.Job, map[string]*jobs.Job, error) {
 }
 
 // editable jobs are ones with no lifecycle in flight: drafts, errored files,
-// waiting/queued jobs, and finished ones being respec'd. A live cell's file
-// is kraken's and the crew's to write.
+// and finished ones being respec'd. A live cell's file is kraken's and the
+// crew's to write.
 func editableJob(j *jobs.Job) bool {
 	return !j.Started() || j.State == "done"
 }
@@ -61,8 +61,8 @@ func composeRawJobContent(j *jobs.Job) string {
 	spec, logSection := splitBodyLog(j.Body)
 	fields := jobFormFields{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-		Ready: j.Ready, Solo: j.Solo, Model: j.Model, Color: j.Color,
-		Prereqs: j.Prereqs, Spec: strings.TrimSpace(spec),
+		Solo: j.Solo, Model: j.Model, Color: j.Color,
+		Spec: strings.TrimSpace(spec),
 	}
 	return serializeJobFile(fields, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
 }
@@ -74,7 +74,7 @@ func composeRawJobContent(j *jobs.Job) string {
 func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	return map[string]any{
 		"slug": p.Slug, "repo": p.Repo, "base": p.Base,
-		"ready": p.Ready, "solo": p.Solo, "model": p.Model, "color": p.Color,
+		"solo": p.Solo, "model": p.Model, "color": p.Color,
 		"body": p.Body, "state": p.State, "outcome": p.Outcome,
 		"session": p.Session, "teardown": p.Teardown, "run": int64(p.Run),
 		// L6: p.Err is "" on a clean parse, which is exactly the value that
@@ -84,21 +84,10 @@ func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	}
 }
 
-// storePrereqs converts the form/raw editor's []jobs.Prereq into the store
-// package's own Prereq shape (field Slug where jobs.Prereq calls it Job).
-func storePrereqs(ps []jobs.Prereq) []store.Prereq {
-	out := make([]store.Prereq, 0, len(ps))
-	for _, p := range ps {
-		out = append(out, store.Prereq{Slug: p.Job, Gated: p.Gated})
-	}
-	return out
-}
-
-// saveJobEditWithLock applies a full editor save (fields + optionally
-// prereqs + optionally PRs, L10's store.SaveJobEdit — one atomic
-// transaction covering all three, replacing the old three-separate-calls
-// sequence of UpdateJobFields, ReplacePrereqs, and a syncStorePRs loop of
-// UpsertPR/RemovePR calls, each of which used to commit on its own) to a
+// saveJobEditWithLock applies a full editor save (fields + optionally PRs,
+// L10's store.SaveJobEdit — one atomic transaction covering both, replacing
+// the old separate-calls sequence of UpdateJobFields and a syncStorePRs loop
+// of UpsertPR/RemovePR calls, each of which used to commit on its own) to a
 // store-backed job with optimistic locking mirroring the file-mode mtime
 // contract: mtime==0 or force==true skips the conflict check, retrying
 // once against the row's freshly-fetched rev if the first attempt (using
@@ -110,7 +99,6 @@ func storePrereqs(ps []jobs.Prereq) []store.Prereq {
 func saveJobEditWithLock(
 	st *store.Store, j *jobs.Job, mtimeTok int64, force bool,
 	fields map[string]any,
-	prereqs []jobs.Prereq, syncPrereqs bool,
 	prs []jobs.JobPR, syncPRs bool,
 ) (newRev int64, conflict bool, err error) {
 	skipCheck := force || mtimeTok == 0
@@ -121,9 +109,8 @@ func saveJobEditWithLock(
 	for _, p := range prs {
 		storePrs = append(storePrs, store.PR{URL: p.URL, State: p.State})
 	}
-	storePrereqsArg := storePrereqs(prereqs)
 
-	newRev, err = st.SaveJobEdit(j.ID, j.Rev, fields, storePrereqsArg, syncPrereqs, storePrs, syncPRs)
+	newRev, err = st.SaveJobEdit(j.ID, j.Rev, fields, storePrs, syncPRs)
 	if errors.Is(err, store.ErrStaleRev) {
 		if !skipCheck {
 			return 0, true, nil
@@ -132,7 +119,7 @@ func saveJobEditWithLock(
 		if gerr != nil {
 			return 0, false, gerr
 		}
-		newRev, err = st.SaveJobEdit(j.ID, fresh.Rev, fields, storePrereqsArg, syncPrereqs, storePrs, syncPRs)
+		newRev, err = st.SaveJobEdit(j.ID, fresh.Rev, fields, storePrs, syncPRs)
 		if errors.Is(err, store.ErrStaleRev) {
 			// a second collision inside the narrow retry window: rare enough
 			// to surface as a genuine conflict rather than loop indefinitely
@@ -203,14 +190,14 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		// abandoned right after creation (never actually saved) leaves that
 		// exact template behind, comments included, on next raw-view/edit.
 		// Deriving the row from the same template text is how the store path
-		// matches that: a second hardcoded "repo monolith, ready/solo false"
+		// matches that: a second hardcoded "repo monolith, solo false"
 		// literal here was a duplicate source of truth that could silently
 		// drift from JobTemplate's own defaults.
 		template := jobs.JobTemplate(slug)
 		parsed := jobs.ParseJob(slug+jobs.JobSuffix, []byte(template))
 		if _, err := st.CreateJob(&store.Job{
 			Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-			Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model,
+			Solo: parsed.Solo, Model: parsed.Model,
 			Color: parsed.Color, Body: parsed.Body,
 		}); err != nil {
 			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -219,14 +206,6 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		j := jobs.JobBySlug(jobs.LoadJobs(), slug)
 		if j == nil {
 			webJSON(w, http.StatusInternalServerError, map[string]string{"error": "job created but could not be reloaded"})
-			return
-		}
-		// the template's own prereqs (always [] today, JobTemplate has no
-		// default prereqs) — included for the same single-source-of-truth
-		// reason as the fields above, so a future template with real
-		// defaults doesn't need a second place taught about them.
-		if err := st.ReplacePrereqs(j.ID, storePrereqs(parsed.Prereqs)); err != nil {
-			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		webBoardCache.invalidate()
@@ -291,10 +270,9 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		// mirroring file mode's contract exactly, only the body changes —
 		// jobFieldsFromParsed(parsed) would otherwise write whatever
 		// ParseJob's best-effort extraction pulled from garbled text
-		// (defaults like empty repo, ready false, empty spec, ...)
-		// straight over the row's real frontmatter columns. Prereqs/PRs stay
-		// untouched too: parsed.Prereqs/parsed.PRs are equally untrustworthy
-		// when Err is set.
+		// (defaults like empty repo, solo false, empty spec, ...) straight
+		// over the row's real frontmatter columns. PRs stay untouched too:
+		// parsed.PRs is equally untrustworthy when Err is set.
 		fields := jobFieldsFromParsed(parsed)
 		if parsed.Err != "" {
 			// L6: "err" rides along even on the unparseable branch — that's
@@ -302,16 +280,15 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 			// (deriveState) until a later save parses clean and clears it.
 			fields = map[string]any{"body": req.Content, "err": parsed.Err}
 		}
-		// L10: prereqs/PRs sync only when the parse succeeded — an
-		// unparseable save leaves them exactly as they were, same as file
-		// mode's contract (parsed.Prereqs/parsed.PRs are equally
-		// untrustworthy when Err is set). SaveJobEdit skips those two
-		// passes entirely when told to, rather than replacing them with a
-		// same-value no-op, so an unparseable save issues no writes beyond
-		// the field update.
+		// L10: PRs sync only when the parse succeeded — an unparseable save
+		// leaves them exactly as they were, same as file mode's contract
+		// (parsed.PRs is equally untrustworthy when Err is set). SaveJobEdit
+		// skips that pass entirely when told to, rather than replacing it
+		// with a same-value no-op, so an unparseable save issues no writes
+		// beyond the field update.
 		syncChildren := parsed.Err == ""
 		newRev, conflict, err := saveJobEditWithLock(st, j, int64(req.MTime), false,
-			fields, parsed.Prereqs, syncChildren, parsed.PRs, syncChildren)
+			fields, parsed.PRs, syncChildren)
 		if conflict {
 			webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
 			return
@@ -356,11 +333,13 @@ func splitBodyLog(body string) (spec, log string) {
 	return body, ""
 }
 
+// jobFormFields is the job form's GET/POST shape. `ready` and `prereqs` left
+// it in apiContract v6 — the queued status they configured is gone, and a form
+// field for a flag nothing reads is a field a client keeps sending.
 type jobFormFields struct {
 	Slug  string `json:"slug"`
 	Repo  string `json:"repo"`
 	Base  string `json:"base"`
-	Ready bool   `json:"ready"`
 	Solo  bool   `json:"solo"`
 	Model string `json:"model"`
 	// Color is RENDER-ONLY on the save path: serializeJobFile emits the
@@ -368,9 +347,8 @@ type jobFormFields struct {
 	// webJobSaveForm overwrites it from the stored job before serializing —
 	// POST /api/job/color is the only writer (webJobColor says why). It is
 	// still served on the form GET so a client can show the current pick.
-	Color   string        `json:"color"`
-	Prereqs []jobs.Prereq `json:"prereqs"`
-	Spec    string        `json:"spec"`
+	Color string `json:"color"`
+	Spec  string `json:"spec"`
 	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
 	// legacy client still sending the old string encoding round-trips too.
 	MTime mtimeToken `json:"mtime"`
@@ -380,7 +358,12 @@ type jobFormFields struct {
 }
 
 // webJobForm returns a job parsed into form fields, plus the datalists the
-// form offers (existing slugs for prereqs, repo candidates).
+// form offers (existing slugs, repo candidates).
+//
+// `slugs` survives the prereq removal that was its original reason for
+// existing: it is a plain list of the other active jobs, and clients use it
+// for their own autocompletion. Serving it costs one loop over a slice already
+// in hand.
 func webJobForm(w http.ResponseWriter, r *http.Request) {
 	js := jobs.LoadJobs()
 	j := jobs.JobBySlug(js, r.URL.Query().Get("slug"))
@@ -395,18 +378,13 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 			slugs = append(slugs, x.Slug)
 		}
 	}
-	prereqs := j.Prereqs
-	if prereqs == nil {
-		prereqs = []jobs.Prereq{}
-	}
 	webJSON(w, http.StatusOK, map[string]any{
 		"slug": j.Slug, "repo": j.Repo, "base": j.Base,
-		"ready": j.Ready, "solo": j.Solo,
-		"model":   j.Model,
-		"color":   j.Color,
-		"prereqs": prereqs,
-		"spec":    strings.TrimSpace(spec),
-		"mtime":   jobEditMTime(j), "editable": editableJob(j),
+		"solo":  j.Solo,
+		"model": j.Model,
+		"color": j.Color,
+		"spec":  strings.TrimSpace(spec),
+		"mtime": jobEditMTime(j), "editable": editableJob(j),
 		"err": j.Err, "slugs": slugs, "repos": jobs.RepoCandidates(),
 	})
 }
@@ -422,18 +400,6 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 	fmt.Fprintf(&b, "repo: %s\n", jobs.OneLine(f.Repo))
 	if f.Base != "" {
 		fmt.Fprintf(&b, "base: %s\n", jobs.OneLine(f.Base))
-	}
-	fmt.Fprintf(&b, "ready: %t\n", f.Ready)
-	if len(f.Prereqs) == 0 {
-		b.WriteString("prereqs: []\n")
-	} else {
-		b.WriteString("prereqs:\n")
-		for _, p := range f.Prereqs {
-			fmt.Fprintf(&b, "  - job: %s\n", jobs.OneLine(p.Job))
-			if p.Gated {
-				b.WriteString("    gated: true\n")
-			}
-		}
 	}
 	fmt.Fprintf(&b, "solo: %t\n", f.Solo)
 	// conditional like base: — absent parses as the default, so untouched
@@ -540,13 +506,13 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(content))
 		fields := map[string]any{
 			"repo": req.Repo, "base": req.Base,
-			"ready": req.Ready, "solo": req.Solo, "model": req.Model,
+			"solo": req.Solo, "model": req.Model,
 			"body": body, "err": parsed.Err,
 		}
-		// L10: form saves always replace prereqs, never touch PRs (they're
-		// not part of jobFormFields by construction — same as file mode).
+		// L10: form saves never touch PRs (they're not part of
+		// jobFormFields by construction — same as file mode).
 		newRev, conflict, err := saveJobEditWithLock(st, j, int64(req.MTime), req.Force,
-			fields, req.Prereqs, true, nil, false)
+			fields, nil, false)
 		if conflict {
 			webJSON(w, http.StatusConflict, map[string]any{
 				"error": "file changed on disk since you opened it", "conflict": true,

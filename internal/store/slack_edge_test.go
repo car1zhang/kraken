@@ -544,7 +544,7 @@ func TestEdgeSlackReadsOnAnEmptyTable(t *testing.T) {
 // and 409 an open editor over a message nobody's job had anything to do with.
 func TestEdgeSlackWritesNeverTouchJobRows(t *testing.T) {
 	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "unrelated", Repo: "kraken", Ready: true})
+	id, err := s.CreateJob(&Job{Slug: "unrelated", Repo: "kraken"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

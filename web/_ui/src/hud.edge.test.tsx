@@ -576,25 +576,18 @@ describe("edge · S2 JobCard", () => {
     expect(edgeBlocked.container.querySelector(".status")).toBeNull();
   });
 
-  // Row: JobCard band 1/3 — the settled two keep their tokens.
-  it("reads `◌ queued` and `✓ done` in those columns", () => {
-    for (const [state, want] of [["queued", "◌ queued"], ["done", "✓ done"]] as Array<[string, string]>) {
-      const { container, unmount } = edgeRTL.render(
-        <edgeCardMod.JobCard {...edgeCardProps(edgeMakeJob({ state }))} />,
-      );
-      expect((container.querySelector(".status") as HTMLElement)?.textContent).toBe(want);
-      unmount();
-    }
-  });
-
-  // Row: JobCard band 1/3 — "The queued-✕ cancel button stays in `.card-top`".
-  it("keeps the queued ✕ inside .card-top", () => {
+  // Row: JobCard band 1/3 — the one settled column keeps its token. The pair
+  // loop this test ran (`◌ queued` beside `✓ done`) lost half its subject with
+  // the queued column, and the "keeps the queued ✕ inside .card-top" test next
+  // to it lost all of its own: submit starts the cell, so there is no booking
+  // for a ✕ to cancel.
+  it("reads `✓ done` in the done column", () => {
     const { container } = edgeRTL.render(
-      <edgeCardMod.JobCard {...edgeCardProps(edgeMakeJob({ state: "queued" }))} />,
+      <edgeCardMod.JobCard {...edgeCardProps(edgeMakeJob({ state: "done" }))} />,
     );
-    const top = container.querySelector(".card-top") as HTMLElement | null;
-    expect(top).toBeTruthy();
-    expect(top?.textContent).toContain("✕");
+    expect((container.querySelector(".status") as HTMLElement)?.textContent).toBe(
+      "✓ done",
+    );
   });
 
   // Row: JobCard outcome — suppressed when `job.outcome === "accepted"`.

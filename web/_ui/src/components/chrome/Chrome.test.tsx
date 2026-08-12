@@ -23,7 +23,7 @@ function model(board: Partial<WebBoard> | null, extra: Partial<BoardModel> = {})
       : undefined,
     error: undefined,
     byKey: new Map(),
-    byColumn: { draft: [], queued: [], working: [], blocked: [], done: [] },
+    byColumn: { draft: [], working: [], blocked: [], done: [] },
     archived: [],
     refetch: async () => {},
     setDragging: () => {},
@@ -106,15 +106,15 @@ describe("the status line", () => {
   });
 
   it("hands the clock corner over to the last mutation failure", () => {
-    renderChrome(model({}, { lastError: "job is not queued" }));
-    expect(document.getElementById("tick-stat")).toHaveTextContent("✕ job is not queued");
+    renderChrome(model({}, { lastError: "job already started" }));
+    expect(document.getElementById("tick-stat")).toHaveTextContent("✕ job already started");
   });
 
   it("gives the corner back to the clock once the failure has been readable", () => {
     // useBoard only clears lastError on the next SUCCESSFUL mutation, so one
     // refused drag would otherwise pin its text over the board's only
     // "am I still ticking" signal indefinitely.
-    const failed = model({}, { lastError: "job is not queued" });
+    const failed = model({}, { lastError: "job already started" });
     const props = {
       board: failed,
       view: "board" as const,
@@ -124,7 +124,7 @@ describe("the status line", () => {
       onToast: vi.fn(),
     };
     const { rerender } = render(<Chrome {...props} />);
-    expect(document.getElementById("tick-stat")).toHaveTextContent("✕ job is not queued");
+    expect(document.getElementById("tick-stat")).toHaveTextContent("✕ job already started");
     vi.spyOn(Date, "now").mockReturnValue(NOW + 11_000);
     rerender(<Chrome {...props} />);
     expect(document.getElementById("tick-stat")).not.toHaveTextContent("✕");

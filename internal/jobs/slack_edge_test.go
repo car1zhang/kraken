@@ -387,7 +387,7 @@ func TestEdgeIrisNamesAndDir(t *testing.T) {
 func TestEdgeIrisBriefStatesTheThreeObligations(t *testing.T) {
 	edgeSandboxHome(t)
 	brief := irisBrief()
-	for _, want := range []string{"ready: false", "kraken slack ack", "## Source"} {
+	for _, want := range []string{"you never start", "kraken slack ack", "## Source"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("irisBrief() does not contain %q", want)
 		}
@@ -403,17 +403,22 @@ func TestEdgeIrisBriefStatesTheThreeObligations(t *testing.T) {
 // asserted separately.
 //
 // The literal `ready: true` is deliberately NOT on this list (arbitrated at
-// the join, 2026-08-03). The contract requires the PRESENCE of `ready: false`
-// and the prose that queueing/starting is carl's move; it does not forbid the
-// other literal appearing — a sentence saying the server REFUSES a
-// `ready: true` draft satisfies the prohibition while failing a bare absence
+// the join, 2026-08-03, and still true for the same reason after the flag
+// itself was retired). The contract requires the PRESENCE of the never-start
+// rule and the prose that starting is carl's move; it does not forbid the
+// words appearing — the brief's sentence saying the server REFUSES a draft
+// carrying `ready` satisfies the prohibition while failing a bare absence
 // check, so that check was a requirement nobody set.
+//
+// `/api/queue` joins the list because it is now the SUBMIT: the URL survived
+// the rename (shipped iOS builds post to it), so a brief that named it would
+// hand iris the exact capability the route's absence is supposed to deny.
 func TestEdgeIrisBriefNeverAuthorizesQueueing(t *testing.T) {
 	edgeSandboxHome(t)
 	brief := irisBrief()
-	for _, forbidden := range []string{"kraken job start", "/api/start"} {
+	for _, forbidden := range []string{"kraken job start", "/api/start", "/api/queue"} {
 		if strings.Contains(brief, forbidden) {
-			t.Errorf("irisBrief() contains %q — queueing and starting are carl's move, never iris'", forbidden)
+			t.Errorf("irisBrief() contains %q — starting a job is carl's move, never iris'", forbidden)
 		}
 	}
 }

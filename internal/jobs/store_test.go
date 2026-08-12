@@ -86,7 +86,7 @@ func TestUseStoreNilUninstallsEventSink(t *testing.T) {
 
 func TestLoadJobsStoreBacked(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "bbb", State: "", Ready: true})
+	mustCreateJob(t, st, store.Job{Slug: "bbb", State: ""})
 	mustCreateJob(t, st, store.Job{Slug: "aaa"})
 
 	jobs := LoadJobs()

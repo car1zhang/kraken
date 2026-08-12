@@ -21,7 +21,7 @@ import (
 
 func TestArchiveRefusesInFlight(t *testing.T) {
 	st := useTestStore(t)
-	mustCreateJob(t, st, store.Job{Slug: "hot", Repo: "x", Ready: true, State: "working"})
+	mustCreateJob(t, st, store.Job{Slug: "hot", Repo: "x", State: "working"})
 	j := LoadJobBySlug("hot")
 	if j == nil {
 		t.Fatal("fixture didn't load")
@@ -30,7 +30,7 @@ func TestArchiveRefusesInFlight(t *testing.T) {
 		t.Fatalf("want kill-first error, got %v", err)
 	}
 	// a live session blocks archiving even for a done job
-	mustCreateJob(t, st, store.Job{Slug: "warm", Repo: "x", Ready: true, State: "done"})
+	mustCreateJob(t, st, store.Job{Slug: "warm", Repo: "x", State: "done"})
 	j = LoadJobBySlug("warm")
 	if _, err := ArchiveJob(j, map[string]bool{CellSession(j): true}); err == nil || !strings.Contains(err.Error(), "live cell") {
 		t.Fatalf("want live-cell error, got %v", err)
@@ -42,7 +42,7 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r1 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x", Ready: true, State: "done", Outcome: "PR merged"})
+	r1 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x", State: "done", Outcome: "PR merged"})
 	// artifact copies are prefixed <slug>-<id>., the same name they carried
 	// while the job was live — archiving moves them without renaming
 	if err := os.WriteFile(filepath.Join(PlutoDir(), fmt.Sprintf("foo-%d.report.md", r1.ID)), []byte("hi"), 0o644); err != nil {

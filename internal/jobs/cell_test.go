@@ -54,7 +54,12 @@ func TestTeardownFinalFields(t *testing.T) {
 		want   []string
 		ok     bool
 	}{
-		{"kill", []string{"state", "", "ready", "false", "teardown", ""}, true},
+		// kill returns a job to draft by clearing state ALONE. It used to
+		// clear a `ready` flag beside it, because leaving that set handed the
+		// job straight back to the daemon's queue loop on the next tick;
+		// neither the flag nor the loop exists, and a "ready" key here would
+		// now be an unknown column.
+		{"kill", []string{"state", "", "teardown", ""}, true},
 		{"done", []string{"state", "done", "teardown", ""}, true},
 		{"done:", []string{"state", "done", "teardown", ""}, true},
 		{"done:accepted", []string{"state", "done", "outcome", "accepted", "teardown", ""}, true},

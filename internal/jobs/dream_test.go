@@ -376,20 +376,18 @@ func TestDreamPassCreatesJobFromFeedback(t *testing.T) {
 	if created == nil || created.Slug != slug {
 		t.Fatalf("created = %+v, want a job named %s", created, slug)
 	}
-	if !created.Ready {
-		t.Fatal("dream job must be ready: true — the queue pass is what starts it")
+	if created.State != "" {
+		t.Fatalf("a freshly created dream job must be a draft, got state %q — the tick submits it, and SubmitJob refuses an already-started job", created.State)
 	}
 	if strings.TrimSpace(created.Body) == "" {
-		t.Fatal("dream job body is empty — startable() does not check for one, so a cell would spawn with an empty prompt")
+		t.Fatal("dream job body is empty — SubmitJob would refuse it as an empty spec and the night would be lost")
 	}
 	if created.Repo != "kraken" {
 		t.Fatalf("repo = %q, want kraken", created.Repo)
 	}
 	// exactly one, and it is on the board
 	var found int
-	bySlug := map[string]*Job{}
 	for _, j := range LoadJobs() {
-		bySlug[j.Slug] = j
 		if j.Slug == slug {
 			found++
 		}
@@ -397,14 +395,15 @@ func TestDreamPassCreatesJobFromFeedback(t *testing.T) {
 	if found != 1 {
 		t.Fatalf("board holds %d jobs named %s, want exactly 1", found, slug)
 	}
-	// the tick folds the created job into its own jobs/bySlug specifically so
-	// the queue pass can start it on THIS tick — which is only true while the
-	// job actually satisfies startable(). A CreateDreamJob that ever set
-	// State, or a new condition in startable, would silently turn that fold
-	// into a no-op and cost a whole DaemonInterval with no test failing.
-	if !startable(created, bySlug) {
-		t.Fatalf("created job is not startable (err %q, ready %v, state %q) — the same-tick queue fold in tick() is a silent no-op",
-			created.Err, created.Ready, created.State)
+	// the tick hands this very value straight to SubmitJob (startCreatedJob),
+	// so every refusal SubmitJob makes has to be false of it. Checking the
+	// refusals rather than calling SubmitJob keeps a real StartCell — git
+	// worktree, tmux, rotation gate — out of this test.
+	if created.Err != "" {
+		t.Fatalf("created job carries a parse error %q — SubmitJob refuses it as unparseable", created.Err)
+	}
+	if created.Started() {
+		t.Fatalf("created job reads as started (state %q) — SubmitJob refuses it", created.State)
 	}
 	got := ReadDreamRun()
 	if got.Job != slug || got.SweptTo == 0 {
@@ -457,8 +456,16 @@ func TestDreamJobContentParsesClean(t *testing.T) {
 	if j.Err != "" {
 		t.Fatalf("dream job content does not parse: %s\n%s", j.Err, content)
 	}
-	if j.Slug != slug || j.Repo != "kraken" || !j.Ready || j.Solo {
-		t.Fatalf("parsed = slug %q repo %q ready %v solo %v, want %s/kraken/true/false", j.Slug, j.Repo, j.Ready, j.Solo, slug)
+	if j.Slug != slug || j.Repo != "kraken" || j.Solo {
+		t.Fatalf("parsed = slug %q repo %q solo %v, want %s/kraken/false", j.Slug, j.Repo, j.Solo, slug)
+	}
+	// the two retired keys must not come back: the tick submits this job
+	// itself, and a ready: line in generated text is the kind of thing a
+	// later edit copies forward from an old sample.
+	for _, gone := range []string{"ready:", "prereqs:"} {
+		if strings.Contains(content, gone) {
+			t.Errorf("generated dream job text still carries %q:\n%s", gone, content)
+		}
 	}
 	if strings.TrimSpace(j.Body) == "" {
 		t.Fatal("body is empty")

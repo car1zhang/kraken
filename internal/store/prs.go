@@ -62,7 +62,7 @@ func (s *Store) UpsertPR(jobID int64, url, state string) error {
 
 // upsertPRTx is UpsertPR's body, written against execer so SaveJobEdit
 // (L10) can compose it inside a caller-owned transaction alongside the
-// field update and prereqs replacement.
+// field update.
 func upsertPRTx(x execer, jobID int64, url, state string) error {
 	insRes, err := x.Exec(
 		`INSERT OR IGNORE INTO prs (job_id, url, state) VALUES (?, ?, ?)`,

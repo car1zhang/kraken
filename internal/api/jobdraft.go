@@ -20,23 +20,26 @@ import (
 // /api/job/draft is the SAFETY SURFACE of the whole Slack intake feature.
 // Iris is a claude reading arbitrary text off Slack and turning it into
 // kraken jobs; the one property that makes that safe is that it can only ever
-// produce a DRAFT — never a queued job, never a started one, never an edit to
-// a job whose cell is live. That property is enforced HERE, server-side, and
-// not merely stated in iris' brief: a brief is a request, and this is the
-// thing that cannot be talked out of it. Every refusal below writes nothing
-// at all.
+// produce a DRAFT — never a started job, never an edit to a job whose cell is
+// live. That property is now STRUCTURAL as well as
+// enforced: starting a cell is what submitting does, submit is a board action,
+// and this route has no start capability of any kind to refuse. What is
+// enforced HERE, server-side, is everything else — the kraken-owned fields, an
+// in-flight job's text, an empty spec — and not merely stated in iris' brief:
+// a brief is a request, and this is the thing that cannot be talked out of it.
+// Every refusal below writes nothing at all.
 //
 // It is deliberately NOT a mode of /api/job/save. The raw editor's save is
 // carl at a keyboard: it salvages an unparseable draft (body + err), it
-// writes the whole field set including `ready` and `state`, and its
-// editableJob gate lets a DONE job through for a respec. None of those are
+// writes the whole field set including `state`, and its editableJob gate lets
+// a DONE job through for a respec. None of those are
 // safe for an agent, and each of them is a row in the refusal matrix below.
 // The two routes therefore share the plumbing (webJobFor, ParseJob,
 // saveJobEditWithLock, jobFieldsFromParsed's narrower cousin) and nothing
 // else.
 //
-// Both routes are additive paths — no existing shape is touched — so
-// `apiContract` stays 5.
+// Both routes are additive paths — no existing shape is touched — so they did
+// not bump `apiContract` (which is 6 for reasons of its own, see board.go).
 
 // jobListSummaryMax caps a summary line. Iris reads this list to decide "is there
 // already a job about this?", which one line per job answers; a job whose
@@ -45,9 +48,9 @@ const jobListSummaryMax = 120
 
 // webJobListItem is one active job on the wire: the identity iris addresses
 // it by, the state that decides whether it may be edited at all, and one
-// line of what it is about. Nothing else — repo, prereqs, PRs, tokens and
-// the rest are the board's business, and this list is polled by an agent
-// with a context window rather than rendered on a screen.
+// line of what it is about. Nothing else — repo, PRs, tokens and the rest are
+// the board's business, and this list is polled by an agent with a context
+// window rather than rendered on a screen.
 //
 // No omitempty anywhere: an empty summary (a job with an empty body) is a
 // real answer and must still ride, and a client reads all three keys
@@ -84,8 +87,9 @@ type jobDraftReq struct {
 //
 // The state served is jobs.DisplayState, the same string the board renders,
 // rather than the stored `state` column: iris uses it to decide whether a
-// job is editable at all, and "draft" for a ready-but-unstarted job would be
-// a lie in exactly the case that matters.
+// job is editable at all, and the two differ on an ERRED job — stored state
+// "" but displayed (and editable) as draft — which is exactly the case where
+// echoing the column would mislead.
 //
 // A read, so it stays reachable under --mirror.
 func jobListHandler(w http.ResponseWriter, r *http.Request) {
@@ -102,15 +106,11 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	js := jobs.LoadJobs()
-	bySlug := make(map[string]*jobs.Job, len(js))
-	for _, j := range js {
-		bySlug[j.Slug] = j
-	}
 	out := make([]webJobListItem, 0, len(js))
 	for _, j := range js {
 		out = append(out, webJobListItem{
 			Slug:    j.Slug,
-			State:   jobs.DisplayState(j, bySlug),
+			State:   jobs.DisplayState(j),
 			Summary: jobSummary(j.Body),
 		})
 	}
@@ -152,16 +152,15 @@ func jobSummary(body string) string {
 //
 // Two paths, chosen by whether an active job already holds the slug:
 //
-//	CREATE — no such job. Refuses ready:true, any non-empty state:, and an
-//	empty body; then creates the row from the parsed fields (the
-//	CreateDreamJob text→ParseJob→CreateJob shape) plus its prereqs.
+//	CREATE — no such job. Refuses a retired ready:/prereqs: key, any
+//	non-empty state:, and an empty body; then creates the row from the
+//	parsed fields (the CreateDreamJob text→ParseJob→CreateJob shape).
 //
-//	EDIT — the job exists. Refuses anything past draft/queued (deliberately
-//	stricter than editableJob, which lets a done job through), refuses any
-//	change to ready or state relative to the stored row, holds the mtime
-//	lock, and writes only {repo, base, solo, model, body}, so every
-//	kraken-owned field — and the stored prereqs, which are carl's release
-//	gate — survives untouched.
+//	EDIT — the job exists. Refuses anything started (deliberately stricter
+//	than editableJob, which lets a done job through), refuses a retired key
+//	and any state:, holds the mtime lock, and writes only
+//	{repo, base, solo, model, body}, so every kraken-owned field survives
+//	untouched.
 //
 // The route is mirror-gated at registration: it is a write, and a mirror
 // board is read-only, full stop.
@@ -213,6 +212,21 @@ func jobDraftHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "job text does not parse: " + parsed.Err})
 		return
 	}
+	// Retired keys are refused rather than ignored, and the refusal has to be
+	// spelled out HERE because the PARSER deliberately accepts them: every job
+	// file written before the cutover carries `ready:`/`prereqs:`, so erroring
+	// on them there would pin the whole corpus to draft. That tolerance is
+	// right for reading old files and wrong for accepting new text: an author
+	// who sends `ready: true` is asking for a start, would get a 200, and
+	// would report to carl that the job was queued while nothing whatsoever
+	// happened. Loud beats silently-ignored for the same reason the old
+	// ready-change guard was loud.
+	if key := retiredFrontmatterKey(req.Content); key != "" {
+		webJSON(w, http.StatusBadRequest, map[string]string{
+			"error": key + ": is a retired key and is refused on this route — the queued status is gone; a job starts when carl submits it on the board. Resend the text without that line",
+		})
+		return
+	}
 
 	st, ok := graphStore(w)
 	if !ok {
@@ -236,17 +250,6 @@ func jobDraftHandler(w http.ResponseWriter, r *http.Request) {
 // key in the frontmatter names the file's own identity to the parser, and
 // honouring it here would let a draft addressed to one slug land on another.
 func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed *jobs.Job) {
-	// The safety property, stated once and enforced here: iris drafts. A
-	// ready job is one the daemon's queue pass will START, unattended, from
-	// text that arrived over Slack — so `ready: true` is refused rather than
-	// quietly rewritten to false, because a silent rewrite would let iris
-	// believe it queued something and report that to carl.
-	if parsed.Ready {
-		webJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "ready: true is refused on this route — drafts stay ready: false; queueing a job is carl's move on the board",
-		})
-		return
-	}
 	// `state` is kraken-owned: it is how the daemon records that a cell is
 	// working or that a job is done. A job created with one already set would
 	// be lying about a lifecycle that never happened.
@@ -256,9 +259,10 @@ func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed 
 		})
 		return
 	}
-	// startable() does not check for a body — only the board's queue action
-	// does — so an empty one would eventually start a cell with an empty
-	// prompt. The same belt-and-braces CreateDreamJob wears.
+	// A body-less draft is a job nobody can submit: jobs.SubmitJob refuses an
+	// empty spec, so this refusal turns "created, and permanently unstartable"
+	// into "not created, said now". The same belt-and-braces CreateDreamJob
+	// wears.
 	if strings.TrimSpace(parsed.Body) == "" {
 		webJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "job body is empty — a draft with no spec is a job nobody can start",
@@ -271,7 +275,7 @@ func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed 
 	// (the other programmatic creator) omits it for the same reason.
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-		Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model,
+		Solo: parsed.Solo, Model: parsed.Model,
 		Body: parsed.Body,
 	}); err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
@@ -289,28 +293,14 @@ func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed 
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "job " + slug + " WAS created but could not be reloaded: " + err.Error()})
 		return
 	}
-	// The row is already committed by here, so this 500 must not read as "the
-	// request failed". It did not: the job exists, only its prereqs are
-	// missing — and the caller's retry will therefore take the EDIT path
-	// against that half-built row, where prereqs are deliberately never
-	// synced. Saying so is the difference between a caller that fixes the
-	// prereqs by hand (or on the board) and one that retries forever
-	// believing nothing landed.
-	if err := st.ReplacePrereqs(created.ID, storePrereqs(parsed.Prereqs)); err != nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "job " + slug + " WAS created, but writing its prereqs failed: " + err.Error() +
-				" — do not retry as a create; the job exists with no prereqs, and this route never sets prereqs on an edit",
-		})
-		return
-	}
 	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "slug": slug, "mtime": jobEditMTime(created)})
 }
 
 // jobDraftEdit is the job-exists path. Every guard here is about a field
 // iris may not move, or a job it may not touch at all — and past the guards,
-// the write itself is narrower still: five spec fields, no prereqs (see the
-// saveJobEditWithLock call below).
+// the write itself is narrower still: five spec fields and nothing else (see
+// the saveJobEditWithLock call below).
 func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *jobs.Job, mtime int64) {
 	// Started() is exactly {working, blocked, done} — deliberately stricter
 	// than editableJob, which also lets a DONE job through for carl to
@@ -319,21 +309,13 @@ func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *j
 	// Slack message. Iris says so in its ack disposition instead.
 	if j.Started() {
 		webJSON(w, http.StatusConflict, map[string]string{
-			"error": j.Slug + " is " + j.State + " — this route edits draft and queued jobs only; say so in the ack disposition instead",
+			"error": j.Slug + " is " + j.State + " — this route edits drafts only; say so in the ack disposition instead",
 		})
 		return
 	}
-	// ready and state are refused as CHANGES rather than ignored. Ignoring
-	// them is the failure mode that matters: iris would send `ready: true`,
-	// get a 200, and report to carl that it queued the job — while the row
-	// sat in draft forever. So the submitted text must agree with the stored
-	// row, loudly, and moving the flag stays a board action.
-	if parsed.Ready != j.Ready {
-		webJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "ready may not change on this route (stored " + boolWord(j.Ready) + ", submitted " + boolWord(parsed.Ready) + ") — queueing and dequeueing are carl's move on the board; resend the text with the stored value",
-		})
-		return
-	}
+	// `state` is refused rather than ignored. Ignoring it is the failure mode
+	// that matters: the caller gets a 200 and reports a lifecycle change to
+	// carl while the row sat in draft.
 	if parsed.State != "" {
 		webJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "state: " + parsed.State + " is refused on this route — state is kraken's; leave the key out",
@@ -351,7 +333,7 @@ func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *j
 	}
 
 	// The narrow field set is the point of this route. jobFieldsFromParsed
-	// (the raw save's map) writes slug, ready, color, state, outcome, session,
+	// (the raw save's map) writes slug, color, state, outcome, session,
 	// teardown, run and err as well — every one of them kraken-owned or
 	// identity, and every one of them a field an agent-written full replace
 	// would silently reset. Only the five below are the spec's own.
@@ -373,21 +355,8 @@ func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *j
 	// override exists for carl looking at a diff in the editor, and iris is
 	// not looking at anything. PRs are never synced (syncPRs=false) — they
 	// are the daemon's record of what shipped.
-	//
-	// PREREQS are not synced either (syncPrereqs=false), and that is the one
-	// place this route differs from every other editor save rather than
-	// merely being narrower than one. A prereq — especially a GATED prereq —
-	// is the board's human-release gate: it is what parks a ready job until
-	// carl lets it go. An iris edit is a whole-text replace, so a submitted
-	// body that simply omits the `prereqs:` line would clear that gate and
-	// make a queued job auto-startable on the daemon's very next pass. Iris
-	// starting a job is the single outcome this whole route exists to
-	// prevent, and clearing its gate is that outcome by another route. So an
-	// edit changes the spec and leaves the gates exactly as carl left them;
-	// prereqs are still SET on the create path, where there is no stored gate
-	// to erase.
 	newRev, conflict, err := saveJobEditWithLock(st, j, mtime, false,
-		fields, nil, false, nil, false)
+		fields, nil, false)
 	if conflict {
 		webJSON(w, http.StatusConflict, map[string]string{
 			"error": j.Slug + " changed since you read it — re-read it with `kraken job raw " + j.Slug + "` and reapply your edit on top",
@@ -402,13 +371,41 @@ func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *j
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "slug": j.Slug, "mtime": newRev})
 }
 
-// boolWord renders a bool the way the job file spells it, so a refusal about
-// `ready` quotes the value the caller actually typed rather than Go's %v of
-// it (identical today — this exists so the refusal text keeps matching the
-// file format if either ever diverges).
-func boolWord(b bool) string {
-	if b {
-		return "true"
+// retiredFrontmatterKey returns the first retired key (`ready` or `prereqs`)
+// the submitted job text sets at the top level of its frontmatter, or "" when
+// it sets neither.
+//
+// It reads the RAW text rather than the parsed job because the parser's whole
+// job with these two keys is to swallow them silently — that is what keeps the
+// existing corpus of job files parsing clean — so a parsed job carries no
+// trace of either. Scanning is confined to the frontmatter block for the
+// obvious reason: a spec body is free to discuss prereqs in prose, and a
+// refusal triggered by the word appearing in a sentence would be unfixable
+// without deleting the sentence.
+//
+// jobs.ParseJob has already returned Err == "" by the time this is called, so
+// the frontmatter here is known well-formed: opening fence on line 0, closing
+// fence somewhere after it, one `key: value` per unindented line.
+func retiredFrontmatterKey(content string) string {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return ""
 	}
-	return "false"
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "---" {
+			return "" // end of frontmatter
+		}
+		if line == "" || line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		key, _, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "ready", "prereqs":
+			return strings.TrimSpace(key)
+		}
+	}
+	return ""
 }

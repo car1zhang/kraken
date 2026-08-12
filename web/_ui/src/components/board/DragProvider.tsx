@@ -44,6 +44,14 @@ interface DragContextValue {
   activeKey: string | null;
   orderJobs: (column: Column, jobs: WebJob[]) => WebJob[];
   isTarget: (to: DropColumn) => boolean;
+  /**
+   * jobKeys of the cards whose submit POSTs are in flight. Read by the card
+   * itself (useCardSubmitting) rather than threaded down through BoardView,
+   * for the reason the drop hooks are: the card is ALSO rendered from the drag
+   * overlay and from tests, and a prop would have to be remembered at each of
+   * those.
+   */
+  submittingKeys: ReadonlySet<string>;
 }
 
 /**
@@ -55,9 +63,18 @@ const IDENTITY: DragContextValue = {
   activeKey: null,
   orderJobs: (_column, jobs) => jobs,
   isTarget: () => false,
+  submittingKeys: new Set<string>(),
 };
 
-const DragCtx = createContext<DragContextValue>(IDENTITY);
+/**
+ * Exported so a test can render a card against a STATED drag state — an
+ * in-flight submit in particular, which is otherwise only reachable by
+ * completing a real dnd-kit drop, and dnd-kit's pointer path needs element
+ * rects jsdom does not have. `useDragReorder.test.tsx` owns the state machine
+ * that fills this in; what a consumer needs pinned is what it does with a
+ * given value, which is exactly what a provided one asks.
+ */
+export const DragCtx = createContext<DragContextValue>(IDENTITY);
 
 export interface DragProviderProps {
   board: BoardModel;
@@ -99,8 +116,9 @@ export function DragProvider({
       activeKey: drag.activeKey,
       orderJobs: drag.orderJobs,
       isTarget: drag.isTarget,
+      submittingKeys: drag.submittingKeys,
     }),
-    [drag.activeKey, drag.orderJobs, drag.isTarget],
+    [drag.activeKey, drag.orderJobs, drag.isTarget, drag.submittingKeys],
   );
 
   return (
@@ -137,12 +155,25 @@ export function useDragState(): DragContextValue {
 }
 
 /**
- * A column's cards in RENDER order — server order, or the optimistic order a
- * just-dropped reorder is holding. Call this before rendering the cards and
- * before anything that reads their order.
+ * A column's cards in RENDER order — server order, the optimistic order a
+ * just-dropped reorder is holding, and the in-flight submit relocated from
+ * DRAFT into WORKING. Call this before rendering the cards and before anything
+ * that reads their order.
  */
 export function useColumnJobs(column: Column, jobs: WebJob[]): WebJob[] {
   return useContext(DragCtx).orderJobs(column, jobs);
+}
+
+/**
+ * True while THIS card's submit POST is in flight — the seconds between the
+ * draft→working drop and the server answering with a started cell or a
+ * refusal. The card draws its in-flight pose from it.
+ *
+ * False outside a DragProvider, which is the honest answer there: a board with
+ * no drag layer has no submit to be waiting on.
+ */
+export function useCardSubmitting(key: string): boolean {
+  return useContext(DragCtx).submittingKeys.has(key);
 }
 
 export interface ColumnDrop {
@@ -218,10 +249,22 @@ export interface SortableCard {
  * One draggable card. `key` is jobKey(job), never the bare slug — an archived
  * entry and an active job that reused its freed slug would otherwise share a
  * drag id (see lib/jobKey.ts).
+ *
+ * A card whose submit is IN FLIGHT is not draggable at all, and that is a
+ * correctness rule rather than a courtesy. For those seconds the card is drawn
+ * in WORKING while every source of truth still files the job as a draft, so a
+ * drag started on it would resolve `from` as "draft" out of `byColumn` and act
+ * on the pair the POINTER is not over: dropping it inside WORKING — where it
+ * visibly is — would post a draft→working submit a second time, and a
+ * same-column reorder of WORKING would post an order containing a slug the
+ * server does not have in that column. Refusing the gesture is what makes both
+ * unreachable, and it needs no second rule anywhere: dnd-kit never starts the
+ * drag, so onDragStart never runs.
  */
 export function useSortableCard(key: string): SortableCard {
+  const submitting = useCardSubmitting(key);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: key });
+    useSortable({ id: key, disabled: submitting });
 
   // The vanilla dragstart guard (app.js:957), reimplemented one layer up.
   //
@@ -232,8 +275,15 @@ export function useSortableCard(key: string): SortableCard {
   // an input inside a card drags the CARD (browsers resolve the gesture to
   // the draggable ancestor), so selecting a word of typed feedback posts a
   // real column move.
+  //
+  // The in-flight card drops its activators outright rather than relying on
+  // `disabled` alone. dnd-kit does honour the flag, but which of the two — the
+  // returned listeners or the sensor's own check — is what stops the gesture is
+  // an internal of the version installed; withholding the listeners is this
+  // module's own statement, and it is the one a test can read.
   const guarded = useMemo(() => {
     const out: Record<string, (event: never) => void> = {};
+    if (submitting) return out;
     for (const [name, fn] of Object.entries(listeners ?? {})) {
       out[name] = (event: never) => {
         const e = event as unknown as { target?: EventTarget | null };
@@ -242,7 +292,7 @@ export function useSortableCard(key: string): SortableCard {
       };
     }
     return out;
-  }, [listeners]);
+  }, [listeners, submitting]);
 
   return {
     setNodeRef,

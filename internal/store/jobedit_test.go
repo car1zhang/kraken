@@ -2,14 +2,14 @@ package store
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 )
 
 // jobedit_test.go — SaveJobEdit (L10): one atomic transaction covering the
-// field update, prereqs replace, and PR sync a single editor save needs.
+// field update and PR sync a single editor save needs. (It used to cover a
+// prereqs replace too; prereqs went with the queued status.)
 
-func TestSaveJobEditAppliesAllThreeAtomically(t *testing.T) {
+func TestSaveJobEditAppliesBothAtomically(t *testing.T) {
 	s := openTest(t)
 	id, err := s.CreateJob(&Job{Slug: "edit-all"})
 	if err != nil {
@@ -18,7 +18,6 @@ func TestSaveJobEditAppliesAllThreeAtomically(t *testing.T) {
 
 	newRev, err := s.SaveJobEdit(id, 1,
 		map[string]any{"state": "working"},
-		[]Prereq{{Slug: "dep-a", Gated: true}}, true,
 		[]PR{{URL: "https://github.com/x/y/pull/1", State: "open"}}, true,
 	)
 	if err != nil {
@@ -38,13 +37,6 @@ func TestSaveJobEditAppliesAllThreeAtomically(t *testing.T) {
 	if got.State != "working" || got.Rev != newRev {
 		t.Fatalf("job fields not applied, or returned newRev disagrees with the row: got=%+v newRev=%d", got, newRev)
 	}
-	prereqs, err := s.ListPrereqs(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(prereqs, []Prereq{{Slug: "dep-a", Gated: true}}) {
-		t.Fatalf("prereqs not applied: %+v", prereqs)
-	}
 	prs, err := s.ListPRs(id)
 	if err != nil {
 		t.Fatal(err)
@@ -56,15 +48,12 @@ func TestSaveJobEditAppliesAllThreeAtomically(t *testing.T) {
 
 // TestSaveJobEditStaleRevRollsBackEverything covers the whole point of
 // L10's single transaction: a stale rev must refuse the field update AND
-// leave prereqs/PRs completely untouched — not partially applied.
+// leave PRs completely untouched — not partially applied.
 func TestSaveJobEditStaleRevRollsBackEverything(t *testing.T) {
 	s := openTest(t)
 	id, err := s.CreateJob(&Job{Slug: "edit-stale"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
-	}
-	if err := s.ReplacePrereqs(id, []Prereq{{Slug: "orig-dep"}}); err != nil {
-		t.Fatal(err)
 	}
 	if err := s.UpsertPR(id, "https://github.com/x/y/pull/9", "open"); err != nil {
 		t.Fatal(err)
@@ -72,20 +61,12 @@ func TestSaveJobEditStaleRevRollsBackEverything(t *testing.T) {
 
 	_, err = s.SaveJobEdit(id, 1, // rev is now 2 (from the UpsertPR bump) — 1 is stale
 		map[string]any{"state": "working"},
-		[]Prereq{{Slug: "new-dep"}}, true,
 		[]PR{{URL: "https://github.com/x/y/pull/99", State: "open"}}, true,
 	)
 	if !errors.Is(err, ErrStaleRev) {
 		t.Fatalf("err = %v, want ErrStaleRev", err)
 	}
 
-	prereqs, err := s.ListPrereqs(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(prereqs, []Prereq{{Slug: "orig-dep"}}) {
-		t.Fatalf("prereqs changed despite the stale-rev refusal: %+v", prereqs)
-	}
 	prs, err := s.ListPRs(id)
 	if err != nil {
 		t.Fatal(err)
@@ -95,18 +76,15 @@ func TestSaveJobEditStaleRevRollsBackEverything(t *testing.T) {
 	}
 }
 
-// TestSaveJobEditSkipsPrereqsAndPRsWhenToldTo covers the unparseable-save
-// contract (api/jobedit.go's webJobSave): syncPrereqs=false/syncPRs=false
-// must leave both completely untouched, not replace them with a same-value
-// no-op.
-func TestSaveJobEditSkipsPrereqsAndPRsWhenToldTo(t *testing.T) {
+// TestSaveJobEditSkipsPRsWhenToldTo covers the unparseable-save
+// contract (api/jobedit.go's webJobSave): syncPRs=false
+// must leave the PR rows completely untouched, not replace them with a
+// same-value no-op.
+func TestSaveJobEditSkipsPRsWhenToldTo(t *testing.T) {
 	s := openTest(t)
 	id, err := s.CreateJob(&Job{Slug: "edit-skip"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
-	}
-	if err := s.ReplacePrereqs(id, []Prereq{{Slug: "keep-me"}}); err != nil {
-		t.Fatal(err)
 	}
 	if err := s.UpsertPR(id, "https://github.com/x/y/pull/5", "open"); err != nil {
 		t.Fatal(err)
@@ -119,7 +97,6 @@ func TestSaveJobEditSkipsPrereqsAndPRsWhenToldTo(t *testing.T) {
 	newRev, err := s.SaveJobEdit(id, before.Rev,
 		map[string]any{"body": "garbage save"},
 		nil, false,
-		nil, false,
 	)
 	if err != nil {
 		t.Fatalf("SaveJobEdit: %v", err)
@@ -128,13 +105,6 @@ func TestSaveJobEditSkipsPrereqsAndPRsWhenToldTo(t *testing.T) {
 		t.Fatalf("newRev = %d, want %d", newRev, before.Rev+1)
 	}
 
-	prereqs, err := s.ListPrereqs(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(prereqs, []Prereq{{Slug: "keep-me"}}) {
-		t.Fatalf("prereqs touched despite syncPrereqs=false: %+v", prereqs)
-	}
 	prs, err := s.ListPRs(id)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +135,7 @@ func TestSaveJobEditPRSyncRemovesUnlisted(t *testing.T) {
 	}
 
 	// new set: pull/2 (unchanged) + pull/3 (new); pull/1 must be removed.
-	_, err = s.SaveJobEdit(id, before.Rev, map[string]any{"body": "x"}, nil, false,
+	_, err = s.SaveJobEdit(id, before.Rev, map[string]any{"body": "x"},
 		[]PR{{URL: "https://github.com/x/y/pull/2", State: "open"}, {URL: "https://github.com/x/y/pull/3", State: "open"}}, true)
 	if err != nil {
 		t.Fatalf("SaveJobEdit: %v", err)

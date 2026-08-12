@@ -20,8 +20,12 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/account/switch", accountSwitchHandler)
 	mux.HandleFunc("/api/account/mode", accountModeHandler)
 	mux.HandleFunc("/api/draft", draftHandler)
-	mux.HandleFunc("/api/queue", webAction("queue", webQueue))
-	mux.HandleFunc("/api/dequeue", webAction("dequeue", webDequeue))
+	// The submit: /api/queue is the URL a shipped iOS build already posts for
+	// its draft→queued drag, so the path is kept (Q4) while the action behind
+	// it is now "start this job's cell, now, synchronously". /api/dequeue and
+	// /api/start are gone with the queued column they served — nothing can
+	// reach a state that either one addressed.
+	mux.HandleFunc("/api/queue", webAction("submit", webSubmit))
 	mux.HandleFunc("/api/done", webAction("done", webDone))
 	mux.HandleFunc("/api/question", webAction("question", webAnswerQuestion))
 	mux.HandleFunc("/api/doc-question", webAction("doc-question", webAnswerDocQuestion))
@@ -73,7 +77,6 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/unarchive", webAction("unarchive", webUnarchive))
 	mux.HandleFunc("/api/delete", webAction("delete", webDelete))
 	mux.HandleFunc("/api/reactivate", webAction("reactivate", webReactivate))
-	mux.HandleFunc("/api/start", webAction("start", webStart))
 	mux.HandleFunc("/api/stop", webAction("stop", webStop))
 	mux.HandleFunc("/api/reorder", webReorderHandler)
 	mux.HandleFunc("/api/job/raw", webJobRaw)

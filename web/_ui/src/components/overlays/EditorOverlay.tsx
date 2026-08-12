@@ -8,7 +8,6 @@ import {
   archiveJob,
   createJob,
   deleteFeedback,
-  dequeueJob,
   editFeedback,
   fetchJobForm,
   queueJob,
@@ -19,7 +18,6 @@ import {
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import {
   type JobForm,
-  type JobFormPrereq,
   type WebArtifact,
   type WebJob,
 } from "../../api/types.ts";
@@ -46,7 +44,7 @@ import {
 // The job editor (app.js:3124 openEditor). THREE modes:
 //
 //   slug == null            the new-job row: a slug field and "create"
-//   slug, editable          the form — repo/base/model/solo/prereqs/spec
+//   slug, editable          the form — repo/base/model/solo/spec
 //   slug, !editable         the same form, every field locked: a cell is in
 //                           flight and the file belongs to the crew
 //
@@ -55,21 +53,18 @@ import {
 // optimistic lock. That is not an oversight — the editor is the only writer of
 // the file while it is open, and a conflict dialog mid-typing is worse than
 // last-writer-wins on a single-user board.
-
-/**
- * app.js:2952 — one prereq row.
- *
- * `id` is a client-side row identity, never sent: `job` cannot be the React key
- * because "+ add" appends an EMPTY row and two empty rows would collide, which
- * breaks removal (React would reconcile the wrong row away). It is a counter
- * rather than an index so removing row 1 does not renumber row 2's identity out
- * from under its input.
- */
-interface PrereqRow {
-  id: number;
-  job: string;
-  gated: boolean;
-}
+//
+// `ready` and `prereqs` are gone from the form in both directions. Prereqs
+// were the queue's gating mechanism and the queue is gone; `ready` was the
+// flag the old queue button set, and the start button below starts the cell
+// outright instead of marking anything.
+//
+// Nothing on the server would catch them coming back: the save route decodes
+// with a plain json.Decode and no DisallowUnknownFields, so a re-added field
+// is silently dropped and answered 200 — it would look saved and read back
+// empty. (The by-name refusal is on `/api/job/draft`, a different route.) The
+// payload built below is the whole guard, which is why it is assembled
+// key-by-key rather than spread from state.
 
 export interface EditorOverlayProps {
   open: boolean;
@@ -194,22 +189,16 @@ function EditorBody({
   const [base, setBase] = useState("");
   const [model, setModel] = useState("");
   const [solo, setSolo] = useState(false);
-  const [prereqs, setPrereqs] = useState<PrereqRow[]>([]);
   const [spec, setSpec] = useState("");
   const [chips, setChips] = useState<AttChip[]>([]);
   const [pending, setPending] = useState(0);
   const [busy, setBusy] = useState(false);
   // true when the freshest save/load says the current spec won't run (loadForm's
-  // d.err, or a save's d.warn) — one of the queue button's arming gates
+  // d.err, or a save's d.warn) — one of the submit button's arming gates
   const [syncWarn, setSyncWarn] = useState(false);
 
   const specRef = useRef<HTMLTextAreaElement | null>(null);
   const attInput = useRef<HTMLInputElement | null>(null);
-  const prereqsRef = useRef<HTMLDivElement | null>(null);
-  const nextPrereqID = useRef(0);
-  // set by "+ add" so the row that appears takes focus — an added row is there
-  // to be typed into, and an empty one is dropped from the payload anyway
-  const focusNewPrereq = useRef(false);
   /**
    * The ARCHIVED branch (app.js:3815). An archived job's key is jobKey's
    * synthetic `archive:<slug>` — there is no such job file — so there is no
@@ -241,13 +230,6 @@ function EditorBody({
       setBase(d.base || "");
       setModel(d.model || "");
       setSolo(!!d.solo);
-      setPrereqs(
-        (d.prereqs || []).map((p) => ({
-          id: nextPrereqID.current++,
-          job: p.job,
-          gated: !!p.gated,
-        })),
-      );
       setSpec(d.spec || "");
       setSyncWarn(!!d.err);
       if (d.err) {
@@ -277,13 +259,7 @@ function EditorBody({
       repo: repo.trim(),
       base: base.trim(),
       model: model.trim(),
-      // the ready row is gone from the form; it round-trips as loaded and the
-      // queue button is what actually sets it
-      ready: !!form.ready,
       solo,
-      prereqs: prereqs
-        .filter((p) => p.job.trim())
-        .map<JobFormPrereq>((p) => ({ job: p.job.trim(), gated: p.gated })),
       spec,
       mtime: 0, // no optimistic lock — see the header comment
     };
@@ -296,7 +272,7 @@ function EditorBody({
       setNoteTone("");
       setNote("sync failed: " + (e instanceof Error ? e.message : e));
     }
-  }, [base, form, model, prereqs, readOnly, repo, slug, solo, spec]);
+  }, [base, form, model, readOnly, repo, slug, solo, spec]);
 
   const autosave = useDebouncedCallback(() => void save(), 600);
   const { call: scheduleSave, cancel: cancelSave } = autosave;
@@ -316,16 +292,7 @@ function EditorBody({
     setNoteTone("dim");
     setNote("syncing…");
     scheduleSave();
-  }, [repo, base, model, solo, prereqs, spec, slug, readOnly, form, scheduleSave]);
-
-  useEffect(() => {
-    if (!focusNewPrereq.current) return;
-    focusNewPrereq.current = false;
-    const rows = prereqsRef.current?.querySelectorAll<HTMLInputElement>(
-      '.prereq-row input[type="text"]',
-    );
-    rows?.[rows.length - 1]?.focus();
-  }, [prereqs]);
+  }, [repo, base, model, solo, spec, slug, readOnly, form, scheduleSave]);
 
   // ---- checkStaleModals (app.js:567) --------------------------------------
   // Same rule as steer's, with one wrinkle: capture is LAZY. A freshly-created
@@ -401,10 +368,15 @@ function EditorBody({
   // steer outranks the editor: if both were somehow open, a paste lands in one
   usePasteLayer(!readOnly, ESC_PRIORITY.editor, onPaste);
 
-  // ---- the queue / dequeue affordance (app.js:3031 updateEditorQueue) -----
+  // ---- the submit affordance (app.js:3031 updateEditorQueue) --------------
   // Derived, not snapshotted. The vanilla one-shot computation read a board
   // that could be missing a job created moments earlier, which forced a
-  // close/reopen before it could be queued.
+  // close/reopen before it could be submitted.
+  //
+  // ONE button now, not two: the queued state it used to toggle between is
+  // gone, and with it the ✕ cancel that returned a booking to draft. Submit
+  // starts the cell, so there is nothing to cancel — only a request that has
+  // either been answered or not.
   const formVisible = !isNew && !!form;
   // missing from the board means just-created — treat that as a fresh draft
   const state = job ? job.state : "draft";
@@ -412,10 +384,8 @@ function EditorBody({
   // a board-level err (an unhealthy cell), distinct from syncWarn's form-level
   // d.err / d.warn
   const boardErr = job ? !!job.err : false;
-  const queuedMode = formVisible && !readOnly && state === "queued" && !live;
-  const draftMode =
-    formVisible && !readOnly && !queuedMode && state === "draft" && !live;
-  // a draft's queue button is always PRESENT — merely disabled until the spec
+  const draftMode = formVisible && !readOnly && state === "draft" && !live;
+  // a draft's submit button is always PRESENT — merely disabled until the spec
   // is non-empty and clean, so the affordance is discoverable from the moment
   // the modal opens
   const armed = draftMode && spec.trim() !== "" && !syncWarn && !boardErr;
@@ -428,17 +398,17 @@ function EditorBody({
     ? "read-only · unarchive to edit"
     : readOnly
       ? "read-only — cell in flight"
-      : queuedMode
-        ? "queued — cancel returns it to draft"
-        : draftMode
-          ? armed
-            ? "synced ✓ — queueable"
+      : draftMode
+        ? busy
+          ? "starting cell…"
+          : armed
+            ? "synced ✓ — ready to start"
             : spec.trim() === ""
-              ? "write a spec to queue"
+              ? "write a spec to start"
               : ""
-          : "";
+        : "";
 
-  const doQueue = useCallback(async () => {
+  const doSubmit = useCallback(async () => {
     if (!slug) return;
     if (pending > 0) {
       setNoteTone("");
@@ -446,39 +416,29 @@ function EditorBody({
       return;
     }
     setBusy(true);
-    // land any edit still sitting in the debounce window BEFORE queueing —
+    // land any edit still sitting in the debounce window BEFORE submitting —
     // cancel first so the pending timer cannot also fire and post twice
     cancelSave();
     await save();
+    // This POST now cuts the worktree and spawns the cell before it answers,
+    // so it holds for seconds. `busy` is what says so: it disables the button
+    // (a second click would be a second cell) and swaps the hint to "starting
+    // cell…". The note is written first for the same reason — the corner would
+    // otherwise still read "synced ✓" throughout the wait.
+    setNoteTone("dim");
+    setNote("starting cell…");
     const res = await mutate(() => queueJob(slug));
     setBusy(false);
     if (res) onClose();
     else {
+      // A refusal is a 409 whose body IS the reason, and mutate has already
+      // parked that sentence in the status corner. The job stayed a draft, so
+      // the modal stays open on it rather than closing on a move that did not
+      // happen.
       setNoteTone("");
-      setNote("queue failed — see status bar");
+      setNote("start refused — see status bar");
     }
   }, [cancelSave, mutate, onClose, pending, save, slug]);
-
-  const doDequeue = useCallback(async () => {
-    if (!slug) return;
-    setBusy(true);
-    // rebase the staleness baseline BEFORE posting: mutate() awaits the board
-    // refresh, so the stale check runs against the new queued→draft state while
-    // we are still awaiting — a stale "queued" baseline there would read our
-    // own action as someone else's change and close the editor
-    const prevState = openState.current;
-    const prevCaptured = captured.current;
-    openState.current = "draft";
-    captured.current = true;
-    const res = await mutate(() => dequeueJob(slug));
-    setBusy(false);
-    if (!res) {
-      openState.current = prevState;
-      captured.current = prevCaptured;
-      setNoteTone("");
-      setNote("cancel failed — see status bar");
-    }
-  }, [mutate, slug]);
 
   const doArchive = useCallback(async () => {
     if (!slug) return;
@@ -609,24 +569,17 @@ function EditorBody({
           archive
         </button>
         <button
-          className="btn ghost"
-          id="editor-dequeue"
-          hidden={!queuedMode}
-          disabled={busy}
-          title="cancel — return this queued job to draft (spec is kept)"
-          onClick={() => void doDequeue()}
-        >
-          ✕ cancel queue
-        </button>
-        <button
           className="btn"
-          id="editor-queue"
+          id="editor-submit"
           hidden={!draftMode}
           disabled={!armed || busy}
-          title="mark this job ready and queue it — same move as dragging the card to QUEUED"
-          onClick={() => void doQueue()}
+          // "start", not "submit", in every user-visible string on this
+          // control: the id and the handler keep the code name, but what carl
+          // reads has to be the one word the board uses for this action.
+          title="start this job's cell now — cuts the worktree and spawns the cell (takes a few seconds); same move as dragging the card to WORKING"
+          onClick={() => void doSubmit()}
         >
-          queue ⌘⏎
+          {busy ? "starting…" : "start ⌘⏎"}
         </button>
       </div>
       {/* the drop target is the whole PANEL — see panelDropHandlers */}
@@ -686,7 +639,7 @@ function EditorBody({
         {/* Questions ABOVE the form, not below it: on a done job they are what
             you clicked in for, and the spec textarea would push them past the
             fold. Rendered for ANY job that has them, not just done ones — this
-            modal is also what a click on a draft/queued/dead card opens. */}
+            modal is also what a click on a draft or dead card opens. */}
         <div className="editor-docq" id="editor-docq" hidden={!hasDocq}>
           {job && hasDocq ? (
             <>
@@ -723,7 +676,7 @@ function EditorBody({
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              if (armed && !busy) void doQueue();
+              if (armed && !busy) void doSubmit();
             }
           }}
         >
@@ -803,71 +756,11 @@ function EditorBody({
               </label>
             </span>
           </div>
-          <div className="f-block">
-            <span className="f-label">
-              prereqs{" "}
-              <button
-                className="mini-add"
-                id="f-add-prereq"
-                disabled={readOnly}
-                onClick={() => {
-                  setPrereqs((prev) => [
-                    ...prev,
-                    { id: nextPrereqID.current++, job: "", gated: false },
-                  ]);
-                  focusNewPrereq.current = true;
-                }}
-              >
-                + add
-              </button>
-            </span>
-            <div id="f-prereqs" ref={prereqsRef}>
-              {prereqs.map((p, i) => (
-                <div className="prereq-row" key={p.id}>
-                  <input
-                    type="text"
-                    list="job-list"
-                    placeholder="job-slug"
-                    spellCheck={false}
-                    disabled={readOnly}
-                    value={p.job}
-                    onChange={(e) =>
-                      setPrereqs((prev) =>
-                        prev.map((row, k) =>
-                          k === i ? { ...row, job: e.target.value } : row,
-                        ),
-                      )
-                    }
-                  />
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      disabled={readOnly}
-                      checked={p.gated}
-                      onChange={(e) =>
-                        setPrereqs((prev) =>
-                          prev.map((row, k) =>
-                            k === i ? { ...row, gated: e.target.checked } : row,
-                          ),
-                        )
-                      }
-                    />{" "}
-                    gated ⚑
-                  </label>
-                  <button
-                    className="rm"
-                    title="remove"
-                    disabled={readOnly}
-                    onClick={() =>
-                      setPrereqs((prev) => prev.filter((_, k) => k !== i))
-                    }
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
+          {/* The prereqs block stood here. It was the QUEUE's gating
+              mechanism — "hold this job until those jobs are done" only means
+              anything while something else decides when a job starts. Carl
+              decides now, by submitting, so a prereq had nothing left to gate
+              and the field is off the wire in both directions. */}
 
           <CmdComposer
             id="editor-text"
@@ -879,7 +772,7 @@ function EditorBody({
             spellCheck={false}
             textareaRef={specRef}
             onSubmit={() => {
-              if (armed && !busy) void doQueue();
+              if (armed && !busy) void doSubmit();
             }}
             wrapper={(composer) => (
               <label className="f-block grow" htmlFor="editor-text">
@@ -938,11 +831,10 @@ function EditorBody({
           {note}
         </div>
       </div>
-      <datalist id="job-list">
-        {(form?.slugs || []).map((x) => (
-          <option value={x} key={x} />
-        ))}
-      </datalist>
+      {/* `job-list` — the other-job-slugs datalist — went with the prereq
+          input above, which was its only `list=` consumer. `JobForm.slugs`
+          stays on the wire type: whether the server keeps sending it is the Go
+          slice's call, and an unread key costs nothing here. */}
       <datalist id="model-list">
         <option value="claude-fable-5" />
         <option value="claude-opus-5" />

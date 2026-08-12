@@ -25,7 +25,7 @@ import (
 // reach their validation error.
 func writeTestJob(t *testing.T, slug, extraFrontmatter string) {
 	t.Helper()
-	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\nready: true\n" +
+	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\n" +
 		extraFrontmatter + "---\n\n# Spec\n"
 	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix), []byte(src), 0o644); err != nil {
 		t.Fatal(err)

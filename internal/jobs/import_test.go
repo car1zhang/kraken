@@ -383,8 +383,8 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 	if rich.Repo != "monolith" || rich.Base != "origin/develop" || rich.Teardown != "kill" {
 		t.Fatalf("rich repo/base/teardown: %+v", rich)
 	}
-	if !rich.Solo || !rich.Ready || rich.Run != 2 {
-		t.Fatalf("rich solo/ready/run: %+v", rich)
+	if !rich.Solo || rich.Run != 2 {
+		t.Fatalf("rich solo/run: %+v", rich)
 	}
 
 	// Body is stored verbatim — including the "## Mid-run log" section
@@ -400,13 +400,11 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 		t.Fatalf("rich body lost its spec text: %q", rich.Body)
 	}
 
-	prereqs, err := st.ListPrereqs(rich.ID)
-	if err != nil {
-		t.Fatalf("ListPrereqs: %v", err)
-	}
-	if len(prereqs) != 1 || prereqs[0].Slug != "other-job" || !prereqs[0].Gated {
-		t.Fatalf("rich prereqs: %+v", prereqs)
-	}
+	// richJobFixture still carries ready: and a prereqs: block on purpose —
+	// that is what the files this importer reads actually look like. Both are
+	// retired: there is no column or child table to check them against any
+	// more, and the only obligation left is the one the clean import above
+	// already proves, that neither key errors the parse or blocks the row.
 
 	prs, err := st.ListPRs(rich.ID)
 	if err != nil {
@@ -442,7 +440,7 @@ func TestImportAllFieldRoundTrip(t *testing.T) {
 	// minimalJobFixture carries a legacy type: info line (Q14: the key is
 	// now consumed-and-discarded, like auto-approve/success) — this is the
 	// designated legacy-discard coverage; the row must still import clean.
-	if minimal.Ready {
+	if minimal.State != "" || minimal.Body == "" {
 		t.Fatalf("minimal round trip: %+v", minimal)
 	}
 
@@ -1101,8 +1099,8 @@ func TestImportAllLegacyKeysImportCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if !legacy.Ready {
-		t.Fatalf("legacy job round trip (type: explore, auto-approve/success all discarded): %+v", legacy)
+	if !strings.Contains(legacy.Body, "legacy job body") {
+		t.Fatalf("legacy job round trip (type: explore, ready/auto-approve/success all discarded): %+v", legacy)
 	}
 }
 
@@ -1134,8 +1132,8 @@ func TestImportAllDuplicateActiveSlugFirstWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if !dup.Ready {
-		t.Fatalf("expected the first file (dup-a, ready: true) to win, got %+v", dup)
+	if !strings.Contains(dup.Body, "dup A body") {
+		t.Fatalf("expected the first file (dup-a) to win, got %+v", dup)
 	}
 }
 

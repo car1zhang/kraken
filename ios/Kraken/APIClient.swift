@@ -41,13 +41,21 @@ actor APIClient {
     // changes only (additive fields don't need a bump). See ios/API.md.
     // v5: skip_doc removed from the job form shapes, doc_questions_err
     // removed from /api/board's job objects.
-    static let expectedContract = 5
+    // v6: ready + prereqs removed from the job form shapes, start_error
+    // removed from /api/board's job objects, the queued state retired.
+    static let expectedContract = 6
 
     private let session: URLSession
     // Multi-MB image uploads over cellular can easily take longer than the
     // snappy 5s resource cap every other call uses — a dedicated session
     // with a generous resource timeout, used only by uploadImage.
     private let uploadSession: URLSession
+    // POST /api/queue is the SUBMIT, and since the queued state was retired
+    // it starts the cell inline — a git worktree, a tmux session and a claude
+    // spawn all inside the request. That is seconds, not milliseconds, so it
+    // cannot ride the 5s cap: a timeout there reports failure for a cell that
+    // is in fact coming up, which is the one wrong answer available here.
+    private let submitSession: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -60,6 +68,11 @@ actor APIClient {
         let uploadConfig = URLSessionConfiguration.ephemeral
         uploadConfig.timeoutIntervalForResource = 60
         uploadSession = URLSession(configuration: uploadConfig)
+
+        let submitConfig = URLSessionConfiguration.ephemeral
+        submitConfig.timeoutIntervalForRequest = 60
+        submitConfig.timeoutIntervalForResource = 60
+        submitSession = URLSession(configuration: submitConfig)
     }
 
     // MARK: - low-level plumbing
@@ -173,13 +186,14 @@ actor APIClient {
         }
     }
 
-    private func post<B: Encodable, T: Decodable>(baseURL: String, path: String, body: B) async throws -> T {
+    private func post<B: Encodable, T: Decodable>(baseURL: String, path: String, body: B,
+                                                  session: URLSession? = nil) async throws -> T {
         let url = try buildURL(baseURL: baseURL, path: path)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        let data = try await perform(request)
+        let data = try await perform(request, session: session)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -193,14 +207,16 @@ actor APIClient {
         try await get(baseURL: baseURL, path: "/api/board")
     }
 
+    /// Submits a draft: the server starts its cell inline and answers only
+    /// once that has happened (or 409s with why it could not). The URL kept
+    /// its name through the queued state's retirement; the meaning did not —
+    /// there is nothing to wait in any more, so this is the start.
+    ///
+    /// Runs on `submitSession` rather than the shared 5s one — see its
+    /// declaration for why.
     func queueJob(baseURL: String, slug: String) async throws {
-        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/queue", body: SlugRequest(slug: slug))
-    }
-
-    /// Cancels a queued-but-unstarted job back to draft. Server 409s if the
-    /// job isn't actually queued or already has a cell coming up.
-    func dequeueJob(baseURL: String, slug: String) async throws {
-        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/dequeue", body: SlugRequest(slug: slug))
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/queue",
+                                           body: SlugRequest(slug: slug), session: submitSession)
     }
 
     func markDone(baseURL: String, slug: String) async throws {
@@ -304,17 +320,12 @@ actor APIClient {
 
     /// Persists a column's full top-to-bottom slug order after a board drag
     /// reorder (see BoardView's within-column drag). `column` is a
-    /// BoardColumn rawValue ("draft", "queued", ...).
+    /// BoardColumn rawValue ("draft", "working", ...).
     func reorderJob(baseURL: String, column: String, slugs: [String]) async throws {
         let _: OkResponse = try await post(
             baseURL: baseURL, path: "/api/reorder",
             body: ReorderRequest(column: column, slugs: slugs)
         )
-    }
-
-    /// Boots a queued job's cell now, ahead of the daemon's own scheduling.
-    func startJob(baseURL: String, slug: String) async throws {
-        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/start", body: SlugRequest(slug: slug))
     }
 
     /// Interrupts a working cell, moving the job to blocked.

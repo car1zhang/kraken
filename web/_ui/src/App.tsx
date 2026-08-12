@@ -31,7 +31,6 @@ import {
   answerQuestion,
   deleteFeedback,
   deleteJob,
-  dequeueJob,
   editFeedback,
   openTmux,
   retryJob,
@@ -177,7 +176,6 @@ export function App() {
       onOpenThread: (slug, tid) => setThread({ slug, tid }),
       onAnswerQuestion: (slug, i) => void board.mutate(() => answerQuestion(slug, i)),
       onRetry: (slug) => void board.mutate(() => retryJob(slug)),
-      onDequeue: (slug) => void board.mutate(() => dequeueJob(slug)),
       onOpenTmux: (slug) => void board.mutate(() => openTmux({ slug })),
       onSaveFeedback: (slug, id, note) =>
         board.mutate(() => editFeedback(slug, id, note)),
@@ -226,8 +224,8 @@ export function App() {
             <JobCard
               job={job}
               // columnFor, not `job.state as Column` — and the health rule with
-              // it. `col` drives JobCard's `editable`, its queued-✕ and its
-              // done-reactivate branches, so a ghost built from the raw state
+              // it. `col` drives JobCard's `editable` and its done-reactivate
+              // branches, so a ghost built from the raw state
               // would render a DIFFERENT card than the one it is ghosting for
               // exactly the job that motivated this whole review round: a
               // health-flagged `working` cell that bucketJobs puts in BLOCKED.

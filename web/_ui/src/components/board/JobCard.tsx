@@ -14,7 +14,7 @@ import { PRChips } from "./chips/PRChips.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
 import { WakeupChip } from "./chips/WakeupChip.tsx";
 import type { BoardActions } from "./BoardView.tsx";
-import { useSortableCard } from "./DragProvider.tsx";
+import { useCardSubmitting, useSortableCard } from "./DragProvider.tsx";
 
 /**
  * One status line with the query's matched substrings wrapped in `<mark>`.
@@ -78,12 +78,12 @@ export interface JobCardProps {
  * outright at the post-gate rounds (first the glyphs, then the words): a live
  * card's column, its pulsing chips and its zeus pill already say live-ness,
  * so the token was the one redundant statement. `draft` is absent for the
- * same reason it always was (a draft is the absence of a state). What remains
- * is `✓ done` (an affirmative, per the kit's own `✓ DONE`) and `◌ queued`
- * (the slot mark) — the two SETTLED facts a column position understates.
+ * same reason it always was (a draft is the absence of a state). `◌ queued`
+ * went with the queued column itself. What remains is `✓ done` (an
+ * affirmative, per the kit's own `✓ DONE`) — the one SETTLED fact a column
+ * position understates.
  */
 const STATUS_TEXT: Partial<Record<Column, string>> = {
-  queued: "◌ queued",
   done: "✓ done",
 };
 
@@ -93,7 +93,7 @@ const STATUS_TEXT: Partial<Record<Column, string>> = {
  * are shared vocabulary with style.css and the iOS JobCardView, so renumbering
  * here means renumbering there.
  *
- *   1. IDENTITY — the slug alone, then repo · cell · age · prereqs · STATE.
+ *   1. IDENTITY — the slug alone, then repo · cell · age · STATE.
  *      Contiguous: nothing may be inserted between these two lines. (They used
  *      to be split in two by the tmux button and the PR/thread rows.) The state
  *      token sits at the END of the second line rather than beside the slug —
@@ -154,12 +154,15 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   // Keyed by jobKey, never the bare slug: an archived entry and an active job
   // that reused its freed slug would otherwise share one drag id.
   const drag = useSortableCard(key);
+  // True for the seconds between a draft→working drop and the server answering
+  // it. The card is being drawn in WORKING while the job's own state still
+  // says draft — see useDragReorder's Submitting.
+  const submitting = useCardSubmitting(key);
   // `editable` is only ever read as a data attribute (by the drag/e2e side, and
   // by the editor, to decide read-only) — the click fallback below decides for
   // itself, exactly as the vanilla one did: it matched `.card[data-editable]`,
   // attribute PRESENCE, not value.
-  const editable = !job.live && ["draft", "queued", "done"].includes(col);
-  const prereqs = job.prereqs ?? [];
+  const editable = !job.live && ["draft", "done"].includes(col);
   const retryable = !!job.health && !/is gone|startup prompt/.test(job.health);
 
   // band 2 — is there anything to put in each row at all? Asked per chip
@@ -183,7 +186,7 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
     textMatch ? markMatches(line, matchTerms ?? []) : line;
 
   // band 6 — assembled first rather than inline, so the row can be dropped
-  // whole when a card offers nothing to press (every draft/queued card).
+  // whole when a card offers nothing to press (every draft card).
   const reactivatable = (col === "done" || job.cell_gone) && job.reactivatable;
   const hasActions = job.live || retryable || reactivatable;
 
@@ -207,6 +210,10 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   const openDrilldown = () => {
     // A click that ends a text selection is not a click on the card.
     if (window.getSelection()?.toString()) return;
+    // A card mid-submit is not a job you can open: its state is about to
+    // change, the editor would close itself on the very next payload
+    // (checkStaleModals), and the steer modal has no cell to steer yet.
+    if (submitting) return;
     // liveDisplayColumn (app.js): only a LIVE job has a steerable column, and
     // an unhealthy one reads as blocked whatever its file says.
     const liveCol = job.live ? (job.health ? "blocked" : job.state) : null;
@@ -220,7 +227,11 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   return (
     <div
       ref={drag.setNodeRef}
-      className={"card editable" + (drag.className ? " " + drag.className : "")}
+      className={
+        "card editable" +
+        (drag.className ? " " + drag.className : "") +
+        (submitting ? " submitting" : "")
+      }
       // ONE inline custom property now: --job-color, the left accent edge,
       // which is the job's colour channel and nothing else — style.css is
       // explicit that the edge carries neither state nor alerts. It is omitted
@@ -252,45 +263,22 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
     >
       {/* ---- band 1: IDENTITY. Contiguous — nothing goes between these two. */}
       <div className="card-top">
+        {/* The spinner is INSIDE the identity line rather than a band of its
+            own: the card is in a column the server has not put it in yet, and
+            that is a fact about the card itself, read at the same glance as
+            which card it is. It leads the slug for the same reason the ROI
+            badge leads its row — the mark lines up down the column edge. */}
+        {submitting ? <span className="submit-spinner" aria-hidden="true" /> : null}
         <span className="slug">{job.slug}</span>
         {/* No `.state` chip beside the slug any more — the state token moved to
-            the end of the .meta line below (STATUS_TEXT). The queued ✕ stays:
-            it is a control, not a label. */}
-        {col === "queued" && !job.live ? (
-          <button
-            className="queue-cancel"
-            data-slug={job.slug}
-            title="cancel — return to draft (spec is kept)"
-            onClick={(ev) => {
-              ev.stopPropagation();
-              actions.onDequeue(job.slug);
-            }}
-          >
-            ✕
-          </button>
-        ) : null}
+            the end of the .meta line below (STATUS_TEXT). The queued ✕ went
+            with the queued column: there is no parked state left to cancel,
+            and a submit in flight is a request, not a booking. */}
       </div>
       <div className="meta">
         <span>{job.repo}</span>
         {job.live ? <span>{job.cell}</span> : null}
         <span data-age={job.mtime}>{age(job.mtime)}</span>
-        {prereqs.length ? (
-          <span className="prereq">
-            {/* joined by a space between the spans, as `.join(" ")` did. The key
-                carries the index because `parsePrereqs` (internal/jobs/job.go)
-                neither dedupes nor rejects a repeated `- job:` line, so the slug
-                alone is not unique. */}
-            {prereqs.map((p, i) => (
-              <Fragment key={`${p.job}|${i}`}>
-                {i > 0 ? " " : null}
-                <span className={p.done ? "ok" : p.gated ? "gate" : "pend"}>
-                  {p.job}
-                  {p.done ? "✓" : p.gated ? "⚑" : "✗"}
-                </span>
-              </Fragment>
-            ))}
-          </span>
-        ) : null}
         {/* LAST in the row, always — style.css right-aligns it off the end of
             the line, so anything appended after it would land outside the
             alignment the design puts it there for. */}
@@ -349,11 +337,13 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
       ) : null}
       {job.err ? <div className="err">✕ {job.err}</div> : null}
       {job.health ? <div className="err">⚠ {job.health}</div> : null}
-      {job.start_error ? (
-        <div className="start-error">
-          <span className="start-error-label">start failed</span>
-          <span className="start-error-msg">{job.start_error}</span>
-        </div>
+      {/* The submit's progress line. It leads band 3 because for these seconds
+          it is the only true thing on the card: every other line describes a
+          job the server still files as a draft. There is no `.start-error`
+          sibling any more — a refusal comes back as this request's own 409 and
+          lands in the status corner, where the action that caused it is. */}
+      {submitting ? (
+        <div className="submitting-line">starting cell… (request in flight)</div>
       ) : null}
       {job.last_sent ? <div className="last-sent">me→zeus: {hi(job.last_sent)}</div> : null}
       {job.detail ? <div className="detail">{hi(job.detail)}</div> : null}

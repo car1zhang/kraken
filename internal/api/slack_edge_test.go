@@ -217,7 +217,11 @@ func TestEdgeJobDraftCreateParseErrorIsNeverSalvaged(t *testing.T) {
 		{"unterminated frontmatter", "---\njob: csv-export-timeout\nrepo: kraken\n\n# Spec\n"},
 		{"frontmatter line with no colon", edgeDraftText([]string{"job: csv-export-timeout", "repo kraken"}, edgeDraftBody())},
 		{"duplicate key", edgeDraftText([]string{"job: csv-export-timeout", "repo: kraken", "repo: monolith"}, edgeDraftBody())},
-		{"non-boolean ready", edgeDraftText([]string{"job: csv-export-timeout", "repo: kraken", "ready: yes"}, edgeDraftBody())},
+		// `ready: yes` used to be the non-boolean case here; the key is
+		// accept-and-ignore in the parser now (the corpus needs it), so it no
+		// longer errs and could not exercise this row. `solo` is the same
+		// shape and is still validated.
+		{"non-boolean solo", edgeDraftText([]string{"job: csv-export-timeout", "repo: kraken", "solo: yes"}, edgeDraftBody())},
 		{"hand-mangled state", edgeDraftText([]string{"job: csv-export-timeout", "repo: kraken", "state: queued"}, edgeDraftBody())},
 	}
 	for _, c := range cases {
@@ -260,9 +264,6 @@ func TestEdgeJobDraftCreateSucceedsAsADraft(t *testing.T) {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
 	j := edgeJob(t, st, "csv-export-timeout")
-	if j.Ready {
-		t.Errorf("created job is ready — iris never queues anything")
-	}
 	if j.State != "" {
 		t.Errorf("created job carries state %q, want none", j.State)
 	}
@@ -276,8 +277,8 @@ func TestEdgeJobDraftCreateSucceedsAsADraft(t *testing.T) {
 	if live == nil {
 		t.Fatal("the created job is not on the board")
 	}
-	if got := jobs.DisplayState(live, map[string]*jobs.Job{}); got != "draft" {
-		t.Fatalf("display state = %q, want draft — the queue pass must never start it", got)
+	if got := jobs.DisplayState(live); got != "draft" {
+		t.Fatalf("display state = %q, want draft — only carl's submit starts it", got)
 	}
 }
 
@@ -286,10 +287,10 @@ func TestEdgeJobDraftCreateSucceedsAsADraft(t *testing.T) {
 // edgeSeedEditable creates a job iris IS allowed to edit (stored state empty)
 // carrying a full set of kraken-owned values, so a successful edit can be
 // checked for collateral damage and a refused one for having changed nothing.
-func edgeSeedEditable(t *testing.T, st *store.Store, slug string, ready bool) *store.Job {
+func edgeSeedEditable(t *testing.T, st *store.Store, slug string) *store.Job {
 	t.Helper()
 	j := &store.Job{
-		Slug: slug, Repo: "kraken", Base: "main", Ready: ready, Solo: true,
+		Slug: slug, Repo: "kraken", Base: "main", Solo: true,
 		Model: "sonnet", Color: "Cyan", Session: "aaaa-bbbb-cccc", Run: 3,
 		Teardown: "kill", Outcome: "",
 		Body: "# Spec\n\noriginal body\n\n## Source\n\noriginal source\n",
@@ -307,7 +308,7 @@ func edgeSeedEditable(t *testing.T, st *store.Store, slug string, ready bool) *s
 func edgeSeedStated(t *testing.T, st *store.Store, slug, state string) *store.Job {
 	t.Helper()
 	j := &store.Job{
-		Slug: slug, Repo: "kraken", Ready: true, State: state,
+		Slug: slug, Repo: "kraken", State: state,
 		Body: "# Spec\n\noriginal body\n",
 	}
 	if _, err := st.CreateJob(j); err != nil {
@@ -328,7 +329,7 @@ func TestEdgeJobDraftEditRefusesLiveStates(t *testing.T) {
 			st, mux := edgeSlackAPI(t)
 			before := edgeSeedStated(t, st, "live-job", state)
 
-			content := edgeDraftText([]string{"job: live-job", "repo: kraken", "ready: true"},
+			content := edgeDraftText([]string{"job: live-job", "repo: kraken"},
 				"# Spec\n\nREWRITTEN\n\n## Source\n\nslack\n")
 			rec := edgePostAPI(t, mux, "/api/job/draft", map[string]any{"slug": "live-job", "content": content})
 			if rec.Code != http.StatusConflict {
@@ -343,33 +344,35 @@ func TestEdgeJobDraftEditRefusesLiveStates(t *testing.T) {
 	}
 }
 
-// TestEdgeJobDraftEditRefusesReadyFlips is the "loudly, never silently
-// rewritten" row, asserted in BOTH directions. Silently forcing ready back to
-// the stored value would leave iris believing it had queued a job that will
-// never start; silently accepting the flip would let iris start work carl
-// never released.
-func TestEdgeJobDraftEditRefusesReadyFlips(t *testing.T) {
+// TestEdgeJobDraftRefusesRetiredKeys replaces the ready-flip matrix. There is
+// no flag left to flip in either direction — the queued status is gone and
+// starting a job is submitting it on the board — but the "loudly, never
+// silently ignored" rule that matrix existed for still binds, and now applies
+// to the KEY rather than to a change in its value. ParseJob accepts both keys
+// on purpose (the corpus needs it), so an author sending one would otherwise
+// get a 200 for a line the server threw away.
+func TestEdgeJobDraftRefusesRetiredKeys(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		stored      bool
-		contentSays string
+		name  string
+		front string
 	}{
-		{"draft asked to become ready", false, "ready: true"},
-		{"queued asked to become a draft", true, "ready: false"},
+		{"ready true", "ready: true"},
+		{"ready false", "ready: false"},
+		{"prereqs empty", "prereqs: []"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, mux := edgeSlackAPI(t)
-			before := edgeSeedEditable(t, st, "flip-job", tc.stored)
+			before := edgeSeedEditable(t, st, "flip-job")
 
-			content := edgeDraftText([]string{"job: flip-job", "repo: kraken", tc.contentSays},
+			content := edgeDraftText([]string{"job: flip-job", "repo: kraken", tc.front},
 				"# Spec\n\nREWRITTEN\n\n## Source\n\nslack\n")
 			rec := edgePostAPI(t, mux, "/api/job/draft", map[string]any{"slug": "flip-job", "content": content})
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status %d, want 400 (body %s)", rec.Code, rec.Body.String())
 			}
 			after := edgeJob(t, st, "flip-job")
-			if after.Ready != before.Ready || after.Body != before.Body || after.Rev != before.Rev {
-				t.Fatalf("a refused ready flip still wrote: %+v -> %+v", before, after)
+			if after.Body != before.Body || after.Rev != before.Rev {
+				t.Fatalf("a refused edit still wrote: %+v -> %+v", before, after)
 			}
 		})
 	}
@@ -394,7 +397,7 @@ func TestEdgeJobDraftEditRefusesStateAndEmptyBody(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			st, mux := edgeSlackAPI(t)
-			before := edgeSeedEditable(t, st, "edit-job", false)
+			before := edgeSeedEditable(t, st, "edit-job")
 
 			rec := edgePostAPI(t, mux, "/api/job/draft", map[string]any{
 				"slug": "edit-job", "content": edgeDraftText(c.front, c.body),
@@ -416,7 +419,7 @@ func TestEdgeJobDraftEditRefusesStateAndEmptyBody(t *testing.T) {
 // which is exactly the window carl's own board edit lands in.
 func TestEdgeJobDraftEditMTimeLock(t *testing.T) {
 	st, mux := edgeSlackAPI(t)
-	before := edgeSeedEditable(t, st, "lock-job", false)
+	before := edgeSeedEditable(t, st, "lock-job")
 	content := edgeDraftText([]string{"job: lock-job", "repo: kraken"},
 		"# Spec\n\nEXTENDED\n\n## Source\n\nslack\n")
 
@@ -468,7 +471,7 @@ func TestEdgeJobDraftEditMTimeLock(t *testing.T) {
 // the card.
 func TestEdgeJobDraftEditPreservesEverythingItDoesNotOwn(t *testing.T) {
 	st, mux := edgeSlackAPI(t)
-	before := edgeSeedEditable(t, st, "preserve-job", true)
+	before := edgeSeedEditable(t, st, "preserve-job")
 	beforePRs, err := st.ListPRs(before.ID)
 	if err != nil {
 		t.Fatalf("ListPRs: %v", err)
@@ -478,7 +481,7 @@ func TestEdgeJobDraftEditPreservesEverythingItDoesNotOwn(t *testing.T) {
 	}
 
 	content := edgeDraftText(
-		[]string{"job: preserve-job", "repo: monolith", "base: develop", "solo: false", "model: opus", "ready: true"},
+		[]string{"job: preserve-job", "repo: monolith", "base: develop", "solo: false", "model: opus"},
 		"# Spec\n\nEXTENDED by iris\n\n## Source\n\nSlack DM\n")
 	rec := edgePostAPI(t, mux, "/api/job/draft", map[string]any{"slug": "preserve-job", "content": content})
 	if rec.Code != http.StatusOK {
@@ -496,9 +499,6 @@ func TestEdgeJobDraftEditPreservesEverythingItDoesNotOwn(t *testing.T) {
 	// everything else
 	if after.Slug != "preserve-job" {
 		t.Errorf("slug changed to %q — this route never renames", after.Slug)
-	}
-	if after.Ready != before.Ready {
-		t.Errorf("ready = %v, want the stored %v", after.Ready, before.Ready)
 	}
 	if after.State != before.State {
 		t.Errorf("state = %q, want the stored %q", after.State, before.State)
@@ -833,7 +833,7 @@ func TestEdgeJobListBoundaries(t *testing.T) {
 	}
 
 	long := strings.Repeat("é", 400) // multi-byte on purpose: the bound is RUNES
-	live := &store.Job{Slug: "listed", Repo: "kraken", Ready: true,
+	live := &store.Job{Slug: "listed", Repo: "kraken",
 		Body: "\n\n" + long + "\nsecond line\n"}
 	if _, err := st.CreateJob(live); err != nil {
 		t.Fatalf("CreateJob: %v", err)
@@ -866,8 +866,8 @@ func TestEdgeJobListBoundaries(t *testing.T) {
 	if strings.ContainsAny(resp.Jobs[0].Summary, "\n\r") {
 		t.Errorf("summary = %q, want the FIRST non-empty line only", resp.Jobs[0].Summary)
 	}
-	if resp.Jobs[0].State != "queued" {
-		t.Errorf("state = %q, want jobs.DisplayState's answer (queued)", resp.Jobs[0].State)
+	if resp.Jobs[0].State != "draft" {
+		t.Errorf("state = %q, want jobs.DisplayState's answer (draft)", resp.Jobs[0].State)
 	}
 }
 
@@ -945,10 +945,12 @@ func TestEdgeSlackWritesAreLiveWithMirrorOff(t *testing.T) {
 // --- the wire contract's version ------------------------------------------
 
 // TestEdgeSlackRoutesAreAdditive: every shape in this slice is new, so
-// apiContract must NOT move. A bump would make the shipped iOS app refuse to
-// talk to this build over a change that could not affect it.
+// apiContract must not move ON THEIR ACCOUNT. A bump for them would make the
+// shipped iOS app refuse to talk to this build over a change that could not
+// affect it. The literal tracks whatever the contract currently is — 6 since
+// the queued status was retired, a real break these routes had no part in.
 func TestEdgeSlackRoutesAreAdditive(t *testing.T) {
-	if apiContract != 5 {
-		t.Fatalf("apiContract = %d, want 5 — five additive routes bump nothing", apiContract)
+	if apiContract != 6 {
+		t.Fatalf("apiContract = %d, want 6 — five additive routes bump nothing", apiContract)
 	}
 }

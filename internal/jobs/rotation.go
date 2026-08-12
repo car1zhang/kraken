@@ -157,8 +157,9 @@ func SetRotationMode(mode, setBy string) error {
 const rotationNoticeSuppress = time.Hour
 
 // rotationGateCooldown collapses a burst of same-tick RotationGate calls
-// (the daemon can queue up to CellCap spawns in a single tick, each calling
-// the gate once) into a single real usage check: only the first call within
+// (a tick can spawn both of the daemon's own creations, and carl can submit
+// several jobs in quick succession, each calling the gate once) into a single
+// real usage check: only the first call within
 // this window actually fetches usage and decides; every later call — even
 // under a different trigger — is skipped via the persisted LastGateAt. The
 // rotation.lock flock alone only bounds CONCURRENT calls (mutual

@@ -24,15 +24,15 @@ import (
 //
 // `draft` is the guarded one, and the guarding is SERVER-side (see
 // jobdraft.go's refusal matrix): it can only ever produce a draft — never a
-// queued job, never a started one, never an edit to a job whose cell is
-// live. Nothing in this file enforces that, deliberately. A CLI check is a
-// suggestion; the route is the gate.
+// started job, never an edit to a job whose cell is live. Nothing in this
+// file enforces that, deliberately. A CLI check is a suggestion; the route is
+// the gate.
 //
 // This does not reopen the job LIFECYCLE on the CLI (Q14, and cmd_jobs.go's
 // header): starting, completing, archiving and reactivating a job remain
 // board-only, and nothing here can reach any of them — `draft` is refused on
-// every job past draft/queued, and the one field that would start a job
-// (`ready`) is refused outright. These are agent-facing HTTP proxies in the
+// every started job, and starting one is now the board's submit action, which
+// has no CLI spelling at all. These are agent-facing HTTP proxies in the
 // `k questions` / `k load` family, not job verbs.
 //
 // Same behavior contract as cmd_load.go / cmd_slack.go: reads print the

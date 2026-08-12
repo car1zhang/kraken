@@ -40,14 +40,16 @@ func TestParseJobFull(t *testing.T) {
 	if j.Slug != "yelp-dedupe" || j.Repo != "monolith" {
 		t.Fatalf("identity: %+v", j)
 	}
-	if !j.Ready || j.Solo {
-		t.Fatalf("flags: ready=%v solo=%v", j.Ready, j.Solo)
+	if j.Solo {
+		t.Fatalf("flags: solo=%v", j.Solo)
 	}
-	want := []Prereq{{Job: "dedupe-strategy-q", Gated: true}, {Job: "schema-migration"}}
-	if len(j.Prereqs) != 2 || j.Prereqs[0] != want[0] || j.Prereqs[1] != want[1] {
-		t.Fatalf("prereqs: %+v", j.Prereqs)
-	}
-	// success is a retired field: legacy files still carry it, and the
+	// ready: and prereqs: are retired keys the corpus on disk still carries
+	// (this sample is a real file's frontmatter). They must be consumed and
+	// discarded — including the prereqs block's indented continuation lines,
+	// which would otherwise hit the stray-indented-line arm and err the job
+	// into draft. The Err == "" check above is what pins that.
+	//
+	// success is a retired field too: legacy files still carry it, and the
 	// block-scalar lines must still be fully consumed (Err == "", body intact)
 	if !strings.Contains(j.Body, "# Spec") || strings.Contains(j.Body, "ready:") {
 		t.Fatalf("body: %q", j.Body)
@@ -68,7 +70,10 @@ func TestParseJobAutoApproveLegacy(t *testing.T) {
 }
 
 func TestParseJobTemplateDefaults(t *testing.T) {
-	// the pluto template as expanded: empty prereqs with inline comment lines
+	// a pre-cutover pluto template as expanded: empty prereqs with inline
+	// comment lines. JobTemplate no longer emits either key, but files
+	// written from the old one are still on disk, so this shape must still
+	// parse clean.
 	src := `---
 job: name
 repo: monolith            # substring-matched
@@ -86,11 +91,23 @@ success: |
 	if j.Err != "" {
 		t.Fatalf("unexpected err: %s", j.Err)
 	}
-	if len(j.Prereqs) != 0 {
-		t.Fatalf("template prereqs should be empty, got %+v", j.Prereqs)
+	if j.State != "" {
+		t.Fatalf("template must not carry a state, got %q", j.State)
 	}
-	if j.Ready {
-		t.Fatal("template must not be ready")
+	if got := DisplayState(j); got != "draft" {
+		t.Fatalf("an unstarted job reads %q, want draft", got)
+	}
+}
+
+func TestJobTemplateDropsRetiredKeys(t *testing.T) {
+	// the template is what `k n`/nvim expand into a new file: it must not
+	// reintroduce either retired key. Both still PARSE (the corpus needs
+	// that), so only this check keeps them from being written afresh.
+	src := JobTemplate("x")
+	for _, bad := range []string{"ready", "prereqs"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("template still mentions %q:\n%s", bad, src)
+		}
 	}
 }
 
@@ -163,19 +180,17 @@ func TestParseJobStrict(t *testing.T) {
 	// every construct the parser can't fully understand must set Err — an
 	// erred job never runs, and the error is surfaced on the board
 	cases := map[string]string{
-		"no frontmatter":     "just some text\n",
-		"unterminated":       "---\njob: x\n",
-		"colonless line":     "---\nnonsense\n---\n",
-		"unknown key":        "---\nraedy: true\n---\n",
-		"duplicate key":      "---\nrepo: a\nrepo: b\n---\n",
-		"bad bool":           "---\nready: yes\n---\n",
-		"bad state":          "---\nstate: bananas\n---\n",
-		"bad color":          "---\ncolor: purpel\n---\n",
-		"stray indented":     "---\nrepo: a\n  orphan: true\n---\n",
-		"junk under prereqs": "---\nprereqs:\n  not an item\n---\n",
-		"prereq missing job": "---\nprereqs:\n  - gated: true\n---\n",
-		"bad prereqs scalar": "---\nprereqs: whenever\n---\n",
-		"bad gated bool":     "---\nprereqs:\n  - job: dep\n    gated: yep\n---\n",
+		"no frontmatter": "just some text\n",
+		"unterminated":   "---\njob: x\n",
+		"colonless line": "---\nnonsense\n---\n",
+		"unknown key":    "---\nraedy: true\n---\n",
+		"duplicate key":  "---\nrepo: a\nrepo: b\n---\n",
+		"bad bool":       "---\nsolo: yes\n---\n",
+		"bad state":      "---\nstate: bananas\n---\n",
+		"bad color":      "---\ncolor: purpel\n---\n",
+		"stray indented": "---\nrepo: a\n  orphan: true\n---\n",
+		// no prereqs cases: the key and its whole block are accept-and-ignore
+		// now (TestParseJobRetiredKeys below), so nothing under it can err.
 	}
 	for name, src := range cases {
 		j := ParseJob("f.job.md", []byte(src))
@@ -185,12 +200,12 @@ func TestParseJobStrict(t *testing.T) {
 		if j.Err == "" {
 			t.Errorf("%s: expected Err, got clean parse: %+v", name, j)
 		}
-		if got := DisplayState(j, nil); got != "draft" {
+		if got := DisplayState(j); got != "draft" {
 			t.Errorf("%s: erred job must display draft, got %q", name, got)
 		}
 	}
 	// errors accumulate rather than overwriting
-	j := ParseJob("f.job.md", []byte("---\nready: yes\nraedy: true\n---\n"))
+	j := ParseJob("f.job.md", []byte("---\nsolo: yes\nraedy: true\n---\n"))
 	if !strings.Contains(j.Err, ";") {
 		t.Errorf("errors should accumulate: %q", j.Err)
 	}
@@ -199,8 +214,42 @@ func TestParseJobStrict(t *testing.T) {
 		t.Errorf("empty file: err=%q slug=%q", j.Err, j.Slug)
 	}
 	// empty bool value reads as absent, not an error
-	if j := ParseJob("f.job.md", []byte("---\nready:\n---\n")); j.Err != "" || j.Ready {
-		t.Errorf("empty bool value: err=%q ready=%v", j.Err, j.Ready)
+	if j := ParseJob("f.job.md", []byte("---\nsolo:\n---\n")); j.Err != "" || j.Solo {
+		t.Errorf("empty bool value: err=%q solo=%v", j.Err, j.Solo)
+	}
+}
+
+// TestParseJobRetiredKeys pins the accept-and-ignore contract for the two
+// keys this change retired. The corpus in ~/Documents/pluto carries them on
+// almost every file; a parser that errored on either would pin the entire
+// board to draft with an "unknown key" that names a feature nobody can find.
+func TestParseJobRetiredKeys(t *testing.T) {
+	for name, src := range map[string]string{
+		"ready true":         "---\njob: x\nready: true\n---\nbody\n",
+		"ready false":        "---\njob: x\nready: false\n---\nbody\n",
+		"ready mangled":      "---\njob: x\nready: yes\n---\nbody\n",
+		"ready empty":        "---\njob: x\nready:\n---\nbody\n",
+		"prereqs empty list": "---\njob: x\nprereqs: []\nsolo: true\n---\nbody\n",
+		"prereqs block":      "---\njob: x\nprereqs:\n  - job: dep\n    gated: true\n  - job: other\nsolo: true\n---\nbody\n",
+		"prereqs comments":   "---\njob: x\nprereqs: []             # - job: other\n                        #   gated: true\nsolo: true\n---\nbody\n",
+		"prereqs tab indent": "---\njob: x\nprereqs:\n\t- job: dep\n\t  gated: true\nsolo: true\n---\nbody\n",
+		"prereqs junk":       "---\njob: x\nprereqs:\n  not an item\nsolo: true\n---\nbody\n",
+		"prereqs scalar":     "---\njob: x\nprereqs: whenever\nsolo: true\n---\nbody\n",
+		"both":               "---\njob: x\nready: true\nprereqs:\n  - job: dep\n---\nbody\n",
+	} {
+		j := ParseJob("x.job.md", []byte(src))
+		if j.Err != "" {
+			t.Errorf("%s: unexpected err %q", name, j.Err)
+		}
+		if got := DisplayState(j); got != "draft" {
+			t.Errorf("%s: want draft, got %q", name, got)
+		}
+	}
+	// the block skip must stop at the next top-level key rather than eating
+	// it: solo: true above is the canary, checked here on the deepest shape.
+	j := ParseJob("x.job.md", []byte("---\njob: x\nprereqs:\n  - job: dep\n    gated: true\nsolo: true\nrepo: monolith\n---\nbody\n"))
+	if j.Err != "" || !j.Solo || j.Repo != "monolith" {
+		t.Errorf("keys after a prereqs block were swallowed: err=%q solo=%v repo=%q", j.Err, j.Solo, j.Repo)
 	}
 }
 
@@ -264,10 +313,11 @@ func TestValidStates(t *testing.T) {
 			t.Errorf("state %q should be valid, got err %q", s, j.Err)
 		}
 	}
-	// draft and queued are derived for display, never written: kraken never
-	// authors them and a hand-authored one is a dead end (started() false but
-	// startable() also false), so they must now be rejected like any other
-	// unknown state.
+	// draft is derived for display, never written: kraken never authors it
+	// and a hand-authored one is a dead end, so it is rejected like any other
+	// unknown state. "queued" is now in the same bucket as the other retired
+	// state names below — it was never written to a file even when the status
+	// existed, so nothing on disk regresses by rejecting it.
 	for _, s := range []string{"queued", "draft", "planning", "plan-review", "executing", "testing", "pr-open", "merged", "failed", "abandoned"} {
 		j := ParseJob("x.job.md", []byte("---\nstate: "+s+"\n---\n"))
 		if j.Err == "" {
@@ -316,13 +366,13 @@ func TestParseJobIndentedFenceInBlockScalar(t *testing.T) {
 	// an indented --- inside a legacy success block scalar is content, not
 	// the closing fence: the fence must not terminate early, and fields
 	// after the block must still parse
-	src := "---\njob: x\nsuccess: |\n  part one\n  ---\n  part two\nrepo: monolith\nready: true\n---\n\n# Spec\n"
+	src := "---\njob: x\nsuccess: |\n  part one\n  ---\n  part two\nrepo: monolith\nsolo: true\n---\n\n# Spec\n"
 	j := ParseJob("x.job.md", []byte(src))
 	if j.Err != "" {
 		t.Fatalf("unexpected err: %s", j.Err)
 	}
-	if j.Repo != "monolith" || !j.Ready {
-		t.Fatalf("fields after indented --- dropped: repo=%q ready=%v", j.Repo, j.Ready)
+	if j.Repo != "monolith" || !j.Solo {
+		t.Fatalf("fields after indented --- dropped: repo=%q solo=%v", j.Repo, j.Solo)
 	}
 	if !strings.Contains(j.Body, "# Spec") {
 		t.Fatalf("body truncated: %q", j.Body)
@@ -332,16 +382,8 @@ func TestParseJobIndentedFenceInBlockScalar(t *testing.T) {
 func TestParseJobCRLF(t *testing.T) {
 	src := strings.ReplaceAll(sampleJob, "\n", "\r\n")
 	j := ParseJob("yelp-dedupe.job.md", []byte(src))
-	if j.Err != "" || !j.Ready || j.Repo != "monolith" {
-		t.Fatalf("CRLF parse degraded: err=%q ready=%v repo=%q", j.Err, j.Ready, j.Repo)
-	}
-}
-
-func TestParsePrereqsTabIndent(t *testing.T) {
-	src := "---\njob: x\nready: true\nprereqs:\n\t- job: dep\n\t  gated: true\n---\n"
-	j := ParseJob("x.job.md", []byte(src))
-	if len(j.Prereqs) != 1 || !j.Prereqs[0].Gated {
-		t.Fatalf("tab-indented gated flag lost: %+v", j.Prereqs)
+	if j.Err != "" || j.Slug != "yelp-dedupe" || j.Repo != "monolith" {
+		t.Fatalf("CRLF parse degraded: err=%q slug=%q repo=%q", j.Err, j.Slug, j.Repo)
 	}
 }
 
@@ -415,101 +457,44 @@ func TestOneLine(t *testing.T) {
 	}
 }
 
-func mkJob(slug, state string, ready bool, prereqs ...Prereq) *Job {
-	return &Job{Slug: slug, State: state, Ready: ready, Prereqs: prereqs}
-}
-
-func slugMap(jobs ...*Job) map[string]*Job {
-	m := map[string]*Job{}
-	for _, j := range jobs {
-		m[j.Slug] = j
-	}
-	return m
+func mkJob(slug, state string) *Job {
+	return &Job{Slug: slug, State: state}
 }
 
 func TestDisplayState(t *testing.T) {
-	done := mkJob("dep", "done", true)
-	pending := mkJob("pend", "", true)
 	cases := []struct {
 		j    *Job
 		want string
 	}{
-		{mkJob("a", "", false), "draft"},                                  // !ready → draft
-		{mkJob("a", "", true), "queued"},                                  // ready, no prereqs → queued
-		{mkJob("a", "working", true), "working"},                          // kraken-managed state wins
-		{mkJob("a", "", true, Prereq{Job: "dep"}), "queued"},              // ready + met prereq → queued
-		{mkJob("a", "", true, Prereq{Job: "dep", Gated: true}), "queued"}, // met but gated → still queued
-		{mkJob("a", "working", true, Prereq{Job: "dep", Gated: true}), "working"},
-		{mkJob("a", "", true, Prereq{Job: "pend"}), "queued"},              // unmet prereq → queued
-		{mkJob("a", "", true, Prereq{Job: "pend", Gated: true}), "queued"}, // unmet + gated → queued
-		{mkJob("a", "", true, Prereq{Job: "missing"}), "queued"},           // missing dep counts unmet → queued
+		{mkJob("a", ""), "draft"},          // never started
+		{mkJob("a", "working"), "working"}, // kraken-managed state wins
+		{mkJob("a", "blocked"), "blocked"}, //
+		{mkJob("a", "done"), "done"},       //
 	}
-	bySlug := slugMap(done, pending)
 	for _, c := range cases {
-		if got := DisplayState(c.j, bySlug); got != c.want {
+		if got := DisplayState(c.j); got != c.want {
 			t.Errorf("DisplayState(%+v) = %q, want %q", c.j, got, c.want)
 		}
 	}
-	// erred job displays draft (the draft column surfaces the error detail),
-	// even though it's Ready
-	broken := mkJob("b", "", true)
-	broken.Err = "prereq cycle"
-	if got := DisplayState(broken, bySlug); got != "draft" {
+	// erred job displays draft (the draft column surfaces the error detail)
+	broken := mkJob("b", "")
+	broken.Err = "unknown key raedy"
+	if got := DisplayState(broken); got != "draft" {
 		t.Errorf("erred job should display draft: %q", got)
 	}
+	// an erred job that HAS started still reads draft: the error outranks a
+	// kraken-managed state, and the board's draft column is where its detail
+	// is rendered.
+	brokenLive := mkJob("bl", "working")
+	brokenLive.Err = "unknown key raedy"
+	if got := DisplayState(brokenLive); got != "draft" {
+		t.Errorf("erred working job should display draft: %q", got)
+	}
 	// a done job with a parse error still shows done: terminal beats broken
-	doneButErred := mkJob("c", "done", true)
+	doneButErred := mkJob("c", "done")
 	doneButErred.Err = "whatever"
-	if got := DisplayState(doneButErred, bySlug); got != "done" {
+	if got := DisplayState(doneButErred); got != "done" {
 		t.Errorf("done should win even over an error: %q", got)
-	}
-}
-
-func TestStartable(t *testing.T) {
-	done := mkJob("dep", "done", true)
-	pending := mkJob("pend", "", true)
-	bySlug := slugMap(done, pending)
-	cases := []struct {
-		j    *Job
-		want bool
-	}{
-		{mkJob("a", "", false), false},                                 // !ready
-		{mkJob("a", "", true), true},                                   // ready, no prereqs
-		{mkJob("a", "", true, Prereq{Job: "dep"}), true},               // ready + met prereq
-		{mkJob("a", "", true, Prereq{Job: "pend"}), false},             // unmet prereq
-		{mkJob("a", "", true, Prereq{Job: "missing"}), false},          // missing dep counts unmet
-		{mkJob("a", "", true, Prereq{Job: "dep", Gated: true}), false}, // met but gated: human must release
-		{mkJob("a", "working", true), false},                           // already started
-	}
-	for _, c := range cases {
-		if got := startable(c.j, bySlug); got != c.want {
-			t.Errorf("startable(%+v) = %v, want %v", c.j, got, c.want)
-		}
-	}
-	errored := mkJob("e", "", true)
-	errored.Err = "boom"
-	if startable(errored, bySlug) {
-		t.Error("erred job must never be startable")
-	}
-}
-
-func TestMarkPrereqCycles(t *testing.T) {
-	a := mkJob("a", "", true, Prereq{Job: "b"})
-	b := mkJob("b", "", true, Prereq{Job: "a"})
-	c := mkJob("c", "", true, Prereq{Job: "a"})
-	d := mkJob("d", "", true)
-	markPrereqCycles([]*Job{a, b, c, d})
-	if a.Err != "prereq cycle" || b.Err != "prereq cycle" {
-		t.Fatalf("cycle not marked: a=%q b=%q", a.Err, b.Err)
-	}
-	if c.Err != "" || d.Err != "" {
-		t.Fatalf("non-cycle members marked: c=%q d=%q", c.Err, d.Err)
-	}
-	// self-loop
-	s := mkJob("s", "", true, Prereq{Job: "s"})
-	markPrereqCycles([]*Job{s})
-	if s.Err != "prereq cycle" {
-		t.Fatalf("self-loop not marked: %q", s.Err)
 	}
 }
 
@@ -531,7 +516,7 @@ func TestPickRepo(t *testing.T) {
 }
 
 func TestJobBySlug(t *testing.T) {
-	jobs := []*Job{mkJob("a", "", true), mkJob("b-c", "", true)}
+	jobs := []*Job{mkJob("a", ""), mkJob("b-c", "")}
 	if JobBySlug(jobs, "b-c") == nil || JobBySlug(jobs, "b-c.job.md") == nil {
 		t.Fatal("slug lookup (with and without suffix) failed")
 	}
@@ -541,10 +526,10 @@ func TestJobBySlug(t *testing.T) {
 }
 
 func TestMarkSlugIssues(t *testing.T) {
-	a := mkJob("Yelp Dedupe", "", true) // slugifies to yelp-dedupe
-	b := mkJob("yelp-dedupe", "", true) // collides with a
-	c := mkJob("!!!", "", true)         // slugifies to ""
-	d := mkJob("fine", "", true)
+	a := mkJob("Yelp Dedupe", "") // slugifies to yelp-dedupe
+	b := mkJob("yelp-dedupe", "") // collides with a
+	c := mkJob("!!!", "")         // slugifies to ""
+	d := mkJob("fine", "")
 	markSlugIssues([]*Job{a, b, c, d})
 	if a.Err != "duplicate slug" || b.Err != "duplicate slug" {
 		t.Fatalf("collision not flagged: a=%q b=%q", a.Err, b.Err)
@@ -655,8 +640,8 @@ func TestJobColorStable(t *testing.T) {
 }
 
 func TestStateRankOrdering(t *testing.T) {
-	// five-state model: live cells first, then queued, then draft, then done
-	order := []string{"working", "blocked", "queued", "draft", "done"}
+	// four-state model: live cells first, then draft paperwork, then done
+	order := []string{"working", "blocked", "draft", "done"}
 	for i := 1; i < len(order); i++ {
 		if stateRank(order[i-1]) > stateRank(order[i]) {
 			t.Errorf("%s should rank before %s", order[i-1], order[i])

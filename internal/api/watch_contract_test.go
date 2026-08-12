@@ -199,7 +199,7 @@ func TestContractWatchlistGetKeySetIsFrozen(t *testing.T) {
 	}
 	want := contractSorted(contractAlwaysKeys, contractOmitemptyKeys)
 	if got := contractKeys(items[0]); !contractEqualStrings(got, want) {
-		t.Fatalf("item keys = %v\nwant exactly %v (A1: the shape is frozen; no new keys, W3: apiContract stays 5)", got, want)
+		t.Fatalf("item keys = %v\nwant exactly %v (A1: the shape is frozen; no new keys, W3: these routes never bump apiContract)", got, want)
 	}
 	for _, banned := range []string{"src", "dst", "predicate", "strength", "edge_id"} {
 		if _, ok := items[0][banned]; ok {

@@ -44,12 +44,12 @@ final class BoardDragStateTests: XCTestCase {
     func testBeginWhileActiveReplacesTheDragAndBumpsGeneration() {
         var drag = BoardDragState()
         let first = drag.begin(slug: "a", column: .draft)
-        drag.hover(.queued)
-        let second = drag.begin(slug: "b", column: .queued)
+        drag.hover(.working)
+        let second = drag.begin(slug: "b", column: .working)
 
         XCTAssertNotEqual(first, second)
         XCTAssertEqual(drag.slug, "b")
-        XCTAssertEqual(drag.sourceColumn, .queued)
+        XCTAssertEqual(drag.sourceColumn, .working)
         XCTAssertNil(drag.hoveredColumn, "a fresh drag starts with nothing hovered")
         XCTAssertFalse(drag.end(generation: first), "the replaced drag's token is stale")
         XCTAssertTrue(drag.isActive)
@@ -116,7 +116,7 @@ final class BoardDragStateTests: XCTestCase {
         var drag = BoardDragState()
         let stale = drag.begin(slug: "a", column: .draft)
         drag.endActive()
-        drag.begin(slug: "b", column: .queued)
+        drag.begin(slug: "b", column: .working)
 
         XCTAssertFalse(drag.end(generation: stale))
         XCTAssertEqual(drag.slug, "b", "the live drag survives a stale end")

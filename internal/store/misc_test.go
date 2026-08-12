@@ -2,41 +2,8 @@ package store
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 )
-
-func TestReplacePrereqs(t *testing.T) {
-	s := openTest(t)
-	id, err := s.CreateJob(&Job{Slug: "prereq-job"})
-	if err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-	if err := s.ReplacePrereqs(id, []Prereq{{Slug: "one", Gated: true}, {Slug: "two"}}); err != nil {
-		t.Fatalf("ReplacePrereqs 1: %v", err)
-	}
-	got, err := s.ListPrereqs(id)
-	if err != nil {
-		t.Fatalf("ListPrereqs: %v", err)
-	}
-	want := []Prereq{{Slug: "one", Gated: true}, {Slug: "two"}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %+v, want %+v", got, want)
-	}
-
-	// replace with a smaller set — old rows must not linger
-	if err := s.ReplacePrereqs(id, []Prereq{{Slug: "three"}}); err != nil {
-		t.Fatalf("ReplacePrereqs 2: %v", err)
-	}
-	got, err = s.ListPrereqs(id)
-	if err != nil {
-		t.Fatalf("ListPrereqs 2: %v", err)
-	}
-	want = []Prereq{{Slug: "three"}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %+v, want %+v", got, want)
-	}
-}
 
 func TestEventsAppendAndPaginate(t *testing.T) {
 	s := openTest(t)

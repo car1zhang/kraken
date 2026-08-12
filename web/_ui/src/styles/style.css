@@ -46,8 +46,8 @@
      overlap is SHAPE, not geometry: a cmd chip is a bare /aim text token
      while a thread chip carries the ⑂ glyph, a status dot and a name, so
      even side by side in the steer modal they are different kinds of object
-     sharing a hue, never two states of one thing (the confusion
-     Theme.swift's `queued` note actually bans). */
+     sharing a hue, never two states of one thing — which is the confusion the
+     board's colour rules actually ban. */
   --stopped: #ff5c5c;
 
   /* --- kit derivation recipes (README "Derivation recipes"), verbatim --- */
@@ -726,7 +726,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 /* ---- board ---- */
 .board {
   display: grid;
-  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  grid-template-columns: repeat(4, minmax(200px, 1fr));
   gap: 12px;
   padding: 14px 16px 20px;
   align-items: start;
@@ -791,10 +791,10 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .col { min-height: 120px; }
 /* the kit's column head: a filled bar with a 3px left rule in the column's
    own colour, not a hairline underline. The per-state treatment keys off the
-   `data-col` attribute BoardColumn already writes, so the five heads stay
-   distinguishable with no markup change (this slice edits no TSX).
-   Five, not the kit's four: QUEUED sits between DRAFT and WORKING here and
-   takes --tint, the one hue left that separates from the other four. */
+   `data-col` attribute BoardColumn already writes, so the four heads stay
+   distinguishable with no markup change.
+   Four — the kit's own count. QUEUED sat between DRAFT and WORKING on --tint
+   until submit became synchronous and the column went with the state. */
 .col-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 5px 8px;
@@ -808,10 +808,6 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   font: 600 10px var(--display); letter-spacing: 0.2em;
 }
 .col-head .n { font: 10px var(--mono); color: inherit; }
-.col[data-col="queued"] .col-head {
-  color: var(--tint); border-left-color: var(--tint);
-  background: color-mix(in srgb, var(--tint) 10%, var(--b1));
-}
 .col[data-col="working"] .col-head {
   color: var(--ac); border-left-color: var(--ac);
   background: color-mix(in srgb, var(--ac) 13%, var(--b1));
@@ -845,13 +841,13 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 
    That left edge is the job's COLOUR CHANNEL and NOTHING else — no exceptions,
    no precedence chain. It carries neither state (an uncoloured job looks the
-   same whether it is draft, queued, working, blocked or done) nor alerts (a
+   same whether it is draft, working, blocked or done) nor alerts (a
    pending question or health error used to force it to the alert hue with a
    hot glow; that rule is long gone). So the bar means "which job is this",
    never "how is it going" or "does this need me", and both of those are
    legible elsewhere on the card: state from its COLUMN (plus the
-   `◌ queued` / `✓ done` token on the two settled columns — the live states
-   carry no token at all, at carl's ask: the column says it), a question from
+   `✓ done` token on the one settled column — the live states carry no token
+   at all, at carl's ask: the column says it), a question from
    its `.chip-question` flag, its `.dq-chip.p0` count and the alert-coloured
    .err line.
 
@@ -902,9 +898,10 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 /* the status token that replaced the card's `.state` span: last child of the
    .meta row, pushed right by its own auto margin so the row needs no second
    flex rule (S2 renders `<span class="status status-<column>">`). Only the
-   two SETTLED columns render one — carl removed the live active/blocked
-   tokens outright at the post-gate rounds (the column already says it), so
-   there is deliberately no .status-working, .status-blocked, or
+   one SETTLED column renders one — carl removed the live active/blocked
+   tokens outright at the post-gate rounds (the column already says it), and
+   `.status-queued` went with the queued column itself, so there is
+   deliberately no .status-working, .status-blocked, .status-queued or
    .status-draft. It does NOT read the --state custom property the old span
    used: the class names the column, and one channel is enough. `.state`
    itself survives just above for ArchivedCard, which is the only thing still
@@ -914,7 +911,6 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   font: 9px var(--mono); letter-spacing: 0.06em;
   color: var(--muted);
 }
-.status-queued { color: var(--tint); }
 .status-done { color: var(--ok); }
 /* the cell's poll-timer chip: a pending ScheduleWakeup counting down to its
    next tick. Accent-tinted like .chip, but with a subtle filled background
@@ -937,17 +933,44 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* dequeue affordance on a queued-but-not-yet-started card — deliberately not
-   .chip (that class is claimed by the delegated click handler that opens an
-   artifact panel) */
-.queue-cancel {
-  font: 9px var(--mono); line-height: 1;
-  background: transparent; color: var(--muted);
-  border: 1px solid var(--border-strong);
-  padding: 2px 6px;
-  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+/* the in-flight SUBMIT. `.queue-cancel` — the ✕ on a queued-but-not-started
+   card — stood here; there is no booking to cancel any more, only a request
+   in flight, and this is what says so.
+
+   The card is drawn in WORKING while the server still files the job as a
+   draft, so the pose has to read as PROVISIONAL rather than as a live cell:
+   the accent-tinted dashed outline is the same vocabulary .col.droptarget uses
+   for "something is happening to this space", and the card keeps its own
+   surface underneath rather than being dimmed like .card.dragging — the
+   difference between "this is a placeholder" and "this card is elsewhere". */
+.card.submitting {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+  cursor: progress;
 }
-.queue-cancel:hover { background: color-mix(in srgb, var(--ac2) 14%, transparent); border-color: var(--ac2); color: var(--ac2); box-shadow: var(--glow-hot); }
+/* leads the identity line, so the mark lines up down the column edge. Same
+   square ring box and the same `spin` keyframe the chrome's .upd spinner uses
+   — one ticking-spinner vocabulary, and reusing the keyframe is what keeps the
+   two from drifting to different speeds.
+
+   steps(8), never linear: the HUD section's PERFORMANCE RULE, and this one
+   earns it twice over — a submit runs for seconds, and a smooth rotate
+   composites a frame at every vsync for all of them. */
+.submit-spinner {
+  display: inline-block; flex: none; box-sizing: border-box;
+  width: 9px; height: 9px; margin-right: 5px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1.1s steps(8) infinite;
+}
+/* first line of band 3 while a submit runs — same treatment as .last-sent,
+   accent rather than muted because for those seconds it is the only true
+   statement on a card whose every other line describes a draft */
+.submitting-line {
+  font: 10px var(--mono); color: var(--accent);
+  margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 /* PR chips: one linked badge per open/merged/closed PR on the job, styled
    like .chip but color-coded by PR state instead of the uniform accent */
 .prs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
@@ -974,8 +997,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    rather than the cyan they wore before: a live thread takes --ok (green — a
    second conversation is running), a closed one --stopped (red — paused,
    revivable from the overlay). Deliberately NOT .chip — that class is
-   claimed by the delegated handler that opens an artifact panel (same reason
-   .queue-cancel keeps its own class). */
+   claimed by the delegated handler that opens an artifact panel (the same
+   reason .ct-chip, .dq-chip and .fb-chip keep their own classes). */
 .threads { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; align-items: center; }
 /* the only chip in the card's row whose width is not bounded by a count or a
    PR number: its label carries the thread's title, which is renamable to
@@ -1032,24 +1055,12 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 .err { color: var(--ac2); font-size: 9px; margin-top: 8px; }
 
-/* A queued job's start failure. Louder than .err on purpose: this is the
-   message that was invisible for nine minutes while a job silently refused
-   to start, and the monospace body is a real git/tmux error worth reading
-   verbatim rather than a summary. */
-.start-error {
-  margin-top: 8px; padding: 6px 8px;
-  border-left: 2px solid var(--warn);
-  background: color-mix(in srgb, var(--warn) 8%, transparent);
-  display: flex; flex-direction: column; gap: 3px;
-}
-.start-error-label {
-  font: 600 9px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--warn);
-}
-.start-error-msg {
-  font-family: var(--mono); font-size: 9px; line-height: 1.5;
-  color: var(--body); word-break: break-word;
-}
+/* `.start-error` and its two children stood here — a queued job's silent
+   start failure, given a loud warn-ruled block because it was invisible for
+   nine minutes while the job refused to start on a tick nobody watched. A
+   submit is a request carl is waiting on, so its refusal is that request's own
+   409: it lands in the status corner beside the action, and there is no stored
+   reason for a card to carry. */
 .outcome { color: var(--ok); font-size: 9px; margin-top: 8px; }
 
 /* the cell's last words: a live zeus' most recent assistant text block —
@@ -1469,10 +1480,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .card:hover .ld-chip.hot { border-color: var(--ac2); box-shadow: var(--glow-hot); }
 .card:hover .ld-chip.warm { border-color: var(--warn); box-shadow: var(--glow-warn); }
 
-.prereq span { font: 9px var(--mono); }
-.prereq .ok { color: var(--ok); }
-.prereq .pend { color: var(--warn); }
-.prereq .gate { color: var(--ac2); }
+/* the card's `.prereq` run — one coloured span per unmet/gated/done prereq in
+   the .meta line — stood here, and went with the field itself. */
 
 .empty { color: var(--muted); opacity: 0.4; text-align: center; padding: 14px 0; font-size: 10px; }
 
@@ -2084,10 +2093,10 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
   border: 1px solid var(--border-strong); padding: 6px 9px; min-width: 120px;
 }
-.f-row select:hover, .f-row input:hover, .f-block textarea:hover, #f-prereqs input:hover {
+.f-row select:hover, .f-row input:hover, .f-block textarea:hover {
   border-color: var(--ac);
 }
-.f-row select:focus, .f-row input:focus, .f-block textarea:focus, #f-prereqs input:focus {
+.f-row select:focus, .f-row input:focus, .f-block textarea:focus {
   outline: none; border-color: var(--ac); box-shadow: var(--glow);
 }
 /* the job-colour picker's two WRAPPERS. Both keep their old swatch-strip
@@ -2226,23 +2235,10 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    question list of the same height. */
 .editor-chips { flex: none; display: flex; flex-direction: column; gap: 4px; }
 .editor-chips .chips { margin-top: 0; max-height: 24vh; overflow-y: auto; }
-.mini-add {
-  background: none; border: 1px solid var(--border-strong);
-  font: 10px var(--mono); letter-spacing: normal; color: var(--muted); padding: 1px 7px;
-}
-.mini-add:hover { color: var(--ac); border-color: var(--ac); box-shadow: var(--glow); }
-#f-prereqs { display: flex; flex-direction: column; gap: 6px; }
-.prereq-row { display: flex; gap: 8px; align-items: center; }
-.prereq-row input[type="text"] {
-  flex: 1; font: 10px var(--mono); letter-spacing: normal;
-  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); color: var(--fg);
-  border: 1px solid var(--border-strong); padding: 6px 9px;
-}
-.prereq-row .rm {
-  background: none; border: none;
-  font: 11px var(--mono); color: var(--muted); padding: 0 4px;
-}
-.prereq-row .rm:hover { color: var(--ac2); }
+/* `.mini-add`, `#f-prereqs` and the `.prereq-row` trio stood here. All four
+   dressed the editor's prereq block, which is gone: prereqs gated the queue,
+   and there is no queue. `.mini-add` had no other user — it was the block's
+   "+ add" button and nothing else. */
 #editor-text-wrap { background: color-mix(in srgb, var(--ac) 2%, var(--b0)); }
 /* metric properties (font/padding/border-width) are declared ONCE for the
    textarea/backdrop pair via this selector union, same reasoning as the

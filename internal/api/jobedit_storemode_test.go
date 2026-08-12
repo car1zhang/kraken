@@ -86,8 +86,15 @@ func TestWebJobRawStoreModeRoundTrip(t *testing.T) {
 	if reloaded == nil {
 		t.Fatal("job missing after save")
 	}
-	if reloaded.Repo != "other-repo" || reloaded.Ready {
+	if reloaded.Repo != "other-repo" {
 		t.Fatalf("save did not apply parsed fields: %+v", reloaded)
+	}
+	// newContent above still carries the retired ready:/prereqs: keys, which
+	// is exactly the shape a raw editor session started from an old file
+	// pastes back. They must be consumed silently rather than erring the save
+	// into a draft.
+	if reloaded.Err != "" {
+		t.Fatalf("retired keys in raw content erred the save: %q", reloaded.Err)
 	}
 	spec, _ := splitBodyLog(reloaded.Body)
 	if got := spec; got == "" {
@@ -98,7 +105,7 @@ func TestWebJobRawStoreModeRoundTrip(t *testing.T) {
 // TestWebJobSaveStoreModeUnparseablePreservesFields covers raw
 // content that fails ParseJob must still save (unparseable drafts happen —
 // the editor doesn't block on it), but only the body column changes.
-// Frontmatter columns, prereqs, and PRs must survive exactly as they were,
+// Frontmatter columns and PRs must survive exactly as they were,
 // same contract as file mode (the raw bytes just sit on disk regardless of
 // whether they parse back) — jobFieldsFromParsed(parsed) on a failed parse
 // carries only ParseJob's best-effort defaults and must never be applied.
@@ -109,9 +116,6 @@ func TestWebJobSaveStoreModeUnparseablePreservesFields(t *testing.T) {
 		Slug: "garbage-store", Repo: "monolith", State: "done", Session: "sess-abc",
 	})
 	if err := st.UpsertPR(j.ID, "https://github.com/x/y/pull/1", "open"); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.ReplacePrereqs(j.ID, []store.Prereq{{Slug: "dep-job", Gated: true}}); err != nil {
 		t.Fatal(err)
 	}
 	// L2: UpsertPR just bumped rev past j.Rev's stale load-time snapshot —
@@ -151,21 +155,18 @@ func TestWebJobSaveStoreModeUnparseablePreservesFields(t *testing.T) {
 	if len(reloaded.PRs) != 1 || reloaded.PRs[0].URL != "https://github.com/x/y/pull/1" {
 		t.Fatalf("prs clobbered by an unparseable save: %+v", reloaded.PRs)
 	}
-	if len(reloaded.Prereqs) != 1 || reloaded.Prereqs[0].Job != "dep-job" {
-		t.Fatalf("prereqs clobbered by an unparseable save: %+v", reloaded.Prereqs)
-	}
 }
 
 // TestWebJobSaveStoreModeGarbageContentPinsToDraft covers L6: a store-mode
 // raw save whose content fails to parse must persist that failure into the
 // row's new err column (mirroring file mode's ParseJob-derived Job.Err),
-// so the job pins to "draft" — not startable — even though it's otherwise
-// Ready, exactly like an unparseable job FILE already does. A later save
-// that parses clean must clear it.
+// so the job pins to "draft" — and SubmitJob's first refusal is exactly this
+// case, so it cannot be started either — like an unparseable job FILE already
+// does. A later save that parses clean must clear it.
 func TestWebJobSaveStoreModeGarbageContentPinsToDraft(t *testing.T) {
 	useTestStore(t)
 	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{
-		Slug: "garbage-pin", Repo: "monolith", Ready: true,
+		Slug: "garbage-pin", Repo: "monolith",
 	})
 
 	garbage := "not even frontmatter, just plain text"
@@ -189,11 +190,13 @@ func TestWebJobSaveStoreModeGarbageContentPinsToDraft(t *testing.T) {
 	if reloaded.Err == "" {
 		t.Fatal("want a non-empty Err persisted on the row after a garbage save")
 	}
-	if got := jobs.DisplayState(reloaded, nil); got != "draft" {
+	if got := jobs.DisplayState(reloaded); got != "draft" {
 		t.Fatalf("DisplayState after garbage save = %q, want draft (not startable)", got)
 	}
 
-	// a later save with content that parses clean must clear err.
+	// a later save with content that parses clean must clear err. The content
+	// still carries ready:/prereqs: — a real editor session's raw text, and
+	// exactly the shape the accept-and-ignore parse arms exist for.
 	clean := "---\njob: garbage-pin\ntype: build\nrepo: monolith\nready: true\nprereqs: []\nsolo: false\n---\n\nfixed\n"
 	body2 := mustJSON(t, map[string]any{"slug": "garbage-pin", "content": clean, "mtime": rev1})
 	req2 := httptest.NewRequest(http.MethodPost, "/api/job/save", bytes.NewReader(body2))
@@ -206,8 +209,10 @@ func TestWebJobSaveStoreModeGarbageContentPinsToDraft(t *testing.T) {
 	if fixed == nil || fixed.Err != "" {
 		t.Fatalf("want err cleared after a clean save, got %+v", fixed)
 	}
-	if got := jobs.DisplayState(fixed, nil); got != "queued" {
-		t.Fatalf("DisplayState after clean save = %q, want queued", got)
+	// draft, not queued: a clean parse clears the error, and an unstarted job
+	// has exactly one state to be in now.
+	if got := jobs.DisplayState(fixed); got != "draft" {
+		t.Fatalf("DisplayState after clean save = %q, want draft", got)
 	}
 }
 
@@ -348,34 +353,12 @@ func TestWebJobCreateStoreModeRowMatchesParsedTemplate(t *testing.T) {
 		t.Fatal("job not created in store")
 	}
 	if j.Repo != want.Repo || j.Base != want.Base ||
-		j.Ready != want.Ready || j.Solo != want.Solo || j.Model != want.Model ||
+		j.Solo != want.Solo || j.Model != want.Model ||
 		j.Body != want.Body {
 		t.Fatalf("row = %+v, want fields matching the parsed template %+v", j, want)
 	}
-	if len(j.Prereqs) != len(want.Prereqs) {
-		t.Fatalf("prereqs = %+v, want %+v", j.Prereqs, want.Prereqs)
-	}
 }
 
-func TestWebJobFormStoreModePrereqsRoundTrip(t *testing.T) {
-	useTestStore(t)
-	st := jobs.ActiveStore()
-	mustCreateStoreJob(t, st, store.Job{Slug: "dep-store", Repo: "monolith"})
-	mustCreateStoreJob(t, st, store.Job{Slug: "form-prereq-store", Repo: "monolith"})
-
-	body := mustJSON(t, jobFormFields{
-		Slug: "form-prereq-store", Repo: "monolith",
-		Prereqs: []jobs.Prereq{{Job: "dep-store", Gated: true}},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	webJobSaveForm(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
-	}
-
-	j := jobs.JobBySlug(jobs.LoadJobs(), "form-prereq-store")
-	if j == nil || len(j.Prereqs) != 1 || j.Prereqs[0].Job != "dep-store" || !j.Prereqs[0].Gated {
-		t.Fatalf("prereqs not persisted: %+v", j)
-	}
-}
+// TestWebJobFormStoreModePrereqsRoundTrip is gone with the field: the form
+// carried a prereqs array in both directions, and that removal — together
+// with `ready` — is the v6 break. There is nothing left to round-trip.

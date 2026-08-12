@@ -61,7 +61,7 @@ final class JobSearchTests: XCTestCase {
                         detail: "merged; board now ranks blocked cards by roi"),
             try makeJob(slug: "yelp-dedupe", repo: "monolith", state: "blocked",
                         detail: "need a call on the dedupe threshold — 0.82 too loose?"),
-            try makeJob(slug: "asr-wer-metrics", repo: "monolith", state: "queued"),
+            try makeJob(slug: "asr-wer-metrics", repo: "monolith", state: "draft"),
             // Archived: its `slug` is the numbered archive file base and
             // `display_slug` carries the original name (see WebJob.title).
             try makeJob(slug: "search-index-2", repo: "monolith", state: "archived",
@@ -312,7 +312,7 @@ final class JobSearchTests: XCTestCase {
     // absent must be a plain no-match, not a crash and not a false positive.
 
     func testAbsentOptionalFields() throws {
-        let bare = try makeJob(slug: "asr-wer-metrics", repo: "monolith", state: "queued")
+        let bare = try makeJob(slug: "asr-wer-metrics", repo: "monolith", state: "draft")
         XCTAssertNil(matchJob(bare, terms: parseTerms("threshold")))
         XCTAssertEqual(matchJob(bare, terms: parseTerms("asr"))?.reason, .name)
         XCTAssertEqual(matchJob(bare, terms: parseTerms(""))?.reason, .name)

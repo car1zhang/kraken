@@ -926,11 +926,11 @@ const (
 	GraphModeRevision = "revision"
 )
 
-// CreateGraphJob writes a graph job's row and returns it loaded, ready to be
-// queued — the sibling of CreateDreamJob, and built the same way for the same
-// reason: render the job's TEXT, ParseJob it, and create the row from the
-// parsed fields, so the row can never disagree with what the same text would
-// have produced had a human pasted it into the board's editor.
+// CreateGraphJob writes a graph job's row and returns it loaded, for the
+// caller to submit — the sibling of CreateDreamJob, and built the same way
+// for the same reason: render the job's TEXT, ParseJob it, and create the row
+// from the parsed fields, so the row can never disagree with what the same
+// text would have produced had a human pasted it into the board's editor.
 //
 // instruction is carl's revision brief and is required in revision mode
 // (a revision job with nothing to revise would spawn a cell to do nothing)
@@ -961,15 +961,15 @@ func CreateGraphJob(st *store.Store, slug, mode, instruction string, ingestCap i
 		return nil, fmt.Errorf("graph job %s does not parse: %s", slug, parsed.Err)
 	}
 	if strings.TrimSpace(parsed.Body) == "" {
-		// startable() does not check for a body — only the board's queue
-		// action does — so an empty one would start a cell with an empty
-		// prompt. Belt and braces on top of the template below, exactly as
-		// CreateDreamJob carries.
+		// SubmitJob refuses an empty spec too, so this is belt and braces on
+		// top of the template below, exactly as CreateDreamJob carries — but
+		// failing the CREATE leaves no job at all rather than an unstartable
+		// draft.
 		return nil, fmt.Errorf("graph job %s has an empty body", slug)
 	}
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-		Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model,
+		Solo: parsed.Solo, Model: parsed.Model,
 		Body: parsed.Body,
 	}); err != nil {
 		return nil, err
@@ -981,9 +981,10 @@ func CreateGraphJob(st *store.Store, slug, mode, instruction string, ingestCap i
 	return loadJobFull(st, sr)
 }
 
-// graphJobContent renders a graph job's file text. ready: true — both shapes
-// are meant to start unattended — and solo: false, so the cell may fan
-// extraction out across episodes.
+// graphJobContent renders a graph job's file text. solo: false, so the cell
+// may fan extraction out across episodes. Nothing in the frontmatter asks for
+// a start: the tick that created this job submits it itself on the same pass
+// (daemon.go's startCreatedJob).
 //
 // The body says as little as possible: the procedure lives in the skill, and
 // the only things the skill cannot know are which mode this job is and what
@@ -999,9 +1000,7 @@ func graphJobContent(slug, mode, instruction string, ingestCap int) string {
 	head := "---\n" +
 		"job: " + slug + "\n" +
 		"repo: kraken\n" +
-		"ready: true\n" +
 		"solo: false\n" +
-		"prereqs: []\n" +
 		"---\n" +
 		"\n" +
 		"Read `.claude/skills/graph/SKILL.md` **by path** from this worktree and follow it\n" +
@@ -1132,10 +1131,16 @@ func kickGraph(st *store.Store, now time.Time) *Job {
 			_ = st.SetKV(graphIngestKVKey, today)
 			return nil
 		}
-		// Any ACTIVE graph job — last night's still draining — means no new
+		// Any RUNNING graph job — last night's still draining — means no new
 		// one: two cells writing k graph add concurrently is safe for the
 		// store but doubles the extraction spend on the same queue.
-		if strings.HasPrefix(j.Slug, "graph-") && j.State != "done" && j.Ready {
+		//
+		// working/blocked, spelled out rather than "not done": those two are
+		// exactly the states in which a cell exists. An older graph job left
+		// as a DRAFT is one whose start FAILED, and it will never drain
+		// anything on its own — declining tonight's kick for it would stop the
+		// ingest queue forever with nothing on screen saying why.
+		if strings.HasPrefix(j.Slug, "graph-") && (j.State == "working" || j.State == "blocked") {
 			return nil
 		}
 	}

@@ -71,20 +71,19 @@ func ActiveStore() *store.Store {
 	return activeStore.Load()
 }
 
-// jobFromStoreRow converts one store row (plus its prereqs/PRs) into a
+// jobFromStoreRow converts one store row (plus its PRs) into a
 // jobs.Job, mirroring ParseJob's shape so board-building code ports with
 // minimal churn. File/ModTime read as empty/zero — a store-backed job has
 // no backing file; File-dependent legacy paths (raw file editing in
 // api/jobedit.go — S2: OldJobState, mentioned here previously, is gone;
 // it was k-migrate-only dead code) are out of this slice's scope (next
 // slice: the api handlers move onto the store's own accessors).
-func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job {
+func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 	j := &Job{
 		ID:       sr.ID,
 		Slug:     sr.Slug,
 		Repo:     sr.Repo,
 		Base:     sr.Base,
-		Ready:    sr.Ready,
 		Solo:     sr.Solo,
 		Model:    sr.Model,
 		Color:    sr.Color,
@@ -111,9 +110,6 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 	if sr.Archived() {
 		j.ArchivedName = sr.ArchivedName
 	}
-	for _, p := range prereqs {
-		j.Prereqs = append(j.Prereqs, Prereq{Job: p.Slug, Gated: p.Gated})
-	}
 	for _, p := range prs {
 		j.PRs = append(j.PRs, JobPR{URL: p.URL, State: p.State,
 			LastCommentAt: p.LastCommentAt, BumpedSHA: p.BumpedSHA,
@@ -122,42 +118,37 @@ func jobFromStoreRow(sr *store.Job, prereqs []store.Prereq, prs []store.PR) *Job
 	return j
 }
 
-// loadJobFull fetches one store job row plus its prereqs/PRs and converts
+// loadJobFull fetches one store job row plus its PRs and converts
 // it, so every caller building a *Job from the store goes through the same
-// three-call shape.
+// two-call shape.
 func loadJobFull(st *store.Store, sr *store.Job) (*Job, error) {
-	prereqs, err := st.ListPrereqs(sr.ID)
-	if err != nil {
-		return nil, err
-	}
 	prs, err := st.ListPRs(sr.ID)
 	if err != nil {
 		return nil, err
 	}
-	return jobFromStoreRow(sr, prereqs, prs), nil
+	return jobFromStoreRow(sr, prs), nil
 }
 
 // loadJobsFromStore fetches every active job row (sorted by slug, matching
-// LoadJobsFromFiles' ordering contract) plus its prereqs/PRs — via
+// LoadJobsFromFiles' ordering contract) plus its PRs — via
 // LoadJobsWithChildren (L12), ONE transaction covering the jobs query and
-// every row's prereqs/PRs, instead of the 1+2N separate queries this used
+// every row's PRs, instead of the 1+N separate queries this used
 // to issue (a write landing between any two of them could otherwise mix
 // state from two different moments into the loaded board). Converts each
 // row and re-runs the same post-load bookkeeping LoadJobsFromFiles
-// performs (slug-collision and prereq-cycle marking) so store-backed and
+// performs (slug-collision marking) so store-backed and
 // file-backed boards agree on Err annotations.
 func loadJobsFromStore(st *store.Store) ([]*Job, error) {
-	rows, prereqsByID, prsByID, err := st.LoadJobsWithChildren()
+	rows, prsByID, err := st.LoadJobsWithChildren()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*Job, 0, len(rows))
 	for _, sr := range rows {
-		out = append(out, jobFromStoreRow(sr, prereqsByID[sr.ID], prsByID[sr.ID]))
+		out = append(out, jobFromStoreRow(sr, prsByID[sr.ID]))
 	}
 	sort.SliceStable(out, func(a, b int) bool { return out[a].Slug < out[b].Slug })
 	markSlugIssues(out)
-	markPrereqCycles(out)
 	return out, nil
 }
 
@@ -166,13 +157,13 @@ func loadJobsFromStore(st *store.Store) ([]*Job, error) {
 // already ordered by archived_name, same ordering LoadArchivedJobsFromFiles
 // uses.
 func loadArchivedJobsFromStore(st *store.Store) ([]*Job, error) {
-	rows, prereqsByID, prsByID, err := st.LoadArchivedJobsWithChildren()
+	rows, prsByID, err := st.LoadArchivedJobsWithChildren()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*Job, 0, len(rows))
 	for _, sr := range rows {
-		out = append(out, jobFromStoreRow(sr, prereqsByID[sr.ID], prsByID[sr.ID]))
+		out = append(out, jobFromStoreRow(sr, prsByID[sr.ID]))
 	}
 	return out, nil
 }
@@ -385,12 +376,12 @@ func saveUploadToStore(st *store.Store, slug, ext string, data []byte) (name, pa
 
 // jobFieldValue converts one of WriteJobFields' variadic string keyvals
 // into the typed value store.UpdateJobFields expects, per jobFieldColumns'
-// column types (bool for ready/solo, int64 for run, string
+// column types (bool for solo, int64 for run, string
 // otherwise). Unknown keys pass through as strings; store.UpdateJobFields
 // itself rejects anything outside its allowlist.
 func jobFieldValue(key, val string) any {
 	switch key {
-	case "ready", "solo":
+	case "solo":
 		return val == "true"
 	case "run":
 		n, _ := strconv.Atoi(val)

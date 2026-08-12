@@ -20,7 +20,6 @@ function stubActions(): BoardActions {
     onOpenThread: vi.fn(),
     onAnswerQuestion: vi.fn(),
     onRetry: vi.fn(),
-    onDequeue: vi.fn(),
     onOpenTmux: vi.fn(),
     onSaveFeedback: vi.fn(async () => null),
     onDeleteFeedback: vi.fn(),

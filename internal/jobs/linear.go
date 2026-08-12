@@ -482,7 +482,7 @@ func linearCreateJob(st *store.Store, src linearSource, cfg core.LinearConfig, i
 	}
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-		Ready: parsed.Ready, Solo: parsed.Solo, Model: parsed.Model,
+		Solo: parsed.Solo, Model: parsed.Model,
 		Body: parsed.Body,
 	}); err != nil {
 		if linearSlugTaken(err) {
@@ -685,7 +685,7 @@ func linearApplyUpdate(st *store.Store, src linearSource, row *store.LinearIssue
 			return identifier + " → job " + j.Slug + " (bump not confirmed)", nil
 		}
 	} else {
-		// R9: a draft or queued job has no pane to bump, so the update goes
+		// R9: a job that has never started has no pane to bump, so the update goes
 		// where the job's own spec is — APPENDED, never rewritten: the body
 		// below is carl's to edit, and a poll that regenerated it would throw
 		// away whatever he had typed since.
@@ -819,10 +819,10 @@ func composeLinearBody(iss core.LinearIssue, cfg core.LinearConfig, media []line
 	b.WriteString("---\n")
 	b.WriteString("job: " + linearSlug(iss.Identifier, iss.Title) + "\n")
 	b.WriteString("repo: " + linearOneLine(cfg.DefaultRepo) + "\n")
-	// ready: false is Q1 — a ticket lands as a DRAFT for carl to read and
-	// queue, never as work that starts itself the moment someone assigns it.
-	b.WriteString("ready: false\n")
-	b.WriteString("prereqs: []\n")
+	// No start-flag key of any kind: a ticket lands as a DRAFT for carl to
+	// read and submit, never as work that starts itself the moment someone
+	// assigns it — and since submitting IS starting now, a draft is that
+	// property structurally rather than by a flag left switched off.
 	b.WriteString("---\n\n")
 
 	title := strings.TrimSpace(iss.Title)

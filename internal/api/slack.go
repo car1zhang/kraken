@@ -20,8 +20,9 @@ import (
 // questions/feedback/load family already uses.
 //
 // Every route here is a NEW PATH rather than a key added to, retyped in, or
-// removed from an existing shape, so `apiContract` stays 5 — the bump policy
-// stated in ios/API.md's header and pinned by TestAPIContractUnchanged.
+// removed from an existing shape, so none of them bumps `apiContract` — the
+// bump policy stated in ios/API.md's header and pinned by
+// TestAPIContractUnchanged.
 //
 // Reads vs writes under --mirror: the two GETs stay open (a read is a read,
 // the same call /api/graph and /api/watchlist's GET make), and the one POST

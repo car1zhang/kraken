@@ -97,21 +97,11 @@ func TestForeignKeyCascade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.ReplacePrereqs(id, []Prereq{{Slug: "other", Gated: true}}); err != nil {
-		t.Fatalf("ReplacePrereqs: %v", err)
-	}
 	if err := s.UpsertPR(id, "https://example.com/pr/1", "open"); err != nil {
 		t.Fatalf("UpsertPR: %v", err)
 	}
 	if err := s.DeleteJob(id); err != nil {
 		t.Fatalf("DeleteJob: %v", err)
-	}
-	prereqs, err := s.ListPrereqs(id)
-	if err != nil {
-		t.Fatalf("ListPrereqs: %v", err)
-	}
-	if len(prereqs) != 0 {
-		t.Errorf("prereqs not cascaded: %+v", prereqs)
 	}
 	prs, err := s.ListPRs(id)
 	if err != nil {

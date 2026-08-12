@@ -20,7 +20,7 @@ import (
 // viewer's reads.
 //
 // Additive, like every other graph route — a NEW PATH, no existing shape
-// touched — so `apiContract` stays 5 and no client that predates it decodes
+// touched — so it never bumps `apiContract`, and no client that predates it decodes
 // anything differently. Nothing in Models.swift consumes it; the only caller
 // is a hook process on localhost.
 

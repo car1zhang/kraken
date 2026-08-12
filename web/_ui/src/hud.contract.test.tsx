@@ -374,8 +374,7 @@ describe("S2 · PRChips — label is `#${n}`, state said by colour alone", () =>
 
 describe("S2 · JobCard band 1/3 — the .state span is gone; only settled columns get a status token", () => {
   // `col` is the board COLUMN the card renders in, per the amended row's props
-  // list `{job, col, actions, matchReason?, matchTerms?}`; the queued-✕ renders
-  // only in its own column.
+  // list `{job, col, actions, matchReason?, matchTerms?}`.
   function card(over: Record<string, unknown>, col?: string) {
     return contractRender(
       <contractUI.JobCard
@@ -415,20 +414,10 @@ describe("S2 · JobCard band 1/3 — the .state span is gone; only settled colum
     expect(container.querySelector(".meta span.status")).toBeNull();
   });
 
-  it("renders ◌ queued and keeps the ✕ cancel button in .card-top", () => {
-    const { container } = card({ state: "queued" }, "queued");
-    const status = container.querySelector(".meta span.status");
-    expect(status).not.toBeNull();
-    expect(status!.classList.contains("status-queued")).toBe(true);
-    expect(status!.textContent).toBe("◌ queued");
-
-    const top = container.querySelector(".card-top");
-    expect(top).not.toBeNull();
-    const cancels = Array.from(top!.querySelectorAll("button")).filter((b) =>
-      (b.textContent ?? "").includes("✕"),
-    );
-    expect(cancels.length).toBeGreaterThan(0);
-  });
+  // "renders ◌ queued and keeps the ✕ cancel button in .card-top" stood here.
+  // Both halves are obsoleted: the queued column is gone, so `◌ queued` has no
+  // column to render in, and the ✕ cancelled a booking that no longer exists —
+  // submit starts the cell outright.
 
   it("renders ✓ done for a done job", () => {
     const { container } = card({ state: "done" });

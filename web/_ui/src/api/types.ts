@@ -29,12 +29,6 @@ export interface WebArtifact {
   url: string;
 }
 
-export interface WebPrereq {
-  job: string;
-  gated: boolean;
-  done: boolean;
-}
-
 export interface WebQuestionOption {
   label: string;
   description: string;
@@ -209,13 +203,12 @@ export interface WebJobLoad {
  */
 export type JobColor = string;
 
-export type JobState =
-  | "draft"
-  | "queued"
-  | "working"
-  | "blocked"
-  | "done"
-  | "archived";
+/**
+ * Four states plus the archive. `queued` is retired: submit starts the cell
+ * synchronously, so a job is a draft until the POST returns and a working cell
+ * after it — there is no parked state for the wire to name.
+ */
+export type JobState = "draft" | "working" | "blocked" | "done" | "archived";
 
 export type ZeusStatus = "running" | "polling" | "waiting" | "question" | string;
 
@@ -238,7 +231,6 @@ export interface WebJob {
   color?: JobColor | string;
   cell?: string;
   live: boolean;
-  prereqs?: WebPrereq[];
   artifacts?: WebArtifact[];
   /** zeus' last assistant text block, capped at 4000 chars */
   detail?: string;
@@ -290,17 +282,11 @@ export interface WebJob {
    * are not: once the key is present a client reads all four unconditionally.
    */
   load?: WebJobLoad;
-  /**
-   * Why the daemon's last attempt to start this job's cell failed. Set only
-   * while the job is QUEUED — a running job has nothing to explain, and a
-   * stale reason on a live card would read as a current fault.
-   *
-   * Before this existed the failure was invisible: it went to ~/.kraken/logs
-   * and to daemon.last_error, which is one string for the whole tick rather
-   * than per job. A job once sat queued through 24 identical failed starts
-   * over nine minutes with nothing on screen.
-   */
-  start_error?: string;
+  // `start_error` is GONE from the wire with the queued state. It existed
+  // because a start happened on a daemon tick nobody was watching, so its
+  // failure had nowhere to land but the card. A submit is now a request carl
+  // made and is waiting on: the refusal comes back as that request's own 409
+  // and is shown against the action, not stored on the job.
 }
 
 /** Mirrors jobs.DaemonStatus (internal/jobs/daemon.go:50). */
@@ -454,19 +440,24 @@ export type ThreadOp = "branch" | "kill" | "revive" | "rename" | "send";
 
 // ---------------------------------------------------------------- job form
 
-export interface JobFormPrereq {
-  job: string;
-  gated?: boolean;
-}
-
+/**
+ * The job form, GET and POST alike. `ready` and `prereqs` are GONE from both
+ * shapes — the breaking change behind apiContract 6.
+ *
+ * Re-adding either here would be worse than a compile error: the save route
+ * decodes with a plain json.Decode and no DisallowUnknownFields, so the server
+ * IGNORES a key it does not know and answers 200 — a field that looks saved,
+ * reads back empty, and reports nothing. The loud by-name refusal is on
+ * `/api/job/draft` alone. So this type is the only thing standing between the
+ * two shapes, and a key added to it has to be added to the Go struct in the
+ * same commit.
+ */
 export interface JobForm {
   slug: string;
   repo?: string;
   base?: string;
-  ready?: boolean;
   solo?: boolean;
   model?: string;
-  prereqs?: JobFormPrereq[];
   spec?: string;
   mtime: number;
   editable?: boolean;
