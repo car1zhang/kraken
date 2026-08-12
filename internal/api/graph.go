@@ -205,6 +205,18 @@ func graphHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Aliases ARE joined here, in one bulk query (never per node). The
+	// viewer only draws canonical names, but this route is also the nightly
+	// graph ingest's ONE inventory pull, and an alias-blind inventory made
+	// its canonicalization re-derive the same same-referent merges night
+	// after night — registered aliases resolved correctly server-side while
+	// the lead's match table kept printing their names as NEW.
+	aliases, err := st.AllNodeAliases()
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
 	// Positions are joined in memory from one Layout() sweep rather than a
 	// per-node query: this route already reads every node, and the layout
 	// table has at most one row per node.
@@ -213,15 +225,12 @@ func graphHandler(w http.ResponseWriter, r *http.Request) {
 		xy[p.NodeID] = p
 	}
 
-	// Aliases are NOT joined here. The viewer draws canonical names; aliases
-	// are an inspector-level detail, and fetching them would be one query per
-	// node on the hottest read this subsystem has.
 	outNodes := make([]webGraphNode, 0, len(nodes))
 	for _, n := range nodes {
 		p := xy[n.ID] // absent = zero value = 0,0, which is the documented contract
 		outNodes = append(outNodes, webGraphNode{
 			ID: n.ID, Name: n.Name, Type: n.Type, Description: n.Description,
-			X: p.X, Y: p.Y,
+			X: p.X, Y: p.Y, Aliases: aliases[n.ID],
 		})
 	}
 	outEdges := make([]webGraphEdge, 0, len(edges))

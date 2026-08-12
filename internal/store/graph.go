@@ -679,6 +679,29 @@ func (s *Store) AllEdges() ([]GraphEdge, error) {
 	return out, rows.Err()
 }
 
+// AllNodeAliases returns every node's alias list in one query, keyed by node
+// id. Nodes with no aliases are absent from the map. One bulk read rather
+// than a NodeAliases call per node: the board's /api/graph read joins this
+// onto every node, and per-node queries there would be N round trips on the
+// subsystem's hottest route.
+func (s *Store) AllNodeAliases() (map[int64][]string, error) {
+	rows, err := s.db.Query(`SELECT node_id, alias FROM kg_node_aliases ORDER BY node_id, alias`)
+	if err != nil {
+		return nil, fmt.Errorf("all node aliases: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64][]string)
+	for rows.Next() {
+		var id int64
+		var a string
+		if err := rows.Scan(&id, &a); err != nil {
+			return nil, fmt.Errorf("all node aliases scan: %w", err)
+		}
+		out[id] = append(out[id], a)
+	}
+	return out, rows.Err()
+}
+
 // NodeAliases returns the alias list for one node.
 func (s *Store) NodeAliases(nodeID int64) ([]string, error) {
 	rows, err := s.db.Query(`SELECT alias FROM kg_node_aliases WHERE node_id = ? ORDER BY alias`, nodeID)

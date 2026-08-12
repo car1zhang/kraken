@@ -2214,11 +2214,13 @@ var graphGetSpec = map[string]fieldSpec{
 	"stats": {kind: wireObject, required: true},
 }
 
-// webGraphNodeSpec: "aliases" is the only omitempty key — GET /api/graph
-// never populates it (aliases are an inspector detail), GET /api/graph/node
-// does. Every other key is required, including x and y: a node at the origin
-// is a node whose layout has not been computed yet, which is a real answer,
-// and an absent key would be indistinguishable from it.
+// webGraphNodeSpec: "aliases" is the only omitempty key — both GET /api/graph
+// (one bulk join; the nightly ingest's canonicalization inventory needs them)
+// and GET /api/graph/node populate it, and a node with no aliases omits the
+// key rather than sending an empty array. Every other key is required,
+// including x and y: a node at the origin is a node whose layout has not been
+// computed yet, which is a real answer, and an absent key would be
+// indistinguishable from it.
 var webGraphNodeSpec = map[string]fieldSpec{
 	"id":          {kind: wireNumber, required: true},
 	"name":        {kind: wireString, required: true},
@@ -2577,6 +2579,41 @@ func TestGraphEndpointWireShapes(t *testing.T) {
 	assertShape(t, "GET /api/graph .nodes[0]", graphResp.Nodes[0], webGraphNodeSpec)
 	assertShape(t, "GET /api/graph .edges[0]", graphResp.Edges[0], webGraphEdgeSpec)
 	assertShape(t, "GET /api/graph .stats", graphResp.Stats, webGraphStatsSpec)
+
+	// The bulk alias join: the declared node carries its alias on THIS route
+	// (the nightly ingest reads /api/graph as its one canonicalization
+	// inventory, so a silent revert here re-blinds it), while the bare
+	// endpoint node omits the key rather than sending an empty array.
+	// Deleting the join in graphHandler must fail here, not only in prose.
+	seenAliased := false
+	for i, raw := range graphResp.Nodes {
+		var n struct {
+			Name    string   `json:"name"`
+			Aliases []string `json:"aliases"`
+		}
+		if err := json.Unmarshal(raw, &n); err != nil {
+			t.Fatal(err)
+		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			t.Fatal(err)
+		}
+		_, hasKey := keys["aliases"]
+		switch n.Name {
+		case "kraken":
+			if len(n.Aliases) != 1 || n.Aliases[0] != "k" {
+				t.Fatalf("nodes[%d] %q: aliases %v, want [k]", i, n.Name, n.Aliases)
+			}
+			seenAliased = true
+		default:
+			if hasKey {
+				t.Fatalf("nodes[%d] %q: aliases key present on an alias-less node", i, n.Name)
+			}
+		}
+	}
+	if !seenAliased {
+		t.Fatal("GET /api/graph: no node carried the registered alias")
+	}
 
 	// The inspector read of the node that DOES carry an alias, so the
 	// "aliases" key is exercised as present rather than only as absent.

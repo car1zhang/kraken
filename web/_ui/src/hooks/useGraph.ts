@@ -75,9 +75,12 @@ export function useGraph(active: boolean): GraphModel {
 /**
  * The inspector's read, fetched once per selection rather than polled.
  *
- * It exists because `aliases` is deliberately absent from /api/graph — one
- * join per node on the hottest read of this subsystem — so the only way to
- * show a node's other names is to ask for the node. A one-shot fetch rather
+ * It exists for the node's EDGE LIST — live and invalidated both, already
+ * cut to this node server-side. The board payload carries every edge
+ * globally and the caller can (and, as fallback, does) derive the node's
+ * list from it; this read is the per-node cut with no client filter to
+ * maintain (aliases now ride the board payload too, so they are no longer
+ * this fetch's reason). A one-shot fetch rather
  * than a usePoll because a selection is a click, not a subscription: nothing
  * about one node changes while carl reads it.
  *

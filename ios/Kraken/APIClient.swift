@@ -605,8 +605,8 @@ actor APIClient {
         try await get(baseURL: baseURL, path: "/api/graph")
     }
 
-    /// One node's detail: its aliases (which the viewer payload deliberately
-    /// omits) plus every edge touching it. The drawer asks for this on each
+    /// One node's detail: its aliases (also on the viewer payload, via one
+    /// bulk join) plus every edge touching it. The drawer asks for this on each
     /// selection; until it lands the caller falls back to the payload's own
     /// edges, so a slow or failed read degrades to fewer facts, never to none.
     func fetchGraphNode(baseURL: String, id: Int64) async throws -> GraphNodeDetail {

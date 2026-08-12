@@ -846,8 +846,8 @@ private struct GraphNodeDrawer: View {
             Text("\(vm.edgeCount(for: node)) edges")
                 .font(.data(10))
                 .foregroundStyle(KTheme.text2)
-            // Aliases exist only on the detail read; while it is in flight the
-            // payload node has none and this row is simply absent, rather than
+            // Aliases ride both the payload and the detail read; a node with
+            // none omits the key, so this row is simply absent rather than
             // claiming the entity has no aliases.
             if let aliases = node.aliases, !aliases.isEmpty {
                 Text("aliases: \(aliases.joined(separator: ", "))")

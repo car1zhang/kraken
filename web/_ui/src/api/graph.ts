@@ -24,9 +24,10 @@ export interface GraphNode {
   x: number;
   y: number;
   /**
-   * NEVER present on /api/graph — joining them would be a query per node on
-   * the hottest read there (ios/API.md). The inspector gets them from
-   * /api/graph/node, which is why selecting a node is its own fetch.
+   * Present on both routes: /api/graph joins them in one bulk query (the
+   * nightly ingest reads that payload as its canonicalization inventory,
+   * which was alias-blind without them — ios/API.md), and /api/graph/node
+   * carries them per node. Absent, not empty, on a node with none.
    */
   aliases?: string[];
 }
