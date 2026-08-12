@@ -137,7 +137,11 @@ Two passes, and the first is what makes the second affordable.
 
 **The mechanical pass** is `kraken mine digest --since <ts>`. Its JSON goes to stdout and its
 human summary to STDERR, so stage it as `> digest.json 2>digest.err` — never `2>&1`, which
-interleaves the summary into the JSON and hands every downstream reader a corrupt file. It reads
+interleaves the summary into the JSON and hands every downstream reader a corrupt file. The
+envelope's top-level keys are `since`, `scanned`, `skipped`, `truncated`, `tokens`, and `digests` —
+the per-session rows are under `digests` (`null`, not `[]`, when nothing was scanned), and two
+consecutive passes have burned calls guessing
+`.Sessions` first, because the row fields are documented everywhere and the wrapper nowhere. It reads
 every transcript in the window and counts what is countable: tool calls, `is_error` clusters by
 tool, interrupts (carl
 pressing escape), `<synthetic>` API failures, output-ceiling deaths (`MaxTokensStops` — messages cut
@@ -193,7 +197,14 @@ A brief must not send a subagent to an artifact that cannot contain the answer. 
 raw file cannot show a scout: an inbound `SendMessage` leaves ZERO trace in a subagent sidecar —
 the sidecar records the effect and never the cause — so a sidecar-heavy assignment's brief says to
 cross-check the parent session's `SendMessage`/`Agent` calls before attributing a mid-run pivot to
-the agent's own judgment.
+the agent's own judgment. Two more lines the brief owes every scout. A reduced view's LINES are
+unbounded — a single line can be an entire inlined skill body — so a page size that worked on page
+one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
+(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep. And
+the brief carries a short **already-established list** — the known cross-cutting costs and facts
+from the watch overlay and the graph that touch this scout's assignment — marked "measure, don't
+re-derive": six scouts in one night each independently re-derived from raw a cost the graph
+already held as an entity, because nothing in any brief said what was already known.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
@@ -201,7 +212,17 @@ unnamed subagents, not teammates. Give each one a scratch path **outside the rep
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
 channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
 (staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
-and the collision recovery costs more than the namespace would have. Tell each scout to stage
+and the collision recovery costs more than the namespace would have. Name those directories with
+SHORT slice handles under one root you create first — a short `/tmp/<handle>` root, never under
+the session-uuid scratchpad, or every path built on it re-carries the identifier — and **never
+hand-transcribe an opaque
+identifier — a session uuid, a 36-char random string — into a brief**: one brief carried five
+successive wrong transcriptions of its work-dir uuid, the attempt labelled "FINAL, copy this
+literally" among them, then cut off before its report rules; the scout burned four calls and a
+duplicated full reduce in the garbled dir, and the failure is silent to the lead. The paths that
+cannot avoid identifiers — the assigned transcript paths above all — go in a staged assignment
+file (copied bytes, not typed ones) that the brief names by its short path, exactly as zeus' own
+brief rides in a file rather than on the tmux command line. Tell each scout to stage
 running notes there AS IT READS: the one-shot report rule concentrates the run's entire value into
 the final call, and a scout that died on a connection error at the literal write boundary — its last words were an
 announcement that it had everything and was writing the report — cost ~30K output tokens of
@@ -322,12 +343,13 @@ read offsets against the staged file's own line count (a `wc -l` you run yoursel
 alone prove contiguity, not completion — a lead extracted both scouts' offset lists, never fetched
 either file's length, and certified "coverage spot-checks passed" on an instrument structurally
 unable to tell a scout that finished from one that stopped a page short (both happened to have
-finished; the check could not have known). The spot-check's test is PAGE COVERAGE, never tool
-choice: READ means the reads collectively reach the staged file's LAST line, so a `Read` capped
+finished; the check could not have known). Two axes decide a row's label, and they answer
+different questions. PAGE COVERAGE — not tool choice — separates READ from SAMPLED: READ means
+the reads collectively reach the staged file's LAST line, so a `Read` capped
 at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row says — a brief
 that banned "a capped grep" while blessing "paged reads" was violated twice in one night by
 capped Reads and a `head`, forms that sentence literally permits, one row even stating the true
-line count its reads never reached. Write the rule into scout briefs as coverage ("a row claiming
+line count its reads never reached. Write that rule into scout briefs as coverage ("a row claiming
 full means your pages reached the last line"), never as a list of banned tools. And give the
 Coverage format a THIRD label, because the binary one manufactures false rows: a scout that did its
 real work in the raw JSONL — exactly what the brief encourages — has nothing honest to write in a
@@ -336,9 +358,21 @@ the tension by writing "READ in full" about reduced files they never opened, one
 own 82-line hole inside the sentence claiming completeness. The labels are: READ (reduced pages
 reached the last line), SAMPLED (say what was skipped), and RAW (targeted) — covered primarily by
 raw-JSONL queries, saying which queries; a RAW row is honest coverage, not a downgrade, but like
-SAMPLED it cannot carry a "clean, nothing found" verdict on its own. Alongside it:
+SAMPLED it cannot carry a "clean, nothing found" verdict on its own. DELIVERY MECHANISM is the
+second axis, and it separates READ from RAW: a READ row's pages entered your context through
+`Read` or a plain `cat` of the staged view itself — content you met only as extraction-script
+output or filtered greps is RAW whatever file the script opened, however completely it covered
+it (an honest, often better way to work; just not that label). This axis goes into scout briefs
+too, as its own coverage sentence — "a row claiming READ means the staged view's own pages
+entered your context, not a script's output over it" — since it is the axis that produced the
+inflated rows. A scout that staged reduced
+views, worked entirely from its own extracts, and filed every row READ has now happened on
+consecutive nights, including by a scout that was itself policing a sibling's inflated
+rows. Alongside it:
 **every finding cites its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
-line out of it.** A finding
+line out of it — name the scout file even when you also cite the underlying transcript, because a
+report whose findings cite only cells and transcripts is indistinguishable, on this format's own
+check, from one synthesized from task notifications.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
 snapshot, the watched fact's edge id — and a `solo: true` night says so once at the top and cites what it read
 directly. A night synthesized from notifications cannot produce the scout citations, so it fails its
