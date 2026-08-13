@@ -365,6 +365,7 @@ button, a, [role="button"], summary, label.check,
 .card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
+.panel-body.md code.code-ref, .steer-detail code.code-ref, .steer-spec-body code.code-ref,
 input[type="checkbox"] {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
@@ -383,6 +384,9 @@ input[type="checkbox"] {
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
 :root[data-theme="light"] #thread-panehead,
+:root[data-theme="light"] .panel-body.md code.code-ref,
+:root[data-theme="light"] .steer-detail code.code-ref,
+:root[data-theme="light"] .steer-spec-body code.code-ref,
 :root[data-theme="light"] input[type="checkbox"] {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
@@ -1944,6 +1948,45 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .md code { font: 10px var(--mono); background: color-mix(in srgb, var(--warn) 8%, var(--b1)); color: var(--warn); padding: 1px 4px; }
 .md pre { background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider); padding: 10px 12px; overflow-x: auto; margin: 0.7em 0; }
 .md pre code { background: none; padding: 0; color: var(--body); }
+/* A code span that is a REF opens the file in an editor (lib/codeRefs.ts), and
+   the underline is the only thing on screen that says so before the click —
+   the chip keeps its ordinary code-span colour, because it is still code and
+   recolouring it would read as a different KIND of token rather than as the
+   same token with somewhere to go. Dashed at rest, solid on hover: the same
+   "available / aimed at" pair the accent underline draws under .md a, one
+   dash-pattern quieter because a doc paragraph can hold a dozen of these and a
+   dozen solid rules is a ruled page.
+
+   The cursor is NOT declared here. Every act-able surface in this app takes the
+   ring reticle from the ONE pointer list at the top of this sheet, which these
+   same three selectors are now on — a local `cursor:` would win the cascade
+   over it and quietly restore the OS hand, which is the exact regression that
+   list's comment exists to prevent. Keep the two lists in step: a ref that is
+   underlined here but missing there reads as clickable and wears the resting
+   crosshair.
+
+   THREE SURFACES, NOT `.md`: the artifact body (`.panel-body.md`), and the
+   steer modal's detail and spec. Those are exactly the three that carry a click
+   handler. `.md` alone would also dress the DREAM report bodies and the thread
+   blocks, which render the same markdown through the same renderer and are
+   deliberately left unwired — a ref there would wear the underline and the
+   act-able cursor and then do nothing on click, which is a worse surface than
+   no affordance at all. The artifact IFRAME is not here either: it is another
+   document, and wireCodeRefs injects its own sheet into it.
+
+   Fenced blocks are excluded by construction — renderMD never runs inlineMD
+   over a fence, so no `<pre><code>` can carry the class. */
+.panel-body.md code.code-ref,
+.steer-detail code.code-ref,
+.steer-spec-body code.code-ref {
+  border-bottom: 1px dashed color-mix(in srgb, var(--ac) 65%, transparent);
+}
+.panel-body.md code.code-ref:hover,
+.steer-detail code.code-ref:hover,
+.steer-spec-body code.code-ref:hover {
+  border-bottom-style: solid;
+  border-bottom-color: var(--ac);
+}
 .md a { color: var(--ac); }
 .md a:hover { color: var(--ac2); }
 .md strong { color: var(--fg); font-weight: 600; }

@@ -1860,6 +1860,13 @@ Response: `{"ok": true, "note": string}` (human-readable outcome).
 `focus_error` (string) is additionally present when the session was raised but bringing its Ghostty window to the front failed — the window still needs a manual switch-to. Both keys are additive (no `apiContract` bump).
 Errors: 400 (both or neither of pane/slug set), 404 (no session in pane / no job / no live cell agent), 409 (open failure).
 
+### `POST /api/editor/open` — local-origin-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+
+Request: `{"slug": string, "archived": bool?, "path": string, "line": number?, "col": number?}` — `path` is repo-relative (a bare basename resolves by unique match against the job's tracked files). `archived` picks the archive namespace for the slug (an archived job and a live one can share one); the web UI sets it from `parts.home === "archive"` for a ref clicked in an artifact served out of the archive home, and from `job?.archived` for a steer on an archived job. Body limited to 1MB.
+Response: `{"ok": true}`, plus `note` (string) when the cell's worktree is gone and the file was opened from the primary `~/Developer/<repo>` checkout instead. `note` is additive and absent on the clean path.
+The source IP must be loopback or one of this host's own interface addresses: a click from a phone or another machine on the tailnet answers 403, since the editor it would open runs here (api/editor.go). Mirror mode 403s it with the rest of the tmux/GUI-driving routes.
+Errors: 403 (non-local origin, or mirror mode), 400 (bad json), 409 (empty/absolute/`..`/dot-prefixed path, negative line/col, unknown slug, unresolvable repo, missing file, basename matching zero or several tracked files, or a launch failure). POST only (405 otherwise) and requires `Content-Type: application/json` (415 otherwise, see `requireJSONPost`).
+
 ---
 
 ## Unified event log

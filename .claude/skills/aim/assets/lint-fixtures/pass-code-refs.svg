@@ -1,0 +1,27 @@
+<svg viewBox="0 0 860 200" role="img" aria-label="The browser-side opener and the server-side handler it posts to, each carrying a repo-relative data-code reference, with the route registration on the edge between them and a pill that carries no reference at all.">
+  <text class="title" x="16" y="26">a code ref rides a component box and the edge between two</text>
+
+  <g class="fn" data-code="web/_ui/src/api/client.ts:276">
+    <rect x="40" y="72" width="220" height="56" rx="6"/>
+    <text x="150" y="98">
+      <tspan x="150" dy="0">openInEditor()</tspan>
+      <tspan x="150" dy="1.2em">function</tspan>
+    </text>
+  </g>
+
+  <g class="fn" data-code="internal/api/editor.go:176-265">
+    <rect x="400" y="72" width="220" height="56" rx="6"/>
+    <text x="510" y="98">
+      <tspan x="510" dy="0">editorOpenHandler()</tspan>
+      <tspan x="510" dy="1.2em">handler</tspan>
+    </text>
+  </g>
+
+  <g class="pill">
+    <rect x="680" y="87" width="120" height="26" rx="13"/>
+    <text x="740" y="104">200 ok</text>
+  </g>
+
+  <path class="edge" d="M 260,100 H 400" data-code="internal/api/register.go:22"/>
+  <text class="edgeLabel" x="330" y="92">POST</text>
+</svg>

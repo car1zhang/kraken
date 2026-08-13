@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -1138,6 +1139,107 @@ func TestPeersOpenWireShape(t *testing.T) {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/peers/open (focus_error)", rec.Body.Bytes(), peersOpenSpec)
+}
+
+// --- /api/editor/open (editor.go editorOpenHandler) ---
+//
+// Reachable here for the same reason /api/peers/open is: the launch itself is
+// behind the openInEditorFunc seam, so both success shapes are exercised with
+// a temp HOME, a throwaway checkout, and no exec — nothing in this package
+// ever runs Zed. The refusal shapes are the shared {"error": string}
+// convention and are covered behaviourally in editoropen_*_test.go.
+
+var editorOpenSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+	// additive, and present ONLY on the fallback open: the cell's worktree is
+	// gone, so the file came from the primary checkout instead. Its
+	// optionality is the wire guarantee that matters — the web client toasts
+	// whatever `note` holds, so a clean open must not carry one, exactly as
+	// /api/peers/open's focus_error must be absent on a clean focus.
+	"note": {kind: wireString, required: false},
+}
+
+// editorOpenRepo makes a checkout under ~/Developer that jobs.ResolveRepo can
+// find (a dir with a .git entry), and returns its path.
+func editorOpenRepo(t *testing.T) string {
+	t.Helper()
+	repo := filepath.Join(util.Home(), "Developer", "demo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+// editorOpenFile writes a file at root/rel, creating its parents — the handler
+// stats every path carrying a "/" before it hands one to the seam.
+func editorOpenFile(t *testing.T, root, rel string) string {
+	t.Helper()
+	p := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("package demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func editorOpenPost(t *testing.T, slug, path string, line int) *httptest.ResponseRecorder {
+	t.Helper()
+	body := mustJSON(t, map[string]any{"slug": slug, "path": path, "line": line})
+	req := httptest.NewRequest(http.MethodPost, "/api/editor/open", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:52341" // the local-origin gate; httptest's default is 192.0.2.1
+	rec := httptest.NewRecorder()
+	editorOpenHandler(rec, req)
+	return rec
+}
+
+func TestEditorOpenWireShape(t *testing.T) {
+	st := useTestStore(t)
+	old := openInEditorFunc
+	t.Cleanup(func() { openInEditorFunc = old })
+	var opened string
+	openInEditorFunc = func(abs string, line, col int) error {
+		opened = abs
+		return nil
+	}
+	repo := editorOpenRepo(t)
+	const rel = "internal/api/board.go"
+
+	// clean success: the cell's worktree is still on disk, so the file opens
+	// from there and the body is a bare {ok:true}
+	live := mustCreateStoreJob(t, st, store.Job{Slug: "editor-shape-live", Repo: "demo", State: "working"})
+	wt := jobs.CellWorktree(live, repo)
+	want := editorOpenFile(t, wt, rel)
+	rec := editorOpenPost(t, live.Slug, rel, 37)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if opened != want {
+		t.Errorf("opened %q, want %q", opened, want)
+	}
+	assertShape(t, "/api/editor/open (clean success)", rec.Body.Bytes(), editorOpenSpec)
+
+	// worktree gone: same shape plus the additive note, opened out of the
+	// primary checkout
+	gone := mustCreateStoreJob(t, st, store.Job{Slug: "editor-shape-gone", Repo: "demo", State: "done"})
+	wantFallback := editorOpenFile(t, repo, rel)
+	rec = editorOpenPost(t, gone.Slug, rel, 37)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if opened != wantFallback {
+		t.Errorf("opened %q, want %q", opened, wantFallback)
+	}
+	assertShape(t, "/api/editor/open (worktree gone)", rec.Body.Bytes(), editorOpenSpec)
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["note"]; !ok {
+		t.Errorf("fallback open carries no note: %s", rec.Body.String())
+	}
 }
 
 // --- /api/health (webpeers.go) ---

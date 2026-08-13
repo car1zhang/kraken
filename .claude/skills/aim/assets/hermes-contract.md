@@ -14,7 +14,9 @@ markup, fill the placeholders. Every component box also gets a silhouette — lo
 in the Shape Kit and use that class. If you need something that isn't a part, check the
 Composition Recipes — most "missing" shapes are compositions of existing parts. Only if
 neither has it do you approximate with the closest part; you NEVER invent new classes,
-attributes, or markup shapes.
+attributes, or markup shapes — with exactly one carve-out, `data-code`, the one metadata
+attribute this kit sanctions (see `### Code refs` in the Shape Kit). Its VALUE always comes
+from your brief; the carve-out lets you place the attribute, never invent what it says.
 
 Every snippet below is copy-paste-ready. Placeholders (`X`, `Y`, `W`, `H`, `CX`, `CY`, `…`)
 are yours to fill in; nothing else about the markup shape should change. A box nested inside
@@ -72,6 +74,7 @@ only the middle one is a number; substituting all three silently draws a differe
 | Flow dot | `<circle class="flow-dot">` | animated dot riding an edge (flow diagrams) |
 | Arrow marker | `<marker>` in defs | the one arrowhead definition per SVG |
 | De-emphasis | add class `dim` | fade untaken paths / background context |
+| Code ref | add attribute `data-code="path:line"` | the brief-assigned code location a component box or an edge stands for — the ONE metadata attribute in this kit (see Shape Kit → Code refs) |
 
 The silhouette rows above gloss their part in one noun. Kind synonyms live in exactly one
 place — the Shape Kit's kind → shape lookup — so look your brief's kind up there, never here.
@@ -357,6 +360,11 @@ endpoints already make in their own labels, the colour alone is fine.
 Edges are always `<path>` — never `<line>` (a `<line class="edge">` renders unstyled in
 some host docs and fails lint placement).
 
+An edge may also carry a **code ref** on its own `<path>` —
+`<path class="edge" d="…" data-code="internal/api/register.go:22"/>` — naming the
+contract or call site the relationship runs through. Same rule as on a box: the value comes
+from your brief and you never invent one. See the Shape Kit's `### Code refs`.
+
 ### Edge label
 
 12px, middle-anchored. Multi-line via `tspan`:
@@ -523,6 +531,57 @@ lines with it. Where the line goes:
 | `pill`, `decision`, `lane`, `region`, `cell`, `actor` | nowhere — parts, not components |
 
 **Function names carry their parens.** Wherever a diagram names a function or method — a `fn` box's name line, another box's label, an edge label, a note — the name ends in `()`: `deriveState()`, `get_appointments()`, never a bare `deriveState`. The parens are what let a reader tell a callable from a value, a field, or a table at a glance; the kind line saying `function` does not travel with the name when it is mentioned elsewhere. A name that wraps across tspans keeps the `()` on its final fragment, and a label naming several functions suffixes each one.
+
+### Code refs — the `data-code` attribute
+
+A **code ref** links a component box, or an edge, to the place in the repo it stands for, so a
+reader can open that line straight from the rendered card. It is the ONE metadata attribute
+this kit sanctions — the single carve-out to "never invent new attributes" at the top of this
+file — and everything about it is decided by your brief.
+
+**Value shape**: `path:line`, the path repo-relative. The full grammar is
+`path[:line[-end|:col]]` — a bare path (`web/_ui/src/lib/codeRefs.ts`) points at the file, a
+line (`web/_ui/src/lib/markdown.ts:109`) at one line, a range (`internal/api/editor.go:176-265`)
+at a span, and a line:column (`web/_ui/src/lib/codeRefs.ts:76:17`) at a position. Every ref in
+this section is a real location in this repo, checked before it was written down — the rule
+below applies to the rule's own examples first.
+
+**The separator is a COLON, never a `#`.** A hash ref is wrong on its own terms — it is not the
+shape the opener parses — and once the characters after it read as hex it is wrong a second
+time: `#` followed by 3-8 hex-alphabet characters is exactly what the COLOR_LITERAL scan hunts
+for, so `data-code="board.go#375"` fails your fragment as a *colour literal* as well, a rule
+about paint firing on a code link. (`board.go#37` is two digits and stays under that scan, so
+it fails only as a malformed ref — the collision needs three.) A ref may also never contain
+whitespace, `{`, `*` or `?`, may never start with `/`, and may never contain a `..` segment.
+
+**Your brief assigns every ref; you never invent one.** The same rule as a treatment, and for
+the same reason: a ref is a factual claim about where code lives, it can be WRONG, and you
+have no way to check it — the lead verified each one existed before briefing you. A box the
+brief gave no ref for carries none. If a box obviously *should* have one and the brief is
+silent, say so in your report rather than guessing a plausible path.
+
+**Where it goes**: on the component box's own `<g>` — the same element that carries the
+silhouette class — and on an edge's `<path class="edge …">` when the brief names a contract or
+call site for that relationship. Parts are not components and take no ref: `pill`, `decision`,
+`lane`, `region`, `cell` and `actor` carry no kind line and no `data-code` either.
+
+```svg
+<g class="proc" data-code="cmd/kraken/cmd_serve.go:37">
+  <rect x="X" y="Y" width="W" height="H" rx="6"/>
+  <text x="CX" y="CY">
+    <tspan x="CX" dy="-0.6em">kraken serve</tspan>
+    <tspan x="CX" dy="1.2em">OS process</tspan>
+  </text>
+</g>
+
+<path class="edge" d="…" marker-end="url(#MARKER_ID)" data-code="internal/api/register.go:22"/>
+```
+
+`lint_svg.py` checks the shape of every ref it finds (`CODE_REF_FORMAT`, a failure) and warns
+when a ref names a bare filename with no directory (`CODE_REF_BASENAME`) — prefer the full
+repo-relative path, since a basename leaves the opener guessing between same-named files. Its
+`--code-refs` flag additionally warns on component boxes carrying no ref at all
+(`CODE_REF_MISSING`); your brief says whether to run with it.
 
 ### Silhouette snippets
 
@@ -1229,6 +1288,12 @@ second copy of this vocabulary (edit both together). Do not do them even once:
   `## Colour Semantics` → `grey`).
 - `<line>` elements for edges — edges are `<path class="edge">`
 - `<foreignObject>`, `<image>`, or any `<script>`
+- **The one PERMITTED attribute outside the markup shapes above**: `data-code="path:line"`, on a
+  component box's `<g>` or an edge's `<path>`. It is the only metadata attribute in this kit, its
+  value always comes from your brief, and the separator is a colon — a `#` there is both the wrong
+  shape and, when its characters read as hex, a `COLOR_LITERAL` failure about paint. Everything
+  else about it — the full grammar, where it may sit, what the linter checks — is in the Shape
+  Kit's `### Code refs`.
 
 ## Geometry Rules
 

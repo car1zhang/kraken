@@ -15,6 +15,11 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/peers/spawn", mirrorGated(peersSpawnHandler))
 	mux.HandleFunc("/api/peers/kill", mirrorGated(peersKillHandler(defaultPeerSource)))
 	mux.HandleFunc("/api/peers/open", mirrorGated(peersOpenHandler(defaultPeerSource)))
+	// A code ref clicked in an artifact (editor.go). Mirror-gated with the
+	// peers open it is modelled on, and for the same reason: it drives a real
+	// GUI app on this Mac regardless of which DB is wired. Its own
+	// local-origin gate is a second, narrower refusal inside the handler.
+	mux.HandleFunc("/api/editor/open", mirrorGated(editorOpenHandler))
 	mux.HandleFunc("/api/board", boardHandler)
 	mux.HandleFunc("/api/usage", usageHandler)
 	mux.HandleFunc("/api/account/switch", accountSwitchHandler)

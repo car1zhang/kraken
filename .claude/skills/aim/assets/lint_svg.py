@@ -3,15 +3,15 @@
 (assets/hermes-contract.md, relative to this skill's own base directory).
 
 Usage:
-    python3 lint_svg.py <fragment.svg> [--marker-id arrow-<id>] [--prefix <p->]
+    python3 lint_svg.py <fragment.svg> [--marker-id arrow-<id>] [--prefix <p->] [--code-refs]
     python3 lint_svg.py --selftest
 
 Hard failures print as "line N: RULE_NAME: message" and cause a non-zero exit.
 Warnings print the same way with a "(warning)" suffix and never affect the exit code.
 
 Warn-tier rules, the complete list: TEXT_OVERFLOW, SHAPE_TEXT_FIT, NEST_WELL,
-HOLDS_MISSING, HOLDS_EMPTY, GEOM_UNPARSEABLE, COLOUR_NO_GLYPH, COLOUR_AS_CATEGORY.
-Every other rule is a hard failure.
+HOLDS_MISSING, HOLDS_EMPTY, GEOM_UNPARSEABLE, COLOUR_NO_GLYPH, COLOUR_AS_CATEGORY,
+CODE_REF_MISSING, CODE_REF_BASENAME. Every other rule is a hard failure.
 Anything this linter cannot parse or read degrades to a finding — it never raises.
 
 stdlib only: re, sys, json, argparse, pathlib, xml.parsers.expat.
@@ -207,6 +207,49 @@ NESTABLE_WELLS = {
 # an ancestor, its depth exemption is unreachable by design, and its HOLDS_MISSING
 # exemption is redundant with the NESTABLE_SHAPES gate that already excludes it.
 CONTAINER_SHAPES = {"group", "region", "lane"}
+
+# ---- code refs: the one metadata attribute the contract sanctions ----
+#
+# `data-code="path:line"` links a box or an edge to the code it stands for, so a
+# reader can open that line from the rendered card. The value comes from the brief
+# and hermes never invents one, which is why the linter checks its SHAPE and its
+# presence but can never check that the file or line exists — that verification is
+# the lead's, before the brief goes out (aim/SKILL.md's delegation rule).
+#
+# The separator is a COLON, never a `#`. COLOR_LITERAL scans raw source lines for
+# `#` followed by 3-8 hex-alphabet characters, so `data-code="board.go#375"` fails
+# the fragment as a COLOUR literal on top of CODE_REF_FORMAT — a rule about paint
+# firing on a code link. It takes three such characters to bite: `board.go#37` is
+# two digits, stays under the scan, and fails CODE_REF_FORMAT alone, which is what
+# lint-fixtures/fail-code-ref-format.svg pins (both verdicts checked by running
+# this linter over each spelling).
+CODE_REF_ATTR = "data-code"
+
+# path[:line[-end|:col]]. The path arm deliberately excludes `:` so the position
+# suffix can never be mistaken for part of the path, and the character bans below
+# are checked separately so each one can name itself in the message.
+CODE_REF_RE = re.compile(
+    r"^(?P<path>[^:]+)(?::(?P<line>\d+)(?:-(?P<end>\d+)|:(?P<col>\d+))?)?$")
+
+# Characters a code ref may never contain. `#` is the COLOR_LITERAL collision above;
+# `{`/`*`/`?` are template and glob syntax, i.e. a ref that was never resolved to one
+# real location. Whitespace is checked separately (any kind, not just a space).
+CODE_REF_BANNED_CHARS = "#{}*?"
+
+# CODE_REF_MISSING's exemption, verbatim from the contract: these shape classes have
+# a silhouette but are PARTS, not components — a terminal, a gate, a participant
+# header, a background tint, a value, a person. None of them stands for code, so
+# none can honestly carry a ref.
+CODE_REF_PART_SHAPES = {"pill", "decision", "lane", "region", "cell", "actor"}
+
+# What CODE_REF_MISSING actually sweeps: every silhouette MINUS the parts above,
+# minus the boundary containers (a `group` is ownership or a machine, not a
+# component — CONTAINER_SHAPES is the same distinction NEST_DEPTH already draws),
+# minus the three annotation parts. `step`, `badge` and `bar` carry no kind line
+# either (contract § Kind tags: only component boxes do), so asking one of them for
+# a code ref is a warning nothing can act on.
+CODE_REF_COMPONENT_SHAPES = (SHAPE_CLASSES - CODE_REF_PART_SHAPES - CONTAINER_SHAPES
+                             - {"step", "badge", "bar"})
 
 # Attributes each element type carries plain user-space numbers in. Every geometry
 # rule reads these, and silently skips an element whose numbers do not parse — which
@@ -651,8 +694,52 @@ def shape_g_ancestors(el):
     return out
 
 
-def lint(path, marker_id=None, prefix=None):
-    """Return (failures, warnings), each a list of (line, RULE, message)."""
+def code_ref_problem(value):
+    """None when `value` is a well-formed `data-code` ref, else a short phrase saying
+    what is wrong with it, ready to drop into a CODE_REF_FORMAT message.
+
+    Well-formed is `path[:line[-end|:col]]`: a repo-relative path, optionally a line,
+    and optionally either a range end or a column. The checks run in the order a
+    reader would want them named — the banned character first, since that is the one
+    a brief actually gets wrong — rather than leaving one regex to say "no" about six
+    different defects at once."""
+    if not value:
+        return "is empty"
+    for ch in CODE_REF_BANNED_CHARS:
+        if ch in value:
+            note = (' (the separator is a colon; a "#" followed by 3-8 hex-alphabet '
+                    "characters also fails COLOR_LITERAL)" if ch == "#" else "")
+            return f'contains "{ch}"{note}'
+    if any(c.isspace() for c in value):
+        return "contains whitespace"
+    if value.startswith("/"):
+        return "starts with / (a ref is relative to the repo root, never absolute)"
+    m = CODE_REF_RE.match(value)
+    if m is None:
+        return "is not path[:line[-end|:col]]"
+    segments = m.group("path").split("/")
+    if any(s == ".." for s in segments):
+        return 'contains a ".." segment'
+    if any(s == "" for s in segments):
+        return "has an empty path segment"
+    return None
+
+
+def code_ref_path(value):
+    """The path half of a well-formed ref (everything before the position suffix).
+    Only ever called on a value code_ref_problem accepted, so the match cannot be
+    None — but it is guarded anyway, since a linter never raises."""
+    m = CODE_REF_RE.match(value)
+    return m.group("path") if m else value
+
+
+def lint(path, marker_id=None, prefix=None, code_refs=False):
+    """Return (failures, warnings), each a list of (line, RULE, message).
+
+    `code_refs` turns on CODE_REF_MISSING, the one check that asks for an attribute
+    rather than judging one that is there. It is opt-in because a diagram whose boxes
+    are not code — a data model, a timeline, a concept map — has nothing to link to,
+    and the same is true of every fragment written before code refs existed."""
     failures = []
     warnings = []
     # A missing path, a directory, a permissions problem: all findings, never a
@@ -782,6 +869,31 @@ def lint(path, marker_id=None, prefix=None):
         if "spark" in tokens and el.tag != "path":
             failures.append((el.line, "CLASS_PLACEMENT",
                               f'class "spark" must be on <path>, found on <{el.tag}>'))
+
+    # CODE_REF_FORMAT (failure) / CODE_REF_BASENAME (warning) — judge the refs that
+    # ARE here. Both sweep every element rather than just component <g>s and edge
+    # <path>s: a ref in the wrong place is still a ref somebody will click, and a
+    # malformed one is malformed wherever it sits.
+    for el in elements:
+        if CODE_REF_ATTR not in el.attrib:
+            continue
+        value = el.attrib[CODE_REF_ATTR]
+        problem = code_ref_problem(value)
+        if problem is not None:
+            failures.append((el.line, "CODE_REF_FORMAT",
+                              f'{CODE_REF_ATTR}="{value}" {problem}; a code ref is '
+                              f"path[:line[-end|:col]] relative to the repo root, and it "
+                              f"comes from your brief — never invent or repair one here, "
+                              f"ask for the corrected ref"))
+            continue
+        # Only well-formed refs reach the basename check, so a single bad value is
+        # reported once, by the rule that can actually describe it.
+        if "/" not in code_ref_path(value):
+            warnings.append((el.line, "CODE_REF_BASENAME",
+                              f'{CODE_REF_ATTR}="{value}" names a bare filename with no '
+                              f"directory; the opener has to guess which tracked file it "
+                              f"means and refuses when several match — give the "
+                              f"repo-relative path"))
 
     # ROOT_SIZE + viewBox extraction
     vb_w = vb_h = None
@@ -964,6 +1076,23 @@ def lint(path, marker_id=None, prefix=None):
         parent_g, _ = nearest_shape_g(el)
         if parent_g is not None:
             kids_of.setdefault(id(parent_g), []).append(shape)
+
+    # CODE_REF_MISSING (warning, --code-refs only) — a component box that links to no
+    # code. Structurally this is COLOUR_NO_GLYPH's sibling: both say a part is missing
+    # the second half of a claim it is already making. It rides the shape_gs sweep
+    # because that sweep is the one place that already knows component from part.
+    if code_refs:
+        for el, shape in shape_gs:
+            if shape not in CODE_REF_COMPONENT_SHAPES:
+                continue
+            if CODE_REF_ATTR in el.attrib:
+                continue
+            warnings.append((el.line, "CODE_REF_MISSING",
+                              f'<g class="{shape}"> carries no {CODE_REF_ATTR}; every '
+                              f"code-backed box in this figure links to its entrypoint. "
+                              f"Add the ref your brief assigned, or say in your report "
+                              f"that this box has no honest code location — the brief "
+                              f"assigns refs, so never invent one to silence this"))
 
     for el, shape in shape_gs:
         parent_g, parent_shape = nearest_shape_g(el)
@@ -1231,7 +1360,10 @@ def selftest():
     that entry's expectations.
 
     A manifest entry is {"file", "expect": "pass"|"fail", "warnings": int, "note", and
-    optionally "marker_id"/"prefix"}. `warnings` is an exact count and is OPTIONAL by
+    optionally "marker_id"/"prefix"/"code_refs"}. `code_refs` is the boolean that runs
+    that fixture with the `--code-refs` flag on; absent means off, which is what keeps
+    every fixture written before code refs existed byte-identical under this sweep.
+    `warnings` is an exact count and is OPTIONAL by
     design — absent means "unchecked" — but every entry in the shipped manifest sets it
     on purpose, so a fixture that starts emitting a new warning can never slip through
     silently. It only ever makes the check stricter: a fail/pass mismatch is a mismatch
@@ -1276,6 +1408,8 @@ def selftest():
                 problem = '"marker_id" must be a string'
             elif not isinstance(entry.get("prefix", ""), str):
                 problem = '"prefix" must be a string'
+            elif not isinstance(entry.get("code_refs", False), bool):
+                problem = '"code_refs" must be true or false, or absent'
             elif "warnings" in entry and (not isinstance(entry["warnings"], int)
                                           or isinstance(entry["warnings"], bool)
                                           or entry["warnings"] < 0):
@@ -1293,7 +1427,9 @@ def selftest():
                   f"{fixtures_dir.name}/")
             all_ok = False
             continue
-        failures, warnings = lint(fpath, marker_id=entry.get("marker_id"), prefix=entry.get("prefix"))
+        failures, warnings = lint(fpath, marker_id=entry.get("marker_id"),
+                                  prefix=entry.get("prefix"),
+                                  code_refs=entry.get("code_refs", False))
         got = "fail" if failures else "pass"
         ok = got == expected
         expected_warnings = entry.get("warnings")
@@ -1318,6 +1454,9 @@ def main():
     ap.add_argument("fragment", nargs="?", help="path to the .svg fragment to lint")
     ap.add_argument("--marker-id", help="expected arrow marker id, e.g. arrow-my-diagram")
     ap.add_argument("--prefix", help="required id prefix for every other id in the fragment")
+    ap.add_argument("--code-refs", action="store_true",
+                     help="also warn (CODE_REF_MISSING) on component boxes carrying no "
+                          "data-code attribute; use it on a figure whose boxes are code")
     ap.add_argument("--selftest", action="store_true",
                      help="lint the bundled lint-fixtures/ and check each one against its "
                           "manifest entry's expected verdict and warning count")
@@ -1329,7 +1468,8 @@ def main():
     if not args.fragment:
         ap.error("fragment path is required unless --selftest is given")
 
-    failures, warnings = lint(args.fragment, marker_id=args.marker_id, prefix=args.prefix)
+    failures, warnings = lint(args.fragment, marker_id=args.marker_id, prefix=args.prefix,
+                              code_refs=args.code_refs)
     print_results(args.fragment, failures, warnings)
     return 1 if failures else 0
 

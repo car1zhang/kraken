@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { createFeedback, threadOp } from "../../api/client.ts";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import { createFeedback, openInEditor, threadOp } from "../../api/client.ts";
 import type { WebJob } from "../../api/types.ts";
 import { useArtifactSeq, type SeqEntry } from "../../hooks/useArtifactSeq.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
+import {
+  codeRefTarget,
+  wireCodeRefs,
+  type CodeRefTarget,
+} from "../../lib/codeRefs.ts";
 import { ArtifactPager, useArtifactKeys } from "./ArtifactPager.tsx";
 import { Overlay, type Mutate } from "./Overlay.tsx";
 import { showToast } from "./Toast.tsx";
@@ -158,6 +169,46 @@ export function artifactParts(url: string): ArtifactParts | null {
   return m && m[1] && m[2] && m[3]
     ? { slug: m[1], home: m[2], name: m[3] }
     : null;
+}
+
+/**
+ * A clicked code ref, sent to the editor on this machine.
+ *
+ * The url is the whole argument list: `artifactParts` yields both the slug the
+ * server resolves the checkout from and the `home` segment that says WHICH
+ * namespace to resolve it in. An archived job's artifact URLs carry its
+ * ArchivedName as the slug segment — exactly the key the archive namespace is
+ * indexed by — so a click here must say `archived`, or a live job that has
+ * since taken the freed slug resolves first and the ref opens in the wrong
+ * checkout with nothing on screen to say so.
+ *
+ * Deliberately NOT routed through `mutate`: opening a file changes nothing on
+ * the board, so there is nothing to invalidate, and the one funnel `mutate`
+ * offers — a failure line in the clock corner — is the wrong place for the two
+ * things this call actually says. Both of them are about the ref you just
+ * clicked ("that worktree is gone, I opened the primary checkout", "three files
+ * are named cell.go"), so they go to the toast, where the reader is looking.
+ *
+ * A refusal arrives as a thrown ApiError carrying the server's own `{error}`
+ * string (client.ts's parseError), which is why the catch toasts `message` and
+ * not a sentence of its own. A bare `{ok:true}` is silent — the editor coming
+ * to the front is the feedback.
+ */
+async function openCodeRef(url: string, t: CodeRefTarget): Promise<void> {
+  const parts = artifactParts(url);
+  if (!parts) return;
+  try {
+    const res = await openInEditor(
+      parts.slug,
+      t.path,
+      t.line,
+      t.col,
+      parts.home === "archive",
+    );
+    if (res?.note) showToast(res.note);
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : String(e));
+  }
 }
 
 export interface ArtifactOverlayProps {
@@ -749,6 +800,15 @@ function ArtifactBody({
  * The listener is removed on unmount and on a src change. Both happen: a step
  * remounts the whole body, and the raw toggle coming back OFF builds a brand
  * new frame with a brand new document to route arrows out of.
+ *
+ * The SAME attach point also wires the frame's code refs (lib/codeRefs.ts) —
+ * a hermes diagram's `data-code` on a component `<g>` is only clickable once
+ * something inside that document is listening. It rides the identical
+ * discipline for the identical reason: every rebuild of the frame is a new
+ * document, and a wiring left pointing at the old one is a card whose boxes
+ * quietly stop opening anything. `hooked.current` is the one dedupe for both,
+ * so a re-fired `load` on an unchanged document adds neither a second keydown
+ * listener nor a second click one.
  */
 function ArtifactFrame({
   url,
@@ -759,10 +819,21 @@ function ArtifactFrame({
 }) {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const hooked = useRef<Document | null>(null);
+  const unwire = useRef<(() => void) | null>(null);
   // render-phase ref write, deliberately: a latest-value mirror, read only
   // from the iframe document's keydown listener, never during this render
   const listener = useRef(onKey);
   listener.current = onKey;
+
+  // The frame's own url is the source of truth for which job's checkout a ref
+  // resolves against — the same derivation the feedback composer makes, and for
+  // the same reason (artifactParts). openCodeRef takes the url rather than a
+  // slug because the `home` segment beside it is what says archive-or-live; a
+  // url no parts come out of simply opens nothing.
+  const opener = useRef<(t: CodeRefTarget) => void>(() => {});
+  opener.current = (t: CodeRefTarget) => {
+    void openCodeRef(url, t);
+  };
 
   // stable across renders — the same function object has to reach
   // removeEventListener that reached addEventListener
@@ -775,7 +846,11 @@ function ArtifactFrame({
       const doc = frame.current?.contentDocument ?? null;
       if (!doc || doc === hooked.current) return;
       hooked.current?.removeEventListener("keydown", handle);
+      unwire.current?.();
       doc.addEventListener("keydown", handle);
+      // through the ref, so `attach` itself stays stable across url changes —
+      // the wiring is hung once per document and must not be re-hung per render
+      unwire.current = wireCodeRefs(doc, (t) => opener.current(t));
       hooked.current = doc;
     } catch {
       /* cross-origin or torn down: buttons still work */
@@ -786,9 +861,11 @@ function ArtifactFrame({
     return () => {
       try {
         hooked.current?.removeEventListener("keydown", handle);
+        unwire.current?.();
       } catch {
         /* the document went away with the frame */
       }
+      unwire.current = null;
       hooked.current = null;
     };
   }, [handle, url]);
@@ -823,6 +900,22 @@ function ArtifactBodyContent({
   // artifact, potentially hundreds of KB of it. The other non-markdown
   // branches already have `text === undefined` on their own.
   const md = useRenderedMD(raw ? undefined : text);
+
+  // ONE delegated handler on the body rather than per-`<code>` wiring, for the
+  // reason the body is innerHTML in the first place: there are no React
+  // elements down there to hang a prop on. codeRefTarget answers null for a
+  // plain `<code>` and for every other click in the doc, so this is inert
+  // everywhere except on a ref.
+  const onBodyClick = useCallback(
+    (ev: ReactMouseEvent<HTMLDivElement>) => {
+      const el = ev.target;
+      if (!(el instanceof Element)) return;
+      const target = codeRefTarget(el);
+      if (!target) return;
+      void openCodeRef(url, target);
+    },
+    [url],
+  );
 
   if (raw) {
     return (
@@ -865,6 +958,7 @@ function ArtifactBodyContent({
     <div
       className="panel-body md"
       id="panel-body"
+      onClick={onBodyClick}
       dangerouslySetInnerHTML={md}
     />
   );

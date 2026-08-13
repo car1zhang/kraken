@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
   answerQuestion,
@@ -12,6 +13,7 @@ import {
   fetchDraft,
   fetchJobForm,
   killJob,
+  openInEditor,
   reactivateJob,
   retryJob,
   saveDraft,
@@ -33,6 +35,7 @@ import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useDebouncedDraft } from "../../hooks/useDebouncedDraft.ts";
 import { useHTML, useRenderedMD } from "../../hooks/useRenderedMD.ts";
+import { codeRefTarget } from "../../lib/codeRefs.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
@@ -63,6 +66,7 @@ import {
   type FileSink,
   type Mutate,
 } from "./Overlay.tsx";
+import { showToast } from "./Toast.tsx";
 
 // Message zeus. ONE modal, three modes (app.js:2097 openSteer), which is why
 // the mode is a discriminator on almost everything below rather than three
@@ -576,6 +580,56 @@ function SteerBody({
     form ? specMetaHTML(form) + renderMD(form.spec || "") : "",
   );
 
+  /**
+   * A code ref clicked in the detail or the spec (lib/codeRefs.ts). Both bodies
+   * are innerHTML, so this is one delegated handler per surface rather than a
+   * prop on anything — codeRefTarget answers null for every click that is not
+   * on a ref, including a plain `<code>`, so it is inert the rest of the time.
+   *
+   * Only these two surfaces. The THREAD and DREAM bodies render the same
+   * markdown through the same renderer and deliberately get nothing: what zeus
+   * says it is stuck on and what the spec asks for are statements about THIS
+   * job's checkout, which `jobSlug` resolves; a thread's answer or a night
+   * report ranges across the whole board and has no one checkout to open a
+   * relative path under.
+   *
+   * `jobSlug` and not `job?.slug`: the modal opens on an archived job too, and
+   * the slug is the one thing present in every mode. The server does NOT treat
+   * the two alike, though — `archived` picks the namespace it resolves that
+   * slug in, and an archived job whose freed slug a new live job has since
+   * taken would otherwise resolve to the live one's checkout. So the flag rides
+   * along, from `job?.archived`.
+   *
+   * Duplicated from ArtifactOverlay's `openCodeRef` rather than shared, which
+   * is the trade the two overlays already make everywhere else — a shared
+   * helper would be a component-to-component import between two modals that
+   * otherwise know nothing about each other, over eight lines whose whole body
+   * is one call and one toast.
+   */
+  const onCodeRefClick = useCallback(
+    (ev: ReactMouseEvent<HTMLDivElement>) => {
+      const el = ev.target;
+      if (!(el instanceof Element)) return;
+      const target = codeRefTarget(el);
+      if (!target) return;
+      void (async () => {
+        try {
+          const res = await openInEditor(
+            jobSlug,
+            target.path,
+            target.line,
+            target.col,
+            job?.archived,
+          );
+          if (res?.note) showToast(res.note);
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : String(e));
+        }
+      })();
+    },
+    [job?.archived, jobSlug],
+  );
+
   const key = job ? jobKey(job) : jobSlug;
   // display_slug || slug — a renamed archive entry prefixes its chips with the
   // name it was archived UNDER, which is what the artifact viewer's title
@@ -665,6 +719,7 @@ function SteerBody({
             className="steer-detail"
             id="steer-detail"
             hidden={!detail}
+            onClick={onCodeRefClick}
             // renderMD escapes before transforming, so agent text is inert
             dangerouslySetInnerHTML={detailHTML}
           />
@@ -777,6 +832,7 @@ function SteerBody({
             className="steer-spec-body"
             id="steer-spec-body"
             hidden={!specOpen}
+            onClick={onCodeRefClick}
             dangerouslySetInnerHTML={specHTML}
           />
         </div>

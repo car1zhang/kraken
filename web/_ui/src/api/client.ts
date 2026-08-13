@@ -247,6 +247,50 @@ export const openTmux = (target: { pane?: string; slug?: string }) =>
     target,
   );
 
+/**
+ * Open a code ref in the editor on THIS machine — the click end of
+ * lib/codeRefs.ts.
+ *
+ * `slug` is what resolves the checkout: the server looks the job up, prefers
+ * its live worktree, and falls back to the primary checkout with a `note` when
+ * the worktree has been torn down. The path stays relative for exactly that
+ * reason — the board cannot know which root it will land under.
+ *
+ * `archived` picks WHICH namespace that lookup runs in, and it is not optional
+ * decoration. An archived job and a live one may carry the same slug (see
+ * WebJob.archived — the board deliberately lists both), and the server resolves
+ * a live job first, so an unflagged call from an archived job's artifact opens
+ * the WRONG checkout without saying so. It is sent only when true because
+ * `archived: false` and "not archived" are the same statement, and the wire
+ * carries the shorter one.
+ *
+ * `line` and `col` are omitted from the body rather than sent as 0 when the ref
+ * carries neither, because 0 and "no line given" are the same value on the wire
+ * and the omission is the honest one.
+ *
+ * Deliberately NOT routed through the shared mutation path: this changes
+ * nothing on the board, so there is nothing to invalidate, and its two
+ * interesting outcomes (a note about a torn-down worktree, an ambiguous
+ * basename) are messages for the reader rather than status-bar failures.
+ */
+export const openInEditor = (
+  slug: string,
+  path: string,
+  line?: number,
+  col?: number,
+  archived?: boolean,
+) =>
+  postJSON<{ ok?: boolean; note?: string; error?: string }>(
+    "/api/editor/open",
+    {
+      slug,
+      path,
+      ...(line === undefined ? {} : { line }),
+      ...(col === undefined ? {} : { col }),
+      ...(archived ? { archived: true } : {}),
+    },
+  );
+
 export const switchAccount = (slug: string) =>
   postJSON<{ from: string; to: string; mode: string }>("/api/account/switch", {
     slug,

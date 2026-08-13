@@ -495,9 +495,9 @@ specific, and it is the only place the cell's real paths appear:
   rows, and overlay updates, each row counted once — and **K is the digest envelope's `scanned`
   count**, minus any sessions you set aside as wholly post-ceiling (name that subtraction in
   Coverage when it is non-zero) — and when the envelope's `truncated` is non-zero, say so beside it
-  (`K transcripts, T partial`): a partial scan must never be silent. Use `0` where a count is
-  zero — never omit the clause. Kraken derives blocked from your silence and shows your last words
-  on the board.
+  (`K transcripts, T partial`): a partial scan must never be silent.
+  Use `0` where a count is zero — never omit the clause. Kraken derives blocked from your
+  silence and shows your last words on the board.
 - Never declare the job done — accepting is carl's move, never yours.
 - `solo: true` on the job means no subagents at all: run the mechanical pass and read what you can
   yourself, and say in the report that the semantic pass was skipped.

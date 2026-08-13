@@ -192,5 +192,18 @@
     "expect": "pass",
     "warnings": 2,
     "note": "three tables, two COLOUR_AS_CATEGORY. (1) five flat cells in three treatments with no header cell -> hue is doing a category's job. (2) the same colouring row-grouped, with the \"cell head\" in a <g> row of its own and the data cells in another: MUST NOT fire, and did fire before the rule grouped cells by their table instead of by their immediate parent — the cry-wolf case, on completely ordinary markup. (3) the same rainbow split across two row <g>s with no header anywhere: MUST fire, and was silent for the mirror-image reason. Every cell states its glyph, so the count isolates this rule from COLOUR_NO_GLYPH"
+  },
+  {
+    "file": "pass-code-refs.svg",
+    "expect": "pass",
+    "code_refs": true,
+    "warnings": 0,
+    "note": "two fn boxes each carrying a repo-relative data-code, and the edge between them carrying one too -> clean, and clean WITH --code-refs on, which is the only entry in this manifest that sets \"code_refs\". Every path holds a \"/\", so CODE_REF_BASENAME stays quiet; the \"pill\" beside them deliberately carries no ref at all and must stay quiet under the flag, which is what pins the parts exemption (a terminal tag stands for no code, so there is nothing it could honestly link to). All three refs name real locations in this repo — a fixture for a rule about refs being verifiable claims cannot itself cite invented ones"
+  },
+  {
+    "file": "fail-code-ref-format.svg",
+    "expect": "fail",
+    "warnings": 0,
+    "note": "data-code=\"internal/api/board.go#37\" -> exactly one CODE_REF_FORMAT failure. The hash is the mistake the convention exists to prevent: the separator is a colon, and a hash followed by 3-8 hex digits would ALSO fail the fragment as a COLOR_LITERAL, with a message about paint. This one's \"37\" is two digits, so it stays under that scan and the failure is isolated to the rule under test"
   }
 ]
