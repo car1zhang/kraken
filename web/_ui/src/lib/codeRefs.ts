@@ -58,7 +58,12 @@ const EXT = /\.[A-Za-z][A-Za-z0-9_+-]*$/;
  * A set artifact (`51-code-map.md`). These are the docs the board is DISPLAYING
  * — they are named in their own prose constantly, they live in the cell's
  * artifacts directory rather than in the checkout, and opening one in an editor
- * is never what the reader meant by clicking it.
+ * is never what the reader meant by clicking it. What the reader DID mean is
+ * resolved by `lib/artifactRefs.ts`: the overlays' click handlers check
+ * membership in the job's artifact list before they reach codeRefTarget. At
+ * render time this rule alone keeps the span plain — nothing consults the
+ * artifact list there — and the iframe's `data-code` path has no artifact-ref
+ * stage at all.
  */
 const SET_ARTIFACT = /^\d\d-[^/]*\.md$/;
 

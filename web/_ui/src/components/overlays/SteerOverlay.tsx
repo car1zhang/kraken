@@ -35,6 +35,10 @@ import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useDebouncedDraft } from "../../hooks/useDebouncedDraft.ts";
 import { useHTML, useRenderedMD } from "../../hooks/useRenderedMD.ts";
+import {
+  decorateArtifactRefs,
+  matchArtifactRef,
+} from "../../lib/artifactRefs.ts";
 import { codeRefTarget } from "../../lib/codeRefs.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import { jobKey } from "../../lib/jobKey.ts";
@@ -580,6 +584,12 @@ function SteerBody({
     form ? specMetaHTML(form) + renderMD(form.spec || "") : "",
   );
 
+  const key = job ? jobKey(job) : jobSlug;
+  // display_slug || slug — a renamed archive entry prefixes its chips with the
+  // name it was archived UNDER, which is what the artifact viewer's title
+  // shows and what its pager pages within.
+  const label = job ? job.display_slug || job.slug : jobSlug;
+
   /**
    * A code ref clicked in the detail or the spec (lib/codeRefs.ts). Both bodies
    * are innerHTML, so this is one delegated handler per surface rather than a
@@ -610,6 +620,20 @@ function SteerBody({
     (ev: ReactMouseEvent<HTMLDivElement>) => {
       const el = ev.target;
       if (!(el instanceof Element)) return;
+      // Artifact refs first: a span naming one of THIS job's artifacts opens
+      // it in the viewer (the same call the chips below make), and only a
+      // span naming nothing in the list falls through to the editor path.
+      const code = el.closest("code");
+      if (code && !code.closest("pre")) {
+        const hit = matchArtifactRef(
+          code.textContent ?? "",
+          job?.artifacts ?? [],
+        );
+        if (hit) {
+          onOpenArtifact(hit.url, `${label}/${hit.name}`, key);
+          return;
+        }
+      }
       const target = codeRefTarget(el);
       if (!target) return;
       void (async () => {
@@ -627,14 +651,41 @@ function SteerBody({
         }
       })();
     },
-    [job?.archived, jobSlug],
+    [job?.archived, job?.artifacts, jobSlug, label, key, onOpenArtifact],
   );
 
-  const key = job ? jobKey(job) : jobSlug;
-  // display_slug || slug — a renamed archive entry prefixes its chips with the
-  // name it was archived UNDER, which is what the artifact viewer's title
-  // shows and what its pager pages within.
-  const label = job ? job.display_slug || job.slug : jobSlug;
+  /**
+   * Dress artifact refs in the two wired bodies after each real change — the
+   * renderer is pure, so membership in this job's artifact list is decided
+   * here, exactly as the artifact viewer does it. Both containers are looked
+   * up by their pinned ids (this modal is singular), and the poll-path guard
+   * is the same fingerprint trick: `job.artifacts` is a fresh array every 3s.
+   */
+  const lastSweep = useRef<{
+    detail: { __html: string } | null;
+    spec: { __html: string } | null;
+    key: string;
+  }>({ detail: null, spec: null, key: "" });
+  useEffect(() => {
+    const artifacts = job?.artifacts ?? [];
+    const akey = artifacts.map((a) => a.url).join("\n");
+    const cur = lastSweep.current;
+    if (cur.detail === detailHTML && cur.spec === specHTML && cur.key === akey)
+      return;
+    let found = false;
+    for (const id of ["steer-detail", "steer-spec-body"]) {
+      const host = document.getElementById(id);
+      if (host) {
+        decorateArtifactRefs(host, artifacts);
+        found = true;
+      }
+    }
+    // Stamp only when a host was actually swept: both divs are hidden-toggled
+    // today so this always fires, but a future conversion to the conditional
+    // rendering their sibling panels use must not poison the guard with a
+    // sweep that dressed nothing.
+    if (found) lastSweep.current = { detail: detailHTML, spec: specHTML, key: akey };
+  }, [detailHTML, specHTML, job?.artifacts]);
 
   return (
     <>

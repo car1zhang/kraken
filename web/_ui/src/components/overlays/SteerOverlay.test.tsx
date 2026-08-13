@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeJob } from "../../test/fixtures.ts";
@@ -1061,5 +1061,44 @@ describe("SteerOverlayProps has no optional ReactNode slots left", () => {
     expect(document.querySelector("#steer-chips button.chip")).toBeTruthy();
     expect(document.querySelector("#steer-feedback .fb-row")).toBeTruthy();
     expect(document.querySelector("#steer-actions .btn.retry")).toBeTruthy();
+  });
+});
+
+describe("artifact refs in the steer detail", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const jobWithCite = makeJob({
+    slug: "j",
+    state: "blocked",
+    live: true,
+    detail: "wrote `51-code-map.md` — review it",
+    artifacts: [
+      { name: "51-code-map.md", url: "/api/artifact/j/cell/51-code-map.md" },
+    ],
+  });
+
+  it("dresses a span naming a job artifact and opens it via onOpenArtifact", async () => {
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="steer"
+        job={jobWithCite}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    const ref = await waitFor(() => {
+      const el = document.querySelector("#steer-detail code.artifact-ref");
+      if (!el) throw new Error("not dressed yet");
+      return el;
+    });
+    expect(ref.getAttribute("title")).toBe("open 51-code-map.md");
+    fireEvent.click(ref);
+    expect(onOpenArtifact).toHaveBeenCalledWith(
+      "/api/artifact/j/cell/51-code-map.md",
+      "j/51-code-map.md",
+      "j",
+    );
   });
 });

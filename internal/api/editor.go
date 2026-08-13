@@ -252,7 +252,9 @@ func editorOpenHandler(w http.ResponseWriter, r *http.Request) {
 		editorFail(w, fmt.Sprintf("path escapes %s: %s", root, req.Path))
 		return
 	}
-	if err := openInEditorFunc(abs, req.Line, req.Col); err != nil {
+	// root rides along so the editor opens the file inside a window rooted at
+	// the resolved checkout — reusing that window when one exists (core/zed.go)
+	if err := openInEditorFunc(root, abs, req.Line, req.Col); err != nil {
 		editorFail(w, err.Error())
 		return
 	}

@@ -1200,7 +1200,7 @@ func TestEditorOpenWireShape(t *testing.T) {
 	old := openInEditorFunc
 	t.Cleanup(func() { openInEditorFunc = old })
 	var opened string
-	openInEditorFunc = func(abs string, line, col int) error {
+	openInEditorFunc = func(root, abs string, line, col int) error {
 		opened = abs
 		return nil
 	}
