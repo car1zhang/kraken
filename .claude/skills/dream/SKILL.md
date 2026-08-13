@@ -299,6 +299,15 @@ an anomaly as a question, not as a claim: "say what that shape means" got a scou
 implied reading and find the real cause, where "confirm that X" would have got X. The same sentence
 pasted into every brief is its own defect — when you suspect a cross-cutting cause, investigate it
 once yourself or name ONE scout its owner, rather than making N scouts rediscover it in parallel.
+And the hypothesis rule covers MECHANISMS, not only counters: a failure mode a brief calls "known"
+must cite where it is written down — a skill line, a watch row id — or be phrased as a possibility
+to check. A lead told its scout that reduce returning zero bytes on sidecars was a known defect
+when no skill and no watch row states any such thing (all eight sidecars reduced cleanly),
+pre-authorised the raw-JSONL fallback on it, and steered that scout into filing eight READ rows
+over staged views it never opened — the exact mislabeling that pass then diagnosed as the scout's
+own drift, with the fabricated mechanism appearing nowhere in its report. A number in a brief at
+least names a source a scout can go check; an invented mechanism has no referent at all, and the
+scout has no move against it.
 
 **Require a per-transcript coverage line, as a filled slot rather than a habit — and Coverage is
 the report's FINAL section**, which is what makes "a finished report ends with its Coverage
@@ -446,6 +455,7 @@ Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it op
 | Shipped | Each change, the evidence behind it, and its PR. |
 | Judgment calls | Everything shipped below the two-sighting default, and why. An empty section on a night that shipped several changes means you are not naming your own judgment. |
 | Watching | Newly watched facts, and what changed on existing ones — the watch overlay is not committed, so this is the only place its movement is visible. |
+| Owed human actions | Every action only carl can take — a credential rotation, an external revoke — still outstanding, each with its watch row id, re-raised EVERY night until it is done. Done means carl's `fine` verdict on that row, or the row's evidence recording who performed the action — then unwatch it; never unwatch a row while its action is still owed, and never write the verdict yourself. The watch row is what makes an owed action durable; this report and the closing line are the only channel that re-SURFACES it, and one live credential's rotation, named in a closing line but not re-raised by the next pass, ceased to exist for two nights while the value stayed live. |
 | Your prompting | The prompting feedback, quoted. |
 | Seen, not actionable | One line each, capped around ten. It is what distinguishes a quiet night from a blind one. |
 | Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. Also the pass's OWN stalls: limit banners, dead stretches, and carl interventions in your own pane tonight — your session is tomorrow's sweep evidence, so tonight's report is the only one that can carry them, and one pass reported four cells' outages while omitting its own 10h37m, 2.5× the four combined. |
@@ -477,8 +487,17 @@ specific, and it is the only place the cell's real paths appear:
 
   `dream swept: <set root>/00-dream-report.md (N shipped, M watching, K transcripts)`
 
-  followed by the PR urls if any, and STOP (end the turn). Use `0` where a count is zero — never omit
-  the clause. Kraken derives blocked from your silence and shows your last words on the board.
+  followed by the PR urls if any, then one clause per still-owed human action from the report's Owed
+  section, and STOP (end the turn). The three counts are DEFINED, not chosen per night — the sibling
+  graph line ran three conventions in three nights before its counts were pinned, and this line had
+  started the same drift (one pass counted only its new rows as "watching"): **N is PRs this pass
+  OPENED** (opened, not merged), **M is watch rows this pass WROTE** — new adds, folds onto existing
+  rows, and overlay updates, each row counted once — and **K is the digest envelope's `scanned`
+  count**, minus any sessions you set aside as wholly post-ceiling (name that subtraction in
+  Coverage when it is non-zero) — and when the envelope's `truncated` is non-zero, say so beside it
+  (`K transcripts, T partial`): a partial scan must never be silent. Use `0` where a count is
+  zero — never omit the clause. Kraken derives blocked from your silence and shows your last words
+  on the board.
 - Never declare the job done — accepting is carl's move, never yours.
 - `solo: true` on the job means no subagents at all: run the mechanical pass and read what you can
   yourself, and say in the report that the semantic pass was skipped.
