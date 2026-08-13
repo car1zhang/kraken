@@ -41,6 +41,7 @@ const edgeEOPath = "/api/editor/open"
 type edgeEOSeams struct {
 	openCalls int
 	lsCalls   int
+	lastRoot  string
 	lastAbs   string
 	lastLine  int
 	lastCol   int
@@ -67,9 +68,9 @@ func edgeEOWire(t *testing.T) (*store.Store, http.Handler, *edgeEOSeams) {
 	t.Cleanup(func() {
 		openInEditorFunc, lsTreeFiles, interfaceAddrs = oldOpen, oldLs, oldAddrs
 	})
-	openInEditorFunc = func(abs string, line, col int) error {
+	openInEditorFunc = func(root, abs string, line, col int) error {
 		seams.openCalls++
-		seams.lastAbs, seams.lastLine, seams.lastCol = abs, line, col
+		seams.lastRoot, seams.lastAbs, seams.lastLine, seams.lastCol = root, abs, line, col
 		return seams.openErr
 	}
 	lsTreeFiles = func(root, base string) ([]string, error) {
@@ -130,7 +131,7 @@ func edgeEOError(t *testing.T, rec *httptest.ResponseRecorder) string {
 // residue of one is noise the arbitration has to unpick by hand.
 func edgeEOReset(seams *edgeEOSeams) {
 	seams.openCalls, seams.lsCalls = 0, 0
-	seams.lastAbs, seams.lastLine, seams.lastCol = "", 0, 0
+	seams.lastRoot, seams.lastAbs, seams.lastLine, seams.lastCol = "", "", 0, 0
 }
 
 // edgeEOExecQuiet asserts the one silence the contract states unconditionally
@@ -462,7 +463,7 @@ func TestEdgeEditorOpenSeamsAreTheOnlyBoundary(t *testing.T) {
 	}
 	// the swap is real: calling through the vars hits the recorders, not the
 	// process boundary
-	if err := openInEditorFunc("/tmp/edge-eo-nothing.go", 1, 0); err != nil {
+	if err := openInEditorFunc("/tmp", "/tmp/edge-eo-nothing.go", 1, 0); err != nil {
 		t.Fatalf("swapped seam returned %v", err)
 	}
 	if seams.openCalls != 1 {

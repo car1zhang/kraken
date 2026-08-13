@@ -43,9 +43,13 @@ const contractEditorRepo = "demorepo"
 
 // contractEditorSeam records what the exec seam was handed. The abs path is the
 // whole point: the contract says it is filepath.Join(root, rel), and which root
-// got picked is how worktree/fallback/archived resolution is observed.
+// got picked is how worktree/fallback/archived resolution is observed. root
+// (added with carl's window-per-working-dir amendment) is that same resolved
+// root passed alongside, so Zed can anchor the file to a workspace rooted
+// there — the seam records it so each test can pin WHICH root rode along.
 type contractEditorSeam struct {
 	calls int
+	root  string
 	abs   string
 	line  int
 	col   int
@@ -86,9 +90,9 @@ func contractEditorSwapSeams(t *testing.T, f *contractEditorFixture) {
 	f.seam = &contractEditorSeam{}
 
 	oldOpen := openInEditorFunc
-	openInEditorFunc = func(abs string, line, col int) error {
+	openInEditorFunc = func(root, abs string, line, col int) error {
 		f.seam.calls++
-		f.seam.abs, f.seam.line, f.seam.col = abs, line, col
+		f.seam.root, f.seam.abs, f.seam.line, f.seam.col = root, abs, line, col
 		return f.seam.err
 	}
 	oldLS := lsTreeFiles
@@ -241,6 +245,9 @@ func TestContractEditorOpenHappyPathUsesTheWorktree(t *testing.T) {
 	if want := filepath.Join(f.worktree, "internal/api/board.go"); f.seam.abs != want {
 		t.Errorf("seam abs = %q, want %q", f.seam.abs, want)
 	}
+	if f.seam.root != f.worktree {
+		t.Errorf("seam root = %q, want the worktree %q (the window anchors there)", f.seam.root, f.worktree)
+	}
 	if f.seam.line != 37 || f.seam.col != 25 {
 		t.Errorf("seam line/col = %d/%d, want 37/25", f.seam.line, f.seam.col)
 	}
@@ -277,6 +284,9 @@ func TestContractEditorOpenWorktreeGoneFallsBackWithNote(t *testing.T) {
 	}
 	if want := filepath.Join(f.checkout, "internal/api/board.go"); f.seam.abs != want {
 		t.Errorf("seam abs = %q, want the primary checkout %q", f.seam.abs, want)
+	}
+	if f.seam.root != f.checkout {
+		t.Errorf("seam root = %q, want the primary checkout %q (the fallback window anchors there)", f.seam.root, f.checkout)
 	}
 }
 
@@ -450,6 +460,9 @@ func TestContractEditorOpenArchivedResolvesTheArchiveNamespace(t *testing.T) {
 	}
 	if want := filepath.Join(archivedWT, "internal/api/board.go"); f.seam.abs != want {
 		t.Errorf("seam abs = %q, want the ARCHIVED generation's worktree %q", f.seam.abs, want)
+	}
+	if f.seam.root != archivedWT {
+		t.Errorf("seam root = %q, want the ARCHIVED generation's worktree %q — a live-generation root would anchor this file into the wrong window", f.seam.root, archivedWT)
 	}
 	if strings.HasPrefix(f.seam.abs, liveWT) {
 		t.Errorf("archived:true resolved the LIVE same-slug job (%q)", f.seam.abs)

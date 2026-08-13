@@ -25,7 +25,12 @@ import (
 const contractZedCLI = "/Applications/Zed.app/Contents/MacOS/cli"
 
 func TestContractZedArgsShapes(t *testing.T) {
-	const abs = "/Users/carl/.kraken/cells/demo-2/wt-kraken/internal/api/board.go"
+	// The root leads so Zed anchors the file to a workspace rooted there —
+	// carl's window-per-working-dir rule (core/zed.go). Amended from the
+	// original `-e <target>` contract when that rule superseded it: `-e`
+	// dropped the file into whichever window was frontmost.
+	const root = "/Users/carl/.kraken/cells/demo-2/wt-kraken"
+	const abs = root + "/internal/api/board.go"
 
 	cases := []struct {
 		name      string
@@ -36,17 +41,17 @@ func TestContractZedArgsShapes(t *testing.T) {
 			// file-level (G7): no position suffix at all — a bare ":0" would
 			// send Zed to a line that does not exist.
 			name: "no line, no col",
-			want: []string{contractZedCLI, "-e", abs},
+			want: []string{contractZedCLI, root, abs},
 		},
 		{
 			name: "line only",
 			line: 37,
-			want: []string{contractZedCLI, "-e", abs + ":37"},
+			want: []string{contractZedCLI, root, abs + ":37"},
 		},
 		{
 			name: "line and col",
 			line: 794, col: 25,
-			want: []string{contractZedCLI, "-e", abs + ":794:25"},
+			want: []string{contractZedCLI, root, abs + ":794:25"},
 		},
 		{
 			// col without a line has no meaning to append to: the contract
@@ -54,19 +59,19 @@ func TestContractZedArgsShapes(t *testing.T) {
 			// file-level form rather than emitting a bare ":25".
 			name: "col without a line",
 			col:  25,
-			want: []string{contractZedCLI, "-e", abs},
+			want: []string{contractZedCLI, root, abs},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := zedArgs(abs, c.line, c.col)
+			got := zedArgs(root, abs, c.line, c.col)
 			if len(got) != len(c.want) {
-				t.Fatalf("zedArgs(%q, %d, %d) = %v, want %v", abs, c.line, c.col, got, c.want)
+				t.Fatalf("zedArgs(%q, %q, %d, %d) = %v, want %v", root, abs, c.line, c.col, got, c.want)
 			}
 			for i := range c.want {
 				if got[i] != c.want[i] {
-					t.Fatalf("zedArgs(%q, %d, %d) = %v, want %v", abs, c.line, c.col, got, c.want)
+					t.Fatalf("zedArgs(%q, %q, %d, %d) = %v, want %v", root, abs, c.line, c.col, got, c.want)
 				}
 			}
 		})
@@ -74,18 +79,19 @@ func TestContractZedArgsShapes(t *testing.T) {
 }
 
 // TestContractZedArgsNeverInventsAFlag guards the shape rather than the string:
-// the argv is exactly three elements, the CLI path is absolute, and `-e` sits
-// between it and the target. A fourth element (a --wait, a --new) would change
-// what a click does without any test above noticing.
+// the argv is exactly three elements — CLI, workspace root, target — and
+// neither the CLI's nor the root's seat holds a flag. A fourth element (a
+// --wait, a --new) or a flag in the root's seat would change what a click does
+// without any test above noticing.
 func TestContractZedArgsNeverInventsAFlag(t *testing.T) {
-	got := zedArgs("/tmp/x/y.go", 12, 3)
+	got := zedArgs("/tmp/x", "/tmp/x/y.go", 12, 3)
 	if len(got) != 3 {
 		t.Fatalf("zedArgs returned %d args (%v), want exactly 3", len(got), got)
 	}
 	if !strings.HasPrefix(got[0], "/") {
 		t.Errorf("argv[0] = %q, want an absolute path (Zed's CLI is not on PATH)", got[0])
 	}
-	if got[1] != "-e" {
-		t.Errorf("argv[1] = %q, want %q", got[1], "-e")
+	if got[1] != "/tmp/x" {
+		t.Errorf("argv[1] = %q, want the workspace root %q", got[1], "/tmp/x")
 	}
 }

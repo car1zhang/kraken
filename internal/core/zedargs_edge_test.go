@@ -17,8 +17,13 @@ import (
 
 const edgeZedCLI = "/Applications/Zed.app/Contents/MacOS/cli"
 
+// edgeZedRoot: every case passes the same workspace root — the root's own
+// semantics (window reuse) are documented at core/zed.go; here it only has
+// to ride argv[1] untouched while the position suffix degrades.
+const edgeZedRoot = "/Users/carl/Developer/kraken"
+
 func edgeZedWant(target string) []string {
-	return []string{edgeZedCLI, "-e", target}
+	return []string{edgeZedCLI, edgeZedRoot, target}
 }
 
 func edgeZedCheck(t *testing.T, what string, got, want []string) {
@@ -38,7 +43,7 @@ func edgeZedCheck(t *testing.T, what string, got, want []string) {
 // send Zed to a line that does not exist.
 func TestEdgeZedArgsLineZeroIsABarePath(t *testing.T) {
 	abs := "/Users/carl/Developer/kraken/web/serve.go"
-	edgeZedCheck(t, "line 0", zedArgs(abs, 0, 0), edgeZedWant(abs))
+	edgeZedCheck(t, "line 0", zedArgs(edgeZedRoot, abs, 0, 0), edgeZedWant(abs))
 }
 
 // TestEdgeZedArgsColWithoutLineIsABarePath: a column is only meaningful
@@ -46,7 +51,7 @@ func TestEdgeZedArgsLineZeroIsABarePath(t *testing.T) {
 // column arriving without one is dropped along with it, not promoted.
 func TestEdgeZedArgsColWithoutLineIsABarePath(t *testing.T) {
 	abs := "/Users/carl/Developer/kraken/web/serve.go"
-	got := zedArgs(abs, 0, 25)
+	got := zedArgs(edgeZedRoot, abs, 0, 25)
 	edgeZedCheck(t, "col without line", got, edgeZedWant(abs))
 	if strings.Contains(got[len(got)-1], "25") {
 		t.Errorf("zedArgs = %q — a column with no line must not reach the target", got)
@@ -58,16 +63,16 @@ func TestEdgeZedArgsColWithoutLineIsABarePath(t *testing.T) {
 // is a package-level pure function with its own callers.
 func TestEdgeZedArgsNegativePositionsAreABarePath(t *testing.T) {
 	abs := "/Users/carl/Developer/kraken/web/serve.go"
-	edgeZedCheck(t, "line -1", zedArgs(abs, -1, 0), edgeZedWant(abs))
-	edgeZedCheck(t, "line -1 col -1", zedArgs(abs, -1, -1), edgeZedWant(abs))
-	edgeZedCheck(t, "line 37 col -1", zedArgs(abs, 37, -1), edgeZedWant(abs+":37"))
+	edgeZedCheck(t, "line -1", zedArgs(edgeZedRoot, abs, -1, 0), edgeZedWant(abs))
+	edgeZedCheck(t, "line -1 col -1", zedArgs(edgeZedRoot, abs, -1, -1), edgeZedWant(abs))
+	edgeZedCheck(t, "line 37 col -1", zedArgs(edgeZedRoot, abs, 37, -1), edgeZedWant(abs+":37"))
 }
 
 // TestEdgeZedArgsLineWithoutColStopsAtTheLine is the boundary between the two
 // guarded clauses: line > 0 and col == 0 takes the FIRST clause only.
 func TestEdgeZedArgsLineWithoutColStopsAtTheLine(t *testing.T) {
 	abs := "/Users/carl/Developer/kraken/web/serve.go"
-	edgeZedCheck(t, "line 37, col 0", zedArgs(abs, 37, 0), edgeZedWant(abs+":37"))
+	edgeZedCheck(t, "line 37, col 0", zedArgs(edgeZedRoot, abs, 37, 0), edgeZedWant(abs+":37"))
 }
 
 // TestEdgeZedArgsNeverRewritesTheAbsolutePath: the path is passed through
@@ -78,7 +83,7 @@ func TestEdgeZedArgsNeverRewritesTheAbsolutePath(t *testing.T) {
 		"/Users/carl/Developer/my repo/web/serve.go",
 		"/Users/carl/Developer/kraken/web/_ui/src/lib/markdown.ts",
 	} {
-		got := zedArgs(abs, 0, 0)
+		got := zedArgs(edgeZedRoot, abs, 0, 0)
 		edgeZedCheck(t, "verbatim "+abs, got, edgeZedWant(abs))
 	}
 }
