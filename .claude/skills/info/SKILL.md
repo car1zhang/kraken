@@ -129,8 +129,22 @@ short form, with /info's overrides:
   no overlapping elements, text measured against its box (~7px/char at 13px) and wrapped with
   tspans before it can overflow, edges attached to box borders and routed around (never through)
   other boxes, every coordinate inside the viewBox, generous whitespace between groups.
-- Boxes are `box → kind` pairs using the sanctioned kind list in the contract's Shape Kit section;
-  the teammate derives the silhouette from the kind — never dictate a shape class.
+- Boxes are `box → kind → code ref` triples using the sanctioned kind list in the contract's Shape
+  Kit section; the teammate derives the silhouette from the kind — never dictate a shape class — and
+  copies the code ref verbatim into a `data-code` attribute on that box's `<g>`, the one metadata
+  attribute the contract sanctions and one hermes may place but never invent. **You assign every ref
+  and you VERIFY it exists before the brief goes out** — one `rg` or `ls` per ref, the same shape as
+  the colour rule below: a ref is a factual claim about where code lives, the renderer cannot check
+  it, and a wrong one ships as a link that opens nothing. The value is `path:line` relative to the
+  repo root (a line `web/_ui/src/lib/markdown.ts:109`; a range `internal/api/editor.go:176-265`; a
+  position `web/_ui/src/lib/codeRefs.ts:76:17`) with a COLON, never a `#`: a hash is the wrong shape
+  outright, and when 3-8 hex-alphabet characters follow it the linter's colour-literal scan fails the
+  whole fragment on top, with a message about paint. An edge gets one too when
+  you can name the contract or call site it runs through; it rides that edge's own `<path>`. A box
+  with no honest code location carries none rather than a plausible-looking one, and the parts
+  (`pill`, `decision`, `lane`, `region`, `cell`, `actor`) never carry one. When a figure's boxes are
+  code, add `--code-refs` to the lint command you hand hermes: it warns on any component box that
+  reached the fragment without the ref you assigned.
 - **Colour states what is going on with the thing, never how to feel about it.** A treatment is a
   factual claim about the element it lands on — which means it can be WRONG, and only you know
   whether it is true, so the brief must assign the treatment AND name its glyph: hermes applies what

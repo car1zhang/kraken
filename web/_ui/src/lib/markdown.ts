@@ -10,7 +10,23 @@
 // "restoring parity" here would reintroduce the bug carl reported.
 //
 // Verbatim was a decision, not laziness (artifacts/53-port-checklist.md, Q7).
-// Two reasons:
+//
+// ONE DELIBERATE DEPARTURE FROM VERBATIM, added later: the code-span restore
+// step wraps a span whose text is a code reference as
+// `<code class="code-ref" data-code="…">` so the board can open it in an editor
+// (lib/codeRefs.ts). It is recorded here rather than left to be discovered
+// because "verbatim" above is otherwise a promise, and this breaks it.
+//
+// It is safe on the same argument the rest of the file rests on, not on a new
+// one. The rule runs on ALREADY-ESCAPED text, like every transform here. It
+// emits no `href` and no scheme, so it cannot be a navigation of any kind — the
+// value lands in a data-* attribute that only this app's own code reads, and
+// the click it enables is a same-origin POST to a route that validates the path
+// itself. And it only ever adds attributes to a `<code>` element this function
+// was already emitting: no rejected span's output changes by a single byte, and
+// no span that was not already a code span becomes one.
+//
+// Two reasons the rest is verbatim:
 //
 //  1. SAFETY BY CONSTRUCTION. Everything this renders is agent-authored — a
 //     zeus detail line, a thread block, a spec, an artifact file — and it is
@@ -32,6 +48,8 @@
 // The subset: fenced code, `#`–`####` headings, ul/ol, blockquote, GFM pipe
 // tables with alignment, inline code/bold/em, and `https?:` links only.
 // Everything else falls through to a `<p>`.
+
+import { parseCodeRef } from "./codeRefs.ts";
 
 /** HTML-escape. Ported from app.js:90. */
 export const esc = (s: unknown): string =>
@@ -80,6 +98,13 @@ const CODE_HOLE = String.fromCharCode(0);
  *
  * Both are strictly narrowing: they refuse pairings, never create one. `**two\n
  * words**` still bolds, because a soft break inside the span is untouched.
+ *
+ * The restore step is also where a code span that names a file gains its
+ * `code-ref` class and `data-code` value — the header's one departure from
+ * verbatim. Prose OUTSIDE backticks is never scanned for one: a bare
+ * `web/serve.go:225` in a sentence stays plain text, because the span is the
+ * author's own signal that the token is code and guessing without it would
+ * paint clickable affordances across ordinary sentences.
  */
 export function inlineMD(s: string): string {
   const code: string[] = [];
@@ -96,7 +121,19 @@ export function inlineMD(s: string): string {
     )
     .replace(
       new RegExp(CODE_HOLE + "(\\d+)" + CODE_HOLE, "g"),
-      (_m, i: string) => `<code>${code[Number(i)]}</code>`,
+      (_m, i: string) => {
+        const held = code[Number(i)] ?? "";
+        // The ONE non-verbatim rule (see the header). parseCodeRef is handed
+        // the ESCAPED span text and returns a verbatim substring of it, so the
+        // value is already attribute-safe — esc() has already turned any `"`
+        // into `&quot;` — and neither of the two things it removes (a
+        // surrounding trim, one cut at a `:` before whitespace) can land inside
+        // an escape entity, since no entity contains whitespace or a `:`.
+        const ref = parseCodeRef(held);
+        return ref === null
+          ? `<code>${held}</code>`
+          : `<code class="code-ref" data-code="${ref}">${held}</code>`;
+      },
     );
 }
 

@@ -1,0 +1,11 @@
+<svg viewBox="0 0 860 160" role="img" aria-label="One component box whose code reference uses a hash instead of a colon before the line number, which the linter rejects.">
+  <text class="title" x="16" y="26">a ref separated by a hash is not a ref</text>
+
+  <g class="proc" data-code="internal/api/board.go#37">
+    <rect x="40" y="60" width="240" height="56" rx="6"/>
+    <text x="160" y="86">
+      <tspan x="160" dy="0">board handler</tspan>
+      <tspan x="160" dy="1.2em">OS process</tspan>
+    </text>
+  </g>
+</svg>
