@@ -845,13 +845,19 @@ struct WatchVerdictRequest: Encodable {
 // the same cell, so carl can ask questions without disturbing the run. A
 // thread can be killed (the window dies, the conversation survives) and
 // revived later, which is why `pane` comes and goes while `tid` never does.
-// `title`/`pane`/`closed_at` are `omitempty` on the wire → Optional here per
-// the rule atop this file; `tid`/`state`/`created_at` are always present.
+// `title`/`pane`/`model`/`closed_at` are `omitempty` on the wire → Optional
+// here per the rule atop this file; `tid`/`state`/`created_at` are always
+// present.
 struct WebThread: Decodable, Identifiable {
     let tid: String
     let title: String?
     let state: String
     let pane: String?
+    /// The tier the thread was branched on (`haiku`/`sonnet`/`opus`/`fable`),
+    /// or nil for one branched with no pick — and equally for any thread read
+    /// from a server that predates the field, which is why it is Optional
+    /// rather than defaulted to a tier the thread may not be running on.
+    let model: String?
     let createdAt: Int64
     let closedAt: Int64?
 
@@ -870,7 +876,7 @@ struct WebThread: Decodable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case tid, title, state, pane
+        case tid, title, state, pane, model
         case createdAt = "created_at"
         case closedAt = "closed_at"
     }
@@ -887,6 +893,12 @@ enum ThreadOp: String {
 // five ops — "branch" (title + optional seed text), "kill"/"revive" (tid),
 // "rename" (tid + title), "send" (tid + text). Unused fields stay nil and
 // JSONEncoder omits them entirely, same as SpawnRequest above.
+//
+// The body's one other key, `model` (branch-only — the tier the new thread's
+// claude runs on), is deliberately absent here: it comes from a picker, and
+// this client has none, so every thread branched from iOS takes the job's
+// model and then kraken's default. API.md names this struct as the body's
+// mirror, so the omission is stated rather than left to be noticed.
 struct ThreadActionRequest: Encodable {
     let slug: String
     let op: String

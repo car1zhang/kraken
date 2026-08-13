@@ -230,7 +230,13 @@ type webThread struct {
 	State string `json:"state"`
 	// Pane is a live thread's tmux pane; CloseThread clears it on the row, so
 	// it is naturally absent for a closed thread rather than a stale id.
-	Pane      string `json:"pane,omitempty"`
+	Pane string `json:"pane,omitempty"`
+	// Model is the tier this thread was branched on — a core.ThreadModels
+	// alias, absent for a thread branched before the picker or with no pick.
+	// It rides the board poll where the rest of the spawn detail does not
+	// because it is the one piece of it a client RENDERS (the head's pill),
+	// and absence is what tells that client to render nothing at all.
+	Model     string `json:"model,omitempty"`
 	CreatedAt int64  `json:"created_at"` // unix millis
 	ClosedAt  int64  `json:"closed_at,omitempty"`
 }
@@ -247,7 +253,7 @@ func webThreadsFrom(ts []store.Thread) []webThread {
 	for i, t := range ts {
 		out[i] = webThread{
 			TID: t.TID, Title: t.Title, State: t.State, Pane: t.Pane,
-			CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
+			Model: t.Model, CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
 		}
 	}
 	return out

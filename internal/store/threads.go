@@ -19,8 +19,10 @@ import (
 // bytes, and there is deliberately no per-job cap on how many threads a job
 // may accumulate. What the row does own is identity (TID/Title), provenance
 // (ParentSession/ForkUUID/Seed — which session it forked from, at which
-// message, and the text it was seeded with), and the live tmux coordinates
-// (Pane/Window) that CloseThread clears and SetThreadPane records.
+// message, and the text it was seeded with), the model it was branched on
+// (Model, which every respawn re-reads so a revive comes back on the tier carl
+// picked), and the live tmux coordinates (Pane/Window) that CloseThread clears
+// and SetThreadPane records.
 
 // Thread is one side thread. Deliberately tag-free like every other type in
 // this package: the store layer never carries JSON tags — the API layer owns
@@ -37,8 +39,15 @@ type Thread struct {
 	Window        string
 	State         string
 	Seed          string
-	CreatedAt     int64 // unix millis
-	ClosedAt      int64 // unix millis; 0 means still live
+	// Model is the model ALIAS carl picked for this thread at branch time —
+	// one of haiku/sonnet/opus/fable — or "" for a thread branched before the
+	// picker existed, or with no pick. The alias rather than the resolved id,
+	// so a revive re-resolves through the one map that owns the mapping
+	// (core.ThreadModels, which this package cannot import — see
+	// validThreadModel below).
+	Model     string
+	CreatedAt int64 // unix millis
+	ClosedAt  int64 // unix millis; 0 means still live
 }
 
 // threadIDRe / validThreadState bound the two fields this package validates
@@ -56,6 +65,15 @@ type Thread struct {
 var threadIDRe = regexp.MustCompile(`^t[1-9][0-9]*$`)
 
 var validThreadState = map[string]bool{"live": true, "closed": true}
+
+// validThreadModel is the set of model aliases a thread row may carry, store's
+// own copy of core.ThreadModels' KEYS — the layering (util ← store ← core)
+// forbids importing the map itself, the same reason threadIDRe and
+// validThreadState are spelled here rather than shared with the layer that
+// consumes them. Only the keys are duplicated, never the model ids: the alias
+// is all this package stores, and resolving it to a `--model` value stays in
+// core alone.
+var validThreadModel = map[string]bool{"haiku": true, "sonnet": true, "opus": true, "fable": true}
 
 // maxThreadSuffix bounds the numeric part of a tid. The regexp above bounds
 // the SHAPE but not the MAGNITUDE, and an unbounded suffix is not a cosmetic
@@ -85,6 +103,18 @@ func validateThreadID(tid string) error {
 	return nil
 }
 
+// validateThreadModel accepts the four aliases and "" — no pick at all, which
+// is what every row branched before the picker carries and what a caller who
+// left the choice to the job's model: field sends. The error names all four
+// because it reaches the client verbatim (the API turns it into a 400), and a
+// typo'd alias is the whole failure mode worth spelling out.
+func validateThreadModel(model string) error {
+	if model == "" || validThreadModel[model] {
+		return nil
+	}
+	return fmt.Errorf("bad thread model %q: want haiku, sonnet, opus or fable", model)
+}
+
 func validateThreadState(state string) error {
 	if !validThreadState[state] {
 		return fmt.Errorf("bad thread state %q: want live or closed", state)
@@ -102,12 +132,12 @@ func validateThreadState(state string) error {
 const threadColumns = `job_id, COALESCE(tid,''), COALESCE(title,''), COALESCE(session_id,''),
 	COALESCE(parent_session,''), COALESCE(fork_uuid,''), COALESCE(cwd,''),
 	COALESCE(pane,''), COALESCE("window",''), COALESCE(state,''), COALESCE(seed,''),
-	COALESCE(created_at,0), COALESCE(closed_at,0)`
+	COALESCE(model,''), COALESCE(created_at,0), COALESCE(closed_at,0)`
 
 func scanThread(row interface{ Scan(...any) error }) (*Thread, error) {
 	var t Thread
 	if err := row.Scan(&t.JobID, &t.TID, &t.Title, &t.SessionID, &t.ParentSession,
-		&t.ForkUUID, &t.CWD, &t.Pane, &t.Window, &t.State, &t.Seed,
+		&t.ForkUUID, &t.CWD, &t.Pane, &t.Window, &t.State, &t.Seed, &t.Model,
 		&t.CreatedAt, &t.ClosedAt); err != nil {
 		return nil, err
 	}
@@ -190,6 +220,13 @@ func normalizeThread(t Thread) (Thread, error) {
 	if err := validateThreadState(t.State); err != nil {
 		return t, err
 	}
+	// the model is validated on the way IN and never again: a row that is
+	// already stored keeps whatever alias it was branched with even if the
+	// menu later loses that entry, because the alternative — refusing to READ
+	// the row — would make a retired tier hide a live thread from the board.
+	if err := validateThreadModel(t.Model); err != nil {
+		return t, err
+	}
 	if t.CreatedAt == 0 {
 		t.CreatedAt = time.Now().UnixMilli()
 	}
@@ -217,11 +254,11 @@ func normalizeThread(t Thread) (Thread, error) {
 func insertThreadTx(x execer, t Thread) error {
 	res, err := x.Exec(
 		`INSERT INTO threads (job_id, tid, title, session_id, parent_session, fork_uuid,
-			cwd, pane, "window", state, seed, created_at, closed_at)
-			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			cwd, pane, "window", state, seed, model, created_at, closed_at)
+			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 			WHERE NOT EXISTS (SELECT 1 FROM threads WHERE job_id = ? AND tid = ?)`,
 		t.JobID, t.TID, t.Title, t.SessionID, t.ParentSession, t.ForkUUID,
-		t.CWD, t.Pane, t.Window, t.State, t.Seed, t.CreatedAt, t.ClosedAt,
+		t.CWD, t.Pane, t.Window, t.State, t.Seed, t.Model, t.CreatedAt, t.ClosedAt,
 		t.JobID, t.TID,
 	)
 	if err != nil {

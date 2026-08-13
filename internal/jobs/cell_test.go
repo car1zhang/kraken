@@ -783,7 +783,8 @@ func TestAllArtifactPathsNoReservedNames(t *testing.T) {
 // So the invariant is stated where it can be checked — over cell.go's own
 // syntax, from this file. It is FILE-scoped where its sibling below is
 // package-scoped, and that asymmetry is deliberate: thread.go's
-// cellClaudeArgs(j.Model) is legal, so a package walk would need a by-name skip
+// cellClaudeArgs call (fed by threadModel's own resolution) is legal, so a
+// package walk would need a by-name skip
 // for it, and a by-name skip is the mechanism that would exempt the very file a
 // future zeus spawn got added to. cell.go is where zeus is spawned and NOWHERE
 // else, so a raw j.Model reaching cellClaudeArgs HERE is by definition a zeus
@@ -844,7 +845,8 @@ func TestZeusSpawnPathsResolveTheModel(t *testing.T) {
 // stagedCommand directly), so there is no legal briefless caller to exempt, and
 // a package walk needs no by-name skip — which is the mechanism that would
 // otherwise exempt the very file a future spawn got added to. The model guard
-// cannot have this, since thread.go's cellClaudeArgs(j.Model) IS legal.
+// cannot have this, since thread.go's cellClaudeArgs call — fed by
+// threadModel's resolution rather than zeusModel's — IS legal.
 func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {

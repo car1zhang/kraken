@@ -245,6 +245,10 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// jobs.ready and the prereqs table, both of which a genuine v16 database
 	// had and this fresh one no longer does.
 	for _, stmt := range []string{
+		// v22 adds a COLUMN rather than a table, so its reversal is a DROP
+		// COLUMN — a leftover threads.model fails that step's ALTER exactly
+		// the way a leftover table fails a bare CREATE.
+		`ALTER TABLE threads DROP COLUMN model`,
 		`DROP TABLE IF EXISTS slack_inbox`,
 		`DROP TABLE IF EXISTS slack_marks`,
 		`DROP TABLE IF EXISTS linear_issues`,

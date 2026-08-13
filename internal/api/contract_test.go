@@ -870,12 +870,15 @@ var webThreadSpec = map[string]fieldSpec{
 	"title":      {kind: wireString, required: false},
 	"state":      {kind: wireString, required: true},
 	"pane":       {kind: wireString, required: false},
+	"model":      {kind: wireString, required: false},
 	"created_at": {kind: wireNumber, required: true},
 	"closed_at":  {kind: wireNumber, required: false},
 }
 
 func TestWebThreadWireShape(t *testing.T) {
-	// a closed thread: no title, no pane (CloseThread clears it)
+	// a closed thread: no title, no pane (CloseThread clears it), and no
+	// model — the shape a thread branched before the picker existed keeps
+	// forever, which is why `model` is omitempty rather than always present
 	data, err := json.Marshal(webThread{TID: "t1", State: "closed", CreatedAt: 1234567890})
 	if err != nil {
 		t.Fatal(err)
@@ -884,7 +887,7 @@ func TestWebThreadWireShape(t *testing.T) {
 
 	data, err = json.Marshal(webThread{
 		TID: "t2", Title: "why the retry loop", State: "live", Pane: "%42",
-		CreatedAt: 1234567890, ClosedAt: 1234567899,
+		Model: "haiku", CreatedAt: 1234567890, ClosedAt: 1234567899,
 	})
 	if err != nil {
 		t.Fatal(err)

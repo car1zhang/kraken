@@ -97,6 +97,15 @@ export interface WebThread {
   pane?: string;
   created_at: number;
   closed_at?: number;
+  /**
+   * The model ALIAS the thread was branched on — one of lib/threadquick.ts's
+   * THREAD_MODELS, never an exact model id (the server resolves the id at spawn
+   * time and keeps it off the wire). Omitempty on the Go side, and absent is the
+   * legacy state rather than a default: every row that predates the column reads
+   * back as "", so a thread without this key runs on the job's model exactly as
+   * it always did.
+   */
+  model?: string;
 }
 
 export type PRState = "open" | "merged" | "closed" | string;

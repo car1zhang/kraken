@@ -24,6 +24,19 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v22: drop threads.model (added at v22, absent through v21). Pure
+	// shape, nothing to carry back — the column's whole content is a choice
+	// made at branch time, and a pre-v22 database has no thread that ever had
+	// one. The jobs.color arm below is the precedent for the single-column
+	// form.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 22 {
+		if _, err := s.db.Exec(`ALTER TABLE threads DROP COLUMN model`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v22, drop threads.model): %v", target, err)
+		}
+	}
 	// Reverse v21: drop job_former_slugs (its index goes with the table).
 	// Nothing to put back — v21 is a single additive CREATE over a v20 shape
 	// that had no such table, so the drop is the whole reversal (the v18 arm

@@ -2,17 +2,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { capturePane, fetchThreadRead, threadOp } from "../../api/client.ts";
 import type { ThreadBlock, ThreadRead, WebJob } from "../../api/types.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
-import { useLocalStorageFlag } from "../../hooks/useLocalStorage.ts";
+import {
+  useLocalStorage,
+  useLocalStorageFlag,
+} from "../../hooks/useLocalStorage.ts";
 import { usePoll } from "../../hooks/usePoll.ts";
 import { age } from "../../lib/format.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
+import {
+  THREAD_MODELS,
+  deriveThreadTitle,
+  threadAwaitingReply,
+} from "../../lib/threadquick.ts";
 import { Overlay, useOpenTmux, type Mutate } from "./Overlay.tsx";
 
 // A side thread: a fork of zeus' session running as a second claude in its own
 // tmux window of the same cell — somewhere to ASK without disturbing zeus.
 //
 // ONE overlay, two modes (app.js:2461 openThread), split on `tid`:
-//   tid == null   "new"    — branch: required name + optional seed question
+//   tid == null   "new"    — branch: the question, then an optional name and
+//                            the model to answer it on
 //   tid != null   "thread" — read/steer/kill/revive one that exists
 // They share a head, a body column and a close path, which is why they are one
 // component rather than two.
@@ -170,7 +179,9 @@ function ThreadBody({
   // a just-branched thread's title, until the board catches its row
   const [titleOverride, setTitleOverride] = useState<string | null>(null);
   const openTmuxTarget = useOpenTmux(mutate);
-  const nameInput = useRef<HTMLInputElement | null>(null);
+  // the question is the field a failed branch sends carl back to, so it is the
+  // one holding a ref — the name is optional and cannot be the thing missing
+  const seedInput = useRef<HTMLTextAreaElement | null>(null);
   const convoRef = useRef<HTMLDivElement | null>(null);
   const lastHTML = useRef<string>("");
 
@@ -180,16 +191,38 @@ function ThreadBody({
   // on.
   const [mirror, setMirror] = useLocalStorageFlag("kraken-thread-mirror", false);
 
+  // The model picker's choice is STICKY for the same reason the mirror toggle
+  // is: it is a standing preference, not a per-branch decision, and re-picking
+  // it on every branch would be the typing this dialog exists to remove.
+  const [storedModel, setStoredModel] = useLocalStorage(
+    "kraken-thread-model",
+    "opus",
+  );
+  // A key left by a hand edit (or a future board with a fifth model) must not
+  // ride out as a request the server refuses by name — an unrecognised value
+  // reads as the default, and the picker lights that default, so what is shown
+  // as picked is what a branch would actually send.
+  const model = (THREAD_MODELS as readonly string[]).includes(storedModel)
+    ? storedModel
+    : "opus";
+
   const rec = (job?.threads || []).find((t) => t.tid === tid) || null;
 
-  // ---- the 3s read, only while the overlay is open on a thread ------------
+  // ---- the read, only while the overlay is open on a thread ---------------
   // No `n`: the server's own default is the right size. LastBlocks counts
   // NON-tool blocks, so a big number means re-reading and re-parsing
   // multi-megabyte transcript tails every tick to redraw a column nobody
   // scrolled.
+  //
+  // 1s while an answer is in flight, 3s the rest of the time. The interval is
+  // STATE rather than an inline derivation because the payload that decides it
+  // is this poll's own — `read.data` does not exist yet on the line below. The
+  // effect further down closes that loop one render later, which is the render
+  // the deciding block landed in anyway.
+  const [awaiting, setAwaiting] = useState(false);
   const read = usePoll<ThreadRead>(
     (signal) => fetchThreadRead(jobSlug, tid as string, undefined, signal),
-    3000,
+    awaiting ? 1000 : 3000,
     { enabled: !!tid },
   );
   const refetchRead = read.refetch;
@@ -211,6 +244,19 @@ function ThreadBody({
     typeof read.data?.counted === "number"
       ? read.data.counted
       : (read.data?.blocks || []).length;
+
+  // The gap between asking and the first block landing is the ONE stretch a
+  // reader WATCHES this column rather than reads it, so that is where the
+  // faster tick goes — and it goes away again the moment the answer is whole.
+  // A closed thread is never awaiting: nothing is running to answer. `seed` is
+  // what makes a just-branched thread count — it carries only inherited blocks
+  // until its first turn, so the question carl typed is the only evidence that
+  // anything is coming at all.
+  const nextAwaiting =
+    live && threadAwaitingReply(read.data?.blocks || [], seed);
+  useEffect(() => {
+    setAwaiting(nextAwaiting);
+  }, [nextAwaiting]);
 
   // a read failure gets its own note and clears its OWN note on recovery, so
   // it cannot eat a "send failed"/"message is empty" the user just triggered
@@ -291,15 +337,20 @@ function ThreadBody({
   );
 
   const branch = useCallback(async () => {
-    const t = newName.trim();
+    // A typed name always wins; otherwise the question names the thread. The
+    // server still REQUIRES a title, so the derivation is not a nicety — it is
+    // what lets the name field be optional at all.
+    const t = newName.trim() || deriveThreadTitle(seed);
     if (!t) {
-      setNote("name this thread — one line on what it's for");
-      nameInput.current?.focus();
+      // the only way to reach here is an empty question AND an empty name,
+      // so the ask is for either one — not for the name in particular
+      setNote("ask something — or name the thread and open it at its prompt");
+      seedInput.current?.focus();
       return;
     }
     setBusy(true);
     const res = await mutate(() =>
-      threadOp(jobSlug, "branch", { title: t, text: seed.trim() }),
+      threadOp(jobSlug, "branch", { title: t, text: seed.trim(), model }),
     );
     setBusy(false);
     if (!res) {
@@ -317,7 +368,7 @@ function ThreadBody({
     } else {
       onClose(); // branched, but no id came back — the card carries it
     }
-  }, [jobSlug, mutate, newName, onBranched, onClose, seed]);
+  }, [jobSlug, model, mutate, newName, onBranched, onClose, seed]);
 
   const send = useCallback(async () => {
     const body = text.trim();
@@ -425,6 +476,19 @@ function ThreadBody({
         >
           {live ? "live" : "closed"}
         </span>
+        {/* Rendered only when the row carries a model, rather than hidden with
+            a fallback: a thread branched before per-thread models existed has
+            no model of its own, and printing the job's would claim a choice
+            nobody made. Absence is the honest paint for it. */}
+        {rec?.model ? (
+          <span
+            className="thread-pill model"
+            id="thread-model-pill"
+            title="the model this thread was branched on — kept across kill/revive"
+          >
+            {rec.model}
+          </span>
+        ) : null}
         <span className="spacer"></span>
         {/* raises THIS THREAD's window, by pane — pointless once the window is
             gone, and hidden without a pane too: a slug-only post would raise
@@ -472,31 +536,17 @@ function ThreadBody({
             same cell, in the same worktree. Zeus is not interrupted and this
             conversation is unaffected. Threads are for asking, not for doing.
           </div>
+          {/* The question comes FIRST and takes the focus: asking is the whole
+              errand, and making a name the price of admission put a naming
+              decision in front of every question. */}
           <label className="thread-field">
-            what is this thread for?
-            <input
-              id="thread-new-name"
-              ref={nameInput}
-              placeholder="short name — e.g. short-clip WER"
-              spellCheck={false}
-              maxLength={80}
-              autoFocus={!tid}
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  void branch();
-                }
-              }}
-            />
-          </label>
-          <label className="thread-field">
-            seed question <span className="dim">— optional</span>
+            what do you want to ask?
             <textarea
               id="thread-seed"
+              ref={seedInput}
               rows={4}
-              placeholder="optional: the first thing to ask — leave empty to open the thread at its prompt with zeus' context loaded"
+              placeholder="the thread opens on this, with zeus' context already loaded — leave it empty to open at a bare prompt instead"
+              autoFocus={!tid}
               value={seed}
               onChange={(e) => setSeed(e.target.value)}
               onKeyDown={(e) => {
@@ -507,6 +557,54 @@ function ThreadBody({
               }}
             />
           </label>
+          <label className="thread-field">
+            name <span className="dim">— optional, taken from the question</span>
+            {/* the placeholder IS the preview: it shows the title this branch
+                would actually be filed under, so the derivation is something
+                carl reads before it happens rather than after */}
+            <input
+              id="thread-new-name"
+              placeholder={
+                deriveThreadTitle(seed) || "short name — e.g. short-clip WER"
+              }
+              spellCheck={false}
+              maxLength={80}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  void branch();
+                }
+              }}
+            />
+          </label>
+          {/* a div, not a <label>: a label wrapping buttons hands its click to
+              the first one, which would make "model" itself a pick of haiku.
+              role=group + aria-label is what names it for AT instead — the
+              same move, and the same reason, as the load drill's group. */}
+          <div className="thread-field">
+            model
+            <div
+              className="thread-models"
+              id="thread-models"
+              role="group"
+              aria-label="model for this thread"
+            >
+              {THREAD_MODELS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className="btn"
+                  aria-pressed={model === m}
+                  disabled={busy}
+                  onClick={() => setStoredModel(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="thread-new-actions">
             <button
               className="btn"

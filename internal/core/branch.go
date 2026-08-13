@@ -56,6 +56,33 @@ const ZeusModel = "claude-fable-5"
 // neighbours it is an exact model id, never the `fable` alias.
 const IrisModel = "claude-fable-5"
 
+// ThreadModels is the menu a SIDE THREAD may be branched on, alias → exact
+// model id. It is the one place in the binary where a tier alias is RESOLVED
+// to an id: the board's branch overlay sends one of these four keys and
+// nothing else, so a thread's own pick never reaches a command line as an
+// alias, which is the rule the three constants above are written for (an alias
+// silently follows whatever claude ships next). A job's `model:` field is not
+// covered by any of this — it is free-form wire text and rides through to
+// --model exactly as carl typed it (jobs.threadModel returns it verbatim).
+//
+// The four values are literals rather than references to DefaultModel and
+// ZeusModel, even where they hold the same id today, for the reason those two
+// constants are already separate from each other: this map answers "what may
+// carl pick for a question he is asking on the side", while they answer what
+// kraken STARTS a general-purpose claude and a cell lead on. Writing
+// `"opus": DefaultModel` would make a change to either constant silently
+// re-aim the picker's opus entry at something else.
+//
+// A thread with no explicit pick is not in here at all — it falls back to the
+// job's model: field and then DefaultModel (jobs.threadSpawnCommand), which is
+// the behaviour every thread had before the picker existed.
+var ThreadModels = map[string]string{
+	"haiku":  "claude-haiku-4-5-20251001",
+	"sonnet": "claude-sonnet-5",
+	"opus":   "claude-opus-5",
+	"fable":  "claude-fable-5",
+}
+
 // ModelArgs is the `--model` flag pair for a spawn: the caller's explicit model
 // (a job's `model:` field) when it has one, else DefaultModel. Always returns a
 // flag — kraken never leaves the model to claude's own config, so the model a

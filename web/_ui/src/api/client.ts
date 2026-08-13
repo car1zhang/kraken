@@ -217,10 +217,16 @@ export const deleteFeedback = (slug: string, id: number) =>
 
 // ------------------------------------------------------------ threads
 
+/**
+ * `model` is read by the BRANCH op alone — every other op ignores it, so a
+ * rename or a send never restates (or accidentally rewrites) the thread's
+ * model. It carries a THREAD_MODELS alias, and the server 400s anything else by
+ * name, which is why the picker is the only thing that sets it.
+ */
 export const threadOp = (
   slug: string,
   op: ThreadOp,
-  extra: { tid?: string; title?: string; text?: string } = {},
+  extra: { tid?: string; title?: string; text?: string; model?: string } = {},
 ) => postJSON<{ ok: true; tid?: string }>("/api/threads", { slug, op, ...extra });
 
 // ------------------------------------------------------------ job editor
