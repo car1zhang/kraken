@@ -1,13 +1,19 @@
 // sfx.ts — the board's sound module: every click on an actionable target and
-// every keystroke in a text field gets an 8-bit chip pulse, synthesized in Web
-// Audio from the locked spec below. Zero assets, zero dependencies: the whole
-// voice is square oscillators through flat-top gain envelopes (near-instant
-// attack, full sustain, hard cut — the chip envelope, which is what makes
-// these read as game sounds rather than notification bleeps).
+// every keystroke in a text field gets an 8-bit chip pulse, and every board
+// event the poll loop notices gets a short motif of its own, all synthesized
+// in Web Audio from the locked tables below. Zero assets, zero dependencies:
+// the whole voice is square oscillators through flat-top gain envelopes
+// (near-instant attack, full sustain, hard cut — the chip envelope, which is
+// what makes these read as game sounds rather than notification bleeps),
+// played two octaves down through a synthesized convolver reverb for the
+// board's cyberpunk-night register.
 //
 // The AudioContext is a lazy singleton, constructed on the first enabled play.
-// Every play happens inside a user-gesture handler (the capture listeners
-// below), so the browser's autoplay policy is satisfied by construction.
+// Only the gesture-driven plays construct it — playSfx runs from the capture
+// listeners below, so the browser's autoplay policy is satisfied by
+// construction. Board-event sounds have no gesture behind them (they arrive on
+// a poll tick), so playEventSfx never constructs anything and simply drops
+// unless a real gesture has already unlocked a running context.
 // Everything degrades to silence: no AudioContext, a throwing constructor, a
 // suspended context that won't resume — none of it may break the board.
 //
@@ -23,11 +29,17 @@
 
 import { MOUSE_ACTIVATION, TOUCH_ACTIVATION } from "../hooks/useDragReorder.ts";
 import { readLS } from "../hooks/useLocalStorage.ts";
+import type { EventType } from "./boardEvents.ts";
 
 export type SoundName = "key" | "click" | "enter" | "toggle";
 
 interface Pulse {
-  /** oscillator frequency, Hz — fixed pitch, no jitter, no RNG anywhere */
+  /**
+   * NOMINAL oscillator frequency, Hz — fixed pitch, no jitter, no RNG in the
+   * note itself. What reaches the oscillator is freq × PITCH_FACTOR; the
+   * tables below stay written at nominal pitch so they still read as the
+   * notes that were auditioned.
+   */
   freq: number;
   /** seconds from the pulse's own start to its hard cut */
   dur: number;
@@ -39,6 +51,28 @@ interface Pulse {
 
 /** One shared output level; the per-pulse gains above ride through this. */
 export const MASTER_GAIN = 0.12;
+
+// The cyberpunk-night retune, decided board-wide in 40-sfx-event-audition.html:
+// every voice drops two octaves and picks up a dark tail. It is applied at
+// synthesis rather than by rewriting the tables, so the interaction spec and
+// the event palette can never drift apart on it, and both keep reading as the
+// notes that were auditioned.
+/** What every oscillator frequency is multiplied by: 0.25 = two octaves down. */
+export const PITCH_FACTOR = 0.25;
+
+// The reverb is synthesized, not sampled — an exponentially-decaying noise
+// impulse built once per context — so the treatment still costs zero assets.
+// It hangs off the master as a WET-ONLY parallel branch beside the untouched
+// dry path, which is what lets a browser that cannot build any of the three
+// node types simply lose the tail instead of the sound.
+/** Level of the wet branch; the dry master → destination path is unchanged. */
+export const REVERB_WET_GAIN = 0.72;
+/** Impulse length in seconds — the outer bound on the tail. */
+export const REVERB_SECONDS = 2.8;
+/** Exponent on the impulse's fade: above 1 it dumps most energy early. */
+export const REVERB_DECAY = 3.2;
+/** Lowpass ahead of the convolver — what makes the tail dark rather than fizzy. */
+export const REVERB_LOWPASS_HZ = 3000;
 
 /** Envelope shape: linear attack, flat sustain, linear cut-out at the end. */
 export const ATTACK_S = 0.002;
@@ -64,6 +98,77 @@ export const SOUNDS: Record<SoundName, readonly Pulse[]> = {
   toggle: [{ freq: 659, dur: 0.045, at: 0, gain: 1.6 }],
 };
 
+// The SNAP-X palette (Q1, chosen by playing 40-sfx-event-audition.html): the
+// same square-wave vocabulary as SOUNDS, one motif per event type, none of
+// them running past 0.25s. The shape carries the meaning — rising for good
+// news (done, pr-merged, resumed, update-done), falling for something wanting
+// attention (blocked, thread-closed, update-failed), an oscillating two-beat
+// for the question that is waiting on carl, a low tritone wobble for health,
+// and one blip / one dyad for the two ambient changes (artifact, color).
+// Nominal pitch like SOUNDS: PITCH_FACTOR drops it into the night register at
+// synthesis. All 13 types ship enabled (Q2) and there is no enabled-set
+// mechanism, so pruning one means editing this table.
+export const EVENT_SOUNDS: Record<EventType, readonly Pulse[]> = {
+  question: [
+    { freq: 988, dur: 0.03, at: 0, gain: 1.6 },
+    { freq: 1319, dur: 0.03, at: 0.04, gain: 1.6 },
+    { freq: 988, dur: 0.03, at: 0.14, gain: 1.6 },
+    { freq: 1319, dur: 0.03, at: 0.18, gain: 1.6 },
+  ],
+  blocked: [
+    { freq: 988, dur: 0.045, at: 0, gain: 1.6 },
+    { freq: 784, dur: 0.055, at: 0.05, gain: 1.6 },
+  ],
+  resumed: [
+    { freq: 784, dur: 0.04, at: 0, gain: 1.5 },
+    { freq: 988, dur: 0.045, at: 0.045, gain: 1.5 },
+  ],
+  done: [
+    { freq: 1047, dur: 0.045, at: 0, gain: 1.7 },
+    { freq: 1319, dur: 0.045, at: 0.05, gain: 1.7 },
+    { freq: 1568, dur: 0.07, at: 0.1, gain: 1.7 },
+  ],
+  "pr-open": [
+    { freq: 988, dur: 0.03, at: 0, gain: 1.7 },
+    { freq: 988, dur: 0.03, at: 0.06, gain: 1.7 },
+    { freq: 1319, dur: 0.06, at: 0.12, gain: 1.7 },
+  ],
+  "pr-merged": [
+    { freq: 1047, dur: 0.04, at: 0, gain: 1.7 },
+    { freq: 1319, dur: 0.04, at: 0.045, gain: 1.7 },
+    { freq: 1568, dur: 0.04, at: 0.09, gain: 1.7 },
+    { freq: 2093, dur: 0.09, at: 0.135, gain: 1.7 },
+  ],
+  health: [
+    { freq: 330, dur: 0.07, at: 0, gain: 1.5 },
+    { freq: 466, dur: 0.07, at: 0.08, gain: 1.5 },
+    { freq: 330, dur: 0.09, at: 0.16, gain: 1.5 },
+  ],
+  "thread-open": [
+    { freq: 1175, dur: 0.035, at: 0, gain: 1.5 },
+    { freq: 880, dur: 0.045, at: 0.04, gain: 1.5 },
+  ],
+  "thread-closed": [
+    { freq: 880, dur: 0.035, at: 0, gain: 1.4 },
+    { freq: 659, dur: 0.05, at: 0.04, gain: 1.4 },
+  ],
+  artifact: [{ freq: 1047, dur: 0.028, at: 0, gain: 1.4 }],
+  color: [
+    { freq: 1319, dur: 0.03, at: 0, gain: 1.2 },
+    { freq: 1047, dur: 0.03, at: 0, gain: 1.2 },
+  ],
+  "update-done": [
+    { freq: 784, dur: 0.035, at: 0, gain: 1.6 },
+    { freq: 1047, dur: 0.035, at: 0.04, gain: 1.6 },
+    { freq: 1319, dur: 0.055, at: 0.08, gain: 1.6 },
+  ],
+  "update-failed": [
+    { freq: 1319, dur: 0.04, at: 0, gain: 1.6 },
+    { freq: 1047, dur: 0.04, at: 0.045, gain: 1.6 },
+    { freq: 392, dur: 0.09, at: 0.09, gain: 1.6 },
+  ],
+};
+
 // Structural slices of the Web Audio types — what this module actually calls.
 // Typing against these rather than lib.dom's AudioContext is what lets the
 // tests inject a plain recording fake without faking the full interface.
@@ -83,13 +188,33 @@ export interface SfxGainNode {
   gain: SfxGainParam;
   connect(node: unknown): void;
 }
+export interface SfxBiquadFilter {
+  type: string;
+  frequency: { value: number };
+  connect(node: unknown): void;
+}
+export interface SfxConvolver {
+  buffer: unknown;
+  connect(node: unknown): void;
+}
+export interface SfxAudioBuffer {
+  getChannelData(ch: number): Float32Array;
+}
 export interface SfxAudioContext {
   currentTime: number;
+  /** frames per second — the impulse's length is derived from it */
+  sampleRate: number;
   state?: string;
   destination: unknown;
   resume?(): unknown;
   createOscillator(): SfxOscillator;
   createGain(): SfxGainNode;
+  // the three night-bus factories are required members, not optional ones: a
+  // context missing them is a fake that has not been updated, and that should
+  // fail a typecheck rather than silently lose the reverb at runtime
+  createBiquadFilter(): SfxBiquadFilter;
+  createConvolver(): SfxConvolver;
+  createBuffer(channels: number, frames: number, sampleRate: number): SfxAudioBuffer;
 }
 
 function defaultFactory(): SfxAudioContext | null {
@@ -133,6 +258,49 @@ export function setSfxEnabled(on: boolean): void {
   enabled = on;
 }
 
+/**
+ * The reverb's impulse response, synthesized: white noise faded out along
+ * (1 - i/n)^REVERB_DECAY, which is the cheapest thing that sounds like a room
+ * rather than a delay line. This is the module's only RNG, and it is heard as
+ * a tail, never as a pitch — the notes themselves stay deterministic.
+ */
+function buildImpulse(c: SfxAudioContext): SfxAudioBuffer {
+  const frames = Math.ceil(c.sampleRate * REVERB_SECONDS);
+  const buf = c.createBuffer(2, frames, c.sampleRate);
+  // two independent channels, not one copied: decorrelated noise is what makes
+  // the tail read as width instead of a mono blur pinned to the centre
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    for (let i = 0; i < frames; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / frames) ** REVERB_DECAY;
+    }
+  }
+  return buf;
+}
+
+/**
+ * The night bus: master → lowpass → convolver → wetGain → destination, built
+ * ONCE per context beside the dry master → destination path that ensureContext
+ * already wired. Nothing holds a reference to these nodes — the graph does,
+ * exactly as it does for pulse()'s per-voice envelopes — so they die with the
+ * context singleton and there is no extra module state for the test seams to
+ * reset. The caller swallows a throw from any of the three factories: an old
+ * browser missing one of them loses the tail, and the dry path plays on.
+ */
+function buildNightBus(c: SfxAudioContext, m: SfxGainNode): void {
+  const lowpass = c.createBiquadFilter();
+  lowpass.type = "lowpass";
+  lowpass.frequency.value = REVERB_LOWPASS_HZ;
+  const convolver = c.createConvolver();
+  convolver.buffer = buildImpulse(c);
+  const wet = c.createGain();
+  wet.gain.value = REVERB_WET_GAIN;
+  m.connect(lowpass);
+  lowpass.connect(convolver);
+  convolver.connect(wet);
+  wet.connect(c.destination);
+}
+
 interface ReadyContext {
   c: SfxAudioContext;
   m: SfxGainNode;
@@ -169,6 +337,16 @@ function ensureContext(): ReadyContext | null {
     ctx = c;
     master = m;
     fresh = true;
+    // AFTER the commit, and in its own try: the wet branch is a bonus hanging
+    // off a dry path that is already complete and already published, so a
+    // context whose convolver (or filter, or buffer) throws loses the tail and
+    // keeps every sound. Never retried for this context — it lives in the
+    // construction branch, and retrying per play would rebuild the graph.
+    try {
+      buildNightBus(c, m);
+    } catch {
+      // no tail; the dry path above is untouched
+    }
   }
   if (ctx.state !== undefined && ctx.state !== "running" && ctx.resume) {
     // covers "suspended" AND iOS Safari's "interrupted"; resume() rejects on
@@ -183,12 +361,17 @@ function ensureContext(): ReadyContext | null {
   return { c: ctx, m: master as SfxGainNode, fresh };
 }
 
-/** One square pulse through the flat-top envelope, onto the master gain. */
+/**
+ * One square pulse through the flat-top envelope, onto the master gain — and
+ * the one place PITCH_FACTOR is applied, so every table (interaction and
+ * event alike) lands in the same register with no chance of one being
+ * retuned without the other.
+ */
 function pulse(c: SfxAudioContext, m: SfxGainNode, p: Pulse, t0: number): void {
   const start = t0 + p.at;
   const osc = c.createOscillator();
   osc.type = "square";
-  osc.frequency.setValueAtTime(p.freq, start);
+  osc.frequency.setValueAtTime(p.freq * PITCH_FACTOR, start);
   const g = c.createGain();
   g.gain.setValueAtTime(0.0001, start);
   g.gain.linearRampToValueAtTime(p.gain, start + ATTACK_S);
@@ -231,7 +414,46 @@ export function playSfx(name: SoundName): void {
   }
 }
 
-// ── event classification ─────────────────────────────────────────────────────
+/**
+ * A board event announcing itself: same master, same envelope, same register
+ * as a click — but this one arrives on a poll tick with no user gesture behind
+ * it, and that difference is the whole rule. It NEVER constructs the
+ * AudioContext: a browser that has not been unlocked would either throw or
+ * hand back a context stuck in "suspended", and calling resume() outside a
+ * gesture is exactly the autoplay violation the module's design avoids. So an
+ * event arriving before carl has clicked anything is silent, permanently and
+ * by intent, and the first click of the session both unlocks the context and
+ * turns the board's voice on.
+ *
+ * There is no rate limit here on purpose: the coalescer upstream is the rate
+ * limit (it caps and staggers a tick's events before any of them get here),
+ * and a second watermark inside this module would silently drop sounds it
+ * already decided were worth playing.
+ */
+export function playEventSfx(name: EventType): void {
+  if (!sfxEnabled()) return;
+  // read the singleton into locals: this is the read-only twin of
+  // ensureContext, and the pair must stay committed-together the same way
+  const c = ctx;
+  const m = master;
+  if (!c || !m) return;
+  // no `fresh` exemption to make here — nothing this function does could have
+  // constructed the context, so a non-running one is always the frozen-clock
+  // case playSfx refuses to schedule into. An undefined state reads as running,
+  // matching playSfx, so a minimal fake behaves the same on both paths.
+  if (c.state !== undefined && c.state !== "running") return;
+  try {
+    const t0 = c.currentTime;
+    for (const p of EVENT_SOUNDS[name]) pulse(c, m, p, t0);
+  } catch {
+    // same contract as playSfx: a throwing node factory reaches no caller —
+    // here that caller is a poll-tick effect, which must not be broken by audio
+  }
+}
+
+// ── DOM event classification ─────────────────────────────────────────────────
+// (DOM events, not the board events above — these two live in the same module
+// and mean entirely different things by "event".)
 
 // What counts as an actionable click target. Text inputs are deliberately
 // absent — clicking into one is focusing, not acting, and its feedback is the
@@ -405,6 +627,10 @@ export function installSfxListeners(doc: Document = document): () => void {
 }
 
 // ── test seams ───────────────────────────────────────────────────────────────
+
+// Both seams drop the context singleton, and that is all they need to do about
+// the night bus: its nodes are held only by the graph hanging off that
+// context, so they go with it and the next construction builds a fresh one.
 
 /** Swap the AudioContext factory (null restores the real one); drops the singleton. */
 export function injectAudioContextFactoryForTest(
