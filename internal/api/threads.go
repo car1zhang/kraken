@@ -43,6 +43,13 @@ type threadsReq struct {
 	TID   string `json:"tid,omitempty"`
 	Title string `json:"title,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// Model is read by `branch` alone — the tier carl picked for this thread,
+	// one of core.ThreadModels' four aliases, empty for no pick. The other
+	// four ops ignore it, for two different reasons: kill, rename and send
+	// put nothing on a command line at all, while revive DOES render one and
+	// deliberately re-reads the alias off the ROW instead of the request, so
+	// no request can move a thread to another tier mid-conversation.
+	Model string `json:"model,omitempty"`
 }
 
 // threadsHandler serves GET (the board/client read) and POST (branch, kill,
@@ -143,10 +150,23 @@ func threadsPost(w http.ResponseWriter, r *http.Request) {
 			webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing title"})
 			return
 		}
+		// after the title check, so a form missing both still gets the
+		// message about the field that is actually required. An unknown
+		// alias is refused HERE rather than left to jobs: this is the one
+		// value that arrives from a picker, so a bad one means a client bug
+		// or a hand-rolled request, and 400 says that where jobs' own
+		// live-state refusals are 409s. Not trimmed, unlike title/tid — the
+		// four aliases are an exact menu, not free text carl types.
+		if req.Model != "" {
+			if _, ok := core.ThreadModels[req.Model]; !ok {
+				webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad model — want haiku, sonnet, opus or fable"})
+				return
+			}
+		}
 		// text is the seed prompt and is deliberately OPTIONAL: branching
 		// with nothing to say yet is a legitimate move (the overlay's own
 		// seed box may be left blank), and the thread comes up idle.
-		t, err := jobs.BranchThread(j, title, req.Text)
+		t, err := jobs.BranchThread(j, title, req.Text, req.Model)
 		if err != nil {
 			threadErr(w, action, req.Slug, err)
 			return

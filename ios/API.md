@@ -255,6 +255,7 @@ window of the same cell):
 | `title` | string | omitempty | carl's name for the thread; absent for one branched without a title — clients fall back to the tid |
 | `state` | string | always | `live` \| `closed`. `closed` = the tmux window is gone; the row (and the transcript it points at) survives, and `revive` resumes the same claude session |
 | `pane` | string | omitempty | the live thread's tmux pane, e.g. `%42` — usable with `GET /api/peers/capture`. Cleared on close (tmux recycles pane ids), so it is absent for a closed thread rather than stale |
+| `model` | string | omitempty | the tier this thread was branched on — `haiku` \| `sonnet` \| `opus` \| `fable`, the alias rather than the resolved id. Absent for a thread branched with no pick (and for every thread branched before the field existed), which falls back to the job's `model` and then kraken's default; a revive re-reads this row, so a thread never changes tier mid-conversation |
 | `created_at` | number | always | unix millis the thread was branched |
 | `closed_at` | number | omitempty | unix millis the thread was closed; absent (0) while live |
 
@@ -805,11 +806,14 @@ Every side-thread mutation, one body shape across all five ops
 | `tid` | string | required for `kill`/`revive`/`rename`/`send` | |
 | `title` | string | required for `branch`/`rename` | |
 | `text` | string | required for `send`; optional for `branch` | |
+| `model` | string | optional for `branch`, ignored by every other op | `haiku` \| `sonnet` \| `opus` \| `fable` — the tier the new thread's claude runs on, matched EXACTLY (not trimmed, not case-folded). Omit or send `""` for the pre-existing behaviour: the job's own `model`, then kraken's default. Anything else is a 400. The web board's branch overlay sends it; the iOS client has no picker, which is why `ThreadActionRequest` in Models.swift carries no `model` field |
 
-- **`branch`** — `{slug, op:"branch", title, text?}`: forks zeus' session into
-  a new claude in a fresh window of the same cell, in the same worktree, under
+- **`branch`** — `{slug, op:"branch", title, text?, model?}`: forks zeus' session
+  into a new claude in a fresh window of the same cell, in the same worktree, under
   a brand-new session id. `text` is the seed prompt and is OPTIONAL — branching
-  with nothing to say yet is legitimate, and the thread comes up idle. This is
+  with nothing to say yet is legitimate, and the thread comes up idle. `model` is
+  the thread's own tier and is likewise optional; it is stored on the row, so a
+  later `revive` comes back on the same one. This is
   the only op whose success body carries the new `tid`.
 - **`kill`** — `{slug, op:"kill", tid}`: kills the thread's window and marks
   the row closed. The ROW SURVIVES: its session id still locates the
@@ -823,8 +827,10 @@ Every side-thread mutation, one body shape across all five ops
   thread's pane, through the same verify-before-acting guard `k s` uses.
 
 Response: `{"ok": true}`, plus `"tid"` on a `branch`. Errors: 400 for a
-missing required field or an unrecognized `op` (the message names every valid
-form), 404 for an unknown slug or an unknown `tid`, 409 for a refusal about
+missing required field, an unrecognized `op` (the message names every valid
+form) or a `branch` `model` outside the four aliases (`bad model — want haiku,
+sonnet, opus or fable`; nothing is spawned), 404 for an unknown slug or an
+unknown `tid`, 409 for a refusal about
 live state (no live cell to branch, a zeus that can't be forked, a pane that
 no longer holds the thread, a tid already taken) — the `error` string is jobs'
 own message verbatim, and it already names the recovery, so a 409 always means
@@ -1530,7 +1536,7 @@ refuses either LOUDLY, since an agent writing one would otherwise be told
 | `repo` | string | always | |
 | `base` | string | always | |
 | `solo` | bool | always | |
-| `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default for zeus (`claude-fable-5`); applied once at cell start. Governs the cell's own claudes — zeus and its side threads; the teammates zeus spawns are opus regardless |
+| `model` | string | always | claude model for zeus (`--model` value), `""` = kraken's default for zeus (`claude-fable-5`); applied once at cell start. Governs the cell's own claudes — zeus, and any side thread branched without its own `model` (see `POST /api/threads`); the teammates zeus spawns are opus regardless |
 | `color` | string | always | the job's color — one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan`, or `""` for no color. Read-only here: it is written by `POST /api/job/color`, never by `saveform` |
 | `spec` | string | always | |
 | `mtime` | number | always | |

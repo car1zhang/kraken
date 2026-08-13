@@ -2758,6 +2758,9 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 .thread-pill.live { color: var(--ok); }
 .thread-pill.closed { color: var(--stopped); }
+/* the model the thread was branched on: the same pill in the quiet voice — it
+   is a fact about the thread, not a state that can change under the reader */
+.thread-pill.model { color: var(--muted); text-transform: none; letter-spacing: 0.06em; }
 
 /* branch dialog: says plainly what the fork does and doesn't touch */
 .thread-banner {
@@ -2787,6 +2790,14 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .thread-field ::placeholder { color: var(--muted); opacity: 1; }
 .thread-new { display: flex; flex-direction: column; gap: 12px; }
 .thread-new-actions { display: flex; gap: 8px; }
+/* the model picker: four .btn in a row, the chosen one lit. It needs a rule of
+   its own because .btn and .btn.ghost differ by border colour alone, which is
+   too quiet to read as a selection in a four-way pick. */
+.thread-models { display: flex; gap: 6px; flex-wrap: wrap; }
+.thread-models .btn[aria-pressed="true"] {
+  color: var(--ac); border-color: var(--ac);
+  background: color-mix(in srgb, var(--ac) 12%, transparent);
+}
 
 /* the conversation: inherited history dimmed above the branch divider, the
    thread's own turns at full strength below it */

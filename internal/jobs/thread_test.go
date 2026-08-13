@@ -107,7 +107,7 @@ func TestThreadSpawnCommandBranch(t *testing.T) {
 	j := &Job{Slug: "branch-cmd"}
 	threadCellDir(t, j)
 
-	cmd, err := threadSpawnCommand(j, "t1", "why is it blocked", "explain the block",
+	cmd, err := threadSpawnCommand(j, "t1", "why is it blocked", "explain the block", "",
 		[]string{"--session-id", "11111111-2222-4333-8444-555555555555", "--fork-session", "-r", "zeus-sess"})
 	if err != nil {
 		t.Fatalf("threadSpawnCommand: %v", err)
@@ -165,7 +165,7 @@ func TestThreadSpawnCommandRevive(t *testing.T) {
 	j := &Job{Slug: "revive-cmd"}
 	threadCellDir(t, j)
 
-	cmd, err := threadSpawnCommand(j, "t2", "the title", "", []string{"-r", "thread-sess"})
+	cmd, err := threadSpawnCommand(j, "t2", "the title", "", "", []string{"-r", "thread-sess"})
 	if err != nil {
 		t.Fatalf("threadSpawnCommand: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestBranchThreadRefusesADeadCell(t *testing.T) {
 	sr := mustCreateJob(t, st, store.Job{Slug: "dead-cell-" + strings.ToLower(t.Name()), Repo: "kraken", State: "working"})
 	j := &Job{ID: sr.ID, Slug: sr.Slug}
 
-	_, err := BranchThread(j, "why", "")
+	_, err := BranchThread(j, "why", "", "")
 	if err == nil {
 		t.Fatal("want a refusal branching off a dead cell")
 	}
@@ -475,7 +475,7 @@ func TestConcurrentBranchesNeverShareATID(t *testing.T) {
 	// each thread's staged brief must carry ITS OWN title: the staged paths are
 	// keyed by tid, so distinct tids are exactly what keeps them apart
 	for i, r := range rows {
-		if _, err := threadSpawnCommand(j, r.TID, titles[i], "seed "+titles[i], []string{"-r", "x"}); err != nil {
+		if _, err := threadSpawnCommand(j, r.TID, titles[i], "seed "+titles[i], "", []string{"-r", "x"}); err != nil {
 			t.Fatalf("threadSpawnCommand: %v", err)
 		}
 	}

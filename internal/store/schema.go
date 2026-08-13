@@ -65,7 +65,10 @@ import (
 // renamed AWAY from, which is what keeps a renamed job's old CLI names,
 // branches, cell dirs and transcript paths resolving (see schemaV21 and
 // store/rename.go).
-const schemaVersion = 21
+// Version 22 adds threads.model, the per-thread model carl picks at branch
+// time, which is what lets one side thread ask a cheap question on Haiku while
+// the next reads the whole diff on Opus (see schemaV22 and store/threads.go).
+const schemaVersion = 22
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1216,6 +1219,33 @@ CREATE TABLE job_former_slugs (
 CREATE INDEX job_former_slugs_slug ON job_former_slugs(slug);
 `
 
+// schemaV22 adds threads.model: the model alias carl picked for THIS side
+// thread at branch time — one of the four keys of core.ThreadModels — empty
+// meaning he picked none, which is the state every thread branched before the
+// picker existed is in. No hook: the empty-string DEFAULT is the whole
+// backfill, schemaV8's situation exactly, and an empty value is not a
+// placeholder here but the real answer (jobs.threadSpawnCommand falls back to
+// the job's model: field and then core.DefaultModel for it, which is what
+// those threads already ran on).
+//
+// The alias is stored rather than the resolved id, because the column has to
+// survive a REVIVE: a revived thread re-renders its spawn command from this
+// row, and storing the alias keeps that resolution in one place
+// (core.ThreadModels) instead of freezing whatever id the map held on the day
+// of the branch.
+//
+// No CHECK constraint, deliberately: the four aliases are a UI menu that will
+// gain and lose entries as claude ships tiers, and a CHECK would make adding
+// one a migration and an OLD row unreadable the day one is retired. The
+// validation lives in Go (store.validateThreadModel), where the error can name
+// the four names.
+//
+// Appended rather than folded into schemaV7 for the reason schemaV2's doc
+// comment spells out: real kraken.db files already exist at v21.
+const schemaV22 = `
+ALTER TABLE threads ADD COLUMN model TEXT NOT NULL DEFAULT '';
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1281,9 +1311,14 @@ type migrationStep struct {
 // migrations[21] adds job_former_slugs (no hook — a brand-new table has
 // nothing to migrate forward, and an EMPTY table correctly means "no job has
 // ever been renamed", which is true of every job that predates the feature;
-// see schemaV21).
+// see schemaV21);
+// migrations[22] adds threads.model (no hook — the column's empty-string
+// DEFAULT is the whole backfill, and empty is the right answer for every
+// thread branched before carl could pick a model: those threads ran on the
+// job's model: field or core.DefaultModel, which is exactly what an empty
+// value still resolves to; see schemaV22).
 // Future schema changes append
-// migrations[22], migrations[23], ... rather than editing an existing
+// migrations[23], migrations[24], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1308,6 +1343,7 @@ var migrations = map[int]migrationStep{
 	19: {sql: schemaV19},
 	20: {sql: schemaV20},
 	21: {sql: schemaV21},
+	22: {sql: schemaV22},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

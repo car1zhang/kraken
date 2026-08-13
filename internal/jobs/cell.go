@@ -611,8 +611,9 @@ func LiveSessions() map[string]bool {
 // caller's resolved model when it has one, else core.DefaultModel. Three call
 // sites share this — zeusSpawnArgv below (both zeus paths, resolved through
 // zeusModel, so a job's model choice survives reactivation),
-// threadSpawnCommand (a thread's branch and revive alike), which passes j.Model
-// directly and so lands on core.DefaultModel when the job set none, and
+// threadSpawnCommand (a thread's branch and revive alike), which resolves the
+// thread's own model pick through threadModel (thread.go) — an alias maps to
+// its exact id, no pick falls back to j.Model and then core.DefaultModel — and
 // irisSpawnCommand, which passes core.IrisModel directly — the one caller with
 // no fallback resolution at all, since iris belongs to no job.
 func cellClaudeArgs(model string) []string {
@@ -623,11 +624,11 @@ func cellClaudeArgs(model string) []string {
 // zeusModel resolves the model a cell's zeus is spawned on: the job's model:
 // field when it set one, else core.ZeusModel — Fable, not the core.DefaultModel
 // everything else in the binary starts on. The FALLBACK is what is zeus-only: a
-// side thread passes j.Model to cellClaudeArgs unresolved (thread.go), so it
-// honours the same override but falls back to DefaultModel, since a thread is
-// carl asking about the work rather than doing it. Zeus' teammates are a third
-// mechanism again and take neither (`model: opus`, pinned in its brief —
-// crew.go).
+// side thread resolves through threadModel (thread.go) instead — its own
+// branch-time pick first, then the same j.Model override, then DefaultModel —
+// since a thread is carl asking about the work rather than doing it. Zeus'
+// teammates are a third mechanism again and take neither (`model: opus`,
+// pinned in its brief — crew.go).
 func zeusModel(j *Job) string {
 	if j.Model != "" {
 		return j.Model

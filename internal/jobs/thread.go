@@ -551,13 +551,58 @@ func liveThreadPanesForOK(j *Job) (panes map[string]bool, ok bool) {
 // implementer's history, which is precisely the prior threadBrief exists to
 // overwrite. `--` stays last, after the brief flag, so the seed is claude's
 // initial prompt and not another flag's value.
-func threadSpawnCommand(j *Job, tid, title, seed string, resumeArgs []string) (string, error) {
-	argv := append(cellClaudeArgs(j.Model), "--name", ThreadAgentName(j, tid))
+//
+// model is the thread's OWN pick (a core.ThreadModels alias) or "" for none;
+// threadModel below turns it into the single --model value cellClaudeArgs
+// puts on the line. It is a parameter rather than read off the row here
+// because branch has no row to read yet — the command is rendered from the
+// request, and the revive path passes the stored alias back in.
+func threadSpawnCommand(j *Job, tid, title, seed, model string, resumeArgs []string) (string, error) {
+	resolved, err := threadModel(j, model)
+	if err != nil {
+		return "", err
+	}
+	argv := append(cellClaudeArgs(resolved), "--name", ThreadAgentName(j, tid))
 	argv = append(argv, resumeArgs...)
 	wt := threadWorktree(j)
 	return stagedCommand(argv,
 		spawnInput{"--append-system-prompt", threadBrief(j, tid, title, wt), threadBriefPath(j, tid)},
 		spawnInput{"--", threadSeed(seed), threadPromptPath(j, tid)})
+}
+
+// threadModel resolves the model a thread's claude is spawned on, in the one
+// place both spawn paths share: carl's own pick for THIS thread when he made
+// one, else the job's model: field, else — through core.ModelArgs' own
+// fallback, which is why "" is returned rather than DefaultModel spelled again
+// — core.DefaultModel. The order is what makes the picker meaningful: a thread
+// is carl asking about the work rather than doing it, so a cheap question may
+// run on Haiku inside a job whose cell is pinned to something else entirely.
+//
+// An unknown alias is an ERROR rather than a silent fallback, and that is the
+// point of resolving here at all: an unrecognised value passed through to
+// --model would leave claude to reject it AFTER a tmux window had been opened
+// and a row written, which reads to carl as a thread that came up dead. The
+// API refuses the same value earlier with a 400; this is the guard for every
+// other caller (and for a row whose stored alias was retired from the menu).
+//
+// Which is the one cost of that strictness, and it lands on whoever edits the
+// map: RETIRING an alias strands every row still carrying it — the thread can
+// never be revived again (this error, forever) and nothing can edit the column
+// back, since store deliberately has no SetThreadModel to go with
+// SetThreadTitle. So a commit that removes an entry from core.ThreadModels
+// owes a migration alongside it, blanking threads.model on every row that
+// still names the retired alias — an UPDATE back to the empty string, which
+// drops those threads onto the job's model and then core.DefaultModel, the
+// fallback they would have had all along.
+func threadModel(j *Job, model string) (string, error) {
+	if model == "" {
+		return j.Model, nil
+	}
+	id, ok := core.ThreadModels[model]
+	if !ok {
+		return "", fmt.Errorf("bad thread model %q: want haiku, sonnet, opus or fable", model)
+	}
+	return id, nil
 }
 
 // threadWorktree resolves the cell worktree a thread opens in — the same
@@ -585,9 +630,22 @@ func threadWorktree(j *Job) string {
 // other request's title and asked the other request's question. From the
 // reservation on, every failure path closes the row again, so a failed branch
 // leaves neither an orphan pane nor a row claiming one.
-func BranchThread(j *Job, title, seed string) (store.Thread, error) {
+//
+// model is carl's pick for this thread — a core.ThreadModels alias, or "" to
+// take the job's model: field and then core.DefaultModel as every thread did
+// before the picker. It is stored on the row, which is what makes a revive
+// come back on the same tier.
+func BranchThread(j *Job, title, seed, model string) (store.Thread, error) {
 	st, err := threadStore(j)
 	if err != nil {
+		return store.Thread{}, err
+	}
+	// with the cheap refusals, not left to the insert: store validates the
+	// alias too (normalizeThread), but only after this function has already
+	// resolved a zeus to fork and minted a session id, and the refusal is the
+	// same either way — so it belongs where the reader is told every cheap
+	// refusal lives.
+	if _, err := threadModel(j, model); err != nil {
 		return store.Thread{}, err
 	}
 	// FindCellSession, the way ReconcileThreads below already resolves it: a
@@ -632,12 +690,13 @@ func BranchThread(j *Job, title, seed string) (store.Thread, error) {
 		CWD:           wt,
 		State:         "live",
 		Seed:          seed,
+		Model:         model,
 	})
 	if err != nil {
 		return store.Thread{}, err
 	}
 	noteThreadSpawn(j.ID, t.TID)
-	cmd, err := threadSpawnCommand(j, t.TID, title, seed,
+	cmd, err := threadSpawnCommand(j, t.TID, title, seed, t.Model,
 		[]string{"--session-id", sessionID, "--fork-session", "-r", zeus.SessionID})
 	if err != nil {
 		releaseReservedThread(st, j, t.TID)
@@ -805,7 +864,10 @@ func reviveClaimed(st *store.Store, j *Job, t store.Thread, sess, wt string, ope
 	// pane, and the grace window is the only thing keeping this tick's
 	// reconcile off it while the window is being opened.
 	noteThreadSpawn(j.ID, t.TID)
-	cmd, err := threadSpawnCommand(j, t.TID, t.Title, "", []string{"-r", t.SessionID})
+	// t.Model, the alias the row was branched with: a revive that dropped it
+	// would silently move the conversation to another tier mid-thread, which
+	// is the one thing a resumed session must not do to carl.
+	cmd, err := threadSpawnCommand(j, t.TID, t.Title, "", t.Model, []string{"-r", t.SessionID})
 	if err != nil {
 		releaseReservedThread(st, j, t.TID)
 		return store.Thread{}, err
