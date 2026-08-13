@@ -20,6 +20,10 @@ func TestMain(m *testing.M) {
 	// that specifically wants to assert on gate invocation re-swaps this
 	// locally.
 	rotationGate = func(string) {}
+	// Same reasoning for the dev-env mirror's git probe: the real gitUntracked
+	// shells out to git in a worktree, and no test fixture dir is one. A test
+	// that asserts on the probe re-swaps it locally (swapGitUntracked).
+	gitUntracked = func(string, []string) ([]string, error) { return nil, nil }
 	code := m.Run()
 	os.RemoveAll(dir) // deferred cleanup never runs past os.Exit
 	os.Exit(code)

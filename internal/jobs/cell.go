@@ -827,6 +827,7 @@ func StartCell(j *Job, repo string) error {
 	// half-built cell is cleanable by hand
 	installHookSettings(wt, j)
 	installSkills(wt, j)
+	linkDevEnv(repo, wt, j)
 	// graphContext appends what the knowledge graph already knows about this
 	// job, or "" — which is the common case and the one that matters: a job
 	// with no match gets a byte-identical brief. It is concatenated HERE
@@ -2343,6 +2344,11 @@ func ReactivateJob(j *Job, session, message string) error {
 			reorient = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + branch + " " + branchDesc + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
 		}
 	}
+	// both modes land here with a real worktree: freshly recreated above, or
+	// the surviving one the resume path found. linkDevEnv is idempotent, and
+	// running it on the resume path is what retrofits links onto a worktree
+	// created before this feature existed.
+	linkDevEnv(repo, wt, j)
 	prompt, hasPrompt := reactivatePrompt(reorient, message, rebaseNote)
 	if !hasPrompt {
 		prompt = "" // spawnCommand omits an empty prompt entirely
