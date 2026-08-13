@@ -20,6 +20,7 @@ import { ThreadOverlay } from "./components/overlays/ThreadOverlay.tsx";
 import { showToast, Toast } from "./components/overlays/Toast.tsx";
 import { UsageOverlay } from "./components/overlays/UsageOverlay.tsx";
 import { useBoard } from "./hooks/useBoard.ts";
+import { useBoardEvents } from "./hooks/useBoardEvents.ts";
 import { useHashRoute } from "./hooks/useHashRoute.ts";
 import { useJobSearch } from "./hooks/useJobSearch.ts";
 import { useLocalStorageSet } from "./hooks/useLocalStorage.ts";
@@ -66,6 +67,13 @@ export function App() {
   // the sfx module's document-level capture listeners; the returned
   // uninstaller keeps strict-mode's double mount from stacking a second set
   useEffect(() => installSfxListeners(), []);
+  // The board's own voice, mounted HERE and exactly once: it diffs consecutive
+  // poll snapshots, so a second instance would diff the same snapshots again
+  // and double every sound. This is the only place `useBoard()` runs — the
+  // views below all take the model as a prop — and it is handed `board.board`,
+  // the raw payload straight off the poll, because a snapshot's IDENTITY is
+  // what tells the hook a new one arrived.
+  useBoardEvents(board.board);
 
   // DEAD, kept only so App's own call sites below still compile. This used to
   // be hoisted because the card and the steer modal shared one "+3 more"
@@ -96,6 +104,15 @@ export function App() {
   // (which also takes `refetch`, so its refresh button re-uses this poll rather
   // than starting a second one).
   const usage = usePoll<WebUsage>((signal) => fetchUsage(signal), USAGE_POLL_MS);
+  // usePoll's refetch now reports whether it delivered a payload, which exists
+  // for the board's mute handshake (useBoard.mutate) and means nothing to the
+  // usage panel — its refresh button awaits this only to sequence a repaint.
+  // Dropped to void here rather than widening UsageOverlay's prop, so a
+  // board-sound mechanism stays out of a rotation control's type. useCallback
+  // because the panel carries it in a handler's deps.
+  const refetchUsage = useCallback(async () => {
+    await usage.refetch();
+  }, [usage.refetch]);
 
   // ------------------------------------------------------------- overlays
   //
@@ -363,7 +380,7 @@ export function App() {
         open={usageOpen}
         data={usage.data}
         onClose={() => setUsageOpen(false)}
-        refetch={usage.refetch}
+        refetch={refetchUsage}
       />
 
       <Toast />

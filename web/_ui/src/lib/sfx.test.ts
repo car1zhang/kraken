@@ -12,12 +12,16 @@ import {
   KEY_RATE_LIMIT_MS,
   keySound,
   MASTER_GAIN,
+  PITCH_FACTOR,
   playSfx,
   resetSfxForTest,
   setSfxEnabled,
   sfxEnabled,
   SOUNDS,
+  type SfxAudioBuffer,
   type SfxAudioContext,
+  type SfxBiquadFilter,
+  type SfxConvolver,
   type SfxGainNode,
   type SfxOscillator,
 } from "./sfx.ts";
@@ -42,8 +46,26 @@ function fakeContext() {
   const gains: RecordedGain[] = [];
   const ctx: SfxAudioContext = {
     currentTime: 10,
+    sampleRate: 44100,
     state: "running",
     destination: { sink: true },
+    // The night bus builds off these three the moment a context is
+    // constructed. This file does not assert on the reverb — it only has to
+    // let it build, so these are inert stubs; what they cost the tests below
+    // is one extra createGain (the wet level) between the master and the
+    // first envelope.
+    createBiquadFilter(): SfxBiquadFilter {
+      return { type: "", frequency: { value: 0 }, connect: () => {} };
+    },
+    createConvolver(): SfxConvolver {
+      return { buffer: null, connect: () => {} };
+    },
+    createBuffer(_channels: number, frames: number): SfxAudioBuffer {
+      // real arrays, so the impulse's fill writes land somewhere
+      const left = new Float32Array(frames);
+      const right = new Float32Array(frames);
+      return { getChannelData: (ch) => (ch === 0 ? left : right) };
+    },
     createOscillator(): SfxOscillator {
       const rec: RecordedOsc = { type: "", freqCalls: [], started: [], stopped: [] };
       oscs.push(rec);
@@ -163,9 +185,11 @@ describe("playSfx", () => {
     // master + one gain per pulse
     expect(f.oscs).toHaveLength(2);
     expect(f.oscs.map((o) => o.type)).toEqual(["square", "square"]);
-    // t0 = currentTime (10); pulses at +0 and +0.045
-    expect(f.oscs[0]?.freqCalls).toEqual([[988, 10]]);
-    expect(f.oscs[1]?.freqCalls).toEqual([[1319, 10.045]]);
+    // t0 = currentTime (10); pulses at +0 and +0.045. The pitches reaching the
+    // oscillator are the table's nominal notes through PITCH_FACTOR — the
+    // night retune is applied at synthesis, so SOUNDS stays at nominal.
+    expect(f.oscs[0]?.freqCalls).toEqual([[988 * PITCH_FACTOR, 10]]);
+    expect(f.oscs[1]?.freqCalls).toEqual([[1319 * PITCH_FACTOR, 10.045]]);
     expect(f.oscs[0]?.started).toEqual([10]);
     expect(f.oscs[1]?.started).toEqual([10.045]);
   });
@@ -174,7 +198,7 @@ describe("playSfx", () => {
     const f = fakeContext();
     injectAudioContextFactoryForTest(() => f.ctx);
     playSfx("key");
-    const env = f.gains[1]; // gains[0] is master
+    const env = f.gains[2]; // gains[0] is master, gains[1] the night bus's wet level
     const [p] = SOUNDS.key;
     expect(env?.sets[0]).toEqual([0.0001, 10]);
     expect(env?.ramps[0]).toEqual([p?.gain, 10 + ATTACK_S]);
@@ -411,7 +435,7 @@ describe("installSfxListeners", () => {
       .getElementById("ta")
       ?.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
     expect(f.oscs).toHaveLength(1);
-    expect(f.oscs[0]?.freqCalls[0]?.[0]).toBe(988);
+    expect(f.oscs[0]?.freqCalls[0]?.[0]).toBe(988 * PITCH_FACTOR);
     un();
   });
 

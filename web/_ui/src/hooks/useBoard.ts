@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 import { fetchBoard } from "../api/client.ts";
 import type { WebBoard, WebJob } from "../api/types.ts";
+import { disarmMute, muteNextDiff } from "../lib/boardEvents.ts";
 import { bucketJobs } from "../lib/format.ts";
 import { jobKey } from "../lib/jobKey.ts";
 import { usePoll } from "./usePoll.ts";
@@ -32,6 +33,49 @@ export interface BoardModel {
    * Run a mutation, then refetch — on BOTH success and failure, matching the
    * vanilla post(). Returns the error rather than throwing so callers can put
    * its text in the tick-stat corner without a try/catch at every call site.
+   *
+   * That refetch is also SILENT: a self-inflicted board change is not news, so
+   * the event sounds skip it (the muteNextDiff/disarmMute pair below). This is
+   * the ONLY mute site, which makes it an invariant a future writer has to
+   * keep rather than a fact about today's tree:
+   *
+   *   **every POST that can move a PER-JOB field lib/boardEvents.ts diffs goes
+   *   through `mutate`** — state, question, health, prs, threads, artifacts,
+   *   color.
+   *
+   * Per-job is the scope on purpose: the differ also reads one BOARD-level
+   * axis, `update.phase`, and that one is exempt — last bullet below.
+   *
+   * The board does post outside this function, and each of those is silent for
+   * a reason of its OWN, none of which generalises to a new call site:
+   *
+   *   - `renameJob` (RenameControl.tsx:259) and `createJob`
+   *     (EditorOverlay.tsx:531) are silent by the jobKey ONE-SIDE rule — the
+   *     differ matches by key and skips any job present on only one side
+   *     (`diffBoard`'s `was === undefined` continue), so a job arriving under
+   *     a new name, or arriving at all, has nothing to be compared against.
+   *   - `saveJobForm` (EditorOverlay.tsx:326) posts repo/base/solo/model/spec
+   *     (JobForm, api/types.ts:455) — not one diffed field among them.
+   *   - `reorderColumn`'s optimistic path (useDragReorder.ts:507) moves only
+   *     job ORDER, which no member of `EventType` describes.
+   *   - The bare `refetch()` calls (useDragReorder's correcting ticks, App's
+   *     onRenamed) post nothing at all; they are ordinary polls and are
+   *     SUPPOSED to speak.
+   *   - `requestUpdate` (UpdateControl.tsx:291, and see its own comment on why
+   *     it skips this path) is the one write that DOES move a diffed field —
+   *     `update.phase`, which the differ turns into update-done/update-failed
+   *     — and it is exempt anyway. A one-shot mute reaches exactly ONE tick,
+   *     and the click's own tick is nowhere near the firing one: the handler
+   *     writes `preflight` before spawning (UpdateControl.tsx:293) and the
+   *     run walks fetching → merging → building → installing → restarting
+   *     (UpdatePhase, api/types.ts:313) before it can reach done or failed,
+   *     minutes later, on an ordinary poll. The chime is also the point: an
+   *     update finishing is news even though carl started it, which is the
+   *     opposite of the argument the rest of this docblock makes.
+   *
+   * Add a POST anywhere and the question is not "is it like one of those" but
+   * "does the differ read what it writes, and can this action's own tick be
+   * the one that fires" — if both, it belongs in `mutate`.
    */
   mutate: (fn: () => Promise<unknown>) => Promise<Error | null>;
   /** Last mutation failure, for the status line. Cleared by the next success. */
@@ -62,22 +106,61 @@ export function useBoard(): BoardModel {
 
   const mutate = useCallback(
     async (fn: () => Promise<unknown>): Promise<Error | null> => {
+      // ARMED BEFORE THE WRITE, not before the refetch. This is a change carl
+      // is making and watching, so the snapshot that reports it back must not
+      // be announced — and the snapshot that reports it back is not
+      // necessarily OUR refetch. The 3s poll can tick while `fn()` is in
+      // flight and straddle the write, landing the change first;
+      // arming after the await hands that tick the announcement. Arming here
+      // mutes whichever board gets there first.
+      const gen = muteNextDiff();
       try {
         await fn();
         setLastError(null);
-        await refetch();
+        const delivered = await refetch();
+        // …and TAKEN BACK DOWN if no board is coming. `refetch` declines in
+        // three ways — a hidden tab, a drag holding polling paused, or a
+        // fetch that failed outright — and an arm left standing after one of
+        // those is not a mute of this action at all: it is a mute of some
+        // arbitrarily later, unrelated tick, worst case eating the burst carl
+        // comes back to the tab for.
+        //
+        // Note what is NOT in that list. A refetch SUPERSEDED by the 3s
+        // interval answers true, because the interval's own request — issued
+        // after this write — is the board this mute is for; disarming there
+        // would hand carl's own change to the very tick about to report it.
+        // (An unmounted hook answers true as well — the arm it leaves standing
+        // is never met: App is the root and never unmounts, and tests reset.)
+        // `gen` is what keeps this honest across overlapping mutations: it
+        // disarms OUR arm and never a newer one.
+        if (!delivered) disarmMute(gen);
         return null;
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
         setLastError(err.message);
         // Refetch on failure too: the server is the truth, and a rejected
-        // action usually means the board already moved on without us.
-        await refetch();
+        // action usually means the board already moved on without us. Same
+        // arm/disarm rule — a refusal still refetches, and that board is still
+        // this action's answer.
+        const delivered = await refetch();
+        if (!delivered) disarmMute(gen);
         return err;
       }
     },
     [refetch],
   );
+
+  // BoardModel keeps the `Promise<void>` shape deliberately. usePoll's refetch
+  // now reports whether it delivered, but that boolean is a PRIVATE handshake
+  // between the poll and `mutate` above — the arm/disarm of the one-shot mute
+  // — and no consumer of this model has a use for it: every one of them awaits
+  // refetch purely to sequence a repaint. Narrowing it back here also keeps a
+  // poll-internal detail from leaking into five suites that build a
+  // BoardModel by hand with `refetch: async () => {}`. useCallback, not an
+  // inline arrow: useDragReorder carries this in its callback deps.
+  const refetchBoard = useCallback(async () => {
+    await refetch();
+  }, [refetch]);
 
   const { byKey, byColumn, archived } = useMemo(() => {
     const key = new Map<string, WebJob>();
@@ -107,7 +190,7 @@ export function useBoard(): BoardModel {
     byKey,
     byColumn,
     archived,
-    refetch,
+    refetch: refetchBoard,
     setDragging,
     mutate,
     lastError,
