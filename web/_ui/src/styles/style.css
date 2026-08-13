@@ -366,6 +366,7 @@ button, a, [role="button"], summary, label.check,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
 .panel-body.md code.code-ref, .steer-detail code.code-ref, .steer-spec-body code.code-ref,
+.panel-body.md code.artifact-ref, .steer-detail code.artifact-ref, .steer-spec-body code.artifact-ref,
 input[type="checkbox"] {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
@@ -387,6 +388,9 @@ input[type="checkbox"] {
 :root[data-theme="light"] .panel-body.md code.code-ref,
 :root[data-theme="light"] .steer-detail code.code-ref,
 :root[data-theme="light"] .steer-spec-body code.code-ref,
+:root[data-theme="light"] .panel-body.md code.artifact-ref,
+:root[data-theme="light"] .steer-detail code.artifact-ref,
+:root[data-theme="light"] .steer-spec-body code.artifact-ref,
 :root[data-theme="light"] input[type="checkbox"] {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, pointer;
 }
@@ -1984,6 +1988,24 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .panel-body.md code.code-ref:hover,
 .steer-detail code.code-ref:hover,
 .steer-spec-body code.code-ref:hover {
+  border-bottom-style: solid;
+  border-bottom-color: var(--ac);
+}
+/* Artifact refs — the SECOND ref kind (lib/artifactRefs.ts): a span naming a
+   sibling artifact of the same job, dressed by the overlay's decorate pass
+   rather than the renderer (membership is a job-scoped fact the renderer
+   cannot know). DOTTED where code refs are dashed: same accent, same hover
+   solidify, a visibly different promise — this click navigates the board,
+   never the editor. Same three surfaces and same no-local-cursor rule as the
+   block above; the class rides the same pointer-list entries. */
+.panel-body.md code.artifact-ref,
+.steer-detail code.artifact-ref,
+.steer-spec-body code.artifact-ref {
+  border-bottom: 1px dotted color-mix(in srgb, var(--ac) 80%, transparent);
+}
+.panel-body.md code.artifact-ref:hover,
+.steer-detail code.artifact-ref:hover,
+.steer-spec-body code.artifact-ref:hover {
   border-bottom-style: solid;
   border-bottom-color: var(--ac);
 }

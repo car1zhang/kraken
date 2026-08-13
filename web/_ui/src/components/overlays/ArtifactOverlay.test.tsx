@@ -14,12 +14,13 @@ import {
 vi.mock("../../api/client.ts", () => ({
   createFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   threadOp: vi.fn(() => Promise.resolve({ ok: true, tid: "t1" })),
+  openInEditor: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 // the overlay's one out-of-band channel — mocked so the tid-less branch can
 // assert what the reader is actually told, rather than that nothing crashed
 vi.mock("./Toast.tsx", () => ({ showToast: vi.fn(), Toast: () => null }));
 
-import { createFeedback, threadOp } from "../../api/client.ts";
+import { createFeedback, openInEditor, threadOp } from "../../api/client.ts";
 import { showToast } from "./Toast.tsx";
 
 const mutate = async <T,>(op: () => Promise<T>) => op();
@@ -1025,5 +1026,94 @@ describe("the markdown body survives a board poll", () => {
       expect(t).not.toBe(first);
       expect(t).toContain("b.md");
     });
+  });
+});
+
+describe("artifact refs in the rendered body", () => {
+  // The md text carries one span of each ref kind: a sibling-artifact name
+  // (which parseCodeRef refuses and the decorate pass must resolve) and a
+  // repo path:line (which must keep falling through to the editor).
+  const MD = "see `51-code-map.md` and `web/serve.go:1`";
+  const mdFetch = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({ ok: true, text: () => Promise.resolve(MD) }),
+      ),
+    );
+
+  it("dresses a span naming a sibling artifact and opens it in the viewer on click", async () => {
+    mdFetch();
+    render(<Harness job={job(["00-overview.md", "51-code-map.md"])} />);
+    const ref = await waitFor(() => {
+      const el = document.querySelector("#panel-body code.artifact-ref");
+      if (!el) throw new Error("not dressed yet");
+      return el;
+    });
+    expect(ref.textContent).toBe("51-code-map.md");
+    expect(ref.getAttribute("title")).toBe("open 51-code-map.md");
+    fireEvent.click(ref);
+    // navigation went through the pager's own prop: the viewer now titles the
+    // cited artifact, the sequence's own "<label>/<name>" way…
+    await waitFor(() => expect(title()).toBe("j/51-code-map.md"));
+    // …and the editor path never fired for it.
+    expect(openInEditor).not.toHaveBeenCalled();
+  });
+
+  it("keeps the editor fallthrough for a span that names no artifact", async () => {
+    mdFetch();
+    render(<Harness job={job(["00-overview.md", "51-code-map.md"])} />);
+    const code = await waitFor(() => {
+      const els = [...document.querySelectorAll("#panel-body code.code-ref")];
+      const el = els.find((e) => e.textContent === "web/serve.go:1");
+      if (!el) throw new Error("not rendered yet");
+      return el;
+    });
+    fireEvent.click(code);
+    await waitFor(() => expect(openInEditor).toHaveBeenCalledTimes(1));
+    expect(title()).toBe("j/00-overview.md");
+  });
+
+  it("leaves the span plain when the job has no artifact by that name", async () => {
+    mdFetch();
+    render(<Harness job={job(["00-overview.md"])} />);
+    await waitFor(() => {
+      if (!document.querySelector("#panel-body code")) {
+        throw new Error("not rendered yet");
+      }
+    });
+    const spans = [...document.querySelectorAll("#panel-body code")];
+    const cite = spans.find((e) => e.textContent === "51-code-map.md");
+    expect(cite?.classList.contains("artifact-ref")).toBe(false);
+    if (cite) fireEvent.click(cite);
+    expect(title()).toBe("j/00-overview.md");
+    expect(openInEditor).not.toHaveBeenCalled();
+  });
+});
+
+describe("artifact refs when seq and the artifact list diverge", () => {
+  it("still navigates, composing the name the way the sequence would (singleton case)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          text: () => Promise.resolve("see `51-code-map.md`"),
+        }),
+      ),
+    );
+    // the open url is NOT in the job's list, so useArtifactSeq degrades to the
+    // singleton while job.artifacts stays full — the held/singleton divergence
+    render(
+      <Harness job={job(["a.md", "51-code-map.md"])} start="gone.md" />,
+    );
+    const ref = await waitFor(() => {
+      const el = document.querySelector("#panel-body code.artifact-ref");
+      if (!el) throw new Error("not dressed yet");
+      return el;
+    });
+    fireEvent.click(ref);
+    await waitFor(() => expect(title()).toBe("j/51-code-map.md"));
+    expect(openInEditor).not.toHaveBeenCalled();
   });
 });

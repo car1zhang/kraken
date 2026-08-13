@@ -6,10 +6,15 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createFeedback, openInEditor, threadOp } from "../../api/client.ts";
-import type { WebJob } from "../../api/types.ts";
+import type { WebArtifact, WebJob } from "../../api/types.ts";
 import { useArtifactSeq, type SeqEntry } from "../../hooks/useArtifactSeq.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
+import {
+  decorateArtifactRefs,
+  matchArtifactRef,
+  type ArtifactRefHit,
+} from "../../lib/artifactRefs.ts";
 import {
   codeRefTarget,
   wireCodeRefs,
@@ -345,6 +350,7 @@ function ArtifactBody({
   seq,
   idx,
   onStep,
+  onNavigate,
   onAskBranched,
 }: ArtifactBodyProps) {
   const [raw, setRaw] = useState(false);
@@ -369,6 +375,27 @@ function ArtifactBody({
   // which artifact the state above describes — the whole reset block below
   const [shown, setShown] = useState(url);
   const composerInput = useRef<HTMLTextAreaElement | null>(null);
+
+  /**
+   * An artifact ref resolved in the rendered body: navigate the viewer to that
+   * artifact through the SAME prop the pager steps with, preferring the `seq`
+   * entry so the name arrives in the sequence's own "<label>/<artifact>" form.
+   * A hit that is in the job's list but not in `seq` — the held-sequence and
+   * singleton cases of useArtifactSeq, where the two deliberately diverge —
+   * still navigates, with the name composed by the SAME expression
+   * `artifactSeqFor` uses, so the title cannot come out different. The jobKey
+   * the viewer opened with is kept either way (App re-points url/name only).
+   */
+  const onOpenRef = useCallback(
+    (hit: ArtifactRefHit) => {
+      const entry = seq.find((s) => s.url === hit.url);
+      if (entry) onNavigate(entry.url, entry.name);
+      else if (job) {
+        onNavigate(hit.url, `${job.display_slug || job.slug}/${hit.name}`);
+      }
+    },
+    [seq, onNavigate, job],
+  );
 
   /**
    * What is on screen right now, for the draft stash — kept on a ref because
@@ -777,6 +804,8 @@ function ArtifactBody({
         text={text}
         error={error}
         onKey={onKey}
+        artifacts={job?.artifacts ?? []}
+        onOpenRef={onOpenRef}
       />
     </>
   );
@@ -881,6 +910,8 @@ function ArtifactBodyContent({
   text,
   error,
   onKey,
+  artifacts,
+  onOpenRef,
 }: {
   url: string;
   raw: boolean;
@@ -889,6 +920,10 @@ function ArtifactBodyContent({
   text: string | undefined;
   error: string | null;
   onKey: (ev: KeyboardEvent) => void;
+  /** The job's artifact list — the membership set artifact refs resolve against. */
+  artifacts: WebArtifact[];
+  /** Open a resolved artifact ref in this viewer (ArtifactBody's seq lookup). */
+  onOpenRef: (hit: ArtifactRefHit) => void;
 }) {
   // Above the branches because it is a hook, and memoised because this is the
   // component the 3s board poll used to rebuild wholesale — see useRenderedMD.
@@ -903,19 +938,61 @@ function ArtifactBodyContent({
 
   // ONE delegated handler on the body rather than per-`<code>` wiring, for the
   // reason the body is innerHTML in the first place: there are no React
-  // elements down there to hang a prop on. codeRefTarget answers null for a
-  // plain `<code>` and for every other click in the doc, so this is inert
-  // everywhere except on a ref.
+  // elements down there to hang a prop on. Artifact refs are checked FIRST —
+  // a span naming a sibling artifact opens it in this viewer, and only a span
+  // that names nothing in the job's own list falls through to the editor path.
+  // codeRefTarget answers null for a plain `<code>` and for every other click
+  // in the doc, so the whole handler is inert everywhere except on a ref.
   const onBodyClick = useCallback(
     (ev: ReactMouseEvent<HTMLDivElement>) => {
       const el = ev.target;
       if (!(el instanceof Element)) return;
+      const code = el.closest("code");
+      if (code && !code.closest("pre")) {
+        const hit = matchArtifactRef(code.textContent ?? "", artifacts);
+        if (hit) {
+          onOpenRef(hit);
+          return;
+        }
+      }
       const target = codeRefTarget(el);
       if (!target) return;
       void openCodeRef(url, target);
     },
-    [url],
+    [url, artifacts, onOpenRef],
   );
+
+  /**
+   * Dress artifact refs whenever the rendered body or the artifact list
+   * changes: the renderer is pure and cannot know this job's artifact list,
+   * so membership is decided here.
+   */
+  const bodyEl = useRef<HTMLDivElement | null>(null);
+  const lastSweep = useRef<{ md: { __html: string } | null; key: string }>({
+    md: null,
+    key: "",
+  });
+  const mdMounted = !raw && !image && !page && !error && text !== undefined;
+  useEffect(() => {
+    // A branch switch (raw toggle, page/image, error) replaces the body's
+    // content wholesale, and the dressing goes with it. Every one of those
+    // transitions also changes `md` (useRenderedMD is keyed on the source
+    // string, which each of them moves), so the sweep would re-run anyway —
+    // this reset is the insurance that keeps that true if the branch
+    // conditions ever stop moving `text`.
+    if (!mdMounted || !bodyEl.current) {
+      lastSweep.current = { md: null, key: "" };
+      return;
+    }
+    const key = artifacts.map((a) => a.url).join("\n");
+    // `artifacts` is a fresh array every 3s poll; `md` is memoised per source
+    // text. Re-sweeping the DOM each tick for unchanged inputs is exactly the
+    // poll-path work this file avoids elsewhere, so the sweep runs only when
+    // an input actually changed.
+    if (lastSweep.current.md === md && lastSweep.current.key === key) return;
+    decorateArtifactRefs(bodyEl.current, artifacts);
+    lastSweep.current = { md, key };
+  }, [md, artifacts, mdMounted]);
 
   if (raw) {
     return (
@@ -956,6 +1033,7 @@ function ArtifactBodyContent({
   }
   return (
     <div
+      ref={bodyEl}
       className="panel-body md"
       id="panel-body"
       onClick={onBodyClick}
