@@ -102,6 +102,14 @@ export function CmdComposer({
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
+            // stopPropagation, not just preventDefault: the editor wraps this
+            // composer in a #editor-form div carrying its own ⌘⏎ handler (so
+            // the shortcut works from the repo/base/model fields too), and a
+            // bubbled ⌘⏎ ran BOTH — two doSubmit calls in one dispatch, both
+            // seeing the same stale `busy`, so every keyboard start posted
+            // /api/queue twice and the loser's 409 painted a false "start
+            // refused" over a cell that was in fact coming up.
+            e.stopPropagation();
             onSubmit?.();
           }
         }}

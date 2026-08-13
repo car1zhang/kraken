@@ -1,6 +1,9 @@
 package jobs
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // submit.go — SubmitJob, the ONE start surface.
 //
@@ -26,6 +29,39 @@ import "fmt"
 // production value is StartCell and there is no second real start path.
 var submitStartCell = StartCell
 
+// submitLocks serializes SubmitJob per job id. The refusal ladder below is
+// check-then-act with a seconds-wide gap: validation reads the job as a
+// startable draft, StartCell's own already-live guard only turns true once
+// `tmux new-session` has run, and the job's stored state flips later still,
+// at StartCell's closing WriteJobState — so two near-simultaneous submits of
+// one job (a client double-fire, two clients of one serve, a double tap)
+// both passed every check and raced inside StartCell's `git worktree add`,
+// where the loser died inside that command (the exact git text varies with
+// arrival offset — `cannot lock ref` is the one instance measured) and
+// answered first with a 409 that read as the start failing while the
+// winner's cell came up. Under the lock the loser instead waits, then hits
+// StartCell's already-live refusal — an honest answer. It is StartCell's
+// refusal rather than the ladder's own already-started one because each
+// request parses its own *Job: the loser's copy still says draft when it
+// wakes. The ladder sits inside the lock simply because it is microseconds
+// of reads on the caller's own copy — moving it out would buy nothing, and a
+// future rung that reads shared state is covered by construction. The lock
+// is per-PROCESS: the viewer's `s` calls SubmitJob from the `k v` process,
+// outside this map, where only StartCell's live-session check covers it — a
+// viewer-vs-board race on one job within the winner's start window remains
+// open, accepted as a two-hands rarity. Keyed by the
+// job's immutable id, not slug, so one job's multi-second start never delays
+// a different job's; ids without a store row share key 0, which is harmless
+// because StartCell's checkCellIdentity refuses those before any side
+// effect. Entries are never removed: a *sync.Mutex per job ever submitted is
+// a few dozen bytes in a process that restarts routinely.
+var submitLocks sync.Map // job id (int64) → *sync.Mutex
+
+func submitLock(id int64) *sync.Mutex {
+	mu, _ := submitLocks.LoadOrStore(id, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 // SubmitJob validates a job and starts its cell, synchronously. A nil return
 // means the cell is up and the job reads `working`; any error means nothing
 // was started and the job is untouched.
@@ -49,6 +85,9 @@ var submitStartCell = StartCell
 // discovering it before any worktree/tmux/rotation work happens is what makes
 // it a clean refusal rather than a half-built cell.
 func SubmitJob(j *Job) error {
+	mu := submitLock(j.ID)
+	mu.Lock()
+	defer mu.Unlock()
 	if j.Err != "" {
 		return fmt.Errorf("%s is unparseable (%s) — fix the file first", j.Slug, j.Err)
 	}

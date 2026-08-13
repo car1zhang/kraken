@@ -792,3 +792,57 @@ describe("the job colour strip", () => {
     await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", "purple"));
   });
 });
+
+// Regression pin for the double-submit race: the spec textarea's ⌘⏎ handler
+// (CmdComposer) prevents default but used to let the event keep BUBBLING to
+// #editor-form's own ⌘⏎ handler, so one keypress ran doSubmit twice in one
+// synchronous dispatch — both invocations reading the same stale `busy` — and
+// every keyboard start posted /api/queue twice. The loser of the resulting
+// server-side race answered first with a 409 the status corner rendered as
+// "start refused" while the winner's cell came up: a false failure on every
+// single keyboard-initiated start. Fails under the unfixed CmdComposer (two
+// queueJob calls), passes with stopPropagation in place.
+describe("⌘⏎ submit fires exactly once", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fetchJobForm as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      Promise.resolve({ ...form, spec: "a non-empty spec" }),
+    );
+  });
+
+  it("one ⌘⏎ in the spec textarea posts one submit, not two", async () => {
+    mount({ job: job({ state: "draft" }) });
+    await waitFor(() =>
+      expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
+    );
+    const submitBtn = document.getElementById("editor-submit") as HTMLButtonElement;
+    await waitFor(() => expect(submitBtn.disabled).toBe(false));
+
+    const textarea = document.getElementById("editor-text") as HTMLTextAreaElement;
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    await waitFor(() => expect(queueJob).toHaveBeenCalledTimes(1));
+    // The duplicate arrived in the SAME dispatch, so it is already in flight
+    // by now if it exists at all — settle the microtask queue and re-count.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queueJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("⌘⏎ from the form's other fields still submits (the outer handler survives)", async () => {
+    mount({ job: job({ state: "draft" }) });
+    await waitFor(() =>
+      expect(document.getElementById("editor-form")).not.toHaveAttribute("hidden"),
+    );
+    await waitFor(() =>
+      expect((document.getElementById("editor-submit") as HTMLButtonElement).disabled).toBe(false),
+    );
+
+    fireEvent.keyDown(document.getElementById("f-base") as HTMLInputElement, {
+      key: "Enter",
+      metaKey: true,
+    });
+    await waitFor(() => expect(queueJob).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queueJob).toHaveBeenCalledTimes(1);
+  });
+});
