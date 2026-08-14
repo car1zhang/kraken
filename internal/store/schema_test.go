@@ -24,6 +24,28 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v23: drop jobs.goal_id and the goals table (both added at v23,
+	// absent through v22). The column goes FIRST: it carries the REFERENCES
+	// clause, so dropping the table out from under it would leave jobs holding
+	// a foreign key onto nothing. goals_scope_period goes with its table —
+	// SQLite drops a table's indexes along with it — and there are no rows to
+	// carry back, since a pre-v23 database has never had a goal.
+	//
+	// Dropping a column named in a foreign key is exactly what the v6 arm
+	// below already does to feedback.job_id, so the bundled SQLite allows it.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 23 {
+		for _, stmt := range []string{
+			`ALTER TABLE jobs DROP COLUMN goal_id`,
+			`DROP TABLE goals`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v23) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v22: drop threads.model (added at v22, absent through v21). Pure
 	// shape, nothing to carry back — the column's whole content is a choice
 	// made at branch time, and a pre-v22 database has no thread that ever had

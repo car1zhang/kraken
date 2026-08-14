@@ -544,7 +544,11 @@ func resumeCellAgents(j *Job, all []*core.Peer, prompt string) (resumed int, err
 		dlogEvent("info", "limit-rescue-skipped", "%s: pane %s holds a live side thread — not killing it", j.Slug, zeus.Pane)
 		return 0, nil
 	}
-	cmd, cmdErr := spawnCommand(j, zeusSpawnArgv(j, "-r", zeus.SessionID), zeusBrief(j)+graphContext(j), prompt)
+	// Same brief + goals + graph concatenation as the other two zeus spawns
+	// (StartCell, ReactivateJob): a rescued zeus is a resumed session, which
+	// does not retain an earlier run's --append-system-prompt, so all three
+	// injections have to be re-staged here or they are simply absent.
+	cmd, cmdErr := spawnCommand(j, zeusSpawnArgv(j, "-r", zeus.SessionID), zeusBrief(j)+goalContext(j)+graphContext(j), prompt)
 	if cmdErr != nil {
 		dlogEvent("error", "limit-rescue-failed", "%s: building zeus' resume command failed: %v", j.Slug, cmdErr)
 		return 0, nil

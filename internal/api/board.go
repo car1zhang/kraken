@@ -507,6 +507,20 @@ type webJob struct {
 	// does not know the key ignores it and renders the card exactly as it did
 	// before estimates existed.
 	Load *webJobLoad `json:"load,omitempty"`
+	// Goal is the goal this job serves (goals.go), present exactly when the
+	// job links one. A pointer with omitempty for the reason Load is one: a
+	// zeroed object would claim a link to goal 0, and there is no such goal.
+	//
+	// It carries the goal's TEXT rather than only its id, so a card can render
+	// the chip from the board payload alone — the alternative (an id the
+	// client resolves against the board's top-level "goals") would be blank
+	// for every job whose goal is not in the current period, which is exactly
+	// the job most worth labelling.
+	//
+	// ADDITIVE — a new optional key on an existing shape — so apiContract does
+	// NOT bump. A client that does not know the key renders the card exactly
+	// as it did before goals existed.
+	Goal *webJobGoal `json:"goal,omitempty"`
 }
 
 type webBoard struct {
@@ -539,6 +553,17 @@ type webBoard struct {
 	// in flight and the build number it is uploading. Additive, same policy
 	// as Update.
 	ShipIOS webShipIOS `json:"ship_ios"`
+	// Goals is the CURRENT local week's and today's goals (goals.go), the
+	// same pair GET /api/goals serves, from the same assembly function so the
+	// two cannot drift. Always present with both arrays non-null: the panel
+	// renders "no goals yet" from an empty array, and a null would make every
+	// consumer write a second nil check for a state that is not different.
+	//
+	// It rides the board rather than making the panel poll a second endpoint
+	// because the panel is on the board and repaints with it — a separate poll
+	// would put the goals and the cards that reference them one tick out of
+	// step. Additive, same policy as Update and ShipIOS.
+	Goals webGoals `json:"goals"`
 }
 
 // jobArtifacts collects a job's viewable artifacts. A live cell always
@@ -924,8 +949,13 @@ func buildWebBoard() webBoard {
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
 	activeStore := jobs.ActiveStore()
-	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS()}
+	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS(), Goals: currentGoals(activeStore)}
 	order := jobs.LoadBoardOrder()
+	// The card chips, built from the two lists the payload ALREADY carries plus
+	// a by-id read for each linked goal those lists do not cover (a job still
+	// serving last week's goal). Scoped to what the loaded jobs actually link
+	// rather than to the whole table, which only grows — see linkedJobGoals.
+	goals := linkedJobGoals(activeStore, board.Goals, js)
 	// One query for the WHOLE board's token rows, read before the loop and
 	// indexed by slug — never a per-job GetJobTokens, which would be ~74
 	// queries inside the cached build (store.ListJobTokens' own reason for
@@ -966,6 +996,13 @@ func buildWebBoard() webBoard {
 			// so one payload shape with the clients gating on state is the
 			// only version that does not flicker the key in and out.
 			Load: webJobLoadFrom(j.Load),
+			// Goal: resolved out of the index above, keyed on the job row's own
+			// goal_id — a nil map entry (no link, or a link that resolved to
+			// nothing) is exactly the omitempty absence. Emitted for every
+			// active job regardless of display state (Load's reasoning) — a card
+			// moves between blocked and working tick to tick, and the chip must
+			// not flicker with it.
+			Goal: goals[j.GoalID],
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true

@@ -39,6 +39,13 @@ struct WebBoard: Decodable {
     // Absent on servers older than the TestFlight ship button (additive too)
     // — nil reads as a plain idle control, same as `update`.
     let shipIOS: WebShipIOS?
+    // The current week's and today's goals, always present on a server new
+    // enough to have them and absent on any older one — the same
+    // absence-on-an-older-server Optional `update` and `ship_ios` are, and
+    // for the same reason (additive key, no contract bump). nil reads as
+    // "this server has no goals to show", which is the drawer drawing
+    // nothing rather than an empty drawer claiming zero goals.
+    let goals: WebGoals?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -49,6 +56,7 @@ struct WebBoard: Decodable {
         case contract, stale
         case update
         case shipIOS = "ship_ios"
+        case goals
     }
 }
 
@@ -70,6 +78,94 @@ struct DaemonStatus: Decodable {
         case cells
         case stale
     }
+}
+
+// MARK: - goals
+
+// One goal row (internal/store/goals.go's Goal, served by api/goals.go and
+// carried on /api/board's `goals` key). `scope` is "week" or "day" and
+// `period` is that scope's key — a `2006-01-02` LOCAL date for a day goal,
+// the LOCAL Monday of the week for a week goal. Both stay Strings rather
+// than an enum/Date: an unknown scope from a newer server must degrade to
+// "not one of the two groups I draw", never fail the decode.
+//
+// `parent_id` is `omitempty` server-side and only a DAY goal can carry one
+// (it points at the week goal it hangs under), so absence is the common
+// case, not a drift signal.
+struct Goal: Decodable, Identifiable, Equatable {
+    let id: Int64
+    let scope: String
+    let period: String
+    let text: String
+    let done: Bool
+    let position: Int64
+    /// The week goal this day goal hangs under; nil (key absent, or 0 in the
+    /// store) when it hangs under nothing.
+    let parentID: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case id, scope, period, text, done, position
+        case parentID = "parent_id"
+    }
+
+    var isWeek: Bool { scope == "week" }
+    var isDay: Bool { scope == "day" }
+}
+
+// The `goals` key on /api/board: the CURRENT week's and today's goals, both
+// arrays always present server-side (never null).
+//
+// Hand-decoded with `try?` for the same blast-radius reason WebUpdate and
+// WebShipIOS are — the three of them are the same kind of key, an additive
+// object hanging off the board root that a cosmetic control reads. A
+// failure inside this object would otherwise propagate out of
+// `decodeIfPresent` and take the ENTIRE /api/board decode with it, losing
+// every job on the board over a drawer. The worst a drifted goal can now do
+// is empty one of the two groups.
+//
+// The tolerance has to start at the CONTAINER, not at the two keys. If
+// `goals` arrives as anything other than an object — a string, a number, an
+// array, whatever a future server or a hand-edited response serves —
+// `container(keyedBy:)` itself throws, and that throw escapes the
+// synthesized `decodeIfPresent` on WebBoard exactly the way an inner
+// failure would, taking the whole board with it. Which is to say: the
+// per-key `try?`s alone would leave the headline case of this comment
+// unhandled, so the container is `try?`'d too and a non-object degrades to
+// no goals at all. `decodeIfPresent` still absorbs an absent or null key
+// before this init ever runs.
+struct WebGoals: Decodable, Equatable {
+    let week: [Goal]
+    let day: [Goal]
+
+    enum CodingKeys: String, CodingKey { case week, day }
+
+    init(from decoder: Decoder) throws {
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self) else {
+            week = []
+            day = []
+            return
+        }
+        week = (try? c.decode([Goal].self, forKey: .week)) ?? []
+        day = (try? c.decode([Goal].self, forKey: .day)) ?? []
+    }
+
+    /// For tests and previews.
+    init(week: [Goal], day: [Goal]) {
+        self.week = week
+        self.day = day
+    }
+}
+
+// The `goal` key on a webJob: the goal that job is linked to, present
+// exactly when there is one (any period, done or not). Strictly decoded,
+// unlike WebGoals above — it sits among webJob's other sub-objects
+// (`question`, `wakeup`, `tokens`, `load`), every one of which is
+// synthesized, and matching its own neighbours is what keeps the job shape
+// readable.
+struct WebJobGoal: Decodable, Equatable {
+    let id: Int64
+    let text: String
+    let done: Bool
 }
 
 // MARK: - self-update
@@ -322,6 +418,13 @@ struct WebJob: Decodable, Identifiable {
     // bump; render through BoardTheme.jobColor, which degrades an unknown
     // name from a newer server to "no color".
     let color: String?
+    // The goal this job is linked to, present exactly when it links one —
+    // from ANY period and done or not, so a job carried over from last week
+    // still names the goal it belongs to. Additive key, absent on older
+    // servers, so no contract bump. Rendered as the card's one goal chip
+    // (`GoalChip` in GoalsDrawer.swift), which is the only place the phone
+    // shows a job's goal — picking one is web-only in v1.
+    let goal: WebJobGoal?
     // `start_error` is gone with the queued state (v6): a start is now the
     // synchronous answer to POST /api/queue, so a failure surfaces as that
     // call's own 409 rather than as a field on a job parked in a queue.
@@ -357,6 +460,7 @@ struct WebJob: Decodable, Identifiable {
         case tokens
         case load
         case color
+        case goal
     }
 }
 
@@ -1137,6 +1241,25 @@ struct JobFormSaveRequest: Encodable {
 struct JobColorRequest: Encodable {
     let slug: String
     let color: String
+}
+
+// GoalUpdateRequest is POST /api/goals' body for the ONE op this app sends:
+// `update`, carrying only the done flag. The endpoint also takes `add` and
+// `remove` (and `text`/`parent_id` on an update) — the phone deliberately
+// sends neither in v1: the drawer is for glancing at goals and checking
+// them off, and every goal is composed on the Mac. A request struct with
+// only the fields this client actually sends is also what keeps the app
+// from ever emitting an absent-means-unchanged field as an explicit zero.
+struct GoalUpdateRequest: Encodable {
+    let op: String
+    let id: Int64
+    let done: Bool
+
+    init(id: Int64, done: Bool) {
+        self.op = "update"
+        self.id = id
+        self.done = done
+    }
 }
 
 // MARK: - board action requests/responses

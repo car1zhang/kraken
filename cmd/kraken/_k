@@ -14,6 +14,7 @@ _k() {
         'c:new named claude window with a prompt'
         'account:rotation status, or switch/pin the main Claude login (auto|<slug>)'
         'questions:cell-side verb — read/write a job'"'"'s open doc questions via kraken serve'
+        'goals:cell-side verb — re-read carl'"'"'s current week/day goals via kraken serve (read-only)'
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'watchlist:cell-side verb — read/write the dream loop'"'"'s watch overlay on the knowledge graph, via kraken serve'
         'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
@@ -75,6 +76,22 @@ _k() {
             # there is no cheap store-backed completion source the way
             # 'k _complete' (tmux/ps discovery) or the pool dir listing
             # (account, above) are.
+            ;;
+        goals)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                # One op, and it stays one: the goals are carl's, written from
+                # the board, so the cell side is read-only by construction (see
+                # cmd_goals.go).
+                ops=(
+                    'get:print this week'"'"'s and today'"'"'s goals as JSON'
+                )
+                _describe -t ops 'op' ops
+            fi
+            # word 4 is the OPTIONAL <slug>; no completion is offered for it,
+            # for the reason spelled out under questions) above: job identity
+            # lives only in kraken.db, with no cheap store-backed completion
+            # source.
             ;;
         update)
             local -a updflags

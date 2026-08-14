@@ -69,6 +69,8 @@ func main() {
 		cmdRecallHook(rest)
 	case "questions":
 		cmdQuestions(rest)
+	case "goals":
+		cmdGoals(rest)
 	case "feedback":
 		cmdFeedback(rest)
 	case "watchlist":
@@ -188,6 +190,17 @@ Commands:
                       takes a bare qid. A 400 (bad qid/importance) or an
                       unreachable serve prints a clean message to stderr and
                       exits non-zero.
+  k goals get [slug]
+                      cell-side verb zeus uses to re-read carl's current
+                      goals, proxied the same way as 'k questions': prints
+                      this week's and today's goals as JSON, day goals
+                      carrying the weekly goal they sit under. With a slug it
+                      also names the one goal that job serves, if any. READ
+                      ONLY — the goals are carl's, written from the board, so
+                      there is deliberately no set/add/remove op here. The
+                      same block is staged into every cell's brief at spawn
+                      and refreshed mid-run, so this verb is for re-reading
+                      it, not for discovering it.
   k feedback get|sweep|addressed <slug> ...
                       cell-side verb zeus uses to read carl's per-artifact
                       feedback and record how it addressed an entry, proxied

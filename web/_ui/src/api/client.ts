@@ -14,6 +14,7 @@ import type {
   CaptureResult,
   DraftResult,
   DreamReports,
+  GoalsPage,
   JobForm,
   LogPage,
   RenameResult,
@@ -146,6 +147,20 @@ export const setWatchVerdict = (
   verdict: WatchVerdict | "",
   comment: string,
 ) => postJSON("/api/watchlist", { id, verdict, comment });
+
+/**
+ * The current week's and today's goals, standalone.
+ *
+ * The BOARD payload already carries the same two lists, and every surface that
+ * has the board reads them from there — this exists for the one surface that
+ * does not: the editor's goal picker, which is handed a single `WebJob` and no
+ * payload, and needs the pickable list. With a `slug` the server also answers
+ * `job_goal` for that job's linked goal whatever its period; the picker does
+ * not ask for it (it reads `job.goal`, the same fact off the board), so the
+ * argument stays off this signature until something needs it.
+ */
+export const fetchGoals = (signal?: AbortSignal) =>
+  getJSON<GoalsPage>("/api/goals", signal);
 
 export const fetchUpdateStatus = (signal?: AbortSignal) =>
   getJSON<import("./types.ts").WebUpdate>("/api/update/status", signal);
@@ -316,6 +331,42 @@ export const setRotationMode = (mode: "auto" | "manual") =>
  */
 export const setJobColor = (slug: string, color: string) =>
   postJSON("/api/job/color", { slug, color });
+
+// ------------------------------------------------------------ goals
+
+/**
+ * Every goal WRITE — add, update, remove — through one route and one function.
+ *
+ * `unknown` rather than a union of the three op shapes, deliberately: the
+ * server is the validator (it 400s with a sentence the status corner shows
+ * verbatim), and a hand-written union here would be a second, weaker copy of
+ * that validation which drifts the moment an op grows a field. The call sites
+ * in GoalsPanel spell each op out as an object literal, which is where the
+ * shapes are readable.
+ *
+ * Bodies: `{op:"add", goal:{scope, period?, text, parent_id?}}` — an absent
+ * period means the CURRENT one for that scope; `{op:"update", id, text?,
+ * done?, parent_id?}` — an absent field is unchanged and an explicit
+ * `parent_id: 0` clears it; `{op:"remove", id}`.
+ *
+ * Goes through the board `mutate` ritual at every call site: a goal write
+ * moves the board payload's `goals` key, so the panel's next truth is the
+ * refetch rather than local state.
+ */
+export const postGoals = (body: unknown) => postJSON("/api/goals", body);
+
+/**
+ * Link a job to a goal, or unlink it with `goalId` 0.
+ *
+ * Its own one-field route rather than a field on the job form, for the colour
+ * route's exact reason: `saveform` refuses a job whose cell is live — which is
+ * when carl is most likely to be filing a running job under a goal — and a
+ * full-replace save from a form that predates the field would wipe the link by
+ * omitting it. The server also leaves the job's `rev` and `updated_at` alone,
+ * so filing a job under a goal is not an edit to the job.
+ */
+export const postJobGoal = (slug: string, goalId: number) =>
+  postJSON("/api/job/goal", { slug, goal_id: goalId });
 
 /**
  * Rename a job. `slug` is its CURRENT name and `to` is the free text carl

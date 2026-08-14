@@ -837,7 +837,10 @@ func StartCell(j *Job, repo string) error {
 	// ceiling), and retrieved facts are variable-length and job-dependent:
 	// folding them in would make the lean ceiling start failing on graph
 	// content rather than on the policy creep it exists to catch.
-	launch, err := spawnCommand(j, zeusSpawnArgv(j), zeusBrief(j)+graphContext(j), jobPrompt(j))
+	// goalContext rides in the same position and for the same reasons — it is
+	// carl's week, so it is variable-length, board-dependent, and holds the
+	// identical ""-on-any-failure guarantee (goalctx.go's rule 2).
+	launch, err := spawnCommand(j, zeusSpawnArgv(j), zeusBrief(j)+goalContext(j)+graphContext(j), jobPrompt(j))
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
@@ -945,12 +948,19 @@ func krakenHookEntry(slug, krakenBin string) map[string]any {
 // It renders its flags through the family's shared hookCommandFlags — the
 // propagation problem is identical to pr-hook's and limit-hook's: a
 // recall-hook invocation is a brand new OS process spawned by this string,
-// inheriting none of serve's flags or env. What it does NOT carry is a slug:
-// recall is keyed on the SESSION named in the hook payload, and a cell's
-// zeus, its side threads and its teammates all fire this hook from the same
-// worktree with different sessions.
-func recallHookCommand(krakenBin string) string {
-	return krakenBin + " recall-hook" + hookCommandFlags()
+// inheriting none of serve's flags or env.
+//
+// It DOES carry the cell's slug, as a trailing argument, and the slug is not
+// the recall key: graph recall is still keyed on the SESSION named in the hook
+// payload, because a cell's zeus, its side threads and its teammates all fire
+// this hook from the same worktree with different sessions. What the slug adds
+// is the GOALS half (goalctx.go): a goals block is about the JOB, and every
+// agent in the cell — including the ones whose sessions nothing has ever
+// stamped onto the job row — should see the goal its cell was pointed at. An
+// old settings.json written before this argument existed keeps working: the
+// slug arrives empty and recall falls back to the session match.
+func recallHookCommand(slug, krakenBin string) string {
+	return krakenBin + " recall-hook" + hookCommandFlags() + " " + slug
 }
 
 // recallHookEntry is the hook group kraken installs under each of
@@ -960,12 +970,12 @@ func recallHookCommand(krakenBin string) string {
 // refuses to load), and on PostToolUse the absence is the point — every tool
 // call qualifies, since which tool ran says nothing about whether the
 // conversation just turned toward something the graph knows.
-func recallHookEntry(krakenBin string) map[string]any {
+func recallHookEntry(slug, krakenBin string) map[string]any {
 	return map[string]any{
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": recallHookCommand(krakenBin),
+				"command": recallHookCommand(slug, krakenBin),
 			},
 		},
 	}
@@ -1086,7 +1096,7 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 		// events, one shared entry would be the SAME mutable map in two
 		// places in the tree, where a later mutation through one key silently
 		// edits the other.
-		hooks[event] = append(withoutRecallHooks(groups), recallHookEntry(krakenBin))
+		hooks[event] = append(withoutRecallHooks(groups), recallHookEntry(slug, krakenBin))
 	}
 	// Assigned once, unconditionally: with the PostToolUse merge and the
 	// recall loop above both writing into `hooks`, every branch that could
@@ -1186,21 +1196,29 @@ func hasHookCommand(groups []any, command string) bool {
 	return false
 }
 
-// recallHookMarker is what identifies a hook group as kraken's recall entry
-// when the exact command string cannot be relied on — which is every install
-// after the first with a different --serve-addr or --db-path. It is the verb
-// with its leading space, so it matches the command kraken writes and cannot
-// match a path component of some unrelated tool.
-const recallHookMarker = " recall-hook"
+// recallHookMarker is the verb that identifies a hook group as kraken's recall
+// entry when the exact command string cannot be relied on — which is every
+// install after the first with a different --serve-addr or --db-path, and now
+// every install of a RENAMED job too, since the command carries the slug.
+const recallHookMarker = "recall-hook"
 
 // withoutRecallHooks returns groups with every group dropped that contains a
-// hook whose command mentions recallHookMarker — the removal half of
-// mergeHookSettings' replace semantics. A command that also mentions
-// " pr-hook" is exempt: `kraken pr-hook recall-hook` — the pr-hook command of
-// a job SLUGGED recall-hook — contains the marker as its slug argument, and
-// without the exemption the recall replace pass (which runs over PostToolUse,
-// where the pr-hook group lives) would silently drop that cell's pr-hook on
-// every install.
+// hook whose command IS a `kraken recall-hook` invocation — the removal half of
+// mergeHookSettings' replace semantics. The mechanism is unchanged; what
+// changed is how a command is recognized, and it had to.
+//
+// It used to be a substring test for " recall-hook" with a " pr-hook" carve-out,
+// because `kraken pr-hook recall-hook` — the pr-hook command of a job SLUGGED
+// recall-hook — carries the marker as its slug argument, and the recall replace
+// pass runs over PostToolUse where that group lives. Once the recall command
+// gained a slug of its own the carve-out inverted: `kraken recall-hook pr-hook`
+// (a job slugged pr-hook) mentions " pr-hook" too, so it would be exempted from
+// removal and a fresh group appended beside it on EVERY install, forever.
+//
+// Matching the VERB — the second whitespace field, which is where kraken's own
+// builders put it — removes both collisions structurally rather than trading
+// one for the other, and it still recognizes every command shape ever written:
+// `kraken recall-hook`, `... --serve-addr X --db-path Y`, and the slugged form.
 //
 // A whole GROUP goes, not the matching hook inside it, because kraken writes
 // its recall entry as a group of exactly one hook: a group carrying kraken's
@@ -1212,8 +1230,7 @@ const recallHookMarker = " recall-hook"
 func withoutRecallHooks(groups []any) []any {
 	var out []any
 	for _, g := range groups {
-		if group, ok := g.(map[string]any); ok &&
-			groupMentions(group, recallHookMarker) && !groupMentions(group, " pr-hook") {
+		if group, ok := g.(map[string]any); ok && groupRunsVerb(group, recallHookMarker) {
 			continue
 		}
 		out = append(out, g)
@@ -1221,9 +1238,31 @@ func withoutRecallHooks(groups []any) []any {
 	return out
 }
 
-// groupMentions reports whether any hook in one settings group carries a
-// command containing sub.
-func groupMentions(group map[string]any, sub string) bool {
+// groupRunsVerb reports whether any hook in one settings group RUNS the named
+// kraken verb, as opposed to merely mentioning it.
+//
+// The rule is one line long: the verb counts anywhere in the command EXCEPT the
+// trailing field, which is where every kraken hook builder puts the slug
+// (prHookCommand, limitHookCommand and recallHookCommand all render `<bin>
+// <verb>[ flags][ slug]`). That is precisely enough to separate the two real
+// collisions from each other — `kraken recall-hook pr-hook` (a job slugged
+// pr-hook) matches recall-hook and not pr-hook; `kraken pr-hook recall-hook`
+// (a job slugged recall-hook) matches pr-hook and not recall-hook — while a
+// two-field command (`kraken recall-hook`, the pre-slug shape still sitting in
+// every installed settings.json) is carved back in, since there the verb IS the
+// trailing field.
+//
+// Deliberately NOT "the second field": krakenBin is os.Executable's answer, a
+// path this process does not choose and that may contain spaces — `/Users/a
+// b/kraken recall-hook foo` puts the verb at index 2 — and a wrapper-launched
+// command (`env FOO=1 kraken recall-hook foo`) shifts it too. A predicate that
+// misses there does not fail loudly: withoutRecallHooks stops recognizing
+// kraken's own entry, the replace pass degrades to an append, and the cell
+// grows one more recall group on every single install, forever. That unbounded
+// accumulation is the exact failure this mechanism exists to prevent, so the
+// predicate is written to be robust to the field the verb lands in rather than
+// to assume one.
+func groupRunsVerb(group map[string]any, verb string) bool {
 	hookList, ok := group["hooks"].([]any)
 	if !ok {
 		return false
@@ -1233,8 +1272,20 @@ func groupMentions(group map[string]any, sub string) bool {
 		if !ok {
 			continue
 		}
-		if cmd, ok := hook["command"].(string); ok && strings.Contains(cmd, sub) {
-			return true
+		cmd, ok := hook["command"].(string)
+		if !ok {
+			continue
+		}
+		f := strings.Fields(cmd)
+		for i := 1; i < len(f); i++ {
+			// the trailing field is the slug — except when the command is
+			// exactly `<bin> <verb>`, which carries no slug at all
+			if i == len(f)-1 && i > 1 {
+				continue
+			}
+			if f[i] == verb {
+				return true
+			}
 		}
 	}
 	return false
@@ -2376,8 +2427,10 @@ func ReactivateJob(j *Job, session, message string) error {
 	// Same graphContext append as StartCell's, and for a sharper reason: a
 	// REACTIVATED job is by definition returning after time passed, which is
 	// exactly when the graph is most likely to know something its zeus does
-	// not. Same ""-on-no-match guarantee.
-	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j)+graphContext(j), prompt)
+	// not. Same ""-on-no-match guarantee. goalContext rides beside it with the
+	// sharper version of the same argument: a job reactivated days later is a
+	// job whose week has almost certainly turned over.
+	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j)+goalContext(j)+graphContext(j), prompt)
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}

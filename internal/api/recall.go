@@ -42,7 +42,7 @@ func graphRecallHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var req jobs.RecallRequest
 	if !decodeGraphBody(w, r, &req,
-		"this route takes only session_id, event, prompt and transcript_path") {
+		"this route takes only session_id, event, prompt, transcript_path and slug") {
 		return
 	}
 	st, ok := graphStore(w)

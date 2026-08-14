@@ -54,6 +54,20 @@ type Job struct {
 	// it, so a load path that forgets it is a job whose old names silently
 	// stop resolving rather than a compile error.
 	FormerSlugs []string
+	// GoalID is the goal this job serves (schema v23's jobs.goal_id), 0 for
+	// none — the normal state of every job, and what a job degrades to when
+	// the goal it pointed at is deleted (schemaV23's ON DELETE SET NULL).
+	//
+	// Written ONLY by SetJobGoal, never by UpdateJobFields: goal_id is
+	// deliberately absent from jobFieldColumns, so a full form or raw save —
+	// which replaces every field it knows about — cannot clear a link it has
+	// never heard of. The four load_* columns are protected the same way, by
+	// the same absence. Colour is NOT the precedent here despite being the
+	// other one-field route: "color" IS in jobFieldColumns, and what keeps a
+	// form save from clearing it is that the form stopped sending it
+	// (jobcolor.go) — a convention in the client rather than a wall in the
+	// store, which is exactly the weaker guarantee this column declines.
+	GoalID int64
 }
 
 // JobLoad is one job's triage estimate: how much effort unblocking it costs
@@ -91,7 +105,7 @@ var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), solo,
 	COALESCE(session,''), COALESCE(teardown,''), run, rev, COALESCE(created_at,0),
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,''),
 	COALESCE(load_unblock,0), COALESCE(load_scope,0), COALESCE(load_note,''),
-	COALESCE(load_at,0)`
+	COALESCE(load_at,0), COALESCE(goal_id,0)`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
@@ -101,7 +115,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 		&j.ID, &j.Slug, &j.Repo, &j.Base, &j.Solo, &j.Model, &j.Color,
 		&j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
-		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
+		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At, &j.GoalID,
 	)
 	if err != nil {
 		return nil, err
@@ -439,6 +453,72 @@ func (s *Store) SetJobLoad(jobID int64, l JobLoad) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("set job load for job %d: %w", jobID, ErrNotFound)
+	}
+	return nil
+}
+
+// SetJobGoal points job jobID at goal goalID, or clears the link when
+// goalID is 0. A direct UPDATE, deliberately OUTSIDE UpdateJobFields and
+// therefore outside its rev gate — this call does NOT bump `rev` and does
+// NOT stamp `updated_at` — for exactly the two reasons SetJobLoad's doc
+// comment above spells out, both of which apply here unchanged.
+//
+// Not stamping updated_at: updated_at is what the board renders as each
+// card's AGE, and picking a goal from the editor says nothing about how long
+// the job has been waiting. Resetting the age of every card carl labels
+// would break the one column that tells him which job has sat longest.
+//
+// Not bumping rev: rev is the editor's optimistic lock (UpdateJobFields), and
+// the goal picker posts DIRECTLY from an OPEN editor form — the SwatchStrip
+// pattern, chosen precisely so labelling works while the form is read-only.
+// Bumping rev would 409 that form's next save over a number it neither shows
+// nor sent.
+//
+// A missing job is ErrNotFound rather than a no-op, SetJobLoad's contract
+// again: a job id matching no row means the caller was addressing something
+// that does not exist. A missing GOAL is its own descriptive error rather
+// than a foreign-key violation, so the API layer's 400 says which id was
+// wrong instead of quoting SQLite. Checking it here rather than leaning on
+// the FK alone also keeps the failure the same shape whether or not the
+// caller's connection has foreign_keys on.
+//
+// The existence check and the UPDATE share ONE transaction, and that is what
+// makes the paragraph above true rather than merely usual: as two statements,
+// a goal deleted in the gap between them would sail past the probe and come
+// back from the write as a raw "FOREIGN KEY constraint failed" — the exact
+// message the probe exists to prevent anyone ever seeing. The window is
+// narrow (kraken serve is the single writer) but it is not empty: this call
+// and a panel delete are two different HTTP requests.
+func (s *Store) SetJobGoal(jobID, goalID int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("set job goal for job %d: %w", jobID, err)
+	}
+	defer tx.Rollback()
+
+	if goalID != 0 {
+		var exists int64
+		err := tx.QueryRow(`SELECT id FROM goals WHERE id = ?`, goalID).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("set job goal for job %d: goal %d does not exist", jobID, goalID)
+		}
+		if err != nil {
+			return fmt.Errorf("set job goal for job %d: %w", jobID, err)
+		}
+	}
+	res, err := tx.Exec(`UPDATE jobs SET goal_id = ? WHERE id = ?`, nullableGoalID(goalID), jobID)
+	if err != nil {
+		return fmt.Errorf("set job goal for job %d: %w", jobID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set job goal for job %d: %w", jobID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("set job goal for job %d: %w", jobID, ErrNotFound)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("set job goal for job %d: %w", jobID, err)
 	}
 	return nil
 }

@@ -269,8 +269,11 @@ func TestGraphContextKeepsTheBriefUnderItsCeiling(t *testing.T) {
 	// injection's own cap is what keeps the sum bounded. Stated as a sum so a
 	// future brief-ceiling bump shows up HERE as one number to update, with
 	// the crew test named as its source of truth.
-	const ceiling = 13_500 + graphContextBytes
-	if n := len(zeusBrief(j) + graphContext(j)); n > ceiling {
+	// goalContextBytes joins the sum for the same reason graphContextBytes did:
+	// cell.go stages zeusBrief + goalContext + graphContext, and each injection
+	// caps itself, so the sum of the three caps is the real ceiling.
+	const ceiling = 13_500 + goalContextBytes + graphContextBytes
+	if n := len(zeusBrief(j) + goalContext(j) + graphContext(j)); n > ceiling {
 		t.Errorf("staged brief is %d bytes, over the %d-byte combined ceiling", n, ceiling)
 	}
 }

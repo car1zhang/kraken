@@ -24,6 +24,49 @@
 
 // ---------------------------------------------------------------- board
 
+// The goals wire item is declared in ../lib/goals.ts, not here, and imported
+// back: `groupGoals` is its only real consumer, TS tests can only reach it
+// where it is exported, and two declarations of the same six fields would
+// drift. This is the one wire shape that lives outside this file, and the
+// import is type-only, so nothing is pulled into the bundle by it.
+import type { Goal } from "../lib/goals.ts";
+
+export type { Goal };
+
+/**
+ * The two current-period lists the board payload carries, and what GET
+ * /api/goals answers with. Both arrays are ALWAYS present on the wire (the
+ * server emits `[]`, never null) — the optionality is on the containing key,
+ * not on these.
+ */
+export interface WebGoals {
+  week: Goal[];
+  day: Goal[];
+}
+
+/**
+ * The goal a job links, flattened onto the job — `webJobGoal`
+ * (internal/api/board.go). Three fields, not the whole Goal: the card chip and
+ * the steer head render the text and mute it when done, and neither has any
+ * use for a period or a position.
+ *
+ * Present EXACTLY when the job links a goal, whatever that goal's period and
+ * whether or not it is done — so a job carrying last week's goal still says so
+ * on its card.
+ */
+export interface WebJobGoal {
+  id: number;
+  text: string;
+  done: boolean;
+}
+
+/** GET /api/goals. `job_goal` rides along only when `?slug=` was given AND
+ *  that job links a goal. */
+export interface GoalsPage {
+  goals: WebGoals;
+  job_goal?: WebJobGoal;
+}
+
 export interface WebArtifact {
   name: string;
   url: string;
@@ -291,6 +334,17 @@ export interface WebJob {
    * are not: once the key is present a client reads all four unconditionally.
    */
   load?: WebJobLoad;
+  /**
+   * The goal this job is linked to, or absent. Absence is the ONLY no-goal
+   * state on the wire — the Go field is a pointer with omitempty, so an
+   * unlinked job drops the key rather than sending a zeroed object, and a
+   * test like `job.goal && job.goal.id === 0` is unreachable.
+   *
+   * Served for ANY linked goal, including a done one and one from a period
+   * that is no longer current, which is why the card chip mutes rather than
+   * hides a done goal.
+   */
+  goal?: WebJobGoal;
   // `start_error` is GONE from the wire with the queued state. It existed
   // because a start happened on a daemon tick nobody was watching, so its
   // failure had nowhere to land but the card. A submit is now a request carl
@@ -399,6 +453,14 @@ export interface WebBoard {
   cell_cap: number;
   live_cells: number;
   jobs: WebJob[];
+  /**
+   * The current week's and today's goals. A current server ALWAYS sends this
+   * key with both arrays present (never null), so the optionality here is the
+   * same one `contract`/`update` carry: a server predating goals sends none,
+   * and the panel renders empty rather than failing the decode. Read it as
+   * `board.goals?.week ?? []`, never unconditionally.
+   */
+  goals?: WebGoals;
   /** absent on a server predating the handshake — the absence is the signal */
   contract?: number;
   stale?: boolean;

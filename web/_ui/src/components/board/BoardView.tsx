@@ -6,6 +6,7 @@ import type { SteerMode } from "../../lib/moves.ts";
 import { ArchiveDrawer } from "./ArchiveDrawer.tsx";
 import { BoardBar } from "./BoardBar.tsx";
 import { BoardColumn } from "./Column.tsx";
+import { GoalsPanel } from "./GoalsPanel.tsx";
 import { JobCard } from "./JobCard.tsx";
 
 /**
@@ -179,6 +180,15 @@ export function BoardView({
           );
         })}
       </main>
+      {/* The goals panel is `position: fixed`, so it is NOT inside the
+          `hidden` <main> above and would keep floating over the LOG, DREAM and
+          GRAPH views. Dropping it outright while the board is hidden is what
+          makes it board-only — a `hidden` attribute on it would work too, but
+          unmounting also stops a half-typed add row surviving a trip through
+          another view. */}
+      {hidden ? null : (
+        <GoalsPanel goals={board.board?.goals} mutate={board.mutate} />
+      )}
     </>
   );
 }

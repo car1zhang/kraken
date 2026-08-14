@@ -60,9 +60,9 @@ other reasons (nil-vs-empty on the Go side, not the wire's absence).
 The rule reads one way only: `omitempty` ⇒ Optional, but Optional does not
 imply `omitempty`. Two kinds of Swift Optional exist without one.
 **Absence on an older server** — `contract`, `stale`, `WebBoard.update`,
-`WebBoard.shipIOS`: all always present on a current server, missing from
-builds that predate them, where the absence is itself what the app checks
-for. **Blast-radius containment** — every field `WebUpdate` and
+`WebBoard.shipIOS`, `WebBoard.goals`: all always present on a current
+server, missing from builds that predate them, where the absence is itself
+what the app checks for. **Blast-radius containment** — every field `WebUpdate` and
 `WebShipIOS` model, all of them always present on the wire, made Optional
 (with a hand-written `init(from:)`) purely so a drifted sub-key costs the
 ⟳ / ⇧ control rather than the entire `/api/board` decode; see those structs'
@@ -92,6 +92,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `stale` | bool | always | this `k web` process' self-check |
 | `update` | object (`webUpdate`) | always | the self-update button's state (see `POST /api/update` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebUpdate` (Models.swift), **Optional** on `WebBoard` — always present on any server new enough to have the button, absent on one older than it |
 | `ship_ios` | object (`webShipIOS`) | always | the TestFlight ship button's state (see `POST /api/ship-ios` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebShipIOS` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is |
+| `goals` | object (`{"week": [goal], "day": [goal]}`) | always (both arrays `[]`, never `null`) | the CURRENT local week's and today's goals — the same two arrays `GET /api/goals` serves, from the same store call, so the board key and that endpoint can never disagree. Periods are `store.GoalPeriods(time.Now())`: `day` is today's local `2006-01-02` date, `week` is the local Monday of this week. Added additively, no contract bump. Modeled in the iOS app as `WebGoals` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is, and hand-decoded for the same blast-radius reason (see that struct's comment) |
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's
@@ -182,6 +183,11 @@ payload, so a client sees exactly what it has always seen.
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 | `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
 | `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive carl's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
+| `goal` | object (`{"id": number, "text": string, "done": bool}`) | omitempty | the goal this job is linked to (`jobs.goal_id`), present exactly when it links one — from ANY period and done or not, so a job carried over from last week still names the goal it belongs to. Written only by `POST /api/job/goal` (below), never by `saveform`: `goal_id` is deliberately absent from the job form's field set, so a full form save cannot touch it. Additive, no contract bump. Modeled in the iOS app as `WebJobGoal` on `WebJob` and rendered as the card's one goal chip (`GoalChip`, GoalsDrawer.swift) — `◎` plus the goal text truncated by the same 24-character rule web's `goalChipText` uses, muted when `done`, full text in the accessibility label since a phone has no tooltip |
+
+`goal` (`webJobGoal`) is a THREE-key projection of the goal row, not the
+whole `goal` object `/api/goals` serves: a card renders the goal's text and
+whether it is ticked off, and never its scope, period, position or parent.
 
 `start_error` and `prereqs` were REMOVED from this shape in v6. `start_error`
 was a side channel for a failure the board could not otherwise see: the daemon
@@ -964,6 +970,99 @@ POST request: `webReq` — `slug` (string, required — empty → 400), `text`
 POST response: `{"ok": true}` on success; non-2xx `{"error": string}` on
 failure (400 for bad JSON or missing slug; 405 for methods other than
 GET/POST).
+
+---
+
+## Goals
+
+Two routes over the `goals` table (internal/api/goals.go), plus the two
+additive keys they put on `/api/board` (`goals` on the board, `goal` on a
+job — both documented above). A goal has a **scope** (`week` or `day`) and a
+**period**: for a day goal, a local `2006-01-02` date; for a week goal, the
+local **Monday** of that week in the same layout. `store.GoalPeriods(now)`
+derives both from the clock, and "current" everywhere below means that pair.
+A day goal may name a week goal as its `parent_id` — that is the only legal
+parent link (a week goal never has one, and a day goal can only point at a
+week goal).
+
+Both routes are additive: nothing about them bumps `apiContract`.
+
+### `GET /api/goals[?slug=]` → `{"goals": {"week": […], "day": […]}}` (api/goals.go)
+
+The current week's and today's goals. Both arrays are always present and
+never `null`; each item is the full goal object:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | the row id — what `update`/`remove` and `POST /api/job/goal` address |
+| `scope` | string | always | `week` \| `day`. Render an unrecognized value from a newer server as "neither of my two groups" rather than failing |
+| `period` | string | always | `2006-01-02`; a week goal's is a Monday |
+| `text` | string | always | |
+| `done` | bool | always | |
+| `position` | number | always | insertion order within (scope, period); the arrays arrive already ordered by it, so a client re-sorting is redundant, not wrong |
+| `parent_id` | number | omitempty | the week goal a DAY goal hangs under. Absent (never `0`) when it hangs under nothing — `0` is the store's no-parent value and is omitted on the wire |
+
+With `?slug=<slug>` the response gains one more key, and only when that job
+links a goal:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `job_goal` | object (`{"id","text","done"}`) | present only when the job links a goal | that job's linked goal, from ANY period and done or not — deliberately NOT restricted to the current periods the two arrays are, because the question `?slug=` asks is "what is this job's goal", which last week's goal answers just as well |
+
+An unknown slug is a 404. GET is reachable in mirror mode (read-only kraken
+mirrors serve it); the POST below is not.
+
+The iOS app does not call this endpoint — the board payload's `goals` key
+carries the same two arrays on the poll it already makes, so the drawer
+needs no second request. `kraken goals get [slug]` is this route's CLI face
+and prints its body verbatim.
+
+### `POST /api/goals` → `{"ok": true}` (api/goals.go)
+
+Every goal write, dispatched on an `op` field. **Mirror-gated**: in mirror
+mode this returns 403 with the body `disabled in mirror mode` (the GET above
+stays reachable). Each successful write logs a `web` event and invalidates
+the board cache, so the next `/api/board` poll carries the new state — the
+board stays the single source of truth and nothing is echoed here.
+
+| `op` | body | notes |
+|---|---|---|
+| `add` | `{"op":"add","goal":{"scope","period"?,"text","parent_id"?}}` | `period` absent defaults to the CURRENT period for that scope. `text` is trimmed and must be non-empty. `parent_id` is legal only on a `day` goal whose parent exists and is `week`-scope |
+| `update` | `{"op":"update","id":N,"text"?:string,"done"?:bool,"parent_id"?:number}` | absent field = unchanged (this is a partial update, not a replace); an explicit `"parent_id":0` CLEARS the parent. Unknown id → 400 |
+| `remove` | `{"op":"remove","id":N}` | deleting an absent id is a no-op and still 200. Deleting a week goal leaves its day children in place with their parent cleared, and a job linked to it keeps reading cleanly with no goal |
+
+Errors: 400 with the store's own validation sentence as the `error` body (a
+scope that is not `week`/`day`, a period that is not `2006-01-02`, a `week`
+period that is not a Monday, empty text, an illegal parent), 403 in mirror
+mode, 405 for other methods.
+
+The iOS app sends exactly ONE of these shapes — `{"op":"update","id":N,
+"done":bool}`, modeled as `GoalUpdateRequest` (Models.swift) and posted by
+`APIClient.setGoalDone` from the board's goals drawer. Adding, editing and
+deleting goals are web-only in v1 by design, not by omission: goals are
+composed at the Mac and the phone is for ticking them off.
+
+### `POST /api/job/goal` → `{"ok": true}` (api/goals.go)
+
+Links one job to one goal, or unlinks it. Its own one-field route rather
+than a `saveform` field for the same reasons `POST /api/job/color` has one:
+it works on a LIVE cell, and it is not a full replace, so a client that
+never sends it cannot clear the link.
+
+Request: `{"slug": string, "goal_id": number}` — `goal_id` `0` clears the
+link.
+
+Response: `{"ok": true}`; the new link rides back on the next `/api/board`
+poll as `webJob.goal`. Errors: 400 (bad json, or a non-zero `goal_id` naming
+no goal), 403 in mirror mode, 404 (no such job), 405 for other methods.
+
+The write touches NEITHER the job's `rev` NOR its `updated_at` — the same
+property `POST /api/job/color` has, and for the same reason: a goal link is
+metadata about the job, not an edit of it, and bumping `rev` would make an
+open editor's next save conflict over a field the editor never touched.
+
+Web-UI-only in v1: the iOS app has no goal picker (not modeled in
+APIClient.swift), though `webJob.goal` is modeled in Models.swift.
 
 ---
 

@@ -217,7 +217,7 @@ func TestMergeHookSettings(t *testing.T) {
 				existing, _ := wantHooks[event].([]any)
 				wantHooks[event] = append(existing, map[string]any{
 					"hooks": []any{
-						map[string]any{"type": "command", "command": "kraken recall-hook"},
+						map[string]any{"type": "command", "command": "kraken recall-hook foo"},
 					},
 				})
 			}
@@ -866,18 +866,27 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 			return true
 		}
 		calls++
-		// The sanctioned shapes are zeusBrief(...) alone or exactly
-		// zeusBrief(...) + graphContext(...): the graph injection is
-		// deliberately OUTSIDE zeusBrief (its two pinning tests measure
-		// static policy text), so the concatenation is part of the spawn
-		// contract this guard protects — the brief half must still lead,
-		// and the only sanctioned addition is graphContext, whose ""-on-
-		// any-failure guarantee is what keeps a briefless spawn impossible.
+		// The sanctioned shapes are zeusBrief(...) alone, or zeusBrief(...)
+		// followed by any run of the sanctioned INJECTIONS — goalContext and
+		// graphContext. Both are deliberately OUTSIDE zeusBrief (its two
+		// pinning tests measure static policy text), so the concatenation is
+		// part of the spawn contract this guard protects — the brief half must
+		// still lead, and each addition is one whose ""-on-any-failure
+		// guarantee is what keeps a briefless spawn impossible.
+		injections := map[string]bool{"goalContext": true, "graphContext": true}
 		arg := call.Args[2]
-		if bin, ok := arg.(*ast.BinaryExpr); ok && bin.Op == token.ADD {
+		for {
+			bin, ok := arg.(*ast.BinaryExpr)
+			if !ok || bin.Op != token.ADD {
+				break
+			}
 			y, ok := bin.Y.(*ast.CallExpr)
-			if fn, ok2 := y.Fun.(*ast.Ident); !ok || !ok2 || fn.Name != "graphContext" {
-				t.Errorf("%s: spawnCommand's brief concatenates something other than graphContext(...)", fset.Position(call.Pos()))
+			if !ok {
+				t.Errorf("%s: spawnCommand's brief concatenates something other than goalContext(...)/graphContext(...)", fset.Position(call.Pos()))
+				break
+			}
+			if fn, ok2 := y.Fun.(*ast.Ident); !ok2 || !injections[fn.Name] {
+				t.Errorf("%s: spawnCommand's brief concatenates something other than goalContext(...)/graphContext(...)", fset.Position(call.Pos()))
 			}
 			arg = bin.X
 		}

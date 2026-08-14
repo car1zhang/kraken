@@ -14,6 +14,7 @@ import { PRChips } from "./chips/PRChips.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
 import { WakeupChip } from "./chips/WakeupChip.tsx";
 import type { BoardActions } from "./BoardView.tsx";
+import { GoalChip } from "./GoalsPanel.tsx";
 import { useCardSubmitting, useSortableCard } from "./DragProvider.tsx";
 
 /**
@@ -174,6 +175,7 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   const hasChips =
     loadChipVisible(job, col) ||
     !!job.question ||
+    !!job.goal ||
     threadChipsVisible(job) ||
     docQuestionChipVisible(job) ||
     artifactCountVisible(job) ||
@@ -321,6 +323,15 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
             withBranch={false}
             compact
           />
+          {/* the job's goal, ONE chip. It is not a count — like the ROI badge
+              it is a fact ABOUT the job rather than something the job contains
+              — and it sits AFTER the crew/thread tokens and BEFORE the
+              inventory counts, which is where mockup 40 §3 draws it and where
+              the iOS card puts it. Three surfaces, one order: a chip that
+              lands in a different slot per client is a chip you have to hunt
+              for. Absent entirely when the job links no goal; muted, never
+              hidden, when that goal is done. */}
+          {job.goal ? <GoalChip goal={job.goal} /> : null}
           <DocQuestionChip job={job} />
           <ArtifactCountChip job={job} />
           <FeedbackChip job={job} />
