@@ -2118,7 +2118,13 @@ private struct BranchThreadView: View {
                 isBusy = false
                 if let tid = resp.tid, !tid.isEmpty {
                     onBranched(WebThread(
-                        tid: tid, title: name, state: "live", pane: nil,
+                        // `model` is nil deliberately: this optimistic row is
+                        // what the list shows for the second or so before the
+                        // next board poll replaces it with the server's, and
+                        // this call site does not choose a model (the server
+                        // resolves the branch's tier itself). Filling in a
+                        // guess would flash a model the thread may not run.
+                        tid: tid, title: name, state: "live", pane: nil, model: nil,
                         createdAt: Int64(Date().timeIntervalSince1970 * 1000),
                         closedAt: nil
                     ))
