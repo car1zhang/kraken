@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"kraken/internal/util"
 )
@@ -144,7 +145,27 @@ func refineStatus(p *Peer) {
 	if err != nil {
 		return
 	}
-	p.Status = refinedStatus(p.Status, string(out))
+	p.Status = refinedStatus(p.Status, string(out), busyOverridable(p, time.Now().UnixMilli()))
+}
+
+// staleBusyMinAgeMS is how old a session file's "busy" transition must be
+// before the pane may overrule it. StatusUpdatedAt is a transition stamp,
+// not a heartbeat (measured: a fresh turn reads ~10s old, wedged cells read
+// hours), so a small floor is enough to keep the prompt-submit →
+// first-spinner-paint race and a respawn's boot window from reading as
+// staleness, while every real wedge measured is orders of magnitude older.
+const staleBusyMinAgeMS = 15_000
+
+// busyOverridable reports whether p's session-file "busy" may be overruled
+// by pane content: only a claude that OWNS the pane's UI (Depth 0 — the
+// agent tmux send-keys reaches, the one whose TUI the capture shows; a
+// nested claude's "busy" stands, since the pane shows the inner agent's UI,
+// which says nothing about the outer one), and only once the busy transition
+// is at least staleBusyMinAgeMS old. A zero StatusAt (no statusUpdatedAt in
+// the session file) reads as old enough — the pane is then the only signal
+// there is.
+func busyOverridable(p *Peer, nowMS int64) bool {
+	return p.Agent == "claude" && p.Depth == 0 && nowMS-p.StatusAt >= staleBusyMinAgeMS
 }
 
 // refinedStatus is refineStatus's pure decision logic, split out for testing
@@ -152,25 +173,40 @@ func refineStatus(p *Peer) {
 // Bash-tool shell is alive (verified against CLI 2.1.216) — that says nothing
 // about the input line, so "shell" is refined from the pane content exactly
 // like "unknown" rather than trusted at face value.
-func refinedStatus(current, paneText string) string {
+//
+// overridableBusy is busyOverridable's verdict, and it exists because a lead
+// with resident teammates never flips its session file back to "idle" when
+// its turn ends (measured 2026-08-13, two cells stuck "busy" 1h and 4h30m
+// while sitting at their prompt — a stale "running" that cellActive's point 1
+// then propagates to the board as a cell working forever): such a peer's
+// "running" is trusted only while the pane actually shows a turn in progress.
+func refinedStatus(current, paneText string, overridableBusy bool) string {
 	if containsQuestionMarker(paneText) {
 		return "question"
 	}
+	// The TUI paints a spinner status line for the whole duration of a turn
+	// (see spinnerLineRe); its absence means the claude is at its prompt.
+	// The old pre-2.1.217 "esc to interrupt" substring fallback is
+	// deliberately GONE: the CLI stopped painting the phrase (zero hits
+	// across every busy pane measured on 2.1.231), while a pane merely
+	// MENTIONING it — a grep's command echo, a doc about the TUI — matched
+	// forever, which on the busy-override path below would have pinned a
+	// stale "busy" at "running" indefinitely: the exact wedge this function
+	// exists to break.
+	turnInProgress := spinnerLineRe.MatchString(paneText)
 	if current == "unknown" || current == "shell" {
 		// no session file (teammates), or a background shell muddying the
-		// reported status: the TUI paints a spinner status line for the
-		// whole turn (see spinnerLineRe), so its absence means the claude
-		// is at its prompt.
-		if spinnerLineRe.MatchString(paneText) {
+		// reported status: the pane is the only signal.
+		if turnInProgress {
 			return "running"
 		}
-		// legacy fallback: pre-2.1.217 CLIs painted "esc to interrupt" INSIDE
-		// the spinner parenthetical itself, not as a separate mode — both
-		// signals coexisted in the same line. spinnerLineRe won't match that
-		// older line shape, so this catches it as its own check.
-		if strings.Contains(paneText, "esc to interrupt") {
-			return "running"
-		}
+		return "waiting"
+	}
+	if current == "running" && overridableBusy && !turnInProgress {
+		// at its prompt with a stale session file. Getting this wrong
+		// running->waiting for one poll costs one spurious blocked flap (a
+		// notification and a job-state write) that self-corrects next tick;
+		// trusting the stale file wedges the cell reading "working" forever.
 		return "waiting"
 	}
 	return current
