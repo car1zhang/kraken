@@ -424,32 +424,71 @@ func TestContainsQuestionMarker(t *testing.T) {
 
 func TestRefinedStatus(t *testing.T) {
 	cases := []struct {
-		name    string
-		current string
-		pane    string
-		want    string
+		name            string
+		current         string
+		pane            string
+		overridableBusy bool
+		want            string
 	}{
-		{"shell running", "shell", "some output\nesc to interrupt\n", "running"},
-		{"shell waiting", "shell", "just a normal prompt\n", "waiting"},
-		{"shell question", "shell", "Do you want to proceed?\n ❯ 1. Yes, proceed\n", "question"},
-		{"unknown running", "unknown", "esc to interrupt\n", "running"},
-		{"unknown waiting", "unknown", "plain output\n", "waiting"},
-		{"running unchanged", "running", "plain output\n", "running"},
-		{"waiting becomes question", "waiting", "blah\n ❯ 1. Yes\n", "question"},
-		{"unknown spinner running (2.1.217)", "unknown", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\n", "running"},
-		{"shell spinner running (2.1.217)", "shell", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\n", "running"},
-		{"legacy esc-to-interrupt still running", "unknown", "some output\nesc to interrupt\n", "running"},
-		{"idle prompt no spinner waiting", "unknown", "some prior output\n❯ \n", "waiting"},
-		{"ellipsis-paren without glyph does not match", "unknown", "Loading… (see docs)\n", "waiting"},
-		{"glyph without ellipsis-paren does not match", "unknown", "✢ note\n", "waiting"},
-		{"question wins over spinner", "unknown", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\nDo you want to proceed?\n ❯ 1. Yes\n", "question"},
-		{"middle-dot glyph frame running", "unknown", "· Wibbling… (3s)\n", "running"},
-		{"short no-token spinner frame running", "unknown", "✳ Creating… (27s)\n", "running"},
+		{"shell waiting", "shell", "just a normal prompt\n", false, "waiting"},
+		{"shell question", "shell", "Do you want to proceed?\n ❯ 1. Yes, proceed\n", false, "question"},
+		{"unknown waiting", "unknown", "plain output\n", false, "waiting"},
+		{"waiting becomes question", "waiting", "blah\n ❯ 1. Yes\n", false, "question"},
+		{"unknown spinner running (2.1.217)", "unknown", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\n", false, "running"},
+		{"shell spinner running (2.1.217)", "shell", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\n", false, "running"},
+		{"idle prompt no spinner waiting", "unknown", "some prior output\n❯ \n", false, "waiting"},
+		{"ellipsis-paren without glyph does not match", "unknown", "Loading… (see docs)\n", false, "waiting"},
+		{"glyph without ellipsis-paren does not match", "unknown", "✢ note\n", false, "waiting"},
+		{"question wins over spinner", "unknown", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\nDo you want to proceed?\n ❯ 1. Yes\n", false, "question"},
+		{"middle-dot glyph frame running", "unknown", "· Wibbling… (3s)\n", false, "running"},
+		{"short no-token spinner frame running", "unknown", "✳ Creating… (27s)\n", false, "running"},
+		// "esc to interrupt" is a DEAD signal (the CLI stopped painting it
+		// after 2.1.217) and was a live false positive: a pane merely
+		// mentioning the phrase read as a turn in progress. Prose mentions
+		// must decide nothing, in either direction.
+		{"esc-to-interrupt prose is not a turn", "unknown", "some output\nesc to interrupt\n", false, "waiting"},
+		{"esc-to-interrupt prose cannot pin a stale busy", "running", "grep -n \"esc to interrupt\" internal/core/peer.go\n❯ \n", true, "waiting"},
+		// the stale-"busy" wedge: a lead with resident teammates never flips
+		// its session file back to idle, so an overridable "running" is only
+		// trusted while the pane shows a turn in progress.
+		{"stale busy at idle prompt downgrades", "running", "⏺ main\n◯ hermes-arch  You are hermes… 58m\n❯ \n", true, "waiting"},
+		{"stale busy with empty capture downgrades", "running", "", true, "waiting"},
+		{"busy with spinner stays running", "running", "✢ Wibbling… (1m 7s · ↓ 2.1k tokens)\n", true, "running"},
+		{"busy at question dialog reads question", "running", "Do you want to proceed?\n ❯ 1. Yes\n", true, "question"},
+		{"non-overridable busy not downgraded", "running", "some prior output\n❯ \n", false, "running"},
+		// only "running" is ever overruled: other statuses pass through even
+		// when the peer's busy would be overridable.
+		{"polling never overruled", "polling", "plain output\n", true, "polling"},
+		{"waiting stays waiting when overridable", "waiting", "plain output\n", true, "waiting"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := refinedStatus(c.current, c.pane); got != c.want {
+			if got := refinedStatus(c.current, c.pane, c.overridableBusy); got != c.want {
 				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestBusyOverridable(t *testing.T) {
+	const now = int64(10_000_000)
+	old := now - 2*staleBusyMinAgeMS
+	fresh := now - staleBusyMinAgeMS/3
+	cases := []struct {
+		name string
+		peer *Peer
+		want bool
+	}{
+		{"foreground claude with stale busy", &Peer{Agent: "claude", Depth: 0, StatusAt: old}, true},
+		{"fresh busy transition not overridable", &Peer{Agent: "claude", Depth: 0, StatusAt: fresh}, false},
+		{"zero StatusAt reads as old enough", &Peer{Agent: "claude", Depth: 0}, true},
+		{"nested claude not overridable", &Peer{Agent: "claude", Depth: 1, StatusAt: old}, false},
+		{"codex not overridable", &Peer{Agent: "codex", Depth: 0, StatusAt: old}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := busyOverridable(c.peer, now); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
 	}
