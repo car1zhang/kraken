@@ -273,6 +273,49 @@ describe("band 2 carries counts, not lists", () => {
     expect(card.querySelector(".ct-chip")!.classList.contains("chip")).toBe(false);
   });
 
+  it("renders the stage badge as glyph + name in the skill's own colour class", () => {
+    const { card } = renderCard(job({ state: "working", live: true, stage: "do" }));
+    const st = card.querySelector(".chips .st-chip")!;
+    // exact, not substring: the glyph carries U+FE0E (text presentation) and
+    // the whole text is glyph + space + name, nothing else
+    expect(st.textContent).toBe("⚙︎ do");
+    expect(st.tagName).toBe("SPAN");
+    // the glyph is decoration: hidden from the accessible name, which is the
+    // stage word alone — the same reading the iOS chip's label gives
+    expect(st.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    // the per-stage class is what aliases --skill-do onto the chip
+    expect(st.classList.contains("st-chip-do")).toBe(true);
+    // NOT class=chip — that class is the artifact-overlay click target, and a
+    // chip-classed span would swallow the card's own click.
+    expect(st.classList.contains("chip")).toBe(false);
+    expect(st.getAttribute("title")).toContain("/do");
+  });
+
+  it("renders an unknown stage as its bare name in the base accent look", () => {
+    // a pipeline skill newer than this build: the name is the payload, so it
+    // must render — with no glyph and no per-stage colour class.
+    const { card } = renderCard(job({ state: "working", live: true, stage: "shipit" }));
+    const st = card.querySelector(".chips .st-chip")!;
+    expect(st.textContent).toBe("shipit");
+    expect(st.className).toBe("st-chip");
+  });
+
+  it("treats Object.prototype keys as unknown stages, not glyphs", () => {
+    // the glyph map is a plain object literal: a bare index would answer
+    // truthily for "constructor", putting a function where the glyph goes —
+    // React drops it with a warning, leaving a stray leading space and an
+    // inert st-chip-constructor class
+    const { card } = renderCard(job({ state: "working", live: true, stage: "constructor" }));
+    const st = card.querySelector(".chips .st-chip")!;
+    expect(st.textContent).toBe("constructor");
+    expect(st.className).toBe("st-chip");
+  });
+
+  it("renders no stage badge when the server sent no stage", () => {
+    const { card } = renderCard(job({ state: "working", live: true }));
+    expect(card.querySelector(".st-chip")).toBeNull();
+  });
+
   it("counts feedback with its open half, and never suppresses it on a done job", () => {
     // Unlike a question, a note is never "settled" by the job being done — carl
     // leaves most of them ON done work.

@@ -11,6 +11,7 @@ import { DocQuestionChip, docQuestionChipVisible } from "./chips/DocQuestionChip
 import { FeedbackChip, feedbackChipVisible } from "./chips/FeedbackChip.tsx";
 import { LoadChip, loadChipVisible } from "./chips/LoadChip.tsx";
 import { PRChips } from "./chips/PRChips.tsx";
+import { StageChip, stageChipVisible } from "./chips/StageChip.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
 import { WakeupChip } from "./chips/WakeupChip.tsx";
 import type { BoardActions } from "./BoardView.tsx";
@@ -176,6 +177,7 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
     loadChipVisible(job, col) ||
     !!job.question ||
     !!job.goal ||
+    stageChipVisible(job) ||
     threadChipsVisible(job) ||
     docQuestionChipVisible(job) ||
     artifactCountVisible(job) ||
@@ -323,6 +325,13 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
             withBranch={false}
             compact
           />
+          {/* the stage badge: which pipeline skill zeus last used. Like the
+              goal chip below it is a fact ABOUT the job rather than something
+              the job contains, so it sits with the identity-ish chips — after
+              the thread tokens, before the goal — rather than among the
+              inventory counts. Absent entirely when the server sent no stage
+              (webJob.Stage documents what absence covers). */}
+          <StageChip job={job} />
           {/* the job's goal, ONE chip. It is not a count — like the ROI badge
               it is a fact ABOUT the job rather than something the job contains
               — and it sits AFTER the crew/thread tokens and BEFORE the

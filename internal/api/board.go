@@ -423,6 +423,18 @@ type webJob struct {
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
+	// Stage is the pipeline skill zeus most recently used — one of the six
+	// phase-governing skill names (info, aim, do, pr, dream, graph) — read
+	// off zeus' transcript (jobs.FindStage), never declared by any agent.
+	// Set only where a transcript already resolves (live started cells and
+	// the cell-gone branch, exactly the two branches that read Detail).
+	// Absence covers three states the wire deliberately does not separate —
+	// no resolvable transcript, any failed or truncated scan (FindStage
+	// fails closed), and no pipeline skill used yet — because a client
+	// renders all three the same way (no badge), the same collapse
+	// webJob.load documents for its own key. Additive, so apiContract stays
+	// put.
+	Stage string `json:"stage,omitempty"`
 	// ZeusStatus is zeus' own refined status (running/polling/waiting/
 	// question), distinct from the cell's aggregate state; omitted when zeus
 	// isn't resolvable (fresh fork, no session file yet).
@@ -1014,6 +1026,7 @@ func buildWebBoard() webBoard {
 					wj.Detail = lastAssistantText(transcript)
 					wj.LastSent = lastUserSent(transcript)
 					wj.Question = webQuestionFrom(jobs.FindPendingQuestion(transcript))
+					wj.Stage = jobs.FindStage(transcript)
 					if zeus != nil && zeus.Status == "polling" && zeus.Wakeup != nil {
 						wj.Wakeup = webWakeupFrom(zeus.Wakeup)
 					}
@@ -1039,6 +1052,7 @@ func buildWebBoard() webBoard {
 			if transcript := core.TranscriptPathForSession(j.Session); transcript != "" {
 				wj.Detail = lastAssistantText(transcript)
 				wj.LastSent = lastUserSent(transcript)
+				wj.Stage = jobs.FindStage(transcript)
 			}
 		}
 		wj.Reactivatable = (j.State == "done" || wj.CellGone) && j.Session != ""

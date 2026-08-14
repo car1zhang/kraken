@@ -167,6 +167,7 @@ payload, so a client sees exactly what it has always seen.
 | `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes) |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
 | `zeus_status` | string | omitempty | zeus' own refined status (running/polling/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
+| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the six phase-governing skill names (`info`/`aim`/`do`/`pr`/`dream`/`graph`), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started non-done jobs with a resolvable transcript only (live or `cell_gone`). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
 | `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
 | `roster` | array (`webAgent`) | omitempty | live crew (nested subagents), live started non-done cells only |
 | `health` | string | omitempty | "" (absent) = healthy |

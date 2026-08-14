@@ -362,7 +362,7 @@ body {
    clickables never listed at all, OS hand in both themes. New clickables get
    added HERE, never a local cursor declaration. */
 button, a, [role="button"], summary, label.check,
-.card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip,
+.card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip, .st-chip,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .goal .t,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
@@ -380,7 +380,8 @@ input[type="checkbox"] {
 :root[data-theme="light"] .card.editable, :root[data-theme="light"] .card.archived,
 :root[data-theme="light"] .chip, :root[data-theme="light"] .ct-chip,
 :root[data-theme="light"] .dq-chip, :root[data-theme="light"] .fb-chip,
-:root[data-theme="light"] .ld-chip, :root[data-theme="light"] .thread-chip,
+:root[data-theme="light"] .ld-chip, :root[data-theme="light"] .st-chip,
+:root[data-theme="light"] .thread-chip,
 :root[data-theme="light"] .thread-count,
 :root[data-theme="light"] .branch-btn, :root[data-theme="light"] .colorsel-row,
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
@@ -1399,6 +1400,39 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   transition: border-color 80ms var(--ease), color 80ms var(--ease);
 }
 .card:hover .ct-chip { color: var(--fg); border-color: var(--ac); }
+
+/* the stage badge — which pipeline skill zeus last used (StageChip: `⚙︎ do`,
+   `⑂ pr`, ...). A plain span and deliberately NOT .chip, same fall-through
+   reason as .ct-chip/.dq-chip. Coloured, not muted: the word is the card's
+   one statement of where in the PIPELINE the job is, a fact about the job
+   like the goal chip beside it, and the muted count look would file it among
+   the inventory. Each stage wears its skill's own palette colour via the
+   alias protocol the cmd-chips use, with the fallback folded into the base
+   rule so a new skill really is one alias line — a column of badges then
+   sorts by eye, the argument .ld-chip's bands make. The base rule's own
+   --skill values are the accent fallback for a stage this stylesheet does
+   not know (a pipeline skill newer than this build). */
+.st-chip {
+  --skill: var(--ac); --skill-soft: var(--accent-edge);
+  font: 9px var(--mono);
+  color: var(--skill);
+  border: 1px solid var(--skill-soft);
+  padding: 2px 6px; white-space: nowrap;
+  /* .chips > * makes this chip inline-flex, and its aria-hidden glyph span +
+     the name text are two flex items — the DOM space between them sits at
+     the first item's line end, which CSS text processing removes. The
+     VISIBLE separation is therefore this gap (the row's own 4px rhythm),
+     not the space; the space stays in the DOM for textContent. */
+  gap: 4px;
+  transition: border-color 80ms var(--ease);
+}
+.st-chip-info  { --skill: var(--skill-info);  --skill-soft: var(--skill-info-soft); }
+.st-chip-aim   { --skill: var(--skill-aim);   --skill-soft: var(--skill-aim-soft); }
+.st-chip-do    { --skill: var(--skill-do);    --skill-soft: var(--skill-do-soft); }
+.st-chip-pr    { --skill: var(--skill-pr);    --skill-soft: var(--skill-pr-soft); }
+.st-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); }
+.st-chip-graph { --skill: var(--skill-graph); --skill-soft: var(--skill-graph-soft); }
+.card:hover .st-chip { border-color: var(--skill); }
 
 /* the board's whole question surface: an open-count chip in the card's chip
    row, the questions themselves one click into the job (docQuestionsChipHTML).

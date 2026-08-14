@@ -2167,6 +2167,10 @@ private struct JobCardView: View {
             // isEmpty tests above: the chip draws for any linked goal,
             // including a done one (muted) and one whose text is empty.
             || job.goal != nil
+            // `isEmpty == false` for the zeusStatus reason above: the wire's
+            // omitempty never sends "", but StageChip's own draw condition
+            // guards it anyway, and this row test must be exactly as strict.
+            || job.stage?.isEmpty == false
     }
 
     var body: some View {
@@ -2244,6 +2248,12 @@ private struct JobCardView: View {
                 CardChipFlow {
                     CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
                     ForEach(job.threads ?? [], id: \.tid) { ThreadChip(thread: $0) }
+                    // The stage badge sits with the identity chips too, just
+                    // ahead of the goal — the same slot web's .st-chip takes;
+                    // StageChip's own doc comment carries the rationale.
+                    if let stage = job.stage, !stage.isEmpty {
+                        StageChip(stage: stage)
+                    }
                     // After the crew and the threads, before the counts.
                     // The authority for that position is the approved
                     // mockup (40-ui-mockups.html §3, which draws the goal
@@ -2399,6 +2409,46 @@ private struct CardChipFlow: Layout {
             subviews[index].place(at: CGPoint(x: bounds.minX, y: bounds.minY),
                                   proposal: ProposedViewSize(width: 0, height: 0))
         }
+    }
+}
+
+/// The stage badge: which pipeline skill zeus most recently used
+/// (info/aim/do/pr/dream/graph), read off zeus' transcript server-side —
+/// see `webJob.Stage` (internal/api/board.go) for what absence covers.
+/// Like the goal it is a fact ABOUT the job rather than something it
+/// contains, so the card slots it with the identity chips (after the
+/// threads, before the goal — the slot web's `.st-chip` takes).
+///
+/// Each stage wears its skill's own icon and palette colour (`KTheme.skill*`
+/// — the same six tokens the steer modal's command chips and the DREAM/GRAPH
+/// surfaces wear, mirrored from web's `--skill-*`), so a column of badges
+/// sorts by eye; web's `.st-chip-<stage>` carries the text-glyph sibling of
+/// each symbol and the two lists move together. The graph symbol is the
+/// Graph tab's own. A stage newer than this build falls back to the accent
+/// look with a neutral symbol rather than drawing nothing — a symbol rather
+/// than web's bare-name treatment because `KChip.icon` is non-optional, so
+/// this chip structurally always draws one: the name is the payload, the
+/// icon and colour are decoration.
+private struct StageChip: View {
+    let stage: String
+
+    private var spec: (icon: String, tint: Color) {
+        switch stage {
+        case "info": return ("info.circle", KTheme.skillInfo)
+        case "aim": return ("scope", KTheme.skillAim)
+        case "do": return ("gearshape.fill", KTheme.skillDo)
+        case "pr": return ("arrow.triangle.branch", KTheme.skillPr)
+        case "dream": return ("moon.fill", KTheme.skillDream)
+        case "graph": return ("point.3.connected.trianglepath.dotted", KTheme.skillGraph)
+        default: return ("arrow.triangle.turn.up.right.diamond", KTheme.accent)
+        }
+    }
+
+    var body: some View {
+        let s = spec
+        KChip(icon: s.icon, text: stage, tint: s.tint)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("stage: \(stage)")
     }
 }
 
