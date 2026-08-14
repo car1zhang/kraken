@@ -347,6 +347,11 @@ struct WebJob: Decodable, Identifiable {
     // zeus' own refined status (running/polling/waiting/question), distinct
     // from `state` — absent when zeus isn't resolvable yet.
     let zeusStatus: String?
+    // The pipeline skill zeus most recently used (info/aim/do/pr/dream/
+    // graph), read off zeus' transcript server-side — see webJob.Stage
+    // (internal/api/board.go) for what absence covers. Additive key, no
+    // contract bump.
+    let stage: String?
     // A pending ScheduleWakeup from zeus' transcript — the cell is on a poll
     // timer (mid /loop or /poll-pr-style tick) rather than genuinely idle.
     // Still counts as "working"; the UI renders a countdown chip from it.
@@ -447,6 +452,7 @@ struct WebJob: Decodable, Identifiable {
         case slug, repo, state, err, outcome, cell, live
         case detail, question, wakeup
         case zeusStatus = "zeus_status"
+        case stage
         case roster, artifacts, health, mtime
         case archived
         case displaySlug = "display_slug"

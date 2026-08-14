@@ -290,6 +290,16 @@ export interface WebJob {
   last_sent?: string;
   question?: WebQuestion;
   zeus_status?: ZeusStatus;
+  /**
+   * The pipeline skill zeus most recently used — one of the six
+   * phase-governing skill names (info/aim/do/pr/dream/graph), read off zeus'
+   * transcript server-side. Absent when no transcript resolves or no pipeline
+   * skill has been used yet; the card renders its one stage chip when a
+   * non-empty value is present. Typed as bare string rather than a union: the
+   * server derives the set from its own skills bundle, and a future pipeline
+   * skill must not fail the decode.
+   */
+  stage?: string;
   wakeup?: WebWakeup;
   roster?: WebAgent[];
   /** computed condition on a live cell; "" means healthy */

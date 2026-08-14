@@ -273,10 +273,15 @@ var webJobSpec = map[string]fieldSpec{
 	// map does not name, so their ABSENCE here is the pin. A documented-but-
 	// optional entry for a key nothing emits would let either one return
 	// silently.
-	"artifacts":     {kind: wireArray, required: false},
-	"detail":        {kind: wireString, required: false},
-	"question":      {kind: wireObject, required: false},
-	"zeus_status":   {kind: wireString, required: false},
+	"artifacts":   {kind: wireArray, required: false},
+	"detail":      {kind: wireString, required: false},
+	"question":    {kind: wireObject, required: false},
+	"zeus_status": {kind: wireString, required: false},
+	// the pipeline skill zeus most recently used (info/aim/do/pr/dream/
+	// graph), read off zeus' transcript; started non-done jobs with a
+	// resolvable transcript only, and omitted until a pipeline skill has
+	// actually been used. Additive, no contract bump.
+	"stage":         {kind: wireString, required: false},
 	"wakeup":        {kind: wireObject, required: false},
 	"roster":        {kind: wireArray, required: false},
 	"health":        {kind: wireString, required: false},
@@ -1033,6 +1038,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 			}},
 		},
 		ZeusStatus:    "running",
+		Stage:         "do",
 		Wakeup:        &webWakeup{Reason: "poll PR checks", FiresAt: 1234567890},
 		Roster:        []webAgent{{Name: "hephaestus-x", Model: "sonnet", Role: "hephaestus", Status: "running", Working: true}},
 		Health:        "unhealthy",

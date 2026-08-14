@@ -53,6 +53,39 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 	}
 }
 
+// TestPipelineStageSetMatchesEmbeddedSkills holds jobs.PipelineStages'
+// literal set in lockstep with the embedded bundle, in BOTH directions:
+// every embedded skill except `load` (the reference skill — no phase, so no
+// stage) must count as a stage, and every stage must name an embedded skill.
+// The set is a literal in stage.go because jobs.SkillsFS is nil wherever
+// root's init hasn't run; this test is what makes that duplication safe —
+// adding a pipeline skill to the bundle without teaching the stage badge
+// about it fails the first direction, and a stage lingering after its skill
+// is renamed or dropped (which would keep badging a phase that no longer
+// exists) fails the second.
+func TestPipelineStageSetMatchesEmbeddedSkills(t *testing.T) {
+	entries, err := fs.ReadDir(skillsFS, ".claude/skills")
+	if err != nil {
+		t.Fatalf("read embedded skills root: %v", err)
+	}
+	embedded := map[string]bool{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		embedded[e.Name()] = true
+		want := e.Name() != "load"
+		if got := jobs.IsPipelineStage(e.Name()); got != want {
+			t.Errorf("jobs.IsPipelineStage(%q) = %v, want %v", e.Name(), got, want)
+		}
+	}
+	for _, stage := range jobs.PipelineStages() {
+		if !embedded[stage] {
+			t.Errorf("stage %q names no embedded skill — renamed or dropped from the bundle without updating pipelineStageSet", stage)
+		}
+	}
+}
+
 // TestCrewPathsPinnedToEmbeddedTree guards against the exact failure the
 // reviewer flagged: a rename of an embedded skill asset passes CI (nothing
 // else references the literal path) but silently breaks every doc job, since
