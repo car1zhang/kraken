@@ -445,6 +445,20 @@ actor APIClient {
         )
     }
 
+    // MARK: - goals
+
+    /// Ticks (or unticks) one goal. The only write the phone makes to
+    /// /api/goals: adding, editing and deleting goals are web-only in v1, so
+    /// there is no addGoal/deleteGoal twin here on purpose. The new state
+    /// rides back on the next /api/board poll (`goals`), same as every other
+    /// board write — nothing to echo.
+    func setGoalDone(baseURL: String, id: Int64, done: Bool) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/goals",
+            body: GoalUpdateRequest(id: id, done: done)
+        )
+    }
+
     // MARK: - sessions
 
     // MARK: - unified event log

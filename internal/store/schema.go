@@ -68,7 +68,10 @@ import (
 // Version 22 adds threads.model, the per-thread model carl picks at branch
 // time, which is what lets one side thread ask a cheap question on Haiku while
 // the next reads the whole diff on Opus (see schemaV22 and store/threads.go).
-const schemaVersion = 22
+// Version 23 adds the goals table plus jobs.goal_id: carl's weekly and daily
+// goals, and the one goal a job optionally serves (see schemaV23 and
+// store/goals.go).
+const schemaVersion = 23
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1246,6 +1249,69 @@ const schemaV22 = `
 ALTER TABLE threads ADD COLUMN model TEXT NOT NULL DEFAULT '';
 `
 
+// schemaV23 adds the goals table and jobs.goal_id: carl's weekly and daily
+// goals (store/goals.go), and the one goal a job optionally serves. One
+// brand-new table plus one nullable column, no hook — nothing anywhere
+// records a goal today, so an EMPTY table and a NULL link are exactly right
+// for every pre-existing row, which is schemaV7/V15/V17/V18/V19/V21's
+// situation.
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - scope carries a CHECK rather than living in Go alone, unlike
+//     threads.model (schemaV22): week and day are the two halves of the
+//     feature's whole data model — every reader groups by them, and the
+//     panel, the injected brief block and the period validator all enumerate
+//     exactly these two — so a third value is corruption rather than a menu
+//     entry a later release might add. store.validateGoalScope still refuses
+//     it first, so the CHECK is the backstop, never the error carl reads.
+//   - period is the LOCAL calendar date '2006-01-02': the day itself for a
+//     day goal, the week's MONDAY for a week goal (store.GoalPeriods is the
+//     one place that derives both, and store.validateGoalPeriod is what keeps
+//     a week row off a Tuesday). Stored as TEXT rather than millis because
+//     every read is an equality match against a date string the caller
+//     already has, and a millis column would make "which week is this" a
+//     range query over a timezone.
+//   - parent_id is the day→week nesting, self-referencing this same table,
+//     with ON DELETE SET NULL so deleting a week goal DEGRADES its day
+//     children to unassigned rather than deleting them — carl's call: a day
+//     goal is work he still did, whatever happened to the week goal above it.
+//     A week goal never carries one (store.AddGoal/UpdateGoal refuse it):
+//     SQL cannot express "only when scope = 'day'" without a trigger, so that
+//     half of the rule lives in Go where its refusal can say why.
+//   - goals_scope_period indexes the ONE read every surface makes — list this
+//     scope's goals for this period, in position order — so the trailing
+//     position column is there to serve the ORDER BY, not just the WHERE.
+//   - jobs.goal_id follows schemaV6's feedback.job_id precedent exactly: a
+//     nullable REFERENCES ... ON DELETE SET NULL added by ALTER, which SQLite
+//     allows precisely because its default is NULL. Deleting a goal therefore
+//     unlinks every job pointing at it rather than orphaning a dangling id,
+//     and NULL (Go 0) is the normal "this job serves no particular goal"
+//     state that every job predating this feature is in. It is deliberately
+//     NOT in jobFieldColumns (jobs.go) — a full form or raw save must be
+//     unable to touch it — the same blast-radius rule the four load_* columns
+//     follow, and by the same mechanism: absence from the allowlist. (Colour,
+//     the other one-field route, is NOT this precedent — "color" is in
+//     jobFieldColumns and is protected only by the form no longer sending it.)
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v22.
+const schemaV23 = `
+CREATE TABLE goals (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	scope      TEXT    NOT NULL CHECK(scope IN ('week','day')),
+	period     TEXT    NOT NULL,             -- local calendar date '2006-01-02'; a week goal's is its Monday
+	text       TEXT    NOT NULL,
+	done       INTEGER NOT NULL DEFAULT 0,
+	position   INTEGER NOT NULL DEFAULT 0,   -- order within (scope, period)
+	parent_id  INTEGER NULL REFERENCES goals(id) ON DELETE SET NULL, -- day goal's week goal; NULL = unassigned
+	created_at INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	updated_at INTEGER NOT NULL DEFAULT 0    -- unix millis
+);
+CREATE INDEX goals_scope_period ON goals(scope, period, position);
+ALTER TABLE jobs ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL;
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1316,9 +1382,13 @@ type migrationStep struct {
 // DEFAULT is the whole backfill, and empty is the right answer for every
 // thread branched before carl could pick a model: those threads ran on the
 // job's model: field or core.DefaultModel, which is exactly what an empty
-// value still resolves to; see schemaV22).
+// value still resolves to; see schemaV22);
+// migrations[23] adds the goals table and jobs.goal_id (no hook — a brand-new
+// table has nothing to migrate forward, and a NULL goal_id correctly means
+// "this job serves no particular goal", which is true of every job that
+// predates the feature; see schemaV23).
 // Future schema changes append
-// migrations[23], migrations[24], ... rather than editing an existing
+// migrations[24], migrations[25], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1344,6 +1414,7 @@ var migrations = map[int]migrationStep{
 	20: {sql: schemaV20},
 	21: {sql: schemaV21},
 	22: {sql: schemaV22},
+	23: {sql: schemaV23},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

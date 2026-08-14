@@ -15,7 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
@@ -183,6 +185,13 @@ var webBoardSpec = map[string]fieldSpec{
 	"stale":      {kind: wireBool, required: true},
 	"update":     {kind: wireObject, required: true},
 	"ship_ios":   {kind: wireObject, required: true},
+	// The current local week's and today's goals (goals.go). Required rather
+	// than omitempty: webBoard.Goals is a struct value, so the key always
+	// rides, and a board with no goals written yet answers with two empty
+	// arrays rather than by going silent. Additive — a key ADDED to an
+	// existing shape, which old clients ignore — so it never bumps
+	// apiContract.
+	"goals": {kind: wireObject, required: true},
 }
 
 // webUpdateSpec covers update.go's webUpdate — served both as webBoard's
@@ -300,6 +309,16 @@ var webJobSpec = map[string]fieldSpec{
 	// through undocumented, which is the whole point of transcribing
 	// ios/API.md.
 	"load": {kind: wireObject, required: false},
+	// The goal this job serves (goals.go), omitempty — absent means the job
+	// links none, which is every job until carl labels one and every job
+	// whose goal was deleted (schema v23's ON DELETE SET NULL clears the
+	// link rather than dangling it). Present exactly when the link resolves,
+	// whatever period the goal belongs to and whether or not it is done: the
+	// link is carl's statement about what the job is FOR, so it must keep
+	// rendering after the week rolls over. Additive, so it never bumps
+	// apiContract; listed here because assertShape rejects any key the spec
+	// doesn't document.
+	"goal": {kind: wireObject, required: false},
 }
 
 // webTokensSpec covers board.go's webTokens, webJob's "tokens" object — one
@@ -460,6 +479,284 @@ func TestJobLoadEndpointWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "GET /api/job/load .load", envelope.Load, webJobLoadSpec)
+}
+
+// --- goals: /api/goals, /api/job/goal, and the two additive board keys
+// (goals.go). Two new PATHS plus two ADDED keys on existing shapes, so
+// nothing here bumps apiContract — these specs exist because assertShape
+// rejects any key ios/API.md hasn't documented, which is what makes an
+// addition that skips this file fail the suite rather than slide through
+// undocumented. ---
+
+// webGoalSpec covers one goals row on the wire. parent_id is the ONLY
+// optional key: 0 means "no parent" rather than "goal zero", so it is the one
+// field whose zero value carries no information. Every other key is required
+// even at its zero value — a client reads `done` unconditionally, and an
+// absent false would be indistinguishable from a goal whose done-ness the
+// server declined to state.
+var webGoalSpec = map[string]fieldSpec{
+	"id":        {kind: wireNumber, required: true},
+	"scope":     {kind: wireString, required: true},
+	"period":    {kind: wireString, required: true},
+	"text":      {kind: wireString, required: true},
+	"done":      {kind: wireBool, required: true},
+	"position":  {kind: wireNumber, required: true},
+	"parent_id": {kind: wireNumber, required: false},
+}
+
+// webGoalsSpec covers the two current-period lists — /api/goals' "goals"
+// value and /api/board's top-level "goals" key, one assembly function
+// (currentGoals) serving both. Both arrays are required and NOT nullable:
+// newWebGoals is what guarantees that, and this spec is what would catch a
+// later assembly path that skipped it and served null.
+var webGoalsSpec = map[string]fieldSpec{
+	"week": {kind: wireArray, required: true},
+	"day":  {kind: wireArray, required: true},
+}
+
+// webJobGoalSpec covers the goal a job links, as it rides a job card and
+// /api/goals?slug=. Three keys, all required: the card renders text and
+// strikes it through on done, and the id is what a click addresses. Period
+// and position are deliberately absent — the chip does not render them, and
+// a key no client reads is a key that drifts unnoticed.
+var webJobGoalSpec = map[string]fieldSpec{
+	"id":   {kind: wireNumber, required: true},
+	"text": {kind: wireString, required: true},
+	"done": {kind: wireBool, required: true},
+}
+
+// goalsGetSpec is GET /api/goals' envelope. "goals" always rides; "job_goal"
+// appears only when ?slug= named a job that links a goal — omitted rather
+// than null, unlike GET /api/job/load's explicit null, because this payload's
+// subject is the goals and the slug is a rider on it: the key's presence IS
+// the answer to "does this job serve a goal", with no third state.
+var goalsGetSpec = map[string]fieldSpec{
+	"goals":    {kind: wireObject, required: true},
+	"job_goal": {kind: wireObject, required: false},
+}
+
+// goalsPostRespSpec / jobGoalPostReqSpec / jobGoalPostRespSpec cover the two
+// write routes. Both responses are the shared bare ack — the written state
+// rides back on the next /api/board poll, already the board's single source
+// of truth, exactly as /api/job/color's and /api/job/load's do.
+var goalsPostRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+var jobGoalPostReqSpec = map[string]fieldSpec{
+	"slug":    {kind: wireString, required: true},
+	"goal_id": {kind: wireNumber, required: true},
+}
+
+var jobGoalPostRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+func TestWebGoalWireShape(t *testing.T) {
+	// an unnested week goal: parent_id must be ABSENT, not 0 — that omission
+	// is the whole difference between "unassigned" and "child of goal 0"
+	data, err := json.Marshal(webGoal{
+		ID: 1, Scope: "week", Period: "2026-08-10", Text: "ship goal tracking", Position: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webGoal (week, unnested)", data, webGoalSpec)
+	if bytes.Contains(data, []byte(`"parent_id"`)) {
+		t.Errorf("webGoal with ParentID 0 emitted a parent_id key: %s", data)
+	}
+
+	// a done day goal nested under it: every key present, parent_id included
+	data, err = json.Marshal(webGoal{
+		ID: 2, Scope: "day", Period: "2026-08-13", Text: "land the store slice",
+		Done: true, Position: 3, ParentID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webGoal (day, nested, done)", data, webGoalSpec)
+
+	data, err = json.Marshal(newWebGoals())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webGoals (empty)", data, webGoalsSpec)
+	// the "never null" half of the contract, which assertShape cannot state:
+	// an empty pair must marshal as two empty ARRAYS, not two nulls
+	if got := string(data); got != `{"week":[],"day":[]}` {
+		t.Errorf("newWebGoals() marshaled as %s, want {\"week\":[],\"day\":[]}", got)
+	}
+
+	data, err = json.Marshal(webJobGoal{ID: 1, Text: "ship goal tracking", Done: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webJobGoal", data, webJobGoalSpec)
+
+	reqData, err := json.Marshal(jobGoalReq{Slug: "demo", GoalID: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "jobGoalReq", reqData, jobGoalPostReqSpec)
+}
+
+// TestGoalsEndpointWireShape drives the real handlers for both verbs, so the
+// envelopes above are pinned as SERVED rather than as marshaled structs — the
+// same reason TestJobLoadEndpointWireShape exists beside TestWebJobLoadWireShape.
+func TestGoalsEndpointWireShape(t *testing.T) {
+	st := useTestStore(t)
+	if _, err := st.CreateJob(&store.Job{Slug: "contract-goals"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	week, day := store.GoalPeriods(time.Now())
+
+	// no goals yet: both arrays present and empty, no job_goal key
+	req := httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+	rec := httptest.NewRecorder()
+	goalsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET (no goals): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/goals (no goals)", rec.Body.Bytes(), goalsGetSpec)
+	if got := rec.Body.String(); !strings.Contains(got, `"week":[]`) || !strings.Contains(got, `"day":[]`) {
+		t.Errorf("GET /api/goals with no goals served %s, want empty arrays for both scopes", got)
+	}
+
+	body := mustJSON(t, map[string]any{
+		"op":   "add",
+		"goal": map[string]any{"scope": "week", "text": "ship goal tracking"},
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/goals", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	goalsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST add: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/goals (add)", rec.Body.Bytes(), goalsPostRespSpec)
+
+	weekGoals, err := st.ListGoals("week", week)
+	if err != nil || len(weekGoals) != 1 {
+		t.Fatalf("ListGoals(week, %s) = %v, %v; want exactly one row", week, weekGoals, err)
+	}
+	parentID := weekGoals[0].ID
+
+	body = mustJSON(t, map[string]any{
+		"op":   "add",
+		"goal": map[string]any{"scope": "day", "text": "land the store slice", "parent_id": parentID},
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/goals", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	goalsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST add (day): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	dayGoals, err := st.ListGoals("day", day)
+	if err != nil || len(dayGoals) != 1 {
+		t.Fatalf("ListGoals(day, %s) = %v, %v; want exactly one row", day, dayGoals, err)
+	}
+
+	// populated: the envelope's arrays now hold real items, each of which must
+	// itself match webGoalSpec — the envelope spec only says "array"
+	req = httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+	rec = httptest.NewRecorder()
+	goalsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET (populated): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/goals (populated)", rec.Body.Bytes(), goalsGetSpec)
+	var envelope struct {
+		Goals struct {
+			Week []json.RawMessage `json:"week"`
+			Day  []json.RawMessage `json:"day"`
+		} `json:"goals"`
+		JobGoal json.RawMessage `json:"job_goal"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Goals.Week) != 1 || len(envelope.Goals.Day) != 1 {
+		t.Fatalf("GET /api/goals served %d week / %d day goals, want 1 each", len(envelope.Goals.Week), len(envelope.Goals.Day))
+	}
+	assertShape(t, "GET /api/goals .goals.week[0]", envelope.Goals.Week[0], webGoalSpec)
+	assertShape(t, "GET /api/goals .goals.day[0]", envelope.Goals.Day[0], webGoalSpec)
+	if envelope.JobGoal != nil {
+		t.Errorf("GET /api/goals without ?slug= served a job_goal key: %s", envelope.JobGoal)
+	}
+
+	// ?slug= on an unlinked job: still no job_goal key
+	req = httptest.NewRequest(http.MethodGet, "/api/goals?slug=contract-goals", nil)
+	rec = httptest.NewRecorder()
+	goalsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET ?slug= (unlinked): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/goals?slug= (unlinked)", rec.Body.Bytes(), goalsGetSpec)
+
+	body = mustJSON(t, map[string]any{"slug": "contract-goals", "goal_id": dayGoals[0].ID})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/goal", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	jobGoalHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/job/goal: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/job/goal", rec.Body.Bytes(), jobGoalPostRespSpec)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/goals?slug=contract-goals", nil)
+	rec = httptest.NewRecorder()
+	goalsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET ?slug= (linked): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/goals?slug= (linked)", rec.Body.Bytes(), goalsGetSpec)
+	envelope.JobGoal = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.JobGoal == nil {
+		t.Fatalf("GET /api/goals?slug= on a linked job served no job_goal key: %s", rec.Body.String())
+	}
+	assertShape(t, "GET /api/goals .job_goal", envelope.JobGoal, webJobGoalSpec)
+
+	// A goal from a PAST period, linked and done: still named. This is the
+	// case the whole any-period rule exists for — a job keeps serving the goal
+	// carl picked for it after the week rolls over — and it is the one a
+	// current-periods-only resolution answers wrongly rather than not at all,
+	// which is why it is pinned here rather than left to the two lists above.
+	oldWeek, _ := store.GoalPeriods(time.Now().AddDate(0, 0, -14))
+	stale, err := st.AddGoal(store.GoalAdd{Scope: "week", Period: oldWeek, Text: "last fortnight's goal"}, 1000)
+	if err != nil {
+		t.Fatalf("AddGoal (past week): %v", err)
+	}
+	done := true
+	if err := st.UpdateGoal(stale.ID, store.GoalUpdate{Done: &done}, 1001); err != nil {
+		t.Fatalf("UpdateGoal (done): %v", err)
+	}
+	body = mustJSON(t, map[string]any{"slug": "contract-goals", "goal_id": stale.ID})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/goal", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	jobGoalHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/job/goal (past-period goal): status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/goals?slug=contract-goals", nil)
+	rec = httptest.NewRecorder()
+	goalsHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET ?slug= (past-period link): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var linked struct {
+		JobGoal *webJobGoal `json:"job_goal"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &linked); err != nil {
+		t.Fatal(err)
+	}
+	if linked.JobGoal == nil {
+		t.Fatalf("a job linked to a past-period goal served no job_goal key: %s", rec.Body.String())
+	}
+	if linked.JobGoal.ID != stale.ID || linked.JobGoal.Text != "last fortnight's goal" || !linked.JobGoal.Done {
+		t.Errorf("job_goal = %+v, want the done past-period goal %d", *linked.JobGoal, stale.ID)
+	}
 }
 
 // --- Slack intake bot: /api/slack/inbox, /api/slack/ack, /api/slack/status
@@ -685,6 +982,10 @@ func TestWebBoardWireShape(t *testing.T) {
 		Daemon:   jobs.DaemonStatus{PID: 1, StartedAt: 2, LastTick: 3, Cells: 4},
 		Jobs:     []webJob{},
 		Contract: apiContract,
+		// newWebGoals rather than the zero value: buildWebBoard always assembles
+		// through currentGoals, so an empty board's goals are two empty ARRAYS,
+		// and a fixture built from the zero value would document two nulls.
+		Goals: newWebGoals(),
 	}
 	data, err := json.Marshal(board)
 	if err != nil {
@@ -751,6 +1052,7 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 			ZeusIn: 41203, ZeusOut: 4877411, ZeusCacheWrite: 30119448, ZeusCacheRead: 901883714,
 		},
 		Load: &webJobLoad{Unblock: 2, Scope: 8, Note: "one decision: which store keys the row", At: 1769040000000},
+		Goal: &webJobGoal{ID: 3, Text: "ship goal tracking", Done: false},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -2501,14 +2803,20 @@ var graphSearchRespSpec = map[string]fieldSpec{
 // graphRecallReqSpec / graphRecallRespSpec cover POST /api/graph/recall
 // (recall.go). Every request key is required rather than omitempty:
 // jobs.RecallRequest carries no omitempty tags, and the shape's only caller is
-// `kraken recall-hook`, which fills all four from one hook payload — a key
-// that vanished when the hook had no prompt would make "no prompt" and "field
-// removed from the payload schema" the same wire fact.
+// `kraken recall-hook`, which fills all five from one hook payload plus its own
+// argv — a key that vanished when the hook had no prompt would make "no prompt"
+// and "field removed from the payload schema" the same wire fact.
+//
+// "slug" is the cell's job slug, and it is required-but-often-empty for exactly
+// that reason: a worktree whose settings.json predates the argument sends `""`,
+// which recall reads as "fall back to the session match" — a distinction that
+// only survives if the key is always on the wire.
 var graphRecallReqSpec = map[string]fieldSpec{
 	"session_id":      {kind: wireString, required: true},
 	"event":           {kind: wireString, required: true},
 	"prompt":          {kind: wireString, required: true},
 	"transcript_path": {kind: wireString, required: true},
+	"slug":            {kind: wireString, required: true},
 }
 
 // graphRecallRespSpec. One key, always present, and `""` is its most common

@@ -43,6 +43,7 @@ import { codeRefTarget } from "../../lib/codeRefs.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
+import { GoalChip } from "../board/GoalsPanel.tsx";
 import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
@@ -701,6 +702,14 @@ function SteerBody({
             can be recoloured. It rides no mode check (recolouring is valid in
             steer, unblock and reactivate alike) and touches nothing else: a
             pick POSTs the colour and never sends a steer message. */}
+        {/* the job's goal, the same chip the card carries. It has to be HERE
+            for the colour picker's reason: a live working/blocked card opens
+            THIS modal and never the editor, so without this copy the one
+            surface that says what a running job is working towards would be
+            unreachable for exactly the jobs that are running. Read-only —
+            the picker that CHANGES the link lives in the editor, on its own
+            ungated route; this is a statement, not a control. */}
+        {job?.goal ? <GoalChip goal={job.goal} /> : null}
         <ColorPicker slug={jobSlug} color={job?.color} mutate={mutate} />
         <RenameButton id="steer-rename" state={rename} visible={showRename} />
         <span className="spacer"></span>

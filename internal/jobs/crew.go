@@ -216,6 +216,15 @@ func zeusBrief(j *Job) string {
 	// The one block of facts a skill genuinely cannot derive. Every skill
 	// below writes "<cellDir>/artifacts" and "<cellDir>/doc/fragments" in the
 	// abstract; this is where those resolve, stated once instead of ~15 times.
+	// A goals sentence was specced for this block — one line naming `kraken
+	// goals get <slug>` as the re-readable pull channel — and it is NOT here,
+	// because the headroom TestZeusBriefStaysLean reports is far smaller than
+	// the shortest honest sentence. (Run that test and read its log line for
+	// the current number; never quote one from prose, which is that test's own
+	// standing rule.) The channel is not lost: goalctx.go's block header names
+	// the same verb and is staged with this brief on every spawn, so the verb
+	// reaches zeus exactly when there are goals to pull, which is the only time
+	// it is worth anything. Re-adding it here means finding the bytes first.
 	fmt.Fprintf(&b, "Cell paths — the skills describe the artifact set in terms of these, and this brief is the only place their real values appear. SET ROOT (your artifacts dir): %s. Diagram fragments stage in: %s. The job slug every `kraken` CLI verb takes is: %s.\n",
 		CellArtifacts(j), docFragmentsDir(j), j.Slug)
 	// PRs are the one carve-out from the link-artifact rule (carl's call): the

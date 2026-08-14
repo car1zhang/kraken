@@ -73,6 +73,20 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/graph/add", mirrorGated(graphAddHandler))
 	mux.HandleFunc("/api/graph/episode-done", mirrorGated(graphEpisodeDoneHandler))
 	mux.HandleFunc("/api/questions", questionsHandler)
+	// Goals (goals.go). Two exact patterns, so neither shadows the other and
+	// neither is a subtree — the same property that lets "/api/job/raw" and
+	// "/api/job/load" coexist below. /api/goals gates its POST inline so the
+	// GET stays reachable under --mirror (a read is a read, and the phone's
+	// drawer plus `kraken goals get` are both reads); /api/job/goal is
+	// POST-only and gates itself inline too, so a caller reaching the handler
+	// directly still hits the refusal.
+	mux.HandleFunc("/api/goals", goalsHandler)
+	// The job→goal link is a one-field route for the reason /api/job/color
+	// and /api/job/load are (jobcolor.go, jobload.go): the form save's
+	// editableJob gate would put labelling out of reach on exactly the live
+	// cells it is most useful on, and a full form save from a client that
+	// predates the field would clear it.
+	mux.HandleFunc("/api/job/goal", jobGoalHandler)
 	mux.HandleFunc("/api/threads", threadsHandler)
 	mux.HandleFunc("/api/thread/read", threadReadHandler)
 	mux.HandleFunc("/api/retry", webAction("retry", webRetry))

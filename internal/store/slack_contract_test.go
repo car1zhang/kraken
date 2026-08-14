@@ -245,6 +245,11 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// jobs.ready and the prereqs table, both of which a genuine v16 database
 	// had and this fresh one no longer does.
 	for _, stmt := range []string{
+		// v23 adds BOTH: the goals table and jobs.goal_id. The column goes
+		// first because it carries the REFERENCES clause onto the table being
+		// dropped right after it.
+		`ALTER TABLE jobs DROP COLUMN goal_id`,
+		`DROP TABLE IF EXISTS goals`,
 		// v22 adds a COLUMN rather than a table, so its reversal is a DROP
 		// COLUMN — a leftover threads.model fails that step's ALTER exactly
 		// the way a leftover table fails a bare CREATE.

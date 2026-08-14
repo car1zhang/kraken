@@ -41,6 +41,15 @@ var mirrorGatedRoutes = []string{
 	// route's own gate wraps only the /color it types into a live pane, not
 	// its write.
 	"/api/job/load",
+	// goals: the same inline gate on both routes (goals.go). /api/goals gates
+	// inline because its GET must stay reachable — the phone's drawer and
+	// `kraken goals get` are both reads, and a mirror refusing a read would be
+	// a new policy rather than this one. /api/job/goal is POST-only and could
+	// have taken a mirrorGated wrapper at registration like /api/graph/add,
+	// but gates inline anyway so a caller reaching the handler directly still
+	// hits the refusal. Both are here because a mirror board must never write
+	// the live deployment's goals or relabel its jobs.
+	"/api/goals", "/api/job/goal",
 	// job rename: the same inline gate (jobrename.go), and it rides this table
 	// rather than needing a bespoke test because the gate sits ahead of the body
 	// decode — mirror ON gives the shared 403, mirror OFF falls through to the

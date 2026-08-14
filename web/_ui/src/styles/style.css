@@ -364,6 +364,7 @@ body {
 button, a, [role="button"], summary, label.check,
 .card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
+.goal .t,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
 .panel-body.md code.code-ref, .steer-detail code.code-ref, .steer-spec-body code.code-ref,
 .panel-body.md code.artifact-ref, .steer-detail code.artifact-ref, .steer-spec-body code.artifact-ref,
@@ -383,6 +384,7 @@ input[type="checkbox"] {
 :root[data-theme="light"] .thread-count,
 :root[data-theme="light"] .branch-btn, :root[data-theme="light"] .colorsel-row,
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
+:root[data-theme="light"] .goal .t,
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
 :root[data-theme="light"] #thread-panehead,
 :root[data-theme="light"] .panel-body.md code.code-ref,
@@ -2871,3 +2873,157 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 #thread-text:hover { border-color: var(--ac); }
 #thread-text:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
 #thread-text::placeholder { color: var(--muted); opacity: 1; }
+
+/* ---- GOALS panel (mockup 40, sections 1 and 2) ------------------------
+   A persistent box pinned to the board's BOTTOM-RIGHT corner, collapsible to
+   a one-line pill, default expanded. `fixed`, not `absolute`: it stays put
+   while the board scrolls, which is the whole point — and being out of the
+   column grid's flow it can never reflow the columns.
+
+   z-index 6 is the load-bearing number. The overlays sit at 20/25/30 and the
+   toast at 40, so an open modal covers this panel rather than the panel
+   chipping a corner out of every drilldown; .board sits at 3, so the panel
+   still floats over the columns. Do not raise it past 10 (body::after's edge
+   strip) without re-reading the z-index block near the top of this sheet. */
+.goals-dock { position: fixed; right: 14px; bottom: 14px; z-index: 6; }
+.goals-panel {
+  /* 330px is the design width; the min() is the floor a fixed box anchored to
+     the right edge needs — at a viewport under ~345px a flat 330px would push
+     the panel's left edge past 0 and take the columns' horizontal scroll with
+     it. The 28px is 14px twice over: the dock's own `right` inset, plus a
+     matching gutter this min() reserves on the left, which nothing else
+     declares. */
+  width: min(330px, calc(100vw - 28px));
+  background: color-mix(in srgb, var(--ac) 7%, var(--b1));
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ac) 25%, transparent);
+  /* the kit's sheared corner — this sheet has no radii anywhere */
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+}
+/* collapsed: the same corner, one line of it — and the SAME cut, so
+   expanding and collapsing changes the box's size and nothing about its
+   silhouette */
+.goals-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  background: color-mix(in srgb, var(--ac) 7%, var(--b1));
+  border: 1px solid var(--border-strong);
+  color: var(--muted); font: 600 9px var(--display); letter-spacing: 0.16em;
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+  transition: color 80ms var(--ease), border-color 80ms var(--ease);
+}
+.goals-pill:hover { color: var(--fg); border-color: var(--ac); }
+.goals-pill .n { font: 9px var(--mono); letter-spacing: 0.06em; }
+/* the head IS the collapse control, same shape as .archive-head's */
+.gs-head {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left;
+  padding: 5px 12px;
+  background: color-mix(in srgb, var(--ac) 5%, var(--b1));
+  border: none; border-left: 3px solid var(--tint);
+  color: var(--muted); font: 600 10px var(--display); letter-spacing: 0.2em;
+  transition: color 80ms var(--ease);
+}
+.gs-head:hover { color: var(--fg); }
+.gs-head .tri, .goals-pill .tri { font-size: 8px; letter-spacing: 0; }
+.gs-head .n { margin-left: auto; font: 9px var(--mono); letter-spacing: 0.06em; }
+/* the list scrolls INSIDE the panel — a long week must not push the panel off
+   the top of the viewport. The sheet's global thin/trackless scrollbar rules
+   dress the bar. */
+.gs-body { padding: 8px 12px 12px; max-height: 46vh; overflow-y: auto; }
+.lane-h {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 0 6px;
+  font: 600 9px var(--display); letter-spacing: 0.2em; color: var(--tint);
+  text-transform: uppercase;
+}
+.goal-group + .lane-h, .goal + .lane-h { margin-top: 6px; }
+.lane-h .sub {
+  font: 8.5px var(--mono); color: var(--muted);
+  letter-spacing: 0.04em; text-transform: none;
+}
+.goal {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 0;
+  font: 10px var(--mono); color: var(--body);
+}
+.goal.sub { padding-left: 22px; }
+.goal .arr, .goal-add .arr { color: var(--muted); opacity: 0.8; }
+/* the done box: a square, drawn by hand because the native control is a
+   rounded platform widget and this sheet has no radii */
+.goal .cb {
+  appearance: none; -webkit-appearance: none;
+  width: 10px; height: 10px; flex: none; margin: 0; position: relative;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  transition: border-color 80ms var(--ease);
+}
+.goal .cb:hover { border-color: var(--ac); }
+.goal .cb:checked {
+  background: color-mix(in srgb, var(--ok) 30%, var(--b1));
+  border-color: var(--ok);
+}
+.goal .cb:checked::after {
+  content: "✓"; position: absolute; inset: -3px 0 0 1px;
+  color: var(--ok); font: 9px var(--mono);
+}
+.goal .t {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.goal .t:hover { color: var(--fg); }
+/* done stays VISIBLE and struck through for the rest of its period — the
+   week's ticked-off work is most of what the panel is for */
+.goal.done .t { text-decoration: line-through; color: var(--muted); }
+/* the delete is a hover affordance: present in the DOM always (so it is
+   reachable by keyboard) and invisible until the row is under the pointer */
+.goal .x {
+  margin-left: auto; flex: none;
+  background: none; border: 0; padding: 0 2px;
+  color: var(--muted); font: 9px var(--mono);
+  opacity: 0; transition: opacity 80ms var(--ease), color 80ms var(--ease);
+}
+.goal:hover .x, .goal .x:focus-visible { opacity: 0.6; }
+.goal .x:hover { opacity: 1; color: var(--counter); }
+/* the inline editor, and the add rows' bare inputs — one skin, since both are
+   "type a goal here": no chrome until focus, so the panel reads as a list
+   rather than as a form */
+.goal-edit, .goal-add .t {
+  flex: 1; min-width: 0;
+  background: transparent; color: var(--fg);
+  border: 1px solid transparent; padding: 1px 4px;
+  font: 10px var(--mono);
+}
+.goal-add .t { color: var(--muted); }
+.goal-edit:focus, .goal-add .t:focus {
+  outline: none; border-color: var(--ac); background: var(--b1); color: var(--fg);
+}
+.goal-add .t::placeholder { color: var(--muted); opacity: 1; }
+.goal-add {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 0;
+  font: 10px var(--mono); color: var(--muted);
+  opacity: 0.7; transition: opacity 80ms var(--ease);
+}
+.goal-add:hover, .goal-add:focus-within { opacity: 1; }
+.goal-add.sub { padding-left: 22px; }
+.goal-add .plus { color: var(--ac); flex: none; }
+.gs-empty { padding: 4px 0 2px; font: 9.5px var(--mono); color: var(--muted); opacity: 0.8; }
+
+/* the goal chip — the job card's band 2 and the steer modal's head. A plain
+   span rather than a .chip (it must fall through to the card's own click),
+   tinted with --tint so it reads as identity-adjacent rather than as an
+   alert, and capped in width because band 2 is a counts row that a long goal
+   would otherwise own. */
+.goal-chip {
+  display: inline-block; max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 9px var(--mono);
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 8%, var(--b1));
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
+  padding: 2px 6px;
+}
+/* a done goal is still the job's goal — muted, never hidden */
+.goal-chip.done { color: var(--muted); border-color: var(--border-strong); background: transparent; }
+.panel-head .goal-chip { flex: none; }

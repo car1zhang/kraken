@@ -57,9 +57,20 @@ func contractThreadColumnValue(t *testing.T, s *Store, jobID int64, tid, column 
 // walks from the database's user_version up to schemaVersion and stops, so
 // migrations[22] with schemaVersion still 21 is dead code that no fresh
 // open and no upgrade ever executes — and the column would simply not exist.
+//
+// It used to pin schemaVersion == 22 outright, which was true only while v22
+// was the newest step — v23 (the goals table) broke this test while breaking
+// nothing about threads.model. Converted to the >= form recall's own version
+// pin already carries (recall_contract_test.go's
+// TestContractRecallSchemaVersionIs19 owns that reasoning in full): what the
+// contract asks for is that the model column's migration IS step 22 and that
+// the step is REACHABLE, not that nothing may ever be appended after it.
 func TestContractSchemaVersionIsV22(t *testing.T) {
-	if schemaVersion != 22 {
-		t.Fatalf("schemaVersion = %d, want 22", schemaVersion)
+	if migrations[22].sql != schemaV22 {
+		t.Fatalf("migrations[22] is not schemaV22 (contract: threads.model arrives at v22)")
+	}
+	if schemaVersion < 22 {
+		t.Fatalf("schemaVersion = %d, want at least 22 (threads.model's migration must be reachable)", schemaVersion)
 	}
 }
 
@@ -124,6 +135,19 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 	s := openTest(t)
 	jobID := seedThreadJob(t, s, "legacy-model")
 
+	// v23 (the goals table plus jobs.goal_id) landed on top of v22 after this
+	// test was written, so reaching a v21 shape now means reversing it too —
+	// otherwise migrate() replays step 23 over a database that still has both
+	// and fails on the bare CREATE. The column goes first: it carries the
+	// REFERENCES clause onto the table dropped right after it.
+	for _, stmt := range []string{
+		`ALTER TABLE jobs DROP COLUMN goal_id`,
+		`DROP TABLE goals`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("reverse v23 (%q): %v", stmt, err)
+		}
+	}
 	if _, err := s.db.Exec(`ALTER TABLE threads DROP COLUMN model`); err != nil {
 		t.Fatalf("reverse v22 (drop threads.model): %v", err)
 	}

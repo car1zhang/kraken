@@ -1047,6 +1047,19 @@ struct BoardView: View {
             contractBanner
             columnChipBar
             columnCarousel
+            // The goals drawer sits at the foot of the board, under the
+            // columns rather than over them: web puts its panel in the
+            // viewport's bottom-right corner because a desktop board has
+            // dead space there, and a phone has none — an overlay would
+            // cover the very cards the drawer is meant to sit beside.
+            // Everything else about it mirrors that panel (same nesting,
+            // same counts, same collapsed pill, persisted collapse state),
+            // minus the CRUD, which is web-only in v1. It draws nothing at
+            // all on a server with no goals, so a board that never uses the
+            // feature is untouched.
+            GoalsDrawer(goals: vm.board?.goals) {
+                await vm.refresh(baseURL: serverURL)
+            }
         }
         .padding(.top, 4)
         // `.ignoresSafeArea()` on the BACKGROUND only, never on the content:
@@ -2150,6 +2163,10 @@ private struct JobCardView: View {
         job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty
             || !(job.threads ?? []).isEmpty || !openQuestions.isEmpty
             || !(job.artifacts ?? []).isEmpty || !(job.feedback ?? []).isEmpty
+            // `!= nil` IS GoalChip's own draw condition here, unlike the
+            // isEmpty tests above: the chip draws for any linked goal,
+            // including a done one (muted) and one whose text is empty.
+            || job.goal != nil
     }
 
     var body: some View {
@@ -2227,6 +2244,20 @@ private struct JobCardView: View {
                 CardChipFlow {
                     CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
                     ForEach(job.threads ?? [], id: \.tid) { ThreadChip(thread: $0) }
+                    // After the crew and the threads, before the counts.
+                    // The authority for that position is the approved
+                    // mockup (40-ui-mockups.html §3, which draws the goal
+                    // between `⚒︎ 2/3` and the counts — only the goal's slot
+                    // is taken from it; this card's counts keep the order
+                    // they already had), not the web card as it stands —
+                    // web is being moved to this same order in this round,
+                    // so citing it would be citing a sibling mid-change.
+                    // The reason behind the mockup's order: the goal says
+                    // what this job is FOR, which reads with the identity
+                    // chips rather than among the inventory counts.
+                    if let goal = job.goal {
+                        GoalChip(goal: goal)
+                    }
                     DocQuestionCountChip(open: openQuestions)
                     ArtifactCountChip(count: (job.artifacts ?? []).count)
                     FeedbackCountChip(feedback: job.feedback ?? [])

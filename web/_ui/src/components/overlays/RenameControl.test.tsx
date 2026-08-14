@@ -56,6 +56,10 @@ vi.mock("../../api/client.ts", () => ({
   editFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   deleteFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   setJobColor: vi.fn(() => Promise.resolve({ ok: true })),
+  // see the same pair in EditorOverlay.test.tsx: this factory is exhaustive,
+  // and the editor's goal picker calls both of these on mount / on pick.
+  fetchGoals: vi.fn(() => Promise.resolve({ goals: { week: [], day: [] } })),
+  postJobGoal: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 
 import { renameJob, saveJobForm } from "../../api/client.ts";

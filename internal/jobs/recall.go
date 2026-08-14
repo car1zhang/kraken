@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,11 +58,21 @@ import (
 // of the graph, they just differ in where the query text comes from: the new
 // prompt vs the transcript's last assistant text), but a payload that cannot
 // say which hook produced it is one nobody can debug from a log.
+//
+// Slug is the CELL's job slug, baked into the hook command at install time
+// (cell.go's recallHookCommand). It is not the graph's key — that is still the
+// session — but it is the only key the GOALS block can use: a cell's teammates
+// and side threads fire this hook with sessions the job row has never heard
+// of, and the goal a cell was pointed at is a property of the job, not of
+// whichever conversation happens to be asking. EMPTY IS LEGAL and stays legal:
+// a worktree whose settings.json predates this argument sends nothing here,
+// and recall falls back to matching the session against the job row.
 type RecallRequest struct {
 	SessionID      string `json:"session_id"`
 	Event          string `json:"event"`
 	Prompt         string `json:"prompt"`
 	TranscriptPath string `json:"transcript_path"`
+	Slug           string `json:"slug"`
 }
 
 // Recall returns the block to inject for one hook firing, or "".
@@ -94,7 +106,11 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	if query == "" {
 		query = strings.TrimSpace(core.LastAssistantText(req.TranscriptPath))
 	}
-	if query == "" {
+	if query == "" && !recallEmitsGoals(req) {
+		// No query and no goals to consider is nothing to do, and this is the
+		// one refusal cheap enough to make BEFORE the lock — which matters,
+		// because it is the PostToolUse path and the lock it would otherwise
+		// take can be held across a slow embed.
 		return ""
 	}
 	// One firing per session at a time, from here through the mark. With
@@ -118,6 +134,57 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	if ctx.Err() != nil {
 		return ""
 	}
+	// --- the goals half, decided BEFORE the same-query short-circuit ---
+	//
+	// The order is the whole point. The graph's short-circuit asks "is this the
+	// same QUERY", and carl editing a goal changes neither the prompt nor the
+	// assistant's last text — so a goals block decided after it would be
+	// withheld for exactly as long as the conversation stayed on one subject,
+	// which is when a changed goal matters most.
+	//
+	// It is also entirely outside kg_recall: goals are STATE, not facts. A fact
+	// is delivered once because it does not change; a goals block is delivered
+	// again every time it differs from the last one this session saw, which is
+	// what the per-session fingerprint below tracks. Nothing here reads
+	// RecalledEdgeIDs or writes MarkRecalled.
+	//
+	// The fingerprint is of the CURRENT RENDERED STATE, including the empty
+	// one, and that is the whole subtlety. Recording only non-empty blocks made
+	// "carl deleted every goal" invisible to the suppressor: the session's last
+	// recorded fingerprint stayed the deleted block's, so restoring those goals
+	// rendered something that matched it and was suppressed FOREVER — the one
+	// state change the feature exists to deliver. Empty is a state like any
+	// other; it just has nothing to inject.
+	goalsState, decided := recallGoalsState(st, req)
+	goals := goalsState
+	fingerprint := goalsFingerprint(goalsState)
+	if fingerprint == state.lastGoals {
+		goals = "" // this session has already seen exactly this state
+	}
+	// commit prefixes the goals block onto whatever the graph half produced and
+	// records the state this session has now seen.
+	//
+	// Guarded on ctx for the reason MarkRecalled is: the caller is a hook that
+	// gives up at recallHookTimeout while the embedder below has a budget an
+	// order of magnitude longer, so a return value from a late path may reach
+	// nobody. Recording a state that was never injected would suppress it until
+	// carl's NEXT edit — the delivery lost silently, exactly the failure the
+	// skip-set guard prevents on the graph side.
+	//
+	// `decided` is false when the goals decision did not run at all — a
+	// PostToolUse firing, or a job that did not resolve — and then nothing is
+	// recorded: the empty string those paths return is "not asked", not "no
+	// goals", and conflating them would re-deliver the block on every prompt
+	// that follows a tool call.
+	commit := func(graphBlock string) string {
+		if decided && ctx.Err() == nil {
+			state.lastGoals = fingerprint
+		}
+		return goals + graphBlock
+	}
+	if query == "" {
+		return commit("")
+	}
 	// Within one assistant message, every PostToolUse firing after the first
 	// carries the SAME LastAssistantText — so a query byte-identical to the
 	// last one this session completed is answered without touching the store,
@@ -130,7 +197,7 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	// seam collapses the two (see the comment at the graphFacts call below);
 	// kg_recall still owns correctness if this process restarts.
 	if query == state.lastQuery {
-		return ""
+		return commit("")
 	}
 	// Fail CLOSED: not knowing what this session has already been told is not
 	// a reason to inject anyway. Read before retrieval so the refusal does not
@@ -138,7 +205,7 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	// deliberately does not arm the short-circuit: the next firing retries.)
 	skip, err := st.RecalledEdgeIDs(sessionID)
 	if err != nil {
-		return ""
+		return commit("")
 	}
 
 	// Unlike the spawn path there is no cached vector to read — the query is a
@@ -181,13 +248,13 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	edges, anchors := graphFacts(st, vec, query)
 	if len(edges) == 0 {
 		state.lastQuery = query
-		return ""
+		return commit("")
 	}
 	kept := keepRelevantFacts(edges, vec, core.ContentTerms(query), skip, anchors)
 	block, rendered := renderGraphBlock(kept)
 	if block == "" {
 		state.lastQuery = query
-		return ""
+		return commit("")
 	}
 
 	// The caller is a hook that gives up at recallHookTimeout (4s) while the
@@ -214,18 +281,119 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	// this one) the skipped fact is ranked against a smaller field, and the
 	// cap it lost to is being spent on fewer competitors each time.
 	if err := st.MarkRecalled(sessionID, rendered, time.Now().UnixMilli()); err != nil {
-		return ""
+		return commit("")
 	}
 	state.lastQuery = query
-	return block
+	return commit(block)
+}
+
+// recallEmitsGoals reports whether this firing is one the goals block may ride
+// on at all: UserPromptSubmit and nothing else.
+//
+// The narrowing is deliberate and it is about frequency, not about capability.
+// PostToolUse fires on EVERY tool call, and the goals block would be silent on
+// almost all of them (the fingerprint below suppresses an unchanged block), but
+// the ones it did fire on would land mid-tool-loop — carl's week arriving
+// between a Read and an Edit. UserPromptSubmit lands where an instruction
+// belongs: at the top of a turn, in front of the agent's own thinking.
+func recallEmitsGoals(req RecallRequest) bool {
+	return req.Event == "UserPromptSubmit"
+}
+
+// recallGoalsState renders the goals block for one firing, plus whether the
+// goals decision RAN at all.
+//
+// The second return is what separates "carl has no goals" (block "", decided
+// true — a real state the suppressor must record) from "this firing was never
+// going to carry goals" (block "", decided false — a PostToolUse firing, or a
+// job neither the slug nor the session resolved). Both look identical from the
+// block alone, and recording the second as the first is what would re-deliver
+// an unchanged block after every tool call.
+//
+// The job is resolved by SLUG first — current name, then former names, since a
+// rename moves neither the cell's installed hook command nor the worktree it
+// fires from — and only then by session, which is the pre-slug fallback for a
+// settings.json written before recallHookCommand carried one. Slug first
+// rather than session first because it is the answer that works for a cell's
+// TEAMMATES and side threads: their sessions appear on no job row, and they are
+// working on the same job with the same goal.
+//
+// A store failure inside the render is ("", true): no read is worth a broken
+// turn, and a transient failure that records "no goals" self-heals on the next
+// firing, which re-renders and re-arms.
+func recallGoalsState(st *store.Store, req RecallRequest) (string, bool) {
+	if !recallEmitsGoals(req) {
+		return "", false
+	}
+	job := recallResolveJob(st, req)
+	if job == nil {
+		return "", false
+	}
+	return renderGoalsBlock(st, job.GoalID), true
+}
+
+// recallResolveJob finds the job this firing belongs to, or nil. One ListJobs
+// read serves all three lookups (current slug, former slugs, session), which is
+// also why it is one query rather than three round trips.
+func recallResolveJob(st *store.Store, req RecallRequest) *store.Job {
+	all, err := st.ListJobs()
+	if err != nil {
+		return nil
+	}
+	if slug := strings.TrimSpace(req.Slug); slug != "" {
+		for _, j := range all {
+			if j.Slug == slug {
+				return j
+			}
+		}
+		for _, j := range all {
+			for _, former := range j.FormerSlugs {
+				if former == slug {
+					return j
+				}
+			}
+		}
+	}
+	if sessionID := strings.TrimSpace(req.SessionID); sessionID != "" {
+		for _, j := range all {
+			if j.Session == sessionID {
+				return j
+			}
+		}
+	}
+	return nil
+}
+
+// goalsFingerprint is the per-session change key: two firings whose rendered
+// goals block hashes the same are the same state, and the second one says
+// nothing. A hash rather than the block itself because this is process state
+// held per live session and the comparison is the only thing it is ever used
+// for.
+func goalsFingerprint(block string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(block))
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 // recallSession is one session's serialization point and its short-circuit
-// memory. lastQuery is guarded by mu, which Recall holds from the skip-set
-// read through the mark.
+// memory. lastQuery and lastGoals are guarded by mu, which Recall holds from
+// the goals decision through the mark.
+//
+// lastGoals is the fingerprint of the last GOALS STATE this session was shown —
+// "" until a goals decision has run for it, and thereafter the fingerprint of
+// whatever was rendered, the empty render included. It is a state key, not a
+// delivery record: an empty render injects nothing but still moves the state,
+// which is what makes deleting every goal and putting one back a change this
+// session is told about.
+//
+// Process state by design, exactly as lastQuery is: a serve restart may re-emit
+// one unchanged goals block per live session, which is a duplicate paragraph
+// rather than a lost one, and the alternative (a kg_recall-style table) would
+// make goals a delivery record instead of the piece of live state they are.
 type recallSession struct {
 	mu        sync.Mutex
 	lastQuery string
+	lastGoals string
 }
 
 // recallSessionKey keys the state map by STORE as well as session, because
@@ -322,7 +490,19 @@ type recallHookSpecific struct {
 //
 // Event-agnostic on purpose: it reads no event name except to echo it back, so
 // wiring or unwiring an event is a change to cell.go's recallHookEvents alone.
-func RunRecallHook(in io.Reader, out io.Writer) {
+//
+// slug is the cell's job slug, forwarded verbatim into the request body. It is
+// VARIADIC rather than a third parameter because it is genuinely optional at
+// both ends: `kraken recall-hook` with no bare argument is a valid invocation
+// (every settings.json written before cell.go started baking the slug in), and
+// the two-argument call is the shape every existing caller already uses. At
+// most one is read; anything past the first is ignored rather than refused,
+// since a hook that dies on an unexpected argument fails the turn it fired on.
+func RunRecallHook(in io.Reader, out io.Writer, slug ...string) {
+	cellSlug := ""
+	if len(slug) > 0 {
+		cellSlug = strings.TrimSpace(slug[0])
+	}
 	raw, err := io.ReadAll(in)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "recall-hook: read stdin: %v\n", err)
@@ -364,6 +544,7 @@ func RunRecallHook(in io.Reader, out io.Writer) {
 		Event:          p.HookEventName,
 		Prompt:         p.Prompt,
 		TranscriptPath: p.TranscriptPath,
+		Slug:           cellSlug,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "recall-hook: encode request: %v\n", err)

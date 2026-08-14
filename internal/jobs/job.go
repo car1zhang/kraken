@@ -110,6 +110,16 @@ type Job struct {
 	// a client-visible field, and adding it to the wire would put a second
 	// spelling of a job's identity in front of clients that key on the slug.
 	FormerSlugs []string `json:"-"`
+	// GoalID is the goal this job serves (store.Job.GoalID, schema v23), 0
+	// for none — which is every job until carl labels one, and every
+	// file-backed Job unconditionally: like Load and FormerSlugs it has no
+	// frontmatter spelling, and its only writer is store.SetJobGoal.
+	//
+	// `json:"-"` on purpose: the client-visible form is api's own
+	// webJobGoal, which carries the goal's TEXT (a bare id would make every
+	// card render a number), so putting the raw id on this struct's wire
+	// shape would be a second, less useful spelling of the same link.
+	GoalID int64 `json:"-"`
 	// ID and Rev are storage-internal, populated only when this Job was
 	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
 	// store row id, Rev the optimistic-concurrency counter WriteJobFields/
