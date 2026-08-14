@@ -564,12 +564,14 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   white-space: nowrap;
 }
 .theme-btn:hover { color: var(--fg); border-color: var(--border-strong); background: color-mix(in srgb, var(--ac) 8%, transparent); }
-/* min-widths sized to each button's WIDEST label (CRIMSON / FX OFF / SYSTEM):
+/* min-widths sized to each button's WIDEST label (CRIMSON / FX OFF /
+   SFX 100% / SYSTEM):
    these are the controls a user clicks repeatedly while watching this exact
    corner, and a label that resizes on every click shifts its neighbours and
    the clock sideways mid-cycle (review finding). */
 #accent-toggle { min-width: 72px; }
 #scanlines-toggle { min-width: 60px; }
+#sfx-toggle { min-width: 78px; }
 #theme-toggle { min-width: 64px; }
 
 /* the self-update control (see the self-update section in app.js): same

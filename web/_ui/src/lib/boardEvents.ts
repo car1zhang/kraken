@@ -34,8 +34,8 @@ import { jobKey } from "./jobKey.ts";
  * `update-*` members are board-level and carry an empty jobKey.
  *
  * There is no enabled-set mechanism and no per-event toggle: the whole feature
- * rides the one `kraken-sfx` switch sfx.ts already owns (read at sfx.ts:251,
- * written by the ♪ SFX toggle in HudControls.tsx:54). Pruning the palette
+ * rides the one `kraken-sfx` switch sfx.ts already owns (read by sfxEnabled,
+ * written by the ♪ SFX toggle in HudControls.tsx). Pruning the palette
  * later means editing the sound table, not threading a preference through
  * three layers — a second toggle for "which events" was considered and cut,
  * because the coalescer below is the thing that actually keeps the board quiet.

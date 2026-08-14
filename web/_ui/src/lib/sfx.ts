@@ -19,7 +19,8 @@
 //
 // Sounds are deliberately NOT motion: the sheet's prefers-reduced-motion rule
 // kills the press-flash one-shot along with every other animation, but audio
-// is governed only by the ♪ SFX toggle (kraken-sfx in localStorage).
+// is governed only by the ♪ SFX button's two localStorage keys — kraken-sfx,
+// the mute flag, and kraken-sfx-vol, the volume percent.
 //
 // The artifact iframe is deliberately outside all of this: the listeners
 // attach to the top document only, and events never cross the iframe
@@ -49,8 +50,40 @@ interface Pulse {
   gain: number;
 }
 
-/** One shared output level; the per-pulse gains above ride through this. */
+/**
+ * One shared output level; the per-pulse gains above ride through this. What
+ * the master node actually holds is MASTER_GAIN × (volume% / 100) — the ♪ SFX
+ * button's stored percent scales this base, it never replaces it, so the
+ * tables keep reading as the levels that were auditioned.
+ */
 export const MASTER_GAIN = 0.12;
+
+/**
+ * The ♪ SFX cycle's volume steps, in click order; past the last one the
+ * button turns OFF, then re-enters at the head. 100 first because it is the
+ * default and the value an unknown stored percent snaps back to; no 0 —
+ * mute is the kraken-sfx FLAG, not a level, so the stored percent always
+ * names a real level and the two keys stay orthogonal. (A hand-edited
+ * stored 0 is still honoured — the label honestly reads 0%, so the state at
+ * least says what it does.)
+ */
+export const VOLUME_STEPS: readonly number[] = [100, 75, 50, 25];
+
+/**
+ * Decode a stored kraken-sfx-vol value into a percent. Shared by sfxVolume()
+ * and the SfxToggle label for the same reason sfxEnabled's decode is shared
+ * with that button: one decoding is what keeps the label and the audio
+ * agreeing on any third value. Anything outside a finite 0–100 — absent key,
+ * hand-edited garbage, negatives, Infinity — reads as 100, the default;
+ * in-range values round to the integer the label can render.
+ */
+export function decodeVolPercent(raw: string | null): number {
+  // Number("") is 0, not NaN — a blank value must read as absent, not as mute
+  if (raw === null || raw.trim() === "") return 100;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return 100;
+  return Math.round(n);
+}
 
 // The cyberpunk-night retune, decided board-wide in 40-sfx-event-audition.html:
 // every voice drops two octaves and picks up a dark tail. It is applied at
@@ -237,6 +270,9 @@ let master: SfxGainNode | null = null;
 // null = not yet read; the first consult reads kraken-sfx (default ON). The
 // SfxToggle persists the flag; this module only holds the runtime state.
 let enabled: boolean | null = null;
+// same lifecycle as `enabled`: null = not yet read, first consult reads
+// kraken-sfx-vol (default 100). The SfxToggle persists the percent.
+let volPct: number | null = null;
 // separate watermarks: each keydown-driven sound bounds its own auto-repeat,
 // and a trailing character tick can never swallow the rarer, more meaningful
 // confirm by landing within the same 33ms window
@@ -256,6 +292,42 @@ export function sfxEnabled(): boolean {
 
 export function setSfxEnabled(on: boolean): void {
   enabled = on;
+}
+
+/** Current volume percent (0–100), read lazily from kraken-sfx-vol. */
+export function sfxVolume(): number {
+  if (volPct === null) volPct = decodeVolPercent(readLS("kraken-sfx-vol"));
+  return volPct;
+}
+
+/** Seconds the live master takes to glide to a new volume: everything in this
+ * module ramps rather than steps (ATTACK_S, CUT_S) to avoid amplitude
+ * discontinuities, and the master must follow the same rule — a hard step
+ * lands as an audible click on whatever voice is sounding when it moves. */
+export const VOL_RAMP_S = 0.015;
+
+/**
+ * Set the runtime volume and apply it to the LIVE master node when one
+ * exists — the singleton outlives the button, so a construction-time-only
+ * read would make the new level inaudible until a reload. Out-of-range input
+ * goes through the same decode as a stored value, so the runtime state can
+ * never hold a percent the label could not show. The try is the module-wide
+ * contract: every audio-node touch degrades to silence, and this one is
+ * reachable straight from a React handler, so a throwing param must degrade
+ * to a stale level, never to a broken click.
+ */
+export function setSfxVolume(pct: number): void {
+  volPct = decodeVolPercent(String(pct));
+  if (!ctx || !master) return;
+  try {
+    const t = ctx.currentTime;
+    // anchor at the current value first: with no prior event on the param, a
+    // bare ramp has nothing scheduled to ramp from
+    master.gain.setValueAtTime(master.gain.value, t);
+    master.gain.linearRampToValueAtTime(MASTER_GAIN * (volPct / 100), t + VOL_RAMP_S);
+  } catch {
+    // silence (at the old level) is the contract
+  }
 }
 
 /**
@@ -319,7 +391,7 @@ function ensureContext(): ReadyContext | null {
     let m: SfxGainNode;
     try {
       m = c.createGain();
-      m.gain.value = MASTER_GAIN;
+      m.gain.value = MASTER_GAIN * (sfxVolume() / 100);
       m.connect(c.destination);
     } catch {
       // the context itself was already constructed — close it, or each retry
@@ -641,12 +713,13 @@ export function injectAudioContextFactoryForTest(
   master = null;
 }
 
-/** Full module reset: singleton, enabled flag, and both rate-limit watermarks. */
+/** Full module reset: singleton, enabled flag, volume, and both rate-limit watermarks. */
 export function resetSfxForTest(): void {
   ctxFactory = defaultFactory;
   ctx = null;
   master = null;
   enabled = null;
+  volPct = null;
   lastKeyAt = -Infinity;
   lastEnterAt = -Infinity;
 }
