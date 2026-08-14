@@ -6,6 +6,7 @@ import {
   ACTIONABLE_SELECTOR,
   ATTACK_S,
   actionableFrom,
+  decodeVolPercent,
   FLASH_CLEANUP_MS,
   injectAudioContextFactoryForTest,
   installSfxListeners,
@@ -16,8 +17,12 @@ import {
   playSfx,
   resetSfxForTest,
   setSfxEnabled,
+  setSfxVolume,
   sfxEnabled,
+  sfxVolume,
   SOUNDS,
+  VOL_RAMP_S,
+  VOLUME_STEPS,
   type SfxAudioBuffer,
   type SfxAudioContext,
   type SfxBiquadFilter,
@@ -648,5 +653,79 @@ describe("the flash backstop tracks the sheet", () => {
     const m = css.match(/animation:\s*pressflash\s+(\d+)ms/);
     expect(m, "pressflash animation not found in style.css").not.toBeNull();
     expect(Number(m?.[1])).toBeLessThan(FLASH_CLEANUP_MS);
+  });
+});
+
+describe("volume", () => {
+  it("pins the ♪ SFX cycle's volume steps and the shared decode's snap-to-default rules", () => {
+    expect(VOLUME_STEPS).toEqual([100, 75, 50, 25]);
+    // absent key = default
+    expect(decodeVolPercent(null)).toBe(100);
+    // any stored finite 0–100 is honoured, cycle member or not — rounded to
+    // the integer the label can render
+    expect(decodeVolPercent("50")).toBe(50);
+    expect(decodeVolPercent("60")).toBe(60);
+    expect(decodeVolPercent("33.333333")).toBe(33);
+    expect(decodeVolPercent("0")).toBe(0);
+    // everything else snaps to the default rather than to silence
+    for (const raw of ["abc", "", "-1", "101", "Infinity", "NaN"]) {
+      expect(decodeVolPercent(raw), raw).toBe(100);
+    }
+  });
+
+  it("constructs the master at MASTER_GAIN scaled by the stored percent", () => {
+    localStorage.setItem("kraken-sfx-vol", "50");
+    const f = fakeContext();
+    injectAudioContextFactoryForTest(() => f.ctx);
+    playSfx("toggle");
+    expect(f.gains[0]?.value).toBe(MASTER_GAIN * 0.5);
+  });
+
+  it("setSfxVolume glides the LIVE master node — anchor at the current value, ramp to the target", () => {
+    const f = fakeContext();
+    injectAudioContextFactoryForTest(() => f.ctx);
+    playSfx("toggle");
+    const m = f.gains[0];
+    expect(m?.value).toBe(MASTER_GAIN);
+    setSfxVolume(25);
+    expect(sfxVolume()).toBe(25);
+    // a ramp, not a value step: a hard step lands as an audible click on
+    // whatever voice is sounding when it moves (review r1, logic note 2)
+    expect(m?.sets).toContainEqual([MASTER_GAIN, 10]);
+    expect(m?.ramps).toContainEqual([MASTER_GAIN * 0.25, 10 + VOL_RAMP_S]);
+  });
+
+  it("setSfxVolume before any context is safe and wins over the stored value at construction", () => {
+    localStorage.setItem("kraken-sfx-vol", "50");
+    setSfxVolume(25); // no context yet — must not throw
+    const f = fakeContext();
+    injectAudioContextFactoryForTest(() => f.ctx);
+    playSfx("toggle");
+    expect(f.gains[0]?.value).toBe(MASTER_GAIN * 0.25);
+  });
+
+  it("consecutive sets each anchor and ramp, with the last ramp carrying the final target", () => {
+    // ordering/convergence pin for an interrupted glide: the fake cannot
+    // model automation interpolation, but it can pin that a rapid second set
+    // schedules its own anchor + ramp and that the LAST ramp wins the level
+    const f = fakeContext();
+    injectAudioContextFactoryForTest(() => f.ctx);
+    playSfx("toggle");
+    setSfxVolume(75);
+    setSfxVolume(50);
+    const m = f.gains[0];
+    const volRamps = m?.ramps.filter(([, t]) => t === 10 + VOL_RAMP_S) ?? [];
+    expect(volRamps).toHaveLength(2);
+    expect(volRamps[volRamps.length - 1]?.[0]).toBe(MASTER_GAIN * 0.5);
+    expect(m?.sets).toHaveLength(2);
+  });
+
+  it("routes an out-of-range runtime set through the same decode as a stored value", () => {
+    const f = fakeContext();
+    injectAudioContextFactoryForTest(() => f.ctx);
+    playSfx("toggle");
+    setSfxVolume(250);
+    expect(sfxVolume()).toBe(100);
+    expect(f.gains[0]?.ramps).toContainEqual([MASTER_GAIN, 10 + VOL_RAMP_S]);
   });
 });
