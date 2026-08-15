@@ -2340,6 +2340,17 @@ extension (`artifactContentType`: html/svg/pdf/png/jpg/gif/webp get their
 real type, everything else is `text/plain; charset=utf-8`). 404 on any
 path-traversal attempt, hidden segment, unresolvable job, or missing file.
 
+### `GET /iso.html?src=<artifact path>` (web/_ui/iso.html) — not an API route (embedded SPA page; no JSON, no Models.swift type)
+
+A second vite entry in the embedded SPA bundle (served by the same
+FileServer as `index.html`, on the no-cache branch). The isoscene viewer page: fetches the diagram card
+named by `src` (which must be a same-origin `/api/artifact/...` path — the
+page refuses anything else), compiles it client-side into the animated 3D
+isometric scene, and `location.replace`s to the flat card when it is bespoke
+or not a diagram. The iOS app routes every `.html`/`.htm` artifact through
+it (`isoViewerURL` in `ArtifactView.swift`); no JSON, no Models.swift type,
+no contract bump.
+
 ### `POST /api/upload` (upload.go)
 
 Uploads an image attachment for a job — the web board's and iOS app's

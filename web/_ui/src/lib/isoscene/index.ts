@@ -13,6 +13,11 @@ import { readCard } from "./reader.ts";
 import { projectScene } from "./project.ts";
 import { renderSceneMarkup } from "./render.ts";
 
+// Re-exported for consumers outside the lib (the iso viewer page escapes the
+// one attacker-influenced string it renders) — reaching into entities.ts
+// directly would breach the one-public-door boundary this file states below.
+export { esc } from "./entities.ts";
+
 /** `opts` defaults to full motion so a caller with no accessibility signal to
  *  pass still gets a valid scene; the board passes the prefers-reduced-motion
  *  media query's answer explicitly. */
