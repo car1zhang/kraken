@@ -361,15 +361,16 @@ describe("the view tabs", () => {
     const tabs = [...container.querySelectorAll(".viewtab")];
     expect(tabs.map((t) => t.textContent)).toEqual([
       "BOARD",
-      "LOG",
-      "DREAM",
+      "KRONOS",
       "GRAPH",
+      "DREAM",
+      "LOG",
     ]);
     expect(tabs.find((t) => t.classList.contains("active"))).toHaveTextContent(
       "DREAM",
     );
     await userEvent.click(tabs[1]!);
-    expect(onNavigate).toHaveBeenCalledWith("log");
+    expect(onNavigate).toHaveBeenCalledWith("kronos");
   });
 });
 
