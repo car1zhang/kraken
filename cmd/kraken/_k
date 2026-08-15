@@ -21,6 +21,9 @@ _k() {
         'graph:cell-side verb — read/write the knowledge graph via kraken serve'
         'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
         'job:iris-side verb — list/read jobs and write a draft via kraken serve'
+        'orch:kronos-side verb — read/ack the orchestrator inbox via kraken serve'
+        'board:kronos-side verb — read the job board (whole, or one job) via kraken serve'
+        'cell:kronos-side verb — steer/submit/answer one job'"'"'s cell via kraken serve'
         'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
@@ -262,6 +265,67 @@ _k() {
                     '--mtime:the lock token `k job raw <slug>` printed (omit on a create)'
                 )
                 _describe -t flags 'flag' draftflags
+            fi
+            # <slug> completion is intentionally not offered, for the reason
+            # spelled out under questions) above: job identity lives only in
+            # kraken.db, with no cheap store-backed completion source.
+            ;;
+        orch)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'inbox:print the unacked orchestrator items as JSON (oldest first, capped at 100 with the full count in `total`)'
+                    'ack:retire a batch of items with a disposition'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == ack ]]; then
+                # both flags are REQUIRED and this op takes no positional at
+                # all, so both are offered from word 4 on — the `slack ack`
+                # shape rather than `load set`'s.
+                local -a ackflags
+                ackflags=(
+                    '--ids:comma-separated inbox ids from `k orch inbox`'
+                    '--disposition:what happened — steered:<slug>, answered:<slug>, ignored:<reason>'
+                )
+                _describe -t flags 'flag' ackflags
+            fi
+            ;;
+        board)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'get:print the whole board payload, or just one job'"'"'s object'
+                )
+                _describe -t ops 'op' ops
+            fi
+            # word 4 is the OPTIONAL <slug>; no completion is offered for it,
+            # for the reason spelled out under questions) above: job identity
+            # lives only in kraken.db, with no cheap store-backed completion
+            # source.
+            ;;
+        cell)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'steer:send a message into the job'"'"'s zeus (message on stdin)'
+                    'submit:start the job'"'"'s cell (the server'"'"'s own refusal sentence when it says no)'
+                    'answer:answer a live prompt (--digit N) or a doc question (--question Qn, text on stdin)'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == answer ]] && (( CURRENT > 4 )); then
+                # CURRENT > 4, not just the `answer` test: word 4 is the
+                # <slug> positional, which every op requires — offering flags
+                # there would suggest it is optional. The two flags are
+                # mutually exclusive (cmd_cell.go refuses both), but zsh
+                # completion offers both: the refusal is the CLI's to make,
+                # and hiding one after the other is typed would hide the
+                # existence of the choice.
+                local -a answerflags
+                answerflags=(
+                    '--digit:1-9 — the option to pick in a live AskUserQuestion prompt'
+                    '--question:the doc question id (Qn) being answered; text on stdin'
+                )
+                _describe -t flags 'flag' answerflags
             fi
             # <slug> completion is intentionally not offered, for the reason
             # spelled out under questions) above: job identity lives only in

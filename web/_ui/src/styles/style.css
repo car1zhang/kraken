@@ -2765,6 +2765,178 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   .graph-canvas { min-height: 60vh; }
 }
 
+/* ---- KRONOS view (see 40-ui-mockups.html) ----
+   The conversation on the left, a status/meter/controls/escalations rail on
+   the right, at the log/dream/graph view's height. --polling (cyan) is the
+   accent throughout: kronos is not a skill, so there is no --skill-* token for
+   him, and cyan is the one status primitive that already carries "a claude in
+   a loop" in both palettes. Everything is namespaced `kronos-` except the
+   conversation's own .blk/.who/.blk-body, which are the side-thread overlay's
+   block idiom reused verbatim — the markup kronosConvo.ts emits. */
+
+.kronosview {
+  height: calc(100vh - 64px);
+  display: grid; grid-template-columns: 1.7fr 1fr;
+  gap: 14px; padding: 12px 16px 16px;
+  position: relative; z-index: 3;
+}
+.kronos-chat {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1));
+  border: 1px solid var(--border);
+}
+.kronos-panehdr {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--divider);
+}
+.kronos-title {
+  font: 600 10px var(--display); letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--polling);
+}
+.kronos-sub { font: 9.5px var(--mono); color: var(--muted); letter-spacing: 0.03em; }
+
+/* the conversation column: one innerHTML region, painted by KronosView */
+.kronos-convo {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 12px 14px;
+}
+.kronos-convo .blk { margin-bottom: 11px; font-size: 11px; line-height: 1.6; }
+.kronos-convo .blk:last-child { margin-bottom: 0; }
+.kronos-convo .who {
+  font: 700 8px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 3px;
+}
+.kronos-convo .blk.user .who { color: var(--ok); }
+/* USER MESSAGES ARE BOUNDED CARDS, everywhere a conversation renders —
+   carl's ask verbatim: where his message starts and ends must be visible at a
+   glance, not inferred from a speaker row. The tint + accent bar + padding
+   carry the boundary; the accent matches each surface's existing .who color
+   so the card and its label agree on who is speaking. Assistant/tool blocks
+   deliberately stay flat — highlighting both sides would erase the contrast
+   that makes the user's side pop. */
+.kronos-convo .blk.user {
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  border-left: 2px solid var(--ok);
+  padding: 7px 9px;
+}
+.kronos-convo .blk.asst .who { color: var(--polling); }
+.kronos-convo .blk.tool { font: 9px var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+.kronos-convo .blk.think { color: var(--muted); font-style: italic; }
+.kronos-convo .blk-body { overflow-wrap: anywhere; }
+.kronos-convo .blk-body p,
+.kronos-convo .blk-body ul,
+.kronos-convo .blk-body ol,
+.kronos-convo .blk-body pre { margin: 0 0 8px; }
+.kronos-convo .blk-body ul, .kronos-convo .blk-body ol { padding-left: 20px; }
+.kronos-convo .blk-body :last-child { margin-bottom: 0; }
+.kronos-convo .blk-body code { background: color-mix(in srgb, var(--warn) 8%, var(--b1)); color: var(--warn); padding: 1px 4px; font: 10px var(--mono); }
+.kronos-convo .blk-body pre { background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider); padding: 8px 10px; white-space: pre-wrap; }
+.kronos-empty { color: var(--muted); opacity: 0.7; font-size: 10px; padding: 26px 10px; text-align: center; }
+
+/* the two OFF states stand where the composer would be, and say what to do */
+.kronos-off {
+  flex: 1; min-height: 0; overflow-y: auto;
+  margin: 12px 14px; padding: 12px 14px;
+  border-left: 2px solid var(--polling);
+  background: color-mix(in srgb, var(--polling) 6%, var(--b1));
+  font-size: 10.5px; line-height: 1.65; color: var(--body);
+}
+.kronos-off b { color: var(--fg); }
+.kronos-off code { font: 9.5px var(--mono); color: var(--polling); }
+
+.kronos-composer {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 12px; border-top: 1px solid var(--divider);
+}
+.kronos-composer textarea {
+  background: color-mix(in srgb, var(--ac) 3%, var(--b0)); color: var(--fg);
+  border: 1px solid var(--border); padding: 7px 9px;
+  font: 11px var(--mono); resize: vertical;
+}
+.kronos-composer textarea:focus { outline: none; border-color: var(--polling); }
+.kronos-composer .btn-big { align-self: flex-end; margin-top: 6px; }
+.kronos-note {
+  min-height: 14px; padding: 0 12px 8px;
+  font: 9.5px var(--mono); color: var(--ac2); overflow-wrap: anywhere;
+}
+
+/* ---- the rail ---- */
+.kronos-side {
+  display: flex; flex-direction: column; gap: 16px; min-width: 0;
+  overflow-y: auto; padding-right: 2px;
+}
+.kronos-block { min-width: 0; }
+.kronos-block h3 {
+  margin: 0 0 8px;
+  font: 600 10px var(--display); letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--muted);
+}
+/* `.dim` is scoped per-surface everywhere else in this file (#usage-overlay,
+   .thread-field), so the meter header carries its own rather than borrowing
+   one that does not apply here. */
+.kronos-block h3 .dim { opacity: 0.7; font-weight: 400; }
+.kronos-stat {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 2px 0; font: 9.5px var(--mono); color: var(--muted);
+}
+.kronos-stat b { color: var(--fg); font-weight: 600; overflow-wrap: anywhere; }
+.kronos-stat b.live { color: var(--ok); }
+.kronos-stat b.down { color: var(--stopped); }
+
+/* the context meter: a track, a fill that takes the crossed band's colour,
+   and one tick per threshold the daemon actually fires on */
+.kronos-meter {
+  position: relative; height: 14px; overflow: hidden;
+  background: color-mix(in srgb, var(--ac) 4%, var(--b0));
+  border: 1px solid var(--border);
+}
+.kronos-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: color-mix(in srgb, var(--polling) 45%, var(--b1));
+}
+.kronos-fill.warn50 { background: color-mix(in srgb, var(--polling) 65%, var(--b1)); }
+.kronos-fill.warn75 { background: color-mix(in srgb, var(--warn) 55%, var(--b1)); }
+.kronos-fill.warn90 { background: color-mix(in srgb, var(--stopped) 55%, var(--b1)); }
+.kronos-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--warn); opacity: 0.85; }
+.kronos-tick.hot { background: var(--stopped); }
+.kronos-mlab {
+  display: flex; justify-content: space-between;
+  margin-top: 4px; font: 8.5px var(--mono); color: var(--muted);
+}
+.kronos-mlab .hot { color: var(--stopped); }
+.kronos-pct { color: var(--fg); font-weight: 700; }
+.kronos-pct.warn50 { color: var(--polling); }
+.kronos-pct.warn75 { color: var(--warn); }
+.kronos-pct.warn90 { color: var(--stopped); }
+.kronos-mnote { margin-top: 6px; font: 9px var(--mono); color: var(--muted); line-height: 1.5; }
+
+/* the controls row — the two relay buttons plus the tmux jump (OPEN TMUX
+   raises the pane and relays nothing). Scoped variants rather than global
+   .btn.warn/.btn.hot: nothing else on the board carries those names, and a
+   new global button vocabulary for two buttons would be a bigger claim than
+   this view makes. */
+.kronos-btns { display: flex; gap: 8px; }
+.kronos-btns .btn { flex: 1; padding: 7px 0; text-align: center; }
+.kronos-btns .btn.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.kronos-btns .btn.warn:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: var(--warn); box-shadow: var(--glow-warn); }
+.kronos-btns .btn.hot { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 45%, transparent); }
+.kronos-btns .btn.hot:hover { background: color-mix(in srgb, var(--ac2) 12%, transparent); border-color: var(--ac2); box-shadow: var(--glow-hot); }
+
+.kronos-esc { font: 9.5px var(--mono); color: var(--muted); }
+.kronos-escrow {
+  padding: 6px 0 6px 8px; border-left: 1px solid var(--divider);
+  line-height: 1.5;
+}
+.kronos-escrow + .kronos-escrow { border-top: 1px dashed var(--divider); }
+.kronos-escrow .t { color: var(--body); }
+.kronos-escrow .k { color: var(--polling); letter-spacing: 0.04em; }
+.kronos-escrow .s { color: var(--fg); }
+.kronos-escrow .sum { color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+
+@media (max-width: 900px) {
+  .kronosview { grid-template-columns: 1fr; height: auto; }
+}
+
 /* ---- side-thread overlay (#thread-overlay — see openThread in app.js) ----
    Two modes in one panel: the branch dialog (#thread-new) and the thread
    itself (#thread-view). Every color here is a token, so both palettes work.
@@ -2848,6 +3020,17 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   color: var(--muted); margin-bottom: 2px;
 }
 #thread-convo .blk.user .who { color: var(--polling); }
+/* the same bounded-card treatment the kronos convo gives user blocks — one
+   rule per surface only because each carries its own speaker accent */
+#thread-convo .blk.user {
+  background: color-mix(in srgb, var(--polling) 8%, transparent);
+  border-left: 2px solid var(--polling);
+  padding: 7px 9px;
+}
+/* the kronos scope always had this; the thread scope needs it now that the
+   user card draws a boundary — an unbreakable token (a pasted URL) would
+   otherwise stream visibly out through the card's right edge */
+#thread-convo .blk-body { overflow-wrap: anywhere; }
 #thread-convo .blk.asst .who { color: var(--ac); }
 #thread-convo .blk.tool { font: 9px var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
 #thread-convo .blk.think { color: var(--muted); font-style: italic; }
@@ -2922,6 +3105,87 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    still floats over the columns. Do not raise it past 10 (body::after's edge
    strip) without re-reading the z-index block near the top of this sheet. */
 .goals-dock { position: fixed; right: 14px; bottom: 14px; z-index: 6; }
+/* ---- kronos dock — the orchestrator beside the goals box ----------------
+   GoalsPanel's fixed-dock pattern one panel-width to the LEFT: 14px inset +
+   330px goals width + 8px gutter = 352px, so the two docks sit side by side
+   and neither covers the other in any expand/collapse combination. Same
+   z-band (under the overlays at 20+), same board-only mount. */
+.kronos-dock { position: fixed; right: 352px; bottom: 14px; z-index: 6; }
+.kronos-dock-panel {
+  /* 366 = the dock's own 352px right inset + the same 14px left gutter the
+     goals min() reserves — one derivation, stated where each is used */
+  width: min(330px, calc(100vw - 366px));
+  background: color-mix(in srgb, var(--polling) 7%, var(--b1));
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--polling) 25%, transparent);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+  display: flex; flex-direction: column;
+}
+.kd-head-row { display: flex; align-items: stretch; }
+/* .gs-head / .goals-pill's SHAPES on the kronos status hue — own rules
+   rather than borrowed classes, so a goals restyle cannot silently restyle
+   this dock, and because those two follow the ACCENT while everything else
+   on this panel follows --polling (a primitive that must not follow the
+   accent — the dock's head drifting violet over a cyan body was the tell). */
+.kd-head {
+  flex: 1;
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left;
+  padding: 5px 12px;
+  background: color-mix(in srgb, var(--polling) 5%, var(--b1));
+  border: none; border-left: 3px solid var(--polling);
+  color: var(--muted); font: 600 10px var(--display); letter-spacing: 0.2em;
+  transition: color 80ms var(--ease);
+}
+.kd-head:hover { color: var(--fg); }
+.kd-head .n { font: 9px var(--mono); letter-spacing: 0.06em; }
+.kd-head .tri { font-size: 8px; letter-spacing: 0; }
+.kd-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  background: color-mix(in srgb, var(--polling) 7%, var(--b1));
+  border: 1px solid var(--border-strong);
+  color: var(--muted); font: 600 9px var(--display); letter-spacing: 0.16em;
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+  transition: color 80ms var(--ease), border-color 80ms var(--ease);
+  /* a right-anchored pill at right: 352px has only 100vw - 366px of room —
+     without a clamp it slides off-screen LEFT at narrow widths, clipped with
+     no scrollbar (the goals pill at right: 14px never meets this) */
+  max-width: calc(100vw - 366px);
+  overflow: hidden; white-space: nowrap;
+}
+.kd-pill:hover { color: var(--fg); border-color: var(--polling); }
+.kd-pill .n { font: 9px var(--mono); letter-spacing: 0.06em; }
+.kd-pill .tri { font-size: 8px; letter-spacing: 0; }
+.kd-act {
+  background: none; border: none; border-left: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; padding: 0 9px;
+}
+.kd-act:hover { color: var(--fg); }
+.kd-act:disabled { opacity: 0.35; cursor: default; }
+.kd-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin: 0 2px; background: var(--muted); }
+.kd-dot.live { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+.kd-dot.down { background: var(--warn); }
+.kd-convo { max-height: 38vh; overflow-y: auto; padding: 9px 11px; border-top: 1px solid var(--border); }
+.kd-composer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.kd-composer input {
+  /* min-width: 0 releases the input's ~130px intrinsic floor — without it a
+     narrow panel's composer overflows the clip-path and the send button is
+     CLIPPED off the right edge, unclickable with no scrollbar to reach it */
+  flex: 1; min-width: 0; background: var(--b0); border: 1px solid var(--border);
+  color: var(--fg); font: 11px var(--mono); padding: 5px 8px;
+}
+.kd-composer button {
+  /* no cursor here — the crosshair list at the top of the sheet is the ONE
+     owner of the pointer cursor, and these are all <button>s it already
+     covers; a local declaration out-cascades it and brings the OS hand back */
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  font: 9px var(--display); letter-spacing: 0.08em; padding: 0 10px;
+}
+.kd-composer button:hover:not(:disabled) { color: var(--fg); border-color: var(--ac); }
+.kd-composer button:disabled { opacity: 0.4; cursor: default; }
+.kd-empty { padding: 12px; color: var(--muted); font-size: 10px; border-top: 1px solid var(--border); }
+.kd-note { padding: 5px 10px; color: var(--warn); font: 9px var(--mono); border-top: 1px solid var(--border); }
 .goals-panel {
   /* 330px is the design width; the min() is the floor a fixed box anchored to
      the right edge needs — at a viewport under ~345px a flat 330px would push

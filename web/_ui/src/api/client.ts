@@ -16,7 +16,10 @@ import type {
   DreamReports,
   GoalsPage,
   JobForm,
+  KronosStatus,
   LogPage,
+  OrchInbox,
+  PeersRead,
   RenameResult,
   ThreadOp,
   ThreadRead,
@@ -162,6 +165,42 @@ export const setWatchVerdict = (
 export const fetchGoals = (signal?: AbortSignal) =>
   getJSON<GoalsPage>("/api/goals", signal);
 
+// ------------------------------------------------------------ kronos
+//
+// Three reads and one write, all pre-existing routes except /api/kronos and
+// /api/orch/inbox. The conversation and the composer deliberately go through
+// the generic PEERS routes rather than a kronos-specific pair: kronos is one
+// claude in one tmux pane, and `k r`/`k s` already address exactly that.
+
+/** kronos' liveness, pane, and last context report. */
+export const fetchKronos = (signal?: AbortSignal) =>
+  getJSON<KronosStatus>("/api/kronos", signal);
+
+/**
+ * The tail of one pane's transcript. `n` counts NON-tool blocks and the server
+ * clamps it to 50, so asking for more re-reads a large transcript tail on every
+ * tick for blocks nobody scrolled to — the same reason ThreadOverlay leaves the
+ * thread read's `n` at the server default.
+ */
+export const fetchPaneRead = (pane: string, n = 30, signal?: AbortSignal) =>
+  getJSON<PeersRead>(
+    `/api/peers/read?pane=${encodeURIComponent(pane)}&n=${n}`,
+    signal,
+  );
+
+/**
+ * Type a message into a pane. This is `k s`: the server re-verifies the pane
+ * still holds the expected agent before it sends, so a stale pane id from a
+ * poll two ticks ago is refused rather than delivered to whatever took the
+ * pane over.
+ */
+export const sendToPane = (pane: string, message: string) =>
+  postJSON("/api/peers/send", { pane, message });
+
+/** Unacked escalations, oldest first. */
+export const fetchOrchInbox = (signal?: AbortSignal) =>
+  getJSON<OrchInbox>("/api/orch/inbox", signal);
+
 export const fetchUpdateStatus = (signal?: AbortSignal) =>
   getJSON<import("./types.ts").WebUpdate>("/api/update/status", signal);
 
@@ -267,6 +306,20 @@ export const openTmux = (target: { pane?: string; slug?: string }) =>
     "/api/peers/open",
     target,
   );
+
+/**
+ * Raise a pane and reduce the response to the one line a note slot shows:
+ * a raise that worked but could not focus the terminal still surfaces its
+ * note, and a clean raise surfaces nothing. Shared by both kronos surfaces
+ * (the full view's OPEN TMUX and the dock's ⧉) so the contract cannot drift
+ * between two hand-copied versions of the same eight lines. Throws are the
+ * caller's — the server's own sentence belongs beside whichever button was
+ * pressed.
+ */
+export const raisePane = async (pane: string): Promise<string> => {
+  const r = await openTmux({ pane });
+  return r.focus_error || r.note || "";
+};
 
 /**
  * Open a code ref in the editor on THIS machine — the click end of
