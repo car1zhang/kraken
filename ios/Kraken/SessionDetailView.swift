@@ -110,6 +110,12 @@ private enum SessionViewMode: String, CaseIterable, Hashable {
 struct SessionDetailView: View {
     let peer: Peer
     let baseURL: String
+    // The KRONOS tab embeds this view with allowKill false: the daemon owns
+    // kronos' lifecycle (EnsureKronos respawns a killed pane on the next
+    // tick), so a Kill button there reads as "stop kronos" while actually
+    // meaning "lose the in-flight turn and respawn" — an affordance that
+    // promises something it cannot do.
+    private let allowKill: Bool
     let onKilled: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
@@ -127,9 +133,10 @@ struct SessionDetailView: View {
     // first so it never yanks a manually-scrolled-up reader back down.
     @State private var userScrolled = false
 
-    init(peer: Peer, baseURL: String, onKilled: @escaping () -> Void = {}) {
+    init(peer: Peer, baseURL: String, allowKill: Bool = true, onKilled: @escaping () -> Void = {}) {
         self.peer = peer
         self.baseURL = baseURL
+        self.allowKill = allowKill
         self.onKilled = onKilled
         _mode = State(initialValue: peer.role == "shell" ? .terminal : .transcript)
     }
@@ -139,6 +146,7 @@ struct SessionDetailView: View {
     // Job cells are killed via the job's own Kill action (server enforces
     // this too); a peer with no pane has nothing to kill.
     private var canKill: Bool {
+        guard allowKill else { return false }
         guard let pane = peer.pane, !pane.isEmpty else { return false }
         if let session = peer.tmuxSession, session.hasPrefix("cell-") { return false }
         return true

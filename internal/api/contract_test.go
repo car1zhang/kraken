@@ -3351,6 +3351,297 @@ func TestGraphSearchWireShape(t *testing.T) {
 	assertShape(t, "POST /api/graph/search", rec.Body.Bytes(), graphSearchRespSpec)
 }
 
+// --- kronos, the orchestrator agent: /api/orch/inbox, /api/orch/ack,
+// /api/orch/context, /api/graph/recall-rearm and /api/kronos (orch.go). New
+// PATHS, no existing shape touched, so none of them bumps apiContract — these
+// specs are here because assertShape rejects any key ios/API.md hasn't
+// documented, which is what makes an addition that skips this file fail the
+// suite rather than slide through undocumented. ---
+
+// webOrchItemSpec covers orch.go's webOrchItem, the elements of
+// /api/orch/inbox's "items" array. Every key is required: the type carries no
+// omitempty anywhere, because an empty slug (a row that belongs to no job) is
+// a real answer kronos must be able to read unconditionally.
+// delivered_at, acked_at and disposition have no entry on purpose — they are
+// kraken's delivery bookkeeping, and a spec entry for one would be the first
+// sign the route had started serving its own records back to the agent as if
+// they were the item, the same thing webSlackMsgSpec's absences guard.
+var webOrchItemSpec = map[string]fieldSpec{
+	"id":      {kind: wireNumber, required: true},
+	"kind":    {kind: wireString, required: true},
+	"slug":    {kind: wireString, required: true},
+	"summary": {kind: wireString, required: true},
+	"seen_at": {kind: wireNumber, required: true},
+}
+
+// orchInboxSpec is GET /api/orch/inbox's envelope. "items" is required and is
+// always an ARRAY, never null — an empty inbox is `[]`, so a client iterates
+// it without a nil check.
+//
+// "total" is required too, and it is not len(items): the route serves at most
+// the oldest orchInboxMax rows (a backlog otherwise arrives whole in kronos'
+// context as one tool result), so total is the FULL unacked count and is what
+// makes that truncation visible rather than silent. Additive — a new key on a
+// new path, so apiContract stays 6.
+var orchInboxSpec = map[string]fieldSpec{
+	"items": {kind: wireArray, required: true},
+	"total": {kind: wireNumber, required: true},
+}
+
+// orchAckReqSpec / orchAckRespSpec cover POST /api/orch/ack. Both request
+// keys are literally required rather than merely non-omitempty: an
+// empty/absent `ids` is a 400 and so is an empty `disposition`, because
+// "acked, reason unknown" is indistinguishable from a bug that acks
+// everything. The body is decoded with unknown fields rejected, so there is
+// deliberately no third key to document.
+var orchAckReqSpec = map[string]fieldSpec{
+	"ids":         {kind: wireArray, required: true},
+	"disposition": {kind: wireString, required: true},
+}
+
+var orchAckRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+// orchContextReqSpec / orchContextRespSpec cover POST /api/orch/context —
+// kronos' statusline hook reporting how full its own context window is. All
+// three request keys are required, and `used_percentage` literally so: it is
+// a POINTER on the Go side precisely so an absent one is a refusal rather
+// than a silent 0, which would record a full window as an empty one at
+// exactly the moment the report went missing (jobload.go's rule, read one
+// level up). The response is the shared bare ack.
+var orchContextReqSpec = map[string]fieldSpec{
+	"session_id":          {kind: wireString, required: true},
+	"used_percentage":     {kind: wireNumber, required: true},
+	"context_window_size": {kind: wireNumber, required: true},
+}
+
+var orchContextRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
+// recallRearmReqSpec / recallRearmRespSpec cover POST
+// /api/graph/recall-rearm. The response is a COUNT rather than the shared
+// bare ack because the caller is a hook with no other way to learn whether
+// the compaction it fired on actually re-armed anything, and 0 is a real
+// answer (a session that had been told nothing yet).
+var recallRearmReqSpec = map[string]fieldSpec{
+	"session_id": {kind: wireString, required: true},
+}
+
+var recallRearmRespSpec = map[string]fieldSpec{
+	"cleared": {kind: wireNumber, required: true},
+}
+
+// webKronosContextSpec covers orch.go's webKronosContext, /api/kronos'
+// "context" object. Every key is required: the type carries no omitempty,
+// because a genuine 0 pct is a real report (a freshly compacted window) and
+// must still ride. Absence is expressed by the "context" key itself being
+// gone — never by a zeroed object, which would claim a report OF zero.
+var webKronosContextSpec = map[string]fieldSpec{
+	"pct":    {kind: wireNumber, required: true},
+	"window": {kind: wireNumber, required: true},
+	"at":     {kind: wireNumber, required: true},
+}
+
+// webKronosSpec covers GET /api/kronos' whole body. Every key but `context`
+// is required for the reason webSlackStatus' are: a zero is a real answer
+// (`live` false with an empty pane is exactly what a machine with the feature
+// off reports) and an absent key would be indistinguishable from it. There is
+// no session_id inside `context` on purpose — the top level already names the
+// session, and two ids in one payload invite a client to render a mismatch
+// this route has no opinion about.
+var webKronosSpec = map[string]fieldSpec{
+	"enabled":    {kind: wireBool, required: true},
+	"live":       {kind: wireBool, required: true},
+	"session_id": {kind: wireString, required: true},
+	"pane":       {kind: wireString, required: true},
+	"spawned_at": {kind: wireNumber, required: true},
+	"context":    {kind: wireObject, required: false},
+}
+
+func TestWebOrchItemWireShape(t *testing.T) {
+	// a slugless row: it belongs to no job — every key must still be present,
+	// which is the difference between "this item is not about a job" and a key
+	// the client has to guess about
+	data, err := json.Marshal(webOrchItem{
+		ID: 1, Kind: "note", Summary: "what's blocking the csv job?", SeenAt: 1769040001000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webOrchItem (slugless)", data, webOrchItemSpec)
+
+	data, err = json.Marshal(webOrchItem{
+		ID: 2, Kind: "job-blocked", Slug: "csv-export-timeout",
+		Summary: "zeus is waiting on a manual test", SeenAt: 1769040101000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webOrchItem (job-blocked)", data, webOrchItemSpec)
+
+	reqData, err := json.Marshal(orchAckReq{IDs: []int64{42, 43}, Disposition: "steered:csv-export-timeout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "orchAckReq", reqData, orchAckReqSpec)
+
+	pct := 62.5
+	reqData, err = json.Marshal(orchContextReq{SessionID: "s-1", UsedPercentage: &pct, ContextWindow: 200000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "orchContextReq", reqData, orchContextReqSpec)
+
+	reqData, err = json.Marshal(recallRearmReq{SessionID: "s-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "recallRearmReq", reqData, recallRearmReqSpec)
+}
+
+// TestOrchEndpointWireShapes drives the inbox read and the ack through their
+// real handlers, so the envelopes above are pinned as SERVED rather than as
+// marshaled structs — the same reason TestSlackEndpointWireShapes exists
+// beside TestWebSlackMsgWireShape.
+func TestOrchEndpointWireShapes(t *testing.T) {
+	st := useTestStore(t)
+
+	// empty inbox: the key is present and the array is [], never null
+	rec := httptest.NewRecorder()
+	orchInboxHandler(rec, httptest.NewRequest(http.MethodGet, "/api/orch/inbox", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/orch/inbox (empty): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/orch/inbox (empty)", rec.Body.Bytes(), orchInboxSpec)
+	if got := rec.Body.String(); !strings.Contains(got, `"items":[]`) {
+		t.Errorf("GET /api/orch/inbox with no items served %s, want an empty array", got)
+	}
+
+	// a job row and a slugless row: both must serve every documented key
+	if _, err := st.AddOrchItem("job-blocked", "csv-export-timeout", "zeus is waiting on a manual test", 1769040000000); err != nil {
+		t.Fatalf("AddOrchItem (job-blocked): %v", err)
+	}
+	id, err := st.AddOrchItem("note", "", "what's blocking the csv job?", 1769040001000)
+	if err != nil {
+		t.Fatalf("AddOrchItem (slugless): %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	orchInboxHandler(rec, httptest.NewRequest(http.MethodGet, "/api/orch/inbox", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/orch/inbox (populated): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/orch/inbox (populated)", rec.Body.Bytes(), orchInboxSpec)
+	var envelope struct {
+		Items []json.RawMessage `json:"items"`
+		Total int               `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Items) != 2 {
+		t.Fatalf("items = %d entries, want 2", len(envelope.Items))
+	}
+	// total is the FULL unacked count, which below the cap equals the page —
+	// asserted here so the key is pinned as SERVED rather than merely
+	// documented; the cap itself is exercised by the edge suite.
+	if envelope.Total != 2 {
+		t.Errorf("total = %d, want 2 (the full unacked count)", envelope.Total)
+	}
+	assertShape(t, "GET /api/orch/inbox .items[0]", envelope.Items[0], webOrchItemSpec)
+	assertShape(t, "GET /api/orch/inbox .items[1]", envelope.Items[1], webOrchItemSpec)
+
+	body := mustJSON(t, map[string]any{"ids": []int64{id}, "disposition": "ignored: merge chatter"})
+	rec = httptest.NewRecorder()
+	orchAckHandler(rec, httptest.NewRequest(http.MethodPost, "/api/orch/ack", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/orch/ack: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/orch/ack", rec.Body.Bytes(), orchAckRespSpec)
+}
+
+// TestKronosEndpointWireShape drives the context report and the status read
+// end to end: the POST is the only writer of the kv row the GET serves, so
+// running them against each other is what pins the "context" object as
+// SERVED rather than as a struct this file marshaled itself.
+//
+// The peer source is a stub returning nothing — the seam peersHandler uses
+// for the same reason — so the handler never shells out to tmux or ps, and
+// `live` is deterministically false.
+func TestKronosEndpointWireShape(t *testing.T) {
+	useTestStore(t)
+	noPeers := func() []*core.Peer { return nil }
+
+	// never reported: every documented key rides, and "context" is ABSENT
+	// rather than null or zeroed — the wire's only spelling of "no report"
+	rec := httptest.NewRecorder()
+	kronosHandler(noPeers)(rec, httptest.NewRequest(http.MethodGet, "/api/kronos", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/kronos (no report): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/kronos (no report)", rec.Body.Bytes(), webKronosSpec)
+	if bytes.Contains(rec.Body.Bytes(), []byte(`"context"`)) {
+		t.Errorf("GET /api/kronos with no report emitted a context key: %s", rec.Body.String())
+	}
+
+	body := mustJSON(t, map[string]any{
+		"session_id": "s-kronos-1", "used_percentage": 62.5, "context_window_size": 200000,
+	})
+	rec = httptest.NewRecorder()
+	orchContextHandler(rec, httptest.NewRequest(http.MethodPost, "/api/orch/context", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/orch/context: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/orch/context", rec.Body.Bytes(), orchContextRespSpec)
+
+	rec = httptest.NewRecorder()
+	kronosHandler(noPeers)(rec, httptest.NewRequest(http.MethodGet, "/api/kronos", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/kronos (reported): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "GET /api/kronos (reported)", rec.Body.Bytes(), webKronosSpec)
+	var reported struct {
+		Context json.RawMessage `json:"context"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reported); err != nil {
+		t.Fatal(err)
+	}
+	if reported.Context == nil {
+		t.Fatalf("GET /api/kronos after a report served no context key: %s", rec.Body.String())
+	}
+	assertShape(t, "GET /api/kronos .context", reported.Context, webKronosContextSpec)
+}
+
+// TestRearmWireShape pins the route whose SUCCESS body needs something this
+// suite cannot reach — a recorded kronos session — by driving its refusals
+// through the real handler and asserting the success shape as a marshaled
+// body.
+func TestRearmWireShape(t *testing.T) {
+	useTestStore(t)
+
+	// blank session is a 400 (a malformed request); a session that is not the
+	// recorded kronos — including the case where none is recorded at all, as
+	// here — is a 403, which is the whole safety property of the route:
+	// kg_recall is per-session state for every conversation in the binary.
+	rec := httptest.NewRecorder()
+	body := mustJSON(t, map[string]any{"session_id": "   "})
+	graphRecallRearmHandler(rec, httptest.NewRequest(http.MethodPost, "/api/graph/recall-rearm", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/graph/recall-rearm (blank session): status %d, want 400 — body %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	body = mustJSON(t, map[string]any{"session_id": "some-other-session"})
+	graphRecallRearmHandler(rec, httptest.NewRequest(http.MethodPost, "/api/graph/recall-rearm", bytes.NewReader(body)))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST /api/graph/recall-rearm (no kronos recorded): status %d, want 403 — body %s", rec.Code, rec.Body.String())
+	}
+
+	assertShape(t, "POST /api/graph/recall-rearm (cleared)", mustJSON(t, map[string]any{"cleared": 3}), recallRearmRespSpec)
+}
+
 // TestAPIContractUnchanged pins apiContract at the value only a BREAKING
 // change may move. Additive endpoints — a whole new path, never a key
 // retyped, renamed or removed on an existing one — never bump it, since old

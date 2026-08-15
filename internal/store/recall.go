@@ -16,9 +16,11 @@ import (
 // than a process-local set for the reason schemaV19's doc comment states: it
 // has to survive `kraken serve` restarting mid-conversation.
 //
-// Two accessors, and they are the whole surface: RecalledEdgeIDs is the skip
-// set a retrieval subtracts, MarkRecalled is the commit. Nothing updates a row
-// and nothing deletes one — a delivery is a fact about the past.
+// Three accessors, and they are the whole surface: RecalledEdgeIDs is the skip
+// set a retrieval subtracts, MarkRecalled is the commit, ClearRecalled is the
+// one erasure. Nothing UPDATES a row — a delivery is a fact about the past, and
+// the only thing that can stop it being true is the context it was delivered
+// INTO going away, which is what ClearRecalled is called for.
 //
 // The session id is treated as an OPAQUE key: it is stored and matched exactly
 // as the caller gave it, and the only inspection either function makes is
@@ -99,4 +101,46 @@ func (s *Store) MarkRecalled(sessionID string, edgeIDs []int64, ts int64) error 
 		}
 	}
 	return tx.Commit()
+}
+
+// ClearRecalled deletes every recall row for sessionID and returns how many
+// went, re-arming that session to be told its facts again.
+//
+// It is the only deletion in this file, and the exception is narrow enough to
+// state exactly: a recall row means "this fact is already in this
+// conversation's context", and a COMPACTION replaces that context with a
+// summary — so after one, the premise the row rests on is no longer true and
+// the session's best facts would stay suppressed forever. Clearing the rows is
+// what puts them back in play; nothing else may call this, and no pass ages a
+// row out on its own.
+//
+// The whole session goes at once rather than row by row. Compaction is not
+// selective — it does not keep some injected facts and drop others — so
+// deleting a subset would encode a distinction the event does not make.
+//
+// A blank session id is an ERROR that deletes nothing, MarkRecalled's rule and
+// for a sharper version of its reason: the write it guards there is a row that
+// cannot be deduplicated, while here an unguarded blank key would match on the
+// empty string and answer zero to a caller that thinks it cleared its session's
+// rows — a re-arm that silently did nothing. Rows of every OTHER session are
+// untouched in both cases — the delete is keyed, never a sweep.
+// Whitespace-only counts as blank, since MarkRecalled stores keys verbatim
+// and refuses those too, so no row can carry one.
+//
+// A session with no rows is not an error: it returns 0, which is the honest
+// answer to "how many deliveries did this discard" for a conversation that was
+// never told anything.
+func (s *Store) ClearRecalled(sessionID string) (int64, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return 0, fmt.Errorf("clear recalled: empty session id")
+	}
+	res, err := s.db.Exec(`DELETE FROM kg_recall WHERE session_id = ?`, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("clear recalled: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("clear recalled: %w", err)
+	}
+	return n, nil
 }

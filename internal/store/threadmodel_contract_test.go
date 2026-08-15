@@ -140,12 +140,18 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 	// otherwise migrate() replays step 23 over a database that still has both
 	// and fails on the bare CREATE. The column goes first: it carries the
 	// REFERENCES clause onto the table dropped right after it.
+	//
+	// v24 (kronos' orch_inbox) landed later still, and needs the same
+	// treatment for the same reason: a leftover table fails step 24's bare
+	// CREATE. Reversed FIRST — this list unwinds newest-first, mirroring the
+	// order migrate() applies the steps.
 	for _, stmt := range []string{
+		`DROP TABLE orch_inbox`,
 		`ALTER TABLE jobs DROP COLUMN goal_id`,
 		`DROP TABLE goals`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {
-			t.Fatalf("reverse v23 (%q): %v", stmt, err)
+			t.Fatalf("reverse v24/v23 (%q): %v", stmt, err)
 		}
 	}
 	if _, err := s.db.Exec(`ALTER TABLE threads DROP COLUMN model`); err != nil {
