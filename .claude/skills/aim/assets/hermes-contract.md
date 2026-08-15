@@ -1311,7 +1311,12 @@ second copy of this vocabulary (edit both together). Do not do them even once:
 - Route edges to attach at box borders (not box centers/interiors) and route them **around**
   other boxes, never through them.
 - **Reserve routing lanes at layout time, before any band is committed**: for every planned
-  edge run, leave a clear corridor (24px+ wide) through the layout it will cross — a layout
+  edge run, leave a clear corridor through the layout it will cross, sized against the widest
+  thing the run will CARRY — the edge's label, not the line: a label is 150-200px wide where the
+  edge is a stroke, corridors sized against the edge have measured 25-32px for a 149px label, and
+  the label then has no legal home. The label's size is measured across ITS long axis, so it
+  constrains a corridor only where the run crosses that axis — for a run parallel to its own
+  label, and for any unlabelled run, the 24px minimum governs — a layout
   placed band-by-band with edges drawn last has no legal routing lanes left, and the final
   band then moves boxes that earlier bands already settled. Two lane-blockers are easy to
   miss because they are not boxes: a group's own label, and step badges — an edge routed
