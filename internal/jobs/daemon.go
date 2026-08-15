@@ -1369,13 +1369,21 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 		// the same user channel with the same read-as-carl hazard the
 		// comment block above the CI bump spells out, and a cell has
 		// visibly hedged on whether this message was carl or a machine.
+		//
+		// The message states the GOAL (get the branch mergeable) rather
+		// than prescribing rebase + --force-with-lease: on a branch that
+		// already carries pushed merge commits and an open PR, a history
+		// rewrite is the wrong move, and a lead correctly refused the old
+		// prescription three times in one afternoon (merging instead, no
+		// force needed, every time) — a canned bump the recipient must
+		// overrule on every occurrence is a hazard, not advice.
 		if f.BaseRef != "" {
 			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with %s — run git fetch origin && git rebase origin/%s in your worktree, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				prWatchPrefix+" %s has merge conflicts with %s — get the branch mergeable: git fetch origin, then merge origin/%s into your branch (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
 				url, f.BaseRef, f.BaseRef))
 		} else {
 			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with its base branch — fetch, rebase onto the base, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				prWatchPrefix+" %s has merge conflicts with its base branch — get the branch mergeable: fetch, merge the base branch in (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
 				url))
 		}
 		newConflictState = "conflicting"
