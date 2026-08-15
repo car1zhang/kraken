@@ -1,0 +1,48 @@
+/* The isoscene viewer page's whole stylesheet. The dark look needs no rules —
+   every paint in the emitted SVG is a var(--iso-…, fallback) whose fallback IS
+   the dark value — so this file is the ground plus the LIGHT material set,
+   keyed on prefers-color-scheme because this page has no board shell and no
+   data-theme stamp. The light values must stay byte-identical to
+   style.css's :root[data-theme="light"] block; isoscene.theme.test.ts pins
+   that equality, so edit both or the pin fails. */
+body {
+  margin: 0;
+  background: var(--iso-bg, #0a0e16);
+}
+svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.iso-note {
+  color: var(--iso-muted, #8b9bb8);
+  font: 14px/1.5 -apple-system, sans-serif;
+  padding: 24px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --iso-bg: #eef2f8;
+    --iso-floor: #e2e8f3;
+    --iso-floor-line: #c9d4e8;
+    --iso-panel: #f7f9fd;
+    --iso-panel-line: #d4dcec;
+    --iso-face-top: #d7e0f0;
+    --iso-face-left: #c3cfe4;
+    --iso-face-right: #adbcd6;
+    --iso-stroke: #7f92b8;
+    --iso-ink: #22304a;
+    --iso-muted: #5a6a88;
+    --iso-faint: #8b99b4;
+    --iso-screen: #1b2740;
+    --iso-shadow: #1b2740;
+    --iso-accent: #007a9e;
+    --iso-accent-dim: #4d94ab;
+    --iso-spark: #a97b00;
+    --iso-grey: #6f7d94;
+    --iso-red: #c2183a;
+    --iso-yellow: #a36f00;
+    --iso-green: #0f7a3d;
+    --iso-blue: #1d5fd6;
+    --iso-purple: #7d3fc9;
+  }
+}

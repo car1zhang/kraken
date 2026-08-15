@@ -92,10 +92,10 @@ func Serve(opts Options) error {
 	// Two cache policies, split by whether the filename carries a content
 	// hash, because the two kinds of asset have opposite requirements.
 	//
-	// Everything vite fingerprints (/assets/index-<hash>.js|css) is immutable
-	// by construction: a changed file gets a changed name, so it can be
-	// cached hard and forever, and a binary upgrade costs one index.html
-	// fetch instead of a full redownload.
+	// Everything vite fingerprints (/assets/main-<hash>.js|css, and the iso
+	// viewer's chunks beside them) is immutable by construction: a changed
+	// file gets a changed name, so it can be cached hard and forever, and a
+	// binary upgrade costs one index.html fetch instead of a full redownload.
 	//
 	// index.html itself keeps no-cache, and that is the part with the sharp
 	// edge: embed.FS files carry a zero mod time, so FileServer sends no

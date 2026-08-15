@@ -31,6 +31,17 @@ export default defineConfig({
     // Hashed filenames are what let web/serve.go serve assets as immutable
     // while keeping index.html on no-cache.
     assetsDir: "assets",
+    rollupOptions: {
+      // Two entries: the board SPA, and the self-contained isoscene viewer
+      // page the iOS app's WKWebView loads for .html diagram cards. iso.html
+      // rides the same embed + FileServer as index.html (an un-hashed name,
+      // so it lands on the no-cache branch web/serve.go already draws) — no
+      // new Go route; web/bundle_test.go pins the entry into the embed.
+      input: {
+        main: "index.html",
+        iso: "iso.html",
+      },
+    },
   },
   server: {
     port: 5173,

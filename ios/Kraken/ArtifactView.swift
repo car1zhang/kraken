@@ -15,15 +15,50 @@ private enum ArtifactContent: Equatable {
 
 private struct ArtifactWebView: UIViewRepresentable {
     let content: ArtifactContent
+    /// Loaded instead when `content`'s URL answers non-2xx. Exists for one
+    /// case: the app and the daemon ship on independent tracks (`k ship-ios`
+    /// vs `k update`), so a phone build that routes .html cards through
+    /// /iso.html can meet a Mac whose kraken binary predates that page — the
+    /// FileServer then 404s, and without this every diagram card would render
+    /// Go's "404 page not found" until the Mac updated. Falling back to the
+    /// flat card makes version skew cost the 3D view, never the artifact.
+    var fallbackURL: URL?
 
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         var lastLoaded: ArtifactContent?
+        /// One-shot per load: cleared before the fallback fires, so a broken
+        /// fallback target cannot ping-pong.
+        var fallbackURL: URL?
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse,
+            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+        ) {
+            if let fallback = fallbackURL,
+               let http = navigationResponse.response as? HTTPURLResponse,
+               !(200...299).contains(http.statusCode),
+               navigationResponse.isForMainFrame {
+                fallbackURL = nil
+                decisionHandler(.cancel)
+                // Main-queue hop rather than a synchronous load from inside
+                // the policy handler: WebKit is still unwinding the cancelled
+                // navigation, and a load issued during that unwind is the
+                // known-dropped shape — whose symptom here would be a blank
+                // web view, strictly worse than the 404 this path replaces.
+                DispatchQueue.main.async {
+                    webView.load(URLRequest(url: fallback))
+                }
+                return
+            }
+            decisionHandler(.allow)
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView()
+        webView.navigationDelegate = context.coordinator
         // Only the container/loading background moves to the theme's ground
         // color — a loaded .html/.svg/.pdf/image artifact's own content is
         // left exactly as the server renders it; the markdown/plain path
@@ -40,6 +75,7 @@ private struct ArtifactWebView: UIViewRepresentable {
         // re-render would restart the page / re-inject the HTML string.
         guard context.coordinator.lastLoaded != content else { return }
         context.coordinator.lastLoaded = content
+        context.coordinator.fallbackURL = fallbackURL
         switch content {
         case .url(let url):
             webView.load(URLRequest(url: url))
@@ -74,6 +110,36 @@ private enum ArtifactKind {
             self = .markdown
         }
     }
+}
+
+/// The isoscene viewer URL for an .html diagram card, or nil for every other
+/// artifact. kraken serve ships a self-contained /iso.html page (built from
+/// the same web/_ui isoscene lib the board uses) that fetches the card named
+/// by ?src=, compiles it into the animated isometric scene, and — the half
+/// that keeps this function simple — location.replace()s to the flat card
+/// when it is bespoke or not a diagram at all. So the app routes every .html
+/// card whose path is under /api/artifact/ through the viewer, and never
+/// needs its own compilability probe: the page IS the probe, and the fallback
+/// is the display-as-is behaviour the spec requires. .svg/.pdf/images stay
+/// direct loads; the viewer only means anything for cards.
+func isoViewerURL(baseURL: String, path: String, name: String) -> URL? {
+    let lower = name.lowercased()
+    guard lower.hasSuffix(".html") || lower.hasSuffix(".htm") else { return nil }
+    guard path.hasPrefix("/api/artifact/") else { return nil }
+    // Hand-encode the query value: URLQueryItem leaves `+` `&` `=` `;` alone
+    // (all members of urlQueryAllowed), and the page parses with
+    // URLSearchParams' form rules, where a literal `+` reads as a space and a
+    // literal `&` truncates the value — either way a legally-named artifact
+    // becomes a 404. Percent-encoding those four is what makes the round
+    // trip byte-exact. (`%` is already outside urlQueryAllowed, so a
+    // filename's own `%` gets escaped without being listed here.)
+    var valueAllowed = CharacterSet.urlQueryAllowed
+    valueAllowed.remove(charactersIn: "+&=;")
+    guard let encoded = path.addingPercentEncoding(withAllowedCharacters: valueAllowed) else { return nil }
+    var comps = URLComponents(string: baseURL)
+    comps?.path = "/iso.html"
+    comps?.percentEncodedQuery = "src=" + encoded
+    return comps?.url
 }
 
 /// Cap on a fetched text artifact before it's handed to plainTextHTML/
@@ -155,6 +221,10 @@ struct ArtifactView: View {
     var onFeedbackCreated: ((ArtifactRef, String) -> Void)?
 
     @State private var content: ArtifactContent?
+    /// The direct artifact URL, kept beside a viewer-routed `content` so the
+    /// web view can fall back to the flat card if /iso.html is absent from
+    /// the running serve (version skew — see ArtifactWebView.fallbackURL).
+    @State private var pageFallback: URL?
     @State private var errorMessage: String?
     @State private var composingFeedback = false
 
@@ -171,7 +241,7 @@ struct ArtifactView: View {
     var body: some View {
         Group {
             if let content {
-                ArtifactWebView(content: content)
+                ArtifactWebView(content: content, fallbackURL: pageFallback)
                     .background(KTheme.ground)
             } else if let errorMessage {
                 VStack(spacing: 16) {
@@ -238,10 +308,18 @@ struct ArtifactView: View {
         }
         switch kind {
         case .page:
-            // Already renderable server-side (text/html, image/svg+xml,
-            // application/pdf, image/*); no fetch needed, WKWebView loads
-            // it directly and renders natively.
-            content = .url(url)
+            // Renderable server-side (text/html, image/svg+xml,
+            // application/pdf, image/*): WKWebView loads a URL and renders
+            // natively — no app-side fetch. An .html card detours through
+            // the isoscene viewer page, which compiles it into the animated
+            // 3D scene (fetching the card itself, so that path costs a page
+            // load plus one same-origin re-read) or bounces straight back to
+            // the flat card — see isoViewerURL for why the app never probes
+            // compilability. The direct URL rides along as the fallback for
+            // a serve that predates /iso.html.
+            let viewer = isoViewerURL(baseURL: baseURL, path: path, name: name)
+            pageFallback = viewer != nil ? url : nil
+            content = .url(viewer ?? url)
         case .plain:
             do {
                 let text = try await APIClient.shared.fetchArtifactText(baseURL: baseURL, path: path)

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kraken — compiled diagram</title>
+  </head>
+  <body>
+    <!-- The isoscene viewer page: fetches the diagram card named by ?src=,
+         compiles it with the same lib the board uses, and falls back to the
+         flat card (location.replace) when it is bespoke or not a diagram.
+         Loaded by the iOS app's artifact WKWebView for .html cards; also
+         reachable from any browser. -->
+    <div id="root"></div>
+    <script type="module" src="/src/iso/main.ts"></script>
+  </body>
+</html>

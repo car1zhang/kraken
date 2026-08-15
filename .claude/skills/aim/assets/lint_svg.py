@@ -11,7 +11,7 @@ Warnings print the same way with a "(warning)" suffix and never affect the exit 
 
 Warn-tier rules, the complete list: TEXT_OVERFLOW, SHAPE_TEXT_FIT, NEST_WELL,
 HOLDS_MISSING, HOLDS_EMPTY, GEOM_UNPARSEABLE, COLOUR_NO_GLYPH, COLOUR_AS_CATEGORY,
-CODE_REF_MISSING, CODE_REF_BASENAME. Every other rule is a hard failure.
+CODE_REF_MISSING, CODE_REF_BASENAME, SMIL_RETIRED. Every other rule is a hard failure.
 Anything this linter cannot parse or read degrades to a finding — it never raises.
 
 stdlib only: re, sys, json, argparse, pathlib, xml.parsers.expat.
@@ -1026,6 +1026,21 @@ def lint(path, marker_id=None, prefix=None, code_refs=False):
                 failures.append((el.line, "ANIM_BEGIN",
                                   f'begin="{begin}" has a positive delay; use "0s" or a negative value'))
                 break
+
+    # SMIL_RETIRED (warning only): fragments ship static — the board's compiled
+    # view generates motion at display time — so SMIL in a fragment is a retired
+    # idiom. Warning rather than failure because already-shipped fragments carry
+    # flow dots legally; the ask is "never ADD animation", and a legacy fragment
+    # re-linted after an unrelated fix accepts this warning rather than stripping
+    # blocks the round never touched. One warning per fragment: the first SMIL
+    # element stands for all of them.
+    for el in elements:
+        if el.tag in ("animate", "animateMotion", "animateTransform", "set"):
+            warnings.append((el.line, "SMIL_RETIRED",
+                             "fragment animation is retired — fragments ship static and the board's "
+                             "compiled view owns motion; remove the SMIL from a new fragment "
+                             "(legacy fragments carrying it stay valid; never add more)"))
+            break
 
     # TEXT_OVERFLOW (warning only)
     if vb_w is not None:

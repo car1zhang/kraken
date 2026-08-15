@@ -1973,6 +1973,46 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .panel-body.raw { white-space: pre-wrap; font: 10px/1.7 var(--mono); color: var(--body); }
 .panel-body.page { padding: 0; overflow: hidden; }
 .panel-body.page iframe { display: block; width: 100%; height: 78vh; border: none; background: #fff; }
+/* The compiled 3D diagram view (IsoSceneView). The scene mounts in the
+   board's own document — unlike the iframe above — precisely so these
+   --iso-* custom properties can retheme it; the emitted SVG's every paint is
+   a var(--iso-…, fallback) with the dark-HUD value as the fallback, so with
+   no overrides the dark look IS the render. */
+.panel-body.iso { padding: 0; overflow: auto; background: var(--iso-bg, #0a0e16); max-height: 78vh; }
+.panel-body.iso svg { display: block; width: 100%; height: auto; }
+.panel-body.iso [data-code] { cursor: pointer; }
+/* Light theme swaps the whole material set. Every name here mirrors one the
+   renderer emits as var(--iso-<name>, <dark fallback>) — the dark values live
+   only in the emitted markup's fallbacks, so this block is the complete list
+   of overridable names (grep the lib for `var(--iso-` when adding one). The
+   semantic hues keep their meaning and only darken enough to clear the light
+   ground; the sparkle gold darkens the most (its dark-mode value is nearly
+   invisible on white). */
+:root[data-theme="light"] {
+  --iso-bg: #eef2f8;
+  --iso-floor: #e2e8f3;
+  --iso-floor-line: #c9d4e8;
+  --iso-panel: #f7f9fd;
+  --iso-panel-line: #d4dcec;
+  --iso-face-top: #d7e0f0;
+  --iso-face-left: #c3cfe4;
+  --iso-face-right: #adbcd6;
+  --iso-stroke: #7f92b8;
+  --iso-ink: #22304a;
+  --iso-muted: #5a6a88;
+  --iso-faint: #8b99b4;
+  --iso-screen: #1b2740;
+  --iso-shadow: #1b2740;
+  --iso-accent: #007a9e;
+  --iso-accent-dim: #4d94ab;
+  --iso-spark: #a97b00;
+  --iso-grey: #6f7d94;
+  --iso-red: #c2183a;
+  --iso-yellow: #a36f00;
+  --iso-green: #0f7a3d;
+  --iso-blue: #1d5fd6;
+  --iso-purple: #7d3fc9;
+}
 
 /* rendered markdown — the artifact viewer's whole surface. Headings take the
    display face (they are headings); body, code and tables stay mono. */

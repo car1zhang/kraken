@@ -23,31 +23,45 @@ import (
 // guarding the empty-dist case (that one fails at compile time, loudly, which
 // is the intended behaviour). They guard the PARTIAL case.
 
-// assetRefRe pulls src="/assets/…" and href="/assets/…" out of index.html.
+// assetRefRe pulls src="/assets/…" and href="/assets/…" out of an entry page.
 var assetRefRe = regexp.MustCompile(`(?:src|href)="(/assets/[^"]+)"`)
 
 func TestEmbeddedBundleIsComplete(t *testing.T) {
+	// Both vite entries: the board SPA, and the isoscene viewer page the iOS
+	// app loads for .html diagram cards. iso.html earns its place here the
+	// same way index.html did — nothing else gates it: dropping the `iso`
+	// entry from vite.config.ts would leave every other Go test green while
+	// every diagram card silently lost its 3D view — on the phone the app's
+	// own 404 fallback (ArtifactWebView.fallbackURL) would quietly serve the
+	// flat card instead, so nothing would even look broken.
+	for _, page := range []string{"index.html", "iso.html"} {
+		idx, err := fs.ReadFile(webAssets, "_ui/dist/"+page)
+		if err != nil {
+			t.Fatalf("read embedded _ui/dist/%s: %v "+
+				"(did `make build` run? dist/ is generated, not committed)", page, err)
+		}
+
+		refs := assetRefRe.FindAllStringSubmatch(string(idx), -1)
+		if len(refs) == 0 {
+			t.Fatalf("%s references no /assets/* files — vite emitted an "+
+				"unprocessed page, which means the bundle was never built into it. "+
+				"This exact failure shipped once during the port: an unclosed <script> tag "+
+				"in the head swallowed the module script, so vite treated the page as a "+
+				"static file, copied it through, and emitted no JS at all — a green build "+
+				"that serves a blank page.", page)
+		}
+
+		for _, m := range refs {
+			ref := strings.TrimPrefix(m[1], "/")
+			if _, err := fs.Stat(webAssets, "_ui/dist/"+ref); err != nil {
+				t.Errorf("%s references %s but it is not in the embed: %v", page, m[1], err)
+			}
+		}
+	}
+
 	idx, err := fs.ReadFile(webAssets, "_ui/dist/index.html")
 	if err != nil {
-		t.Fatalf("read embedded _ui/dist/index.html: %v "+
-			"(did `make build` run? dist/ is generated, not committed)", err)
-	}
-
-	refs := assetRefRe.FindAllStringSubmatch(string(idx), -1)
-	if len(refs) == 0 {
-		t.Fatal("index.html references no /assets/* files — vite emitted an " +
-			"unprocessed index.html, which means the bundle was never built into it. " +
-			"This exact failure shipped once during the port: an unclosed <script> tag " +
-			"in the head swallowed the module script, so vite treated index.html as a " +
-			"static file, copied it through, and emitted no JS at all — a green build " +
-			"that serves a blank board.")
-	}
-
-	for _, m := range refs {
-		ref := strings.TrimPrefix(m[1], "/")
-		if _, err := fs.Stat(webAssets, "_ui/dist/"+ref); err != nil {
-			t.Errorf("index.html references %s but it is not in the embed: %v", m[1], err)
-		}
+		t.Fatalf("re-read embedded _ui/dist/index.html: %v", err)
 	}
 
 	// The pre-paint theme stamp is the FOUC guard: it has to be inline in the
