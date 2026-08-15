@@ -2,10 +2,23 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readLS, writeLS } from "./useLocalStorage.ts";
 
-export const VIEWS = ["board", "log", "dream", "graph"] as const;
+export const VIEWS = ["board", "kronos", "graph", "dream", "log"] as const;
 export type View = (typeof VIEWS)[number];
 
 const LEGACY_KEY = "kraken-view";
+
+/**
+ * Navigate from OUTSIDE the chrome's tab row (the kronos dock's ⤢ is the one
+ * caller today). A bare `location.hash =` write would route fine — the
+ * hashchange listener below picks it up — but it would skip the LEGACY_KEY
+ * stamp `navigate` performs, and that key's whole claim is to be a faithful
+ * record of the last view for a downgrade. One helper keeps the two writes
+ * paired everywhere a jump originates.
+ */
+export function navigateTo(v: View): void {
+  writeLS(LEGACY_KEY, v);
+  if (parseHash() !== v) location.hash = `#/${v}`;
+}
 
 /** The one place a stored/URL view is validated. See useHashRoute's header. */
 function isView(raw: string | null | undefined): raw is View {
@@ -18,7 +31,9 @@ function parseHash(): View | null {
 }
 
 /**
- * The four views as real URLs (#/board, #/log, #/dream, #/graph) — Q6.
+ * The five views as real URLs (#/board, #/kronos, #/graph, #/dream, #/log) —
+ * Q6, plus the kronos panel added beside them. VIEWS' order IS the tab order
+ * the chrome renders (carl's pick: kronos beside the board, log last).
  *
  * The vanilla board had no router at all: the active view was a localStorage
  * string toggling `hidden` attributes, so there was no back button and no
@@ -69,8 +84,9 @@ export function useHashRoute(): [View, (v: View) => void] {
 
   const navigate = useCallback((v: View) => {
     setView(v);
-    writeLS(LEGACY_KEY, v);
-    if (parseHash() !== v) location.hash = `#/${v}`;
+    // navigateTo holds the stamp-and-route pairing so two implementations of
+    // it cannot drift; setView is the one thing a non-component caller lacks
+    navigateTo(v);
   }, []);
 
   return [view, navigate];

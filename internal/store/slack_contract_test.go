@@ -245,6 +245,10 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// jobs.ready and the prereqs table, both of which a genuine v16 database
 	// had and this fresh one no longer does.
 	for _, stmt := range []string{
+		// v24 adds kronos' orch_inbox — a later migration's table in this
+		// walk's terms, and a leftover one fails that step's bare CREATE
+		// exactly as a leftover linear_issues would.
+		`DROP TABLE IF EXISTS orch_inbox`,
 		// v23 adds BOTH: the goals table and jobs.goal_id. The column goes
 		// first because it carries the REFERENCES clause onto the table being
 		// dropped right after it.

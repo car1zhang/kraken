@@ -24,6 +24,22 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v24: drop kronos' one table. It is brand new at v24 (schemaV24
+	// adds it and touches nothing else), so there is nothing to put back in
+	// its place and no rows to carry — the v17 arm's situation exactly, and
+	// the same ruling: this helper reproduces an older SHAPE.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 24 {
+		for _, stmt := range []string{
+			`DROP TABLE orch_inbox`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v24) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v23: drop jobs.goal_id and the goals table (both added at v23,
 	// absent through v22). The column goes FIRST: it carries the REFERENCES
 	// clause, so dropping the table out from under it would leave jobs holding

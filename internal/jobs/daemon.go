@@ -679,6 +679,12 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			if d.Notified[key] == 0 && !anyCellSessionAlive(j) {
 				if !mirror {
 					notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
+					// kronos' inbox (orch.go), at the same transition and
+					// under the same Notified key: one row per streak, never
+					// one per tick. Inside the !mirror arm with the
+					// notification for the same reason — a mirror board
+					// neither notifies nor drives the real kronos.
+					enqueueOrchNotice(orchKindCellGone, j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
 				}
 				dlogEvent("error", "cell-gone", "%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
 				d.Notified[key] = now.Unix()
@@ -725,6 +731,11 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 						suffix = " — will auto-retry; also on the board"
 					}
 					notify("kraken ⚠ "+j.Slug, reason+suffix)
+					// kronos' inbox, under the health key's own dedup: a
+					// STANDING stall keeps the same reason at the tail of the
+					// transcript indefinitely, so this fires on the streak
+					// rather than on the tick.
+					enqueueOrchNotice(orchKindCellUnhealth, j.Slug, reason+suffix)
 					d.Notified[key] = now.Unix()
 					dlogEvent("error", "cell-unhealthy", "unhealthy %s: %s", j.Slug, reason)
 				}
@@ -893,6 +904,11 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				if d.Notified[key] == 0 {
 					if !mirror {
 						notify("kraken ⏸ "+j.Slug, "blocked — see the board")
+						// kronos' inbox, under the same key — which is
+						// deleted whenever the derived state reads working
+						// again, so a job that blocks, unblocks and blocks
+						// again enqueues once per block rather than once ever.
+						enqueueOrchNotice(orchKindJobBlocked, j.Slug, "blocked — the cell is waiting; the board carries the question")
 					}
 					d.Notified[key] = now.Unix()
 				}
@@ -1010,6 +1026,34 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		deliverSlack(ActiveStore(), all)
 	}
 
+	// Orchestrator (kronos.go, orch.go, kronosctx.go): keep kronos alive
+	// while the feature is on, bump it when inbox rows are waiting, and warn
+	// carl before his orchestrator's context fills. Each takes a snapshot
+	// THIS tick already holds — EnsureKronos the `live` session map,
+	// deliverOrch the discovered `all` peers — for the reason the Slack block
+	// above states: a discovery sweep costs a `ps` plus a `tmux list-panes`
+	// and one per tick is the budget.
+	//
+	// Skipped under mirror for both of that block's reasons at once (real
+	// store writes, and typing into a pane belonging to the live deployment),
+	// and gated on KronosEnabled() so a machine that never opted in pays one
+	// stat. Each pass re-checks that gate itself — the gate here is the cheap
+	// early exit, not the guarantee.
+	if !mirror && KronosEnabled() {
+		if err := EnsureKronos(ActiveStore(), live); err != nil {
+			// Deduped like irisfail: a spawn that fails because tmux or claude
+			// is unavailable will fail identically four times a minute.
+			if d.Notified["kronosfail"] == 0 {
+				dlogErr("kronos: %v", err)
+				d.Notified["kronosfail"] = now.Unix()
+			}
+		} else {
+			delete(d.Notified, "kronosfail")
+		}
+		deliverOrch(ActiveStore(), all)
+		ctxPass(ActiveStore())
+	}
+
 	// linear pass (self-paced internally — see LinearPass): poll Linear for
 	// issues newly assigned to carl, create a draft job per qualifying one,
 	// and keep the ones that already have a job in step. Beside the graph
@@ -1113,6 +1157,11 @@ func (d *daemonState) startCreatedJob(j *Job) bool {
 	if err := SubmitJob(j); err != nil {
 		dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
 		notify("kraken ⚠ "+j.Slug, "created but could not start: "+err.Error())
+		// kronos' inbox. No dedup key: this fires once per job the tick
+		// CREATED (dream, graph), nothing retries it, and the job stays draft
+		// — so the transition happens at most once for that job ever. Its one
+		// caller sits inside the tick's !mirror block.
+		enqueueOrchNotice(orchKindStartFailed, j.Slug, "created but could not start: "+err.Error())
 		return false
 	}
 	dlogEvent("info", "cell-start", "started %s (cell %s)", j.Slug, CellSession(j))
@@ -1270,6 +1319,12 @@ func (d *daemonState) trackPRs(j *Job) {
 			msg = "PR merged — job already accepted; recorded"
 		}
 		notify("kraken ✓ "+j.Slug, msg)
+		// kronos' inbox. No Notified key here because the transition itself is
+		// the dedup: newlyMerged is what reconcilePRs reports as a state
+		// CHANGE, and writeJobPRs has already committed the new state above,
+		// so a PR is newly-merged exactly once ever. trackPRs runs only inside
+		// the daemon's !mirror block, so the mirror gate is already upstream.
+		enqueueOrchNotice(orchKindPRMerged, j.Slug, msg+" — "+url)
 	}
 }
 
@@ -1369,13 +1424,21 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 		// the same user channel with the same read-as-carl hazard the
 		// comment block above the CI bump spells out, and a cell has
 		// visibly hedged on whether this message was carl or a machine.
+		//
+		// The message states the GOAL (get the branch mergeable) rather
+		// than prescribing rebase + --force-with-lease: on a branch that
+		// already carries pushed merge commits and an open PR, a history
+		// rewrite is the wrong move, and a lead correctly refused the old
+		// prescription three times in one afternoon (merging instead, no
+		// force needed, every time) — a canned bump the recipient must
+		// overrule on every occurrence is a hazard, not advice.
 		if f.BaseRef != "" {
 			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with %s — run git fetch origin && git rebase origin/%s in your worktree, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				prWatchPrefix+" %s has merge conflicts with %s — get the branch mergeable: git fetch origin, then merge origin/%s into your branch (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
 				url, f.BaseRef, f.BaseRef))
 		} else {
 			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with its base branch — fetch, rebase onto the base, resolve the conflicts, verify the build still passes, then git push --force-with-lease, and continue",
+				prWatchPrefix+" %s has merge conflicts with its base branch — get the branch mergeable: fetch, merge the base branch in (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
 				url))
 		}
 		newConflictState = "conflicting"
