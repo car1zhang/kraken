@@ -3145,35 +3145,37 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    still floats over the columns. Do not raise it past 10 (body::after's edge
    strip) without re-reading the z-index block near the top of this sheet. */
 .goals-dock { position: fixed; right: 14px; bottom: 14px; z-index: 6; }
-/* ---- kronos dock — the orchestrator beside the goals box ----------------
-   GoalsPanel's fixed-dock pattern one panel-width to the LEFT: 14px inset +
-   330px goals width + 8px gutter = 352px, so the two docks sit side by side
-   and neither covers the other in any expand/collapse combination. Same
-   z-band (under the overlays at 20+), same board-only mount. */
-.kronos-dock { position: fixed; right: 352px; bottom: 14px; z-index: 6; }
+/* ---- kronos dock — the orchestrator at the board's other corner ----------
+   GoalsPanel's fixed-dock pattern anchored LEFT, mirroring the goals box on
+   the right (carl's call 2026-08-15 — the two docks bracket the board rather
+   than stack beside each other). Same z-band (under the overlays at 20+),
+   same board-only mount. */
+.kronos-dock { position: fixed; left: 14px; bottom: 14px; z-index: 6; }
 .kronos-dock-panel {
-  /* 366 = the dock's own 352px right inset + the same 14px left gutter the
-     goals min() reserves — one derivation, stated where each is used */
+  /* 366 = this dock's own 14px left inset + an 8px gutter + the goals
+     panel's 330px + its 14px right inset — reserved so the two expanded
+     docks can never overlap at any viewport width */
   width: min(330px, calc(100vw - 366px));
-  background: color-mix(in srgb, var(--polling) 7%, var(--b1));
+  background: color-mix(in srgb, var(--ac) 7%, var(--b1));
   border: 1px solid var(--border-strong);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--polling) 25%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ac) 25%, transparent);
   clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
   display: flex; flex-direction: column;
 }
 .kd-head-row { display: flex; align-items: stretch; }
-/* .gs-head / .goals-pill's SHAPES on the kronos status hue — own rules
+/* .gs-head / .goals-pill's SHAPES on the goals palette too — own rules
    rather than borrowed classes, so a goals restyle cannot silently restyle
-   this dock, and because those two follow the ACCENT while everything else
-   on this panel follows --polling (a primitive that must not follow the
-   accent — the dock's head drifting violet over a cyan body was the tell). */
+   this dock. The chrome follows --ac/--tint exactly as the goals panel does
+   (carl's call 2026-08-15: the dock must adhere to the board's scheme);
+   --polling remains the KRONOS VIEW's status hue inside the conversation,
+   never this dock's chrome. */
 .kd-head {
   flex: 1;
   display: flex; align-items: center; gap: 8px;
   width: 100%; text-align: left;
   padding: 5px 12px;
-  background: color-mix(in srgb, var(--polling) 5%, var(--b1));
-  border: none; border-left: 3px solid var(--polling);
+  background: color-mix(in srgb, var(--ac) 5%, var(--b1));
+  border: none; border-left: 3px solid var(--tint);
   color: var(--muted); font: 600 10px var(--display); letter-spacing: 0.2em;
   transition: color 80ms var(--ease);
 }
@@ -3183,18 +3185,18 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .kd-pill {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 5px 12px;
-  background: color-mix(in srgb, var(--polling) 7%, var(--b1));
+  background: color-mix(in srgb, var(--ac) 7%, var(--b1));
   border: 1px solid var(--border-strong);
   color: var(--muted); font: 600 9px var(--display); letter-spacing: 0.16em;
   clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
   transition: color 80ms var(--ease), border-color 80ms var(--ease);
-  /* a right-anchored pill at right: 352px has only 100vw - 366px of room —
-     without a clamp it slides off-screen LEFT at narrow widths, clipped with
-     no scrollbar (the goals pill at right: 14px never meets this) */
+  /* the clamp reserves the goals panel's corner (its 330px + both insets +
+     the gutter): a left-anchored pill overflows RIGHT at narrow widths, and
+     without this it would run under an expanded goals box */
   max-width: calc(100vw - 366px);
   overflow: hidden; white-space: nowrap;
 }
-.kd-pill:hover { color: var(--fg); border-color: var(--polling); }
+.kd-pill:hover { color: var(--fg); border-color: var(--ac); }
 .kd-pill .n { font: 9px var(--mono); letter-spacing: 0.06em; }
 .kd-pill .tri { font-size: 8px; letter-spacing: 0; }
 .kd-act {
