@@ -1,5 +1,11 @@
 [
   {
+    "file": "warn-smil-retired.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "legacy flow-dot SMIL -> exactly one SMIL_RETIRED warning per fragment (two animateMotion elements, one warning), never a failure"
+  },
+  {
     "file": "fail-tiling-defeat.svg",
     "expect": "fail",
     "warnings": 0,

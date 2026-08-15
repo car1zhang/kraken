@@ -1,0 +1,455 @@
+<meta charset="utf-8">
+<title>Picking a treatment: what is going on with the thing</title>
+<!--
+  DIAGRAM CARD TEMPLATE — one standalone artifact per diagram (10-<id>.html .. 49-<id>.html).
+  - Filled in per diagram by the doc pipeline's wrap step: the CARD_TITLE tokens in the title
+    above and the h1 below, and the CAPTION token in the figcaption below, are substituted by zeus
+    (title plus a self-sufficient 2-4 sentence caption, HTML-escaped); the DIAGRAM placeholder
+    comment inside the figure below is substituted with the lint-clean hermes fragment's raw svg
+    contents by a mechanical python one-liner (see .claude/skills/aim/SKILL.md, Core Rules,
+    "Wrap, don't flatten") — zeus never reads or writes SVG bodies.
+  - This file is deliberately a BODY FRAGMENT — no DOCTYPE, html, head, or body tags. Browsers
+    render it fine when opened locally, and every card stays self-contained (inline CSS, one
+    inline SVG, no external assets) so it can be viewed or shared on its own.
+  - The caption must be fully self-sufficient: readable and meaningful with no other artifact
+    open — state what the figure shows and what to take away, not just a label.
+  - The style block below is copied from spec-template.html's shared diagram CSS: all svg/
+    figure/root-var rules verbatim (same classes, same dark-mode + reduced-motion handling), so a
+    card renders identically to the other cards and legacy templates, with the prose-only rules
+    (h2-h4, code/pre, table, blockquote.meta) trimmed since a card has no prose beyond its own
+    title.
+-->
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
+    --surface: #f6f8fa;
+    --red: #d1242f; --yellow: #9a6700; --green: #1a7f37; --blue: #0969da; --purple: #8250df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+      --surface: #161b22;
+      --red: #f85149; --yellow: #d29922; --green: #3fb950; --blue: #4493f8; --purple: #ab7df8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 940px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem;
+  }
+  h1 { font-size: 1.9rem; border-bottom: 1px solid var(--line); padding-bottom: .4rem; }
+  /* Diagram slots */
+  figure.diagram { margin: 1.25rem 0; border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; background: var(--surface); overflow-x: auto; }
+  figure.diagram figcaption { margin-top: .6rem; font-size: .85rem; color: var(--muted); }
+  /* ===== Shared SVG styling — HARDENED (this block is deliverable D1) ===== */
+  svg { display: block; width: 100%; height: auto; font-family: inherit; }
+  /* Baseline safety net: TRULY zero-specificity defaults so NO shape can ever render as SVG's
+     default solid black. Class rules below always win; explicit fill/stroke attrs are respected.
+     EVERY :not() must sit INSIDE the :where(), never beside it. :where() zeroes only its own
+     argument, so `svg :where(path):not([stroke]):not([class])` is (0,2,1) — it OUT-RANKS every
+     treatment rule at (0,1,2) and repaints path-drawn silhouettes (store, decision, cloud, file,
+     event, the actor stem, path regions, every inner-detail path) muted, silently discarding the
+     claim the treatment was making. Written as below each rule is (0,0,1) and loses to everything,
+     which is the entire point of a safety net. */
+  svg :where(rect:not([fill]), circle:not([fill]), ellipse:not([fill]), polygon:not([fill]))
+    { fill: var(--surface); }
+  svg :where(rect:not([stroke]), circle:not([stroke]), ellipse:not([stroke]), polygon:not([stroke]))
+    { stroke: var(--line); }
+  svg :where(path:not([fill])) { fill: none; }
+  svg :where(path:not([stroke]):not([class])) { stroke: var(--muted); }
+  svg text { fill: var(--fg); font-size: 13px; }
+  /* Dual selectors: match both <g class="node"><rect/></g> AND bare <rect class="node"/>.
+     Every SHAPE rule uses the direct-child combinator (>): containment nests a child <g> inside
+     its parent <g>, and a descendant selector would repaint the nested child's own geometry. */
+  svg .node > rect, svg rect.node { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .node > text, svg .store > text, svg .lane > text { text-anchor: middle; dominant-baseline: middle; }
+  svg .group > rect, svg rect.group { fill: none; stroke: var(--line); stroke-dasharray: 5 4; }
+  svg .group > text, svg text.group { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .store > rect, svg rect.store, svg .store > ellipse, svg ellipse.store, svg .store > path
+    { fill: var(--surface); stroke: var(--fg); stroke-width: 1.2; }
+  svg .lane > rect, svg rect.lane { fill: var(--surface); stroke: var(--line); }
+  svg .edge { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  svg .edge.dashed { stroke-dasharray: 5 4; }
+  svg .edgeLabel { fill: var(--muted); font-size: 12px; text-anchor: middle; }
+  svg .arrowhead { fill: var(--muted); stroke: none; }
+  svg .flow-dot { fill: var(--blue); stroke: none; }
+  svg .cell > rect, svg rect.cell { fill: var(--bg); stroke: var(--line); }
+  svg .cell > text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
+  svg .step > circle { fill: var(--blue); stroke: none; }
+  svg .step > text { fill: var(--bg); font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
+  /* A treatment on a .step must carry the DISC, not just the ring: at (0,1,2) the treatment
+     rules below would otherwise leave a red ring and red numeral on a blue disc. These are
+     (0,2,2), so they win wherever they sit. The numeral is reasserted to --bg for the same
+     reason — the treatment's own > text rule would repaint it into its own fill. */
+  svg .step.grey > circle { fill: var(--muted); }
+  svg .step.red > circle { fill: var(--red); }
+  svg .step.yellow > circle { fill: var(--yellow); }
+  svg .step.green > circle { fill: var(--green); }
+  svg .step.blue > circle { fill: var(--blue); }
+  svg .step.purple > circle { fill: var(--purple); }
+  svg .step.grey > text, svg .step.red > text, svg .step.yellow > text,
+  svg .step.green > text, svg .step.blue > text, svg .step.purple > text
+    { fill: var(--bg); }
+  /* Semantic TREATMENT classes — the sanctioned replacement for ad-hoc hex colors.
+     One claim each: grey = missing/absent/removed, red = critically wrong, yellow =
+     warning/likely wrong, green = fixed/passing/working, blue = new/added, purple =
+     emphasis/unorthodox. All six carry the SAME emphasis (stroke-width 1.8 on the shape,
+     font-weight 600 on the text) so a claim reads equally strongly whichever treatment
+     states it — the strength is the claim, the hue is which claim.
+     The bare-element halves (svg rect.grey, svg text.red, ...) are DEFENCE IN DEPTH, not an
+     expected authoring form: CLASS_PLACEMENT pins all six treatments to a <g> or a <path>, so
+     lint-clean markup never produces a bare <rect class="grey">. They stay because the pattern
+     predates this cutover and costs nothing, and because an unstyled box is the worst failure
+     this stylesheet has — but write the <g> form. */
+  /* grey repeats its dash pattern on that bare-element half rather than relying on the
+     silhouette rule below: grey is the one treatment whose load-bearing signal is the border
+     STYLE, so if the fallback ever does fire, muted-stroke-only would read as
+     ordinary-and-faded — a different claim, not a weaker one. */
+  svg .grey > rect, svg rect.grey { stroke: var(--muted); stroke-width: 1.8; stroke-dasharray: 2 3; }
+  svg .grey > text, svg text.grey { fill: var(--muted); font-weight: 600; }
+  svg .red > rect, svg rect.red { stroke: var(--red); stroke-width: 1.8; }
+  svg .red > text, svg text.red { fill: var(--red); font-weight: 600; }
+  svg .yellow > rect, svg rect.yellow { stroke: var(--yellow); stroke-width: 1.8; }
+  svg .yellow > text, svg text.yellow { fill: var(--yellow); font-weight: 600; }
+  svg .green > rect, svg rect.green { stroke: var(--green); stroke-width: 1.8; }
+  svg .green > text, svg text.green { fill: var(--green); font-weight: 600; }
+  svg .blue > rect, svg rect.blue { stroke: var(--blue); stroke-width: 1.8; }
+  svg .blue > text, svg text.blue { fill: var(--blue); font-weight: 600; }
+  svg .purple > rect, svg rect.purple { stroke: var(--purple); stroke-width: 1.8; }
+  svg .purple > text, svg text.purple { fill: var(--purple); font-weight: 600; }
+  /* All six are legal on edges too. .edge.grey is DOTTED (2 3) where .edge.dashed is DASHED
+     (5 4) so the two never read as the same mark, and it is placed after .edge.dashed
+     above so an `edge dashed grey` resolves to the dotted pattern the treatment asks for.
+     Edge markers need no per-treatment rule: they inherit .arrowhead. */
+  svg .edge.grey { stroke: var(--muted); stroke-dasharray: 2 3; }
+  svg .edge.red { stroke: var(--red); }
+  svg .edge.yellow { stroke: var(--yellow); }
+  svg .edge.green { stroke: var(--green); }
+  svg .edge.blue { stroke: var(--blue); }
+  svg .edge.purple { stroke: var(--purple); }
+  svg .pill > rect { fill: var(--surface); stroke: var(--muted); }
+  svg .pill > text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .decision > path { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .decision > text { fill: var(--fg); font-size: 12px; text-anchor: middle; dominant-baseline: middle; }
+  svg .actor > circle { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor > path { fill: none; stroke: var(--fg); stroke-width: 1.2; }
+  svg .actor > text { fill: var(--fg); font-size: 12px; text-anchor: middle; }
+  svg .badge > circle { fill: var(--surface); stroke: var(--line); }
+  svg .badge > text { fill: var(--fg); font-size: 10px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
+  svg .bar > rect { fill: var(--blue); stroke: none; }
+  svg .bar.grey > rect { fill: var(--muted); }
+  svg .bar.red > rect { fill: var(--red); }
+  svg .bar.yellow > rect { fill: var(--yellow); }
+  svg .bar.green > rect { fill: var(--green); }
+  svg .bar.blue > rect { fill: var(--blue); }
+  svg .bar.purple > rect { fill: var(--purple); }
+  svg .axis { stroke: var(--muted); stroke-width: 1; fill: none; }
+  svg .region > rect, svg .region > ellipse, svg .region > path { fill: var(--blue); opacity: .12; stroke: none; }
+  /* Match the base .region rule above: a region is a coverage ZONE and a blob is its natural
+     shape, so a path- or ellipse-drawn `region red` must recolor too rather than stay blue.
+     The path arm excludes .spark: these variants are (0,2,2) and would otherwise out-specify
+     the spark rule, which relies on being (0,1,2)-and-last and cannot be raised. */
+  svg .region.grey > rect, svg .region.grey > ellipse, svg .region.grey > path:not(.spark)
+    { fill: var(--muted); }
+  svg .region.red > rect, svg .region.red > ellipse, svg .region.red > path:not(.spark)
+    { fill: var(--red); }
+  svg .region.yellow > rect, svg .region.yellow > ellipse, svg .region.yellow > path:not(.spark)
+    { fill: var(--yellow); }
+  svg .region.green > rect, svg .region.green > ellipse, svg .region.green > path:not(.spark)
+    { fill: var(--green); }
+  svg .region.blue > rect, svg .region.blue > ellipse, svg .region.blue > path:not(.spark)
+    { fill: var(--blue); }
+  svg .region.purple > rect, svg .region.purple > ellipse, svg .region.purple > path:not(.spark)
+    { fill: var(--purple); }
+  svg .region > text { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .title { fill: var(--fg); font-size: 14px; font-weight: 600; text-anchor: start; }
+  svg .note { fill: var(--muted); font-size: 12px; text-anchor: start; }
+  svg .dim { opacity: .45; }
+  /* ===== Shape kit: one silhouette per component kind ===== */
+  /* Compute family — bg fill, fg outline */
+  svg .proc > rect, svg .cli > rect, svg .thread > rect, svg .fn > rect, svg .ui > rect,
+  svg .iface > rect, svg .pkg > rect, svg .machine > rect, svg .agent > rect,
+  svg .event > path, svg .timer > circle, svg .cloud > path
+    { fill: var(--bg); stroke: var(--fg); stroke-width: 1.2; }
+  /* Inner detail strokes: dividers, subroutine bars, clock hands, stems, 3D faces.
+     agent is deliberately absent: its only direct <path> child is the spark badge, not inner detail. */
+  svg .proc > rect + rect, svg .cli > path, svg .fn > path, svg .ui > path, svg .iface > path,
+  svg .timer > path, svg .table > path, svg .type > path, svg .machine > path
+    { fill: none; stroke: var(--muted); stroke-width: 1; }
+  /* Small solid detail shapes: window dots, lollipop knob, component tabs */
+  svg .ui > circle, svg .iface > circle, svg .pkg > rect + rect, svg .pkg > rect + rect + rect
+    { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+  /* thread is lightweight/ephemeral: dashed outline */
+  svg .thread > rect { stroke-dasharray: 5 4; }
+  /* Data family — surface fill, fg outline */
+  svg .store > path, svg .store > ellipse, svg .table > rect, svg .file > path,
+  svg .queue > rect, svg .type > rect
+    { fill: var(--surface); stroke: var(--fg); stroke-width: 1.2; }
+  svg .cell.head > rect { fill: var(--surface); }
+  /* Every shape centers its label the way .node does */
+  svg .proc > text, svg .cli > text, svg .thread > text, svg .fn > text, svg .agent > text,
+  svg .timer > text, svg .iface > text, svg .event > text, svg .ui > text, svg .table > text,
+  svg .file > text, svg .queue > text, svg .type > text, svg .pkg > text, svg .machine > text,
+  svg .cloud > text, svg .llm > text
+    { text-anchor: middle; dominant-baseline: middle; }
+  /* A parent holding children moves its label to a top-left band (wins over the rule above) */
+  svg .holds > text
+    { text-anchor: start; dominant-baseline: auto; font-size: 12px; fill: var(--muted); }
+  /* Treatment variants must reach path/circle/ellipse silhouettes, not just rects.
+     Direct children only, so edges and arrowheads are never caught. */
+  /* grey is the one treatment that also changes the stroke PATTERN — absence reads as a
+     DOTTED outline. The mechanism is the one `svg .thread > rect { stroke-dasharray: 5 4 }`
+     above already uses; only the pattern differs (2 3, so grey and thread/dashed stay
+     distinguishable). Two reasons it is written exactly here:
+       - FULL OPACITY, deliberately: no .grey opacity rule. Grey at .45 measures 1.89:1
+         against the light page, and lands 1.46:1 from what `dim` does to an ordinary box —
+         so "this thing is absent" and "this is background context" would render as the same
+         thing. The dotted pattern, not a fade, is what carries absence.
+       - <g class="thread grey"> puts two stroke-dasharray declarations at equal specificity
+         (0,1,2) and source order alone decides the winner, so .grey is placed AFTER .thread:
+         the treatment is the more important claim. */
+  svg .grey > rect, svg .grey > path, svg .grey > circle, svg .grey > ellipse
+    { stroke: var(--muted); stroke-width: 1.8; stroke-dasharray: 2 3; }
+  svg .red > rect, svg .red > path, svg .red > circle, svg .red > ellipse
+    { stroke: var(--red); stroke-width: 1.8; }
+  svg .yellow > rect, svg .yellow > path, svg .yellow > circle, svg .yellow > ellipse
+    { stroke: var(--yellow); stroke-width: 1.8; }
+  svg .green > rect, svg .green > path, svg .green > circle, svg .green > ellipse
+    { stroke: var(--green); stroke-width: 1.8; }
+  svg .blue > rect, svg .blue > path, svg .blue > circle, svg .blue > ellipse
+    { stroke: var(--blue); stroke-width: 1.8; }
+  svg .purple > rect, svg .purple > path, svg .purple > circle, svg .purple > ellipse
+    { stroke: var(--purple); stroke-width: 1.8; }
+  /* bar and region are fill-carried, never stroked — reassert after ALL SIX treatment
+     variants, whose (0,1,2) selectors would otherwise give them an outline they never had
+     (and, for grey, a dash pattern to go with it) */
+  svg .bar > rect, svg .region > rect, svg .region > ellipse, svg .region > path
+    { stroke: none; stroke-dasharray: none; }
+  /* The sparkle: a filled blue mark, not an outlined silhouette — blue-filled at any size.
+     A spark badge is legal inside ANY silhouette, and every per-shape rule that could hit it
+     (svg .fn > path, svg .store > path, svg .event > path, svg .region > path, the six
+     treatment variants — grey, red, yellow, green, blue, purple — ...) is specificity (0,1,2).
+     So this rule must BOTH out-specify them — hence `svg path.spark`, also (0,1,2) — and come
+     last, to win the source-order tiebreak.
+     Do not "simplify" it back to a bare `svg .spark`: at (0,1,1) it loses to every one of those
+     rules and the badge renders as a hollow gray outline in every card. */
+  svg path.spark, svg .spark { fill: var(--blue); stroke: none; }
+  @media (prefers-reduced-motion: reduce) {
+    svg .flow-dot { display: none; }
+    figure.diagram * { animation: none !important; }
+  }
+</style>
+
+<h1>Picking a treatment: what is going on with the thing</h1>
+
+<figure class="diagram">
+  <svg viewBox="0 0 860 970" role="img" aria-label="One real element — the CRM_CUSTOMERS snowflake table — walked through the colour-decision procedure from a neutral entry to a yellow verdict, with every untaken branch drawn dim, then a static verdict strip of six shipped elements showing their shipped and proposed treatments">
+  <defs>
+    <marker id="arrow-recolor-walkthrough" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <text class="title" x="16" y="30">absence is grey and dotted, not a colour — red is only for wrong AND critical, so most wrongness is yellow</text>
+
+  <!-- ================= PART 1 — the decision walk (animated) ================= -->
+
+  <!-- step 1: entry — the shipped element, deliberately drawn NEUTRAL here -->
+  <g class="step">
+    <circle cx="32" cy="92" r="11"/>
+    <text x="32" y="96">1</text>
+  </g>
+  <g class="table">
+    <rect x="56" y="56" width="280" height="72" rx="2"/>
+    <path d="M 56,76 H 336 M 196,76 V 128 M 56,102 H 336"/>
+    <text x="196" y="67">CRM_CUSTOMERS — snowflake table</text>
+  </g>
+  <text class="note" x="370" y="96">shipped card draws it red — is that right?</text>
+
+  <path class="edge" id="rw-e1" d="M 196,128 V 160" marker-end="url(#arrow-recolor-walkthrough)"/>
+
+  <!-- step 2: is it not there? -->
+  <g class="step">
+    <circle cx="32" cy="204" r="11"/>
+    <text x="32" y="208">2</text>
+  </g>
+  <g class="decision">
+    <path d="M 196,160 L 316,204 L 196,248 L 76,204 Z"/>
+    <text x="196" y="208">is it not there?</text>
+  </g>
+
+  <!-- step 2, untaken: yes → absence is grey, and grey is a border style -->
+  <path class="edge dim" id="rw-u1" d="M 316,204 H 370" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel dim" x="343" y="196">yes</text>
+  <g class="pill grey dim">
+    <rect x="370" y="191" width="190" height="26" rx="13"/>
+    <text x="465" y="208">∅ absent — grey, dotted</text>
+  </g>
+
+  <path class="edge" id="rw-e2" d="M 196,248 V 272" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel" x="214" y="264">no</text>
+
+  <!-- step 3: is it wrong? -->
+  <g class="step">
+    <circle cx="32" cy="316" r="11"/>
+    <text x="32" y="320">3</text>
+  </g>
+  <g class="decision">
+    <path d="M 196,272 L 316,316 L 196,360 L 76,316 Z"/>
+    <text x="196" y="320">is it wrong?</text>
+  </g>
+
+  <!-- step 3, untaken: no → the state gate, then the provenance gate -->
+  <path class="edge dim" id="rw-u2" d="M 316,316 H 376" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel dim" x="346" y="308">no</text>
+
+  <g class="decision dim">
+    <path d="M 476,278 L 576,316 L 476,354 L 376,316 Z"/>
+    <text x="476" y="320">
+      <tspan x="476" dy="-0.6em">was broken,</tspan>
+      <tspan x="476" dy="1.2em">now repaired?</tspan>
+    </text>
+  </g>
+  <path class="edge dim" id="rw-u3" d="M 476,354 V 380" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel dim" x="497" y="371">yes</text>
+  <g class="pill green dim">
+    <rect x="381" y="380" width="190" height="26" rx="13"/>
+    <text x="476" y="397">✓ green — fixed / working</text>
+  </g>
+
+  <path class="edge dim" id="rw-u4" d="M 576,316 H 616" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel dim" x="596" y="308">no</text>
+
+  <g class="decision dim">
+    <path d="M 716,278 L 816,316 L 716,354 L 616,316 Z"/>
+    <text x="716" y="320">
+      <tspan x="716" dy="-0.6em">introduced by</tspan>
+      <tspan x="716" dy="1.2em">this change?</tspan>
+    </text>
+  </g>
+  <path class="edge dim" id="rw-u5" d="M 716,278 V 242" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel dim" x="738" y="262">yes</text>
+  <g class="pill blue dim">
+    <rect x="626" y="216" width="180" height="26" rx="13"/>
+    <text x="716" y="233">+ blue — new / added</text>
+  </g>
+  <path class="edge dim" id="rw-u6" d="M 716,354 V 380" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel dim" x="738" y="371">no</text>
+  <g class="pill dim">
+    <rect x="666" y="380" width="100" height="26" rx="13"/>
+    <text x="716" y="397">no colour</text>
+  </g>
+
+  <path class="edge" id="rw-e3" d="M 196,360 V 400" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel" x="214" y="384">yes</text>
+
+  <!-- step 4: confirmed AND critical? -->
+  <g class="step">
+    <circle cx="32" cy="452" r="11"/>
+    <text x="32" y="456">4</text>
+  </g>
+  <g class="decision">
+    <path d="M 196,400 L 316,452 L 196,504 L 76,452 Z"/>
+    <text x="196" y="456">
+      <tspan x="196" dy="-0.6em">confirmed AND</tspan>
+      <tspan x="196" dy="1.2em">critical?</tspan>
+    </text>
+  </g>
+
+  <!-- step 4, untaken: yes → red, the both-halves case -->
+  <path class="edge dim" id="rw-u7" d="M 316,452 H 370" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel dim" x="343" y="444">yes</text>
+  <g class="pill red dim">
+    <rect x="370" y="439" width="190" height="26" rx="13"/>
+    <text x="465" y="456">✗ red — critically wrong</text>
+  </g>
+  <text class="note dim" x="370" y="489">
+    <tspan x="370" dy="0">e.g. auto-reap killed a live cell</tspan>
+    <tspan x="370" dy="1.4em">and destroyed WIP</tspan>
+  </text>
+
+  <path class="edge" id="rw-e4" d="M 196,504 V 532" marker-end="url(#arrow-recolor-walkthrough)"/>
+  <text class="edgeLabel" x="214" y="522">no</text>
+
+  <!-- step 5: exit — the same element, now carrying its verdict -->
+  <g class="step">
+    <circle cx="32" cy="568" r="11"/>
+    <text x="32" y="572">5</text>
+  </g>
+  <g class="table yellow">
+    <rect x="56" y="532" width="290" height="72" rx="2"/>
+    <path d="M 56,552 H 346 M 201,552 V 604 M 56,578 H 346"/>
+    <text x="201" y="543">⚠ CRM_CUSTOMERS — snowflake table</text>
+    <animate attributeName="opacity" values="1;0.55;1" dur="2.5s" repeatCount="indefinite" begin="0s"/>
+  </g>
+  <text class="note" x="370" y="576">slow but working — wrong, not critically wrong</text>
+
+  <text class="note" x="24" y="648">red vs yellow = confirmed AND critical, or else yellow · blue vs green = provenance vs state</text>
+
+  <!-- flow dots ride the TAKEN path only: entry → the three gates → exit -->
+  <circle class="flow-dot" r="4">
+    <animateMotion dur="3s" repeatCount="indefinite" begin="0s">
+      <mpath href="#rw-e1"/>
+    </animateMotion>
+  </circle>
+  <circle class="flow-dot" r="4">
+    <animateMotion dur="3s" repeatCount="indefinite" begin="-0.75s">
+      <mpath href="#rw-e2"/>
+    </animateMotion>
+  </circle>
+  <circle class="flow-dot" r="4">
+    <animateMotion dur="3s" repeatCount="indefinite" begin="-1.5s">
+      <mpath href="#rw-e3"/>
+    </animateMotion>
+  </circle>
+  <circle class="flow-dot" r="4">
+    <animateMotion dur="3s" repeatCount="indefinite" begin="-2.25s">
+      <mpath href="#rw-e4"/>
+    </animateMotion>
+  </circle>
+
+  <!-- ================= PART 2 — the verdict strip (static) ================= -->
+
+  <g class="cell head"><rect x="20" y="690" width="250" height="28" rx="3"/><text x="145" y="708">element (verbatim from a shipped card)</text></g>
+  <g class="cell head"><rect x="270" y="690" width="100" height="28" rx="3"/><text x="320" y="708">shipped</text></g>
+  <g class="cell head"><rect x="370" y="690" width="120" height="28" rx="3"/><text x="430" y="708">proposed</text></g>
+  <g class="cell head"><rect x="490" y="690" width="350" height="28" rx="3"/><text x="665" y="708">why it changed</text></g>
+
+  <g class="cell"><rect x="20" y="718" width="250" height="32" rx="3"/><text x="145" y="738">node "temporary attention decoder"</text></g>
+  <g class="cell red"><rect x="270" y="718" width="100" height="32" rx="3"/><text x="320" y="738">✗ dim+red</text></g>
+  <g class="cell grey"><rect x="370" y="718" width="120" height="32" rx="3"/><text x="430" y="738">∅ grey</text></g>
+  <g class="cell"><rect x="490" y="718" width="350" height="32" rx="3"/><text x="665" y="738">discarded after training — absence is not a colour at all</text></g>
+
+  <g class="cell"><rect x="20" y="750" width="250" height="32" rx="3"/><text x="145" y="770">store "customer_search table"</text></g>
+  <g class="cell green"><rect x="270" y="750" width="100" height="32" rx="3"/><text x="320" y="770">✓ green</text></g>
+  <g class="cell blue"><rect x="370" y="750" width="120" height="32" rx="3"/><text x="430" y="770">+ blue</text></g>
+  <g class="cell"><rect x="490" y="750" width="350" height="32" rx="3"/><text x="665" y="770">it is the new table — added, not succeeding</text></g>
+
+  <g class="cell"><rect x="20" y="782" width="250" height="32" rx="3"/><text x="145" y="802">node "CRM_CUSTOMERS"</text></g>
+  <g class="cell red"><rect x="270" y="782" width="100" height="32" rx="3"/><text x="320" y="802">✗ red</text></g>
+  <g class="cell yellow"><rect x="370" y="782" width="120" height="32" rx="3"/><text x="430" y="802">⚠ yellow</text></g>
+  <g class="cell"><rect x="490" y="782" width="350" height="32" rx="3"/><text x="665" y="802">slow but working — wrong, not critically wrong</text></g>
+
+  <g class="cell"><rect x="20" y="814" width="250" height="32" rx="3"/><text x="145" y="834">pill "dormant: QWEN_STT_WS_URL unset"</text></g>
+  <g class="cell yellow"><rect x="270" y="814" width="100" height="32" rx="3"/><text x="320" y="834">⚠ yellow</text></g>
+  <g class="cell grey"><rect x="370" y="814" width="120" height="32" rx="3"/><text x="430" y="834">∅ grey</text></g>
+  <g class="cell"><rect x="490" y="814" width="350" height="32" rx="3"/><text x="665" y="834">the env var is absent — nothing is misbehaving</text></g>
+
+  <g class="cell"><rect x="20" y="846" width="250" height="32" rx="3"/><text x="145" y="866">cell "the · back · bed · room"</text></g>
+  <g class="cell yellow"><rect x="270" y="846" width="100" height="32" rx="3"/><text x="320" y="866">⚠ yellow</text></g>
+  <g class="cell"><rect x="370" y="846" width="120" height="32" rx="3"/><text x="430" y="866">no colour</text></g>
+  <g class="cell"><rect x="490" y="846" width="350" height="32" rx="3"/><text x="665" y="866">text tokens beside audio tokens is a category</text></g>
+
+  <g class="cell"><rect x="20" y="878" width="250" height="32" rx="3"/><text x="145" y="898">auto-reap killed a live cell on PR merge</text></g>
+  <g class="cell"><rect x="270" y="878" width="100" height="32" rx="3"/><text x="320" y="898">not drawn</text></g>
+  <g class="cell red"><rect x="370" y="878" width="120" height="32" rx="3"/><text x="430" y="898">✗ red</text></g>
+  <g class="cell"><rect x="490" y="878" width="350" height="32" rx="3"/><text x="665" y="898">confirmed and destroyed work — this is what red is for</text></g>
+
+  <text class="note" x="20" y="944">5 of 6 change — two of them leave the colour channel entirely</text>
+</svg>
+
+  <figcaption>The top half walks a real shipped element through the decision procedure: CRM_CUSTOMERS, the slow legacy Snowflake table the customer-search work exists to replace, drawn red in the shipped card. It exits yellow, because it works — just slowly — and red now requires wrong AND critical. The untaken branches are dimmed so the whole procedure stays visible, including the red branch, whose honest example is an incident rather than a design flaw: auto-reap killing a live cell and destroying uncommitted work. The bottom strip runs the procedure over six elements taken verbatim from shipped cards; five change, and two of those leave the colour channel entirely for grey-plus-dotted. This card is also the standard&#x27;s end-to-end test — it is the first figure written in the new vocabulary, linted by the new checks and wrapped by the new stylesheet.</figcaption>
+</figure>

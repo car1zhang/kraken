@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -20,17 +21,23 @@ import {
   wireCodeRefs,
   type CodeRefTarget,
 } from "../../lib/codeRefs.ts";
+import { cardCompilable } from "../../lib/isoscene/index.ts";
 import { ArtifactPager, useArtifactKeys } from "./ArtifactPager.tsx";
+import { IsoSceneView } from "./IsoSceneView.tsx";
 import { Overlay, type Mutate } from "./Overlay.tsx";
 import { showToast } from "./Toast.tsx";
 
-// The artifact viewer (app.js:1774 openArtifact). FOUR render modes, picked
-// from the URL's extension alone:
+// The artifact viewer (app.js:1774 openArtifact). FIVE render modes — three
+// picked from the URL's extension alone, two opt-in toggles:
 //
 //   png|jpe?g|gif|webp   → <img>
 //   html|svg|pdf         → same-origin <iframe src>
 //   anything else        → fetched text, rendered as markdown
 //   …with `raw` on       → the same fetched text, verbatim in a <pre>-ish body
+//   …with `3D` on        → the isoscene-compiled scene (IsoSceneView), offered
+//                          only for an .html diagram card whose whole markup
+//                          parses (lib/isoscene cardCompilable); a bespoke
+//                          card gets no 3D affordance and displays as-is
 //
 // The iframe is deliberately UNSANDBOXED. web/serve.go:253 justifies it as
 // "same trust as opening the file" — these are artifacts this machine's own
@@ -46,6 +53,17 @@ import { showToast } from "./Toast.tsx";
 
 const isPage = (url: string) => /\.(html|svg|pdf)$/i.test(url);
 const isImage = (url: string) => /\.(png|jpe?g|gif|webp)$/i.test(url);
+// only .html pages can hold a compilable diagram card; .svg/.pdf never offer 3D
+const isHtmlPage = (url: string) => /\.html?$/i.test(url);
+
+// The 3D toggle's session stickiness: compilable cards open in 3D (carl's
+// call — the compiled scene is the point of a diagram card, so it is the
+// default, with the toggle stepping back to the flat card). A reader who
+// toggles off gets the next card flat too. Module state rather than
+// per-artifact — the per-artifact reset block below deliberately re-seeds
+// from this, exactly how `raw` deliberately does NOT persist (raw is a
+// debugging posture, 3D is a reading preference).
+let isoDefault = true;
 
 export interface ArtifactParts {
   slug: string;
@@ -354,6 +372,9 @@ function ArtifactBody({
   onAskBranched,
 }: ArtifactBodyProps) {
   const [raw, setRaw] = useState(false);
+  // the compiled-3D toggle; seeded from (and feeding) the session-sticky
+  // isoDefault — see its comment at module scope
+  const [iso, setIso] = useState(isoDefault);
   // undefined = not fetched yet; a page/image is never fetched up front (the
   // iframe/img does its own request), so `raw` on one triggers the fetch late
   const [text, setText] = useState<string | undefined>(undefined);
@@ -468,6 +489,7 @@ function ArtifactBody({
     const draft = drafts.get(url);
     setShown(url);
     setRaw(false);
+    setIso(isoDefault);
     setText(undefined);
     setError(null);
     setNote("");
@@ -486,7 +508,16 @@ function ArtifactBody({
 
   const page = isPage(url);
   const image = isImage(url);
-  const needsText = raw || (!page && !image);
+  // .html pages fetch their text up front too: cardCompilable needs the bytes
+  // to decide whether the 3D toggle is offered at all, and a bespoke card must
+  // show NO affordance rather than a button that fails on press. One extra
+  // same-origin read of a file the iframe fetches anyway.
+  const htmlPage = page && isHtmlPage(url);
+  const needsText = raw || (!page && !image) || htmlPage;
+  const compilable = useMemo(
+    () => (htmlPage && text !== undefined ? cardCompilable(text) : false),
+    [htmlPage, text],
+  );
 
   const onKey = useArtifactKeys(onStep);
 
@@ -687,6 +718,24 @@ function ArtifactBody({
         >
           raw
         </button>
+        {/* the compiled isometric view — offered only when the whole card
+            parses (cardCompilable); a bespoke concept diagram shows no 3D
+            affordance at all and displays as-is */}
+        <button
+          className="btn ghost"
+          id="panel-iso"
+          hidden={!compilable}
+          aria-pressed={iso}
+          title="compile this card into an animated isometric scene"
+          onClick={() => {
+            // the sticky write lives in the handler, not the updater —
+            // StrictMode double-invokes updaters and they are meant to be pure
+            isoDefault = !iso;
+            setIso(!iso);
+          }}
+        >
+          3D
+        </button>
         {/* Branching forks the cell's zeus session, so it needs a live cell —
             the same `job.live` gate ThreadChips.tsx puts on the ⑂ it renders in
             the steer modal. Without a job resolved (a singleton open) there is
@@ -799,6 +848,7 @@ function ArtifactBody({
       <ArtifactBodyContent
         url={url}
         raw={raw}
+        iso={iso && compilable}
         page={page}
         image={image}
         text={text}
@@ -905,6 +955,7 @@ function ArtifactFrame({
 function ArtifactBodyContent({
   url,
   raw,
+  iso,
   page,
   image,
   text,
@@ -915,6 +966,9 @@ function ArtifactBodyContent({
 }: {
   url: string;
   raw: boolean;
+  /** true only when the 3D toggle is on AND the card compiles (the caller
+   * ANDs the two, so a stale sticky preference can never blank a card) */
+  iso: boolean;
   page: boolean;
   image: boolean;
   text: string | undefined;
@@ -932,9 +986,11 @@ function ArtifactBodyContent({
   // exactly `raw`: the raw branch has real `text` (needsText fetches it FOR
   // raw) and renders it verbatim, so parsing it as markdown here would burn a
   // whole renderMD over a body no branch will mount — on a raw-opened page
-  // artifact, potentially hundreds of KB of it. The other non-markdown
-  // branches already have `text === undefined` on their own.
-  const md = useRenderedMD(raw ? undefined : text);
+  // artifact, potentially hundreds of KB of it. Pages need the same guard now
+  // that the 3D probe fetches every .html page's text up front: without
+  // `page`/`image` here, opening any diagram card would markdown-parse 30-40KB
+  // of HTML source for a branch `mdMounted` below can never take.
+  const md = useRenderedMD(raw || page || image ? undefined : text);
 
   // ONE delegated handler on the body rather than per-`<code>` wiring, for the
   // reason the body is innerHTML in the first place: there are no React
@@ -1006,6 +1062,14 @@ function ArtifactBodyContent({
       <div className="panel-body page" id="panel-body">
         <img src={url} alt="artifact" />
       </div>
+    );
+  }
+  if (page && iso && text !== undefined) {
+    // the compiled isometric scene, in the board's own document — a compile
+    // failure inside renders its reason, and the flat iframe below stays one
+    // toggle away; the card is never lost
+    return (
+      <IsoSceneView html={text} onOpenRef={(t) => void openCodeRef(url, t)} />
     );
   }
   if (page) {

@@ -1,0 +1,59 @@
+<meta charset="utf-8">
+<title>Mini fixture</title>
+<!-- Hand-authored minimal diagram card for isoscene tests: every value here is
+     exact and frozen by 50-contract.md — tests may assert against it byte-for-byte.
+     Shaped like a real card (figure.diagram envelope, one svg) but tiny. -->
+<h1>Mini fixture</h1>
+<figure class="diagram">
+<svg viewBox="0 0 860 500" role="img" aria-label="mini fixture">
+  <defs>
+    <marker id="arrow-mini" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <text class="title" x="16" y="30">mini: two boxes, one legacy-animated edge</text>
+  <g class="proc" data-code="cmd/kraken/cmd_serve.go:37">
+    <rect x="100" y="100" width="200" height="80" rx="2"/>
+    <rect x="104" y="104" width="192" height="72" rx="1"/>
+    <text x="200" y="140">
+      <tspan x="200" dy="-0.6em">kraken serve</tspan>
+      <tspan x="200" dy="1.2em">OS process</tspan>
+    </text>
+  </g>
+  <g class="group">
+    <rect x="440" y="240" width="300" height="200" rx="8"/>
+    <text x="454" y="262">data zone — file-ownership</text>
+    <g class="store blue">
+      <path d="M 500,310 a 80,10 0 0,1 160,0 v 70 a 80,10 0 0,1 -160,0 z"/>
+      <ellipse cx="580" cy="310" rx="80" ry="10"/>
+      <text x="580" y="344">
+        <tspan x="580" dy="-0.6em">+ kraken.db</tspan>
+        <tspan x="580" dy="1.2em">sqlite db</tspan>
+      </text>
+    </g>
+  </g>
+  <g class="node dim">
+    <rect x="100" y="380" width="160" height="60" rx="8"/>
+    <text x="180" y="410">out of story</text>
+  </g>
+  <g class="pill grey">
+    <rect x="330" y="60" width="120" height="26" rx="13"/>
+    <text x="390" y="77">∅ retired flag</text>
+  </g>
+  <g class="step">
+    <circle cx="70" cy="140" r="11"/>
+    <text x="70" y="144">3b</text>
+  </g>
+  <path id="mini-e1" class="edge" d="M 300,140 L 500,320" marker-end="url(#arrow-mini)" data-code="web/serve.go:116"/>
+  <text class="edgeLabel" x="400" y="215">writes rows</text>
+  <path class="edge dashed" d="M 180,180 V 380" marker-end="url(#arrow-mini)"/>
+  <text class="note" x="600" y="80">
+    <tspan x="600" dy="0">one legacy flow-dot rides e1</tspan>
+    <tspan x="600" dy="1.4em">second note line</tspan>
+  </text>
+  <circle class="flow-dot" r="4">
+    <animateMotion dur="3s" repeatCount="indefinite" begin="0s"><mpath href="#mini-e1"/></animateMotion>
+  </circle>
+</svg>
+<figcaption>Mini fixture caption.</figcaption>
+</figure>
