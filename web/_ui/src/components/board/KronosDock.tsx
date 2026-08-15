@@ -25,11 +25,13 @@ const DOCK_READ_POLL_MS = 4000;
  *
  * It is GoalsPanel's shape on purpose (fixed, out of the columns' flow,
  * collapsible to a one-line pill, board-only — BoardView drops it while the
- * board is hidden, since a fixed element ignores the hidden <main>), parked
- * one goals-panel width to the left so the two docks sit side by side and
- * neither covers the other whatever state each is in. Shape, not classes:
- * the dock's head and pill are kd- rules on the kronos status hue, so a
- * goals restyle cannot silently restyle this panel too.
+ * board is hidden, since a fixed element ignores the hidden <main>), anchored
+ * at the board's LEFT corner mirroring the goals box on the right (carl's
+ * call 2026-08-15), so the two docks bracket the board and neither covers
+ * the other whatever state each is in. Shape, not classes: the dock's head
+ * and pill are kd- rules on the same --ac/--tint palette the goals panel
+ * uses, so it reads as board chrome — but a goals restyle still cannot
+ * silently restyle this panel too.
  *
  * DEFAULT COLLAPSED, the opposite of the goals default, deliberately: goals
  * are a glance, kronos is a conversation — expanded-by-default it would cover
