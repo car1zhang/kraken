@@ -200,7 +200,10 @@ cross-check the parent session's `SendMessage`/`Agent` calls before attributing 
 the agent's own judgment. Two more lines the brief owes every scout. A reduced view's LINES are
 unbounded — a single line can be an entire inlined skill body — so a page size that worked on page
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
-(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep. And
+(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep — and
+that on the RAW JSONL, BSD grep silently returns nothing on multi-megabyte lines (a real transcript
+record can be one), so a raw query that comes back empty is re-run through python before it is
+believed; two reviewers and a lead have each burned calls independently rediscovering this. And
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch overlay and the graph that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost the graph
@@ -210,7 +213,12 @@ already held as an entity, because nothing in any brief said what was already kn
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
 unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
-channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
+channel truncates. The chat reply is a SHORT pointer — a few lines plus the report path, never the
+findings themselves — because the completion notification re-carries the reply verbatim into your
+context, where it then rides every later turn's cache read: one night's scouts, briefed without
+this, delivered ~297 KB of report text twice over (the notification inline AND your own Read of the
+file), and the Read is the delivery you act on — the notification's copy is a backup you did not
+order. Each brief also names that scout's OWN scratch subdirectory for working files
 (staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
 and the collision recovery costs more than the namespace would have. Name those directories with
 SHORT slice handles under one root you create first — a short `/tmp/<handle>` root, never under
@@ -234,7 +242,15 @@ scout brief — framed only as brief material, it was broken by the pass's own l
 echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
 by the next night's lead again; scouts hit the same aborts on their first command. Spawn them in
 waves rather than all at once; a few at a time, with the remainder running as slots free. Every
-transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT
+transcript gets read; the pass simply takes as long as it takes. Waves carry one obligation a batch
+spawn never had: **a scout finding that indicts your own brief template applies to the briefs you
+have not yet dispatched, BEFORE it is filed for the skill lane.** The measured asymmetry is exact — a
+lead amended its outgoing briefs within two minutes for every fact it derived itself, and for none it
+received: a scout's finding that siblings were opening the live kraken.db read-write was logged for
+the skill edit while two briefs dispatched minutes later carried no db clause, and the defect the
+pass shipped a fix for that night recurred inside the pass, two minutes after it read the finding. A
+skill edit merged at dawn governs tomorrow's cells at the earliest; the briefs in your hand govern
+tonight. **A scout dead on a TRANSPORT
 error is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent
 resumable, and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`)
 continues it with its context intact and nothing re-paid — so fetch the messaging tools at the TOP
@@ -267,14 +283,21 @@ saying so, while you wait on a file that is never coming. But `general-purpose` 
 including this cell's worktree, and this pass's one hard rule is that findings never enter git — so
 the guarantee that used to be structural is now a sentence in the brief, and it has to actually be
 there: *write nothing under the repo; "read-only" bars the repo, not your own report, which goes at
-the scratch path above.* When the brief mentions the heredoc report fallback, it says FALLBACK —
-"if `Write` is refused" and nothing wider: briefed with "or any other refusal, use a heredoc",
-scouts with a working `Write` tool have shipped 20 KB reports through `cat <<EOF` (three of five in
-one measured wave), and a heredoc routes report PROSE through Bash, where a text-matching guardrail
-hook can block the whole write because the findings quote a banned command. `do/SKILL.md` names the
-same failure for review fleets; it applies to scout briefs identically. And the brief says what to
-do when BOTH paths are closed — `Write` refused and the heredoc blocked by a hook: report the
-refusal in the reply and stop, never trim or reword the findings until the hook passes. One more
+the scratch path above.* For the REPORT itself, the heredoc is the scout's PRIMARY route, not a
+fallback: the harness refuses an unnamed subagent's `Write` of a report file every time
+("Subagents should return findings as text, not write report files" — measured 14 of 14 one night
+and again the next), so a brief that says try-Write-first makes every scout generate its full
+report as a doomed `Write` payload and re-emit it verbatim as the heredoc — ~81K output tokens a
+night, eleven percent of all scout output, bought nothing. Say it plainly: *write the report with
+`cat > <path> <<'EOF'`; your `Write` tool works for notes and staged files but is refused for the
+report.* Two bounds keep that from leaking. The refusal is scoped to unnamed SUBAGENTS — a named
+teammate's `Write` works (0 of 3 reviewers refused, same night), so teammate briefs keep Write, and
+appends go through `Edit` or `cat >>`, never a re-`Write` of the whole file (two reviewers re-emitted
+~26 KB to append two sections while the third appended correctly). And a heredoc routes report PROSE
+through Bash, where a text-matching guardrail hook can block the whole write because the findings
+quote a banned command — `do/SKILL.md` names the same failure for review fleets — so the brief says
+what to do when the heredoc is hook-blocked: report the refusal in the reply and stop, never trim
+or reword the findings until the hook passes. One more
 brief clause, and it binds you as much as any scout: `kraken.db` is read through the verbs —
 `kraken watchlist get`, `kraken feedback sweep`, `k graph search|get` — never by opening the file
 (`kraken serve` is its single writer, and a second handle would run migrations — `graph/SKILL.md`
