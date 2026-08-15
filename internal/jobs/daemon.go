@@ -912,8 +912,9 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// mirror: nothing in this block runs. Every pass here either shells out
 	// to gh and/or writes prs: history that only matters for a real cell's
 	// lifecycle, or TYPES INTO A LIVE PANE (the PR watcher's bumps, the
-	// colour reconcile's /color) — and a mirror board is read-only by
-	// policy, most of all toward panes belonging to the real deployment.
+	// colour reconcile's /color, the question watcher's answer bumps) — and
+	// a mirror board is read-only by policy, most of all toward panes
+	// belonging to the real deployment.
 	if !mirror {
 		for _, j := range jobs {
 			if !prTrackable(j) {
@@ -936,6 +937,15 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		// chosen colour differs from what was last delivered to this cell.
 		for _, j := range jobs {
 			d.syncColor(j, all, live)
+		}
+		// question watcher (its own pass, same per-tick cadence): bump zeus'
+		// pane when carl answers a doc question on the board — answers land
+		// as silent row updates, and a cell parked at a gate has no other
+		// way to learn one arrived (see qwatch.go for the measured cost of
+		// the heartbeat poll this retires). Its own sweep for the block's
+		// standing reason: independently orderable, independently skippable.
+		for _, j := range jobs {
+			d.watchQuestions(j, all, live)
 		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
 		// whose claudes hit the account's usage limit gets the main login
