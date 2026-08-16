@@ -486,6 +486,13 @@ actor APIClient {
         try await get(baseURL: baseURL, path: "/api/peers")
     }
 
+    /// The orchestrator's status — enabled/live/pane plus the context
+    /// sentinel's last report. The KRONOS tab's poll; conversation reads and
+    /// sends then go through the same peers routes every session uses.
+    func kronosStatus(baseURL: String) async throws -> KronosStatus {
+        try await get(baseURL: baseURL, path: "/api/kronos")
+    }
+
     /// Spawns a new peer — a plain shell or a Claude session — in a fresh
     /// tmux pane. `dir` nil/empty defaults to home server-side; `name`/
     /// `prompt` only apply to `kind: "claude"`, `cmd` only to `kind: "shell"`.

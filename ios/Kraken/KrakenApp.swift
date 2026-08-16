@@ -113,9 +113,9 @@ struct KrakenApp: App {
     }
 }
 
-/// Four tabs, in this order: Board · Sessions · Memory · Settings.
+/// Five tabs, in this order: Board · Kronos · Sessions · Memory · Settings.
 ///
-/// "Memory" is the third tab's LABEL only — it is the graph screen, its tag is
+/// "Memory" is the fourth tab's LABEL only — it is the graph screen, its tag is
 /// still `AppRouter.Tab.graph`, and `kraken://graph` still selects it.
 ///
 /// Usage and Log used to be tabs three and four. They are drawers now — Usage
@@ -123,7 +123,9 @@ struct KrakenApp: App {
 /// GRAPH moved into. The graph was a Board-toolbar sheet only because five
 /// tabs was the ceiling before iOS collapses a TabView into a "More" list;
 /// with two screens demoted to drawers it fits as a peer, which is what it
-/// always read as.
+/// always read as. KRONOS took the fifth and last slot under that ceiling,
+/// second in the order to match the web board's tab order (carl's pick):
+/// the orchestrator is a primary surface, not a session buried in a list.
 struct RootTabView: View {
     @Environment(AppRouter.self) private var router
     // The graph talks to the same Mac as every other screen; it takes its base
@@ -137,6 +139,9 @@ struct RootTabView: View {
             BoardView()
                 .tabItem { Label("Board", systemImage: "square.grid.2x2") }
                 .tag(AppRouter.Tab.board)
+            KronosTabView()
+                .tabItem { Label("Kronos", systemImage: "crown") }
+                .tag(AppRouter.Tab.kronos)
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
                 .tag(AppRouter.Tab.sessions)

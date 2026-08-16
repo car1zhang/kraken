@@ -19,6 +19,7 @@ function ViewHarness() {
       {/* the MEMORY tab's <main> keeps the id/class `graph` — the rename is a
           label, and every internal name stays put */}
       <main className="graphview" id="graph" hidden={view !== "memory"} />
+      <main className="kronosview" id="kronos" hidden={view !== "kronos"} />
     </>
   );
 }
@@ -31,8 +32,8 @@ beforeEach(() => {
 });
 
 describe("VIEWS", () => {
-  it("is board · log · dream · memory, with no dag", () => {
-    expect([...VIEWS]).toEqual(["board", "log", "dream", "memory"]);
+  it("is board · kronos · memory · dream · log (carl's tab order, graph renamed), with no dag", () => {
+    expect([...VIEWS]).toEqual(["board", "kronos", "memory", "dream", "log"]);
     expect(VIEWS as readonly string[]).not.toContain("dag");
   });
 });

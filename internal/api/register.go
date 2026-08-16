@@ -147,6 +147,28 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/slack/inbox", slackInboxHandler)
 	mux.HandleFunc("/api/slack/status", slackStatusHandler)
 	mux.HandleFunc("/api/slack/ack", mirrorGated(slackAckHandler))
+	// kronos, the orchestrator agent (orch.go). Every one of these is an
+	// exact pattern, so none shadows another and none is a subtree — the same
+	// property that lets "/api/graph" and "/api/graph/recall" coexist above,
+	// and the reason "/api/graph/recall" and "/api/graph/recall-rearm" (the
+	// last of which is registered a few lines BELOW, with its siblings rather
+	// than with the graph family) are two routes rather than a collision.
+	// The two GETs stay open under --mirror (a read is a read, the same
+	// call /api/slack/inbox and /api/slack/status make); the three WRITES
+	// are gated via mirrorGated at registration rather than inline, which
+	// is available here for the reason it is on /api/slack/ack: all three
+	// are POST-ONLY paths, so there is no GET on the same path that a
+	// route wrapper would take down with them.
+	//
+	// /api/orch/context and /api/graph/recall-rearm are POSTed by HOOKS
+	// running inside kronos' own pane rather than by kronos deciding to call
+	// them — and both are still gated, because both WRITE (a context report
+	// the daemon's warning pass fires off, and a wipe of kg_recall marks).
+	mux.HandleFunc("/api/orch/inbox", orchInboxHandler)
+	mux.HandleFunc("/api/orch/ack", mirrorGated(orchAckHandler))
+	mux.HandleFunc("/api/orch/context", mirrorGated(orchContextHandler))
+	mux.HandleFunc("/api/graph/recall-rearm", mirrorGated(graphRecallRearmHandler))
+	mux.HandleFunc("/api/kronos", kronosHandler(defaultPeerSource))
 	mux.HandleFunc("/api/job/list", jobListHandler)
 	mux.HandleFunc("/api/job/draft", mirrorGated(jobDraftHandler))
 	mux.HandleFunc("/api/upload", uploadHandler)

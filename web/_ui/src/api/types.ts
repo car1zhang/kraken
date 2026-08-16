@@ -724,6 +724,69 @@ export interface RenameResult {
   notes?: string[];
 }
 
+// ---------------------------------------------------------------- kronos
+
+/**
+ * `GET /api/peers/read?pane=…&n=…` — the tail of ONE pane's transcript, the
+ * same reader `k r` uses (internal/api/peers.go's peersReadHandler).
+ *
+ * Its block element is `ThreadBlock` minus `inherited`: the thread read
+ * endpoint is documented as this one's block plus that flag, so the type is
+ * reused rather than copied. `n` is clamped server-side to 1-50.
+ */
+export interface PeersRead {
+  blocks?: ThreadBlock[];
+  counted?: number;
+}
+
+/**
+ * `GET /api/kronos` — kronos' liveness, its pane, and the last context report
+ * the statusline sentinel filed.
+ *
+ * `context` is a POINTER on the wire, omitted entirely when kronos has never
+ * reported one — absent means "no report", never a zeroed object. It is typed
+ * `| null` here because that is what the contract states, and every read of it
+ * goes through optional chaining so an absent key (undefined) lands in the same
+ * branch as an explicit null.
+ */
+export interface KronosStatus {
+  enabled: boolean;
+  live: boolean;
+  session_id: string;
+  pane: string;
+  /** unix MILLIS, like every other stamp in this build's kronos routes. */
+  spawned_at: number;
+  /**
+   * Optional BECAUSE the server omits the key entirely until a first report
+   * arrives (json omitempty on a nil pointer) — declaring it required would
+   * let `status.context.pct` typecheck and then throw on every board where
+   * kronos has never reported. The `?` is what makes the compiler enforce
+   * the optional chaining this field needs.
+   */
+  context?: { pct: number; window: number; at: number } | null;
+}
+
+/** One row of `GET /api/orch/inbox` — an escalation kronos has not acked. */
+export interface OrchItem {
+  id: number;
+  kind: string;
+  slug: string;
+  summary: string;
+  /** unix MILLIS. */
+  seen_at: number;
+}
+
+/**
+ * `GET /api/orch/inbox`. Oldest-first, unacked only; the delivery and ack
+ * stamps are deliberately withheld from the wire. `items` carries at most the
+ * oldest 100 rows; `total` is the FULL unacked count, so a reader holding 100
+ * of 900 can see the backlog instead of believing it has seen the inbox.
+ */
+export interface OrchInbox {
+  items?: OrchItem[];
+  total: number;
+}
+
 /** Every non-2xx response body across the whole API. */
 export interface WireError {
   error: string;

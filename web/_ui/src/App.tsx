@@ -8,6 +8,7 @@ import { DragProvider } from "./components/board/DragProvider.tsx";
 import { Chrome } from "./components/chrome/Chrome.tsx";
 import { DreamView } from "./components/dream/DreamView.tsx";
 import { GraphView } from "./components/graph/GraphView.tsx";
+import { KronosView } from "./components/kronos/KronosView.tsx";
 import { LogView } from "./components/log/LogView.tsx";
 import { ArtifactOverlay } from "./components/overlays/ArtifactOverlay.tsx";
 import { EditorOverlay } from "./components/overlays/EditorOverlay.tsx";
@@ -306,14 +307,15 @@ export function App() {
         />
       </DragProvider>
 
-      {/* All three stay MOUNTED across view switches, hidden rather than
+      {/* All four stay MOUNTED across view switches, hidden rather than
           unmounted: LogView keeps its paged history and scroll position,
           DreamView keeps which report dates are expanded plus any half-typed
-          watchlist comment, and GraphView keeps its filter rail, its selection
+          watchlist comment, GraphView keeps its filter rail, its selection
           and — the expensive one — its sigma WebGL context and camera
-          position. Unmounting would throw all of that away on every tab
-          switch — the vanilla board kept them in module state for the same
-          reason. */}
+          position, and KronosView keeps a half-typed message and the
+          conversation's scroll position. Unmounting would throw all of that
+          away on every tab switch — the vanilla board kept them in module
+          state for the same reason. */}
       <LogView active={view === "log"} />
       <DreamView active={view === "dream"} mutate={mutate} onToast={showToast} />
       <GraphView
@@ -326,6 +328,7 @@ export function App() {
         onOpenArtifact={(url, name) => setArtifact({ url, name, key: "" })}
         onRemoveSaved={removeSaved}
       />
+      <KronosView active={view === "kronos"} />
 
       <SteerOverlay
         open={steer !== null}

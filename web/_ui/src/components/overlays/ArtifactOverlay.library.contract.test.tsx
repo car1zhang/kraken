@@ -316,9 +316,15 @@ describe("the save toggle's click", () => {
 describe("the memory rename", () => {
   const CONTRACT_LEGACY_KEY = "kraken-view";
 
-  // `VIEWS` is `["board","log","dream","memory"]` — the whole list, in order.
-  it("renames the fourth view to memory and keeps the other three", () => {
-    expect([...VIEWS]).toEqual(["board", "log", "dream", "memory"]);
+  // The rename, not the roster: this pin originally asserted the contract's
+  // exact four-view list, and the kronos view merging beside it turned that
+  // into a false failure — the same over-pin the store tests document for
+  // schemaVersion equalities. What the rename obliges is that `memory` is a
+  // view and `graph` is not; which OTHER views exist is the tab roster's
+  // business, not this contract's. (Relaxed at the merge by the lead, citing
+  // the amended contract row; the blind author was already released.)
+  it("renames the graph view to memory", () => {
+    expect(VIEWS as readonly string[]).toContain("memory");
     expect(VIEWS as readonly string[]).not.toContain("graph");
   });
 

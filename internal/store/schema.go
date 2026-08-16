@@ -71,10 +71,12 @@ import (
 // Version 23 adds the goals table plus jobs.goal_id: carl's weekly and daily
 // goals, and the one goal a job optionally serves (see schemaV23 and
 // store/goals.go).
-// Version 24 adds saved_artifacts, the artifact LIBRARY: one frozen snapshot
+// Version 24 adds kronos' orch_inbox, the orchestrator's inbox carrying
+// slack_inbox's three-timestamp lifecycle (see schemaV24 and store/orch.go).
+// Version 25 adds saved_artifacts, the artifact LIBRARY: one frozen snapshot
 // per artifact carl saves, keyed (job_id, name) and outliving the job it came
-// from (see schemaV24 and store/saved.go).
-const schemaVersion = 24
+// from (see schemaV25 and store/saved.go).
+const schemaVersion = 25
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1315,11 +1317,72 @@ CREATE INDEX goals_scope_period ON goals(scope, period, position);
 ALTER TABLE jobs ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL;
 `
 
-// schemaV24 adds saved_artifacts: the artifact LIBRARY, one FROZEN copy of an
+// schemaV24 adds kronos' one table. It is brand new and there is no hook:
+// nothing anywhere holds an orchestrator inbox row today, so there is nothing
+// to migrate forward — schemaV17/V18/V19's situation exactly, and an EMPTY
+// inbox is precisely the state a database that predates kronos is in.
+//
+// Purely additive: no existing table, column or row is touched, so a database
+// on a Mac that never creates ~/.kraken/kronos.env carries one empty table and
+// is otherwise identical to a v23 one.
+//
+// orch_inbox is slack_inbox's shape with Slack's identity columns removed, and
+// that is deliberate rather than incidental: kronos' inbox has the same
+// lifecycle as iris' — a row is SEEN (the daemon enqueued it at a transition
+// it was already notifying about), DELIVERED (kronos' pane was bumped with a
+// count), then ACKED with a one-line disposition — so it carries the same three
+// timestamps rather than a state column, for schemaV17's reason: each
+// transition has a different writer, and each "not yet" is a real query
+// (`delivered_at = 0 AND acked_at = 0` is the delivery pass' worklist,
+// `acked_at = 0` is what the inbox route serves).
+//
+// kind carries NO CHECK constraint, which is where this table parts company
+// with slack_inbox.source. The two look alike — a short closed-ish set naming
+// where a row came from — but source names one of three POLLING LOOPS the
+// poller owns end to end, while kind names a daemon TRANSITION POINT, and the
+// set of transitions worth waking kronos for is expected to grow as the daemon
+// learns to notice more (the frozen contract's list — job-blocked, cell-gone,
+// cell-unhealthy, pr-merged, start-failed — is the set on the day it
+// ships, not a closed universe). A CHECK would make adding one a migration, and
+// the store's obligation is only that an EMPTY kind is refused, which
+// AddOrchItem does in Go where the error can say so.
+//
+// slug is NOT a foreign key and defaults to empty, both for reasons this
+// schema has already settled elsewhere: the no-FK rule is job_tokens' and
+// slack_inbox's — an inbox row records that something happened, which stays
+// true after the job is archived or hard deleted — and an EMPTY slug is a real
+// answer rather than a missing one: a row may describe something belonging to
+// no job at all.
+//
+// No secondary index, deliberately, and this is the paragraph to revisit if a
+// read ever gets slow rather than a defect to fix now — the argument schemaV17
+// makes for slack_inbox. Both orch_inbox listings scan the table at most once
+// per daemon tick. If a read ever does get slow, the index to add is
+// orch_inbox(acked_at, id), covering both filters and their shared ORDER BY
+// id. (An imsg_sent sibling table — the removed iMessage bridge's echo guard —
+// briefly shared this step and went with the bridge before the step ever
+// shipped.)
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v23.
+const schemaV24 = `
+CREATE TABLE orch_inbox (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind         TEXT NOT NULL,              -- which daemon transition raised it; no CHECK, see above
+	slug         TEXT NOT NULL DEFAULT '',   -- the job it is about; '' = belongs to no job
+	summary      TEXT NOT NULL DEFAULT '',   -- one line, capped by the caller
+	seen_at      INTEGER NOT NULL DEFAULT 0, -- unix millis: the daemon enqueued it
+	delivered_at INTEGER NOT NULL DEFAULT 0, -- unix millis: kronos' pane was bumped; 0 = pending
+	acked_at     INTEGER NOT NULL DEFAULT 0, -- unix millis: kronos acted on it; 0 = unacked
+	disposition  TEXT NOT NULL DEFAULT ''    -- kronos' one-line account of what it did
+);
+`
+
+// schemaV25 adds saved_artifacts: the artifact LIBRARY, one FROZEN copy of an
 // artifact's bytes per (job, name) that carl asked to keep. One brand-new
 // table, no hook — nothing anywhere has ever saved an artifact, so an EMPTY
 // table is exactly right for every pre-existing database, which is
-// schemaV7/V15/V17/V18/V19/V21/V23's situation.
+// schemaV7/V15/V17/V18/V19/V21/V23/V24's situation.
 //
 // Shape notes, in the order they will be asked about:
 //
@@ -1347,8 +1410,10 @@ ALTER TABLE jobs ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET N
 // first", a full scan of a table carl grows by hand a few rows at a time.
 //
 // Appended rather than folded into an earlier step for the reason schemaV2's
-// doc comment spells out: real kraken.db files already exist at v23.
-const schemaV24 = `
+// doc comment spells out: real kraken.db files already exist at v24. (It was
+// authored as v24 in a cell branch and renumbered here: kronos' orch_inbox
+// merged to main first and took that version.)
+const schemaV25 = `
 CREATE TABLE saved_artifacts (
 	id       INTEGER PRIMARY KEY AUTOINCREMENT,
 	job_id   INTEGER NOT NULL,             -- no FK, no cascade: the row outlives its job
@@ -1435,12 +1500,15 @@ type migrationStep struct {
 // table has nothing to migrate forward, and a NULL goal_id correctly means
 // "this job serves no particular goal", which is true of every job that
 // predates the feature; see schemaV23);
-// migrations[24] adds saved_artifacts (no hook — a brand-new table has nothing
+// migrations[24] adds kronos' orch_inbox (no hook — a brand-new table with no
+// prior home for its data, and an empty inbox is exactly the state a database
+// that predates kronos is in; see schemaV24);
+// migrations[25] adds saved_artifacts (no hook — a brand-new table has nothing
 // to migrate forward, and an EMPTY library correctly means "carl has never
 // saved an artifact", which is true of every database that predates the
-// feature; see schemaV24).
+// feature; see schemaV25).
 // Future schema changes append
-// migrations[25], migrations[26], ... rather than editing an existing
+// migrations[26], migrations[27], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1468,6 +1536,7 @@ var migrations = map[int]migrationStep{
 	22: {sql: schemaV22},
 	23: {sql: schemaV23},
 	24: {sql: schemaV24},
+	25: {sql: schemaV25},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

@@ -2,10 +2,28 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readLS, writeLS } from "./useLocalStorage.ts";
 
-export const VIEWS = ["board", "log", "dream", "memory"] as const;
+export const VIEWS = ["board", "kronos", "memory", "dream", "log"] as const;
 export type View = (typeof VIEWS)[number];
 
 const LEGACY_KEY = "kraken-view";
+
+/**
+ * Navigate from OUTSIDE the chrome's tab row (the kronos dock's ⤢ is the one
+ * caller today). A bare `location.hash =` write would route fine — the
+ * hashchange listener below picks it up — but it would skip the LEGACY_KEY
+ * stamp `navigate` performs, and that key's whole claim is to be a faithful
+ * record of the last view for a downgrade. One helper keeps the two writes
+ * paired everywhere a jump originates.
+ *
+ * Compared against the hash's own TEXT (hashView), not parseHash(): a legacy
+ * `#/graph` PARSES to "memory" already (RENAMED, below), so the parsed
+ * comparison would call a jump to MEMORY a no-op and leave the old name in
+ * the address bar — same reasoning as `navigate`'s own comparison.
+ */
+export function navigateTo(v: View): void {
+  writeLS(LEGACY_KEY, v);
+  if (hashView() !== v) location.hash = `#/${v}`;
+}
 
 /**
  * Views that were RENAMED, mapped to what they are called now.
@@ -57,7 +75,10 @@ function parseHash(): View | null {
 }
 
 /**
- * The four views as real URLs (#/board, #/log, #/dream, #/memory) — Q6.
+ * The five views as real URLs (#/board, #/kronos, #/memory, #/dream, #/log) —
+ * Q6, plus the kronos panel added beside them. VIEWS' order IS the tab order
+ * the chrome renders (carl's pick: kronos beside the board, log last), and
+ * `memory` is the graph view under its renamed tab (RENAMED, above).
  *
  * The vanilla board had no router at all: the active view was a localStorage
  * string toggling `hidden` attributes, so there was no back button and no
@@ -116,8 +137,9 @@ export function useHashRoute(): [View, (v: View) => void] {
   // the rest of the session.
   const navigate = useCallback((v: View) => {
     setView(v);
-    writeLS(LEGACY_KEY, v);
-    if (hashView() !== v) location.hash = `#/${v}`;
+    // navigateTo holds the stamp-and-route pairing so two implementations of
+    // it cannot drift; setView is the one thing a non-component caller lacks
+    navigateTo(v);
   }, []);
 
   return [view, navigate];

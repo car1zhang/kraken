@@ -361,17 +361,18 @@ describe("the view tabs", () => {
     const tabs = [...container.querySelectorAll(".viewtab")];
     expect(tabs.map((t) => t.textContent)).toEqual([
       "BOARD",
-      "LOG",
-      "DREAM",
+      "KRONOS",
       // the graph view's tab reads MEMORY — a label change only, everything
       // internal (the view id, the `graph-` classes, /api/graph) keeps `graph`
       "MEMORY",
+      "DREAM",
+      "LOG",
     ]);
     expect(tabs.find((t) => t.classList.contains("active"))).toHaveTextContent(
       "DREAM",
     );
     await userEvent.click(tabs[1]!);
-    expect(onNavigate).toHaveBeenCalledWith("log");
+    expect(onNavigate).toHaveBeenCalledWith("kronos");
   });
 });
 

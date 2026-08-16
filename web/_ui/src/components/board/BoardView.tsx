@@ -8,6 +8,7 @@ import { BoardBar } from "./BoardBar.tsx";
 import { BoardColumn } from "./Column.tsx";
 import { GoalsPanel } from "./GoalsPanel.tsx";
 import { JobCard } from "./JobCard.tsx";
+import { KronosDock } from "./KronosDock.tsx";
 
 /**
  * Everything a card can do that this slice does not own. All of them are
@@ -187,7 +188,13 @@ export function BoardView({
           unmounting also stops a half-typed add row surviving a trip through
           another view. */}
       {hidden ? null : (
-        <GoalsPanel goals={board.board?.goals} mutate={board.mutate} />
+        <>
+          <GoalsPanel goals={board.board?.goals} mutate={board.mutate} />
+          {/* same fixed-dock reasoning as the goals panel above — and dropped
+              with it while the board is hidden, or both would float over the
+              other views */}
+          <KronosDock />
+        </>
       )}
     </>
   );

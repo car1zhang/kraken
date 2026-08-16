@@ -1062,13 +1062,13 @@ func TestWatchDecision(t *testing.T) {
 			// the load-bearing conflict case: the base moved under an
 			// UNCHANGED head, so a SHA-keyed watermark would never fire —
 			// the clean→conflicting transition must.
-			name:                "fresh conflict on an unchanged head bumps with a rebase message",
+			name:                "fresh conflict on an unchanged head bumps with a goal-stated message",
 			fetch:               prWatchFetch{State: "open", HeadSHA: "sha1", Mergeable: "conflicting", BaseRef: "main"},
 			lastCommentAt:       "2024-01-01T00:00:00Z",
 			bumpedSHA:           "sha1",
 			conflictState:       "clean",
 			wantBump:            true,
-			wantMessageContains: []string{"merge conflicts", "git rebase origin/main", "--force-with-lease", "[kraken pr-watch — automated notice, not a reply from carl]"},
+			wantMessageContains: []string{"merge conflicts", "get the branch mergeable", "merge origin/main into your branch", "needs no force-push", "[kraken pr-watch — automated notice, not a reply from carl]"},
 			wantLastCommentAt:   "2024-01-01T00:00:00Z",
 			wantBumpedSHA:       "sha1",
 			wantConflictState:   "conflicting",
