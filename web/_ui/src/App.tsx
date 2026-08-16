@@ -23,6 +23,7 @@ import { useBoard } from "./hooks/useBoard.ts";
 import { useBoardEvents } from "./hooks/useBoardEvents.ts";
 import { useHashRoute } from "./hooks/useHashRoute.ts";
 import { useJobSearch } from "./hooks/useJobSearch.ts";
+import { useLibrary } from "./hooks/useLibrary.ts";
 import { useLocalStorageSet } from "./hooks/useLocalStorage.ts";
 import { usePoll } from "./hooks/usePoll.ts";
 import { columnFor } from "./lib/format.ts";
@@ -34,7 +35,9 @@ import {
   deleteJob,
   editFeedback,
   openTmux,
+  removeFromLibrary,
   retryJob,
+  saveToLibrary,
   unarchiveJob,
 } from "./api/client.ts";
 
@@ -171,6 +174,39 @@ export function App() {
     [board],
   );
 
+  // ------------------------------------------------------------- library
+  //
+  // ONE poll for the saved-artifact list, hoisted here for the reason the
+  // search is: two children need the SAME instance. The memory view renders it
+  // and the artifact viewer's ☆/★ button is a membership test against it, so
+  // two polls would be two answers to "is this saved" — the star would go on
+  // claiming a row that the list beside it had just removed.
+  //
+  // Gated on either surface being up: the memory view showing, or the artifact
+  // viewer being open over anything at all (that is where the star lives).
+  const library = useLibrary(view === "memory" || artifact !== null);
+
+  // Both writes take the shared mutation path so a refusal lands in the clock
+  // corner like every other one, then pull the list back at once rather than
+  // waiting out the 30s tick — DreamView's verdict shape exactly. Neither
+  // returns anything: the button's next state is whatever the refetched list
+  // says, which is what keeps a failed save reading "unsaved" without a single
+  // line of failure handling at the call site.
+  const saveArtifact = useCallback(
+    async (slug: string, home: string, name: string) => {
+      await mutate(() => saveToLibrary(slug, home, name));
+      await library.refetch();
+    },
+    [mutate, library.refetch],
+  );
+  const removeSaved = useCallback(
+    async (id: number) => {
+      await mutate(() => removeFromLibrary(id));
+      await library.refetch();
+    },
+    [mutate, library.refetch],
+  );
+
   // The job editor autosaves on a 600ms debounce, and a self-update reload
   // drops whatever is still in flight. EditorOverlay registers its flusher
   // here so Chrome can await it before location.reload().
@@ -280,7 +316,16 @@ export function App() {
           reason. */}
       <LogView active={view === "log"} />
       <DreamView active={view === "dream"} mutate={mutate} onToast={showToast} />
-      <GraphView active={view === "graph"} />
+      <GraphView
+        active={view === "memory"}
+        library={library}
+        // A library row opens as a SINGLETON in the viewer: its `key` is the
+        // empty string, which resolves to no job, which is exactly right — a
+        // frozen snapshot belongs to no artifact SEQUENCE (the row it came from
+        // may outlive the job entirely), so the pager and `⑂ ask` both hide.
+        onOpenArtifact={(url, name) => setArtifact({ url, name, key: "" })}
+        onRemoveSaved={removeSaved}
+      />
 
       <SteerOverlay
         open={steer !== null}
@@ -361,6 +406,9 @@ export function App() {
           setThread({ slug, tid });
         }}
         onClose={() => setArtifact(null)}
+        library={library.items}
+        onSaveArtifact={saveArtifact}
+        onRemoveSaved={removeSaved}
         mutate={mutate}
       />
 

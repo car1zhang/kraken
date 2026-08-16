@@ -50,6 +50,19 @@ var mirrorGatedRoutes = []string{
 	// hits the refusal. Both are here because a mirror board must never write
 	// the live deployment's goals or relabel its jobs.
 	"/api/goals", "/api/job/goal",
+	// artifact library: the same inline gate on both write routes
+	// (library.go). /api/library gates inline because its GET must stay
+	// reachable — reading the library is a read, and a mirror refusing one
+	// would be a new policy rather than this one. /api/library/remove is
+	// POST-only and could have taken a mirrorGated wrapper at registration
+	// like /api/graph/add, but gates inline anyway so a caller reaching the
+	// handler directly still hits the refusal. Both ride this shared table
+	// safely in BOTH sweeps: with mirror off, against this table's
+	// {"slug":"nonexistent"} body, the save 400s on the missing `home` and the
+	// remove 400s on the unrecognized `slug` field (its `id` check is never
+	// reached), each long before any store write — no library row is created
+	// or destroyed by this test.
+	"/api/library", "/api/library/remove",
 	// job rename: the same inline gate (jobrename.go), and it rides this table
 	// rather than needing a bespoke test because the gate sits ahead of the body
 	// decode — mirror ON gives the shared 403, mirror OFF falls through to the

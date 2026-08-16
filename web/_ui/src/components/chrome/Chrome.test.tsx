@@ -363,7 +363,9 @@ describe("the view tabs", () => {
       "BOARD",
       "LOG",
       "DREAM",
-      "GRAPH",
+      // the graph view's tab reads MEMORY — a label change only, everything
+      // internal (the view id, the `graph-` classes, /api/graph) keeps `graph`
+      "MEMORY",
     ]);
     expect(tabs.find((t) => t.classList.contains("active"))).toHaveTextContent(
       "DREAM",

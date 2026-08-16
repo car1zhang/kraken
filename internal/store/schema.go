@@ -71,7 +71,10 @@ import (
 // Version 23 adds the goals table plus jobs.goal_id: carl's weekly and daily
 // goals, and the one goal a job optionally serves (see schemaV23 and
 // store/goals.go).
-const schemaVersion = 23
+// Version 24 adds saved_artifacts, the artifact LIBRARY: one frozen snapshot
+// per artifact carl saves, keyed (job_id, name) and outliving the job it came
+// from (see schemaV24 and store/saved.go).
+const schemaVersion = 24
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1312,6 +1315,51 @@ CREATE INDEX goals_scope_period ON goals(scope, period, position);
 ALTER TABLE jobs ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL;
 `
 
+// schemaV24 adds saved_artifacts: the artifact LIBRARY, one FROZEN copy of an
+// artifact's bytes per (job, name) that carl asked to keep. One brand-new
+// table, no hook — nothing anywhere has ever saved an artifact, so an EMPTY
+// table is exactly right for every pre-existing database, which is
+// schemaV7/V15/V17/V18/V19/V21/V23's situation.
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - job_id carries NO foreign key and NO cascade, the job_tokens rule
+//     (schemaV10's comment, second half): a saved artifact must survive the
+//     job it came from — teardown, archiving, and the hard delete alike —
+//     because the whole point of saving one is that it outlives the run. A
+//     cascade would delete carl's library the moment he cleaned up a job.
+//   - snapshot is the bytes as they stood AT SAVE TIME, never a pointer at
+//     the live file: an artifact is rewritten in place by the agent that
+//     owns it, and a library entry that silently followed those rewrites
+//     would be a bookmark rather than a saved copy. This is the same freeze
+//     feedback.snapshot performs, for the same reason.
+//   - slug is the DISPLAY slug at save time — the string the client
+//     addressed the job by — stored rather than joined because the row has
+//     to render after the job is archived (which renames it) or deleted
+//     (which leaves nothing to join against). It is display, never identity:
+//     identity is job_id.
+//   - UNIQUE(job_id, name) is what makes a re-save a REPLACE rather than a
+//     second row. Saving an artifact twice is one library entry whose
+//     snapshot and saved_at move forward, so the toggle in each viewer has
+//     exactly two states to render.
+//
+// No index beyond that UNIQUE: the one read is "the whole library, newest
+// first", a full scan of a table carl grows by hand a few rows at a time.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v23.
+const schemaV24 = `
+CREATE TABLE saved_artifacts (
+	id       INTEGER PRIMARY KEY AUTOINCREMENT,
+	job_id   INTEGER NOT NULL,             -- no FK, no cascade: the row outlives its job
+	slug     TEXT    NOT NULL,             -- display slug at save time
+	name     TEXT    NOT NULL,             -- artifact path within the job, slashes intact
+	snapshot BLOB    NOT NULL,             -- the bytes frozen at save time
+	saved_at INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	UNIQUE(job_id, name)
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1386,9 +1434,13 @@ type migrationStep struct {
 // migrations[23] adds the goals table and jobs.goal_id (no hook — a brand-new
 // table has nothing to migrate forward, and a NULL goal_id correctly means
 // "this job serves no particular goal", which is true of every job that
-// predates the feature; see schemaV23).
+// predates the feature; see schemaV23);
+// migrations[24] adds saved_artifacts (no hook — a brand-new table has nothing
+// to migrate forward, and an EMPTY library correctly means "carl has never
+// saved an artifact", which is true of every database that predates the
+// feature; see schemaV24).
 // Future schema changes append
-// migrations[24], migrations[25], ... rather than editing an existing
+// migrations[25], migrations[26], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1415,6 +1467,7 @@ var migrations = map[int]migrationStep{
 	21: {sql: schemaV21},
 	22: {sql: schemaV22},
 	23: {sql: schemaV23},
+	24: {sql: schemaV24},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

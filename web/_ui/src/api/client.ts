@@ -16,6 +16,7 @@ import type {
   DreamReports,
   GoalsPage,
   JobForm,
+  LibraryPage,
   LogPage,
   RenameResult,
   ThreadOp,
@@ -162,6 +163,13 @@ export const setWatchVerdict = (
 export const fetchGoals = (signal?: AbortSignal) =>
   getJSON<GoalsPage>("/api/goals", signal);
 
+/**
+ * The saved-artifact library, newest first. Open under `--mirror` (it reads
+ * frozen bytes and touches no job), unlike the two writes below.
+ */
+export const fetchLibrary = (signal?: AbortSignal) =>
+  getJSON<LibraryPage>("/api/library", signal);
+
 export const fetchUpdateStatus = (signal?: AbortSignal) =>
   getJSON<import("./types.ts").WebUpdate>("/api/update/status", signal);
 
@@ -229,6 +237,22 @@ export const editFeedback = (slug: string, id: number, feedback: string) =>
 
 export const deleteFeedback = (slug: string, id: number) =>
   postJSON("/api/feedback", { slug, id, delete: true });
+
+// ------------------------------------------------------------ library
+//
+// The same {slug, home, name} triple `createFeedback` sends, and for the same
+// reason: it is what `artifactParts` recovers from the URL the viewer is
+// showing, so the artifact addressed is exactly the one on screen. The server
+// resolves it, freezes the CURRENT bytes and upserts by (job, name) — a re-save
+// replaces the snapshot and keeps the row id, so this is idempotent rather than
+// duplicating.
+
+export const saveToLibrary = (slug: string, home: string, name: string) =>
+  postJSON<{ ok: true; id: number }>("/api/library", { slug, home, name });
+
+/** Drop one saved row by its id — the id the list served, never a slug. */
+export const removeFromLibrary = (id: number) =>
+  postJSON("/api/library/remove", { id });
 
 // ------------------------------------------------------------ threads
 

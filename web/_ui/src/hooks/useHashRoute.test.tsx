@@ -16,7 +16,9 @@ function ViewHarness() {
       <main id="board" hidden={view !== "board"} />
       <main className="logview" id="log" hidden={view !== "log"} />
       <main className="dreamview" id="dream" hidden={view !== "dream"} />
-      <main className="graphview" id="graph" hidden={view !== "graph"} />
+      {/* the MEMORY tab's <main> keeps the id/class `graph` — the rename is a
+          label, and every internal name stays put */}
+      <main className="graphview" id="graph" hidden={view !== "memory"} />
     </>
   );
 }
@@ -29,8 +31,8 @@ beforeEach(() => {
 });
 
 describe("VIEWS", () => {
-  it("is board · log · dream · graph, with no dag", () => {
-    expect([...VIEWS]).toEqual(["board", "log", "dream", "graph"]);
+  it("is board · log · dream · memory, with no dag", () => {
+    expect([...VIEWS]).toEqual(["board", "log", "dream", "memory"]);
     expect(VIEWS as readonly string[]).not.toContain("dag");
   });
 });

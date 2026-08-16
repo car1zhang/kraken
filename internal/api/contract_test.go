@@ -1084,6 +1084,23 @@ var webAgentSpec = map[string]fieldSpec{
 	"working": {kind: wireBool, required: true},
 }
 
+// webLibraryItemSpec covers library.go's webLibraryItem, the elements of GET
+// /api/library's "items" array. All five keys are required — none carries
+// omitempty, and each is a real answer at its zero value — and the spec's
+// no-extra-keys check is what keeps the snapshot BYTES from ever appearing
+// beside them: the bytes are what "url" is for.
+//
+// It rides here with webArtifactSpec rather than in a file of its own for the
+// reason that spec does: this is a small array-element shape whose parent
+// payload asserts only that it holds an array.
+var webLibraryItemSpec = map[string]fieldSpec{
+	"id":       {kind: wireNumber, required: true},
+	"slug":     {kind: wireString, required: true},
+	"name":     {kind: wireString, required: true},
+	"saved_at": {kind: wireNumber, required: true},
+	"url":      {kind: wireString, required: true},
+}
+
 // jobPRSpec covers job.go's jobs.JobPR, the elements of webJob's "prs" array —
 // the daemon-tracked record of every PR shipped from the cell branch.
 var jobPRSpec = map[string]fieldSpec{
@@ -1097,6 +1114,25 @@ func TestWebArtifactWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webArtifact", data, webArtifactSpec)
+}
+
+// TestWebLibraryItemWireShape pins one library entry's shape, marshaled from
+// the same constructor the route uses — so the served "url" is asserted to be
+// the one libraryItemURL builds rather than a literal restated here, which is
+// the only version of that assertion a wrong route registration could fail.
+func TestWebLibraryItemWireShape(t *testing.T) {
+	item := webLibraryItemFrom(store.SavedArtifactMeta{
+		ID: 7, JobID: 3, Slug: "kraken-save-artifacts", Name: "50-contract.md",
+		SavedAt: 1769040000000, Size: 4096,
+	})
+	if want := "/api/library/artifact/7/50-contract.md"; item.URL != want {
+		t.Fatalf("url = %q, want %q", item.URL, want)
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webLibraryItem", data, webLibraryItemSpec)
 }
 
 func TestWebAgentWireShape(t *testing.T) {

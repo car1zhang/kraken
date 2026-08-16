@@ -135,17 +135,20 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 	s := openTest(t)
 	jobID := seedThreadJob(t, s, "legacy-model")
 
-	// v23 (the goals table plus jobs.goal_id) landed on top of v22 after this
-	// test was written, so reaching a v21 shape now means reversing it too —
-	// otherwise migrate() replays step 23 over a database that still has both
-	// and fails on the bare CREATE. The column goes first: it carries the
-	// REFERENCES clause onto the table dropped right after it.
+	// v23 (the goals table plus jobs.goal_id) and v24 (saved_artifacts, the
+	// artifact library) both landed on top of v22 after this test was written,
+	// so reaching a v21 shape now means reversing them too — otherwise
+	// migrate() replays those steps over a database that still has their
+	// tables and fails on a bare CREATE. Newest first, and within v23 the
+	// column goes before the table: it carries the REFERENCES clause onto the
+	// table dropped right after it.
 	for _, stmt := range []string{
+		`DROP TABLE saved_artifacts`,
 		`ALTER TABLE jobs DROP COLUMN goal_id`,
 		`DROP TABLE goals`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {
-			t.Fatalf("reverse v23 (%q): %v", stmt, err)
+			t.Fatalf("reverse v23/v24 (%q): %v", stmt, err)
 		}
 	}
 	if _, err := s.db.Exec(`ALTER TABLE threads DROP COLUMN model`); err != nil {
