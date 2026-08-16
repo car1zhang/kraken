@@ -166,6 +166,21 @@ func cmdBashLint() {
 	}
 }
 
+// --- wakeup-guard ---
+
+// cmdWakeupGuard is the thin dispatch wrapper for `kraken wakeup-guard` — a
+// Claude Code PreToolUse hook on the ScheduleWakeup tool
+// (jobs.WakeupGuardStdin does the work), not a user-facing verb, so it's kept
+// out of usage() like bash-lint. Same exit-2 blocking protocol and the same
+// fail-open posture: anything that is not a well-formed ScheduleWakeup arm
+// exits 0 and prints nothing.
+func cmdWakeupGuard() {
+	if msg, block := jobs.WakeupGuardStdin(os.Stdin); block {
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(2)
+	}
+}
+
 // --- k logevent ---
 
 // cmdLogEvent appends one entry to the unified event log — plumbing for

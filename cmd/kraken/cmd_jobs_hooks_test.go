@@ -6,9 +6,10 @@ import (
 	"testing"
 )
 
-// TestMainDispatchesEveryHookVerb pins main.go's dispatch cases for the three
+// TestMainDispatchesEveryHookVerb pins main.go's dispatch cases for the five
 // hook verbs a cell's .claude/settings.json installs (jobs/cell.go's
-// prHookCommand, limitHookCommand and recallHookCommand). The pin exists
+// prHookCommand, bashLintCommand, wakeupGuardCommand, limitHookCommand and
+// recallHookCommand). The pin exists
 // because this regression actually shipped: a refactor of the hook-verb
 // region dropped `case "recall-hook"` while the build stayed green — nothing
 // else references a dispatch case — leaving every installed recall-hook
@@ -22,7 +23,7 @@ func TestMainDispatchesEveryHookVerb(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, verb := range []string{"pr-hook", "limit-hook", "recall-hook"} {
+	for _, verb := range []string{"pr-hook", "bash-lint", "wakeup-guard", "limit-hook", "recall-hook"} {
 		if !strings.Contains(string(src), `case "`+verb+`":`) {
 			t.Errorf("main.go has no dispatch case for %q — every cell's settings.json installs a hook command that calls it", verb)
 		}
