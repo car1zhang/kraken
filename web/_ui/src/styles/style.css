@@ -1101,6 +1101,20 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
   font: 9px var(--mono);
 }
+/* the repo tag — the meta row's one AT-A-GLANCE token: same-repo cards wear
+   the same tint (repoColorVar hashes the name onto the eight --job-* palette
+   vars), so a column scans by colour before anyone reads a name. Tinted text
+   over a faint wash of the same colour, no border: a bordered box here would
+   read as a BUTTON in a row of plain words, and the chip rows below already
+   own that shape. --repo-color arrives inline from the card and is never
+   emitted empty (JobCard omits the whole span for a blank repo), so the
+   var() needs no fallback. */
+.meta .repo {
+  color: color-mix(in srgb, var(--repo-color) 72%, var(--fg));
+  background: color-mix(in srgb, var(--repo-color) 12%, transparent);
+  padding: 1px 5px;
+  letter-spacing: 0.04em;
+}
 .err { color: var(--ac2); font-size: 9px; margin-top: 8px; }
 
 /* `.start-error` and its two children stood here — a queued job's silent

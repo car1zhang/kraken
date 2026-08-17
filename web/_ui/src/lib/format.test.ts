@@ -8,10 +8,12 @@ import {
   countdown,
   docQuestionsOpenP0,
   flagCount,
+  JOB_COLORS,
   loadBadgeTitle,
   loadRatioText,
   loadROI,
   logTime,
+  repoColorVar,
   settledJob,
   usageColorClass,
   usageCountdown,
@@ -31,6 +33,37 @@ const job = (over: Partial<WebJob> = {}): WebJob => ({
 // text token from JobCard's STATUS_TEXT (50-contract.md, JobCard band 1/3 row
 // as amended), and ArchivedCard hardcodes its own `--state`, so nothing read
 // the mapping any more.
+
+describe("repoColorVar", () => {
+  it("maps a repo name to one of the eight --job-* palette vars", () => {
+    const v = repoColorVar("monolith");
+    const allowed = JOB_COLORS.map((c) => `var(--job-${c})`);
+    expect(allowed).toContain(v);
+  });
+
+  it("is deterministic — same name, same var, across calls", () => {
+    expect(repoColorVar("kraken")).toBe(repoColorVar("kraken"));
+  });
+
+  it("separates the repos actually on the board today", () => {
+    // What must hold: monolith, kraken, configs and roi-slides-generator land
+    // on distinct slots, or the one board the feature was built for scans no
+    // better than plain text. It is the 5381 seed that places them — the
+    // multiplier is inert mod 8; see repoColorVar's doc. A new repo colliding
+    // with one of these is acceptable; these four colliding with each other
+    // is the feature failing on day one.
+    const seen = new Set(
+      ["monolith", "kraken", "configs", "roi-slides-generator"].map(repoColorVar),
+    );
+    expect(seen.size).toBe(4);
+  });
+
+  it("returns \"\" for a blank or absent repo — callers omit, never emit empty", () => {
+    expect(repoColorVar("")).toBe("");
+    expect(repoColorVar(undefined)).toBe("");
+    expect(repoColorVar(null)).toBe("");
+  });
+});
 
 describe("age", () => {
   it("formats seconds-resolution stamps", () => {
