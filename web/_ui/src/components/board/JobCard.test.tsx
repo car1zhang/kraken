@@ -536,6 +536,38 @@ describe("job colour", () => {
   });
 });
 
+describe("the repo tag", () => {
+  it("renders the repo as a .repo tag in the meta row, carrying --repo-color", () => {
+    const { card } = renderCard(job({ repo: "monolith" }));
+    const tag = card.querySelector(".meta .repo")!;
+    expect(tag).not.toBeNull();
+    expect(tag.textContent).toBe("monolith");
+    // The exact var is repoColorVar's business (format.test.ts pins the
+    // mapping); the card's obligation is that the property is a --job-* var.
+    expect(tag.getAttribute("style")).toMatch(/--repo-color: var\(--job-\w+\)/);
+  });
+
+  it("gives two repos two different tints", () => {
+    // The at-a-glance channel: same repo, same var; different repo, different
+    // var — for the names actually on the board (format.test.ts owns the
+    // wider distinctness claim).
+    const style = (repo: string) => {
+      const { card } = renderCard(job({ repo }));
+      return card.querySelector(".meta .repo")!.getAttribute("style");
+    };
+    expect(style("monolith")).not.toBe(style("kraken"));
+    expect(style("kraken")).toBe(style("kraken"));
+  });
+
+  it("omits the span whole for a blank repo — no empty tag, no empty property", () => {
+    // An empty bordered/washed tag would be a mark with no meaning, and
+    // --repo-color set to "" would substitute nothing at computed-value time —
+    // same trap the --job-color cases above document.
+    const { card } = renderCard(job({ repo: "" }));
+    expect(card.querySelector(".meta .repo")).toBeNull();
+  });
+});
+
 describe("the card click fallback", () => {
   it("opens the steer composer on a live working job", async () => {
     const { card, actions } = renderCard(job({ state: "working", live: true }));

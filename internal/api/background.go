@@ -144,7 +144,8 @@ func backgroundHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Same invalidate as the POST arm: a stale cached payload here keeps
-		// the image up AND the remove button rendered after a 200.
+		// the image up — and the ▨ BG button's ✓ mark and the menu's live
+		// CLEAR row with it — after a 200.
 		webBoardCache.invalidate()
 		webJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:

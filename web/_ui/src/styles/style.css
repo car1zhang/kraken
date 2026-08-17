@@ -497,7 +497,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   font-family: var(--mono); font-size: 11px;
 }
 .chrome > .mark, .chrome > .led, .chrome > .viewtabs,
-.chrome > .upd, .chrome > .theme-btn { flex: none; }
+.chrome > .upd, .chrome > .theme-btn, .chrome > .bg-menu-root { flex: none; }
 /* .spacer is the one child that must GROW, and it needs saying at this
    specificity: `.chrome > .spacer` is (0,2,0) and would beat the bare
    `.spacer { flex: 1 }` below no matter which came first, so leaving the
@@ -1125,6 +1125,20 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   color: var(--muted); margin-top: 3px;
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
   font: 9px var(--mono);
+}
+/* the repo tag — the meta row's one AT-A-GLANCE token: same-repo cards wear
+   the same tint (repoColorVar hashes the name onto the eight --job-* palette
+   vars), so a column scans by colour before anyone reads a name. Tinted text
+   over a faint wash of the same colour, no border: a bordered box here would
+   read as a BUTTON in a row of plain words, and the chip rows below already
+   own that shape. --repo-color arrives inline from the card and is never
+   emitted empty (JobCard omits the whole span for a blank repo), so the
+   var() needs no fallback. */
+.meta .repo {
+  color: color-mix(in srgb, var(--repo-color) 72%, var(--fg));
+  background: color-mix(in srgb, var(--repo-color) 12%, transparent);
+  padding: 1px 5px;
+  letter-spacing: 0.04em;
 }
 .err { color: var(--ac2); font-size: 9px; margin-top: 8px; }
 
@@ -2452,6 +2466,46 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    cut to the host's width, and a menu narrower than its own labels would
    ellipsis every row */
 .gm-menu { min-width: 180px; max-width: 280px; }
+
+/* ---- board-background menu: the header's ▨ BG button and its two-option
+   dropdown (UPLOAD… / CLEAR — BackgroundControl.tsx). The menu skin mirrors
+   .colorsel-menu above (same fill, border, shadow, corner cut) rather than
+   sharing its classes: the colorsel names were frozen by that slice's
+   contract, and this menu's rows are real <button>s — which is also what
+   keeps them under the pointer-cursor list's bare `button` term with no new
+   entry there. Anchored RIGHT, not left like .colorsel-menu: the button
+   sits in the header's right-hand cluster, so it grows INWARD instead of
+   toward the viewport edge — the ~380px of toggles and clock after it mean
+   neither anchor clips today, but the elastic .spacer slides this cluster
+   around, and inward is the direction that stays safe while it moves.
+   z-index 50 is .colorsel-menu's own number, the sheet's dropdown ceiling
+   (overlays 20/25/30, toast 40, rake 60 — see the z-index block near the top
+   of this sheet). It orders the menu INSIDE .chrome's stacking context only
+   (sticky + z-index 5), so it buys ordering over the header's own children
+   and nothing else: the subtree still paints at 5, under body::after's edge
+   strip (10) and under every overlay. That is all this menu needs — it drops
+   over .board (3), which .chrome's own 5 already clears. */
+.bg-menu-root { position: relative; display: inline-block; }
+.bg-menu {
+  position: absolute; top: calc(100% + 3px); right: 0; z-index: 50;
+  min-width: 96px; display: flex; flex-direction: column;
+  background: color-mix(in srgb, var(--ac) 6%, var(--b0));
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--b0) 80%, transparent);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+.bg-menu-row {
+  display: block; width: 100%; padding: 5px 10px; text-align: left;
+  background: transparent; border: 0;
+  font: 9px var(--mono); letter-spacing: 0.06em; color: var(--body);
+  white-space: nowrap;
+}
+.bg-menu-row:hover:not(:disabled) { background: color-mix(in srgb, var(--ac) 22%, transparent); color: var(--fg); }
+/* same treatment as .colorsel-btn:disabled, theme asymmetry included: the
+   dark pointer list's bare `button` term loses to this (0,2,0), the light
+   list's theme-prefixed one does not. */
+.bg-menu-row:disabled { opacity: 0.4; cursor: default; }
+
 .f-toggles { display: flex; gap: 14px; align-items: center; padding-bottom: 6px; }
 .editor-form label.check {
   flex-direction: row; align-items: center; gap: 5px;

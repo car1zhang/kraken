@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 
 import type { WebJob } from "../../api/types.ts";
-import { age, jobColorVar } from "../../lib/format.ts";
+import { age, jobColorVar, repoColorVar } from "../../lib/format.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import { ArtifactCountChip, artifactCountVisible } from "./chips/ArtifactChips.tsx";
 import { FeedbackChip, feedbackChipVisible } from "./chips/FeedbackChip.tsx";
@@ -92,7 +92,17 @@ export function ArchivedCard({ job, actions }: ArchivedCardProps) {
         <span className="state">■ archived</span>
       </div>
       <div className="meta">
-        <span>{job.repo}</span>
+        {/* Same repo tag as the live card's — the archive scans by the same
+            colour channel, dimmed with the rest of the card by .card.archived's
+            opacity. Omitted whole for a blank repo, as there. */}
+        {job.repo ? (
+          <span
+            className="repo"
+            style={{ "--repo-color": repoColorVar(job.repo) } as CSSProperties}
+          >
+            {job.repo}
+          </span>
+        ) : null}
         <span data-age={job.mtime}>{age(job.mtime)}</span>
       </div>
 

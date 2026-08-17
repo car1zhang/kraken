@@ -59,6 +59,41 @@ export function jobColorVar(j: { color?: string } | null | undefined): string {
   return c && (JOB_COLORS as readonly string[]).includes(c) ? `var(--job-${c})` : "";
 }
 
+/**
+ * repoColorVar maps a repo NAME to one of the eight `--job-*` palette vars,
+ * deterministically, so every card of one repo wears the same tint and two
+ * different repos usually wear different ones — the "at a glance" channel for
+ * the `.meta` row's repo tag. Same-var-per-theme trick as jobColorVar: the
+ * palette hexes are theme-scoped in style.css, so this function never needs to
+ * know which theme is active.
+ *
+ * Deterministic rather than assigned: there is no repo registry anywhere to
+ * hold an assignment, and a hash means the board, a fresh browser, and any
+ * future surface agree with zero coordination. djb2 (h*33+c, seeded 5381) is
+ * the shape rather than the reason — with eight slots the multiplier washes
+ * out (33 ≡ 1 mod 8, so the index is really (5381 + Σ charCode) % 8); the
+ * four repos on today's board — monolith, kraken, configs,
+ * roi-slides-generator — have pairwise-distinct character sums mod 8, so they
+ * land on four distinct slots whatever the seed is; the seed only decides
+ * WHICH four (cyan, blue, pink, purple today), so changing 5381 re-tints the
+ * whole board. Eight
+ * slots over an open set of names means collisions remain possible (any two
+ * names with the same character-code sum share a tint); that is fine — the
+ * tag still prints the name, and the colour only has to make SCANNING work,
+ * not be a unique key.
+ *
+ * "" for a blank repo, and callers must then omit the property rather than
+ * set it to "" — same computed-value-time trap jobColorVar documents.
+ */
+export function repoColorVar(repo: string | undefined | null): string {
+  if (!repo) return "";
+  let h = 5381;
+  for (let i = 0; i < repo.length; i++) {
+    h = (h * 33 + repo.charCodeAt(i)) >>> 0;
+  }
+  return `var(--job-${JOB_COLORS[h % JOB_COLORS.length]})`;
+}
+
 // ---------------------------------------------------------------- clocks
 
 /**
