@@ -2,7 +2,7 @@ import { Fragment, type CSSProperties, type ReactNode } from "react";
 
 import type { WebJob } from "../../api/types.ts";
 import type { Column } from "../../lib/columns.ts";
-import { age, columnFor, jobColorVar } from "../../lib/format.ts";
+import { age, columnFor, jobColorVar, repoColorVar } from "../../lib/format.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import { highlightSegments, type JobMatch } from "../../lib/jobSearch.ts";
 import { ArtifactCountChip, artifactCountVisible } from "./chips/ArtifactChips.tsx";
@@ -280,7 +280,21 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
             and a submit in flight is a request, not a booking. */}
       </div>
       <div className="meta">
-        <span>{job.repo}</span>
+        {/* The repo, as a TAG rather than a bare word — the card's one
+            at-a-glance statement of which codebase the job targets. Tinted by
+            repoColorVar so a column scans by colour before it reads a single
+            name; the property is omitted (never "") for a blank repo, same
+            all-or-nothing emission as --job-color above, and the span itself
+            is omitted too — an empty bordered tag would be a mark with no
+            meaning. */}
+        {job.repo ? (
+          <span
+            className="repo"
+            style={{ "--repo-color": repoColorVar(job.repo) } as CSSProperties}
+          >
+            {job.repo}
+          </span>
+        ) : null}
         {job.live ? <span>{job.cell}</span> : null}
         <span data-age={job.mtime}>{age(job.mtime)}</span>
         {/* LAST in the row, always — style.css right-aligns it off the end of

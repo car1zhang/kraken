@@ -129,6 +129,17 @@ describe("the archived card's bands", () => {
     expect(renderCard().card.getAttribute("style") ?? "").not.toContain("--job-color");
   });
 
+  it("wears the same repo tag as a live card — the archive scans by the same channel", () => {
+    const tag = renderCard(job({ repo: "monolith" })).card.querySelector(".meta .repo")!;
+    expect(tag).not.toBeNull();
+    expect(tag.textContent).toBe("monolith");
+    expect(tag.getAttribute("style")).toMatch(/--repo-color: var\(--job-\w+\)/);
+  });
+
+  it("omits the repo tag whole for a blank repo, as the live card does", () => {
+    expect(renderCard(job({ repo: "" })).card.querySelector(".meta .repo")).toBeNull();
+  });
+
   it("shows the renamed-on-archive label alongside the archive name", () => {
     const { card } = renderCard(job({ slug: "old-2", display_slug: "old" }));
     expect(card.querySelector(".slug")).toHaveTextContent("old");
