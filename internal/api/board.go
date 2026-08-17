@@ -519,19 +519,29 @@ type webJob struct {
 	// does not know the key ignores it and renders the card exactly as it did
 	// before estimates existed.
 	Load *webJobLoad `json:"load,omitempty"`
-	// Goal is the goal this job serves (goals.go), present exactly when the
-	// job links one. A pointer with omitempty for the reason Load is one: a
-	// zeroed object would claim a link to goal 0, and there is no such goal.
+	// Goals is every goal this job serves (goals.go), in link position order
+	// and present exactly when there is at least one — absence is the wire's
+	// only spelling of "serves none", so an empty ARRAY is never served
+	// (omitempty, and webJobGoalsFor returns nil rather than an empty slice).
 	//
-	// It carries the goal's TEXT rather than only its id, so a card can render
-	// the chip from the board payload alone — the alternative (an id the
-	// client resolves against the board's top-level "goals") would be blank
-	// for every job whose goal is not in the current period, which is exactly
-	// the job most worth labelling.
+	// Each element carries the goal's TEXT rather than only its id, so a card
+	// can render its chips from the board payload alone — the alternative (ids
+	// the client resolves against the board's top-level "goals") would be blank
+	// for every goal outside the current period, which is exactly the goal a
+	// long-running job is most likely to still serve.
 	//
 	// ADDITIVE — a new optional key on an existing shape — so apiContract does
-	// NOT bump. A client that does not know the key renders the card exactly
-	// as it did before goals existed.
+	// NOT bump. A client that does not know it reads `goal` below and renders
+	// one chip, exactly as it did when a job could serve only one goal.
+	Goals []webJobGoal `json:"goals,omitempty"`
+	// Goal is this job's PRIMARY goal, and it is `goals[0]` by definition —
+	// present exactly when Goals is, built from it by the one function that
+	// builds both (primaryJobGoal), so the two can never name different goals.
+	//
+	// It is retained rather than replaced because every shipped iOS build reads
+	// it: the array is the addition, this is the compatibility. A pointer with
+	// omitempty for the reason Load is one: a zeroed object would claim a link
+	// to goal 0, and there is no such goal.
 	Goal *webJobGoal `json:"goal,omitempty"`
 }
 
@@ -969,11 +979,16 @@ func buildWebBoard() webBoard {
 	activeStore := jobs.ActiveStore()
 	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS(), Goals: currentGoals(activeStore), Background: currentBackground(activeStore)}
 	order := jobs.LoadBoardOrder()
-	// The card chips, built from the two lists the payload ALREADY carries plus
-	// a by-id read for each linked goal those lists do not cover (a job still
-	// serving last week's goal). Scoped to what the loaded jobs actually link
-	// rather than to the whole table, which only grows — see linkedJobGoals.
-	goals := linkedJobGoals(activeStore, board.Goals, js)
+	// The card chips, in two steps with two different scopes, deliberately: ONE
+	// unfiltered query for every link in job_goals (jobGoalLinks — small, and
+	// every row of it belongs to a job this board renders), then the goals those
+	// links name, taken from the two lists the payload ALREADY carries plus one
+	// by-id read per distinct id those lists do not cover (a job still serving
+	// last week's goal). Only the second is demand-scoped, since goals is the
+	// table that only grows — see linkedJobGoals. The archived loop below reads
+	// the same two maps, which is why they are built out here.
+	links := jobGoalLinks(activeStore)
+	goals := linkedJobGoals(activeStore, board.Goals, links)
 	// One query for the WHOLE board's token rows, read before the loop and
 	// indexed by slug — never a per-job GetJobTokens, which would be ~74
 	// queries inside the cached build (store.ListJobTokens' own reason for
@@ -985,6 +1000,10 @@ func buildWebBoard() webBoard {
 		// roughly every two seconds, and the byState bucketing below needs the
 		// same answer.
 		displayState := jobs.DisplayState(j)
+		// Resolved once per card, and once for BOTH keys: Goal is this slice's
+		// head, never a separate lookup, which is what makes "goal is goals[0]"
+		// a property of the code rather than a convention two lines share.
+		jobGoals := webJobGoalsFor(goals, links[j.ID])
 		wj := webJob{
 			Slug: j.Slug, Repo: j.Repo,
 			State: displayState, Err: j.Err, Outcome: j.Outcome,
@@ -1014,13 +1033,14 @@ func buildWebBoard() webBoard {
 			// so one payload shape with the clients gating on state is the
 			// only version that does not flicker the key in and out.
 			Load: webJobLoadFrom(j.Load),
-			// Goal: resolved out of the index above, keyed on the job row's own
-			// goal_id — a nil map entry (no link, or a link that resolved to
-			// nothing) is exactly the omitempty absence. Emitted for every
-			// active job regardless of display state (Load's reasoning) — a card
-			// moves between blocked and working tick to tick, and the chip must
-			// not flicker with it.
-			Goal: goals[j.GoalID],
+			// Goals/Goal: resolved out of the two maps above, keyed on the job's
+			// own id — an empty slice (no links, or links that resolved to
+			// nothing) is exactly the omitempty absence, for both keys at once.
+			// Emitted for every active job regardless of display state (Load's
+			// reasoning) — a card moves between blocked and working tick to
+			// tick, and its chips must not flicker with it.
+			Goals: jobGoals,
+			Goal:  primaryJobGoal(jobGoals),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -1089,7 +1109,7 @@ func buildWebBoard() webBoard {
 	// derivation — just the file, its artifacts, and the two
 	// actions (unarchive, delete) keyed on the archive file base
 	for _, a := range jobs.LoadArchivedJobs() {
-		board.Jobs = append(board.Jobs, archivedWebJob(a, activeStore, tokens))
+		board.Jobs = append(board.Jobs, archivedWebJob(a, activeStore, tokens, webJobGoalsFor(goals, links[a.ID])))
 	}
 	return board
 }
@@ -1103,7 +1123,11 @@ func buildWebBoard() webBoard {
 // DiscoverAll — the phrasing update_test.go and shipios_test.go already use
 // for avoiding this same function). As a function they are reachable, and the
 // Load decision in particular is one a later edit could reverse in one line.
-func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]store.JobTokens) webJob {
+// goals is the archived job's own chips, already resolved by the caller out of
+// the board-wide maps — passed in rather than looked up here for the reason
+// tokens is: this function must stay callable by a test, and a lookup inside it
+// would need a store the archived path does not otherwise read goals from.
+func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]store.JobTokens, goals []webJobGoal) webJob {
 	return webJob{
 		Slug: a.ArchivedName, Repo: a.Repo,
 		State: "archived", Archived: true, DisplaySlug: a.Slug,
@@ -1142,6 +1166,17 @@ func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]stor
 		// would put a number answering a question this card cannot pose
 		// in front of a client, which is how a stale estimate starts
 		// reading as a current fact.
+		//
+		// Goals IS set, which is Tokens' call rather than Load's, and for
+		// Tokens' reason: the goals a job served are a fact about work that
+		// happened, and an archived card answering "what was this for" is the
+		// retrospective question the archive column exists to pose. Nothing
+		// about it goes stale — a goal's text and done-ness are read live from
+		// the same index the active cards use — and unlike a triage estimate it
+		// poses no question the card cannot answer. Goal rides along as its
+		// head, as everywhere: the two keys appear together or not at all.
+		Goals: goals,
+		Goal:  primaryJobGoal(goals),
 	}
 }
 

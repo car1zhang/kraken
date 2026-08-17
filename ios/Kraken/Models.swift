@@ -190,16 +190,75 @@ struct WebGoals: Decodable, Equatable {
     }
 }
 
-// The `goal` key on a webJob: the goal that job is linked to, present
-// exactly when there is one (any period, done or not). Strictly decoded,
-// unlike WebGoals above — it sits among webJob's other sub-objects
-// (`question`, `wakeup`, `tokens`, `load`), every one of which is
-// synthesized, and matching its own neighbours is what keeps the job shape
-// readable.
+// The `goal` key on a webJob: the PRIMARY goal that job is linked to,
+// present exactly when it links at least one (any period, done or not) and
+// always equal to `goals[0]`. Strictly decoded, unlike WebGoals above — it
+// sits among webJob's other sub-objects (`question`, `wakeup`, `tokens`,
+// `load`), every one of which is synthesized, and matching its own
+// neighbours is what keeps the job shape readable.
 struct WebJobGoal: Decodable, Equatable {
     let id: Int64
     let text: String
     let done: Bool
+}
+
+// The `goals` key on a webJob: EVERY goal that job links, in link-position
+// order, present exactly when it links at least one. `goal` above is this
+// array's head, served alongside it so a build that predates multi-goal
+// links keeps rendering the primary; both keys are omitted together when
+// the job links nothing.
+//
+// A wrapper struct rather than a bare `[WebJobGoal]?` property, because the
+// tolerance below needs an `init(from:)` of its own and an array property
+// cannot carry one. `items` is the array; the type is Equatable so a test
+// can compare a whole list in one assertion.
+//
+// Hand-decoded, and tolerant in two distinct places — the card's chips are
+// cosmetic, the board is not, so a drifted server may cost chips and must
+// never cost the job it is drawn on. A failure here would NOT stop at the
+// chip: `WebBoard.jobs` is a strictly decoded `[WebJob]`, so a throw inside
+// one job's `goals` takes the ENTIRE board decode with it. The two places:
+//
+//   - The CONTAINER: `goals` present but not an array (a string, a number,
+//     an object — whatever a future server or a hand-edited response
+//     serves) degrades to an empty `items` rather than throwing. Absent or
+//     null is a different case entirely, absorbed by WebJob's synthesized
+//     `decodeIfPresent` before this init ever runs: it nils the whole
+//     property.
+//   - Each ELEMENT: a malformed one is DROPPED and the rest survive, which
+//     a plain `[WebJobGoal]` decode cannot do — one bad element throws for
+//     the whole array. That is what `TolerantWebJobGoal` below is for: a
+//     wrapper whose own decode never throws, so the array decode always
+//     succeeds and the failures arrive as nils to be filtered out.
+struct WebJobGoalList: Decodable, Equatable {
+    let items: [WebJobGoal]
+
+    init(from decoder: Decoder) throws {
+        guard let c = try? decoder.singleValueContainer(),
+              let raw = try? c.decode([TolerantWebJobGoal].self) else {
+            items = []
+            return
+        }
+        items = raw.compactMap(\.goal)
+    }
+
+    /// For tests and previews.
+    init(items: [WebJobGoal]) {
+        self.items = items
+    }
+}
+
+// One element of the `goals` array, decoded so that it cannot throw: a
+// malformed element yields `goal == nil` instead of failing the array. It
+// exists only inside WebJobGoalList's init — `[WebJobGoal?]` would NOT do
+// the same job, since Optional's own decoding still calls WebJobGoal's
+// throwing init for any non-null value.
+private struct TolerantWebJobGoal: Decodable {
+    let goal: WebJobGoal?
+
+    init(from decoder: Decoder) throws {
+        goal = try? WebJobGoal(from: decoder)
+    }
 }
 
 // MARK: - self-update
@@ -457,13 +516,21 @@ struct WebJob: Decodable, Identifiable {
     // bump; render through BoardTheme.jobColor, which degrades an unknown
     // name from a newer server to "no color".
     let color: String?
-    // The goal this job is linked to, present exactly when it links one —
-    // from ANY period and done or not, so a job carried over from last week
+    // The PRIMARY goal this job is linked to: the head of `goals` below,
+    // present under exactly the same condition and never on its own. From
+    // ANY period and done or not, so a job carried over from last week
     // still names the goal it belongs to. Additive key, absent on older
-    // servers, so no contract bump. Rendered as the card's one goal chip
-    // (`GoalChip` in GoalsDrawer.swift), which is the only place the phone
-    // shows a job's goal — picking one is web-only in v1.
+    // servers, so no contract bump.
     let goal: WebJobGoal?
+    // Every goal this job links, in link-position order, present exactly
+    // when it links at least one. A job may link several, so the card draws
+    // one chip per goal (`GoalChip` in GoalsDrawer.swift, laid out by
+    // `CardChipFlow`), which is the only place the phone shows a job's
+    // goals — picking them is web-only. Additive key, absent on servers
+    // that predate multi-goal links (where `goal` alone still carries the
+    // one link), so no contract bump; see WebJobGoalList for why a drifted
+    // value degrades to an empty list rather than failing the board.
+    let goals: WebJobGoalList?
     // `start_error` is gone with the queued state (v6): a start is now the
     // synchronous answer to POST /api/queue, so a failure surfaces as that
     // call's own 409 rather than as a field on a job parked in a queue.
@@ -501,6 +568,7 @@ struct WebJob: Decodable, Identifiable {
         case load
         case color
         case goal
+        case goals
     }
 }
 

@@ -137,24 +137,25 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 
 	// v23 (the goals table plus jobs.goal_id) landed on top of v22 after this
 	// test was written, so reaching a v21 shape now means reversing it too —
-	// otherwise migrate() replays step 23 over a database that still has both
-	// and fails on the bare CREATE. The column goes first: it carries the
-	// REFERENCES clause onto the table dropped right after it.
+	// otherwise migrate() replays step 23 over a database that still has the
+	// table and fails on the bare CREATE.
 	//
-	// v24 (kronos' orch_inbox), v25 (saved_artifacts, the artifact library)
-	// and v26 (board_bg, the board background) landed later still, and need
-	// the same treatment for the same reason: a leftover table fails that
-	// step's bare CREATE. Reversed FIRST — this list unwinds newest-first,
-	// mirroring the order migrate() applies the steps.
+	// v24 (kronos' orch_inbox), v25 (saved_artifacts, the artifact library),
+	// v26 (board_bg, the board background) and v27 (job_goals, which replaced
+	// jobs.goal_id) landed later still, and need the same treatment for the
+	// same reason: a leftover table fails that step's bare CREATE. Reversed
+	// FIRST — this list unwinds newest-first, mirroring the order migrate()
+	// applies the steps. Only v27's TABLE is dropped: the goal_id column v23
+	// added is already gone, taken by v27 itself.
 	for _, stmt := range []string{
+		`DROP TABLE job_goals`,
 		`DROP TABLE board_bg`,
 		`DROP TABLE saved_artifacts`,
 		`DROP TABLE orch_inbox`,
-		`ALTER TABLE jobs DROP COLUMN goal_id`,
 		`DROP TABLE goals`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {
-			t.Fatalf("reverse v26/v25/v24/v23 (%q): %v", stmt, err)
+			t.Fatalf("reverse v27/v26/v25/v24/v23 (%q): %v", stmt, err)
 		}
 	}
 	if _, err := s.db.Exec(`ALTER TABLE threads DROP COLUMN model`); err != nil {

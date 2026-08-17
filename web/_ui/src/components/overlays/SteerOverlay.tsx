@@ -43,7 +43,7 @@ import { codeRefTarget } from "../../lib/codeRefs.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
-import { GoalPicker } from "./GoalPicker.tsx";
+import { GoalMultiPicker } from "./GoalMultiPicker.tsx";
 import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
@@ -694,28 +694,35 @@ function SteerBody({
         <span className="panel-title" id="steer-title">
           {jobSlug + TITLE_SUFFIX[mode]}
         </span>
-        {/* the job's goal — the same picker the editor's form carries
-            (GoalPicker), HERE because the board routes a live working/blocked
-            card to THIS modal and never to the editor, so a picker that lived
-            only in the editor was reachable exactly when filing a job under a
-            goal matters least. /api/job/goal is ungated precisely so a
-            RUNNING job can be linked, and like the colour strip below it
-            rides no mode check — linking is valid in steer, unblock and
-            reactivate alike — and never sends a steer message. Withheld for
-            an archived job: its synthetic slug is not a job the route can
-            answer for, and the wire withholds its goal anyway. The wrapper
+        {/* the job's goals — the same picker the editor's form carries
+            (GoalMultiPicker), HERE because the board routes a live
+            working/blocked card to THIS modal and never to the editor, so a
+            picker that lived only in the editor was reachable exactly when
+            filing a job under a goal matters least. /api/job/goal is ungated
+            precisely so a RUNNING job can be linked, and like the colour strip
+            below it rides no mode check — linking is valid in steer, unblock
+            and reactivate alike — and never sends a steer message. Withheld
+            for an archived job: its synthetic slug is not a job the route can
+            answer for, and the wire withholds its goals anyway. The wrapper
             span exists only to carry the FULL goal text as a tooltip
-            (FieldSelect has no title prop) — the chip this replaced paid for
-            its truncation the same way. cut=20: the head is ONE LINE with
-            every control rigid and only the title giving (style.css says so
-            at .panel-head), so the label's cap is what bounds the strip, and
-            the editor form row's 28 is too wide a rigid block here. */}
+            (the picker has no title prop) — the chip this replaced paid for
+            its truncation the same way, and with several links it lists them
+            all, which is the one place the count on the button can be spelled
+            out. It reads `goals` ALONE, exactly as the picker inside it does
+            and unlike the card's chips, which fall back to the legacy single
+            `goal` (api/types.ts states which key means what): a tooltip is
+            what the button abbreviates, so a tooltip naming a goal the button
+            beneath it reads as "—" would be the one control contradicting
+            itself. cut=20: the head is ONE LINE with every control rigid and
+            only the title giving (style.css says so at .panel-head), so the
+            label's cap is what bounds the strip, and the editor form row's 28
+            is too wide a rigid block here. */}
         {job?.archived ? null : (
-          <span title={job?.goal?.text}>
-            <GoalPicker
+          <span title={(job?.goals ?? []).map((g) => g.text).join(" · ") || undefined}>
+            <GoalMultiPicker
               id="steer-goal"
               slug={jobSlug}
-              goal={job?.goal}
+              goals={job?.goals}
               mutate={mutate}
               cut={20}
             />

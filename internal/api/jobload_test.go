@@ -436,7 +436,7 @@ func TestArchivedWebJobWithholdsLoad(t *testing.T) {
 	}
 
 	tokens := map[int64]store.JobTokens{a.ID: {JobID: a.ID, In: 1, Out: 2}}
-	wj := archivedWebJob(a, st, tokens)
+	wj := archivedWebJob(a, st, tokens, nil)
 	if wj.Load != nil {
 		t.Fatalf("archived card carries load = %+v, want no key at all", wj.Load)
 	}

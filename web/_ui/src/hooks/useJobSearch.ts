@@ -15,7 +15,11 @@ export interface JobSearchModel {
   /** The FILTERED render lists. Never board.byColumn — see the docblock. */
   byColumn: Record<Column, WebJob[]>;
   archived: WebJob[];
-  /** jobKey() → why that job survived. Empty while idle, since nothing was filtered. */
+  /**
+   * jobKey() → why that job survived a TEXT search. Empty while idle, since
+   * nothing was filtered — and empty under a goal filter with no query, since
+   * a card kept by its goal has no matched words to explain or to mark.
+   */
   reasonByKey: ReadonlyMap<string, JobMatch["reason"]>;
   /**
    * The jobKeys currently on screen. Empty while idle — ask `active` first,
@@ -29,8 +33,24 @@ export interface JobSearchModel {
   /** Jobs kept, and jobs on the board — the `N of M jobs` readout. */
   matched: number;
   total: number;
-  /** A non-whitespace query is present. Everything cosmetic keys off this. */
+  /**
+   * Something is narrowing the board: a non-whitespace query, a goal filter,
+   * or both. Everything cosmetic keys off this.
+   */
   active: boolean;
+  /**
+   * The goal id these lists were filtered by, echoed straight from the
+   * argument (with `undefined` normalised to `null`) so that a consumer
+   * holding only this model can tell WHY the lists are short.
+   *
+   * Nothing renders it today: App owns the filter state and hands it to the
+   * bar and the panel directly, so both of those read the prop rather than
+   * this field. It is here because a model that reports `active: true` while
+   * carrying no sign of the goal half would make "narrowed by a query" and
+   * "narrowed by a goal" indistinguishable to anyone downstream — and because
+   * the contract freezes it as the model's one statement of the filter.
+   */
+  goalFilter: number | null;
 }
 
 /** Shared, never written: the idle return needs stable empty collections. */
@@ -58,12 +78,26 @@ const NO_KEYS: ReadonlySet<string> = new Set();
  *
  * Nothing is persisted — no localStorage key, no hash parameter. A reload
  * lands on an unfiltered board, which is the only resting state a card set
- * this volatile can safely have.
+ * this volatile can safely have. The goal filter obeys the same rule and for
+ * the same reason: it is App state, and a reload lands unfiltered.
+ *
+ * The GOAL FILTER composes with the query rather than replacing it: a job is
+ * kept when it links the filtered goal AND matches every typed term, which is
+ * the reading that makes the `N of M` readout a count of what is on screen.
+ * It changes nothing above — the filtered lists are still the second view, and
+ * `board.byColumn` is still handed back untouched.
  */
-export function useJobSearch(board: BoardModel): JobSearchModel {
+export function useJobSearch(
+  board: BoardModel,
+  goalFilter: number | null = null,
+): JobSearchModel {
   const [query, setQuery] = useState("");
   const { byColumn, archived } = board;
   const terms = useMemo(() => parseTerms(query), [query]);
+  // One spelling of "no filter" from here down: the prop may arrive as
+  // undefined (a host that never passes one) or null (App's cleared state),
+  // and two absent values would be two branches in every test below.
+  const goal = goalFilter ?? null;
 
   return useMemo(() => {
     let total = archived.length;
@@ -72,7 +106,9 @@ export function useJobSearch(board: BoardModel): JobSearchModel {
     // Idle returns the board's OWN arrays by identity rather than copies:
     // there is nothing to filter, and a fresh array every render would
     // re-register every column's sortable list on every keystroke elsewhere.
-    if (terms.length === 0) {
+    // FULLY idle: a goal filter with no query is not idle, so it takes the
+    // filtering path below like any other narrowing.
+    if (terms.length === 0 && goal === null) {
       return {
         query,
         setQuery,
@@ -84,19 +120,29 @@ export function useJobSearch(board: BoardModel): JobSearchModel {
         matched: total,
         total,
         active: false,
+        goalFilter: null,
       };
     }
 
     const reasonByKey = new Map<string, JobMatch["reason"]>();
     const visibleKeys = new Set<string>();
     const keep = (job: WebJob): boolean => {
-      const m = matchJob(job, terms);
-      if (!m) return false;
+      // The goal predicate reads `goals` and ONLY `goals` — the array is the
+      // job's whole link set, and a job carrying no array links nothing, so
+      // there is no fallback to the legacy `goal` key to write here: it is
+      // that array's head whenever it exists at all.
+      if (goal !== null && !(job.goals ?? []).some((g) => g.id === goal)) return false;
       // Keyed by jobKey(), never bare slug: an archived entry and a live job
       // that reused its freed slug are two rows here (see lib/jobKey.ts), and
       // a bare-slug key would hand one of them the other's match reason.
       const key = jobKey(job);
-      reasonByKey.set(key, m.reason);
+      if (terms.length > 0) {
+        const m = matchJob(job, terms);
+        if (!m) return false;
+        // A reason explains a TEXT match, so a card kept by the goal filter
+        // alone gets none — there are no matched words on it to mark.
+        reasonByKey.set(key, m.reason);
+      }
       visibleKeys.add(key);
       return true;
     };
@@ -121,6 +167,7 @@ export function useJobSearch(board: BoardModel): JobSearchModel {
       matched,
       total,
       active: true,
+      goalFilter: goal,
     };
-  }, [byColumn, archived, terms, query]);
+  }, [byColumn, archived, terms, query, goal]);
 }

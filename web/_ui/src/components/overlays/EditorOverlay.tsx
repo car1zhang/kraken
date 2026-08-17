@@ -25,7 +25,7 @@ import {
 import { insertIntoTextarea } from "../../hooks/useCmdHighlight.ts";
 import { useDebouncedCallback } from "../../hooks/useDebouncedDraft.ts";
 import { FieldSelect } from "./FieldSelect.tsx";
-import { GoalPicker } from "./GoalPicker.tsx";
+import { GoalMultiPicker } from "./GoalMultiPicker.tsx";
 import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { jobKey } from "../../lib/jobKey.ts";
@@ -829,20 +829,21 @@ function EditorBody({
                 onPick={(c) => void pickColor(c)}
               />
             </div>
-            {/* the goal link. A DIV rather than a <label>, for the repo
+            {/* the goal links. A DIV rather than a <label>, for the repo
                 field's reason (a label would forward a menu row's click to the
                 button and reopen the menu the pick just closed) — and, like
                 the colour strip beside it, NOT disabled while read-only: the
-                link is carl's filing of the job rather than job-file state the
-                crew owns, it rides its own ungated route, and filing a RUNNING
-                job under a goal is most of what the control is for. The
-                control itself is shared with the steer head — see GoalPicker. */}
+                links are carl's filing of the job rather than job-file state
+                the crew owns, they ride their own ungated route, and filing a
+                RUNNING job under a goal is most of what the control is for.
+                The control itself is shared with the steer head — see
+                GoalMultiPicker. */}
             <div className="f-field">
-              goal{" "}
-              <GoalPicker
+              goals{" "}
+              <GoalMultiPicker
                 id="f-goal"
                 slug={slug}
-                goal={job?.goal}
+                goals={job?.goals}
                 mutate={mutate}
                 active={!archived}
               />

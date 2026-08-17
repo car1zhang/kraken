@@ -1,9 +1,23 @@
 import { useEffect, useRef } from "react";
 
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
+import { goalChipText } from "../../lib/goals.ts";
 
 export interface BoardBarProps {
   search: JobSearchModel;
+  /**
+   * The goal the board is filtered to, resolved to its text by the caller —
+   * absent when nothing is filtered, which is the ONLY state in which this bar
+   * renders exactly what it rendered before the filter existed.
+   *
+   * The chip is the filter's visible OWNER wherever the filter was set from:
+   * the goals panel that sets it collapses to a one-line pill, so a board
+   * quietly showing a third of its cards needs something that cannot be
+   * collapsed to say so and to undo it.
+   */
+  goalChip?: { id: number; text: string };
+  /** Clear the goal filter — the chip's ✕. Nothing else calls it. */
+  onClearGoal?: () => void;
   /**
    * True while ANY modal overlay is open. App.tsx owns that state — one field
    * per overlay — and passes the disjunction down rather than this component
@@ -16,7 +30,9 @@ export interface BoardBarProps {
 }
 
 /**
- * The board's search strip: one input, a clear button and the match readout.
+ * The board's search strip: one input, a clear button, the goal filter's chip
+ * when one is set, and the match readout — which counts the COMBINED
+ * predicate, since the query and the goal filter narrow the same lists.
  *
  * cmd+K / ctrl+K focuses and SELECTS the input, so a second press followed by
  * typing replaces the query rather than appending to it. It fires whatever is
@@ -37,7 +53,13 @@ export interface BoardBarProps {
  * for the same reason: a key with a local meaning must not also fire the
  * global one.
  */
-export function BoardBar({ search, overlayOpen, hidden }: BoardBarProps) {
+export function BoardBar({
+  search,
+  goalChip,
+  onClearGoal,
+  overlayOpen,
+  hidden,
+}: BoardBarProps) {
   const { query, setQuery, matched, total, active } = search;
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -90,6 +112,27 @@ export function BoardBar({ search, overlayOpen, hidden }: BoardBarProps) {
           </button>
         ) : null}
       </span>
+      {/* the goal filter's chip, between the input and the readout: its own
+          `gf-` class family rather than the card's `.goal-chip`, because that
+          one is an inert label that must fall THROUGH to the card's click and
+          this one is a control with a button in it. Absent entirely with no
+          filter, which is what keeps the at-rest bar byte-identical to the one
+          that predates the feature. */}
+      {goalChip ? (
+        <span className="gf-chip" id="goal-filter-chip" title={goalChip.text}>
+          ◎ {goalChipText(goalChip.text)}
+          <button
+            className="gf-x"
+            id="goal-filter-clear"
+            type="button"
+            title="clear the goal filter"
+            aria-label="clear the goal filter"
+            onClick={() => onClearGoal?.()}
+          >
+            ✕
+          </button>
+        </span>
+      ) : null}
       {active ? null : <span className="bb-hint">⌘K</span>}
       <span className="bb-read">
         {active ? (

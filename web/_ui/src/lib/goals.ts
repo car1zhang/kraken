@@ -1,16 +1,22 @@
-// Goals — the wire item, the grouping the panel renders, and the one-line
-// chip truncation the cards and the steer head share.
+// Goals — the wire item, the grouping the panel renders, the one-line chip
+// truncation the cards and the steer head share, and the per-goal job count
+// the panel's badges and the board's filter agree on.
 //
-// A LEAF module: no React, no fetch, no imports at all. Everything here is
-// exported because it is what the panel, the card chip, the editor picker and
-// the steer head all read — and because a pure function nobody can name is a
-// pure function nobody can test.
+// A LEAF module: no React, no fetch, and its ONE import is type-only
+// (`WebJob`, for the count below), so nothing is pulled into the bundle and
+// the api/types.ts ↔ here pair is not a runtime cycle — that file imports
+// `Goal` back from here the same way. Everything is exported because it is
+// what the panel, the card chip, the board view, the picker and the steer
+// head all read — and because a pure function nobody can name is a pure
+// function nobody can test.
 //
 // `Goal` mirrors the wire item served by GET /api/goals and by the board
 // payload's `goals` key, field for field (internal/api/goals.go). It lives
 // HERE rather than in api/types.ts even though it is a wire shape, because
 // `groupGoals` is its only real consumer and one definition beats two that can
 // drift; api/types.ts imports it back for the board payload.
+
+import type { WebJob } from "../api/types.ts";
 
 /**
  * One `goals` row as it arrives on the wire.
@@ -96,6 +102,32 @@ export function groupGoals(week: Goal[], day: Goal[]): GoalGroups {
       dayTotal: day.length,
     },
   };
+}
+
+/**
+ * How many of these jobs link each goal — goal id → count, ids with no jobs
+ * simply ABSENT rather than present at zero, which is how a panel row knows to
+ * draw no badge at all.
+ *
+ * Reads `goals` and ONLY `goals`, never the legacy single `goal` that rides
+ * beside it as the array's head. That is the whole point of the function and
+ * not a shortcut: the board's goal filter matches on `goals` alone, so a count
+ * that folded in a `goal`-only job would promise more cards than clicking the
+ * badge delivers — a number that disagrees with the board it sits beside.
+ * A job with no `goals` therefore contributes nothing.
+ *
+ * The caller decides what "these jobs" means; BoardView passes the payload's
+ * whole flat array, active and archived alike, because an archived job links a
+ * goal like any other and the archive drawer is on that same board.
+ */
+export function goalJobCounts(jobs: WebJob[]): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const job of jobs) {
+    for (const g of job.goals ?? []) {
+      counts.set(g.id, (counts.get(g.id) ?? 0) + 1);
+    }
+  }
+  return counts;
 }
 
 /** The chip's character budget. One number, read by every chip renderer. */

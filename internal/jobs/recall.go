@@ -316,7 +316,13 @@ func recallEmitsGoals(req RecallRequest) bool {
 // settings.json written before recallHookCommand carried one. Slug first
 // rather than session first because it is the answer that works for a cell's
 // TEAMMATES and side threads: their sessions appear on no job row, and they are
-// working on the same job with the same goal.
+// working on the same job with the same goals.
+//
+// The job's whole LINK SET rides into the render, which is what makes a link
+// add, remove or clear re-arm the block through the fingerprint below with no
+// machinery of its own: those writes change which lines carry the marker (and
+// which off-period goals lead), so the rendered block differs and the
+// suppressor lets exactly one delivery through.
 //
 // A store failure inside the render is ("", true): no read is worth a broken
 // turn, and a transient failure that records "no goals" self-heals on the next
@@ -329,7 +335,7 @@ func recallGoalsState(st *store.Store, req RecallRequest) (string, bool) {
 	if job == nil {
 		return "", false
 	}
-	return renderGoalsBlock(st, job.GoalID), true
+	return renderGoalsBlock(st, job.GoalIDs), true
 }
 
 // recallResolveJob finds the job this firing belongs to, or nil. One ListJobs

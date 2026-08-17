@@ -248,8 +248,8 @@ func TestContractGoalCtxMarksTheJobsLinkedGoal(t *testing.T) {
 	contractGoalCtxAdd(t, st, "day", day, "an unrelated daily", 0)
 
 	j := contractGoalCtxJob(t, st, "marked", "")
-	if err := st.SetJobGoal(j.ID, linked.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	if err := st.AddJobGoal(j.ID, linked.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
 	j = JobBySlug(LoadJobs(), "marked")
 
@@ -283,8 +283,8 @@ func TestContractGoalCtxIncludesTheLinkedGoalEvenWhenDoneOrStale(t *testing.T) {
 	}
 
 	j := contractGoalCtxJob(t, st, "stale-link", "")
-	if err := st.SetJobGoal(j.ID, stale.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	if err := st.AddJobGoal(j.ID, stale.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
 	j = JobBySlug(LoadJobs(), "stale-link")
 

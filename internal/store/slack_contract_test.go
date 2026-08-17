@@ -245,6 +245,10 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// jobs.ready and the prereqs table, both of which a genuine v16 database
 	// had and this fresh one no longer does.
 	for _, stmt := range []string{
+		// v27 replaces jobs.goal_id with the job_goals join table. Only the
+		// table needs dropping here: the column it replaced is already gone
+		// (v27 dropped it), and a v16 database never had either.
+		`DROP TABLE IF EXISTS job_goals`,
 		// v26 adds board_bg, the board background image. Newest first, like
 		// every entry below it.
 		`DROP TABLE IF EXISTS board_bg`,
@@ -254,10 +258,9 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 		// walk's terms, and a leftover one fails that step's bare CREATE
 		// exactly as a leftover linear_issues would.
 		`DROP TABLE IF EXISTS orch_inbox`,
-		// v23 adds BOTH: the goals table and jobs.goal_id. The column goes
-		// first because it carries the REFERENCES clause onto the table being
-		// dropped right after it.
-		`ALTER TABLE jobs DROP COLUMN goal_id`,
+		// v23 adds BOTH: the goals table and jobs.goal_id. Only the table is
+		// dropped here — v27 above already took the column, so this list
+		// reverses each of the two in the step that actually left it behind.
 		`DROP TABLE IF EXISTS goals`,
 		// v22 adds a COLUMN rather than a table, so its reversal is a DROP
 		// COLUMN — a leftover threads.model fails that step's ALTER exactly

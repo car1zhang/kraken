@@ -160,9 +160,10 @@ export const setWatchVerdict = (
  * has the board reads them from there — this exists for the one surface that
  * does not: the editor's goal picker, which is handed a single `WebJob` and no
  * payload, and needs the pickable list. With a `slug` the server also answers
- * `job_goal` for that job's linked goal whatever its period; the picker does
- * not ask for it (it reads `job.goal`, the same fact off the board), so the
- * argument stays off this signature until something needs it.
+ * `job_goals` (and `job_goal`, its head) for that job's links whatever their
+ * period; the picker does not ask for it (it reads `job.goals`, the same fact
+ * off the board), so the argument stays off this signature until something
+ * needs it.
  */
 export const fetchGoals = (signal?: AbortSignal) =>
   getJSON<GoalsPage>("/api/goals", signal);
@@ -434,7 +435,15 @@ export const setJobColor = (slug: string, color: string) =>
 export const postGoals = (body: unknown) => postJSON("/api/goals", body);
 
 /**
- * Link a job to a goal, or unlink it with `goalId` 0.
+ * Add or remove ONE of a job's goal links, or clear them all with `goalId` 0.
+ *
+ * A job links many goals, so the write is per-link rather than a full replace:
+ * `op` says which end of that link moves, and a client holding a stale list
+ * can therefore never wipe a link some other surface just made — the property
+ * a "here is the whole set" write loses. `op` is sent exactly when given, so
+ * the clear-all keeps the one-field shape it has always had ({slug, goal_id:
+ * 0}); every caller passing a goalId above 0 passes an op with it, and the
+ * server refuses that pair without one.
  *
  * Its own one-field route rather than a field on the job form, for the colour
  * route's exact reason: `saveform` refuses a job whose cell is live — which is
@@ -443,8 +452,8 @@ export const postGoals = (body: unknown) => postJSON("/api/goals", body);
  * omitting it. The server also leaves the job's `rev` and `updated_at` alone,
  * so filing a job under a goal is not an edit to the job.
  */
-export const postJobGoal = (slug: string, goalId: number) =>
-  postJSON("/api/job/goal", { slug, goal_id: goalId });
+export const postJobGoal = (slug: string, goalId: number, op?: "add" | "remove") =>
+  postJSON("/api/job/goal", { slug, goal_id: goalId, ...(op ? { op } : {}) });
 
 /**
  * Rename a job. `slug` is its CURRENT name and `to` is the free text carl

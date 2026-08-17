@@ -399,7 +399,7 @@ body {
 button, a, [role="button"], summary, label.check,
 .card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip, .st-chip,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
-.goal .t,
+.goal, .goal .t,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
 .panel-body.md code.code-ref, .steer-detail code.code-ref, .steer-spec-body code.code-ref,
 .panel-body.md code.artifact-ref, .steer-detail code.artifact-ref, .steer-spec-body code.artifact-ref,
@@ -420,7 +420,7 @@ input[type="checkbox"] {
 :root[data-theme="light"] .thread-count,
 :root[data-theme="light"] .branch-btn, :root[data-theme="light"] .colorsel-row,
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
-:root[data-theme="light"] .goal .t,
+:root[data-theme="light"] .goal, :root[data-theme="light"] .goal .t,
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
 :root[data-theme="light"] #thread-panehead,
 :root[data-theme="light"] .panel-body.md code.code-ref,
@@ -767,6 +767,31 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 .bb-clear:hover { color: var(--fg); }
 .bb-hint { color: var(--muted); opacity: 0.6; font-size: 9px; }
+/* the goal filter's chip: the filter's visible owner, tinted with --tint like
+   the card's goal chip so the two read as the same subject, but its OWN class
+   family — that one is an inert span that falls through to the card's click,
+   this one wraps a real button. `flex: none` because the bar's readout takes
+   the free space with `margin-left: auto`, and a chip that stretched would
+   push a long goal into the count. */
+.gf-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  max-width: 240px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 3px 8px;
+  font: 10px var(--mono);
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 8%, var(--b1));
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
+}
+/* always visible, unlike the goal row's hover-only × — the chip exists to be
+   undone, and a clear you have to find by hovering is one you scan past */
+.gf-x {
+  flex: none;
+  background: none; border: 0; padding: 0 1px;
+  color: var(--muted); font: 10px var(--mono);
+  transition: color 80ms var(--ease);
+}
+.gf-x:hover { color: var(--fg); }
 /* pushed to the far edge so the count sits where the chrome's own stats do */
 .bb-read { color: var(--text-2); margin-left: auto; }
 .bb-read b { color: var(--accent); font-weight: 400; }
@@ -2415,6 +2440,18 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .colorsel-row.sel { background: color-mix(in srgb, var(--ac) 14%, transparent); color: var(--fg); }
 .colorsel-row:hover { background: color-mix(in srgb, var(--ac) 22%, transparent); color: var(--fg); }
 .colorsel-row .tick { margin-left: auto; color: var(--ac); }
+/* ---- the goal MULTI-select (GoalMultiPicker): the colorsel skin with a
+   LEADING tick per row, because a row here is a toggle rather than the one
+   selected value — the tick has to sit where the eye scans a checklist, and
+   the column it reserves is what keeps the labels aligned whether or not
+   their row is on. The box is empty (not a transparent ✓) when unticked, so
+   its width comes from here rather than from a glyph nobody can see. */
+.gm-row .gm-tick { flex: none; width: 9px; text-align: center; color: var(--ok); }
+.gm-row .gm-lbl { overflow: hidden; text-overflow: ellipsis; }
+/* wider than the colour menu's 128px floor: these rows carry a goal's text
+   cut to the host's width, and a menu narrower than its own labels would
+   ellipsis every row */
+.gm-menu { min-width: 180px; max-width: 280px; }
 .f-toggles { display: flex; gap: 14px; align-items: center; padding-bottom: 6px; }
 .editor-form label.check {
   flex-direction: row; align-items: center; gap: 5px;
@@ -3421,6 +3458,36 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .goal .t:hover { color: var(--fg); }
+/* the FILTER affordance and its count. The funnel marks the gesture the row's
+   dead space carries and is invisible until the row is hovered or is the one
+   filtering, the same hover-affordance stance as the × below; the count, WHEN
+   IT RENDERS, takes the auto margin that pushes the row's tail right (the ×
+   keeps its own for the rows with no badge), so the two right-align as one
+   group rather than drifting apart. */
+.goal .funnel {
+  flex: none; color: var(--tint); font-size: 9px;
+  opacity: 0; transition: opacity 80ms var(--ease);
+}
+.goal:hover .funnel { opacity: 0.9; }
+.goal .njobs {
+  flex: none; margin-left: auto;
+  font: 8.5px var(--mono); color: var(--muted);
+  border: 1px solid var(--divider); padding: 0 5px;
+}
+.goal .njobs + .x { margin-left: 8px; }
+/* the row the board is filtered to: tinted panel-wide rather than by one
+   token, since the statement is about the whole row and has to be findable in
+   a collapsed-then-reopened panel without reading every line */
+.goal.filtering {
+  background: color-mix(in srgb, var(--tint) 14%, var(--b1));
+  outline: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
+}
+.goal.filtering .t { color: var(--fg); }
+.goal.filtering .funnel { opacity: 1; }
+.goal.filtering .njobs {
+  color: var(--tint);
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
+}
 /* done stays VISIBLE and struck through for the rest of its period — the
    week's ticked-off work is most of what the panel is for */
 .goal.done .t { text-decoration: line-through; color: var(--muted); }
@@ -3459,12 +3526,13 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .goal-add .plus { color: var(--ac); flex: none; }
 .gs-empty { padding: 4px 0 2px; font: 9.5px var(--mono); color: var(--muted); opacity: 0.8; }
 
-/* the goal chip — the job card's band 2 (the steer modal's head carries the
-   GoalPicker dropdown instead, which wears the .colorsel skin). A plain
-   span rather than a .chip (it must fall through to the card's own click),
-   tinted with --tint so it reads as identity-adjacent rather than as an
-   alert, and capped in width because band 2 is a counts row that a long goal
-   would otherwise own. */
+/* the goal chip — the job card's band 2, ONE per linked goal (the steer
+   modal's head carries the GoalMultiPicker dropdown instead, which wears the
+   .colorsel skin). A plain span rather than a .chip (it must fall through to
+   the card's own click), tinted with --tint so it reads as identity-adjacent
+   rather than as an alert, and capped in width because band 2 is a counts row
+   that a long goal would otherwise own — the cap is what lets several of them
+   share the row and wrap instead of one owning it. */
 .goal-chip {
   display: inline-block; max-width: 150px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -3474,5 +3542,6 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
   padding: 2px 6px;
 }
-/* a done goal is still the job's goal — muted, never hidden */
+/* a done goal is still one of the job's goals — muted, never hidden, and each
+   chip mutes on its OWN goal's done-ness */
 .goal-chip.done { color: var(--muted); border-color: var(--border-strong); background: transparent; }

@@ -326,15 +326,19 @@ var webJobSpec = map[string]fieldSpec{
 	// through undocumented, which is the whole point of transcribing
 	// ios/API.md.
 	"load": {kind: wireObject, required: false},
-	// The goal this job serves (goals.go), omitempty — absent means the job
-	// links none, which is every job until carl labels one and every job
-	// whose goal was deleted (schema v23's ON DELETE SET NULL clears the
-	// link rather than dangling it). Present exactly when the link resolves,
-	// whatever period the goal belongs to and whether or not it is done: the
-	// link is carl's statement about what the job is FOR, so it must keep
-	// rendering after the week rolls over. Additive, so it never bumps
-	// apiContract; listed here because assertShape rejects any key the spec
-	// doesn't document.
+	// Every goal this job serves (goals.go), in link order, omitempty — absent
+	// means the job links none, which is every job until carl labels one and
+	// every job whose goals were deleted (schema v27's ON DELETE CASCADE takes
+	// the link rows with them rather than dangling them). Present exactly when
+	// at least one link resolves, whatever period a goal belongs to and whether
+	// or not it is done: the link is carl's statement about what the job is FOR,
+	// so it must keep rendering after the week rolls over. Additive, so it never
+	// bumps apiContract; listed here because assertShape rejects any key the
+	// spec doesn't document.
+	"goals": {kind: wireArray, required: false},
+	// The job's PRIMARY goal — `goals[0]`, always, built from the same slice —
+	// retained because every shipped iOS build reads it. Present under exactly
+	// the same condition as "goals": the two appear and vanish together.
 	"goal": {kind: wireObject, required: false},
 }
 
@@ -542,14 +546,17 @@ var webJobGoalSpec = map[string]fieldSpec{
 	"done": {kind: wireBool, required: true},
 }
 
-// goalsGetSpec is GET /api/goals' envelope. "goals" always rides; "job_goal"
-// appears only when ?slug= named a job that links a goal — omitted rather
-// than null, unlike GET /api/job/load's explicit null, because this payload's
-// subject is the goals and the slug is a rider on it: the key's presence IS
-// the answer to "does this job serve a goal", with no third state.
+// goalsGetSpec is GET /api/goals' envelope. "goals" always rides; "job_goals"
+// and its head "job_goal" appear only when ?slug= named a job that links at
+// least one — omitted rather than null, unlike GET /api/job/load's explicit
+// null, because this payload's subject is the goals and the slug is a rider on
+// it: the keys' presence IS the answer to "does this job serve a goal", with no
+// third state. The two are always present together and "job_goal" is always
+// "job_goals"[0].
 var goalsGetSpec = map[string]fieldSpec{
-	"goals":    {kind: wireObject, required: true},
-	"job_goal": {kind: wireObject, required: false},
+	"goals":     {kind: wireObject, required: true},
+	"job_goals": {kind: wireArray, required: false},
+	"job_goal":  {kind: wireObject, required: false},
 }
 
 // goalsPostRespSpec / jobGoalPostReqSpec / jobGoalPostRespSpec cover the two
@@ -560,9 +567,13 @@ var goalsPostRespSpec = map[string]fieldSpec{
 	"ok": {kind: wireBool, required: true},
 }
 
+// op is OPTIONAL because goal_id 0 — the clear-all, and the whole body a
+// pre-multi-goal client sends — carries none: 0 names no goal, so there is
+// nothing for an op to disambiguate. slug and goal_id stay required.
 var jobGoalPostReqSpec = map[string]fieldSpec{
 	"slug":    {kind: wireString, required: true},
 	"goal_id": {kind: wireNumber, required: true},
+	"op":      {kind: wireString, required: false},
 }
 
 var jobGoalPostRespSpec = map[string]fieldSpec{
@@ -610,11 +621,22 @@ func TestWebGoalWireShape(t *testing.T) {
 	}
 	assertShape(t, "webJobGoal", data, webJobGoalSpec)
 
-	reqData, err := json.Marshal(jobGoalReq{Slug: "demo", GoalID: 7})
+	// the clear: no op, and none emitted — this is the body a client predating
+	// multi-goal jobs sends, and it must stay a legal request shape
+	reqData, err := json.Marshal(jobGoalReq{Slug: "demo", GoalID: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertShape(t, "jobGoalReq", reqData, jobGoalPostReqSpec)
+	assertShape(t, "jobGoalReq (clear)", reqData, jobGoalPostReqSpec)
+	if bytes.Contains(reqData, []byte(`"op"`)) {
+		t.Errorf("jobGoalReq with no Op emitted an op key: %s", reqData)
+	}
+
+	reqData, err = json.Marshal(jobGoalReq{Slug: "demo", GoalID: 7, Op: "add"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "jobGoalReq (add)", reqData, jobGoalPostReqSpec)
 }
 
 // TestGoalsEndpointWireShape drives the real handlers for both verbs, so the
@@ -709,7 +731,7 @@ func TestGoalsEndpointWireShape(t *testing.T) {
 	}
 	assertShape(t, "GET /api/goals?slug= (unlinked)", rec.Body.Bytes(), goalsGetSpec)
 
-	body = mustJSON(t, map[string]any{"slug": "contract-goals", "goal_id": dayGoals[0].ID})
+	body = mustJSON(t, map[string]any{"slug": "contract-goals", "goal_id": dayGoals[0].ID, "op": "add"})
 	req = httptest.NewRequest(http.MethodPost, "/api/job/goal", bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	jobGoalHandler(rec, req)
@@ -733,6 +755,21 @@ func TestGoalsEndpointWireShape(t *testing.T) {
 		t.Fatalf("GET /api/goals?slug= on a linked job served no job_goal key: %s", rec.Body.String())
 	}
 	assertShape(t, "GET /api/goals .job_goal", envelope.JobGoal, webJobGoalSpec)
+	// the array rides beside it, its elements the same shape, its head the
+	// object above — the promise the two keys make about each other
+	var linkedList struct {
+		JobGoals []json.RawMessage `json:"job_goals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &linkedList); err != nil {
+		t.Fatal(err)
+	}
+	if len(linkedList.JobGoals) != 1 {
+		t.Fatalf("GET /api/goals?slug= served %d job_goals, want 1: %s", len(linkedList.JobGoals), rec.Body.String())
+	}
+	assertShape(t, "GET /api/goals .job_goals[0]", linkedList.JobGoals[0], webJobGoalSpec)
+	if !bytes.Equal(linkedList.JobGoals[0], envelope.JobGoal) {
+		t.Errorf("job_goal = %s but job_goals[0] = %s; the primary IS the array's head", envelope.JobGoal, linkedList.JobGoals[0])
+	}
 
 	// A goal from a PAST period, linked and done: still named. This is the
 	// case the whole any-period rule exists for — a job keeps serving the goal
@@ -748,7 +785,16 @@ func TestGoalsEndpointWireShape(t *testing.T) {
 	if err := st.UpdateGoal(stale.ID, store.GoalUpdate{Done: &done}, 1001); err != nil {
 		t.Fatalf("UpdateGoal (done): %v", err)
 	}
-	body = mustJSON(t, map[string]any{"slug": "contract-goals", "goal_id": stale.ID})
+	// cleared first, so the past-period goal is the job's ONLY link and
+	// therefore its primary — the key under test below
+	body = mustJSON(t, map[string]any{"slug": "contract-goals", "goal_id": 0})
+	req = httptest.NewRequest(http.MethodPost, "/api/job/goal", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	jobGoalHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/job/goal (clear): status %d, body %s", rec.Code, rec.Body.String())
+	}
+	body = mustJSON(t, map[string]any{"slug": "contract-goals", "goal_id": stale.ID, "op": "add"})
 	req = httptest.NewRequest(http.MethodPost, "/api/job/goal", bytes.NewReader(body))
 	rec = httptest.NewRecorder()
 	jobGoalHandler(rec, req)

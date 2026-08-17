@@ -24,13 +24,46 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v27: put jobs.goal_id back, repopulate it from each job's FIRST
+	// link, and drop job_goals. Unlike every other arm here this one carries
+	// DATA back, and it has to: v27 is the only migration so far that moved
+	// existing rows rather than adding an empty table, so a shape-only reversal
+	// would hand migrate() a v26 database whose links had silently vanished —
+	// and v27's own backfill would then re-run over an empty column, turning a
+	// round trip through this helper into a wipe.
+	//
+	// LOWEST position wins, since that link is the one v27's wire calls the
+	// PRIMARY (`goal` is `goals[0]`), and goal_id can only hold one. A job with
+	// several links loses the rest, which is what a downgrade to a
+	// one-goal-per-job shape means; goal_id itself carries the ON DELETE SET
+	// NULL clause the pre-v27 column had, or v23's own reversal below would find
+	// a column it does not recognise.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 27 {
+		for _, stmt := range []string{
+			`ALTER TABLE jobs ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL`,
+			`UPDATE jobs SET goal_id = (
+				SELECT jg.goal_id FROM job_goals jg
+				WHERE jg.job_id = jobs.id
+				ORDER BY jg.position, jg.goal_id
+				LIMIT 1
+			)`,
+			`DROP TABLE job_goals`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v27) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v26: drop board_bg. Nothing to put back — v26 is a single
 	// additive CREATE over a v25 shape that had no such table, so the drop is
 	// the whole reversal (the v18 arm below owns the bare-CREATE-vs-IF-NOT-
 	// EXISTS reasoning this arm exists to serve).
 	//
-	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
-	// migrate() applies them.
+	// Reversed after v27, for that block's reason: downgrades unwind
+	// newest-first, mirroring the order migrate() applies them.
 	if target < 26 {
 		if _, err := s.db.Exec(`DROP TABLE board_bg`); err != nil {
 			t.Fatalf("downgrade to v%d (undo v26): %v", target, err)

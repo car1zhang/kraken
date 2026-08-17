@@ -608,10 +608,17 @@ func TestEdgeGoalGetReachesGoalsOutsideTheCurrentPeriods(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SetJobGoal: refusals and the link's degradation
+// job_goals link verbs: refusals and the link's degradation
+//
+// These pins were written against schema v23's SetJobGoal, whose scalar link
+// v27 replaced with the job_goals join table and the three verbs below. Every
+// obligation they assert is carried over unchanged — it was never about the
+// column: a missing job is ErrNotFound, a missing goal is a descriptive refusal
+// that writes nothing, the clear is always accepted for a job that exists, and
+// deleting a goal degrades the job rather than breaking a read.
 // ---------------------------------------------------------------------------
 
-func TestEdgeGoalSetJobGoalMissingJobIsErrNotFound(t *testing.T) {
+func TestEdgeGoalLinkMissingJobIsErrNotFound(t *testing.T) {
 	s := openTest(t)
 	_, curDay := edgeGoalCurrent()
 	g, err := s.AddGoal(GoalAdd{Scope: "day", Period: curDay, Text: "a goal"}, edgeGoalNow)
@@ -619,44 +626,48 @@ func TestEdgeGoalSetJobGoalMissingJobIsErrNotFound(t *testing.T) {
 		t.Fatalf("seed goal: %v", err)
 	}
 	for _, jobID := range []int64{0, -1, 987654} {
-		if err := s.SetJobGoal(jobID, g.ID); !errors.Is(err, ErrNotFound) {
-			t.Errorf("SetJobGoal(job %d) = %v, want ErrNotFound", jobID, err)
+		if err := s.AddJobGoal(jobID, g.ID); !errors.Is(err, ErrNotFound) {
+			t.Errorf("AddJobGoal(job %d) = %v, want ErrNotFound", jobID, err)
+		}
+		if err := s.RemoveJobGoal(jobID, g.ID); !errors.Is(err, ErrNotFound) {
+			t.Errorf("RemoveJobGoal(job %d) = %v, want ErrNotFound", jobID, err)
 		}
 	}
 	// The clearing form addresses the same missing job and must refuse the
-	// same way: "clear the link on a job that does not exist" is still a
+	// same way: "clear the links on a job that does not exist" is still a
 	// caller addressing nothing.
-	if err := s.SetJobGoal(987654, 0); !errors.Is(err, ErrNotFound) {
-		t.Errorf("SetJobGoal(missing job, 0) = %v, want ErrNotFound", err)
+	if err := s.ClearJobGoals(987654); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ClearJobGoals(missing job) = %v, want ErrNotFound", err)
 	}
 }
 
-func TestEdgeGoalSetJobGoalMissingGoalIsRefused(t *testing.T) {
+func TestEdgeGoalAddJobGoalMissingGoalIsRefused(t *testing.T) {
 	s := openTest(t)
 	jobID, err := s.CreateJob(&Job{Slug: "goal-link-missing"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	for _, goalID := range []int64{987654, -1} {
-		err := s.SetJobGoal(jobID, goalID)
+	for _, goalID := range []int64{987654, -1, 0} {
+		err := s.AddJobGoal(jobID, goalID)
 		if err == nil {
-			t.Errorf("SetJobGoal(job, goal %d) = nil — a link to a goal that does not exist must be refused", goalID)
+			t.Errorf("AddJobGoal(job, goal %d) = nil — a link to a goal that does not exist must be refused", goalID)
 			continue
 		}
-		edgeGoalAssertDescriptive(t, "SetJobGoal missing goal", err)
+		edgeGoalAssertDescriptive(t, "AddJobGoal missing goal", err)
 	}
 	j, err := s.GetJobBySlug("goal-link-missing")
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if j.GoalID != 0 {
-		t.Errorf("a refused SetJobGoal wrote GoalID = %d, want 0", j.GoalID)
+	if len(j.GoalIDs) != 0 {
+		t.Errorf("a refused AddJobGoal wrote GoalIDs = %v, want none", j.GoalIDs)
 	}
 }
 
-// TestEdgeGoalSetJobGoalZeroClears is the unlink path: 0 is the wire's "—",
-// not an id, and it must always be accepted for a job that exists.
-func TestEdgeGoalSetJobGoalZeroClears(t *testing.T) {
+// TestEdgeGoalClearJobGoalsUnlinks is the unlink path: the wire's "—" is not an
+// id, and it must always be accepted for a job that exists — including when
+// there is nothing left to clear.
+func TestEdgeGoalClearJobGoalsUnlinks(t *testing.T) {
 	s := openTest(t)
 	jobID, err := s.CreateJob(&Job{Slug: "goal-link-clear"})
 	if err != nil {
@@ -667,32 +678,36 @@ func TestEdgeGoalSetJobGoalZeroClears(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed goal: %v", err)
 	}
-	if err := s.SetJobGoal(jobID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal link: %v", err)
+	if err := s.AddJobGoal(jobID, g.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
-	if j, _ := s.GetJobBySlug("goal-link-clear"); j == nil || j.GoalID != g.ID {
+	if j, _ := s.GetJobBySlug("goal-link-clear"); j == nil || len(j.GoalIDs) != 1 || j.GoalIDs[0] != g.ID {
 		t.Fatalf("link did not take: %+v", j)
 	}
-	if err := s.SetJobGoal(jobID, 0); err != nil {
-		t.Fatalf("SetJobGoal(0) = %v, want nil (0 clears)", err)
+	if err := s.ClearJobGoals(jobID); err != nil {
+		t.Fatalf("ClearJobGoals = %v, want nil", err)
 	}
 	j, err := s.GetJobBySlug("goal-link-clear")
 	if err != nil {
 		t.Fatalf("GetJobBySlug after clear: %v", err)
 	}
-	if j.GoalID != 0 {
-		t.Errorf("GoalID = %d after clearing, want 0", j.GoalID)
+	if len(j.GoalIDs) != 0 {
+		t.Errorf("GoalIDs = %v after clearing, want none", j.GoalIDs)
 	}
-	// Clearing an already-clear link is the same accepted write, not an error.
-	if err := s.SetJobGoal(jobID, 0); err != nil {
-		t.Errorf("second SetJobGoal(0) = %v, want nil", err)
+	// Clearing an already-clear job is the same accepted write, not an error —
+	// and so is removing a link that is not there.
+	if err := s.ClearJobGoals(jobID); err != nil {
+		t.Errorf("second ClearJobGoals = %v, want nil", err)
+	}
+	if err := s.RemoveJobGoal(jobID, g.ID); err != nil {
+		t.Errorf("RemoveJobGoal on an absent link = %v, want nil", err)
 	}
 }
 
-// TestEdgeGoalDeletingALinkedGoalLeavesTheJobReadable is the ON DELETE SET NULL
-// promise stated as behaviour: deleting a goal a job points at degrades that
-// job to "no goal", never to an unscannable row or a foreign-key error. It is
-// the failure mode that would take the whole board down rather than one chip.
+// TestEdgeGoalDeletingALinkedGoalLeavesTheJobReadable is the ON DELETE CASCADE
+// promise stated as behaviour: deleting a goal a job serves degrades that job to
+// one fewer goal, never to an unscannable row or a foreign-key error. It is the
+// failure mode that would take the whole board down rather than one chip.
 func TestEdgeGoalDeletingALinkedGoalLeavesTheJobReadable(t *testing.T) {
 	s := openTest(t)
 	jobID, err := s.CreateJob(&Job{Slug: "goal-link-delete"})
@@ -704,46 +719,58 @@ func TestEdgeGoalDeletingALinkedGoalLeavesTheJobReadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed goal: %v", err)
 	}
-	if err := s.SetJobGoal(jobID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	if err := s.AddJobGoal(jobID, g.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
 	if err := s.DeleteGoal(g.ID); err != nil {
 		t.Fatalf("DeleteGoal on a linked goal: %v — the delete must not be blocked by the link", err)
 	}
 
-	// Every read path must still answer, with the link degraded to 0.
+	// Every read path must still answer, with the link gone.
 	bySlug, err := s.GetJobBySlug("goal-link-delete")
 	if err != nil {
 		t.Fatalf("GetJobBySlug after deleting the linked goal: %v", err)
 	}
-	if bySlug.GoalID != 0 {
-		t.Errorf("GetJobBySlug GoalID = %d, want 0", bySlug.GoalID)
+	if len(bySlug.GoalIDs) != 0 {
+		t.Errorf("GetJobBySlug GoalIDs = %v, want none", bySlug.GoalIDs)
 	}
 	byID, err := s.GetJobByID(jobID)
 	if err != nil {
 		t.Fatalf("GetJobByID after deleting the linked goal: %v", err)
 	}
-	if byID.GoalID != 0 {
-		t.Errorf("GetJobByID GoalID = %d, want 0", byID.GoalID)
+	if len(byID.GoalIDs) != 0 {
+		t.Errorf("GetJobByID GoalIDs = %v, want none", byID.GoalIDs)
 	}
 	all, err := s.ListJobs()
 	if err != nil {
 		t.Fatalf("ListJobs after deleting the linked goal: %v", err)
 	}
 	for _, j := range all {
-		if j.ID == jobID && j.GoalID != 0 {
-			t.Errorf("ListJobs GoalID = %d, want 0", j.GoalID)
+		if j.ID == jobID && len(j.GoalIDs) != 0 {
+			t.Errorf("ListJobs GoalIDs = %v, want none", j.GoalIDs)
 		}
+	}
+	// The link row itself is gone, not merely unreadable through the job.
+	links, err := s.ListJobGoalLinks()
+	if err != nil {
+		t.Fatalf("ListJobGoalLinks: %v", err)
+	}
+	if ids, ok := links[jobID]; ok {
+		t.Errorf("ListJobGoalLinks still lists job %d with %v; the cascade must take the row", jobID, ids)
 	}
 }
 
-// TestEdgeGoalIDIsNotAFormSaveColumn pins the contract's "goal_id is NOT added
-// to jobFieldColumns" clause directly. It is the whole reason /api/job/goal
-// exists as its own route: a full form save that could name goal_id would wipe
-// the link from a client that predates the field.
-func TestEdgeGoalIDIsNotAFormSaveColumn(t *testing.T) {
-	if jobFieldColumns["goal_id"] {
-		t.Fatal("goal_id is in jobFieldColumns — a full form/raw save can now wipe a job's goal link")
+// TestEdgeGoalLinksAreNotAFormSaveColumn is what the v23 "goal_id is NOT added
+// to jobFieldColumns" pin becomes: the link is a TABLE now, so a full form or
+// raw save cannot name it at all — but the retired column name must not creep
+// back into the allowlist either. It is the whole reason /api/job/goal exists as
+// its own route: a full form save that could reach the link would wipe it from a
+// client that predates the field.
+func TestEdgeGoalLinksAreNotAFormSaveColumn(t *testing.T) {
+	for _, name := range []string{"goal_id", "job_goals"} {
+		if jobFieldColumns[name] {
+			t.Fatalf("%q is in jobFieldColumns — a full form/raw save can now reach a job's goal links", name)
+		}
 	}
 }
 

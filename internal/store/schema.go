@@ -79,7 +79,11 @@ import (
 // Version 26 adds board_bg, the web board's one optional background image —
 // a singleton blob row, replaced on upload and deleted on remove (see
 // schemaV26 and store/background.go).
-const schemaVersion = 26
+// Version 27 replaces jobs.goal_id with the job_goals join table: a job serves
+// ANY number of goals rather than exactly one, the existing links are carried
+// across in pure SQL, and the column is dropped (see schemaV27 and
+// store/jobgoals.go).
+const schemaVersion = 27
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1462,6 +1466,72 @@ CREATE TABLE board_bg (
 );
 `
 
+// schemaV27 replaces jobs.goal_id with job_goals: a job serves ANY number of
+// goals now, so the link stops being a column on the job row and becomes rows
+// in a join table. No hook — the carry-across is one INSERT ... SELECT, which
+// is exactly the shape SQL is for, unlike schemaV12's slug→id mapping.
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - The composite PRIMARY KEY (job_id, goal_id) is what makes "link this
+//     goal" idempotent in the SCHEMA rather than only in Go: one job cannot
+//     hold the same goal twice, whatever a caller asks for, so
+//     store.AddJobGoal's silent no-op on an existing link is a decision about
+//     the ERROR MESSAGE rather than about the data.
+//   - ON DELETE CASCADE on BOTH sides, which is the one place this table parts
+//     company with the v23 column it replaces (that was ON DELETE SET NULL).
+//     The two spell the same outcome for the same event: deleting a goal
+//     un-links every job that served it, and the job reads cleanly with one
+//     fewer goal. A NULLable column had to say "no goal" with a value; a row
+//     says it by not existing, so the cascade is the direct spelling of it.
+//     The job side matters for a reason the column never had: a hard-deleted
+//     job's link rows would otherwise outlive it as garbage no reader can even
+//     name (jobs.DeleteJob's other children — PRs, uploads, artifacts — cascade
+//     for that same reason).
+//   - position orders one job's goals, and it is the whole reason the wire can
+//     promise that `goal` is `goals[0]` durably: without it the primary would
+//     be whatever order SQLite returned that second, and a card's chip would
+//     change on nothing. It defaults to 0 so the backfill below can leave it
+//     out; store.AddJobGoal appends at MAX(position)+1 thereafter.
+//   - job_goals_goal indexes the goal→jobs direction. The job→goals direction
+//     is already served by the PRIMARY KEY's own index (job_id leads it), and
+//     the reverse is what "which jobs serve this goal" asks — the board filter's
+//     question, and the one a delete's cascade walks.
+//   - The backfill runs BEFORE the DROP, necessarily: it reads the very column
+//     the next statement removes. A NULL goal_id yields no row, which is the
+//     join table's spelling of the same "serves no particular goal" the NULL
+//     was, and position stays 0 for every carried link — one link cannot be out
+//     of order with itself.
+//   - The backfill's `AND goal_id IN (SELECT id FROM goals)` is not redundant
+//     with v23's foreign key, and the asymmetry is the point: the OLD column was
+//     declared REFERENCES but SQLite only enforces that when foreign_keys is on
+//     for the connection that wrote the row, whereas the INSERT below is
+//     enforced against the NEW table's FK inside the migration's own
+//     transaction. So one dangling goal_id — a hand-edited row, a restored
+//     backup, a write from a connection with the pragma off — would fail the
+//     insert, fail the transaction, and make the database refuse to OPEN,
+//     forever and on every run. Skipping it degrades one stale link (which
+//     already pointed at nothing) instead. That trade is the whole rule: a
+//     migration may lose a link it cannot honour; it may not cost carl the
+//     board.
+//
+// Appended rather than folded into schemaV23 for the reason schemaV2's doc
+// comment spells out: real kraken.db files already exist at v26, with real
+// links in that column.
+const schemaV27 = `
+CREATE TABLE job_goals (
+	job_id   INTEGER NOT NULL REFERENCES jobs(id)  ON DELETE CASCADE,
+	goal_id  INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+	position INTEGER NOT NULL DEFAULT 0,           -- order within one job's goals
+	PRIMARY KEY (job_id, goal_id)
+);
+CREATE INDEX job_goals_goal ON job_goals(goal_id);
+INSERT INTO job_goals (job_id, goal_id)
+	SELECT id, goal_id FROM jobs
+	WHERE goal_id IS NOT NULL AND goal_id IN (SELECT id FROM goals);
+ALTER TABLE jobs DROP COLUMN goal_id;
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1547,8 +1617,14 @@ type migrationStep struct {
 // migrations[26] adds board_bg (no hook — a brand-new singleton table, and an
 // empty one correctly means "no background set", which is true of every
 // database that predates the feature; see schemaV26).
+// migrations[27] creates job_goals, carries every RESOLVABLE jobs.goal_id link
+// into it and drops the column (no hook — the carry-across is one INSERT ...
+// SELECT over two tables in this same database, which is precisely what SQL
+// expresses; a NULL link yields no row, which is the join table's own spelling
+// of "serves no particular goal", and a link naming a goal that no longer exists
+// is skipped rather than allowed to fail the whole open; see schemaV27).
 // Future schema changes append
-// migrations[27], migrations[28], ... rather than editing an existing
+// migrations[28], migrations[29], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1578,6 +1654,7 @@ var migrations = map[int]migrationStep{
 	24: {sql: schemaV24},
 	25: {sql: schemaV25},
 	26: {sql: schemaV26},
+	27: {sql: schemaV27},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

@@ -8,8 +8,14 @@ import (
 
 // goals_contract_test.go — athena-logic's BLIND contract tests for
 // 50-contract.md, Slice S1's store half: GoalPeriods, the validators' accepting
-// arm, and the five CRUD methods (ListGoals/AddGoal/UpdateGoal/DeleteGoal/
-// SetJobGoal) plus Job.GoalID and the jobFieldColumns exclusion.
+// arm, and the four goal CRUD methods (ListGoals/AddGoal/UpdateGoal/DeleteGoal).
+//
+// The job-link half below was written against schema v23's single jobs.goal_id
+// column and its one setter, SetJobGoal; schema v27 replaced both with the
+// job_goals join table and the three verbs AddJobGoal/RemoveJobGoal/
+// ClearJobGoals, so those pins are carried onto the new verbs here (the
+// no-bump and one-transaction obligations carry over verbatim — they were
+// never about the column).
 //
 // Written from the contract text alone. internal/store/goals.go, the v23
 // migration and the goal_id additions to jobs.go were never read — only
@@ -696,11 +702,11 @@ func TestContractDeleteGoalLeavesChildrenWithTheParentCleared(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SetJobGoal + Job.GoalID
+// job_goals link verbs + Job.GoalIDs
 // ---------------------------------------------------------------------------
 
 // contractGoalJob creates a job whose rev and updated_at are DELIBERATELY not
-// "now": SetJobGoal's whole obligation is that it moves neither, and a row
+// "now": every link verb's whole obligation is that it moves neither, and a row
 // stamped at the current millisecond cannot tell a preserved updated_at from a
 // freshly rewritten one.
 func contractGoalJob(t *testing.T, s *Store, slug string) *Job {
@@ -717,26 +723,28 @@ func contractGoalJob(t *testing.T, s *Store, slug string) *Job {
 	return got
 }
 
-// TestContractSetJobGoalLinksWithoutTouchingRevOrUpdatedAt is the colour-route
+// TestContractAddJobGoalLinksWithoutTouchingRevOrUpdatedAt is the colour-route
 // property restated for goals, and the reason this write does not go through
 // UpdateJobFields: rev is the editor's optimistic lock (a bump 409s an open
 // form over a field the form never showed), and updated_at is what the board
 // renders as a card's AGE (a bump resets how long the job has been waiting).
-func TestContractSetJobGoalLinksWithoutTouchingRevOrUpdatedAt(t *testing.T) {
+// All three link verbs are held to it — the obligation is about the write, not
+// about which of them made it.
+func TestContractAddJobGoalLinksWithoutTouchingRevOrUpdatedAt(t *testing.T) {
 	s := openTest(t)
 	week, _ := contractGoalPeriods(t)
 	g := contractGoalAdd(t, s, "week", week, "the linked goal", 0)
 	before := contractGoalJob(t, s, "linked-job")
 
-	if err := s.SetJobGoal(before.ID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	if err := s.AddJobGoal(before.ID, g.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
 	after, err := s.GetJobByID(before.ID)
 	if err != nil {
 		t.Fatalf("GetJobByID: %v", err)
 	}
-	if after.GoalID != g.ID {
-		t.Errorf("GoalID = %d after the link, want %d", after.GoalID, g.ID)
+	if len(after.GoalIDs) != 1 || after.GoalIDs[0] != g.ID {
+		t.Errorf("GoalIDs = %v after the link, want [%d]", after.GoalIDs, g.ID)
 	}
 	if after.Rev != before.Rev {
 		t.Errorf("rev moved %d → %d; a goal link is outside the rev gate", before.Rev, after.Rev)
@@ -744,28 +752,52 @@ func TestContractSetJobGoalLinksWithoutTouchingRevOrUpdatedAt(t *testing.T) {
 	if after.UpdatedAt != before.UpdatedAt {
 		t.Errorf("updated_at moved %d → %d; a goal link must not reset the card's age", before.UpdatedAt, after.UpdatedAt)
 	}
+
+	for _, step := range []struct {
+		name string
+		run  func() error
+	}{
+		{"RemoveJobGoal", func() error { return s.RemoveJobGoal(before.ID, g.ID) }},
+		{"AddJobGoal (again)", func() error { return s.AddJobGoal(before.ID, g.ID) }},
+		{"ClearJobGoals", func() error { return s.ClearJobGoals(before.ID) }},
+	} {
+		if err := step.run(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		row, err := s.GetJobByID(before.ID)
+		if err != nil {
+			t.Fatalf("GetJobByID after %s: %v", step.name, err)
+		}
+		if row.Rev != before.Rev || row.UpdatedAt != before.UpdatedAt {
+			t.Errorf("%s moved rev/updated_at (%d/%d → %d/%d); every link verb is outside the rev gate",
+				step.name, before.Rev, before.UpdatedAt, row.Rev, row.UpdatedAt)
+		}
+	}
 }
 
-// TestContractSetJobGoalZeroClearsTheLink pins the unlink verb: 0 is not "no
-// change", it is the editor picker's `—` row.
-func TestContractSetJobGoalZeroClearsTheLink(t *testing.T) {
+// TestContractClearJobGoalsClearsEveryLink pins the unlink verb the picker's
+// `—` row posts: it is not "no change", and it does not stop at the first link.
+func TestContractClearJobGoalsClearsEveryLink(t *testing.T) {
 	s := openTest(t)
 	week, _ := contractGoalPeriods(t)
-	g := contractGoalAdd(t, s, "week", week, "linked then not", 0)
+	first := contractGoalAdd(t, s, "week", week, "linked then not", 0)
+	second := contractGoalAdd(t, s, "week", week, "also linked then not", 0)
 	j := contractGoalJob(t, s, "unlink-job")
 
-	if err := s.SetJobGoal(j.ID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal(link): %v", err)
+	for _, g := range []*Goal{first, second} {
+		if err := s.AddJobGoal(j.ID, g.ID); err != nil {
+			t.Fatalf("AddJobGoal(%d): %v", g.ID, err)
+		}
 	}
-	if err := s.SetJobGoal(j.ID, 0); err != nil {
-		t.Fatalf("SetJobGoal(clear): %v", err)
+	if err := s.ClearJobGoals(j.ID); err != nil {
+		t.Fatalf("ClearJobGoals: %v", err)
 	}
 	after, err := s.GetJobByID(j.ID)
 	if err != nil {
 		t.Fatalf("GetJobByID: %v", err)
 	}
-	if after.GoalID != 0 {
-		t.Errorf("GoalID = %d after clearing, want 0", after.GoalID)
+	if len(after.GoalIDs) != 0 {
+		t.Errorf("GoalIDs = %v after clearing, want none", after.GoalIDs)
 	}
 	if after.Rev != j.Rev || after.UpdatedAt != j.UpdatedAt {
 		t.Errorf("clearing moved rev/updated_at (%d/%d → %d/%d); the clear is the same write as the set",
@@ -773,48 +805,48 @@ func TestContractSetJobGoalZeroClearsTheLink(t *testing.T) {
 	}
 }
 
-// TestContractJobGoalIDIsPopulatedByEveryReadPath: "populated (0 when NULL) by
-// EVERY job read path". A GoalID that only appears on GetJobByID would show a
-// chip on the editor and none on the board, which is exactly the class of bug
-// jobColumns exists as one shared string to prevent.
-func TestContractJobGoalIDIsPopulatedByEveryReadPath(t *testing.T) {
+// TestContractJobGoalIDsArePopulatedByEveryReadPath: filled by EVERY job read
+// path. GoalIDs that only appeared on GetJobByID would show chips on the editor
+// and none on the board — the FormerSlugs hazard, which is why one attach
+// helper serves every loader.
+func TestContractJobGoalIDsArePopulatedByEveryReadPath(t *testing.T) {
 	s := openTest(t)
 	week, _ := contractGoalPeriods(t)
 	g := contractGoalAdd(t, s, "week", week, "read-path goal", 0)
 	linked := contractGoalJob(t, s, "read-path-linked")
 	unlinked := contractGoalJob(t, s, "read-path-unlinked")
-	if err := s.SetJobGoal(linked.ID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	if err := s.AddJobGoal(linked.ID, g.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
 
 	bySlug, err := s.GetJobBySlug("read-path-linked")
 	if err != nil {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
-	if bySlug.GoalID != g.ID {
-		t.Errorf("GetJobBySlug GoalID = %d, want %d", bySlug.GoalID, g.ID)
+	if len(bySlug.GoalIDs) != 1 || bySlug.GoalIDs[0] != g.ID {
+		t.Errorf("GetJobBySlug GoalIDs = %v, want [%d]", bySlug.GoalIDs, g.ID)
 	}
 	byID, err := s.GetJobByID(linked.ID)
 	if err != nil {
 		t.Fatalf("GetJobByID: %v", err)
 	}
-	if byID.GoalID != g.ID {
-		t.Errorf("GetJobByID GoalID = %d, want %d", byID.GoalID, g.ID)
+	if len(byID.GoalIDs) != 1 || byID.GoalIDs[0] != g.ID {
+		t.Errorf("GetJobByID GoalIDs = %v, want [%d]", byID.GoalIDs, g.ID)
 	}
 
 	all, err := s.ListJobs()
 	if err != nil {
 		t.Fatalf("ListJobs: %v", err)
 	}
-	seen := map[string]int64{}
+	seen := map[string][]int64{}
 	for _, j := range all {
-		seen[j.Slug] = j.GoalID
+		seen[j.Slug] = j.GoalIDs
 	}
-	if seen["read-path-linked"] != g.ID {
-		t.Errorf("ListJobs GoalID for the linked job = %d, want %d", seen["read-path-linked"], g.ID)
+	if len(seen["read-path-linked"]) != 1 || seen["read-path-linked"][0] != g.ID {
+		t.Errorf("ListJobs GoalIDs for the linked job = %v, want [%d]", seen["read-path-linked"], g.ID)
 	}
-	if seen["read-path-unlinked"] != 0 {
-		t.Errorf("ListJobs GoalID for the unlinked job = %d, want 0 (NULL reads as 0)", seen["read-path-unlinked"])
+	if len(seen["read-path-unlinked"]) != 0 {
+		t.Errorf("ListJobs GoalIDs for the unlinked job = %v, want none", seen["read-path-unlinked"])
 	}
 
 	rows, _, err := s.LoadJobsWithChildren()
@@ -825,12 +857,12 @@ func TestContractJobGoalIDIsPopulatedByEveryReadPath(t *testing.T) {
 	for _, j := range rows {
 		if j.Slug == "read-path-linked" {
 			found = true
-			if j.GoalID != g.ID {
-				t.Errorf("LoadJobsWithChildren GoalID = %d, want %d", j.GoalID, g.ID)
+			if len(j.GoalIDs) != 1 || j.GoalIDs[0] != g.ID {
+				t.Errorf("LoadJobsWithChildren GoalIDs = %v, want [%d]", j.GoalIDs, g.ID)
 			}
 		}
-		if j.Slug == "read-path-unlinked" && j.GoalID != 0 {
-			t.Errorf("LoadJobsWithChildren GoalID for the unlinked job = %d, want 0", j.GoalID)
+		if j.Slug == "read-path-unlinked" && len(j.GoalIDs) != 0 {
+			t.Errorf("LoadJobsWithChildren GoalIDs for the unlinked job = %v, want none", j.GoalIDs)
 		}
 	}
 	if !found {
@@ -839,17 +871,72 @@ func TestContractJobGoalIDIsPopulatedByEveryReadPath(t *testing.T) {
 	_ = unlinked
 }
 
-// TestContractDeletingALinkedGoalLeavesTheJobReadable is the ON DELETE SET
-// NULL guarantee from the job's side: a deleted goal degrades the job to "no
-// goal", never to a read error and never to a dangling id the chip would try
-// to render.
+// TestRegressionFormerSlugLoadCarriesGoalLinks is a REGRESSION pin for a defect
+// this round introduced and fixed: GetJobByFormerSlug (rename.go) is the fourth
+// scanJob caller and the one that does not live in jobs.go, and the first cut of
+// the GoalIDs attach missed it — so a job resolved by a name it had been renamed
+// AWAY from came back with no links at all, while the same job resolved by its
+// current slug came back with them.
+//
+// The symptom was invisible where it mattered most: `GET /api/goals?slug=<old
+// name>` (the route a cell's baked-in commands and any stale board still use)
+// served neither job_goals nor job_goal for a job that plainly had links, which
+// reads as "carl never labelled this" rather than as a lookup that took the
+// fallback path.
+func TestRegressionFormerSlugLoadCarriesGoalLinks(t *testing.T) {
+	s := openTest(t)
+	week, _ := contractGoalPeriods(t)
+	first := contractGoalAdd(t, s, "week", week, "the goal it serves", 0)
+	second := contractGoalAdd(t, s, "week", week, "and another", 0)
+	j := contractGoalJob(t, s, "old-name")
+	for _, g := range []*Goal{first, second} {
+		if err := s.AddJobGoal(j.ID, g.ID); err != nil {
+			t.Fatalf("AddJobGoal(%d): %v", g.ID, err)
+		}
+	}
+	if _, err := s.RenameJob(j.ID, j.Rev, "new-name"); err != nil {
+		t.Fatalf("RenameJob: %v", err)
+	}
+
+	byFormer, err := s.GetJobByFormerSlug("old-name")
+	if err != nil {
+		t.Fatalf("GetJobByFormerSlug: %v", err)
+	}
+	if len(byFormer.GoalIDs) != 2 || byFormer.GoalIDs[0] != first.ID || byFormer.GoalIDs[1] != second.ID {
+		t.Errorf("GetJobByFormerSlug GoalIDs = %v, want [%d %d] — the former-slug load must carry the links, in order",
+			byFormer.GoalIDs, first.ID, second.ID)
+	}
+	// stated as the property rather than as two literals: whichever name a
+	// caller resolves the job by, it sees the same links
+	byCurrent, err := s.GetJobBySlug("new-name")
+	if err != nil {
+		t.Fatalf("GetJobBySlug: %v", err)
+	}
+	if len(byFormer.GoalIDs) != len(byCurrent.GoalIDs) {
+		t.Fatalf("former-slug load has %d links and current-slug load %d; one job, one answer",
+			len(byFormer.GoalIDs), len(byCurrent.GoalIDs))
+	}
+	for i := range byCurrent.GoalIDs {
+		if byFormer.GoalIDs[i] != byCurrent.GoalIDs[i] {
+			t.Errorf("link %d differs by lookup path: former %d, current %d", i, byFormer.GoalIDs[i], byCurrent.GoalIDs[i])
+		}
+	}
+}
+
+// TestContractDeletingALinkedGoalLeavesTheJobReadable is the ON DELETE CASCADE
+// guarantee from the job's side: a deleted goal degrades the job to one fewer
+// goal, never to a read error and never to a dangling id the chip would try to
+// render.
 func TestContractDeletingALinkedGoalLeavesTheJobReadable(t *testing.T) {
 	s := openTest(t)
 	week, _ := contractGoalPeriods(t)
 	g := contractGoalAdd(t, s, "week", week, "doomed goal", 0)
+	kept := contractGoalAdd(t, s, "week", week, "surviving goal", 0)
 	j := contractGoalJob(t, s, "orphaned-link")
-	if err := s.SetJobGoal(j.ID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	for _, id := range []int64{g.ID, kept.ID} {
+		if err := s.AddJobGoal(j.ID, id); err != nil {
+			t.Fatalf("AddJobGoal(%d): %v", id, err)
+		}
 	}
 
 	if err := s.DeleteGoal(g.ID); err != nil {
@@ -859,25 +946,47 @@ func TestContractDeletingALinkedGoalLeavesTheJobReadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobByID after deleting the linked goal: %v", err)
 	}
-	if after.GoalID != 0 {
-		t.Errorf("GoalID = %d after the goal was deleted, want 0", after.GoalID)
+	if len(after.GoalIDs) != 1 || after.GoalIDs[0] != kept.ID {
+		t.Errorf("GoalIDs = %v after the goal was deleted, want just the surviving [%d]", after.GoalIDs, kept.ID)
 	}
 	if after.Slug != "orphaned-link" {
 		t.Errorf("job scanned as %+v; a deleted goal must not disturb the rest of the row", *after)
 	}
 }
 
-// TestContractGoalIDIsNotAJobFieldColumn pins the form-save-cannot-wipe-it
-// property at its source. The editor's saveform is a FULL REPLACE over
-// jobFieldColumns; goal_id being in that map would mean any client predating
-// the picker silently unlinks the goal on the next save.
-func TestContractGoalIDIsNotAJobFieldColumn(t *testing.T) {
-	if jobFieldColumns["goal_id"] {
-		t.Error("goal_id is in jobFieldColumns — a full form save could then wipe the link")
+// TestContractJobGoalsAreUnreachableFromUpdateJobFields is what the v23
+// jobFieldColumns pin becomes now that the link is a TABLE rather than a
+// column. The property it protected is unchanged — the editor's saveform is a
+// FULL REPLACE, and a client predating the picker must not be able to unlink a
+// goal by saving the form — but it now holds by construction: UpdateJobFields
+// can only name columns of `jobs`, and there is no longer one to name. What is
+// left to pin is the allowlist itself: neither the retired column name nor the
+// join table can be smuggled through it.
+func TestContractJobGoalsAreUnreachableFromUpdateJobFields(t *testing.T) {
+	for _, name := range []string{"goal_id", "job_goals", "goals"} {
+		if jobFieldColumns[name] {
+			t.Errorf("%q is in jobFieldColumns — a full form save could then reach a job's goal links", name)
+		}
 	}
 	s := openTest(t)
+	week, _ := contractGoalPeriods(t)
+	g := contractGoalAdd(t, s, "week", week, "fields-guard goal", 0)
 	j := contractGoalJob(t, s, "fields-guard")
+	if err := s.AddJobGoal(j.ID, g.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
+	}
 	if _, err := s.UpdateJobFields(j.ID, j.Rev, map[string]any{"goal_id": int64(1)}); err == nil {
 		t.Error("UpdateJobFields accepted goal_id; the allowlist must refuse it")
+	}
+	// and a save that names only legal fields leaves the links alone
+	if _, err := s.UpdateJobFields(j.ID, j.Rev, map[string]any{"body": "rewritten"}); err != nil {
+		t.Fatalf("UpdateJobFields(body): %v", err)
+	}
+	after, err := s.GetJobByID(j.ID)
+	if err != nil {
+		t.Fatalf("GetJobByID: %v", err)
+	}
+	if len(after.GoalIDs) != 1 || after.GoalIDs[0] != g.ID {
+		t.Errorf("GoalIDs = %v after a full form save, want the link untouched [%d]", after.GoalIDs, g.ID)
 	}
 }

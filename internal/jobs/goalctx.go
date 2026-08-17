@@ -14,8 +14,13 @@ import (
 // three rules verbatim (graphctx.go:13-34), and each one is why a piece of
 // this file looks the way it does:
 //
-//  1. It NEVER calls a network. Goals are three indexed local reads — four
-//     when a linked goal has to be resolved by id; nothing here embeds,
+//  1. It NEVER calls a network. A goalContext call is five local reads, four
+//     of them indexed — the job row (jobs_active_slug, or the id), its goal
+//     links (the leading column of a composite primary key), its former slugs
+//     (deliberately a whole-table read, bounded by renames — see
+//     attachFormerSlugs), then one ListGoals per current period
+//     (goals_scope_period) — plus one more per linked goal that falls outside
+//     those two lists and has to be resolved by id. Nothing here embeds,
 //     fetches or resolves anything off the machine.
 //
 //  2. It NEVER fails a spawn. Every error path — no store, an unreadable
@@ -53,10 +58,13 @@ const goalContextBytes = 700
 // own last line was, exactly as graphContextHeader's does.
 const goalContextHeader = "\nCarl's goals right now (re-read any time: `kraken goals get <slug>`):\n"
 
-// goalContextMarker is the literal that flags the goal THIS job was linked to
-// on the board. It is the one line in the block that is about this cell rather
-// than about carl's week, so it is marked in place rather than hoisted into a
-// section of its own.
+// goalContextMarker is the literal that flags a goal THIS job was linked to on
+// the board. Those are the lines in the block that are about this cell rather
+// than about carl's week, so they are marked in place rather than hoisted into
+// a section of their own. A job may link several goals, and then the marker
+// lands on every one of their lines and on no other — the wording stays
+// singular because it reads as a label on the line it sits on rather than as a
+// claim about how many there are.
 const goalContextMarker = " ← this job's goal"
 
 // goalNestPrefix indents a day goal under its weekly parent. The arrow is what
@@ -66,7 +74,7 @@ const goalNestPrefix = "    ↳ "
 
 // goalByID is the seam onto the store's by-id goal read: the ONE place in this
 // package that resolves a goal that is NOT in the current week's or today's
-// list. It exists because the job's linked goal is included unconditionally —
+// list. It exists because the job's linked goals are included unconditionally —
 // done, or left over from a period that has rolled — while every other goal in
 // the block comes from the two current-period lists.
 //
@@ -94,18 +102,23 @@ func goalContext(j *Job) string {
 	if st == nil {
 		return ""
 	}
-	return renderGoalsBlock(st, jobGoalID(st, j))
+	return renderGoalsBlock(st, jobGoalIDs(st, j))
 }
 
-// jobGoalID reads the goal this job is linked to, or 0.
+// jobGoalIDs reads the goals this job is linked to, in link position order, or
+// nil.
 //
-// The link lives on the store's job row (store.Job.GoalID) rather than on
-// jobs.Job, because it is set by a route (`/api/job/goal`) that deliberately
-// touches neither `rev` nor `updated_at` — so a jobs.Job in hand may predate
-// the link by any amount of time, and re-reading the row is the only way to
-// see it. Every failure — a file-backed job with no row, a missing row, a
-// read error — is 0, which is the unlinked job's answer.
-func jobGoalID(st *store.Store, j *Job) int64 {
+// The links live on the store's job row (store.Job.GoalIDs, filled by every
+// loader out of the job_goals join table) rather than on jobs.Job, because they
+// are written by a route (`/api/job/goal`) that deliberately touches neither
+// `rev` nor `updated_at` — so a jobs.Job in hand may predate a link by any
+// amount of time, and re-reading the row is the only way to see it. Every
+// failure — a file-backed job with no row, a missing row, a read error — is
+// nil, which is the unlinked job's answer.
+func jobGoalIDs(st *store.Store, j *Job) []int64 {
+	if st == nil || j == nil {
+		return nil
+	}
 	var (
 		row *store.Job
 		err error
@@ -116,17 +129,17 @@ func jobGoalID(st *store.Store, j *Job) int64 {
 	case strings.TrimSpace(j.Slug) != "":
 		row, err = st.GetJobBySlug(j.Slug)
 	default:
-		return 0
+		return nil
 	}
 	if err != nil || row == nil {
-		return 0
+		return nil
 	}
-	return row.GoalID
+	return row.GoalIDs
 }
 
 // renderGoalsBlock is THE renderer, shared by goalContext above and Recall
-// (recall.go). Given a store and the id of the goal this job is linked to (0
-// for none), it returns the block or "".
+// (recall.go). Given a store and the ids of the goals this job is linked to (in
+// link position order, empty for none), it returns the block or "".
 //
 // What goes in, and why each rule is a rule:
 //
@@ -138,14 +151,33 @@ func jobGoalID(st *store.Store, j *Job) int64 {
 //     The nesting is the whole reason parents exist: "today: land the PR" means
 //     something different under "this week: ship goal tracking" than it does
 //     alone.
-//   - The job's linked goal is included WHATEVER its state — done, or from a
-//     period that has since rolled — and marked. It is the one goal the cell
-//     was pointed at deliberately, and dropping it because carl ticked it off
-//     would silently remove the only line that says what this cell is for.
-func renderGoalsBlock(st *store.Store, linkedID int64) string {
+//   - EVERY linked goal is included WHATEVER its state — done, or from a period
+//     that has since rolled — and marked. These are the goals the cell was
+//     pointed at deliberately, and dropping one because carl ticked it off
+//     would silently remove a line that says what this cell is for. A job may
+//     link several, so the done-filter's carve-out is SET MEMBERSHIP rather
+//     than an id comparison: exactly the linked ids are exempt, and the marker
+//     lands on exactly their lines.
+func renderGoalsBlock(st *store.Store, linkedIDs []int64) string {
 	if st == nil {
 		return ""
 	}
+
+	// The link set, deduped and with any 0 dropped, plus the same ids in
+	// position order for the lead groups below. Deduping here rather than
+	// trusting the caller is what keeps the marker's "and no other line" half
+	// true by construction: a repeated id would otherwise lead twice, and the
+	// second copy would carry the marker on a line the first one already owns.
+	linked := make(map[int64]bool, len(linkedIDs))
+	order := make([]int64, 0, len(linkedIDs))
+	for _, id := range linkedIDs {
+		if id == 0 || linked[id] {
+			continue
+		}
+		linked[id] = true
+		order = append(order, id)
+	}
+
 	week, day := store.GoalPeriods(time.Now())
 	weekGoals, err := st.ListGoals("week", week)
 	if err != nil {
@@ -165,7 +197,7 @@ func renderGoalsBlock(st *store.Store, linkedID int64) string {
 	shown := map[int64]bool{}
 	var weekShown []store.Goal
 	for _, g := range weekGoals {
-		if g.Done && g.ID != linkedID {
+		if g.Done && !linked[g.ID] {
 			continue
 		}
 		shown[g.ID] = true
@@ -179,7 +211,7 @@ func renderGoalsBlock(st *store.Store, linkedID int64) string {
 		inBlock[g.ID] = true
 	}
 	for _, g := range dayGoals {
-		if g.Done && g.ID != linkedID {
+		if g.Done && !linked[g.ID] {
 			continue
 		}
 		inBlock[g.ID] = true
@@ -194,25 +226,30 @@ func renderGoalsBlock(st *store.Store, linkedID int64) string {
 	// nests under it — because the byte cap below treats the two positions
 	// differently, and it can only do that if it can still tell them apart.
 	var groups [][]string
-	// The linked goal LEADS when it is not already in the current lists — first
-	// group under the header, so it is the one line the cap is least likely to
-	// reach. (Least likely, not immune: an in-list linked goal is an ordinary
-	// line in ordinary position and the cap binds on it exactly as on any
-	// other.)
-	if linkedID != 0 && !inBlock[linkedID] {
-		if g := goalByID(st, linkedID); g != nil {
+	// A linked goal LEADS when it is not already in the current lists — its own
+	// group ahead of the week's, so it is among the lines the cap is least
+	// likely to reach. (Least likely, not immune: an in-list linked goal is an
+	// ordinary line in ordinary position and the cap binds on it exactly as on
+	// any other, and a job linking several off-period goals gets N lead groups
+	// which the cap bounds like any others — in LINK POSITION order, so when it
+	// binds the earlier links are the ones that survive.)
+	for _, id := range order {
+		if inBlock[id] {
+			continue
+		}
+		if g := goalByID(st, id); g != nil {
 			groups = append(groups, []string{goalLine(*g, false, true)})
 		}
 	}
 	for _, g := range weekShown {
-		group := []string{goalLine(g, false, g.ID == linkedID)}
+		group := []string{goalLine(g, false, linked[g.ID])}
 		for _, c := range children[g.ID] {
-			group = append(group, goalLine(c, true, c.ID == linkedID))
+			group = append(group, goalLine(c, true, linked[c.ID]))
 		}
 		groups = append(groups, group)
 	}
 	for _, g := range unassigned {
-		groups = append(groups, []string{goalLine(g, false, g.ID == linkedID)})
+		groups = append(groups, []string{goalLine(g, false, linked[g.ID])})
 	}
 	if len(groups) == 0 {
 		return ""
@@ -259,13 +296,13 @@ func renderGoalsBlock(st *store.Store, linkedID int64) string {
 }
 
 // goalLine renders one goal: `- [week] <text>` at the top level, `    ↳ <text>`
-// when nested under its weekly parent, plus `(done)` for the one done goal the
-// block ever carries and the linked-goal marker.
+// when nested under its weekly parent, plus `(done)` for the done goals the
+// block carries and the linked-goal marker.
 //
 // The scope label is on the TOP-LEVEL line only — a nested line's arrow already
 // says it is a day goal, and the label there would be noise on every child.
-// Done is stated rather than implied because the only done goal that reaches
-// here is the job's own linked goal, and "the goal this cell serves is already
+// Done is stated rather than implied because the only done goals that reach
+// here are ones this job is linked to, and "a goal this cell serves is already
 // ticked off" is exactly the kind of thing zeus must not have to infer.
 //
 // The text is ONE-LINED first (goalOneLine), for factLine's reason: a newline
