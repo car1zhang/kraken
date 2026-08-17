@@ -29,8 +29,9 @@ vi.mock("../../api/client.ts", () => ({
   deleteFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   setJobColor: vi.fn(() => Promise.resolve({ ok: true })),
   // the goal picker's two calls. This factory is EXHAUSTIVE by design — a
-  // client function the editor imports but the factory omits throws on first
-  // access — so a control added to the form is added here in the same commit.
+  // client function the editor's subtree imports but the factory omits throws
+  // on first access — so a control added to the form is added here in the
+  // same commit.
   fetchGoals: vi.fn(() => Promise.resolve({ goals: { week: [], day: [] } })),
   postJobGoal: vi.fn(() => Promise.resolve({ ok: true })),
 }));

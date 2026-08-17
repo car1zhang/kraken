@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type MutableRefObject,
@@ -11,15 +10,12 @@ import {
   createJob,
   deleteFeedback,
   editFeedback,
-  fetchGoals,
   fetchJobForm,
-  postJobGoal,
   queueJob,
   saveJobForm,
   setJobColor,
   uploadImage,
 } from "../../api/client.ts";
-import { goalChipText, type Goal } from "../../lib/goals.ts";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import {
   type JobForm,
@@ -29,6 +25,7 @@ import {
 import { insertIntoTextarea } from "../../hooks/useCmdHighlight.ts";
 import { useDebouncedCallback } from "../../hooks/useDebouncedDraft.ts";
 import { FieldSelect } from "./FieldSelect.tsx";
+import { GoalPicker } from "./GoalPicker.tsx";
 import { SwatchStrip } from "./SwatchStrip.tsx";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { jobKey } from "../../lib/jobKey.ts";
@@ -603,95 +600,6 @@ function EditorBody({
     [mutate, slug],
   );
 
-  /**
-   * The goal picker's option list — the CURRENT week's and today's goals,
-   * fetched straight from GET /api/goals.
-   *
-   * Fetched rather than read off the board payload (which carries the same two
-   * lists) because this modal is handed ONE job and no payload, and an
-   * optional `goals` prop the integrator has to remember to pass is a picker
-   * that renders empty and says nothing — the exact failure the docblock on
-   * SteerOverlayProps catalogues. A failure here degrades to the linked goal
-   * alone rather than painting an error over a form that is otherwise fine:
-   * the goal link is not what carl opened the editor for.
-   *
-   * Not refetched after a pick. The LIST is the period's goals and a pick does
-   * not change it; what the pick changes is `job.goal`, which arrives on the
-   * board refetch `mutate` already performs.
-   */
-  const [goalList, setGoalList] = useState<Goal[]>([]);
-  useEffect(() => {
-    if (!slug || archived) return;
-    const ac = new AbortController();
-    fetchGoals(ac.signal)
-      .then((d) => {
-        if (ac.signal.aborted) return;
-        setGoalList([...(d.goals?.week ?? []), ...(d.goals?.day ?? [])]);
-      })
-      .catch(() => {
-        // deliberately silent — see above
-      });
-    return () => ac.abort();
-  }, [archived, slug]);
-
-  /**
-   * FieldSelect speaks in STRINGS, so each goal needs one label that is both
-   * what the menu row reads and what the button shows when it is selected —
-   * the two cannot differ, or the tick would never land on the current row.
-   *
-   * Labels carry the scope (`wk` / `day`) the way the mockup's menu does, and
-   * are cut to chip width so a long goal cannot stretch the field row. A goal
-   * linked from a period that is no longer current is appended WITHOUT a scope
-   * prefix (its scope is not on the wire — `job.goal` is id/text/done) and
-   * only when the current-period list does not already hold it, so an
-   * off-period link round-trips instead of silently reading as "—". Collisions
-   * (two goals whose truncated text matches) are broken with the id, since two
-   * identical rows would be a picker that cannot say which one it picked.
-   */
-  const linkedGoal = job?.goal;
-  const goalOptions = useMemo(() => {
-    const options: string[] = [];
-    const idByLabel = new Map<string, number>();
-    const labelById = new Map<number, string>();
-    const push = (id: number, text: string, prefix: string) => {
-      if (labelById.has(id)) return;
-      const base = prefix + goalChipText(text, 28);
-      const label = idByLabel.has(base) ? `${base} #${id}` : base;
-      options.push(label);
-      idByLabel.set(label, id);
-      labelById.set(id, label);
-    };
-    for (const g of goalList) push(g.id, g.text, g.scope === "week" ? "wk " : "day ");
-    if (linkedGoal) push(linkedGoal.id, linkedGoal.text, "");
-    return { options, idByLabel, labelById };
-  }, [goalList, linkedGoal]);
-
-  /**
-   * The goal pick, on the COLOUR strip's pattern rather than the debounced
-   * form autosave: `/api/job/goal` is its own ungated one-field route, so it
-   * works while a cell is in flight — which is when filing a running job under
-   * a goal is most useful — and a full-replace `saveform` can never wipe the
-   * link by omitting it.
-   *
-   * `pendingGoal` shows the pick instantly and is cleared when the write
-   * settles, handing authority back to the board payload: a REFUSED pick snaps
-   * back to whatever the server actually has. `null` is "nothing pending",
-   * which is why it is not 0 — 0 is the unlink carl may genuinely have picked.
-   */
-  const [pendingGoal, setPendingGoal] = useState<number | null>(null);
-  const pickGoal = useCallback(
-    async (label: string) => {
-      if (!slug) return;
-      const id = label ? (goalOptions.idByLabel.get(label) ?? 0) : 0;
-      setPendingGoal(id);
-      await mutate(() => postJobGoal(slug, id));
-      setPendingGoal(null);
-    },
-    [goalOptions, mutate, slug],
-  );
-  const goalValue =
-    goalOptions.labelById.get(pendingGoal ?? linkedGoal?.id ?? 0) ?? "";
-
   const repos = form?.repos || [];
   const hasDocq = !!job?.doc_questions?.length;
   const artifacts = job?.artifacts ?? [];
@@ -927,15 +835,16 @@ function EditorBody({
                 the colour strip beside it, NOT disabled while read-only: the
                 link is carl's filing of the job rather than job-file state the
                 crew owns, it rides its own ungated route, and filing a RUNNING
-                job under a goal is most of what the control is for. */}
+                job under a goal is most of what the control is for. The
+                control itself is shared with the steer head — see GoalPicker. */}
             <div className="f-field">
               goal{" "}
-              <FieldSelect
+              <GoalPicker
                 id="f-goal"
-                label="goal"
-                value={goalValue}
-                options={goalOptions.options}
-                onPick={(g) => void pickGoal(g)}
+                slug={slug}
+                goal={job?.goal}
+                mutate={mutate}
+                active={!archived}
               />
             </div>
             <span className="f-toggles">

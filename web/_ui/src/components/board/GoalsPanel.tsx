@@ -11,10 +11,10 @@ import { goalChipText, groupGoals, type Goal } from "../../lib/goals.ts";
  * full text in `title`, muted when the goal is done.
  *
  * It lives in this file rather than in `chips/` because it is the goals
- * feature's own surface and its two renderers (the job card's band 2 and the
- * steer modal's head) are the same statement in two places: this job is filed
- * under that goal. Two copies of four lines would drift on the first change to
- * the glyph or the truncation.
+ * feature's own surface. Its one renderer is the job card's band 2 — the
+ * steer modal's head carried the same chip until the link became editable
+ * there, where GoalPicker (overlays/GoalPicker.tsx) now makes the same
+ * statement as a control: this job is filed under that goal.
  *
  * A plain span, not a `.chip` button: `.chip` is the artifact overlay's click
  * target, and this one must fall THROUGH to whatever owns the click around it
