@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -32,23 +32,54 @@ const passthroughMutate = () =>
     return null;
   });
 
+const toggle = () => document.getElementById("bg-toggle")!;
+const menu = () => document.querySelector(".bg-menu");
+const uploadRow = () => document.getElementById("bg-upload") as HTMLButtonElement | null;
+const clearRow = () => document.getElementById("bg-clear") as HTMLButtonElement | null;
+
 describe("BackgroundControl", () => {
-  it("with no background: upload button only, no remove, no ✓", () => {
+  it("is one button; the menu only exists once clicked", async () => {
     render(<BackgroundControl hasBg={false} mutate={passthroughMutate()} />);
-    expect(document.getElementById("bg-upload")).toHaveTextContent(/^▨ BG$/);
-    expect(document.getElementById("bg-remove")).toBeNull();
+    expect(toggle()).toHaveTextContent(/^▨ BG$/);
+    expect(menu()).toBeNull();
+    await userEvent.click(toggle());
+    expect(menu()).not.toBeNull();
+    expect(uploadRow()).toHaveTextContent("UPLOAD…");
+    expect(clearRow()).toHaveTextContent("CLEAR");
   });
 
-  it("with a background: the ✓ mark and the remove button appear", () => {
+  it("with no background: CLEAR is disabled, UPLOAD is not", async () => {
+    render(<BackgroundControl hasBg={false} mutate={passthroughMutate()} />);
+    await userEvent.click(toggle());
+    expect(uploadRow()!.disabled).toBe(false);
+    expect(clearRow()!.disabled).toBe(true);
+  });
+
+  it("with a background: the ✓ mark shows and CLEAR is live", async () => {
     render(<BackgroundControl hasBg={true} mutate={passthroughMutate()} />);
-    expect(document.getElementById("bg-upload")).toHaveTextContent("▨ BG ✓");
-    expect(document.getElementById("bg-remove")).not.toBeNull();
+    expect(toggle()).toHaveTextContent("▨ BG ✓");
+    await userEvent.click(toggle());
+    expect(clearRow()!.disabled).toBe(false);
   });
 
-  it("picking a file POSTs it to /api/background through mutate", async () => {
+  it("CLEAR DELETEs /api/background through mutate and closes the menu", async () => {
+    const calls = stubFetch();
+    const mutate = passthroughMutate();
+    render(<BackgroundControl hasBg={true} mutate={mutate} />);
+    await userEvent.click(toggle());
+    await userEvent.click(clearRow()!);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([{ url: "/api/background", method: "DELETE" }]);
+    expect(menu()).toBeNull();
+  });
+
+  it("UPLOAD closes the menu; a picked file POSTs to /api/background", async () => {
     const calls = stubFetch();
     const mutate = passthroughMutate();
     render(<BackgroundControl hasBg={false} mutate={mutate} />);
+    await userEvent.click(toggle());
+    await userEvent.click(uploadRow()!);
+    expect(menu()).toBeNull();
     const file = new File(["png-bytes"], "bg.png", { type: "image/png" });
     await userEvent.upload(
       document.getElementById("bg-file-input") as HTMLInputElement,
@@ -70,12 +101,44 @@ describe("BackgroundControl", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("remove DELETEs /api/background through mutate", async () => {
-    const calls = stubFetch();
+  it("an outside mousedown dismisses the menu (useMenuDismiss)", async () => {
+    render(<BackgroundControl hasBg={true} mutate={passthroughMutate()} />);
+    await userEvent.click(toggle());
+    expect(menu()).not.toBeNull();
+    fireEvent.mouseDown(document.body);
+    expect(menu()).toBeNull();
+  });
+
+  it("a second click on the toggle closes the menu — no close-then-reopen", async () => {
+    // The fragile invariant here is useMenuDismiss's inside-root early
+    // return: the toggle's own mousedown must NOT count as an outside
+    // dismissal, or the following click's setOpen(o => !o) would reopen
+    // what the mousedown just closed.
+    render(<BackgroundControl hasBg={true} mutate={passthroughMutate()} />);
+    await userEvent.click(toggle());
+    expect(menu()).not.toBeNull();
+    await userEvent.click(toggle());
+    expect(menu()).toBeNull();
+  });
+
+  it("Escape closes the menu", async () => {
+    render(<BackgroundControl hasBg={true} mutate={passthroughMutate()} />);
+    await userEvent.click(toggle());
+    expect(menu()).not.toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(menu()).toBeNull();
+  });
+
+  it("a hasBg flip under an open menu re-disables CLEAR without closing it", async () => {
     const mutate = passthroughMutate();
-    render(<BackgroundControl hasBg={true} mutate={mutate} />);
-    await userEvent.click(document.getElementById("bg-remove")!);
-    expect(mutate).toHaveBeenCalledTimes(1);
-    expect(calls).toEqual([{ url: "/api/background", method: "DELETE" }]);
+    const { rerender } = render(<BackgroundControl hasBg={true} mutate={mutate} />);
+    await userEvent.click(toggle());
+    expect(clearRow()!.disabled).toBe(false);
+    // a board poll flips the payload while the menu is open — the menu must
+    // survive the re-render (closing under the pointer is the worse failure)
+    rerender(<BackgroundControl hasBg={false} mutate={mutate} />);
+    expect(menu()).not.toBeNull();
+    expect(clearRow()!.disabled).toBe(true);
+    expect(toggle()).toHaveTextContent(/^▨ BG$/);
   });
 });
