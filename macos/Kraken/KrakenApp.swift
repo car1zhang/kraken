@@ -446,6 +446,16 @@ struct BoardWebView: NSViewRepresentable {
              ::-webkit-scrollbar styling — the same rendering Chrome shows.
              Shell-only: in a browser the standard-property path is fine. */
           * { scrollbar-width: auto !important; scrollbar-color: auto !important; }
+          /* no rubber-band overscroll of the root: in this frameless shell
+             the under-page area revealed by the bounce is the WINDOW behind
+             the web view, which reads as a black flash leaking around the
+             board (carl's report). Shell-only on purpose — in a browser the
+             bounce is native feel over the browser's own chrome, and the
+             board must not lose it to fix a fact about this window. The
+             underPageBackgroundColor sample in didFinish is the backstop for
+             whatever exposure remains (mid-load, or an engine that ignores
+             overscroll-behavior on the root). */
+          html { overscroll-behavior: none !important; }
         `;
         /* A PR chip is an <a> inside the card's whole-card click target; the
            SPA source now stops the bubble itself (PRChips.tsx), but a server
@@ -476,6 +486,13 @@ struct BoardWebView: NSViewRepresentable {
         // 200px-minimum columns), and an overscroll past its edge would
         // trigger a history swipe — breaking a core gesture to defend against
         // a same-host main-frame navigation nothing in the SPA emits.
+        //
+        // .clear is the PRE-LOAD value only: before the board commits, the
+        // under-page area blends into the frameless window instead of
+        // flashing WebKit's default white. didFinish replaces it with the
+        // page's own ground color, so any under-page exposure after load
+        // (the injected overscroll-behavior rule bars the root bounce, but
+        // mid-load and edge engines remain) paints board-colored, not black.
         view.underPageBackgroundColor = .clear
         // serverHost is set BEFORE the load: the policy delegate treats a nil
         // serverHost as "not the server", so the reverse order would leave the
@@ -523,6 +540,43 @@ struct BoardWebView: NSViewRepresentable {
             // when the view kept it across the load, the repair if it didn't.
             webView.pageZoom = zoom
             webView.evaluateJavaScript(BoardWebView.shellPadJS(at: zoom))
+        }
+
+        /// Once the page is loaded (styles applied — didCommit is too early,
+        /// the sheet may not have parsed and html's background computes
+        /// transparent), replace the pre-load .clear under-page color with
+        /// the page's own ground. Sampled rather than hardcoded because the
+        /// ground is theme- and accent-derived (--bg-board is a color-mix);
+        /// a hex here would drift the first time the palette moves. A theme
+        /// toggled after load keeps the stale sample until the next
+        /// navigation — acceptable for a backstop the injected
+        /// overscroll-behavior rule keeps out of sight.
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript(
+                "getComputedStyle(document.documentElement).backgroundColor"
+            ) { value, _ in
+                guard let css = value as? String, let color = Coordinator.nsColor(fromCSS: css) else { return }
+                webView.underPageBackgroundColor = color
+            }
+        }
+
+        /// Parses WebKit's computed-color spellings — "rgb(16, 15, 21)",
+        /// "rgba(16, 15, 21, 1)", "color(srgb 0.06 0.058 0.082)" — into an
+        /// NSColor. nil for anything else, including a fully transparent
+        /// answer (styles not applied), so a failed sample keeps the current
+        /// under-page color rather than painting a wrong one.
+        static func nsColor(fromCSS css: String) -> NSColor? {
+            let nums = css.split(whereSeparator: { !"0123456789.".contains($0) })
+                .compactMap { Double($0) }
+            guard nums.count >= 3 else { return nil }
+            if nums.count >= 4, nums[3] == 0 { return nil }
+            let scale = css.hasPrefix("color(") ? 1.0 : 255.0
+            return NSColor(
+                srgbRed: nums[0] / scale,
+                green: nums[1] / scale,
+                blue: nums[2] / scale,
+                alpha: 1
+            )
         }
 
         /// Host equality with loopback's spellings unified — `localhost` and
