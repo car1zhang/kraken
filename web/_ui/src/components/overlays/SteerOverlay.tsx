@@ -43,7 +43,7 @@ import { codeRefTarget } from "../../lib/codeRefs.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
-import { GoalChip } from "../board/GoalsPanel.tsx";
+import { GoalPicker } from "./GoalPicker.tsx";
 import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
@@ -694,22 +694,38 @@ function SteerBody({
         <span className="panel-title" id="steer-title">
           {jobSlug + TITLE_SUFFIX[mode]}
         </span>
+        {/* the job's goal — the same picker the editor's form carries
+            (GoalPicker), HERE because the board routes a live working/blocked
+            card to THIS modal and never to the editor, so a picker that lived
+            only in the editor was reachable exactly when filing a job under a
+            goal matters least. /api/job/goal is ungated precisely so a
+            RUNNING job can be linked, and like the colour strip below it
+            rides no mode check — linking is valid in steer, unblock and
+            reactivate alike — and never sends a steer message. Withheld for
+            an archived job: its synthetic slug is not a job the route can
+            answer for, and the wire withholds its goal anyway. The wrapper
+            span exists only to carry the FULL goal text as a tooltip
+            (FieldSelect has no title prop) — the chip this replaced paid for
+            its truncation the same way. cut=20: the head is ONE LINE with
+            every control rigid and only the title giving (style.css says so
+            at .panel-head), so the label's cap is what bounds the strip, and
+            the editor form row's 28 is too wide a rigid block here. */}
+        {job?.archived ? null : (
+          <span title={job?.goal?.text}>
+            <GoalPicker
+              id="steer-goal"
+              slug={jobSlug}
+              goal={job?.goal}
+              mutate={mutate}
+              cut={20}
+            />
+          </span>
+        )}
         {/* The same nine-swatch colour strip as the job editor's. It has to be
-            HERE and not only in the editor: the board routes a live
-            working/blocked card to this modal and never to the editor, so
-            without this copy the picker would be reachable only while the cell
-            is down — and /api/job/color is ungated precisely so a RUNNING job
-            can be recoloured. It rides no mode check (recolouring is valid in
-            steer, unblock and reactivate alike) and touches nothing else: a
-            pick POSTs the colour and never sends a steer message. */}
-        {/* the job's goal, the same chip the card carries. It has to be HERE
-            for the colour picker's reason: a live working/blocked card opens
-            THIS modal and never the editor, so without this copy the one
-            surface that says what a running job is working towards would be
-            unreachable for exactly the jobs that are running. Read-only —
-            the picker that CHANGES the link lives in the editor, on its own
-            ungated route; this is a statement, not a control. */}
-        {job?.goal ? <GoalChip goal={job.goal} /> : null}
+            HERE and not only in the editor, for the goal picker's exact
+            reason — and /api/job/color is ungated precisely so a RUNNING job
+            can be recoloured. A pick POSTs the colour and never sends a
+            steer message. */}
         <ColorPicker slug={jobSlug} color={job?.color} mutate={mutate} />
         <RenameButton id="steer-rename" state={rename} visible={showRename} />
         <span className="spacer"></span>

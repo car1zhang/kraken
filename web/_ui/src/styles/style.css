@@ -3424,7 +3424,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .goal-add .plus { color: var(--ac); flex: none; }
 .gs-empty { padding: 4px 0 2px; font: 9.5px var(--mono); color: var(--muted); opacity: 0.8; }
 
-/* the goal chip — the job card's band 2 and the steer modal's head. A plain
+/* the goal chip — the job card's band 2 (the steer modal's head carries the
+   GoalPicker dropdown instead, which wears the .colorsel skin). A plain
    span rather than a .chip (it must fall through to the card's own click),
    tinted with --tint so it reads as identity-adjacent rather than as an
    alert, and capped in width because band 2 is a counts row that a long goal
@@ -3440,4 +3441,3 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 /* a done goal is still the job's goal — muted, never hidden */
 .goal-chip.done { color: var(--muted); border-color: var(--border-strong); background: transparent; }
-.panel-head .goal-chip { flex: none; }

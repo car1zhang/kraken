@@ -29,6 +29,9 @@ vi.mock("../../api/client.ts", () => ({
   setJobColor: vi.fn(() => Promise.resolve({ ok: true })),
   retryJob: vi.fn(() => Promise.resolve({ ok: true })),
   answerQuestion: vi.fn(() => Promise.resolve({ ok: true })),
+  // the head's goal picker (GoalPicker) — same pair the editor's mock carries
+  fetchGoals: vi.fn(() => Promise.resolve({ goals: { week: [], day: [] } })),
+  postJobGoal: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 
 import {
@@ -738,6 +741,36 @@ describe("#steer-swatches — the job colour picker", () => {
       await waitFor(() => expect(setJobColor).toHaveBeenCalledWith("j", ""));
       unmount();
     }
+  });
+});
+
+describe("#steer-goal — the head's goal picker", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // The HOST wiring only — GoalPicker's own behavior (labels, the pick, the
+  // unlink) is pinned in GoalPicker.test.tsx by bare-mounting it. What only
+  // this suite can say is that the steer head actually mounts the control:
+  // a live card opens THIS modal and never the editor, so a picker asserted
+  // nowhere but the editor's form could go dead here without a test failing.
+  it("mounts the picker for a live job", () => {
+    render(
+      <Steer open slug="j" mode="steer" job={job} onClose={() => {}} mutate={mutate} />,
+    );
+    expect(document.getElementById("steer-goal")).toBeInTheDocument();
+  });
+
+  it("withholds it for an archived job — the wire withholds its goal too", () => {
+    render(
+      <Steer
+        open
+        slug="archive:j.job.md"
+        mode="reactivate"
+        job={makeJob({ slug: "archive:j.job.md", state: "archived", archived: true, live: false })}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(document.getElementById("steer-goal")).toBeNull();
   });
 });
 
