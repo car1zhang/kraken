@@ -93,6 +93,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `update` | object (`webUpdate`) | always | the self-update button's state (see `POST /api/update` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebUpdate` (Models.swift), **Optional** on `WebBoard` — always present on any server new enough to have the button, absent on one older than it |
 | `ship_ios` | object (`webShipIOS`) | always | the TestFlight ship button's state (see `POST /api/ship-ios` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebShipIOS` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is |
 | `goals` | object (`{"week": [goal], "day": [goal]}`) | always (both arrays `[]`, never `null`) | the CURRENT local week's and today's goals — the same two arrays `GET /api/goals` serves, from the same store call, so the board key and that endpoint can never disagree. Periods are `store.GoalPeriods(time.Now())`: `day` is today's local `2006-01-02` date, `week` is the local Monday of this week. Added additively, no contract bump. Modeled in the iOS app as `WebGoals` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is, and hand-decoded for the same blast-radius reason (see that struct's comment) |
+| `background` | object (`{"updated_at": number}`) | omitted when no background is set | the board's optional background image (api/background.go): the upload stamp alone (unix millis), never the bytes — `GET /api/background` serves those, with `?v=<updated_at>` as the cache-buster. ABSENT is the wire's only "no background". Added additively, no contract bump. Modeled in the iOS app as `WebBackground` (Models.swift), **Optional** on `WebBoard`; the app decodes it but does not render a background yet (a noted follow-up) |
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's
@@ -2555,3 +2556,27 @@ only (405 otherwise). `name` must exactly match the saved-name format
 name, unresolvable slug, or missing file — resolution goes through
 `api.UploadPath`, which does not require an active job (an upload outlives
 its job's own draft/working/etc. state changes, same lifecycle as artifacts).
+
+### `GET`/`POST`/`DELETE /api/background` (api/background.go) — web-UI-only today (decoded but not rendered by the iOS app)
+
+The board's one optional background image — a singleton blob in kraken.db
+(`board_bg`, schema v26), belonging to the BOARD rather than any job.
+Additive, no contract bump. The board payload's `background` key (above) is
+how a client learns one is set without ever pulling the bytes.
+
+- **GET** — the success path is not JSON: it serves the raw image bytes,
+  `Content-Type` from the type sniffed at upload, `Cache-Control: private,
+  max-age=31536000` (safe because clients request it as
+  `/api/background?v=<updated_at>` — a replaced image is a new URL, and the
+  stamp is strictly increasing). Errors ARE JSON `{"error": …}`: 404 when no
+  background is set, plus the 500 every method here shares when no store is
+  wired.
+- **POST** — `multipart/form-data` with a single `file` field; same 10MB
+  cap, 11MB body ceiling, and content-sniffed PNG/JPEG/GIF/WebP allow-list
+  as `POST /api/upload`, and the same error statuses (413/415/400/500).
+  Replaces any previous background. Response (200): `{"ok": true,
+  "updated_at": <unix millis>}`.
+- **DELETE** — removes the background (the plain board is the fallback).
+  Idempotent: deleting with none set still answers `{"ok": true}`.
+
+Any other method: 405.

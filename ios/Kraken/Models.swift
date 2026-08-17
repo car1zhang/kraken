@@ -46,6 +46,16 @@ struct WebBoard: Decodable {
     // "this server has no goals to show", which is the drawer drawing
     // nothing rather than an empty drawer claiming zero goals.
     let goals: WebGoals?
+    // The web board's optional background image (additive; absent both on an
+    // older server AND whenever no background is set — absence is the wire's
+    // only "no background"). Decoded so the shape is modeled, but the app
+    // does not render a board background yet; the follow-up is an
+    // AsyncImage on /api/background?v=<updatedAt> behind the board list with
+    // the same 80% surface tint the web board draws — gated on
+    // updatedAt > 0, never on background != nil alone, since the drift
+    // degrade below yields a non-nil object with a zero stamp while the
+    // server's wire treats zero as unset.
+    let background: WebBackground?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -57,6 +67,30 @@ struct WebBoard: Decodable {
         case update
         case shipIOS = "ship_ios"
         case goals
+        case background
+    }
+}
+
+// The `background` key on /api/board: the upload stamp (unix millis), never
+// the bytes — GET /api/background serves those, with the stamp as the URL's
+// cache-buster.
+//
+// Hand-decoded with `try?` for WebGoals' blast-radius reason: this is the
+// same kind of key — an additive object hanging off the board root — and a
+// drifted or non-object value must degrade to a zeroed stamp, never take
+// the ENTIRE /api/board decode (and every job on the board) with it.
+// `decodeIfPresent` on WebBoard still absorbs an absent or null key before
+// this init ever runs.
+struct WebBackground: Decodable, Equatable {
+    let updatedAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        updatedAt = (try? c?.decode(Int64.self, forKey: .updatedAt)) ?? 0
     }
 }
 

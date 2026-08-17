@@ -172,6 +172,13 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/job/list", jobListHandler)
 	mux.HandleFunc("/api/job/draft", mirrorGated(jobDraftHandler))
 	mux.HandleFunc("/api/upload", uploadHandler)
+	// The board's background image (background.go): GET serves it, POST
+	// uploads/replaces it, DELETE removes it. Ungated because ITS write
+	// touches nothing but the wired kraken.db — no tmux pane, no process, no
+	// file on disk — which is a strictly weaker footprint than /api/upload
+	// above, itself ungated while also materializing a real file under
+	// ~/.kraken/uploads.
+	mux.HandleFunc("/api/background", backgroundHandler)
 	mux.HandleFunc("/api/logs/files", webLogFiles)
 	mux.HandleFunc("/api/logs", webLogRead)
 	mux.HandleFunc("/api/pr-attach", prAttachHandler)

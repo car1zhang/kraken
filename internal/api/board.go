@@ -576,6 +576,12 @@ type webBoard struct {
 	// would put the goals and the cards that reference them one tick out of
 	// step. Additive, same policy as Update and ShipIOS.
 	Goals webGoals `json:"goals"`
+	// Background is the board's optional background image — the updated_at
+	// stamp only, never the bytes (GET /api/background serves those; see
+	// background.go). A pointer with omitempty: absence is the wire's only
+	// spelling of "no background", webJob.load's rule. Additive, same policy
+	// as Update and ShipIOS.
+	Background *webBackground `json:"background,omitempty"`
 }
 
 // jobArtifacts collects a job's viewable artifacts. A live cell always
@@ -961,7 +967,7 @@ func buildWebBoard() webBoard {
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
 	activeStore := jobs.ActiveStore()
-	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS(), Goals: currentGoals(activeStore)}
+	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS(), Goals: currentGoals(activeStore), Background: currentBackground(activeStore)}
 	order := jobs.LoadBoardOrder()
 	// The card chips, built from the two lists the payload ALREADY carries plus
 	// a by-id read for each linked goal those lists do not cover (a job still

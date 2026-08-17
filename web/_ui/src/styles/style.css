@@ -265,6 +265,41 @@ mark { background: color-mix(in srgb, var(--warn) 30%, transparent); color: var(
    to the canvas and a negative-z pseudo-element hides behind it. */
 html { background: var(--ground); }
 
+/* Board background image (carl-uploaded; POST /api/background). Gated
+   entirely on [data-bg], which App.tsx stamps only while the board payload
+   carries a background — without the attribute this block is inert and the
+   default board paints exactly as the `html` rule above alone would.
+   Two image layers over the html rule's background-color: the image, and the
+   board's own ground at 80% opacity ON TOP of it — the "translucent board
+   chrome over the image" ask, so the picture reads through a 20% window.
+   Cards and panels sit on opaque fills (--surface and friends mix over
+   --b1, an opaque hex in both themes) and keep full contrast; the sticky
+   .chrome header is the one exception — its fill mixes over --b2, the
+   sheet's single translucent primitive (92% alpha in both themes), so the
+   tinted image bleeds through the header at ~8%. Faint by design, and
+   accepted rather than special-cased under this gate. The tint layer is a
+   single-stop gradient because background-image layers can't take a bare
+   color; mixed from --ground, it re-derives with the theme and the accent
+   like every other surface. The
+   solid --ground beneath stays as the fallback while the image loads (or
+   404s after a stale stamp). Fixed attachment keeps the image steady under
+   a scrolled board, cover keeps it filling the viewport whatever its aspect.
+   --bg-image is set inline by App.tsx (a url() against /api/background);
+   the `none` fallback keeps a half-stamped document painting the plain
+   board rather than an invalid background. */
+:root[data-bg] {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--ground) 80%, transparent),
+      color-mix(in srgb, var(--ground) 80%, transparent)
+    ),
+    var(--bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
 body {
   background: transparent;
   color: var(--body);

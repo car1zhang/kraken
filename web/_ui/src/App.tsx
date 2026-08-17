@@ -27,6 +27,7 @@ import { useJobSearch } from "./hooks/useJobSearch.ts";
 import { useLibrary } from "./hooks/useLibrary.ts";
 import { useLocalStorageSet } from "./hooks/useLocalStorage.ts";
 import { usePoll } from "./hooks/usePoll.ts";
+import { stampBackground } from "./lib/background.ts";
 import { columnFor } from "./lib/format.ts";
 import { jobKey } from "./lib/jobKey.ts";
 import { installSfxListeners } from "./lib/sfx.ts";
@@ -71,6 +72,20 @@ export function App() {
   // the sfx module's document-level capture listeners; the returned
   // uninstaller keeps strict-mode's double mount from stacking a second set
   useEffect(() => installSfxListeners(), []);
+
+  // The board background image: <html data-bg> plus the --bg-image custom
+  // property, both driven by the payload's `background.updated_at` stamp
+  // (stampBackground, lib/background.ts). style.css keys the whole image
+  // treatment off [data-bg], so with no background set this effect leaves
+  // the document byte-identical to a board that never had the feature. React
+  // is the ONE writer of this attribute — unlike data-theme/data-accent
+  // there is no pre-paint IIFE half, because the image is server state that
+  // cannot be known before the first payload. Keyed on the stamp, not the
+  // object: the payload allocates a fresh `background` object every poll,
+  // and the stamp is what actually changes when the image does (it doubles
+  // as backgroundURL's cache-buster).
+  const bgAt = board.board?.background?.updated_at;
+  useEffect(() => stampBackground(bgAt), [bgAt]);
   // The board's own voice, mounted HERE and exactly once: it diffs consecutive
   // poll snapshots, so a second instance would diff the same snapshots again
   // and double every sound. This is the only place `useBoard()` runs — the

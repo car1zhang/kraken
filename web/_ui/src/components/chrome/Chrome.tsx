@@ -4,6 +4,7 @@ import type { WebUsage } from "../../api/types.ts";
 import type { BoardModel } from "../../hooks/useBoard.ts";
 import { VIEWS, type View } from "../../hooks/useHashRoute.ts";
 import { age, flagCount } from "../../lib/format.ts";
+import { BackgroundControl } from "./BackgroundControl.tsx";
 import { Banner, StaleBanner } from "./Banners.tsx";
 import { AccentToggle, ScanToggle, SfxToggle } from "./HudControls.tsx";
 import { ShipControl, useShipRun } from "./ShipControl.tsx";
@@ -172,6 +173,7 @@ export function Chrome({
         <span className="spacer" />
         <UpdControlButton id="update-btn" model={update.button} onClick={update.onClick} />
         <ShipControl id="ship-btn" model={ship.button} onClick={ship.onClick} />
+        <BackgroundControl hasBg={!!b?.background} mutate={board.mutate} />
         <AccentToggle />
         <ScanToggle />
         <SfxToggle />

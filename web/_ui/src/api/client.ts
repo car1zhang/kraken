@@ -11,6 +11,7 @@
 // call's text belongs in the tick-stat corner rather than in a retry loop.
 
 import type {
+  BackgroundUploadResult,
   CaptureResult,
   DraftResult,
   DreamReports,
@@ -488,3 +489,37 @@ export async function uploadImage(
   if (!res.ok) return parseError(res);
   return (await res.json()) as UploadResult;
 }
+
+// -------------------------------------------------- board background
+//
+// The board's one optional background image (api/background.go): POST
+// uploads/replaces it, DELETE removes it, and the board payload's
+// `background.updated_at` stamp is both the "is one set" signal and the
+// image URL's cache-buster.
+
+export async function uploadBackground(
+  file: File,
+): Promise<BackgroundUploadResult> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(BASE + "/api/background", {
+    method: "POST",
+    body: fd,
+  });
+  if (!res.ok) return parseError(res);
+  return (await res.json()) as BackgroundUploadResult;
+}
+
+export async function removeBackground(): Promise<{ ok: true }> {
+  const res = await fetch(BASE + "/api/background", { method: "DELETE" });
+  if (!res.ok) return parseError(res);
+  return (await res.json()) as { ok: true };
+}
+
+/**
+ * The image URL for a set background. The ?v= stamp is what makes the
+ * browser re-fetch exactly when the image changes: GET /api/background
+ * serves a year-long Cache-Control on the strength of it.
+ */
+export const backgroundURL = (updatedAt: number) =>
+  `${BASE}/api/background?v=${updatedAt}`;
