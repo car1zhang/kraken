@@ -15,7 +15,9 @@ import (
 )
 
 // goals.go — GET/POST /api/goals and POST /api/job/goal: carl's weekly and
-// daily goals (store/goals.go) and the one goal a job optionally serves.
+// daily goals (store/goals.go) and the goals a job serves — any number of them
+// since schema v27, held as job_goals rows (store/jobgoals.go) and served as an
+// ordered array whose head is the retained single `goal` key.
 //
 // The GET is deliberately period-LESS: it always answers for the CURRENT
 // local week and day (store.GoalPeriods), because every caller — the board's
@@ -27,10 +29,12 @@ import (
 // The job link is its own route rather than a field of the job form for the
 // reason /api/job/color and /api/job/load are (jobcolor.go, jobload.go): the
 // form save is gated on editableJob — no lifecycle in flight — and labelling
-// a job with the goal it serves is most useful precisely while its cell is
+// a job with the goals it serves is most useful precisely while its cell is
 // LIVE, so routing it through the form would put the feature out of reach
 // exactly where it matters. The full-replace blast radius argument applies
-// identically: a form save from a client predating the field would clear it.
+// identically, and it is why the route takes a per-goal `op` rather than a
+// list of ids: a save (or a post) from a client that has not seen every link
+// would clear the ones it does not know about.
 
 // goalLogTextMax caps the goal text echoed into an event line for a REFUSED
 // add — the one place a request body's text reaches the events table, since a
@@ -124,32 +128,67 @@ func currentGoals(st *store.Store) webGoals {
 	return out
 }
 
+// jobGoalLinks reads the goal links for one board build — ONE query for the
+// whole job_goals TABLE (store.ListJobGoalLinks), never a read per card, which
+// is the same rule jobTokensIndex follows for the token rows and for the same
+// reason: a board carrying ~74 jobs rebuilds roughly every two seconds.
+//
+// Whole-table rather than board-scoped, and the two coincide rather than
+// agreeing by design: every link row belongs to a job, and the board renders
+// every job there is — active cards and archived ones alike — so a WHERE over
+// the board's ids would name every row the unfiltered read already returns,
+// while costing a rebuilt, re-planned statement on the hottest read in the
+// process. The map may therefore carry a job id no card looks up — the build
+// loaded its jobs before this query ran, so a job linked in the gap is in here
+// and not on that board — and that costs nothing: every consumer reads it BY
+// job id, so a spare entry is never seen.
+//
+// A failure degrades to "no job links anything" rather than failing the poll,
+// the never-fail-the-whole-poll-for-one-field contract jobQuestions and
+// jobTokensIndex follow — the cost is every card's chips for one build, not the
+// board.
+func jobGoalLinks(st *store.Store) map[int64][]int64 {
+	if st == nil {
+		return nil
+	}
+	links, err := st.ListJobGoalLinks()
+	if err != nil {
+		util.LogEvent("web", "error", "goals", fmt.Sprintf("list job goal links: %v", err))
+		return nil
+	}
+	return links
+}
+
 // linkedJobGoals resolves the chips for one board build: the goals the board's
 // cards may need, keyed by id — the current period's, plus one by-id read per
 // linked goal outside it.
 //
-// It is scoped to the demand rather than to the table on purpose. A board
-// rebuilds roughly every two seconds for as long as kraken serve is up, and
-// the goals table only ever grows — carl writes new goals every week and
-// deletes almost none — so reading it whole per build would cost more every
-// month while the answer it feeds (one chip per labelled card) stays the same
-// handful of rows. What bounds the work here instead is the number of DISTINCT
-// linked ids on the board, which is at most the number of jobs and in practice
-// a few.
+// The GOALS table is the one this function refuses to read whole, and that is
+// the distinction worth keeping straight: the link map above is read whole
+// because it is small and every row of it is wanted, while goals only ever grows
+// — carl writes new ones every week and deletes almost none — so reading it
+// whole per build would cost more every month while the answer it feeds (one
+// chip per link) stays the same handful of rows. What bounds the work here is
+// the number of DISTINCT ids the links actually name.
 //
 // current is the pair the same build already assembled, and it is the SEED:
-// most labelled jobs point at a goal that is in this week's or today's list,
-// so those are already in hand and are not queried a second time. Only an id
-// the current periods do not cover — a job still serving last week's goal, the
-// case the whole any-period rule exists for — costs a GetGoal.
+// most linked goals are in this week's or today's list, so those are already in
+// hand and are not queried a second time. Only an id the current periods do not
+// cover — a job still serving last week's goal, the case the whole any-period
+// rule exists for — costs a GetGoal, and it costs exactly one for the whole
+// board however many cards carry it.
+//
+// links is the link map (jobGoalLinks above), so the ids come from one query
+// rather than one per job — and it covers the ARCHIVED cards too, which carry
+// chips now, since it holds every link in the table rather than the active
+// jobs' alone.
 //
 // A lookup that misses drops the chip rather than failing the poll, the same
-// never-fail-the-whole-poll-for-one-field contract jobQuestions and
-// jobTokensIndex follow. ErrNotFound is not logged: schema v23's ON DELETE SET
-// NULL means it should be unreachable, and a job holding a dangling id is
-// nothing an operator can act on. Any OTHER error is logged, because that one
-// is real.
-func linkedJobGoals(st *store.Store, current webGoals, js []*jobs.Job) map[int64]*webJobGoal {
+// never-fail-the-whole-poll-for-one-field contract. ErrNotFound is not logged:
+// schema v27's ON DELETE CASCADE takes the link rows with the goal, so it should
+// be unreachable, and a dangling id is nothing an operator can act on. Any OTHER
+// error is logged, because that one is real.
+func linkedJobGoals(st *store.Store, current webGoals, links map[int64][]int64) map[int64]*webJobGoal {
 	index := map[int64]*webJobGoal{}
 	if st == nil {
 		return index
@@ -160,23 +199,57 @@ func linkedJobGoals(st *store.Store, current webGoals, js []*jobs.Job) map[int64
 		}
 	}
 	// tried, separate from index, so an id that resolves to nothing is queried
-	// once for the whole board rather than once per job pointing at it.
+	// once for the whole board rather than once per job linking it.
 	tried := map[int64]bool{}
-	for _, j := range js {
-		if j.GoalID == 0 || index[j.GoalID] != nil || tried[j.GoalID] {
-			continue
-		}
-		tried[j.GoalID] = true
-		g, err := st.GetGoal(j.GoalID)
-		if err != nil {
-			if !errors.Is(err, store.ErrNotFound) {
-				util.LogEvent("web", "error", "goals", fmt.Sprintf("read goal %d for job %s: %v", j.GoalID, j.Slug, err))
+	for jobID, ids := range links {
+		for _, id := range ids {
+			if id == 0 || index[id] != nil || tried[id] {
+				continue
 			}
-			continue
+			tried[id] = true
+			g, err := st.GetGoal(id)
+			if err != nil {
+				if !errors.Is(err, store.ErrNotFound) {
+					util.LogEvent("web", "error", "goals", fmt.Sprintf("read goal %d for job %d: %v", id, jobID, err))
+				}
+				continue
+			}
+			index[g.ID] = webJobGoalFrom(*g)
 		}
-		index[g.ID] = webJobGoalFrom(*g)
 	}
 	return index
+}
+
+// webJobGoalsFor turns one job's link ids into its chips, in link order,
+// dropping any id the index could not resolve.
+//
+// It returns nil rather than an empty slice for a job with no links, since
+// `goals` is omitempty and absence is the wire's only spelling of "serves no
+// goal" — an empty ARRAY would be a second spelling of it.
+func webJobGoalsFor(index map[int64]*webJobGoal, ids []int64) []webJobGoal {
+	var out []webJobGoal
+	for _, id := range ids {
+		if g := index[id]; g != nil {
+			out = append(out, *g)
+		}
+	}
+	return out
+}
+
+// primaryJobGoal is the retained single `goal` key: the HEAD of the array,
+// always, so the two can never disagree about which goal a card's one chip
+// names. Nil when there are no goals at all, which is exactly when `goals`
+// itself is absent — the two keys appear and vanish together.
+//
+// One function rather than a `goals[0]` at each call site: the promise is that
+// `goal` IS `goals[0]`, and a promise about two keys has to be kept in the one
+// place that builds both.
+func primaryJobGoal(goals []webJobGoal) *webJobGoal {
+	if len(goals) == 0 {
+		return nil
+	}
+	head := goals[0]
+	return &head
 }
 
 // goalWire is POST /api/goals' "add" payload. Period is optional — omitted
@@ -204,12 +277,25 @@ type goalsReq struct {
 	ParentID *int64  `json:"parent_id,omitempty"`
 }
 
-// jobGoalReq is POST /api/job/goal's body: which job, which goal, 0 to
-// unlink. Two fields and no more — this is the colour route's shape, and for
-// the same reason.
+// jobGoalReq is POST /api/job/goal's body: which job, which goal, and which
+// way — `op` "add" or "remove" — with goal_id 0 the legacy CLEAR-ALL shape,
+// whatever op says.
+//
+// A per-goal op rather than a full-replace list of ids, and that is the whole
+// design decision on this route: a client sends what it wants CHANGED, never
+// the set it believes is current, so a client that has not seen a link (an
+// older build, a stale board, another window's write a second ago) cannot
+// silently unlink it. It is the same stale-client wipe the one-field route
+// exists to avoid, which a `goal_ids: [...]` body would reintroduce exactly.
+//
+// op is deliberately absent from the CLEAR: goal_id 0 was the pre-multi-goal
+// wire's unlink, shipped iOS builds and any older board still send exactly
+// that, and answering it with a 400 over a missing op would break them for
+// nothing — 0 names no goal, so there is nothing for an op to disambiguate.
 type jobGoalReq struct {
 	Slug   string `json:"slug"`
 	GoalID int64  `json:"goal_id"`
+	Op     string `json:"op,omitempty"`
 }
 
 // goalsHandler serves GET (every client's read) and POST (carl's writes).
@@ -233,12 +319,19 @@ func goalsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // goalsGet serves {"goals":{"week":[…],"day":[…]}} for the current local
-// periods, plus "job_goal" when ?slug= names a job that links one.
+// periods, plus "job_goals" (and its head, "job_goal") when ?slug= names a job
+// that links at least one.
 //
-// job_goal is OMITTED rather than null for an unlinked job, unlike
+// Both are OMITTED rather than null for an unlinked job, unlike
 // /api/job/load's explicit null: this payload's subject is the goals, and the
-// slug is a rider on it, so the key's presence is exactly the question the
-// caller asked ("does this job serve a goal") with no third state to express.
+// slug is a rider on it, so the keys' presence is exactly the question the
+// caller asked ("does this job serve any goal") with no third state to express.
+//
+// job_goals is the array and job_goal is its FIRST element, always — the same
+// pairing webJob.Goals/webJob.Goal carries on the board payload, kept here by
+// the same one function (primaryJobGoal) so the two spellings cannot drift.
+// job_goal is retained rather than dropped because shipped iOS builds read it
+// and the array is additive.
 func goalsGet(w http.ResponseWriter, r *http.Request) {
 	st := jobs.ActiveStore()
 	if st == nil {
@@ -252,28 +345,37 @@ func goalsGet(w http.ResponseWriter, r *http.Request) {
 			webJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 			return
 		}
-		// One by-id read — GetGoal is frozen for exactly this: the linked goal
-		// is deliberately NOT restricted to the current periods or to undone
-		// goals (the link is carl's statement about what this job is FOR, and
-		// it must keep reading after the week rolls over or the goal is ticked
-		// off), so it cannot be answered from the two lists above.
-		if j.GoalID != 0 {
-			g, err := st.GetGoal(j.GoalID)
+		// One by-id read per link — GetGoal is frozen for exactly this: a linked
+		// goal is deliberately NOT restricted to the current periods or to
+		// undone goals (the link is carl's statement about what this job is FOR,
+		// and it must keep reading after the week rolls over or the goal is
+		// ticked off), so it cannot be answered from the two lists above. The
+		// count is the job's own link count — a handful — not the board's, since
+		// this route answers about one job.
+		var linked []webJobGoal
+		for _, id := range j.GoalIDs {
+			g, err := st.GetGoal(id)
 			switch {
 			case errors.Is(err, store.ErrNotFound):
 				// The link points at a row that is gone. Unreachable behind
-				// schema v23's ON DELETE SET NULL, and the honest answer either
-				// way is the same as an unlinked job: no key.
+				// schema v27's ON DELETE CASCADE, which takes the link row with
+				// the goal, and the honest answer either way is the same as an
+				// unlinked job: one fewer entry, and no key at all if it was the
+				// only one.
 			case err != nil:
 				// NOT degraded to "no linked goal": the caller named one job and
 				// asked a yes/no question about it, so answering "no" from a
 				// failed read would be a wrong answer rather than a missing one.
-				util.LogEvent("web", "error", "goals", fmt.Sprintf("read goal %d for job %s: %v", j.GoalID, j.Slug, err))
+				util.LogEvent("web", "error", "goals", fmt.Sprintf("read goal %d for job %s: %v", id, j.Slug, err))
 				webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			default:
-				resp["job_goal"] = webJobGoalFrom(*g)
+				linked = append(linked, *webJobGoalFrom(*g))
 			}
+		}
+		if len(linked) > 0 {
+			resp["job_goals"] = linked
+			resp["job_goal"] = primaryJobGoal(linked)
 		}
 	}
 	webJSON(w, http.StatusOK, resp)
@@ -391,12 +493,18 @@ func goalsPost(w http.ResponseWriter, r *http.Request) {
 	webJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// jobGoalHandler sets (or clears) the one goal a job serves. POST-only, so
-// unlike goalsHandler there is no GET to keep reachable — the link rides back
-// on the next /api/board poll, already the board's single source of truth for
-// job state, exactly as /api/job/color's colour does. The mirror gate is
+// jobGoalHandler links, unlinks, or clears the goals a job serves. POST-only,
+// so unlike goalsHandler there is no GET to keep reachable — the links ride
+// back on the next /api/board poll, already the board's single source of truth
+// for job state, exactly as /api/job/color's colour does. The mirror gate is
 // still inline rather than a mirrorGated wrapper at registration, so a caller
 // reaching the handler directly still hits it.
+//
+// Three shapes, and the order they are tested in is the contract: goal_id 0 is
+// the CLEAR whatever `op` says (the pre-multi-goal wire, still spoken by
+// shipped clients); otherwise `op` decides, and an absent or unrecognised one
+// is a 400 naming the two that work rather than a guess — defaulting to "add"
+// would make a typo'd remove silently link the goal it meant to drop.
 func jobGoalHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
@@ -426,7 +534,23 @@ func jobGoalHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "no store wired"})
 		return
 	}
-	if err := st.SetJobGoal(j.ID, req.GoalID); err != nil {
+	op := req.Op
+	var write func() error
+	switch {
+	case req.GoalID == 0:
+		op = "clear"
+		write = func() error { return st.ClearJobGoals(j.ID) }
+	case req.Op == "add":
+		write = func() error { return st.AddJobGoal(j.ID, req.GoalID) }
+	case req.Op == "remove":
+		write = func() error { return st.RemoveJobGoal(j.ID, req.GoalID) }
+	default:
+		webJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("unrecognized job-goal op %q — need add or remove (or goal_id 0 to clear)", req.Op),
+		})
+		return
+	}
+	if err := write(); err != nil {
 		util.LogEvent("web", "error", "job-goal", "job-goal "+req.Slug+": "+err.Error())
 		// An unknown goal is the caller's mistake (a stale picker, a typo'd
 		// id) and comes back as a 400 with the store's own sentence naming
@@ -440,7 +564,7 @@ func jobGoalHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
-	util.LogEvent("web", "info", "job-goal", fmt.Sprintf("job-goal %s -> %d", req.Slug, req.GoalID))
+	util.LogEvent("web", "info", "job-goal", fmt.Sprintf("job-goal %s %s %d", req.Slug, op, req.GoalID))
 	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

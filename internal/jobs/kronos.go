@@ -359,7 +359,7 @@ func kronosBrief() string {
 	b.WriteString("- `kraken board get [slug]` — the whole board as JSON, or one job's object. Every state, every question, every load estimate carl might ask about is in here.\n")
 	b.WriteString("- `kraken graph search <query>` — kraken's durable memory of its own history. Search it before you answer a question about anything that happened before your current context.\n")
 	b.WriteString("- `kraken graph get <handle>` — the full fact or source episode behind a `[F… E…]` handle a search printed.\n")
-	b.WriteString("- `kraken goals get [slug]` — carl's weekly and daily goals, and which job serves which. This is what makes \"what should I look at first\" answerable.\n\n")
+	b.WriteString("- `kraken goals get [slug]` — carl's weekly and daily goals, and which goals each job serves (a job may serve several, or none). This is what makes \"what should I look at first\" answerable.\n\n")
 	b.WriteString("Acting:\n\n")
 	b.WriteString("- `kraken orch ack --ids 42,43 --disposition \"<what you did>\"` — closes inbox rows. Several ids at once only when they genuinely share one disposition.\n")
 	b.WriteString("- `kraken cell steer <slug>` — sends text (on stdin) into a job's cell. This is how an instruction from carl becomes work.\n")

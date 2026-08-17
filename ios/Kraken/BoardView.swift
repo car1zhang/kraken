@@ -2159,14 +2159,30 @@ private struct JobCardView: View {
     /// Web's `crewChipsHTML` gets this free — `j.zeus_status` is falsy for
     /// both, so its `!j.zeus_status` guard fires either way — and
     /// JobDetailView's Roster section already spells it this way.
+    /// The goals this card draws a chip for, in link order: the `goals`
+    /// array whenever the server sent one, and otherwise the single `goal`
+    /// key a server predating multi-goal links carries alone. Presence of
+    /// the array — not its contents — is what decides, so a drifted `goals`
+    /// that decoded to an empty list draws no chip rather than falling back
+    /// to a `goal` the same payload may have drifted too; web's JobCard
+    /// spells the identical `job.goals ?? (job.goal ? [job.goal] : [])`, and
+    /// a card that reads differently on the two clients is the failure this
+    /// avoids. Chips are cosmetic either way — see WebJobGoalList.
+    private var cardGoals: [WebJobGoal] {
+        if let items = job.goals?.items { return items }
+        return job.goal.map { [$0] } ?? []
+    }
+
     private var hasChipRow: Bool {
         job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty
             || !(job.threads ?? []).isEmpty || !openQuestions.isEmpty
             || !(job.artifacts ?? []).isEmpty || !(job.feedback ?? []).isEmpty
-            // `!= nil` IS GoalChip's own draw condition here, unlike the
-            // isEmpty tests above: the chip draws for any linked goal,
-            // including a done one (muted) and one whose text is empty.
-            || job.goal != nil
+            // `cardGoals` IS the chips' own draw condition — the row below
+            // draws exactly one GoalChip per element of it — so this test is
+            // neither weaker nor stricter by construction rather than by
+            // agreement. The chip draws for any linked goal, including a
+            // done one (muted) and one whose text is empty.
+            || !cardGoals.isEmpty
             // `isEmpty == false` for the zeusStatus reason above: the wire's
             // omitempty never sends "", but StageChip's own draw condition
             // guards it anyway, and this row test must be exactly as strict.
@@ -2265,8 +2281,17 @@ private struct JobCardView: View {
                     // The reason behind the mockup's order: the goal says
                     // what this job is FOR, which reads with the identity
                     // chips rather than among the inventory counts.
-                    if let goal = job.goal {
-                        GoalChip(goal: goal)
+                    //
+                    // ONE chip per linked goal, in link order, and no `+N`
+                    // badge for the rest (carl's call, 2026-08-17): the
+                    // chips wrap in CardChipFlow like every other chip here,
+                    // so a job serving three goals says all three. `offset`
+                    // is the ForEach id rather than the goal id because
+                    // nothing on the wire promises the ids are distinct, and
+                    // a duplicate id is a SwiftUI state-reuse bug rather
+                    // than a visible one.
+                    ForEach(Array(cardGoals.enumerated()), id: \.offset) { item in
+                        GoalChip(goal: item.element)
                     }
                     DocQuestionCountChip(open: openQuestions)
                     ArtifactCountChip(count: (job.artifacts ?? []).count)

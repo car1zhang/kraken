@@ -88,10 +88,15 @@ func contractGoalsPostOK(t *testing.T, body map[string]any) {
 	}
 }
 
-// contractGoalsJobGoal drives POST /api/job/goal.
-func contractGoalsJobGoal(t *testing.T, slug string, goalID int64) *httptest.ResponseRecorder {
+// contractGoalsJobGoal drives POST /api/job/goal. op rides only when given,
+// since goal_id 0 (the clear) is the one shape that carries none.
+func contractGoalsJobGoal(t *testing.T, slug string, goalID int64, op ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	body := mustJSON(t, map[string]any{"slug": slug, "goal_id": goalID})
+	payload := map[string]any{"slug": slug, "goal_id": goalID}
+	for _, o := range op {
+		payload["op"] = o
+	}
+	body := mustJSON(t, payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/job/goal", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	jobGoalHandler(rec, req)
@@ -302,6 +307,10 @@ func TestContractGoalsGetOmitsParentIDWhenZeroAndCarriesItOtherwise(t *testing.T
 // the "any period, done or not" clause: the editor picker has to be able to
 // show the currently-linked goal even when it is not one of the current-period
 // rows, or picking it once and reopening the form shows an empty select.
+//
+// Since v27 the scoped read serves an ARRAY (`job_goals`) with `job_goal` as
+// its head; both halves are asserted here, on the same body, because the
+// promise is precisely that they agree.
 func TestContractGoalsGetSlugAddsJobGoal(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
@@ -315,9 +324,15 @@ func TestContractGoalsGetSlugAddsJobGoal(t *testing.T) {
 	if err := st.UpdateGoal(g.ID, store.GoalUpdate{Done: &done}, 2); err != nil {
 		t.Fatalf("mark done: %v", err)
 	}
+	second, err := st.AddGoal(store.GoalAdd{Scope: "week", Period: "2026-01-05", Text: "a second old goal"}, 1)
+	if err != nil {
+		t.Fatalf("seed second goal: %v", err)
+	}
 	j := mustCreateStoreJob(t, st, store.Job{Slug: "goal-linked", Repo: "kraken", State: "working"})
-	if err := st.SetJobGoal(j.ID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	for _, id := range []int64{g.ID, second.ID} {
+		if err := st.AddJobGoal(j.ID, id); err != nil {
+			t.Fatalf("AddJobGoal(%d): %v", id, err)
+		}
 	}
 
 	body := contractGoalsGetOK(t, "goal-linked")
@@ -338,21 +353,44 @@ func TestContractGoalsGetSlugAddsJobGoal(t *testing.T) {
 	if jg["done"] != true {
 		t.Errorf("job_goal.done = %v, want true", jg["done"])
 	}
+	// the array carries BOTH links, in link order, and its head is job_goal
+	list, ok := body["job_goals"].([]any)
+	if !ok {
+		t.Fatalf("job_goals = %T, want an array: %v", body["job_goals"], body)
+	}
+	if len(list) != 2 {
+		t.Fatalf("job_goals = %v, want both links", list)
+	}
+	for i, want := range []int64{g.ID, second.ID} {
+		item, ok := list[i].(map[string]any)
+		if !ok {
+			t.Fatalf("job_goals[%d] = %T, want an object", i, list[i])
+		}
+		if got, isNum := item["id"].(float64); !isNum || int64(got) != want {
+			t.Errorf("job_goals[%d].id = %v, want %d", i, item["id"], want)
+		}
+	}
+	if head, ok := list[0].(map[string]any); !ok || head["id"] != jg["id"] {
+		t.Errorf("job_goal = %v is not job_goals[0] = %v", jg, list[0])
+	}
 	// the lanes are still served alongside it
 	contractGoalsLane(t, body, "week")
 	contractGoalsLane(t, body, "day")
 }
 
 // TestContractGoalsGetSlugOmitsJobGoalWhenUnlinked: ABSENT, not null and not
-// a zero-valued object — the client's test is key presence.
+// a zero-valued object — the client's test is key presence, and it is the same
+// test for both keys, which appear and vanish together.
 func TestContractGoalsGetSlugOmitsJobGoalWhenUnlinked(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
 	mustCreateStoreJob(t, st, store.Job{Slug: "goal-unlinked", Repo: "kraken", State: "working"})
 
 	body := contractGoalsGetOK(t, "goal-unlinked")
-	if v, ok := body["job_goal"]; ok {
-		t.Errorf("job_goal = %v for a job with no goal; the key is absent", v)
+	for _, key := range []string{"job_goal", "job_goals"} {
+		if v, ok := body[key]; ok {
+			t.Errorf("%s = %v for a job with no goal; the key is absent", key, v)
+		}
 	}
 	contractGoalsLane(t, body, "week")
 	contractGoalsLane(t, body, "day")
@@ -558,7 +596,7 @@ func TestContractGoalsPostRemoveDeletesAndIsIdempotent(t *testing.T) {
 // TestContractJobGoalLinksALiveJobAndClears is the route's reason for
 // existing: it is settable on a LIVE job (the editor form is read-only there,
 // which is exactly when carl decides what a running job is for), and goal_id 0
-// is the unlink.
+// is the unlink — which since v27 clears EVERY link rather than the one.
 func TestContractJobGoalLinksALiveJobAndClears(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
@@ -568,9 +606,13 @@ func TestContractJobGoalLinksALiveJobAndClears(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed goal: %v", err)
 	}
+	second, err := st.AddGoal(store.GoalAdd{Scope: "week", Period: week, Text: "the other linked goal"}, 1)
+	if err != nil {
+		t.Fatalf("seed second goal: %v", err)
+	}
 	j := mustCreateStoreJob(t, st, store.Job{Slug: "live-link", Repo: "kraken", State: "working"})
 
-	rec := contractGoalsJobGoal(t, "live-link", g.ID)
+	rec := contractGoalsJobGoal(t, "live-link", g.ID, "add")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("link: status %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -581,13 +623,16 @@ func TestContractJobGoalLinksALiveJobAndClears(t *testing.T) {
 	if ok["ok"] != true {
 		t.Fatalf("body = %s, want {\"ok\":true}", rec.Body.String())
 	}
+	if rec := contractGoalsJobGoal(t, "live-link", second.ID, "add"); rec.Code != http.StatusOK {
+		t.Fatalf("second link: status %d, body %s", rec.Code, rec.Body.String())
+	}
 
 	row, err := st.GetJobByID(j.ID)
 	if err != nil {
 		t.Fatalf("GetJobByID: %v", err)
 	}
-	if row.GoalID != g.ID {
-		t.Fatalf("GoalID = %d, want %d", row.GoalID, g.ID)
+	if len(row.GoalIDs) != 2 || row.GoalIDs[0] != g.ID || row.GoalIDs[1] != second.ID {
+		t.Fatalf("GoalIDs = %v, want [%d %d]", row.GoalIDs, g.ID, second.ID)
 	}
 	// observable on the read route the editor polls
 	body := contractGoalsGetOK(t, "live-link")
@@ -599,6 +644,18 @@ func TestContractJobGoalLinksALiveJobAndClears(t *testing.T) {
 		t.Errorf("job_goal.id = %v, want %d", jg["id"], g.ID)
 	}
 
+	// remove is per-goal: the other link survives it
+	if rec := contractGoalsJobGoal(t, "live-link", g.ID, "remove"); rec.Code != http.StatusOK {
+		t.Fatalf("remove: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	row, err = st.GetJobByID(j.ID)
+	if err != nil {
+		t.Fatalf("GetJobByID after remove: %v", err)
+	}
+	if len(row.GoalIDs) != 1 || row.GoalIDs[0] != second.ID {
+		t.Fatalf("GoalIDs = %v after removing one, want [%d]", row.GoalIDs, second.ID)
+	}
+
 	if rec := contractGoalsJobGoal(t, "live-link", 0); rec.Code != http.StatusOK {
 		t.Fatalf("clear: status %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -606,11 +663,14 @@ func TestContractJobGoalLinksALiveJobAndClears(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobByID after clear: %v", err)
 	}
-	if row.GoalID != 0 {
-		t.Errorf("GoalID = %d after goal_id 0, want 0", row.GoalID)
+	if len(row.GoalIDs) != 0 {
+		t.Errorf("GoalIDs = %v after goal_id 0, want none", row.GoalIDs)
 	}
-	if _, present := contractGoalsGetOK(t, "live-link")["job_goal"]; present {
-		t.Error("job_goal is still present after the unlink")
+	after := contractGoalsGetOK(t, "live-link")
+	for _, key := range []string{"job_goal", "job_goals"} {
+		if _, present := after[key]; present {
+			t.Errorf("%s is still present after the unlink", key)
+		}
 	}
 }
 
@@ -637,15 +697,15 @@ func TestContractJobGoalLeavesRevAndUpdatedAtAlone(t *testing.T) {
 		t.Fatalf("GetJobBySlug: %v", err)
 	}
 
-	if rec := contractGoalsJobGoal(t, "rev-guard", g.ID); rec.Code != http.StatusOK {
+	if rec := contractGoalsJobGoal(t, "rev-guard", g.ID, "add"); rec.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
 	after, err := st.GetJobBySlug("rev-guard")
 	if err != nil {
 		t.Fatalf("GetJobBySlug after: %v", err)
 	}
-	if after.GoalID != g.ID {
-		t.Fatalf("GoalID = %d, want %d", after.GoalID, g.ID)
+	if len(after.GoalIDs) != 1 || after.GoalIDs[0] != g.ID {
+		t.Fatalf("GoalIDs = %v, want [%d]", after.GoalIDs, g.ID)
 	}
 	if after.Rev != before.Rev {
 		t.Errorf("rev moved %d → %d through the route", before.Rev, after.Rev)

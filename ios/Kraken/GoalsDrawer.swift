@@ -108,18 +108,23 @@ func goalChipText(_ text: String, max limit: Int = 24) -> String {
     return cut.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) + "…"
 }
 
-/// The job card's ONE goal chip — `◎` plus the truncated goal text, muted
+/// ONE goal chip on a job card — `◎` plus the truncated goal text, muted
 /// when the goal is already ticked off.
 ///
-/// One chip, never a list, and no count: the card's rule is
-/// counts-not-lists, and a job links exactly one goal, so the goal is the
-/// single case where naming the thing IS the summary. The full untruncated
-/// text lives in the accessibility label rather than a tooltip — web hangs
-/// it off `title=`, and a phone has no hover to reach that with.
+/// One chip per goal and no count: a job may link several goals, and the
+/// card draws every one of them (`JobCardView.cardGoals`, wrapped by
+/// CardChipFlow) rather than one chip plus a `+N` badge — carl's call,
+/// 2026-08-17. Naming the goals IS the summary here, which is the card's
+/// one departure from its counts-not-lists rule. The full untruncated text
+/// lives in the accessibility label rather than a tooltip — web hangs it
+/// off `title=`, and a phone has no hover to reach that with.
 ///
-/// Draws nothing without a goal, which is why `JobCardView.hasChipRow`
-/// tests `job.goal != nil` and nothing weaker: a chip that renders empty
-/// still makes the enclosing VStack pay its gap for a band you cannot see.
+/// This view always draws something, so the enclosing row must not exist
+/// when there are no goals: `JobCardView.hasChipRow` therefore tests
+/// `!cardGoals.isEmpty`, the very list the ForEach draws from, and nothing
+/// weaker — a chip row that renders empty still makes the enclosing VStack
+/// pay its gap for a band you cannot see. A linked goal always earns a
+/// chip, including a done one (muted) and one whose text is empty.
 struct GoalChip: View {
     let goal: WebJobGoal
 

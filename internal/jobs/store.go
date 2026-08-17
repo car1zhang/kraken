@@ -110,11 +110,11 @@ func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 		// spelling either, so a file-backed job always reads as never renamed
 		// — which is true, since renaming is a store-only verb.
 		FormerSlugs: sr.FormerSlugs,
-		// GoalID carries across whole for the same reason (schema v23's
-		// jobs.goal_id): no frontmatter spelling, so a file-backed job always
-		// reads as linked to nothing — which is true, since the only writer is
-		// store.SetJobGoal.
-		GoalID: sr.GoalID,
+		// GoalIDs carries across whole for the same reason (schema v27's
+		// job_goals rows): no frontmatter spelling, so a file-backed job always
+		// reads as linked to nothing — which is true, since the only writers are
+		// store's three link verbs.
+		GoalIDs: sr.GoalIDs,
 	}
 	if sr.Archived() {
 		j.ArchivedName = sr.ArchivedName

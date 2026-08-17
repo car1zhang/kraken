@@ -110,14 +110,26 @@ export function App() {
     [expandedKeys, toggleExpanded],
   );
 
+  // The goal the board is filtered to, or null. It lives up here for the
+  // search's exact reason and one of its own: the goals PANEL sets it, the
+  // board BAR shows and clears it, and the search hook composes it with the
+  // query — three surfaces, one value. NOTHING persists it (no localStorage,
+  // no hash), matching the query beside it: a reload lands on an unfiltered
+  // board, which is the only resting state a card set this volatile can
+  // safely have.
+  const [goalFilter, setGoalFilter] = useState<number | null>(null);
+
   // The board search lives HERE rather than inside BoardView because two
   // children need one instance of it: BoardView renders the filtered lists,
   // and DragProvider — which wraps the board — needs the same instance's
   // `visibleKeys` to know where "the end of the column" is for a drop on empty
   // space. Two calls would be two query states, and the drag layer would read
   // the one nobody typed into. `board` itself is still passed to DragProvider
-  // WHOLE: search narrows the render, never the model a reorder posts.
-  const search = useJobSearch(board);
+  // WHOLE: search narrows the render, never the model a reorder posts — and
+  // the goal filter rides the same path for the same reason, which is why it
+  // is an argument to this hook rather than a second filtering layer anywhere
+  // below it.
+  const search = useJobSearch(board, goalFilter);
 
   // One poll, two readers: the chrome's usage corner and the overlay it opens
   // (which also takes `refetch`, so its refresh button re-uses this poll rather
@@ -316,6 +328,8 @@ export function App() {
           board={board}
           actions={actions}
           search={search}
+          goalFilter={goalFilter}
+          onGoalFilter={setGoalFilter}
           hidden={view !== "board"}
           overlayOpen={overlayOpen}
           expanded={expanded}

@@ -33,7 +33,9 @@ vi.mock("../../api/client.ts", () => ({
   // on first access — so a control added to the form is added here in the
   // same commit.
   fetchGoals: vi.fn(() => Promise.resolve({ goals: { week: [], day: [] } })),
-  postJobGoal: vi.fn(() => Promise.resolve({ ok: true })),
+  postJobGoal: vi.fn((_slug: string, _goalId: number, _op?: "add" | "remove") =>
+    Promise.resolve({ ok: true }),
+  ),
 }));
 
 import {
@@ -116,6 +118,12 @@ describe("EditorOverlay modes", () => {
     expect((document.getElementById("f-base") as HTMLInputElement).value).toBe(
       "origin/main",
     );
+    // the goal picker is mounted by this form, which is the half only a HOST
+    // test can say: GoalMultiPicker's own behaviour is pinned against the
+    // component, and the editor is one of its two hosts (the steer head is the
+    // other, asserted the same way in SteerOverlay.test.tsx). The id lands on
+    // the picker's button.
+    expect(document.getElementById("f-goal")).toBeInTheDocument();
     // both real checkouts plus the "—" row
     await user.click(repoBtn);
     expect(

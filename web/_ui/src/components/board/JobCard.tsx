@@ -173,10 +173,15 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   // adjustment round: the CREW gets its own line (hasCrewRow), everything
   // else shares the counts row (hasChips).
   const hasCrewRow = crewChipsVisible(job);
+  // EVERY goal the job links, in link-position order — one chip each. The
+  // fallback is for a payload carrying only the legacy primary (`goal`
+  // without `goals`): the array is the truth wherever it is present, and its
+  // absence with a primary set can only be an older server.
+  const goalChips = job.goals ?? (job.goal ? [job.goal] : []);
   const hasChips =
     loadChipVisible(job, col) ||
     !!job.question ||
-    !!job.goal ||
+    goalChips.length > 0 ||
     stageChipVisible(job) ||
     threadChipsVisible(job) ||
     docQuestionChipVisible(job) ||
@@ -346,15 +351,20 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
               inventory counts. Absent entirely when the server sent no stage
               (webJob.Stage documents what absence covers). */}
           <StageChip job={job} />
-          {/* the job's goal, ONE chip. It is not a count — like the ROI badge
-              it is a fact ABOUT the job rather than something the job contains
-              — and it sits AFTER the crew/thread tokens and BEFORE the
-              inventory counts, which is where mockup 40 §3 draws it and where
-              the iOS card puts it. Three surfaces, one order: a chip that
-              lands in a different slot per client is a chip you have to hunt
-              for. Absent entirely when the job links no goal; muted, never
-              hidden, when that goal is done. */}
-          {job.goal ? <GoalChip goal={job.goal} /> : null}
+          {/* the job's goals, ONE CHIP PER GOAL in link order. They are not
+              counts — like the ROI badge they are facts ABOUT the job rather
+              than things the job contains — and they sit AFTER the crew/thread
+              tokens and BEFORE the inventory counts, which is where mockup 40
+              §3 draws them and where the iOS card puts them. Three surfaces,
+              one order: a chip that lands in a different slot per client is a
+              chip you have to hunt for. Absent entirely when the job links no
+              goal; each chip muted, never hidden, when ITS OWN goal is done.
+              There is no "+N more" badge (carl, 2026-08-17): the goal is the
+              counts-not-lists exception, because naming the goal IS the
+              summary, and band 2 wraps when the chips ask for the room. */}
+          {goalChips.map((g) => (
+            <GoalChip key={g.id} goal={g} />
+          ))}
           <DocQuestionChip job={job} />
           <ArtifactCountChip job={job} />
           <FeedbackChip job={job} />

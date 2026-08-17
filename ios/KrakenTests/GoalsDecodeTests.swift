@@ -1,13 +1,22 @@
 import XCTest
 @testable import Kraken
 
-// Pins the goal wire shapes (see ios/API.md's `goals` and `goal` rows under
-// "GET /api/board", its "POST /api/goals" section, and internal/api/goals.go)
-// — a goal item with and without `parent_id`, a board WITH the two additive
-// keys and a board WITHOUT either of them. The second half is the point:
-// `goals` and `goal` were added additively, so `contract` stays 6 and cannot
-// be used to tell an older server apart — the ABSENCE of the keys is the
-// whole signal, and a decode that threw on it would cost the entire board.
+// Pins the goal wire shapes (see ios/API.md's board-level `goals` row and
+// its job-level `goal`/`goals` rows under "GET /api/board", its "POST
+// /api/goals" section, and internal/api/goals.go) — a goal item with and
+// without `parent_id`, a board WITH the additive keys and a board WITHOUT
+// any of them, and a job linking MANY goals as well as one.
+//
+// Two theses, and both are about absence and drift rather than the happy
+// path. First: every one of these keys was added additively, so `contract`
+// stays 6 and cannot be used to tell an older server apart — the ABSENCE of
+// a key is the whole signal, and a decode that threw on it would cost the
+// entire board. Second: a job's goals are cosmetic chips on a card while
+// the board carrying them is not, so `goals` is decoded tolerantly at both
+// levels (a non-array degrades to an empty list, a malformed element is
+// dropped and the rest survive) — a drifted server may cost chips and must
+// never cost the jobs they are drawn on.
+//
 // Mirrors ShipIOSDecodeTests, which pins its own additive key the same way.
 final class GoalsDecodeTests: XCTestCase {
 
@@ -82,32 +91,126 @@ final class GoalsDecodeTests: XCTestCase {
         XCTAssertEqual(b.contract, 6)
     }
 
-    func testDecodesJobGoalKey() throws {
-        let job = """
-        [{"slug": "kraken-goal-tracking", "repo": "kraken", "state": "working", "live": true,
-          "mtime": 1780000000000,
-          "goal": {"id": 1, "text": "ship goal tracking", "done": false}}]
+    /// One job, with whatever goal keys the case under test needs.
+    private func jobs(goalKeys: String) -> String {
         """
+        [{"slug": "kraken-goal-tracking", "repo": "kraken", "state": "working", "live": true,
+          "mtime": 1780000000000\(goalKeys)}]
+        """
+    }
+
+    // A server that predates multi-goal links serves `goal` alone. It still
+    // decodes, and `goals` is nil rather than empty — the card falls back to
+    // the single key on exactly that nil.
+    func testDecodesJobGoalKey() throws {
+        let job = jobs(goalKeys: #","goal": {"id": 1, "text": "ship goal tracking", "done": false}"#)
         let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: job).utf8))
         let g = try XCTUnwrap(b.jobs.first?.goal)
         XCTAssertEqual(g.id, 1)
         XCTAssertEqual(g.text, "ship goal tracking")
         XCTAssertFalse(g.done)
+        XCTAssertNil(b.jobs.first?.goals, "absent `goals` is nil, never an empty list")
+    }
+
+    // The many-goal shape: `goals` carries every link in position order and
+    // `goal` is durably its head, so a client reading either key agrees with
+    // one reading the other about which goal comes first.
+    func testDecodesJobGoalsArrayInLinkOrder() throws {
+        let job = jobs(goalKeys: """
+        ,
+          "goal": {"id": 3, "text": "ship goals", "done": false},
+          "goals": [{"id": 3, "text": "ship goals", "done": false},
+                    {"id": 9, "text": "csr cutover", "done": true},
+                    {"id": 4, "text": "answer carl", "done": false}]
+        """)
+        let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: job).utf8))
+        let list = try XCTUnwrap(b.jobs.first?.goals)
+        XCTAssertEqual(list.items.map(\.id), [3, 9, 4], "link order, not id order")
+        XCTAssertEqual(list.items.map(\.done), [false, true, false])
+        XCTAssertEqual(list.items.first, b.jobs.first?.goal, "`goal` is durably goals[0]")
     }
 
     // The whole additive claim, in one test: a server predating goals serves
-    // neither key, and that board must decode with everything else intact.
+    // none of the keys, and that board must decode with everything else
+    // intact.
     func testBoardWithoutGoalKeysDecodes() throws {
-        let job = """
-        [{"slug": "kraken-goal-tracking", "repo": "kraken", "state": "working", "live": true,
-          "mtime": 1780000000000}]
-        """
-        let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: job).utf8))
+        let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: jobs(goalKeys: "")).utf8))
         XCTAssertNil(b.goals)
         XCTAssertNil(b.jobs.first?.goal)
+        XCTAssertNil(b.jobs.first?.goals)
         XCTAssertEqual(b.jobs.count, 1)
         XCTAssertEqual(b.cellCap, 4)
         XCTAssertEqual(b.contract, 6)
+    }
+
+    // A null `goals` is the absent case, absorbed by WebJob's synthesized
+    // `decodeIfPresent` before WebJobGoalList's init ever runs: nil property,
+    // not an empty list. The distinction is what lets the card fall back to
+    // the single `goal` key on nil and draw nothing on an empty list.
+    func testNullJobGoalsKeyDecodesToNil() throws {
+        let job = jobs(goalKeys: #","goals": null"#)
+        let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: job).utf8))
+        XCTAssertNil(b.jobs.first?.goals)
+    }
+
+    // Drift, container level: `goals` present but not an array. Every shape
+    // here reaches WebJobGoalList's init (only null/absent is intercepted
+    // above), so the `try?` on the array decode is what keeps the JOB — and
+    // with it the whole strictly-decoded `jobs` array — alive.
+    //
+    // Discriminating: with that init's body replaced by a plain
+    // `items = try decoder.singleValueContainer().decode([WebJobGoal].self)`,
+    // every case below fails the WHOLE board decode with
+    // `typeMismatch(Swift.Array<Any>)` — verified this session by making
+    // exactly that edit, running the suite, and restoring the original bytes.
+    func testNonArrayJobGoalsYieldsAnEmptyListAndAUsableBoard() throws {
+        let shapes = [#""a string""#, "42", "true", #"{"id": 1, "text": "x", "done": false}"#]
+        for (i, shape) in shapes.enumerated() {
+            let job = jobs(goalKeys: #","goal": {"id": 1, "text": "x", "done": false}, "goals": "# + shape)
+            let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: job).utf8))
+            XCTAssertEqual(b.jobs.count, 1, "case \(i): the job itself must survive")
+            XCTAssertEqual(b.jobs.first?.goals?.items, [], "case \(i)")
+            XCTAssertEqual(b.jobs.first?.goal?.id, 1, "case \(i): the primary key is untouched")
+            XCTAssertEqual(b.liveCells, 2, "case \(i): and so must the board")
+        }
+    }
+
+    // Drift, element level: one malformed entry costs its own chip and no
+    // more. A plain `[WebJobGoal]` decode cannot do this — one bad element
+    // throws for the entire array — which is what TolerantWebJobGoal exists
+    // for.
+    //
+    // Discriminating: with the same strict-init edit as above, this case
+    // fails the whole board decode with
+    // `typeMismatch(Swift.Int64, … codingPath: jobs / Index 0 / goals /
+    // Index 1 / id)` — the first bad element, reached THROUGH the jobs
+    // array, which is the blast radius this tolerance caps — rather than
+    // returning the two good goals; verified the same way, by making the
+    // edit, running, and restoring.
+    func testMalformedGoalElementIsDroppedAndTheRestSurvive() throws {
+        let job = jobs(goalKeys: """
+        ,
+          "goals": [{"id": 1, "text": "ship goals", "done": false},
+                    {"id": "not a number", "text": "drifted", "done": false},
+                    "a bare string",
+                    {"text": "no id at all", "done": true},
+                    {"id": 4, "text": "answer carl", "done": true}]
+        """)
+        let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: job).utf8))
+        let list = try XCTUnwrap(b.jobs.first?.goals)
+        XCTAssertEqual(list.items.map(\.id), [1, 4], "the three malformed elements are dropped")
+        XCTAssertEqual(list.items.map(\.text), ["ship goals", "answer carl"], "order survives")
+        XCTAssertEqual(b.liveCells, 2, "the board itself must survive")
+    }
+
+    // An EMPTY array is a shape the server never sends (`goals` is
+    // omitempty, so zero links means no key), but a client must not crash on
+    // one: it decodes to an empty list, which the card reads as "no chips"
+    // rather than falling back to `goal`.
+    func testEmptyJobGoalsArrayDecodesToAnEmptyList() throws {
+        let job = jobs(goalKeys: #","goals": []"#)
+        let b = try JSONDecoder().decode(WebBoard.self, from: Data(board(jobs: job).utf8))
+        XCTAssertEqual(b.jobs.first?.goals?.items, [])
     }
 
     // Blast radius (see WebGoals' header in Models.swift): the drawer is

@@ -49,9 +49,12 @@ vi.mock("../api/client.ts", () => ({
   setJobColor: vi.fn(() => Promise.resolve({ ok: true })),
   retryJob: vi.fn(() => Promise.resolve({ ok: true })),
   answerQuestion: vi.fn(() => Promise.resolve({ ok: true })),
-  // the head's goal picker (GoalPicker) — same pair the editor's mock carries
+  // the head's goal picker (GoalMultiPicker) — same pair the editor's mock
+  // carries; `op` rides every link write above goal_id 0
   fetchGoals: vi.fn(() => Promise.resolve({ goals: { week: [], day: [] } })),
-  postJobGoal: vi.fn(() => Promise.resolve({ ok: true })),
+  postJobGoal: vi.fn((_slug: string, _goalId: number, _op?: "add" | "remove") =>
+    Promise.resolve({ ok: true }),
+  ),
 }));
 
 /**

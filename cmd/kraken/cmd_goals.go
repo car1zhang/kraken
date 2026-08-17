@@ -50,7 +50,7 @@ func cmdGoals(args []string) {
 	case "get":
 		// The slug is OPTIONAL here, unlike every op in the questions/feedback
 		// family: the goals themselves are global, and the slug only adds the
-		// job's own linked goal to the answer. More than one bare argument is
+		// job's own linked goals to the answer. More than one bare argument is
 		// a usage error rather than a silently ignored extra.
 		if len(rest) > 1 {
 			util.Die("usage: k goals get [slug]")
@@ -68,8 +68,9 @@ func cmdGoals(args []string) {
 }
 
 // runGoalsGet is `kraken goals get [slug]`: GET /api/goals (plus ?slug= when
-// given) — prints {"goals":{"week":[…],"day":[…]}}, and "job_goal" too when
-// the named job serves one, straight through.
+// given) — prints {"goals":{"week":[…],"day":[…]}}, and, when the named job
+// serves at least one goal, "job_goals" (every link, first one first) with
+// "job_goal" beside it carrying that same first link, straight through.
 //
 // An empty or whitespace-only slug is treated as absent rather than sent as
 // an empty query value, which the server would 404 as "no job \"\"" — the

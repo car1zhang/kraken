@@ -144,6 +144,12 @@ func TestEdgeKronosMigrationPreservesAPopulatedV23DB(t *testing.T) {
 
 	// Rewind to a genuine v23 shape: v24's table gone, user_version 23.
 	for _, stmt := range []string{
+		// v27 replaced jobs.goal_id with the job_goals join table, so
+		// reversing it takes BOTH directions: the table goes, and the column
+		// comes back — a genuine v23 database has it, and step 27 replays by
+		// dropping it.
+		`DROP TABLE IF EXISTS job_goals`,
+		`ALTER TABLE jobs ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL`,
 		// v26 adds board_bg (the board background) and v25 saved_artifacts
 		// (the artifact library) — later migrations' tables in this walk's
 		// terms; leftover, each fails its step's bare CREATE. Newest first.

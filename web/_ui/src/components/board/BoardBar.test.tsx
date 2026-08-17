@@ -41,6 +41,11 @@ function Harness({
     matched: 2,
     total: 6,
     active: terms.length > 0,
+    // the model carries the board's goal filter now; this harness types a
+    // whole JobSearchModel, so the key is here to satisfy that type. Null
+    // throughout — every assertion below is about the bar at rest and under a
+    // QUERY, and the chip is a prop rather than something read off here.
+    goalFilter: null,
   };
   return <BoardBar search={search} overlayOpen={overlayOpen} hidden={hidden} />;
 }

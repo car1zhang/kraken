@@ -110,16 +110,21 @@ type Job struct {
 	// a client-visible field, and adding it to the wire would put a second
 	// spelling of a job's identity in front of clients that key on the slug.
 	FormerSlugs []string `json:"-"`
-	// GoalID is the goal this job serves (store.Job.GoalID, schema v23), 0
-	// for none — which is every job until carl labels one, and every
-	// file-backed Job unconditionally: like Load and FormerSlugs it has no
-	// frontmatter spelling, and its only writer is store.SetJobGoal.
+	// GoalIDs is every goal this job serves (store.Job.GoalIDs, schema v27's
+	// job_goals rows), in link position order and empty for none — which is
+	// every job until carl labels one, and every file-backed Job
+	// unconditionally: like Load and FormerSlugs it has no frontmatter
+	// spelling, and its only writers are store's three link verbs
+	// (AddJobGoal/RemoveJobGoal/ClearJobGoals).
+	//
+	// The head of the slice is the PRIMARY link, which is what lets every
+	// surface promise that the single `goal` it still serves is `goals[0]`.
 	//
 	// `json:"-"` on purpose: the client-visible form is api's own
-	// webJobGoal, which carries the goal's TEXT (a bare id would make every
-	// card render a number), so putting the raw id on this struct's wire
-	// shape would be a second, less useful spelling of the same link.
-	GoalID int64 `json:"-"`
+	// webJobGoal, which carries each goal's TEXT (bare ids would make every
+	// card render numbers), so putting them on this struct's wire shape would
+	// be a second, less useful spelling of the same links.
+	GoalIDs []int64 `json:"-"`
 	// ID and Rev are storage-internal, populated only when this Job was
 	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
 	// store row id, Rev the optimistic-concurrency counter WriteJobFields/

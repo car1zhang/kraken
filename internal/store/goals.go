@@ -14,13 +14,13 @@ import (
 // split ownership, there is no agent-owned column here, so no write below
 // has to preserve anything across another writer's update.
 //
-// Two things are deliberately NOT in this file. Job linkage lives on the
-// jobs row (SetJobGoal, jobs.go) because the link is a property of the job,
-// not of the goal — deleting a goal unlinks it through the schema's ON
-// DELETE SET NULL rather than through code here. And the "which week is it"
-// question is answered by GoalPeriods below, one place, so the panel, the
-// API's current-period read and the injected brief block can never disagree
-// about where Monday is.
+// Two things are deliberately NOT in this file. Job linkage lives in its own
+// join table (schema v27's job_goals, jobgoals.go) because the link is a
+// property of the pair rather than of the goal — deleting a goal unlinks every
+// job that served it through the schema's ON DELETE CASCADE rather than through
+// code here. And the "which week is it" question is answered by GoalPeriods
+// below, one place, so the panel, the API's current-period read and the injected
+// brief block can never disagree about where Monday is.
 
 // goalDateLayout is the period format for BOTH scopes: a day goal's period
 // is its own local calendar date, a week goal's is that week's local Monday.
@@ -301,10 +301,11 @@ func (s *Store) AddGoal(g GoalAdd, now int64) (*Goal, error) {
 	}, nil
 }
 
-// nullableGoalID maps this package's 0-means-none convention onto SQL NULL,
-// for both goals.parent_id and jobs.goal_id (SetJobGoal). Untyped nil rather
-// than sql.NullInt64{}: database/sql binds either as NULL, and the nil form
-// keeps the call sites reading as the one decision they make.
+// nullableGoalID maps this package's 0-means-none convention onto SQL NULL for
+// goals.parent_id — its only column since schema v27 dropped jobs.goal_id, the
+// other one it used to serve. Untyped nil rather than sql.NullInt64{}:
+// database/sql binds either as NULL, and the nil form keeps the call sites
+// reading as the one decision they make.
 func nullableGoalID(id int64) any {
 	if id == 0 {
 		return nil
@@ -386,12 +387,13 @@ func (s *Store) UpdateGoal(id int64, upd GoalUpdate, now int64) error {
 // double-click on a delete affordance is not a failure.
 //
 // Two things survive the row and neither is handled here: a day goal that
-// pointed at it keeps existing with its parent CLEARED, and a job that
-// linked it keeps existing with its link cleared. Both fall out of
-// schemaV23's ON DELETE SET NULL, which is why this method is one statement
-// rather than a transaction that fixes up two other tables — and why the
-// nesting degrades instead of cascading, which would delete a day's work
-// along with the week goal it happened to sit under.
+// pointed at it keeps existing with its parent CLEARED (schemaV23's ON DELETE
+// SET NULL), and every job that linked it keeps existing with that link gone
+// (schemaV27's ON DELETE CASCADE on job_goals — the row IS the link, so
+// deleting it is how the link is cleared). Both fall out of the schema, which
+// is why this method is one statement rather than a transaction that fixes up
+// two other tables — and why the nesting degrades instead of cascading, which
+// would delete a day's work along with the week goal it happened to sit under.
 func (s *Store) DeleteGoal(id int64) error {
 	if _, err := s.db.Exec(`DELETE FROM goals WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("delete goal %d: %w", id, err)

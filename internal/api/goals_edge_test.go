@@ -183,9 +183,9 @@ func TestEdgeGoalJobUnknownSlugIs404(t *testing.T) {
 		t.Fatalf("seed goal: %v", err)
 	}
 	for _, body := range []map[string]any{
-		{"slug": "no-such-job", "goal_id": g.ID},
+		{"slug": "no-such-job", "goal_id": g.ID, "op": "add"},
 		{"slug": "no-such-job", "goal_id": 0}, // the unlink form addresses the same missing job
-		{"slug": "", "goal_id": g.ID},
+		{"slug": "", "goal_id": g.ID, "op": "add"},
 	} {
 		rec := edgeGoalJobPost(t, body)
 		if rec.Code != http.StatusNotFound {
@@ -203,9 +203,20 @@ func TestEdgeGoalJobUnknownGoalIs400(t *testing.T) {
 	mustCreateStoreJob(t, st, store.Job{Slug: "goal-link-400", Repo: "monolith"})
 
 	for _, goalID := range []any{987654, -1} {
-		rec := edgeGoalJobPost(t, map[string]any{"slug": "goal-link-400", "goal_id": goalID})
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("goal_id %v: status %d, want 400 (body %s)", goalID, rec.Code, rec.Body.String())
+		for _, op := range []string{"add", "remove"} {
+			rec := edgeGoalJobPost(t, map[string]any{"slug": "goal-link-400", "goal_id": goalID, "op": op})
+			if op == "remove" {
+				// removing a link that is not there is a no-op by contract, even
+				// when the goal id names nothing — the caller's intent ("this job
+				// should not serve that") is already satisfied
+				if rec.Code != http.StatusOK {
+					t.Errorf("op remove, goal_id %v: status %d, want 200 (body %s)", goalID, rec.Code, rec.Body.String())
+				}
+				continue
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("op add, goal_id %v: status %d, want 400 (body %s)", goalID, rec.Code, rec.Body.String())
+			}
 		}
 	}
 	// And 0 — the unlink — is not "an unknown goal": it is the documented clear
@@ -331,13 +342,17 @@ func TestEdgeGoalsEmptyStateArraysAreNeverNull(t *testing.T) {
 		t.Fatalf("GET ?slug=goal-empty-state: status %d (body %s)", rec.Code, rec.Body.String())
 	}
 	edgeGoalAssertArraysPresent(t, rec)
-	// job_goal is ABSENT (not null) for a job that links nothing.
+	// job_goal and job_goals are both ABSENT (not null, not []) for a job that
+	// links nothing — absence is the wire's only spelling of it, and the two
+	// keys are governed by the same condition.
 	var withSlug map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &withSlug); err != nil {
 		t.Fatalf("decode: %v (body %s)", err, rec.Body.String())
 	}
-	if _, ok := withSlug["job_goal"]; ok {
-		t.Errorf("job_goal is present for a job with no linked goal: %s", rec.Body.String())
+	for _, key := range []string{"job_goal", "job_goals"} {
+		if _, ok := withSlug[key]; ok {
+			t.Errorf("%s is present for a job with no linked goal: %s", key, rec.Body.String())
+		}
 	}
 }
 

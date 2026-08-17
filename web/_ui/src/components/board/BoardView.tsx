@@ -1,6 +1,9 @@
+import { useMemo } from "react";
+
 import type { BoardModel } from "../../hooks/useBoard.ts";
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { COLUMNS } from "../../lib/columns.ts";
+import { goalJobCounts } from "../../lib/goals.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
 import { ArchiveDrawer } from "./ArchiveDrawer.tsx";
@@ -79,6 +82,18 @@ export interface BoardViewProps {
   /** The view router hides the board rather than unmounting it, as today. */
   hidden?: boolean;
   /**
+   * The goal the board is filtered to, and its setter. App owns the state
+   * because the same value has to reach `useJobSearch` — which lives up there
+   * with it, for DragProvider's sake — and this view only relays it to the two
+   * surfaces that show and set it (the bar's chip, the panel's rows).
+   *
+   * Optional so a bare `<BoardView board actions search />` still renders a
+   * board: without them the filter simply has no setter, which is exactly the
+   * state a harness that never wired one is in.
+   */
+  goalFilter?: number | null;
+  onGoalFilter?: (id: number | null) => void;
+  /**
    * True while any modal overlay is open, straight from App.tsx's per-overlay
    * state. Only the search bar reads it, and only to keep cmd+K from pulling
    * focus out of a composer — see BoardBar.
@@ -134,11 +149,62 @@ export function BoardView({
   actions,
   search,
   hidden,
+  goalFilter = null,
+  onGoalFilter = () => {},
   overlayOpen,
 }: BoardViewProps) {
+  /**
+   * How many jobs link each goal, and every goal's text — both from the ONE
+   * payload this view already holds, so a per-row count costs no wire key and
+   * no second source that could disagree with the cards on screen.
+   *
+   * The counting itself is `goalJobCounts` (lib/goals.ts), a pure function
+   * over the flat job array rather than a loop here: it is the number the
+   * panel's badges promise and the board's filter has to deliver, so it is
+   * worth being nameable and testable on its own. It is fed
+   * `board.board?.jobs` — the flat array, not the bucketed columns — because
+   * archived jobs ride that same array, link goals like any other, and the
+   * archive drawer is on this board.
+   *
+   * The text index is this view's own half, and stays here because it is
+   * board-shaped rather than count-shaped: the bar's chip has to NAME the
+   * filtered goal even when it is not one of the current period's — an
+   * off-period goal is absent from `board.goals` and reachable only through
+   * the jobs that link it — and a filter whose chip could not name it would be
+   * a filter carl can see the effect of and not the cause. Unlike the count it
+   * reads the legacy single `goal` too: naming a goal costs nothing and a
+   * missing name costs the chip, while COUNTING one the filter would not match
+   * costs the badge its honesty.
+   */
+  const jobs = board.board?.jobs;
+  const goalIndex = useMemo(() => {
+    const counts = goalJobCounts(jobs ?? []);
+    const text = new Map<number, string>();
+    for (const g of board.board?.goals?.week ?? []) text.set(g.id, g.text);
+    for (const g of board.board?.goals?.day ?? []) text.set(g.id, g.text);
+    for (const job of jobs ?? []) {
+      for (const g of job.goals ?? []) if (!text.has(g.id)) text.set(g.id, g.text);
+      if (job.goal && !text.has(job.goal.id)) text.set(job.goal.id, job.goal.text);
+    }
+    return { counts, text };
+  }, [jobs, board.board?.goals]);
+
   return (
     <>
-      <BoardBar search={search} overlayOpen={overlayOpen} hidden={hidden} />
+      <BoardBar
+        search={search}
+        // a filtered id the payload cannot name still gets a chip, carrying
+        // the id itself: the alternative is a filter with no visible owner
+        // and no way back, which is the one state this chip exists to prevent
+        goalChip={
+          goalFilter === null
+            ? undefined
+            : { id: goalFilter, text: goalIndex.text.get(goalFilter) ?? `#${goalFilter}` }
+        }
+        onClearGoal={() => onGoalFilter(null)}
+        overlayOpen={overlayOpen}
+        hidden={hidden}
+      />
       <main className="board" id="board" hidden={hidden}>
         {COLUMNS.map((col) => {
           // The FILTERED list, so SortableColumn registers only cards that are
@@ -189,7 +255,13 @@ export function BoardView({
           another view. */}
       {hidden ? null : (
         <>
-          <GoalsPanel goals={board.board?.goals} mutate={board.mutate} />
+          <GoalsPanel
+            goals={board.board?.goals}
+            mutate={board.mutate}
+            goalFilter={goalFilter}
+            onGoalFilter={onGoalFilter}
+            counts={goalIndex.counts}
+          />
           {/* same fixed-dock reasoning as the goals panel above — and dropped
               with it while the board is hidden, or both would float over the
               other views */}

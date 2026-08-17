@@ -133,6 +133,16 @@ func (s *Store) GetJobByFormerSlug(slug string) (*Job, error) {
 		return nil, err
 	}
 	j.FormerSlugs = former
+	// Goal links come from a second table too (schema v27's job_goals) and are
+	// attached through the SAME helper the other three scanJob callers use. This
+	// loader is the one that gets forgotten — it lives in rename.go rather than
+	// jobs.go — and forgetting it is silent: a renamed job resolved by its old
+	// name would serve no chips at all while the same job resolved by its
+	// current one served them, which is exactly the split FormerSlugs itself
+	// exists to prevent.
+	if err := attachJobGoals(s.db, []*Job{j}); err != nil {
+		return nil, err
+	}
 	return j, nil
 }
 

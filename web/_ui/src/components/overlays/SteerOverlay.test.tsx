@@ -29,9 +29,12 @@ vi.mock("../../api/client.ts", () => ({
   setJobColor: vi.fn(() => Promise.resolve({ ok: true })),
   retryJob: vi.fn(() => Promise.resolve({ ok: true })),
   answerQuestion: vi.fn(() => Promise.resolve({ ok: true })),
-  // the head's goal picker (GoalPicker) — same pair the editor's mock carries
+  // the head's goal picker (GoalMultiPicker) — same pair the editor's mock
+  // carries; `op` rides every link write above goal_id 0
   fetchGoals: vi.fn(() => Promise.resolve({ goals: { week: [], day: [] } })),
-  postJobGoal: vi.fn(() => Promise.resolve({ ok: true })),
+  postJobGoal: vi.fn((_slug: string, _goalId: number, _op?: "add" | "remove") =>
+    Promise.resolve({ ok: true }),
+  ),
 }));
 
 import {
@@ -747,8 +750,9 @@ describe("#steer-swatches — the job colour picker", () => {
 describe("#steer-goal — the head's goal picker", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  // The HOST wiring only — GoalPicker's own behavior (labels, the pick, the
-  // unlink) is pinned in GoalPicker.test.tsx by bare-mounting it. What only
+  // The HOST wiring only — GoalMultiPicker's own behavior (labels, the ticks,
+  // the add/remove ops, the clear) is pinned against the component itself by
+  // bare-mounting it, since it takes its whole world through props. What only
   // this suite can say is that the steer head actually mounts the control:
   // a live card opens THIS modal and never the editor, so a picker asserted
   // nowhere but the editor's form could go dead here without a test failing.

@@ -227,8 +227,8 @@ func TestEdgeGoalContextLinkedGoalFromAPastPeriodIsStillMarked(t *testing.T) {
 	j := edgeGoalJob(t, st, "past-linked", "")
 	past := edgeGoalAdd(t, st, store.GoalAdd{
 		Scope: "week", Period: "2026-08-03", Text: "carry the migration over from last week"})
-	if err := st.SetJobGoal(j.ID, past.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	if err := st.AddJobGoal(j.ID, past.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
 	// Reload through the ordinary path, exactly as a spawn does.
 	j = JobBySlug(LoadJobs(), "past-linked")
@@ -259,8 +259,8 @@ func TestEdgeGoalContextLinkedDoneGoalIsStillShown(t *testing.T) {
 	if err := st.UpdateGoal(g.ID, store.GoalUpdate{Done: &done}, time.Now().UnixMilli()); err != nil {
 		t.Fatalf("UpdateGoal done: %v", err)
 	}
-	if err := st.SetJobGoal(j.ID, g.ID); err != nil {
-		t.Fatalf("SetJobGoal: %v", err)
+	if err := st.AddJobGoal(j.ID, g.ID); err != nil {
+		t.Fatalf("AddJobGoal: %v", err)
 	}
 	j = JobBySlug(LoadJobs(), "done-linked")
 

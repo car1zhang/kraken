@@ -60,11 +60,14 @@ export interface WebJobGoal {
   done: boolean;
 }
 
-/** GET /api/goals. `job_goal` rides along only when `?slug=` was given AND
- *  that job links a goal. */
+/** GET /api/goals. `job_goals` rides along only when `?slug=` was given AND
+ *  that job links at least one goal; `job_goal` is its head, present under
+ *  exactly the same condition (the server keeps both keys, and the primary is
+ *  defined as `job_goals[0]` so the two cannot drift). */
 export interface GoalsPage {
   goals: WebGoals;
   job_goal?: WebJobGoal;
+  job_goals?: WebJobGoal[];
 }
 
 export interface WebArtifact {
@@ -345,16 +348,32 @@ export interface WebJob {
    */
   load?: WebJobLoad;
   /**
-   * The goal this job is linked to, or absent. Absence is the ONLY no-goal
-   * state on the wire — the Go field is a pointer with omitempty, so an
+   * The job's PRIMARY goal — `goals[0]` — or absent. Absence is the ONLY
+   * no-goal state on the wire: the Go field is a pointer with omitempty, so an
    * unlinked job drops the key rather than sending a zeroed object, and a
    * test like `job.goal && job.goal.id === 0` is unreachable.
+   *
+   * Present exactly when `goals` is, and always equal to its head. It is kept
+   * beside the array rather than retired because a client that only ever shows
+   * one goal (and the iOS build already shipped) reads this one key.
    *
    * Served for ANY linked goal, including a done one and one from a period
    * that is no longer current, which is why the card chip mutes rather than
    * hides a done goal.
    */
   goal?: WebJobGoal;
+  /**
+   * EVERY goal this job links, in link position order — the head is `goal`
+   * above. Present exactly when the job links at least one goal; absence is
+   * the only no-goals spelling, so nothing here ever arrives as `[]`.
+   *
+   * The card renders one chip per element and the board's goal filter matches
+   * on this array alone — a job carrying only the legacy `goal` key (a server
+   * predating the array) is not a match for a filter, which is why every
+   * renderer that wants BOTH spells the fallback out (`job.goals ?? (job.goal
+   * ? [job.goal] : [])`).
+   */
+  goals?: WebJobGoal[];
   // `start_error` is GONE from the wire with the queued state. It existed
   // because a start happened on a daemon tick nobody was watching, so its
   // failure had nowhere to land but the card. A submit is now a request carl

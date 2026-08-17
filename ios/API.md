@@ -185,11 +185,13 @@ payload, so a client sees exactly what it has always seen.
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 | `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
 | `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive carl's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
-| `goal` | object (`{"id": number, "text": string, "done": bool}`) | omitempty | the goal this job is linked to (`jobs.goal_id`), present exactly when it links one — from ANY period and done or not, so a job carried over from last week still names the goal it belongs to. Written only by `POST /api/job/goal` (below), never by `saveform`: `goal_id` is deliberately absent from the job form's field set, so a full form save cannot touch it. Additive, no contract bump. Modeled in the iOS app as `WebJobGoal` on `WebJob` and rendered as the card's one goal chip (`GoalChip`, GoalsDrawer.swift) — `◎` plus the goal text truncated by the same 24-character rule web's `goalChipText` uses, muted when `done`, full text in the accessibility label since a phone has no tooltip |
+| `goal` | object (`{"id": number, "text": string, "done": bool}`) | omitempty | the job's PRIMARY goal — durably `goals[0]`, the head of the array below, present under exactly the same condition and never on its own. Retained beside `goals` so a client that predates multi-goal links keeps rendering one goal rather than none. Additive, no contract bump. Modeled in the iOS app as `WebJobGoal` on `WebJob` |
+| `goals` | array (`[{"id": number, "text": string, "done": bool}]`) | omitempty | EVERY goal this job links (`job_goals`), in link-position order, present exactly when it links at least one — each from ANY period and done or not, so a job carried over from last week still names the goals it belongs to. Written only by `POST /api/job/goal` (below), never by `saveform`: the link is deliberately absent from the job form's field set, so a full form save cannot touch it. Additive, no contract bump. Modeled in the iOS app as `WebJobGoalList` on `WebJob` (a wrapper struct, because its decode is hand-written) and rendered as ONE card chip per goal (`GoalChip`, GoalsDrawer.swift) — `◎` plus the goal text truncated by the same 24-character rule web's `goalChipText` uses, muted when `done`, full text in the accessibility label since a phone has no tooltip; no `+N` badge for the rest, the chips wrap. That decode is tolerant in two places, since chips are cosmetic and the board is not: a `goals` that is not an array degrades to an empty list, and a malformed ELEMENT is dropped while the rest survive |
 
-`goal` (`webJobGoal`) is a THREE-key projection of the goal row, not the
-whole `goal` object `/api/goals` serves: a card renders the goal's text and
-whether it is ticked off, and never its scope, period, position or parent.
+`goal` and `goals` (`webJobGoal`) are a THREE-key projection of the goal row,
+not the whole `goal` object `/api/goals` serves: a card renders the goal's
+text and whether it is ticked off, and never its scope, period, position or
+parent.
 
 `start_error` and `prereqs` were REMOVED from this shape in v6. `start_error`
 was a side channel for a failure the board could not otherwise see: the daemon
@@ -977,9 +979,9 @@ GET/POST).
 
 ## Goals
 
-Two routes over the `goals` table (internal/api/goals.go), plus the two
-additive keys they put on `/api/board` (`goals` on the board, `goal` on a
-job — both documented above). A goal has a **scope** (`week` or `day`) and a
+Two routes over the `goals` table (internal/api/goals.go), plus the additive
+keys they put on `/api/board` (`goals` on the board; `goals` and its head
+`goal` on a job — all documented above). A goal has a **scope** (`week` or `day`) and a
 **period**: for a day goal, a local `2006-01-02` date; for a week goal, the
 local **Monday** of that week in the same layout. `store.GoalPeriods(now)`
 derives both from the clock, and "current" everywhere below means that pair.
@@ -1004,12 +1006,13 @@ never `null`; each item is the full goal object:
 | `position` | number | always | insertion order within (scope, period); the arrays arrive already ordered by it, so a client re-sorting is redundant, not wrong |
 | `parent_id` | number | omitempty | the week goal a DAY goal hangs under. Absent (never `0`) when it hangs under nothing — `0` is the store's no-parent value and is omitted on the wire |
 
-With `?slug=<slug>` the response gains one more key, and only when that job
-links a goal:
+With `?slug=<slug>` the response gains two more keys, and only when that job
+links at least one goal:
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `job_goal` | object (`{"id","text","done"}`) | present only when the job links a goal | that job's linked goal, from ANY period and done or not — deliberately NOT restricted to the current periods the two arrays are, because the question `?slug=` asks is "what is this job's goal", which last week's goal answers just as well |
+| `job_goals` | array (`[{"id","text","done"}]`) | present only when the job links ≥1 goal | every goal that job links, in link-position order, each from ANY period and done or not — deliberately NOT restricted to the current periods the two arrays are, because the question `?slug=` asks is "what is this job's goals", which last week's goal answers just as well |
+| `job_goal` | object (`{"id","text","done"}`) | present only when the job links ≥1 goal | the PRIMARY link — durably `job_goals[0]`, present under exactly the same condition. Retained for clients that predate multi-goal links |
 
 An unknown slug is a 404. GET is reachable in mirror mode (read-only kraken
 mirrors serve it); the POST below is not.
@@ -1046,25 +1049,34 @@ composed at the Mac and the phone is for ticking them off.
 
 ### `POST /api/job/goal` → `{"ok": true}` (api/goals.go)
 
-Links one job to one goal, or unlinks it. Its own one-field route rather
-than a `saveform` field for the same reasons `POST /api/job/color` has one:
-it works on a LIVE cell, and it is not a full replace, so a client that
-never sends it cannot clear the link.
+Links a job to a goal, unlinks one, or clears every link. Its own one-field
+route rather than a `saveform` field for the same reasons `POST
+/api/job/color` has one: it works on a LIVE cell, and it is not a full
+replace, so a client that never sends it cannot clear the links.
 
-Request: `{"slug": string, "goal_id": number}` — `goal_id` `0` clears the
-link.
+Request: `{"slug": string, "goal_id": number, "op": string}` — one job may
+link several goals, so the write says which way it goes:
 
-Response: `{"ok": true}`; the new link rides back on the next `/api/board`
-poll as `webJob.goal`. Errors: 400 (bad json, or a non-zero `goal_id` naming
-no goal), 403 in mirror mode, 404 (no such job), 405 for other methods.
+| body | effect |
+|---|---|
+| `{"slug","goal_id":N>0,"op":"add"}` | appends that link (already linked is a no-op that keeps its position) |
+| `{"slug","goal_id":N>0,"op":"remove"}` | drops that link (not linked is a no-op); the surviving links keep their positions |
+| `{"slug","goal_id":0}` | clears ALL links, whatever `op` says — the legacy shape, unchanged |
+| `{"slug","goal_id":N>0}` with no/unknown `op` | 400 naming the valid ops: a non-zero id with no direction is ambiguous, and guessing one would silently rewrite a link set |
+
+Response: `{"ok": true}`; the new links ride back on the next `/api/board`
+poll as `webJob.goals` (and its head as `webJob.goal`). Errors: 400 (bad
+json, a non-zero `goal_id` naming no goal, or the missing/unknown `op`
+above), 403 in mirror mode, 404 (no such job), 405 for other methods.
 
 The write touches NEITHER the job's `rev` NOR its `updated_at` — the same
 property `POST /api/job/color` has, and for the same reason: a goal link is
 metadata about the job, not an edit of it, and bumping `rev` would make an
 open editor's next save conflict over a field the editor never touched.
 
-Web-UI-only in v1: the iOS app has no goal picker (not modeled in
-APIClient.swift), though `webJob.goal` is modeled in Models.swift.
+Web-UI-only: the iOS app has no goal picker (this route is not modeled in
+APIClient.swift), though `webJob.goal` and `webJob.goals` are both modeled
+in Models.swift and drawn on the card.
 
 ---
 

@@ -209,7 +209,8 @@ Commands:
                       goals, proxied the same way as 'k questions': prints
                       this week's and today's goals as JSON, day goals
                       carrying the weekly goal they sit under. With a slug it
-                      also names the one goal that job serves, if any. READ
+                      also names every goal that job serves (a job may serve
+                      several, or none), first one first. READ
                       ONLY — the goals are carl's, written from the board, so
                       there is deliberately no set/add/remove op here. The
                       same block is staged into every cell's brief at spawn
