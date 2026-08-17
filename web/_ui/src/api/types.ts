@@ -476,6 +476,24 @@ export interface WebBoard {
   stale?: boolean;
   update?: WebUpdate;
   ship_ios?: WebShipIOS;
+  /**
+   * The board's optional background image (api/background.go). ABSENT is the
+   * wire's only "no background" — the Go field is a pointer with omitempty,
+   * so a set background always carries a nonzero updated_at, which doubles
+   * as the image URL's cache-buster (see backgroundURL in client.ts).
+   */
+  background?: WebBackground;
+}
+
+/** The `background` key on /api/board: the upload stamp, never the bytes. */
+export interface WebBackground {
+  updated_at: number;
+}
+
+/** POST /api/background's 200 body. */
+export interface BackgroundUploadResult {
+  ok: true;
+  updated_at: number;
 }
 
 // ---------------------------------------------------------------- usage

@@ -551,6 +551,36 @@ struct BoardWebView: NSViewRepresentable {
             return nil
         }
 
+        // <input type="file"> — the board's ▨ BG background upload. WebKit
+        // routes a file-input click to this delegate method, and a UI
+        // delegate WITHOUT it drops the click SILENTLY (the same
+        // no-delegate-no-behavior shape as createWebViewWith above) — the
+        // picker simply never opens, which is exactly how the shell shipped
+        // broken while Safari on the same board worked.
+        func webView(
+            _ webView: WKWebView,
+            runOpenPanelWith parameters: WKOpenPanelParameters,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping ([URL]?) -> Void
+        ) {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = parameters.allowsDirectories
+            panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+            // A sheet on the shell window where there is one, a floating
+            // panel otherwise — begin(completionHandler:) covers the
+            // no-window edge without a second code path.
+            if let window = webView.window {
+                panel.beginSheetModal(for: window) { response in
+                    completionHandler(response == .OK ? panel.urls : nil)
+                }
+            } else {
+                panel.begin { response in
+                    completionHandler(response == .OK ? panel.urls : nil)
+                }
+            }
+        }
+
         // Any main-frame navigation to an EXTERNAL host goes to the browser —
         // not just link clicks: a JS `location.href`, a meta refresh or a
         // redirect chain would equally replace the resident SPA. The initial

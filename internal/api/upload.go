@@ -26,8 +26,10 @@ const (
 	// maxUploadBytes is the enforced per-file cap.
 	maxUploadBytes = 10 << 20
 	// maxUploadBody bounds the whole request body a client may send — 1MB of
-	// slack over maxUploadBytes for multipart framing and the "slug" field,
-	// mirroring the http.MaxBytesReader pattern used elsewhere (peers.go).
+	// slack over maxUploadBytes for multipart framing and any small fields
+	// beside the file (this route's "slug"; /api/background sends the file
+	// alone), mirroring the http.MaxBytesReader pattern used elsewhere
+	// (peers.go). Both image-upload routes share these two caps.
 	maxUploadBody = 11 << 20
 )
 

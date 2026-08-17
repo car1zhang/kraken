@@ -192,6 +192,18 @@ var webBoardSpec = map[string]fieldSpec{
 	// existing shape, which old clients ignore — so it never bumps
 	// apiContract.
 	"goals": {kind: wireObject, required: true},
+	// The board's optional background image (background.go): the updated_at
+	// stamp alone, pointer + omitempty, so ABSENT is the wire's only spelling
+	// of "no background set". Additive — never bumps apiContract.
+	"background": {kind: wireObject, required: false},
+}
+
+// webBackgroundSpec covers background.go's webBackground — webBoard's
+// "background" key when a background is set. One field, no omitempty: once
+// the key rides, the SPA reads updated_at unconditionally (it is the image
+// URL's cache-buster).
+var webBackgroundSpec = map[string]fieldSpec{
+	"updated_at": {kind: wireNumber, required: true},
 }
 
 // webUpdateSpec covers update.go's webUpdate — served both as webBoard's
@@ -1013,6 +1025,43 @@ func TestWebBoardWireShape(t *testing.T) {
 	}
 	if got, _ := n.Int64(); got != int64(apiContract) {
 		t.Errorf("contract = %d, want %d", got, apiContract)
+	}
+}
+
+func TestWebBackgroundWireShape(t *testing.T) {
+	data, err := json.Marshal(webBackground{UpdatedAt: 1_700_000_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webBackground", data, webBackgroundSpec)
+
+	// A board WITH a background carries the key as an object; the bare-board
+	// fixture in TestWebBoardWireShape covers the absent side (required:
+	// false there is the assertion that absence is legal).
+	board, err := json.Marshal(webBoard{Goals: newWebGoals(), Jobs: []webJob{}, Background: &webBackground{UpdatedAt: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(board, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["background"].(map[string]any); !ok {
+		t.Errorf("board with a background set: background key = %#v, want an object", m["background"])
+	}
+
+	// And the omitempty half: a nil pointer must DROP the key, never send
+	// null or a zeroed object — absence is the wire's only "no background".
+	bare, err := json.Marshal(webBoard{Goals: newWebGoals(), Jobs: []webJob{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m2 map[string]any
+	if err := json.Unmarshal(bare, &m2); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := m2["background"]; present {
+		t.Errorf("board without a background still carries the key: %#v", m2["background"])
 	}
 }
 

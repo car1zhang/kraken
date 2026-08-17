@@ -190,9 +190,10 @@ func TestContractKronosV24MigratesFromV23(t *testing.T) {
 	// Roll the shape back to a genuine v23: exactly the table v24 adds, gone,
 	// and the version stamp lowered.
 	for _, stmt := range []string{
-		// v25 adds saved_artifacts (the artifact library) — a later
-		// migration's table in this walk's terms; leftover, it fails that
-		// step's bare CREATE. Newest first.
+		// v26 adds board_bg (the board background) and v25 saved_artifacts
+		// (the artifact library) — later migrations' tables in this walk's
+		// terms; leftover, each fails its step's bare CREATE. Newest first.
+		`DROP TABLE IF EXISTS board_bg`,
 		`DROP TABLE IF EXISTS saved_artifacts`,
 		`DROP TABLE IF EXISTS orch_inbox`,
 		`PRAGMA user_version = 23`,

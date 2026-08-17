@@ -24,6 +24,18 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v26: drop board_bg. Nothing to put back — v26 is a single
+	// additive CREATE over a v25 shape that had no such table, so the drop is
+	// the whole reversal (the v18 arm below owns the bare-CREATE-vs-IF-NOT-
+	// EXISTS reasoning this arm exists to serve).
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 26 {
+		if _, err := s.db.Exec(`DROP TABLE board_bg`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v26): %v", target, err)
+		}
+	}
 	// Reverse v25: drop saved_artifacts. Nothing to put back — v25 is a single
 	// additive CREATE over a v24 shape that had no such table, so the drop is
 	// the whole reversal (the v18 arm below owns the bare-CREATE-vs-IF-NOT-

@@ -76,7 +76,10 @@ import (
 // Version 25 adds saved_artifacts, the artifact LIBRARY: one frozen snapshot
 // per artifact carl saves, keyed (job_id, name) and outliving the job it came
 // from (see schemaV25 and store/saved.go).
-const schemaVersion = 25
+// Version 26 adds board_bg, the web board's one optional background image —
+// a singleton blob row, replaced on upload and deleted on remove (see
+// schemaV26 and store/background.go).
+const schemaVersion = 26
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1425,6 +1428,40 @@ CREATE TABLE saved_artifacts (
 );
 `
 
+// schemaV26 adds board_bg: the web board's one OPTIONAL background image,
+// carl-uploaded from the board's header. One brand-new table, no hook —
+// nothing anywhere has ever set a background, so an EMPTY table is exactly
+// right for every pre-existing database, which is schemaV25's situation
+// (and V7/V15/V17/V18/V19/V21/V23/V24's before it).
+//
+// Shape notes:
+//
+//   - id is CHECK (id = 1): the board has exactly one background, so the
+//     table is a singleton row — an upload REPLACES it (store/background.go
+//     upserts id 1), a remove deletes it, and "no row" is the plain-board
+//     default. A kv row was the other candidate and was rejected because kv
+//     values are TEXT and this is a multi-megabyte binary blob.
+//   - bytes is the image as uploaded, blob-canonical like uploads.bytes and
+//     saved_artifacts.snapshot: the row IS the image, so it survives
+//     restarts and rides the nightly VACUUM INTO backups with everything
+//     else.
+//   - updated_at (unix millis) doubles as the wire's cache-buster: the
+//     board payload serves it so the SPA can re-fetch exactly when the
+//     image actually changes. It is declared BEFORE bytes so the board
+//     rebuild's stamp-only read (BoardBackgroundUpdatedAt) never walks the
+//     blob's overflow pages to reach a trailing column.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v25.
+const schemaV26 = `
+CREATE TABLE board_bg (
+	id         INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton: the board has one background
+	mime       TEXT    NOT NULL,
+	updated_at INTEGER NOT NULL DEFAULT 0,          -- unix millis, strictly increasing (see store/background.go)
+	bytes      BLOB    NOT NULL
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1507,8 +1544,11 @@ type migrationStep struct {
 // to migrate forward, and an EMPTY library correctly means "carl has never
 // saved an artifact", which is true of every database that predates the
 // feature; see schemaV25).
+// migrations[26] adds board_bg (no hook — a brand-new singleton table, and an
+// empty one correctly means "no background set", which is true of every
+// database that predates the feature; see schemaV26).
 // Future schema changes append
-// migrations[26], migrations[27], ... rather than editing an existing
+// migrations[27], migrations[28], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1537,6 +1577,7 @@ var migrations = map[int]migrationStep{
 	23: {sql: schemaV23},
 	24: {sql: schemaV24},
 	25: {sql: schemaV25},
+	26: {sql: schemaV26},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
