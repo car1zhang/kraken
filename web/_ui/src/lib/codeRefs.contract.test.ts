@@ -105,6 +105,11 @@ function contractArtifact(url: string, job: WebJob) {
     onNavigate: () => {},
     onAskBranched: () => {},
     onClose: () => {},
+    // the library slice of the integrator: this file is about code refs inside
+    // the rendered body, so the head's ☆ save is wired to nothing on purpose
+    library: [],
+    onSaveArtifact: async () => {},
+    onRemoveSaved: async () => {},
     mutate: contractMutate,
   });
 }

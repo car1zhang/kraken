@@ -643,6 +643,37 @@ export interface WatchlistPage {
   watchlist: WebWatchItem[];
 }
 
+// ------------------------------------------------------------- library
+
+/**
+ * One `saved_artifacts` row — a FROZEN snapshot of an artifact's bytes, taken
+ * when carl pressed ☆ save (internal/api/library.go).
+ *
+ * Every key is unconditional on the Go side (no omitempty), which is what lets
+ * the board read `saved_at` as a measured stamp rather than as "maybe absent",
+ * and it is unix MILLIS — the same convention `WebJob.mtime` and
+ * `WebWatchItem.first_seen` use.
+ *
+ * `url` is `/api/library/artifact/<id>/<name>` and is the ONLY way to read the
+ * snapshot: it serves the frozen bytes, never the live artifact, so a row
+ * outlives the job it came from — including a hard-deleted one. `slug` is the
+ * display slug AT SAVE TIME and is history, not a live pointer: it is what the
+ * row says it came from, not a job the board is guaranteed to still carry.
+ */
+export interface WebLibraryItem {
+  id: number;
+  slug: string;
+  name: string;
+  /** unix MILLIS */
+  saved_at: number;
+  url: string;
+}
+
+/** GET /api/library. Always an array, never null; saved_at DESC, ties id DESC. */
+export interface LibraryPage {
+  items: WebLibraryItem[];
+}
+
 // ---------------------------------------------------------------- misc
 
 export interface UploadResult {

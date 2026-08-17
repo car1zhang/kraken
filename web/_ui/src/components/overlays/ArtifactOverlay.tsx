@@ -7,7 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createFeedback, openInEditor, threadOp } from "../../api/client.ts";
-import type { WebArtifact, WebJob } from "../../api/types.ts";
+import type { WebArtifact, WebJob, WebLibraryItem } from "../../api/types.ts";
 import { useArtifactSeq, type SeqEntry } from "../../hooks/useArtifactSeq.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
@@ -22,6 +22,7 @@ import {
   type CodeRefTarget,
 } from "../../lib/codeRefs.ts";
 import { cardCompilable } from "../../lib/isoscene/index.ts";
+import { libraryMatch } from "../../lib/library.ts";
 import { ArtifactPager, useArtifactKeys } from "./ArtifactPager.tsx";
 import { IsoSceneView } from "./IsoSceneView.tsx";
 import { Overlay, type Mutate } from "./Overlay.tsx";
@@ -272,6 +273,28 @@ export interface ArtifactOverlayProps {
    * so the one Escape you would reach for closes the wrong thing.
    */
   onAskBranched: (slug: string, tid: string) => void;
+  /**
+   * The saved-artifact library as the server currently reports it (App's one
+   * poll, shared with the memory view's library mode).
+   *
+   * The head's ☆/★ button is `libraryMatch(library, url) !== null` and nothing
+   * else — there is no local "I clicked it" latch, deliberately: a latch would
+   * light the star on a save the server refused, and it would go on claiming
+   * "saved" after the row was removed from the list in the other view.
+   */
+  library: WebLibraryItem[];
+  /**
+   * Freeze the open artifact into the library. REQUIRED rather than an optional
+   * slot, for the reason App.tsx's own onOpenArtifact note gives: an integrator
+   * that simply forgets one gets a compile error instead of a dead button.
+   *
+   * Both of these are expected to route through the shared `mutate` and then
+   * refetch the library, which is why neither returns anything — the button's
+   * next state comes from `library`, not from the answer.
+   */
+  onSaveArtifact: (slug: string, home: string, name: string) => Promise<void>;
+  /** Drop one saved row by the id the library served. */
+  onRemoveSaved: (id: number) => Promise<void>;
   /** See Overlay.tsx. Feedback rides the board payload, so this invalidates. */
   mutate: Mutate;
 }
@@ -370,6 +393,9 @@ function ArtifactBody({
   onStep,
   onNavigate,
   onAskBranched,
+  library,
+  onSaveArtifact,
+  onRemoveSaved,
 }: ArtifactBodyProps) {
   const [raw, setRaw] = useState(false);
   // the compiled-3D toggle; seeded from (and feeding) the session-sticky
@@ -393,6 +419,10 @@ function ArtifactBody({
   // which composer last succeeded, for the head button's transient ✓ — the
   // composer closes on success, and its note region closes with it
   const [sentMode, setSentMode] = useState<ComposerMode | null>(null);
+  // one save/remove in flight — the button's LOOK never comes from here (that
+  // is `saved`, i.e. the server's list); this only stops a double press from
+  // posting twice while the first round trip is out
+  const [savingLib, setSavingLib] = useState(false);
   // which artifact the state above describes — the whole reset block below
   const [shown, setShown] = useState(url);
   const composerInput = useRef<HTMLTextAreaElement | null>(null);
@@ -494,6 +524,7 @@ function ArtifactBody({
     setError(null);
     setNote("");
     setSending(false);
+    setSavingLib(false);
     setSentMode(null);
     setMode(draft?.mode ?? null);
     setComposerText(draft?.text ?? "");
@@ -518,6 +549,39 @@ function ArtifactBody({
     () => (htmlPage && text !== undefined ? cardCompilable(text) : false),
     [htmlPage, text],
   );
+
+  /**
+   * The library row this artifact IS, if any — the ☆/★ button's entire state.
+   *
+   * It matches BOTH url shapes (lib/library.ts), which is what makes the button
+   * work in the one place a local latch could not: a snapshot opened FROM the
+   * library carries a `/api/library/artifact/<id>/…` url, has no job, and is by
+   * definition already saved — pressing ★ there removes it.
+   */
+  const saved = useMemo(() => libraryMatch(library, url), [library, url]);
+  // What a SAVE would address. A url that yields no parts and matches no row
+  // is one nothing can be done with — the button hides rather than offering a
+  // press that can only fail.
+  // memoised so its identity is stable across the 3s board re-render — it is a
+  // dependency of the handler below
+  const saveParts = useMemo(() => artifactParts(url), [url]);
+  const savable = saved !== null || saveParts !== null;
+
+  const toggleSaved = useCallback(async () => {
+    if (savingLib) return;
+    setSavingLib(true);
+    // The failure path is deliberately silent HERE: both callbacks go through
+    // the shared `mutate`, which parks the server's own sentence in the clock
+    // corner, and the button's state comes back from the refetched list — so a
+    // refused save simply leaves it reading ☆ save.
+    if (saved) await onRemoveSaved(saved.id);
+    else if (saveParts) {
+      await onSaveArtifact(saveParts.slug, saveParts.home, saveParts.name);
+    }
+    // Same identity question `send` and `ask` ask: a step or a close mid-flight
+    // means this body is no longer the one that pressed the button.
+    if (alive.current && latest.current.url === url) setSavingLib(false);
+  }, [savingLib, saved, saveParts, onRemoveSaved, onSaveArtifact, url]);
 
   const onKey = useArtifactKeys(onStep);
 
@@ -735,6 +799,31 @@ function ArtifactBody({
           }}
         >
           3D
+        </button>
+        {/* Freeze this artifact into the library — a SNAPSHOT of its current
+            bytes, which is why it survives the job's teardown, its archive and
+            even a hard delete. `aria-pressed` is the #panel-iso idiom directly
+            above, and the pressed state is the SERVER's (`saved`), so this
+            button cannot claim a save that did not land.
+
+            Hidden when there is nothing to address: a url that parses to no
+            {slug, home, name} and matches no saved row can neither be saved nor
+            removed, and a button whose only outcome is a refusal is worse than
+            no button. */}
+        <button
+          className="btn ghost"
+          id="panel-save"
+          hidden={!savable}
+          disabled={savingLib}
+          aria-pressed={saved !== null}
+          title={
+            saved
+              ? "remove this snapshot from the library"
+              : "save a frozen copy of this artifact to the library"
+          }
+          onClick={() => void toggleSaved()}
+        >
+          {saved ? "★ saved" : "☆ save"}
         </button>
         {/* Branching forks the cell's zeus session, so it needs a live cell —
             the same `job.live` gate ThreadChips.tsx puts on the ⑂ it renders in

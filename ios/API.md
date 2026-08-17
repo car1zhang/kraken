@@ -1067,6 +1067,83 @@ APIClient.swift), though `webJob.goal` is modeled in Models.swift.
 
 ---
 
+## Artifact library
+
+Four routes over the `saved_artifacts` table (internal/api/library.go,
+internal/store/saved.go): the artifacts carl asked to KEEP. A library entry
+is a **frozen copy** of an artifact's bytes as they stood at save time, not a
+bookmark — agents rewrite artifacts in place and cell dirs are deleted at
+teardown, so an entry that followed the live file would change under carl and
+eventually 404. The copy is addressed by its own row id and survives the job
+it came from (the row carries no foreign key onto `jobs`, the `job_tokens`
+survival rule), archiving and hard delete included.
+
+All four routes are additive: nothing about them bumps `apiContract`, and
+nothing about them touches `/api/board` — no key on a job object, no board
+cache interaction. The library is its own view with its own poll.
+
+### `GET /api/library` → `{"items": [LibraryItem]}` (api/library.go)
+
+The whole library, newest first — `saved_at` descending, `id` descending as
+the tiebreak. `items` is always present and never `null`; a client renders
+"nothing saved yet" from an empty array. Clients render the served order and
+do not re-sort.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | the row id — what `POST /api/library/remove` addresses and what the artifact URL below carries |
+| `slug` | string | always | the job's DISPLAY slug as it stood at save time (an archived job's numbered archive name, an active job's own slug). Display only — identity is the row id, and the job may since have been renamed, archived or deleted |
+| `name` | string | always | the artifact's path within its job, slashes intact |
+| `saved_at` | number | always | unix millis, stamped server-side at save |
+| `url` | string | always | `/api/library/artifact/<id>/<name>` — the FROZEN bytes, never the live artifact |
+
+Reachable in mirror mode (a read is a read); the two POSTs below are not.
+
+### `POST /api/library` → `{"ok": true, "id": number}` (api/library.go)
+
+Freezes an artifact's CURRENT bytes into the library. Request:
+`{"slug": string, "home": string, "name": string}` — the same triple
+`POST /api/feedback`'s create form takes, and `home` plays the same role:
+`archive` resolves the slug in the archived-jobs namespace, anything else in
+active jobs, so an archived `foo-2` and an active job slugged `foo-2` are
+different files. The bytes come from the same resolution the artifact route
+serves from, so a saved copy and a feedback snapshot taken at the same
+moment are byte-identical.
+
+Saving an artifact that is already in the library **replaces** it under the
+same `id`: one entry whose bytes and `saved_at` move forward, never a second
+row.
+
+Response carries the row `id` so a client that has just saved can address the
+entry without waiting for its next poll. Errors: 400 (bad json, an
+unrecognized field, or a missing/empty `slug`, `home` or `name` — the
+refusal names the one that is missing), 403 in mirror mode with the body
+`disabled in mirror mode`, 404 (no such job, or no such artifact), 405 for
+other methods, 413 for a body over 1 MB.
+
+### `POST /api/library/remove` → `{"ok": true}` (api/library.go)
+
+Drops one entry. Request: `{"id": number}` — the row id, never
+`(slug, name)`: a saved artifact outlives its job, so a removal keyed on the
+job would stop working exactly when the library is most useful.
+
+Errors: 400 (bad json, an unrecognized field, or an `id` that is absent or
+≤ 0), 403 in mirror mode, 404 for an id naming no row — deliberately not a
+silent 200, because the remove affordance sits on a row the caller is
+looking at, so "already gone" means that view is stale — 405 for other
+methods, 413 for a body over 1 MB.
+
+### `GET /api/library/artifact/<id>/<name>`
+
+Not JSON — serves the saved entry's **frozen** bytes with a `Content-Type`
+picked by extension (the same mapping `GET /api/artifact/...` uses) and
+`Cache-Control: no-store`. Lookup is by `<id>` alone; the `<name>` segment is
+display and extension only, so a download lands with a real filename — the
+content type comes from the STORED name, not the requested one. An unknown or
+malformed id is a 404. Reachable in mirror mode.
+
+---
+
 ## Knowledge graph
 
 Ten routes over the `kg_*` tables (internal/api/graph.go, plus

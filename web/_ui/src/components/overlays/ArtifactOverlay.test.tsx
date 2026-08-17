@@ -25,6 +25,22 @@ import { showToast } from "./Toast.tsx";
 
 const mutate = async <T,>(op: () => Promise<T>) => op();
 
+/**
+ * The library half of the integrator, in miniature.
+ *
+ * App polls the saved list and owns both writes; every case in this file opens
+ * an artifact that is NOT in it, which is exactly the state these tests were
+ * written against — the head still carries ☆ save, and none of them touches it.
+ * Spread rather than defaulted inside the component: the props are REQUIRED on
+ * purpose, so an integrator that forgets one gets a compile error rather than a
+ * dead button (App.tsx's own onOpenArtifact note).
+ */
+const noLibrary = {
+  library: [],
+  onSaveArtifact: async () => {},
+  onRemoveSaved: async () => {},
+};
+
 const art = (n: string): WebArtifact => ({
   name: n,
   url: `/api/artifact/j/artifacts/${n}`,
@@ -68,6 +84,7 @@ function Harness({
       onNavigate={wired ? (url, name) => setCur({ url, name }) : () => {}}
       onAskBranched={onAskBranched}
       onClose={() => setOpen(false)}
+      {...noLibrary}
       mutate={mutate}
     />
   );
@@ -423,6 +440,7 @@ describe("the feedback draft", () => {
         onNavigate={() => {}}
         onAskBranched={() => {}}
         onClose={() => {}}
+        {...noLibrary}
         mutate={mutate}
       />,
     );
@@ -440,6 +458,7 @@ describe("the feedback draft", () => {
         onNavigate={() => {}}
         onAskBranched={() => {}}
         onClose={() => {}}
+        {...noLibrary}
         mutate={mutate}
       />
     );
@@ -452,6 +471,7 @@ describe("the feedback draft", () => {
         onNavigate={() => {}}
         onAskBranched={() => {}}
         onClose={() => {}}
+        {...noLibrary}
         mutate={mutate}
       />
     );
@@ -792,6 +812,7 @@ describe("the ask composer", () => {
             onNavigate={() => {}}
             onAskBranched={branched}
             onClose={() => setOpen(false)}
+            {...noLibrary}
             mutate={mutate}
           />
         </>

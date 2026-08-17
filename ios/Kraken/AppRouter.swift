@@ -13,9 +13,14 @@ import Observation
 ///   kraken://overview              → Board tab, open the overview sheet
 ///   kraken://dream                 → Board tab, open the DREAM sheet
 ///                                     (the nightly loop's reports + watchlist)
-///   kraken://graph                 → Graph tab (the knowledge graph viewer,
+///   kraken://graph                 → the MEMORY tab (the knowledge graph
+///                                     viewer and the saved-artifact library,
 ///                                     a tab of its own since the nav
-///                                     restructure — no longer a Board sheet)
+///                                     restructure — no longer a Board sheet).
+///                                     The host stays `graph` and the case
+///                                     stays `.graph`: only the tab's visible
+///                                     label renamed, so links in shipped
+///                                     builds keep working.
 ///   kraken://kronos                → Kronos tab (the orchestrator's
 ///                                     conversation + context meter)
 ///   kraken://job/<slug>            → Board tab, open that job's detail

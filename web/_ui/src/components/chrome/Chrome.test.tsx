@@ -362,7 +362,9 @@ describe("the view tabs", () => {
     expect(tabs.map((t) => t.textContent)).toEqual([
       "BOARD",
       "KRONOS",
-      "GRAPH",
+      // the graph view's tab reads MEMORY — a label change only, everything
+      // internal (the view id, the `graph-` classes, /api/graph) keeps `graph`
+      "MEMORY",
       "DREAM",
       "LOG",
     ]);

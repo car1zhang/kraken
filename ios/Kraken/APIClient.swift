@@ -658,6 +658,39 @@ actor APIClient {
         try await get(baseURL: baseURL, path: "/api/graph/node", query: [("id", String(id))])
     }
 
+    // MARK: - artifact library
+
+    /// Every saved artifact, newest first — the server's own order, which the
+    /// client never re-sorts. Additive endpoint, no contract bump.
+    func fetchLibrary(baseURL: String) async throws -> LibraryPayload {
+        try await get(baseURL: baseURL, path: "/api/library")
+    }
+
+    /// Freezes one artifact's CURRENT bytes into the library and returns the
+    /// row id. The {slug, home, name} triple is the artifact-route address,
+    /// exactly as `createFeedback` sends it — recovered from the artifact's
+    /// own URL by `artifactParts(from:)`, never from a display name.
+    ///
+    /// Re-saving the same artifact is an upsert server-side: the snapshot and
+    /// the timestamp are replaced, the row id stays, nothing duplicates.
+    @discardableResult
+    func saveToLibrary(baseURL: String, slug: String, home: String, name: String) async throws -> Int64 {
+        let response: LibrarySaveResponse = try await post(
+            baseURL: baseURL, path: "/api/library",
+            body: LibrarySaveRequest(slug: slug, home: home, name: name)
+        )
+        return response.id
+    }
+
+    /// Drops a saved row by its library id (never by slug/name — the job it
+    /// came from may not exist any more).
+    func removeFromLibrary(baseURL: String, id: Int64) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/library/remove",
+            body: LibraryRemoveRequest(id: id)
+        )
+    }
+
     // MARK: - artifacts
 
     /// Fetches a non-html artifact's raw body as text (webArtifact.url is

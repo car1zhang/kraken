@@ -73,6 +73,19 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/graph/add", mirrorGated(graphAddHandler))
 	mux.HandleFunc("/api/graph/episode-done", mirrorGated(graphEpisodeDoneHandler))
 	mux.HandleFunc("/api/questions", questionsHandler)
+	// The artifact library (library.go). The first two are exact patterns, so
+	// neither shadows the other — the same property that lets "/api/feedback"
+	// and "/api/feedback/sweep" coexist above. The third is a SUBTREE, the one
+	// on this surface beside /api/artifact/ and /api/upload/ over in web: its
+	// path carries the row id and a display filename rather than a query
+	// string, so a saved copy downloads under a real name with a real
+	// extension. Both POSTs gate themselves INLINE (never mirrorGated here) —
+	// /api/library's GET must stay reachable under --mirror, and the remove
+	// gates the same way so a caller reaching the handler directly still hits
+	// the refusal.
+	mux.HandleFunc("/api/library", libraryHandler)
+	mux.HandleFunc("/api/library/remove", libraryRemoveHandler)
+	mux.HandleFunc("/api/library/artifact/", libraryArtifactHandler)
 	// Goals (goals.go). Two exact patterns, so neither shadows the other and
 	// neither is a subtree — the same property that lets "/api/job/raw" and
 	// "/api/job/load" coexist below. /api/goals gates its POST inline so the

@@ -340,6 +340,38 @@ struct ArtifactView: View {
     }
 }
 
+/// The one thing the pager's bookmark control can do for the page on screen.
+///
+/// A two-case enum rather than a bool plus an optional triple because the two
+/// halves carry different payloads and neither is derivable from the other: a
+/// remove needs a library row id, a save needs the artifact-route triple, and
+/// a library SNAPSHOT url has the first while having no second. Deciding once
+/// and carrying the decision is also what keeps the glyph and the press from
+/// disagreeing.
+private enum ArtifactBookmarkAction {
+    /// Not in the library: freeze this live artifact's current bytes.
+    case save(ArtifactRef)
+    /// Already a library row — either this live artifact's own saved copy, or
+    /// (opened from the Memory tab) that copy itself. Removable by id either
+    /// way.
+    case remove(WebLibraryItem)
+
+    var isSaved: Bool {
+        switch self {
+        case .save: return false
+        case .remove: return true
+        }
+    }
+
+    /// The artifact's name, for the accessibility sentence.
+    var name: String {
+        switch self {
+        case .save(let ref): return ref.name
+        case .remove(let item): return item.name
+        }
+    }
+}
+
 // MARK: - artifact pager
 
 /// What the artifact sheet actually presents: one ArtifactView per artifact
@@ -390,6 +422,16 @@ struct ArtifactPagerView: View {
     /// anything in the job's wire list. WebArtifact.id is already the url.
     @State private var selection: String
 
+    /// The saved-artifact library as the server currently holds it — what the
+    /// bookmark paints from. SERVER state, never a local latch: a save that is
+    /// refused leaves the glyph unfilled because the refreshed list still has
+    /// no row for this artifact, which is the honest answer and needs no undo
+    /// path of its own.
+    @State private var library: [WebLibraryItem] = []
+    /// A save/remove POST is in the air — the button disables, so a double tap
+    /// can't post a save and a remove of the same artifact past each other.
+    @State private var bookmarkInFlight = false
+
     init(
         artifacts: [WebArtifact],
         selected: WebArtifact,
@@ -425,7 +467,39 @@ struct ArtifactPagerView: View {
         .background { ThemeBackgroundView() }
         .navigationTitle(pages[index].name)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: baseURL) { await loadLibrary() }
         .toolbar {
+            // The save toggle lives HERE, on the pager's own bar, for exactly
+            // the reason the title does (see `showsFeedbackButton`): every
+            // materialized page's `.toolbar` resolves against the same
+            // NavigationStack, so a per-page bookmark would stack up to three
+            // of them. One toolbar, one instance, painted from the SELECTED
+            // page — which is also the only page a save could mean.
+            //
+            // Present only when there is something for it to do — see
+            // `bookmarkAction`, which is also where the two ways a page can
+            // be removable are reconciled.
+            if let action = bookmarkAction {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await toggleBookmark(action) }
+                    } label: {
+                        Label(
+                            action.isSaved ? "Saved" : "Save",
+                            systemImage: action.isSaved ? "bookmark.fill" : "bookmark"
+                        )
+                    }
+                    .labelStyle(.iconOnly)
+                    .disabled(bookmarkInFlight)
+                    .tint(KTheme.accent)
+                    .accessibilityLabel(
+                        action.isSaved
+                            ? "Remove \(action.name) from the library"
+                            : "Save \(action.name) to the library"
+                    )
+                    .accessibilityAddTraits(action.isSaved ? [.isSelected] : [])
+                }
+            }
             // Hidden outright for a one-page sheet (a single-artifact job, or
             // the singleton fallback): "1 / 1" between two dead chevrons is
             // noise, and today's behavior is exactly what's left without it.
@@ -473,5 +547,71 @@ struct ArtifactPagerView: View {
     private func step(to target: WebArtifact?) {
         guard let target else { return }
         withAnimation { selection = target.url }
+    }
+
+    // MARK: - the save toggle
+
+    /// What the bookmark can do for the page on screen, or nil for no control
+    /// at all.
+    ///
+    /// The library row is consulted FIRST, and that ordering is the whole of
+    /// the cross-client parity fix. Two different urls can name a library row:
+    /// a LIVE artifact url that a saved row froze (matched on `(slug, name)`),
+    /// and the SNAPSHOT url of the row itself — which is what a page opened
+    /// from the Memory tab carries, and which yields no `artifactParts` triple
+    /// at all. Both are removable, by id, and both therefore paint filled;
+    /// gating the control on the triple alone left a snapshot showing no
+    /// bookmark where the web board shows ★ saved and offers the removal.
+    ///
+    /// Save is the fallback, not the default: a page reaches it only by
+    /// parsing as a live artifact address AND matching no row. A url that is
+    /// neither — an upload, a malformed path — gets no control, since its only
+    /// available outcome would be a refusal.
+    private var bookmarkAction: ArtifactBookmarkAction? {
+        if let saved = libraryItemMatching(url: selection, in: library) { return .remove(saved) }
+        if let ref = artifactParts(from: selection) { return .save(ref) }
+        return nil
+    }
+
+    /// Reads the library once per sheet (and again after every toggle). Not
+    /// polled: nothing else on this phone can change the library while this
+    /// sheet is up, so on this phone a repeat read could only ever return what
+    /// the first one did.
+    ///
+    /// A failed read leaves `library` as it was and says nothing: the bookmark
+    /// is a secondary affordance, and an error banner over an artifact the
+    /// reader opened to READ would be the wrong trade. The glyph then reads
+    /// unsaved, and the save it invites is an upsert server-side — so the
+    /// worst case of getting this wrong is a re-save that changes nothing.
+    private func loadLibrary() async {
+        guard let payload = try? await APIClient.shared.fetchLibrary(baseURL: baseURL) else { return }
+        library = payload.items
+    }
+
+    /// Acts on the action the button was PAINTED from, rather than re-deciding
+    /// here: the two must agree, and re-running the decision against a
+    /// `library` that a concurrent `loadLibrary` may have replaced is exactly
+    /// how a press on ★ could post a save.
+    private func toggleBookmark(_ action: ArtifactBookmarkAction) async {
+        guard !bookmarkInFlight else { return }
+        bookmarkInFlight = true
+        defer { bookmarkInFlight = false }
+        do {
+            switch action {
+            case .remove(let saved):
+                try await APIClient.shared.removeFromLibrary(baseURL: baseURL, id: saved.id)
+            case .save(let ref):
+                try await APIClient.shared.saveToLibrary(
+                    baseURL: baseURL, slug: ref.slug, home: ref.home, name: ref.name
+                )
+            }
+        } catch {
+            // Swallowed deliberately, and then re-read below: the button
+            // paints from the server's list, so a refusal shows up as the
+            // glyph simply not changing. Mirroring the intent locally is the
+            // one thing that must not happen — it would claim a save the
+            // server refused.
+        }
+        await loadLibrary()
     }
 }

@@ -170,20 +170,71 @@ struct GraphView: View {
         return base
     }
 
+    /// Which half of the MEMORY tab is on screen.
+    ///
+    /// The two are peers rather than a screen with a drawer on it: the graph is
+    /// what kraken worked out about its own history, the library is what carl
+    /// chose to keep out of it. Both are memory, neither contains the other.
+    ///
+    /// Deliberately not persisted. The tab opens on the graph every time
+    /// because that is the screen with the poll and the layout behind it; a
+    /// remembered LIBRARY mode would make the graph reachable only by a tap
+    /// nobody had a reason to look for.
+    enum Mode: String, CaseIterable {
+        case graph = "Graph"
+        case library = "Library"
+    }
+
+    @State private var mode: Mode = .graph
+
     var body: some View {
         Group {
             if let serverBase {
-                withPolling(withDrawer(screen), base: serverBase)
+                modes(base: serverBase)
             } else {
                 noServer
             }
         }
         .background { ThemeBackgroundView() }
-        .navigationTitle("Graph")
+        // MEMORY, not "Graph": the tab renames on both clients while every
+        // internal name keeps `graph` — the enum case, the deep-link host, the
+        // file names, the routes. This is the label and nothing else.
+        .navigationTitle("Memory")
         // Full-page treatment: the graph is a tab root now, and a tab root gets
         // a large left-aligned title. It carried .inline from its life as a
         // sheet, where a small centred title was right — re-hosting it without
         // re-styling it left it reading as a drawer that had lost its handle.
+    }
+
+    /// The mode switch and whichever half it selects.
+    ///
+    /// The unselected half is not merely hidden — it is out of the tree, and
+    /// that is what leaves the graph idle while the library is up. Two
+    /// separate mechanisms do it, and neither had to learn about this switch:
+    /// `screen`'s own `onDisappear` stops the display loop (and drops the node
+    /// selection), while the 30s poll stops because SwiftUI cancels
+    /// `withPolling`'s `.task(id:)` when its subtree leaves the tree.
+    private func modes(base: String) -> some View {
+        VStack(spacing: 0) {
+            modeSwitch
+            if mode == .graph {
+                withPolling(withDrawer(screen), base: base)
+            } else {
+                LibraryList(baseURL: base)
+            }
+        }
+    }
+
+    private var modeSwitch: some View {
+        Picker("Mode", selection: $mode) {
+            ForEach(Mode.allCases, id: \.self) { value in
+                Text(value.rawValue).tag(value)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
     }
 
     // body is deliberately a composition of small expressions rather than one

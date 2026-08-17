@@ -1754,3 +1754,80 @@ struct GraphNodeDetail: Codable, Equatable {
     let node: GraphNode
     let edges: [GraphEdge]
 }
+
+// MARK: - artifact library
+
+// The saved-artifact library (internal/api/library.go) — a snapshot table, so
+// every row is FROZEN bytes rather than a pointer at a live file: a saved
+// artifact stays readable after its job is torn down, archived or hard
+// deleted. Additive endpoints, `apiContract` stays 6.
+//
+// `Codable` rather than this file's usual `Decodable`, for the reason the
+// graph types above give: the encode half is what lets a test build a payload
+// as values and round-trip it instead of hand-writing JSON. Equatable for the
+// same reason.
+
+// One saved artifact, as GET /api/library lists it. All five keys are always
+// on the wire (no omitempty anywhere in the Go row type), so none is Optional
+// per this file's rule atop.
+//
+// `Web`-prefixed rather than the bare `LibraryItem` the first cut used, and
+// the prefix is load-bearing rather than stylistic: SwiftUI re-exports
+// `DeveloperToolsSupport.LibraryItem`, so in any file importing both SwiftUI
+// and this module the bare name is "ambiguous for type lookup" and will not
+// compile. It also lands on the file's own wire-type convention and matches
+// the web client's `WebLibraryItem`.
+struct WebLibraryItem: Codable, Equatable, Identifiable {
+    /// The `saved_artifacts` row id — the library's own identity, and what
+    /// both the remove POST and the snapshot URL address. `Identifiable`'s
+    /// `id` requirement is satisfied by this field directly.
+    let id: Int64
+    /// The job's display slug AS AT SAVE TIME, frozen with the bytes: the
+    /// job it came from may since have been archived (freeing the slug) or
+    /// deleted, so this is a label, never a lookup key.
+    let slug: String
+    /// The artifact's server-side name, slashes intact for a nested one.
+    let name: String
+    /// Unix millis.
+    let savedAt: Int64
+    /// `/api/library/artifact/<id>/<name>` — the SNAPSHOT route, not the
+    /// live-artifact one. Served by the server rather than built here so the
+    /// escaping is the server's own.
+    let url: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, slug, name
+        case savedAt = "saved_at"
+        case url
+    }
+}
+
+// GET /api/library — `items` is always an array, never null.
+struct LibraryPayload: Codable, Equatable {
+    let items: [WebLibraryItem]
+}
+
+// POST /api/library's body: the same {slug, home, name} triple
+// FeedbackCreateRequest carries, and for the same reason — it is the address
+// of one artifact under the artifact route, recovered from its URL by
+// `artifactParts(from:)`. `home` is the artifact-route home set
+// ("cell"|"pluto"|"archive"). Its own tiny type rather than a reused one: the
+// server refuses an unknown field outright, so a request struct may only ever
+// carry the keys this endpoint names.
+struct LibrarySaveRequest: Encodable {
+    let slug: String
+    let home: String
+    let name: String
+}
+
+// POST /api/library's success body. `id` is the saved row — the SAME id on a
+// re-save, since the server upserts by (job, name) rather than duplicating.
+struct LibrarySaveResponse: Decodable {
+    let ok: Bool
+    let id: Int64
+}
+
+// POST /api/library/remove's body: the row id and nothing else.
+struct LibraryRemoveRequest: Encodable {
+    let id: Int64
+}

@@ -116,14 +116,16 @@ func contractKronosOrchTotal(t *testing.T, s *Store) int64 {
 // schema v24
 // ---------------------------------------------------------------------------
 
-// TestContractKronosSchemaV24Lands pins the version and both tables' frozen
-// column sets. The contract states `schemaVersion = 24` outright, so the
-// equality is the contract rather than a snapshot of today — a later migration
-// appended on top of this build fails here on purpose, which is the signal
-// that this file's v23 walk below needs its list extended.
+// TestContractKronosSchemaV24Lands pins the version FLOOR and both tables'
+// frozen column sets. A floor rather than the equality the contract wrote:
+// v25 (saved_artifacts) landed in a concurrent branch days after this file
+// was authored, and an exact pin fails on every later migration while
+// asserting nothing kronos needs — the v23 walk below already fails loudly
+// when a new migration's table is missing from its list, which is the real
+// extension signal (it just fired for v25).
 func TestContractKronosSchemaV24Lands(t *testing.T) {
-	if schemaVersion != 24 {
-		t.Fatalf("schemaVersion = %d, want 24 (the contract freezes the number)", schemaVersion)
+	if schemaVersion < 24 {
+		t.Fatalf("schemaVersion = %d, want >= 24 (kronos' orch_inbox lands at 24)", schemaVersion)
 	}
 	s := openTest(t)
 	var version int
@@ -188,6 +190,10 @@ func TestContractKronosV24MigratesFromV23(t *testing.T) {
 	// Roll the shape back to a genuine v23: exactly the table v24 adds, gone,
 	// and the version stamp lowered.
 	for _, stmt := range []string{
+		// v25 adds saved_artifacts (the artifact library) — a later
+		// migration's table in this walk's terms; leftover, it fails that
+		// step's bare CREATE. Newest first.
+		`DROP TABLE IF EXISTS saved_artifacts`,
 		`DROP TABLE IF EXISTS orch_inbox`,
 		`PRAGMA user_version = 23`,
 	} {

@@ -24,13 +24,23 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v25: drop saved_artifacts. Nothing to put back — v25 is a single
+	// additive CREATE over a v24 shape that had no such table, so the drop is
+	// the whole reversal (the v18 arm below owns the bare-CREATE-vs-IF-NOT-
+	// EXISTS reasoning this arm exists to serve), and its UNIQUE index goes
+	// with it, as SQLite drops a table's indexes along with the table.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 25 {
+		if _, err := s.db.Exec(`DROP TABLE saved_artifacts`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v25): %v", target, err)
+		}
+	}
 	// Reverse v24: drop kronos' one table. It is brand new at v24 (schemaV24
 	// adds it and touches nothing else), so there is nothing to put back in
 	// its place and no rows to carry — the v17 arm's situation exactly, and
 	// the same ruling: this helper reproduces an older SHAPE.
-	//
-	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
-	// migrate() applies them.
 	if target < 24 {
 		for _, stmt := range []string{
 			`DROP TABLE orch_inbox`,

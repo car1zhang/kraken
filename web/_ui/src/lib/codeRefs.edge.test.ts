@@ -303,6 +303,12 @@ describe("a plain <code> is not a click target", () => {
         onNavigate: () => {},
         onAskBranched: () => {},
         onClose: () => {},
+        // the library slice of the integrator. Required props, but this call
+        // site is cast `as never`, so omitting them is a RUNTIME crash rather
+        // than a compile error — the star reads the list on the first render.
+        library: [],
+        onSaveArtifact: async () => {},
+        onRemoveSaved: async () => {},
         mutate: edgeMutate,
       } as never),
     );

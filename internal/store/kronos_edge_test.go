@@ -144,6 +144,10 @@ func TestEdgeKronosMigrationPreservesAPopulatedV23DB(t *testing.T) {
 
 	// Rewind to a genuine v23 shape: v24's table gone, user_version 23.
 	for _, stmt := range []string{
+		// v25 adds saved_artifacts (the artifact library) — a later
+		// migration's table in this walk's terms; leftover, it fails that
+		// step's bare CREATE. Newest first.
+		`DROP TABLE IF EXISTS saved_artifacts`,
 		`DROP TABLE IF EXISTS orch_inbox`,
 		`PRAGMA user_version = 23`,
 	} {

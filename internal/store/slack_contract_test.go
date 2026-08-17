@@ -245,6 +245,9 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// jobs.ready and the prereqs table, both of which a genuine v16 database
 	// had and this fresh one no longer does.
 	for _, stmt := range []string{
+		// v25 adds saved_artifacts, the artifact library. Newest first, like
+		// every entry below it.
+		`DROP TABLE IF EXISTS saved_artifacts`,
 		// v24 adds kronos' orch_inbox — a later migration's table in this
 		// walk's terms, and a leftover one fails that step's bare CREATE
 		// exactly as a leftover linear_issues would.

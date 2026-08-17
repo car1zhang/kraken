@@ -2798,6 +2798,78 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .graph-fact.stale .graph-src { text-decoration: none; }
 .graph-empty-facts { font: 10px var(--mono); color: var(--muted); }
 
+/* ---- MEMORY's mode switch: GRAPH | LIBRARY ----
+   Two segments in the header, at .graph-lbl's scale rather than the tabs'
+   — this is a switch INSIDE a view, and sizing it like the chrome's view tabs
+   would make it compete with them. The active segment wears --skill-graph
+   exactly as .graph-title does, so the whole header reads as one family. */
+.graph-modes { display: flex; gap: 1px; }
+.graph-mode {
+  background: transparent; border: 1px solid var(--border);
+  font: 700 8.5px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--muted); padding: 3px 9px;
+  white-space: nowrap;
+}
+.graph-mode:hover:not(.on) { color: var(--fg); border-color: var(--border-strong); }
+.graph-mode.on {
+  background: color-mix(in srgb, var(--skill-graph) 16%, var(--b1));
+  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
+  color: var(--skill-graph);
+}
+
+/* ---- LIBRARY mode: the saved artifacts ----
+   The DREAM view's pane recipe (.dream-pane / .dream-panehdr / .dream-scroll /
+   .dream-empty) with this view's prefix and this view's accent — it is the same
+   object, a list of things to read, and re-deriving a second list shape for it
+   would only be a second thing to keep in step. */
+.graph-lib { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.graph-libhdr { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; }
+/* the shared .graph-lbl carries a bottom margin for the rail's stacked rows;
+   on one header line it would push the row out of alignment */
+.graph-libhdr .graph-lbl { margin: 0; }
+.graph-libfilter {
+  width: 190px; padding: 3px 8px;
+  background: color-mix(in srgb, var(--ac) 5%, var(--b1));
+  border: 1px solid var(--border); color: var(--fg);
+  font: 10px var(--mono);
+}
+.graph-libfilter:focus { outline: none; border-color: var(--skill-graph); }
+.graph-libscroll {
+  flex: 1; min-height: 0; overflow-y: auto;
+  background: color-mix(in srgb, var(--ac) 3%, var(--b1));
+  border: 1px solid var(--border);
+  padding: 12px;
+}
+.graph-libempty {
+  color: var(--muted); opacity: 0.7; font-size: 10px;
+  padding: 26px 10px; text-align: center;
+}
+.graph-librow {
+  display: flex; align-items: stretch;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--ac) 2%, var(--b0));
+}
+.graph-librow + .graph-librow { margin-top: 8px; }
+.graph-libopen {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+  background: none; border: 0; padding: 8px 10px; text-align: left;
+}
+.graph-librow:hover { border-color: color-mix(in srgb, var(--skill-graph) 45%, var(--b1)); }
+.graph-libopen:hover .graph-libname { color: var(--skill-graph); }
+.graph-libname {
+  max-width: 100%; font: 500 10px var(--mono); color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.graph-libmeta { font: 8.5px var(--mono); color: var(--muted); letter-spacing: 0.04em; }
+.graph-librm {
+  flex: none; width: 26px;
+  background: none; border: 0; border-left: 1px solid var(--divider);
+  color: var(--muted); font-size: 10px; line-height: 1;
+}
+.graph-librm:hover { color: var(--ac2); }
+.graph-librm:disabled { opacity: 0.4; }
+
 @media (max-width: 900px) {
   .graphview { height: auto; }
   .graph-stage { grid-template-columns: 1fr; }

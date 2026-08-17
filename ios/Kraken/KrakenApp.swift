@@ -113,7 +113,10 @@ struct KrakenApp: App {
     }
 }
 
-/// Five tabs, in this order: Board · Kronos · Sessions · Graph · Settings.
+/// Five tabs, in this order: Board · Kronos · Sessions · Memory · Settings.
+///
+/// "Memory" is the fourth tab's LABEL only — it is the graph screen, its tag is
+/// still `AppRouter.Tab.graph`, and `kraken://graph` still selects it.
 ///
 /// Usage and Log used to be tabs three and four. They are drawers now — Usage
 /// off the Board's toolbar, Log off a Settings row — which bought the slot
@@ -148,7 +151,13 @@ struct RootTabView: View {
             // The board toolbar's own graph glyph, carried over with the
             // screen it opened — carl on the alternative: "this brain is
             // kinda buns".
-            .tabItem { Label("Graph", systemImage: "point.3.connected.trianglepath.dotted") }
+            //
+            // The LABEL says Memory: the tab holds two things kraken keeps —
+            // the knowledge graph and the saved-artifact library — and "Graph"
+            // named only one of them. Nothing internal renamed with it:
+            // `AppRouter.Tab.graph`, `kraken://graph` and the file names all
+            // stay, so a deep link shipped in an older build still lands here.
+            .tabItem { Label("Memory", systemImage: "point.3.connected.trianglepath.dotted") }
             .tag(AppRouter.Tab.graph)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }

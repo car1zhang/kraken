@@ -27,6 +27,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Sigma from "sigma";
 
 import { useGraph, useGraphNode, type GraphEdge } from "../../hooks/useGraph.ts";
+import type { LibraryModel } from "../../hooks/useLibrary.ts";
+import { filterLibrary } from "../../lib/library.ts";
 import {
   colorOf,
   DEFAULT_FILTERS,
@@ -63,9 +65,20 @@ import {
 /** The slider's ceiling. A fact asserted by ten separate episodes is settled. */
 const MAX_SIGHTINGS = 10;
 
+/**
+ * The two things the MEMORY view can be showing.
+ *
+ * Both are kraken remembering something for carl, which is the whole reason
+ * they share a tab: the graph is what its agents worked out, the library is
+ * what he chose to keep. `"graph"` is the internal name throughout — the view's
+ * id, its classes and this file all keep it (only the tab and the header say
+ * MEMORY), so the mode value keeps it too.
+ */
+type MemoryMode = "graph" | "library";
+
 export interface GraphViewProps {
   /**
-   * Whether GRAPH is the visible view. Gates the poll and drives `hidden`.
+   * Whether MEMORY is the visible view. Gates the poll and drives `hidden`.
    *
    * Keep this component MOUNTED across view switches, exactly as LogView and
    * DreamView are: the filter rail, the selection and — more expensively — the
@@ -74,6 +87,19 @@ export interface GraphViewProps {
    * where carl had panned to on every tab switch.
    */
   active: boolean;
+  /**
+   * The saved-artifact library — App's ONE poll, shared with the artifact
+   * viewer's ☆/★ button so the two can never disagree about what is saved.
+   */
+  library: LibraryModel;
+  /**
+   * Open a saved snapshot in the artifact viewer, by its LIBRARY url. That url
+   * serves the frozen bytes rather than the live file, which is what makes a
+   * row from a torn-down (or hard-deleted) job still readable.
+   */
+  onOpenArtifact: (url: string, name: string) => void;
+  /** Drop one saved row. Routed through the shared mutate by the integrator. */
+  onRemoveSaved: (id: number) => Promise<void>;
 }
 
 /**
@@ -162,8 +188,152 @@ function Facts({
   );
 }
 
-export function GraphView({ active }: GraphViewProps) {
+/**
+ * LIBRARY mode: the saved artifacts, newest first, as the server served them.
+ *
+ * Built on the DREAM view's pane recipe (a header line with a count, one
+ * scroller, one empty state) because it is the same object — a list of things
+ * to read — and namespaced `graph-lib*` for the same reason the rest of this
+ * view is namespaced `graph-`.
+ *
+ * The list is rendered in ARRIVAL ORDER and the filter only narrows it: the
+ * server sorts saved_at DESC (ties id DESC) and nothing here re-sorts, so a row
+ * never moves under the cursor that is aiming at it.
+ */
+function LibraryPane({
+  hidden,
+  library,
+  onOpenArtifact,
+  onRemoveSaved,
+}: {
+  /**
+   * Hidden rather than unmounted, for the reason App keeps this whole view
+   * mounted: the filter box is component state and a toggle back to the graph
+   * would otherwise throw away what carl had typed into it.
+   */
+  hidden: boolean;
+  library: LibraryModel;
+  onOpenArtifact: (url: string, name: string) => void;
+  onRemoveSaved: (id: number) => Promise<void>;
+}) {
+  const [q, setQ] = useState("");
+  // Which rows have a remove in flight — the double-press guard. A set rather
+  // than one boolean: the rows are independent, and locking the whole list
+  // because one row is mid-request would be a worse lie than the one it fixes.
+  const [removing, setRemoving] = useState<ReadonlySet<number>>(
+    () => new Set<number>(),
+  );
+  const rows = useMemo(
+    () => filterLibrary(library.items, q),
+    [library.items, q],
+  );
+
+  const remove = async (id: number) => {
+    if (removing.has(id)) return;
+    setRemoving((prev) => new Set(prev).add(id));
+    // No try/catch and no failure branch: the caller routes this through the
+    // shared mutate, which parks the server's own sentence in the clock corner
+    // and never rejects. The row's fate is whatever the refetched list says.
+    await onRemoveSaved(id);
+    setRemoving((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  // An endpoint failure says so IN PLACE OF the empty state — "nothing saved
+  // yet" over a failed read would be a claim this pane cannot make.
+  const empty = library.error
+    ? "couldn't load the library: " + library.error.message
+    : !library.loaded
+      ? "loading…"
+      : library.items.length
+        ? "nothing matches that filter"
+        : "nothing saved yet — ☆ save in the artifact viewer keeps a frozen copy here";
+
+  return (
+    <section className="graph-lib" hidden={hidden}>
+      <div className="graph-libhdr">
+        <span className="graph-lbl">Saved artifacts</span>
+        <span className="graph-stat">
+          {library.items.length
+            ? `${rows.length} of ${library.items.length}`
+            : ""}
+        </span>
+        <span className="spacer" />
+        <input
+          className="graph-libfilter"
+          type="search"
+          value={q}
+          placeholder="filter by name or job…"
+          aria-label="filter saved artifacts"
+          onChange={(ev) => setQ(ev.target.value)}
+        />
+      </div>
+      <div className="graph-libscroll">
+        {rows.length ? (
+          rows.map((it) => (
+            <div className="graph-librow" key={it.id}>
+              {/* the whole row opens it — the ✕ beside it is the one part
+                  that does not, so it sits outside this button rather than
+                  nested inside it (a button in a button is invalid markup and
+                  swallows its own click) */}
+              <button
+                className="graph-libopen"
+                title={`${it.slug} / ${it.name}`}
+                onClick={() =>
+                  onOpenArtifact(it.url, `${it.slug}/${it.name}`)
+                }
+              >
+                <span className="graph-libname">{it.name}</span>
+                <span className="graph-libmeta">
+                  {it.slug} · {shortDate(it.saved_at)}
+                </span>
+              </button>
+              <button
+                className="graph-librm"
+                title="remove from the library"
+                aria-label={`remove ${it.name}`}
+                disabled={removing.has(it.id)}
+                onClick={() => void remove(it.id)}
+              >
+                ✕
+              </button>
+            </div>
+          ))
+        ) : (
+          <div className="graph-libempty">{empty}</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function GraphView({
+  active,
+  library,
+  onOpenArtifact,
+  onRemoveSaved,
+}: GraphViewProps) {
   const { nodes: polledNodes, edges: polledEdges, stats, error, loaded } = useGraph(active);
+
+  // GRAPH | LIBRARY. Component state, so which half carl was reading survives a
+  // trip to the board exactly as the camera and the filter rail do.
+  const [mode, setMode] = useState<MemoryMode>("graph");
+  /**
+   * What "the canvas is on screen" means now.
+   *
+   * Every place that read `active` for the CANVAS or the SIMULATION reads this
+   * instead, and the substitution is load-bearing rather than tidy: a container
+   * hidden behind the library list is exactly as zero-sized as one hidden
+   * behind another view, sigma's resize() throws on a zero-sized container, and
+   * the recovery on the way back is this effect's own early-return branch
+   * calling resize()+refresh() on the flip. The graph POLL still keys on
+   * `active` alone — the payload is the whole graph and it is worth having
+   * warm when the toggle comes back.
+   */
+  const graphActive = active && mode === "graph";
 
   // Identity-STABLE node/edge arrays. usePoll hands back freshly-parsed
   // arrays every 30 s even when the payload is byte-identical — which for a
@@ -275,8 +445,8 @@ export function GraphView({ active }: GraphViewProps) {
   // after a tab switch) captured active === false and froze the simulation
   // AND dragging for the whole session (review finding, r3 — the effect's
   // dep re-ran on the change but bailed without rebuilding the closure).
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  const activeRef = useRef(graphActive);
+  activeRef.current = graphActive;
   // The press being tracked: sigma key + screen coords at downNode, and
   // whether it has crossed DRAG_THRESHOLD_PX into a real drag.
   const pressRef = useRef<{ key: string; sx: number; sy: number; dragging: boolean } | null>(null);
@@ -363,7 +533,7 @@ export function GraphView({ active }: GraphViewProps) {
 
   // ------------------------------------------------------------ the canvas
   useEffect(() => {
-    if (!active) return;
+    if (!graphActive) return;
     const existing = sigmaRef.current;
     if (existing) {
       // The container had zero size while `hidden`, so sigma's cached
@@ -424,7 +594,7 @@ export function GraphView({ active }: GraphViewProps) {
       // of the canvas rather than taking the page down.
       setRenderError(err instanceof Error ? err.message : String(err));
     }
-  }, [active]);
+  }, [graphActive]);
 
   // Kill on unmount only. App keeps this view mounted for the whole session,
   // so in practice this runs when the page goes away — but a leaked WebGL
@@ -563,7 +733,7 @@ export function GraphView({ active }: GraphViewProps) {
       cancelAnimationFrame(rafRef.current);
       rafLiveRef.current = false;
     };
-  }, [physicsOn, hidden, active, positions, edges, filters, edgeByKey]);
+  }, [physicsOn, hidden, graphActive, positions, edges, filters, edgeByKey]);
 
   // The handle's real teardown: unmount only.
   useEffect(
@@ -724,71 +894,125 @@ export function GraphView({ active }: GraphViewProps) {
   return (
     <main className="graphview" id="graph" hidden={!active}>
       <div className="graph-hdr">
-        <span className="graph-title">knowledge graph</span>
-        <span className="spacer" />
-        <span className="graph-stat">
-          <b>{(stats?.nodes ?? nodes.length).toLocaleString()}</b> nodes ·{" "}
-          <b>{(stats?.edges ?? edges.length).toLocaleString()}</b> edges
-          {/* "current" is counted CLIENT-side from the same isInvalidated
-              predicate the canvas draws with — the server's live_edges counts
-              system-time liveness only (expired_at = 0), so quoting it here
-              put a bigger number in the header than edges on the canvas,
-              with nothing explaining the gap (review finding). */}
-          <>
-            {" "}
-            · <b>{edges.filter((e) => !isInvalidated(e)).length.toLocaleString()}</b> current
-          </>
-          {/* The mockup's header reads "layout rev #219". There is no layout
-              revision on the wire — positions are recomputed in place — so the
-              episode count stands in: it is the number that answers the same
-              question, "how much has this picture learned". */}
-          {stats?.episodes !== undefined ? (
-            <>
-              {" "}
-              · <b>{stats.episodes.toLocaleString()}</b> episodes
-            </>
-          ) : null}
-          {stats?.pending ? <> · {stats.pending} pending</> : null}
-          {stats?.missing_embeddings ? (
-            <> · {stats.missing_embeddings} unembedded</>
-          ) : null}
+        {/* MEMORY, not "knowledge graph": the tab and this header are the two
+            places the rename is visible, and everything else — the view id, the
+            `graph-` class family, this file, every /api/graph route — keeps the
+            old name on purpose. */}
+        <span className="graph-title">memory</span>
+        <span className="graph-modes">
+          <button
+            className={"graph-mode" + (mode === "graph" ? " on" : "")}
+            aria-pressed={mode === "graph"}
+            title="the knowledge graph — what kraken worked out"
+            onClick={() => setMode("graph")}
+          >
+            graph
+          </button>
+          <button
+            className={"graph-mode" + (mode === "library" ? " on" : "")}
+            aria-pressed={mode === "library"}
+            title="saved artifacts — frozen copies you chose to keep"
+            onClick={() => setMode("library")}
+          >
+            library
+          </button>
         </span>
-        {error ? (
-          <span className="graph-stat err">couldn&apos;t refresh: {error.message}</span>
+        <span className="spacer" />
+        {/* the counts, the refresh error and the physics toggle are all
+            statements ABOUT THE CANVAS — in library mode there is no canvas for
+            them to describe, so they leave with it rather than sitting over a
+            list they have nothing to do with */}
+        {mode === "graph" ? (
+          <>
+            <span className="graph-stat">
+              <b>{(stats?.nodes ?? nodes.length).toLocaleString()}</b> nodes ·{" "}
+              <b>{(stats?.edges ?? edges.length).toLocaleString()}</b> edges
+              {/* "current" is counted CLIENT-side from the same isInvalidated
+                  predicate the canvas draws with — the server's live_edges
+                  counts system-time liveness only (expired_at = 0), so quoting
+                  it here put a bigger number in the header than edges on the
+                  canvas, with nothing explaining the gap (review finding). */}
+              <>
+                {" "}
+                ·{" "}
+                <b>
+                  {edges.filter((e) => !isInvalidated(e)).length.toLocaleString()}
+                </b>{" "}
+                current
+              </>
+              {/* The mockup's header reads "layout rev #219". There is no
+                  layout revision on the wire — positions are recomputed in
+                  place — so the episode count stands in: it is the number that
+                  answers the same question, "how much has this picture
+                  learned". */}
+              {stats?.episodes !== undefined ? (
+                <>
+                  {" "}
+                  · <b>{stats.episodes.toLocaleString()}</b> episodes
+                </>
+              ) : null}
+              {stats?.pending ? <> · {stats.pending} pending</> : null}
+              {stats?.missing_embeddings ? (
+                <> · {stats.missing_embeddings} unembedded</>
+              ) : null}
+            </span>
+            {error ? (
+              <span className="graph-stat err">
+                couldn&apos;t refresh: {error.message}
+              </span>
+            ) : null}
+            <button
+              className={"graph-chk graph-physics" + (physicsOn ? "" : " off")}
+              aria-pressed={physicsOn}
+              title={
+                physicsOn
+                  ? "physics on — drag nodes; click to toggle off"
+                  : "physics off — click to turn on"
+              }
+              onClick={() => {
+                // The next pref is derived from the PREF AXIS (what would
+                // physicsAllowed say), never from the composite physicsOn:
+                // that composite also encodes renderError/!ready, so on a
+                // machine with no WebGL the old derivation flipped the STORED
+                // pref back and forth under a button that looked dead — and the
+                // parity it happened to stop at then governed the next machine
+                // (review finding). Explicit both ways: auto is reachable only
+                // by never touching the button.
+                const next: PhysicsPref = physicsAllowed(
+                  visibleCount,
+                  physicsPref,
+                  reducedMotion,
+                )
+                  ? "off"
+                  : "on";
+                writePhysicsPref(window.localStorage, next);
+                setPhysicsPref(next);
+              }}
+            >
+              {physicsOn
+                ? "physics on"
+                : visibleCount > PHYSICS_NODE_CAP && physicsPref !== "on"
+                  ? `physics off — ${visibleCount.toLocaleString()} nodes`
+                  : "physics off"}
+            </button>
+          </>
         ) : null}
-        <button
-          className={"graph-chk graph-physics" + (physicsOn ? "" : " off")}
-          aria-pressed={physicsOn}
-          title={
-            physicsOn
-              ? "physics on — drag nodes; click to toggle off"
-              : "physics off — click to turn on"
-          }
-          onClick={() => {
-            // The next pref is derived from the PREF AXIS (what would
-            // physicsAllowed say), never from the composite physicsOn:
-            // that composite also encodes renderError/!ready, so on a
-            // machine with no WebGL the old derivation flipped the STORED
-            // pref back and forth under a button that looked dead — and the
-            // parity it happened to stop at then governed the next machine
-            // (review finding). Explicit both ways: auto is reachable only
-            // by never touching the button.
-            const next: PhysicsPref = physicsAllowed(visibleCount, physicsPref, reducedMotion)
-              ? "off"
-              : "on";
-            writePhysicsPref(window.localStorage, next);
-            setPhysicsPref(next);
-          }}
-        >
-          {physicsOn
-            ? "physics on"
-            : visibleCount > PHYSICS_NODE_CAP && physicsPref !== "on"
-              ? `physics off — ${visibleCount.toLocaleString()} nodes`
-              : "physics off"}
-        </button>
       </div>
 
-      <div className="graph-stage">
+      <LibraryPane
+        hidden={mode !== "library"}
+        library={library}
+        onOpenArtifact={onOpenArtifact}
+        onRemoveSaved={onRemoveSaved}
+      />
+
+      {/* Hidden rather than unmounted, and NOT for the filter box's reason: the
+          sigma instance, its WebGL context and its camera live on this
+          element's child, so unmounting the stage in library mode would rebuild
+          the context and lose the camera on every toggle — the same trade App
+          makes for the whole view. `graphActive` above is what tells sigma to
+          resize itself on the way back. */}
+      <div className="graph-stage" hidden={mode !== "graph"}>
         <aside className="graph-rail">
           <p className="graph-lbl">Node type</p>
           {types.length ? (
