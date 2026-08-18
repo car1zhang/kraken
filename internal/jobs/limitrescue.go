@@ -239,6 +239,124 @@ func limitHitTriggerDue(stamp int64, now time.Time) bool {
 	return stamp == 0 || now.Sub(time.Unix(stamp, 0)) > limitRescueRetryInterval
 }
 
+// --- the main-swap watermark ---
+//
+// Every swap moves the ONE login every claude on this Mac shares, so a swap
+// performed for one owner is a repair that silently landed for every other
+// owner sitting on the same limit. Nothing said so before: an owner's record
+// still read SwappedAt == 0, so its rotate arm came around and moved a SECOND
+// account for a limit the first swap had already cleared — and the resume it
+// was actually owed, the only step that gets a latched claude off the dead
+// credential, never fired at all.
+//
+// The watermark is the smallest thing that closes that: one kv row recording
+// when main last moved and to whom, written by every jobs-side swap success
+// and read by every rescue pass. adoptLandedSwap is the whole of what a
+// reader does with it.
+
+// mainSwapKVKey holds it. A kv singleton rather than a table for the reason
+// the rotation notice state is a file: it is one small value the daemon
+// rewrites, and nothing ever queries a history of it.
+const mainSwapKVKey = "main_swap"
+
+// mainSwap is what that key holds. `at` is unix SECONDS — the same unit every
+// timestamp on the LimitHit record it is compared against uses, and the one
+// place a millis/seconds mixture would be invisible: a millis stamp is always
+// greater than a seconds one, so `swapAt >= hit.At` would adopt every hit
+// that ever existed onto the first swap the machine ever made.
+type mainSwap struct {
+	At int64  `json:"at"`
+	To string `json:"to"`
+}
+
+// recordMainSwap stamps a CONFIRMED swap. Called after the swap has actually
+// committed and before the rotation lock is released, so the row can never
+// claim a swap that a later failure rolled back, and can never be missing
+// while another process is already free to take the lock and swap again.
+//
+// It returns its failure rather than swallowing it, and every caller logs and
+// carries on: a lost watermark costs a later owner one redundant swap, while
+// failing the swap over its bookkeeping costs the account move that was the
+// whole point.
+func recordMainSwap(to string, now time.Time) error {
+	st := ActiveStore()
+	if st == nil {
+		return fmt.Errorf("record main swap to %s: no store wired", to)
+	}
+	data, err := json.Marshal(mainSwap{At: now.Unix(), To: to})
+	if err != nil {
+		return fmt.Errorf("record main swap to %s: %w", to, err)
+	}
+	if err := st.SetKV(mainSwapKVKey, string(data)); err != nil {
+		return fmt.Errorf("record main swap to %s: %w", to, err)
+	}
+	return nil
+}
+
+// RecordMainSwap is recordMainSwap for the one swap success site outside this
+// package: internal/api's POST /api/account/switch, which swaps main through
+// core.SwapMainTo directly. A swap made from the board is exactly as
+// machine-wide as one the rescue makes, so a rescue that could not see it
+// would swap a second account behind carl's own manual switch.
+func RecordMainSwap(to string, now time.Time) error { return recordMainSwap(to, now) }
+
+// readMainSwap returns the watermark, or (0, "") when there isn't a usable
+// one. Errorless like ReadLimitHit and for the same direction of caution: no
+// store, no row and a row that no longer parses all mean "no swap is known to
+// have landed", which costs at most one redundant swap, where the opposite
+// reading strands an owner waiting for a resume that nothing will perform.
+func readMainSwap() (at int64, to string) {
+	st := ActiveStore()
+	if st == nil {
+		return 0, ""
+	}
+	raw, err := st.GetKV(mainSwapKVKey)
+	if err != nil || raw == "" {
+		return 0, ""
+	}
+	var s mainSwap
+	if json.Unmarshal([]byte(raw), &s) != nil {
+		return 0, ""
+	}
+	return s.At, s.To
+}
+
+// adoptLandedSwap folds a swap somebody else performed onto this owner's own
+// unresolved hit, so the decide chain's landed-swap gate takes over from its
+// rotate arm. Pure, so the whole rule is table-testable with no store and no
+// clock.
+//
+// Every condition is a way the adoption would otherwise be wrong. A record
+// with no hit (At == 0) or an already-resolved one has nothing to repair; a
+// non-rate_limit error is not fixed by a different account, so a swap says
+// nothing about it; a record that already carries SwappedAt has its own swap
+// and must keep it, since overwriting the stamp would restart the settle
+// window and defer the resume it is waiting for; a watermark naming no
+// account (swapTo == "") is a row nothing should ever have written, and
+// adopting it would send the resume chasing a credential with no name. And
+// the swap must be at least as new as the hit: a swap that landed BEFORE this limit was recorded
+// is the account the limit was hit ON, and adopting it would send the owner
+// to resume onto the very credential that is exhausted, resolving the hit for
+// good.
+//
+// It stamps SwappedAt/SwappedTo and NOTHING else — not Attempts, not
+// HandledAt, not Outcome. The adoption is an observation, not a rescue round:
+// what to do about it is the decide chain's, whose landed-swap gate already
+// sits above the manual-pin gate for the reason stated there — once the
+// credential has really moved, the resume must complete whatever the mode
+// says.
+func adoptLandedSwap(hit LimitHit, swapAt int64, swapTo string) (LimitHit, bool) {
+	if hit.At == 0 || hit.HandledAt != 0 || hit.Error != "rate_limit" || hit.SwappedAt != 0 {
+		return hit, false
+	}
+	if swapTo == "" || swapAt < hit.At {
+		return hit, false
+	}
+	hit.SwappedAt = swapAt
+	hit.SwappedTo = swapTo
+	return hit, true
+}
+
 // limitRescueDecide is the whole decision surface, pure over the five facts
 // it is handed so the gate chain is table-testable without a store, tmux or a
 // clock. The ORDER of the gates is itself the contract — a later gate must
@@ -400,9 +518,19 @@ func selectRescueTarget(now time.Time) (target, mainEmail, why string) {
 	return target, mainEmail, why
 }
 
-// rescueLimitedCell performs the swap half of a rotate decision. The step
-// order is the obligation: take the same cross-process lock RotationGate and
-// every manual switch take BEFORE selecting, so a target can never be chosen
+// rescueLimitedCell performs the swap half of a CELL's rotate decision — the
+// job reduced to its slug and handed to rescueSwap, which is the whole of the
+// body it used to hold. A cell and a standing agent swap the same machine's
+// one login, so nothing in that body could honestly differ between them, and
+// two copies of it would be two places for the lock order below to be got
+// wrong.
+func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, err error) {
+	return rescueSwap(j.Slug, now)
+}
+
+// rescueSwap performs the swap half of a rotate decision. The step order is
+// the obligation: take the same cross-process lock RotationGate and every
+// manual switch take BEFORE selecting, so a target can never be chosen
 // against a pool another swap is mid-way through rewriting.
 //
 // The swap itself is core.SwapMainTo unchanged — the journal, the save-back
@@ -410,7 +538,7 @@ func selectRescueTarget(now time.Time) (target, mainEmail, why string) {
 // belong to exactly one implementation — reached through rotation.go's
 // swapMain seam, the same identifier RotationGate and the account API use,
 // which is what makes the swapped path exercisable without a real keychain.
-// This is the swap half only — it kills nothing; resumeCellAgents does that,
+// This is the swap half only — it kills nothing; the resume half does that,
 // a settle window later, once the swap is recorded.
 //
 // A landed swap also kicks one usage pass, so the snapshot's idea of who
@@ -419,7 +547,11 @@ func selectRescueTarget(now time.Time) (target, mainEmail, why string) {
 // the board read the snapshot). Same single-flight the rotation gate's own
 // post-swap kick uses, and non-blocking for the same reason: this runs inside
 // a daemon tick that every other job's pass is queued behind.
-func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, err error) {
+//
+// label names the owner in the event log and nowhere else — a slug for a
+// cell, an agent id for a standing agent, and in both cases what carl would
+// search the log for.
+func rescueSwap(label string, now time.Time) (toEmail string, outcome string, err error) {
 	release, ok, lockErr := AcquireRotationLock()
 	if !ok {
 		// Contention is the ordinary case and is not an error — the other
@@ -428,7 +560,7 @@ func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, e
 		// happened", so it reports the same outcome and is logged here rather
 		// than raised: the caller's job is to count the attempt either way.
 		if lockErr != nil {
-			dlogEvent("info", "limit-rescue-skipped", "%s: rotation lock unavailable: %v", j.Slug, lockErr)
+			dlogEvent("info", "limit-rescue-skipped", "%s: rotation lock unavailable: %v", label, lockErr)
 		}
 		return "", "lock-busy", nil
 	}
@@ -436,12 +568,27 @@ func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, e
 
 	target, _, why := selectRescueTarget(now)
 	if target == "" {
-		dlogEvent("info", "limit-rescue-skipped", "%s: no rotation target: %s", j.Slug, why)
+		dlogEvent("info", "limit-rescue-skipped", "%s: no rotation target: %s", label, why)
 		return "", "no-target", nil
 	}
 	_, to, swapErr := swapMain(target)
 	if swapErr != nil {
 		return "", "swap-failed", swapErr
+	}
+	// Stamped here, inside the lock and immediately after the swap committed,
+	// so every OTHER owner sitting on the same exhausted account learns that
+	// its repair has already happened (adoptLandedSwap) rather than swapping a
+	// second one. The clock is a FRESH read, never the caller's `now`: the
+	// adoption test is `swapAt >= hit.At`, the caller's now predates the swap
+	// by however long selection and the keychain write took (and on the
+	// standing path it was the tick-start clock), and a pre-swap stamp makes
+	// every hit recorded during the swap itself — the documented herd, every
+	// claude failing within seconds of the wall — read as NEWER than the
+	// repair and rotate a second account anyway. Logged and carried on when it
+	// fails: the account really has moved, and there is nothing to be gained
+	// by reporting the swap as failed.
+	if stampErr := recordMainSwap(to, time.Now()); stampErr != nil {
+		dlogEvent("error", "limit-rescue-failed", "%s: swapped to %s but recording the main-swap watermark failed — another owner may swap again: %v", label, to, stampErr)
 	}
 	// runUsagePass is captured into a local before the goroutine starts
 	// (rather than read from inside it) so a test that swaps the package var
@@ -611,8 +758,18 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 			// empty — the swap path's resume effectively gets several rounds,
 			// and the reset path gets the same allowance on top of the
 			// attempts it inherited.
+			//
+			// The condition is on ResetAt ALONE, not SwappedAt==0 && ResetAt!=0:
+			// a hit that parked until its reset with attempts already spent can
+			// later ADOPT a machine-wide swap (adoptLandedSwap), which stamps
+			// SwappedAt without granting any attempts — under the narrower
+			// condition that adoption collapsed the cap back to the base and a
+			// single refused round (a still-nameless just-respawned agent is
+			// enough) parked the hit terminally, forfeiting the reset re-arm the
+			// record still carried. A reset target on the record keeps the wider
+			// allowance whichever path stamped the swap.
 			failCap := limitRescueMaxAttempts
-			if hit.SwappedAt == 0 && hit.ResetAt != 0 {
+			if hit.ResetAt != 0 {
 				failCap = limitRescueMaxAttempts * 2
 			}
 			hit.Attempts++
@@ -716,21 +873,31 @@ func mergeLimitRescueState(cur, hit LimitHit) (LimitHit, bool) {
 // not block, and the failure this is aimed at (a momentarily busy database)
 // is the kind a second attempt clears.
 func saveLimitRescueState(j *Job, hit LimitHit) error {
+	return saveLimitRescueStateByKey(limitHitKey(j.ID), j.Slug, hit)
+}
+
+// saveLimitRescueStateByKey is that write with the owner reduced to its kv key
+// plus a label for the error text, so a standing agent's pass and a cell's
+// share one implementation of the merge-under-a-fresh-read rule. Two copies
+// would be two chances to reintroduce the write-what-we-read bug the merge
+// exists to prevent — and that bug is silent, since its symptom is a SECOND
+// machine-wide credential swap a tick later rather than anything failing here.
+func saveLimitRescueStateByKey(key, label string, hit LimitHit) error {
 	st := ActiveStore()
 	if st == nil {
-		return fmt.Errorf("%s: no store wired", j.Slug)
+		return fmt.Errorf("%s: no store wired", label)
 	}
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		merged, ok := mergeLimitRescueState(ReadLimitHit(j), hit)
+		merged, ok := mergeLimitRescueState(readLimitHitByKey(key), hit)
 		if !ok {
-			return fmt.Errorf("%s: a newer limit hit replaced the record mid-rescue — this rescue's bookkeeping was not stored", j.Slug)
+			return fmt.Errorf("%s: a newer limit hit replaced the record mid-rescue — this rescue's bookkeeping was not stored", label)
 		}
 		data, err := json.Marshal(merged)
 		if err != nil {
-			return fmt.Errorf("%s: marshal limit-hit record: %w", j.Slug, err)
+			return fmt.Errorf("%s: marshal limit-hit record: %w", label, err)
 		}
-		if lastErr = st.SetKV(limitHitKey(j.ID), string(data)); lastErr == nil {
+		if lastErr = st.SetKV(key, string(data)); lastErr == nil {
 			return nil
 		}
 	}
@@ -753,13 +920,13 @@ func saveLimitRescueState(j *Job, hit LimitHit) error {
 // therefore the thing a test can hold: every field rule of the write-back
 // lives there rather than inline here.
 //
-// Two arms deliberately record NOTHING. A lock-busy rotate is a no-op, since
-// the lock is contended by every cell spawn and counting that as an attempt
-// parks a hit that never reached the pool; and a resume that never reached
-// zeus leaves the hit open, since resolving it would strand a cell whose
-// account moved and whose every claude is still latched onto the old one.
-// Both mean "try again next tick", and in both the absence of a write is
-// what says so.
+// A lock-busy rotate deliberately records NOTHING — the lock is contended by
+// every cell spawn, and counting that as an attempt parks a hit that never
+// reached the pool. A resume that never reached zeus is different: it leaves
+// the hit OPEN (resolving it would strand a cell whose account moved and
+// whose every claude is still latched onto the old one) but it IS counted,
+// through limitRescueApply's no-agents increment-then-test, so a zeus that
+// can never be reached parks at the cap instead of re-deciding forever.
 //
 // The resume arm's write lands AFTER the respawn rather than before, which
 // is the one place this pass holds a record across seconds of work. It has
@@ -788,6 +955,27 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	// zero every tick, which costs one regexp scan and writes nothing.
 	if hit.ResetAt == 0 {
 		hit.ResetAt = parseLimitReset(hit.Details, time.Unix(hit.At, 0))
+	}
+	// A swap somebody else already landed (the rotation gate at another cell's
+	// spawn, carl's own manual switch, another owner's rescue) is this cell's
+	// repair too — main is one login. Adopting it here, BEFORE the parked-wait
+	// skip below and before the decision, is what routes this tick to the
+	// resume it is owed instead of to a second swap of a second account. The
+	// write is immediate rather than left to the arm's own write-back: the
+	// resume arm can spend seconds respawning, and a tick that died in between
+	// would come back with the stamp gone and rotate after all.
+	//
+	// With no watermark the pair reads (0, "") and adoptLandedSwap changes
+	// nothing, so a machine that has never swapped pays one kv read and
+	// behaves exactly as it did before.
+	if swapAt, swapTo := readMainSwap(); swapAt != 0 {
+		if adopted, changed := adoptLandedSwap(hit, swapAt, swapTo); changed {
+			hit = adopted
+			if err := saveLimitRescueState(j, hit); err != nil {
+				dlogErr("%s: persist adopted main-swap watermark failed: %v", j.Slug, err)
+			}
+			dlogEvent("info", "limit-rescue-skipped", "%s: main was already swapped to %s — adopting it instead of rotating again", j.Slug, swapTo)
+		}
 	}
 	// A parked-until-reset hit is unresolved for its whole wait — the one
 	// long-lived shape gate 2's short-circuit above cannot cover — and

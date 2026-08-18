@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
@@ -95,6 +96,18 @@ func accountSwitchHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		webJSON(w, status, map[string]string{"error": err.Error()})
 		return
+	}
+
+	// Stamped before the deferred release, while this handler still holds the
+	// rotation lock: a manual switch moves the same one login every claude on
+	// the machine shares, so any cell or standing agent parked on a usage
+	// limit has just had its repair performed by carl. Without this the next
+	// rescue tick still reads SwappedAt == 0 on that record and swaps a SECOND
+	// account behind the switch he made deliberately (jobs' adoptLandedSwap is
+	// the reader). Logged rather than raised: the swap itself committed, and
+	// reporting it as a failure would be false.
+	if err := jobs.RecordMainSwap(to, time.Now()); err != nil {
+		util.LogEvent("web", "error", "account-switch", "account switch "+slug+": swap ok but the main-swap watermark did not persist: "+err.Error())
 	}
 
 	// mode defaults to "manual" (the write below normally succeeds); on a

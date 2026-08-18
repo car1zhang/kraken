@@ -255,6 +255,13 @@ func cmdAccountSwitch(slug string) {
 		fmt.Fprintf(os.Stderr, "warning: main switched to %s, but the manual pin did not persist: %v\n", to, err)
 	}
 	util.LogEvent("cli", "info", "account", fmt.Sprintf("k account %s: %s -> %s", slug, from, to))
+	// This swap is deliberately NOT stamped into the main_swap watermark
+	// (jobs.RecordMainSwap): that watermark is a kv row, kraken serve is the
+	// sole kraken.db writer, and this CLI process has no store handle — so a
+	// hand-run `k account` swap is not adopted by parked limit hits the way a
+	// board switch or a rescue swap is. Under the manual pin this command also
+	// sets, an unresolved hit parks rather than rotates anyway, so the cost is
+	// a missed resume, not a double swap.
 	// Printed BEFORE the usage refresh below, not after: a Ctrl-C during that
 	// refresh must not hide that the swap already committed.
 	fmt.Printf("main: %s → %s (rotation pinned manual — re-enable with k account auto)\n", from, to)

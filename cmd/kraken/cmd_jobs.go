@@ -43,21 +43,79 @@ func cmdPrHook(args []string) {
 
 // --- limit-hook ---
 
-// cmdLimitHook is the thin dispatch wrapper for `kraken limit-hook <slug>` —
-// a Claude Code StopFailure hook (jobs.LimitHook does the work), kept out of
-// usage() alongside pr-hook for the same reason, and silently ignoring a
-// malformed invocation for the same reason: it runs as a hook, and a hook
-// that fails the turn it fires on is worse than a hook that does nothing.
+// cmdLimitHook is the thin dispatch wrapper for the StopFailure hook
+// (jobs.LimitHook / jobs.LimitHookAgent do the work), kept out of usage()
+// alongside pr-hook for the same reason, and silently ignoring a malformed
+// invocation for the same reason: it runs as a hook, and a hook that fails
+// the turn it fires on is worse than a hook that does nothing.
 //
-// It takes --serve-addr/--db-path identically to pr-hook, since the cell's
-// hook command for both is built from one shared flag renderer
+// It has two forms, because a limit can land on two kinds of claude. A CELL's
+// hook names its job — `kraken limit-hook <slug>`, byte-identical to what
+// every installed settings.json already carries. A STANDING agent's names
+// itself — `kraken limit-hook --agent kronos` — because kronos and iris have
+// no job and so no slug, and the id is what the record is keyed on.
+//
+// It takes --serve-addr/--db-path identically to pr-hook, since every hook
+// command in the family is built from one shared flag renderer
 // (jobs/cell.go's hookCommandFlags).
 func cmdLimitHook(args []string) {
-	slug, ok := hookArgs(args)
+	slug, agent, ok := limitHookArgs(args)
 	if !ok {
 		return
 	}
+	if agent != "" {
+		jobs.LimitHookAgent(agent)
+		return
+	}
 	jobs.LimitHook(slug)
+}
+
+// limitHookArgs parses this verb's argument shape: hookArgs' two flags, plus
+// `--agent <id>`, plus at most one bare slug — and exactly one of the agent
+// and the slug. ok=false for every other shape, and the caller's only correct
+// response is to do nothing at all: a hook that dies on an argument it did
+// not expect fails the turn it fired on.
+//
+// It does not extend hookArgs, which pr-hook shares and whose contract is
+// exactly one bare slug. A flag only this verb accepts belongs in only this
+// verb's parser; widening the shared one would silently make `pr-hook --agent
+// kronos` a legal invocation of a verb that has no idea what to do with it.
+func limitHookArgs(args []string) (slug, agent string, ok bool) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--serve-addr":
+			i++
+			if i >= len(args) {
+				return "", "", false
+			}
+			os.Setenv("KRAKEN_SERVE_ADDR", args[i])
+		case "--db-path":
+			i++
+			if i >= len(args) {
+				return "", "", false
+			}
+			os.Setenv("KRAKEN_DB_PATH", args[i])
+		case "--agent":
+			i++
+			if i >= len(args) || agent != "" {
+				return "", "", false
+			}
+			agent = args[i]
+		default:
+			if slug != "" {
+				return "", "", false // more than one bare arg: malformed
+			}
+			slug = args[i]
+		}
+	}
+	// Both named is a hook command that cannot be built by anything in this
+	// binary, and neither named is the shape that used to be "no slug": in
+	// both, who the limit belongs to is unknown, and guessing files it against
+	// the wrong owner.
+	if (slug == "") == (agent == "") {
+		return "", "", false
+	}
+	return slug, agent, true
 }
 
 // hookArgs parses the argument shape both hook verbs share: any number of

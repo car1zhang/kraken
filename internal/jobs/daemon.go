@@ -977,6 +977,37 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		for _, j := range jobs {
 			d.limitRescue(j, all, live)
 		}
+		// the same two passes for the STANDING agents — kronos and iris, the
+		// long-lived claudes that belong to no job (standingrescue.go). They
+		// sit in this block for its two reasons exactly: a rotate makes a
+		// machine-wide credential change, and a resume destroys and recreates a
+		// live pane's process. They consume the snapshots this tick already
+		// holds rather than sweeping again, like every pass above, and each row
+		// is gated on its own feature switch — a machine that runs neither
+		// agent pays one stat and one config read.
+		//
+		// Health first, then rescue, so a limit the health pass records this
+		// tick is acted on this tick rather than one interval later. Both are
+		// no-ops without a store: every record they read and write is a kv row.
+		if st := ActiveStore(); st != nil {
+			for _, a := range standingAgents() {
+				if a.Enabled == nil || !a.Enabled() {
+					continue
+				}
+				// A FRESH clock per agent, not the tick-start `now` the rest of
+				// this function carries: these run after the whole per-job loop
+				// and the PR tracker's gh shell-outs, so the tick clock can be
+				// tens of seconds stale by here — and the rescue compares its
+				// `now` against second-granularity stamps (the settle window,
+				// the adoption's swapAt >= hit.At) where that staleness decides
+				// outcomes. The cell pass has the same need and takes its own
+				// reading inside limitRescue; the standing signature makes the
+				// clock a parameter, so the freshness is the call site's job.
+				standingNow := time.Now()
+				d.standingHealthPass(a, st, all, live, standingNow)
+				d.standingLimitRescue(a, st, all, live, standingNow)
+			}
+		}
 	}
 
 	// token pass (every tick, self-paced internally — see tokensPass): keep
