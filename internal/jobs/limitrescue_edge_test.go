@@ -1023,37 +1023,17 @@ func TestEdgeRecordLimitHitPersistsThroughRead(t *testing.T) {
 
 // --- rescueLimitedCell: refusal paths only ---
 
-// The order is the obligation: the lock comes FIRST, so a rescue that
-// cannot take it never selects a target and never swaps. This is the one
-// gate keeping the daemon's rescue from racing `k account <slug>` or the
-// rotation gate mid-swap.
-func TestEdgeRescueLimitedCellRefusesWhileLockHeld(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	release, ok, err := acquireRotationLock()
-	if !ok || err != nil {
-		t.Fatalf("test could not take the lock first: ok=%v err=%v", ok, err)
-	}
-	defer release()
-
-	j := &Job{Slug: "edge-lock-busy", ID: 1, Repo: "monolith", State: "working"}
-	email, outcome, err := rescueLimitedCell(j, edgeNow)
-	if err != nil {
-		t.Fatalf("lock contention returned an error %v — contention is not a failure", err)
-	}
-	if outcome != "lock-busy" {
-		t.Fatalf("outcome = %q, want %q", outcome, "lock-busy")
-	}
-	if email != "" {
-		t.Errorf("toEmail = %q, want empty — nothing was swapped", email)
-	}
-}
+// The lock-held refusal was tested here and retired with Q2: a rebind writes
+// one job row and displaces no machine-wide credential, so it takes the
+// binder's in-process mutex rather than the cross-process rotation flock, and
+// a mutex blocks instead of answering "busy". Nothing races `k account
+// <slug>` any more because nothing on this path touches what that command
+// changes.
 
 // With no usage snapshot at all (a scratch HOME, no store), the pool has no
-// rows, so SelectRotationTarget has nothing to pick: the outcome is
-// "no-target" and NOTHING is swapped. This is also the only way to exercise
-// rescueLimitedCell's target-selection step without performing a real
-// machine-wide credential swap.
+// rows, so the binder has nothing to pick: the outcome is "no-target" and
+// NOTHING is rebound. This is also the only way to exercise
+// rescueLimitedCell's target-selection step without a real pool on disk.
 func TestEdgeRescueLimitedCellNoTargetNeverSwaps(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -1438,13 +1418,13 @@ func TestEdgeLimitRescueApplyParkNoTargetResolvesAtExactlyTheCap(t *testing.T) {
 // `toEmail`: a rescueLimitedCell that returns an email alongside a failure
 // must not have that email recorded as a swap that happened.
 func TestEdgeLimitRescueApplyRotateWithoutASwap(t *testing.T) {
-	for _, outcome := range []string{"no-target", "lock-busy", "swap-failed", ""} {
+	for _, outcome := range []string{"no-target", "bind-failed", ""} {
 		t.Run("outcome "+outcome, func(t *testing.T) {
 			hit := edgeApplyHit()
 			hit.Attempts = 1
 			hit.LastAttempt = edgeNow.Add(-limitRescueRetryInterval).Unix()
 
-			// a non-empty email alongside a non-"swapped" outcome must be ignored
+			// a non-empty email alongside a non-"rebound" outcome must be ignored
 			got := limitRescueApply(hit, rescueRotate, outcome, "someone@example.com", edgeNow)
 
 			if got.Attempts != 2 {
@@ -1544,7 +1524,7 @@ func TestEdgeLimitRescueApplyStampsUnixSeconds(t *testing.T) {
 		outcome string
 		read    func(LimitHit) []int64
 	}{
-		{rescueRotate, "swapped", func(h LimitHit) []int64 { return []int64{h.SwappedAt, h.LastAttempt} }},
+		{rescueRotate, "rebound", func(h LimitHit) []int64 { return []int64{h.SwappedAt, h.LastAttempt} }},
 		{rescueRotate, "no-target", func(h LimitHit) []int64 { return []int64{h.LastAttempt} }},
 		{rescueResume, "", func(h LimitHit) []int64 { return []int64{h.HandledAt} }},
 		{rescueParkManual, "manual", func(h LimitHit) []int64 { return []int64{h.HandledAt} }},
@@ -1579,8 +1559,8 @@ func TestEdgeLimitRescueApplyIsPureAndNonMutating(t *testing.T) {
 		t.Run(string(action), func(t *testing.T) {
 			hit := edgeApplyHit()
 			before := hit
-			first := limitRescueApply(hit, action, "swapped", "to@example.com", edgeNow)
-			second := limitRescueApply(hit, action, "swapped", "to@example.com", edgeNow)
+			first := limitRescueApply(hit, action, "rebound", "to@example.com", edgeNow)
+			second := limitRescueApply(hit, action, "rebound", "to@example.com", edgeNow)
 			if first != second {
 				t.Fatalf("not deterministic: %+v then %+v", first, second)
 			}
@@ -2049,7 +2029,7 @@ func TestEdgeLimitRescueApplyResumeOutcomeLiteralIsExact(t *testing.T) {
 	for _, outcome := range []string{
 		"",              // what the reached-at-least-one-pane call site passes
 		"rotated",       // the Outcome it writes, fed back by mistake
-		"swapped",       // the rotate arm's literal, in the wrong arm
+		"rebound",       // the rotate arm's literal, in the wrong arm
 		"no-agent",      // one character off
 		"No-Agents",     // case variant
 		" no-agents",    // whitespace
@@ -2200,12 +2180,12 @@ func TestEdgeMergeLimitHitDeliveryCarriesTheSwapWatermark(t *testing.T) {
 	})
 }
 
-// --- Amendment 12: the refusal paths through the swap seams ---
+// --- the rescue's refusal paths ---
 
 // edgeSeedUsageSnapshot writes a snapshot with one main row and one pool row
-// into the wired store, which is what selectRescueTarget reads before it ever
-// reaches selectTarget — without it the rescue exits at "no usage snapshot"
-// and no seam is called at all.
+// into the wired store, which is what selectRescueBind reads before it ever
+// reaches the selector — without it the rescue exits at "no usage snapshot"
+// and the selection step is never entered at all.
 func edgeSeedUsageSnapshot(t *testing.T, st *store.Store) {
 	t.Helper()
 	snap := core.UsageSnapshot{Accounts: []core.AccountUsage{
@@ -2221,78 +2201,29 @@ func edgeSeedUsageSnapshot(t *testing.T, st *store.Store) {
 	}
 }
 
-// Amendment 12 routes the rescue through the package's own swapMain and
-// selectTarget vars, which makes the step ORDER — the obligation the
-// contract states for this function — observable for the first time: a
-// refusal at one step must mean the later steps were never reached, since a
-// target chosen against a pool another swap is rewriting is exactly what the
-// lock exists to prevent. No keychain is touched: both seams are stubbed.
+// The step-ordering proof this held — lock, then select, then swap, each
+// refusal meaning the later steps were never reached — retired with Q2 along
+// with two of its three steps: rescueLimitedCell takes no flock (a rebind
+// displaces nothing machine-wide, so the binder's in-process mutex is the
+// whole guard) and never swaps the machine's login. "Never swaps" is pinned
+// statically now by TestRetirementNoAutomatedMainSwap, which is stronger
+// than a stub nobody calls — it fails on the mere REFERENCE. What survives
+// here is the middle step.
 func TestEdgeRescueLimitedCellRefusalOrderingThroughTheSeams(t *testing.T) {
 	j := &Job{Slug: "edge-seam", ID: 21, Repo: "monolith"}
 
-	t.Run("lock busy: neither seam is reached", func(t *testing.T) {
+	t.Run("no target: nothing is bound", func(t *testing.T) {
 		st := useTestStore(t)
 		stubRotation(t)
 		edgeSeedUsageSnapshot(t, st)
-		selects, swaps := 0, 0
-		selectTarget = func(_ []core.AccountUsage, _ string, _ int64) (string, string) { selects++; return "pool-a", "" }
-		swapMain = func(string) (string, string, error) { swaps++; return "", "", nil }
-
-		release, ok, err := acquireRotationLock()
-		if !ok || err != nil {
-			t.Fatalf("test could not take the lock first: ok=%v err=%v", ok, err)
-		}
-		defer release()
-
-		to, outcome, err := rescueLimitedCell(j, edgeNow)
-		if outcome != "lock-busy" || err != nil || to != "" {
-			t.Fatalf("= (%q, %q, %v), want (\"\", \"lock-busy\", nil)", to, outcome, err)
-		}
-		if selects != 0 || swaps != 0 {
-			t.Fatalf("selectTarget called %d times, swapMain %d — the lock must come first", selects, swaps)
-		}
-	})
-
-	t.Run("no target: the swap is never reached", func(t *testing.T) {
-		st := useTestStore(t)
-		stubRotation(t)
-		edgeSeedUsageSnapshot(t, st)
-		swaps := 0
-		selectTarget = func(_ []core.AccountUsage, _ string, _ int64) (string, string) { return "", "nobody eligible" }
-		swapMain = func(string) (string, string, error) { swaps++; return "", "", nil }
+		// no keychain items exist under this scratch HOME, so every seeded
+		// slot is excluded by the item-exists guard
+		slotItemExists = func(string) bool { return false }
+		t.Cleanup(func() { slotItemExists = core.SlotItemExists })
 
 		to, outcome, err := rescueLimitedCell(j, edgeNow)
 		if outcome != "no-target" || err != nil || to != "" {
 			t.Fatalf("= (%q, %q, %v), want (\"\", \"no-target\", nil)", to, outcome, err)
-		}
-		if swaps != 0 {
-			t.Fatalf("swapMain was called %d times with no target selected", swaps)
-		}
-	})
-
-	t.Run("swap failure is reported, not swallowed", func(t *testing.T) {
-		st := useTestStore(t)
-		stubRotation(t)
-		edgeSeedUsageSnapshot(t, st)
-		selectTarget = func(_ []core.AccountUsage, _ string, _ int64) (string, string) { return "pool-a", "" }
-		swapMain = func(string) (string, string, error) {
-			return "", "", fmt.Errorf("keychain locked")
-		}
-
-		to, outcome, err := rescueLimitedCell(j, edgeNow)
-		if outcome != "swap-failed" {
-			t.Fatalf("outcome = %q, want %q", outcome, "swap-failed")
-		}
-		if err == nil {
-			t.Fatal("a failed swap returned a nil error — the caller logs this one and it must not read as a quiet no-op")
-		}
-		if to != "" {
-			t.Errorf("toEmail = %q, want empty — nothing was swapped", to)
-		}
-		// and the record that outcome produces must not claim a swap
-		got := limitRescueApply(edgeApplyHit(), rescueRotate, outcome, to, edgeNow)
-		if got.SwappedAt != 0 || got.SwappedTo != "" {
-			t.Errorf("a swap-failed rotate recorded a watermark: (%d, %q)", got.SwappedAt, got.SwappedTo)
 		}
 	})
 }

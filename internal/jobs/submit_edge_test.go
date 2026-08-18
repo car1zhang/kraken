@@ -27,7 +27,7 @@ import (
 // what ResolveRepo walks (~/Developer) and what every cell path derives from
 // via util.Home(); KRAKEN_PLUTO_DIR keeps any incidental job-file read off
 // the real ~/Documents/pluto. Package TestMain already quarantines the event
-// log and no-ops rotationGate.
+// log and no-ops bindGate.
 func edgeSandbox(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())

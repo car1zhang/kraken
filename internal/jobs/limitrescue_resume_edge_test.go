@@ -1,12 +1,10 @@
 package jobs
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -585,17 +583,24 @@ func TestEdgeResumePromptsCarryTheirRequiredClauses(t *testing.T) {
 		})
 	}
 
-	t.Run("swap path: clause 2, the account was switched", func(t *testing.T) {
-		if !edgeResumeMentions(limitRescueResumePrompt, "switch") {
-			t.Errorf("the swap-path prompt does not say the account was switched: %q", limitRescueResumePrompt)
+	// Narrowed with Q2: the rescue rebinds this ONE cell, so the clause is
+	// that the cell's account moved. A prompt still saying the machine's
+	// main login was switched would be telling zeus something false about
+	// every other session on the Mac.
+	t.Run("rebind path: clause 2, the cell was rebound", func(t *testing.T) {
+		if !edgeResumeMentions(limitRescueResumePrompt, "rebound") {
+			t.Errorf("the rebind-path prompt does not say the cell was rebound: %q", limitRescueResumePrompt)
+		}
+		if edgeResumeMentions(limitRescueResumePrompt, "main claude account") {
+			t.Errorf("the rebind-path prompt claims the MAIN account moved: %q", limitRescueResumePrompt)
 		}
 	})
 	t.Run("reset path: clause 2, the window reset and the account never moved", func(t *testing.T) {
 		if !edgeResumeMentions(limitResetResumePrompt, "reset") {
 			t.Errorf("the reset-path prompt does not say the window reset: %q", limitResetResumePrompt)
 		}
-		if edgeResumeMentions(limitResetResumePrompt, "switch") {
-			t.Errorf("the reset-path prompt claims a switch — on this path the account never moved: %q", limitResetResumePrompt)
+		if edgeResumeMentions(limitResetResumePrompt, "rebound") {
+			t.Errorf("the reset-path prompt claims a rebind — on this path the account never moved: %q", limitResetResumePrompt)
 		}
 	})
 	t.Run("swap path: clause 5, no account is named", func(t *testing.T) {
@@ -605,360 +610,14 @@ func TestEdgeResumePromptsCarryTheirRequiredClauses(t *testing.T) {
 	})
 }
 
-// --- selectRescueTarget: the dual exclusion ---
+// selectRescueTarget's dual main-identity exclusion was tested here and
+// retired with it (Q2). The rescue's selection is selectRescueBind's now: it
+// goes through decideBind, excludes the account the CELL is on rather than
+// the machine's main row, and reaches core.SelectBindTarget rather than
+// core.SelectRotationTarget.
 
-func edgeResumeAccount(slug, email string) core.AccountUsage {
-	return core.AccountUsage{Slug: slug, Email: email}
-}
-
-// edgeResumeSeedSnapshot writes a usage snapshot into the wired store — what
-// selectRescueTarget reads before it ever reaches the selectTarget seam.
-func edgeResumeSeedSnapshot(t *testing.T, st *store.Store, rows ...core.AccountUsage) {
-	t.Helper()
-	data, err := json.Marshal(core.UsageSnapshot{Accounts: rows})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetKV(usageSnapshotKVKey, string(data)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// edgeResumeStubMainIdentity swaps the jobs-side live-identity seam.
-func edgeResumeStubMainIdentity(t *testing.T, email string) {
-	t.Helper()
-	orig := mainIdentityEmail
-	mainIdentityEmail = func() string { return email }
-	t.Cleanup(func() { mainIdentityEmail = orig })
-}
-
-// edgeResumeCapturePool stubs the selectTarget seam to record the pool and the
-// mainEmail it is handed, and to select nothing — so no test here ever
-// reaches a swap.
-func edgeResumeCapturePool(t *testing.T, pool *[]string, mainEmail *string) {
-	t.Helper()
-	selectTarget = func(accts []core.AccountUsage, main string, _ int64) (string, string) {
-		*mainEmail = main
-		for _, a := range accts {
-			*pool = append(*pool, a.Slug)
-		}
-		return "", "nobody eligible"
-	}
-}
-
-func edgeResumePoolHas(pool []string, slug string) bool {
-	for _, s := range pool {
-		if s == slug {
-			return true
-		}
-	}
-	return false
-}
-
-// The identity half is v1's, and it holds: the live read wins, the snapshot's
-// main row is the fallback, and a snapshot that cannot be read still carries
-// the live email out.
-func TestEdgeResumeSelectRescueTargetResolvesMainIdentity(t *testing.T) {
-	t.Run("an empty live read falls back to the snapshot's main row", func(t *testing.T) {
-		st := useTestStore(t)
-		stubRotation(t)
-		edgeResumeSeedSnapshot(t, st,
-			edgeResumeAccount("main", "snapshot-main@example.com"),
-			edgeResumeAccount("pool-a", "a@example.com"),
-		)
-		edgeResumeStubMainIdentity(t, "")
-
-		var pool []string
-		var seen string
-		edgeResumeCapturePool(t, &pool, &seen)
-
-		target, mainEmail, why := selectRescueTarget(edgeResumeNow)
-		if target != "" || strings.TrimSpace(why) == "" {
-			t.Fatalf("= (%q, %q), want no target and a stated reason", target, why)
-		}
-		if seen != "snapshot-main@example.com" || mainEmail != "snapshot-main@example.com" {
-			t.Fatalf("mainEmail = %q (seam saw %q), want the snapshot main row's email", mainEmail, seen)
-		}
-	})
-
-	t.Run("a live identity outranks a stale snapshot main row", func(t *testing.T) {
-		st := useTestStore(t)
-		stubRotation(t)
-		edgeResumeSeedSnapshot(t, st,
-			edgeResumeAccount("main", "stale-main@example.com"),
-			edgeResumeAccount("pool-a", "a@example.com"),
-		)
-		edgeResumeStubMainIdentity(t, "live-main@example.com")
-
-		var pool []string
-		var seen string
-		edgeResumeCapturePool(t, &pool, &seen)
-
-		_, mainEmail, _ := selectRescueTarget(edgeResumeNow)
-		if seen != "live-main@example.com" || mainEmail != "live-main@example.com" {
-			t.Fatalf("mainEmail = %q (seam saw %q), want the live identity — the snapshot lags the rescue's own swap", mainEmail, seen)
-		}
-	})
-
-	t.Run("no snapshot still carries the live email out", func(t *testing.T) {
-		useTestStore(t)
-		stubRotation(t)
-		// nothing seeded: ReadUsageSnapshot has nothing to return
-		edgeResumeStubMainIdentity(t, "live-main@example.com")
-		selectTarget = func([]core.AccountUsage, string, int64) (string, string) {
-			t.Error("the selector was reached with no snapshot to select from")
-			return "", ""
-		}
-
-		target, mainEmail, why := selectRescueTarget(edgeResumeNow)
-		if target != "" {
-			t.Errorf("target = %q, want empty", target)
-		}
-		if strings.TrimSpace(why) == "" {
-			t.Error("the refusal carries no reason")
-		}
-		if mainEmail != "live-main@example.com" {
-			t.Errorf("mainEmail = %q, want the live email — the caller's notification needs it even when the pool is unreadable", mainEmail)
-		}
-	})
-}
-
-// The dual exclusion, which is the review round's finding 3 as a test. After a
-// swap A→B the pool still holds slot(A) — core.SwapMainTo mirrors the outgoing
-// account into its own save-back slot — and the snapshot still calls A "main"
-// until the next usage pass lands. Excluding only the live identity (B) leaves
-// the JUST-EXHAUSTED account eligible, and its row is stale-healthy by
-// construction, which is the whole premise the rescue is built on: the next
-// attempt would rotate straight back onto the account that just 429'd.
-func TestEdgeResumeSelectRescueTargetExcludesBothIdentities(t *testing.T) {
-	st := useTestStore(t)
-	stubRotation(t)
-	edgeResumeSeedSnapshot(t, st,
-		// the snapshot still names the OUTGOING account as main
-		edgeResumeAccount("main", "Exhausted@Example.com"),
-		// its save-back mirror, spelled in another case
-		edgeResumeAccount("slot-exhausted", "exhausted@example.com"),
-		// the account the rescue swapped ONTO, also spelled differently
-		edgeResumeAccount("slot-live", "LIVE-MAIN@example.com"),
-		// an unrelated pool account: the one row that must survive
-		edgeResumeAccount("slot-fresh", "fresh@example.com"),
-		// and a row with no identity at all, which neither match may sweep
-		edgeResumeAccount("slot-nameless", ""),
-	)
-	edgeResumeStubMainIdentity(t, "live-main@example.com")
-
-	var pool []string
-	var seen string
-	edgeResumeCapturePool(t, &pool, &seen)
-
-	if _, mainEmail, _ := selectRescueTarget(edgeResumeNow); mainEmail != "live-main@example.com" {
-		t.Fatalf("mainEmail = %q, want the live identity", mainEmail)
-	}
-	if seen != "live-main@example.com" {
-		t.Fatalf("the selector was handed mainEmail %q", seen)
-	}
-
-	if edgeResumePoolHas(pool, "slot-live") {
-		t.Errorf("pool = %v, want slot-live excluded — it mirrors the account main IS, case-folded", pool)
-	}
-	if edgeResumePoolHas(pool, "slot-exhausted") {
-		t.Errorf("pool = %v, want slot-exhausted excluded — it mirrors the account that just hit the limit, which the snapshot still calls main", pool)
-	}
-	if !edgeResumePoolHas(pool, "slot-fresh") {
-		t.Errorf("pool = %v, want slot-fresh present — the exclusion took an unrelated row with it", pool)
-	}
-	if !edgeResumePoolHas(pool, "slot-nameless") {
-		t.Errorf("pool = %v, want slot-nameless present — an identity-less row is not main, it is excluded downstream on its own merits", pool)
-	}
-}
-
-// --- the post-swap usage-pass kick ---
-
-// edgeResumeSwapReady wires a store, the rotation seams and a one-pool-row
-// snapshot, and points selectTarget/swapMain at a swap that succeeds. Every
-// kick test starts from here and changes only runUsagePass.
-func edgeResumeSwapReady(t *testing.T) {
-	t.Helper()
-	st := useTestStore(t)
-	stubRotation(t)
-	edgeResumeSeedSnapshot(t, st,
-		edgeResumeAccount("main", "main@example.com"),
-		edgeResumeAccount("pool-a", "a@example.com"),
-	)
-	edgeResumeStubMainIdentity(t, "main@example.com")
-	selectTarget = func([]core.AccountUsage, string, int64) (string, string) { return "pool-a", "" }
-	swapMain = func(string) (string, string, error) { return "main@example.com", "a@example.com", nil }
-}
-
-// edgeResumeWatchUsagePass swaps runUsagePass for a non-blocking recorder. The
-// channel is buffered so the pass never blocks on an unread signal, which
-// would make the very obligation under test (the kick must not block) depend
-// on the stub.
-func edgeResumeWatchUsagePass(t *testing.T) chan struct{} {
-	t.Helper()
-	kicked := make(chan struct{}, 1)
-	runUsagePass = func() error {
-		select {
-		case kicked <- struct{}{}:
-		default:
-		}
-		return nil
-	}
-	return kicked
-}
-
-// edgeResumeAssertNoKick gives an asynchronous kick a window to arrive and
-// fails if one does. The wait is what makes the negative assertion mean
-// something: the kick must not block the caller, so it may well be a goroutine
-// that lands after rescueLimitedCell has returned.
-func edgeResumeAssertNoKick(t *testing.T, kicked chan struct{}, outcome string) {
-	t.Helper()
-	select {
-	case <-kicked:
-		t.Fatalf("a usage pass was kicked for outcome %q — nothing was swapped, so the snapshot has nothing to catch up to", outcome)
-	case <-time.After(400 * time.Millisecond):
-	}
-}
-
-// The kick is the "swapped" outcome's alone. Every other outcome left the
-// machine's login exactly where it was, so a pass kicked from one is a network
-// fetch bought for nothing — and, on the lock-busy path, a pass fired while
-// ANOTHER holder is mid-swap, which is precisely the window whose read would
-// be recorded as truth.
-func TestEdgeResumeUsagePassKickIsSwapOnly(t *testing.T) {
-	t.Run("no target", func(t *testing.T) {
-		edgeResumeSwapReady(t)
-		selectTarget = func([]core.AccountUsage, string, int64) (string, string) { return "", "nobody eligible" }
-		swapMain = func(string) (string, string, error) {
-			t.Error("swapMain was called with no target selected")
-			return "", "", nil
-		}
-		kicked := edgeResumeWatchUsagePass(t)
-
-		_, outcome, err := rescueLimitedCell(&Job{Slug: "edge-kick-no-target", ID: 121}, edgeResumeNow)
-		if outcome != "no-target" || err != nil {
-			t.Fatalf("= (%q, %v), want (no-target, nil)", outcome, err)
-		}
-		edgeResumeAssertNoKick(t, kicked, "no-target")
-	})
-
-	t.Run("swap failed", func(t *testing.T) {
-		edgeResumeSwapReady(t)
-		swapMain = func(string) (string, string, error) { return "", "", errors.New("keychain locked") }
-		kicked := edgeResumeWatchUsagePass(t)
-
-		_, outcome, err := rescueLimitedCell(&Job{Slug: "edge-kick-swap-failed", ID: 122}, edgeResumeNow)
-		if outcome != "swap-failed" {
-			t.Fatalf("outcome = %q, want swap-failed", outcome)
-		}
-		if err == nil {
-			t.Error("a failed swap returned a nil error")
-		}
-		edgeResumeAssertNoKick(t, kicked, "swap-failed")
-	})
-
-	t.Run("lock busy", func(t *testing.T) {
-		edgeResumeSwapReady(t)
-		selectTarget = func([]core.AccountUsage, string, int64) (string, string) {
-			t.Error("selectTarget was reached while another holder had the lock")
-			return "", "held"
-		}
-		swapMain = func(string) (string, string, error) {
-			t.Error("swapMain was reached while another holder had the lock")
-			return "", "", nil
-		}
-		kicked := edgeResumeWatchUsagePass(t)
-
-		release, ok, err := acquireRotationLock()
-		if err != nil || !ok {
-			t.Fatalf("the test could not take the lock first: ok=%v err=%v", ok, err)
-		}
-		defer release()
-
-		_, outcome, err := rescueLimitedCell(&Job{Slug: "edge-kick-lock", ID: 123}, edgeResumeNow)
-		if outcome != "lock-busy" || err != nil {
-			t.Fatalf("= (%q, %v), want (lock-busy, nil)", outcome, err)
-		}
-		edgeResumeAssertNoKick(t, kicked, "lock-busy")
-	})
-}
-
-// The kick "must not block the caller": the rescue pass runs inside a daemon
-// tick that has other cells to visit, and a usage pass is a network fetch
-// across every pool account. A synchronous kick would hold the tick open for
-// as long as the fetch takes — and if the pass ever wedges, forever.
-func TestEdgeResumeUsagePassKickDoesNotBlockTheRescue(t *testing.T) {
-	edgeResumeSwapReady(t)
-
-	release := make(chan struct{})
-	var once sync.Once
-	stop := func() { once.Do(func() { close(release) }) }
-	defer stop()
-
-	runUsagePass = func() error {
-		<-release
-		return nil
-	}
-
-	type result struct {
-		to      string
-		outcome string
-		err     error
-	}
-	done := make(chan result, 1)
-	go func() {
-		to, outcome, err := rescueLimitedCell(&Job{Slug: "edge-kick-nonblocking", ID: 124}, edgeResumeNow)
-		done <- result{to, outcome, err}
-	}()
-
-	var got result
-	select {
-	case got = <-done:
-	case <-time.After(5 * time.Second):
-		stop()
-		t.Fatal("rescueLimitedCell did not return while the usage pass was still running — the kick blocks the caller")
-	}
-
-	if got.err != nil {
-		t.Fatalf("err = %v, want nil", got.err)
-	}
-	if got.outcome != "swapped" {
-		t.Fatalf("outcome = %q, want swapped", got.outcome)
-	}
-	if got.to != "a@example.com" {
-		t.Errorf("toEmail = %q, want the target's email", got.to)
-	}
-
-	// let the pass finish before the seams are restored, so the process-global
-	// single-flight flag is not left set for whichever test runs next
-	stop()
-	for i := 0; i < 500 && usagePassRunning.Load(); i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// The kick goes through the EXISTING single-flight, so a pass already in
-// flight is not joined by a second one. Two concurrent passes fetch the same
-// accounts and race each other's write of the snapshot the very next rescue
-// tick reads.
-func TestEdgeResumeUsagePassKickRespectsTheSingleFlight(t *testing.T) {
-	edgeResumeSwapReady(t)
-	kicked := edgeResumeWatchUsagePass(t)
-
-	// a pass is already running, as far as the flag is concerned
-	usagePassRunning.Store(true)
-	t.Cleanup(func() { usagePassRunning.Store(false) })
-
-	_, outcome, err := rescueLimitedCell(&Job{Slug: "edge-kick-single-flight", ID: 125}, edgeResumeNow)
-	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
-	}
-	if outcome != "swapped" {
-		t.Fatalf("outcome = %q, want swapped — the in-flight pass must not change the swap's own outcome", outcome)
-	}
-	select {
-	case <-kicked:
-		t.Fatal("a second usage pass ran while one was already in flight — the kick bypassed the single-flight")
-	case <-time.After(400 * time.Millisecond):
-	}
-}
+// The post-swap usage-pass kick tests lived here and retired with the swap
+// itself (Q2): rescueLimitedCell rebinds one job row now, so no account's
+// usage changed and there is nothing for a fresh snapshot to catch up to.
+// The kick that survives — the account API's, after a manual switch — is
+// KickUsagePass's own, and is exercised there.

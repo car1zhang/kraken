@@ -148,6 +148,12 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 	// applies the steps. Only v27's TABLE is dropped: the goal_id column v23
 	// added is already gone, taken by v27 itself.
 	for _, stmt := range []string{
+		// v28's three account-binding columns go first: a v21 database has
+		// none of them, and step 28 replays by adding them, which fails on a
+		// duplicate column name if they are left behind.
+		`ALTER TABLE jobs DROP COLUMN account_slug`,
+		`ALTER TABLE jobs DROP COLUMN account_email`,
+		`ALTER TABLE jobs DROP COLUMN account_at`,
 		`DROP TABLE job_goals`,
 		`DROP TABLE board_bg`,
 		`DROP TABLE saved_artifacts`,
@@ -155,7 +161,7 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 		`DROP TABLE goals`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {
-			t.Fatalf("reverse v27/v26/v25/v24/v23 (%q): %v", stmt, err)
+			t.Fatalf("reverse v28/v27/v26/v25/v24/v23 (%q): %v", stmt, err)
 		}
 	}
 	if _, err := s.db.Exec(`ALTER TABLE threads DROP COLUMN model`); err != nil {

@@ -65,7 +65,8 @@ const docAnswerMaxLen = 4000
 // the ready DB field, never touched a file outside the sandbox DB, and the
 // mirror tick's own StartCell skip is what kept a mirror-queued job sitting
 // harmlessly in the queued column. Submitting a job STARTS its cell in the
-// request now — real worktree, real tmux session, real rotation gate — so the
+// request now — real worktree, real tmux session, a real account binding
+// stamped on the job row and delivered into the cell's environment — so the
 // property that made the exception safe is gone, and "submit" is gated like
 // everything else that reaches the machine.
 var mirrorGatedActions = map[string]bool{
@@ -135,7 +136,7 @@ func webAction(name string, f func(webReq) error) http.HandlerFunc {
 // submitJobFn is the start seam for this layer, mirroring jobs.SubmitJob's
 // own submitStartCell: a handler test swaps it so the whole route — routing,
 // mirror gate, slug lookup, the webAction wrapper's 409 encoding — can be
-// exercised without a git worktree, a tmux server, or the rotation gate. The
+// exercised without a git worktree, a tmux server, or the account binder. The
 // production value is jobs.SubmitJob and there is no second real start path.
 var submitJobFn = jobs.SubmitJob
 

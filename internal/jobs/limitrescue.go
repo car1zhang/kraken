@@ -18,24 +18,34 @@ import (
 // exhausted, so the only repair is a different account. The hook (limithook.go)
 // records the hit; this file decides what to do about it and does it.
 //
-// The repair is a swap followed by a kill+resume of ZEUS, and both halves of
-// that are forced by measurement (2026-08-07, Claude Code 2.1.224). A
-// RUNNING claude does not re-read a swapped credential: it resolves one at
-// session start and re-resolves it only on an auth error or on a refresh
-// scheduled off the OLD token's expiry, so turns kept billing the
-// swapped-out account for as long as the probe ran. And a claude that has
-// already 429'd carries a client-side limit latch — Claude Code blocks
-// further requests locally until the reset time the banner names. On a
-// latched process, the keychain swap and a real /usage fetch showing the new
-// account healthy were both measured to leave the latch exactly where it
-// was. A message typed into such a pane cannot produce a successful turn no
-// matter what it says.
+// The repair is a REBIND followed by a kill+resume of ZEUS. The rebind half
+// is Q2's whole point: the cell is bound to one pool account
+// (CLAUDE_SECURESTORAGE_CONFIG_DIR, binding.go), so moving it off an
+// exhausted window means stamping a different slot on THIS job's row —
+// nothing machine-wide moves, no other cell is displaced, carl's own main
+// login is untouched, and there is no save-back slot and no cross-process
+// flock to manage. An UNBOUND cell (the pool was dry when it spawned, or it
+// predates binding) gets bound by its rescue, which is strictly better than
+// the machine swap that used to happen here.
+//
+// The resume half is unchanged and is forced by measurement (2026-08-07,
+// Claude Code 2.1.224). A RUNNING claude does not re-read a changed
+// credential: it resolves one at session start and re-resolves it only on an
+// auth error or on a refresh scheduled off the OLD token's expiry, so turns
+// kept billing the outgoing account for as long as the probe ran. And a
+// claude that has already 429'd carries a client-side limit latch — Claude
+// Code blocks further requests locally until the reset time the banner
+// names. On a latched process, a credential change and a real /usage fetch
+// showing a healthy account were both measured to leave the latch exactly
+// where it was. A message typed into such a pane cannot produce a successful
+// turn no matter what it says.
 //
 // So the resume arm kills zeus' claude in place and respawns it with the
 // full cell-spawn surface plus `-r <session-id>` (resumeCellAgents through
-// core.RespawnPeerPane). The fresh process reads the keychain at startup, so
-// it adopts the current account on its first turn, and it carries no latch;
-// the conversation comes back intact.
+// core.RespawnPeerPane). That command is built by spawnCommand, which is
+// where the new binding's env assignment goes on, so the fresh process comes
+// up on the rebound account, adopts it on its first turn, and carries no
+// latch; the conversation comes back intact.
 //
 // Zeus alone, because a tmux teammate has no resolvable session id to resume
 // (discover.go leaves SessionID empty for every teammate row) — so the crew
@@ -44,13 +54,25 @@ import (
 // session, restart a cell, or call ReactivateJob — the cell's windows, its
 // worktree and its session are exactly what this rescue exists to preserve.
 //
-// The swap and the resume stay two steps a settle window apart. Not for
+// The rebind and the resume stay two steps a settle window apart. Not for
 // propagation — a new process reads the keychain when it starts — but as a
-// debounce: the halves land on different ticks, so the swap is durably
-// recorded, and visibly complete, before anything SIGKILLs a pane.
+// debounce: the halves land on different ticks, so the new binding is
+// durably recorded, and visibly complete, before anything SIGKILLs a pane.
 
 // limitRescueAction is the decision's outcome — what the pass should do with
 // a recorded hit on this tick.
+//
+// The ROTATION vocabulary below is deliberately kept while every comment,
+// log line, notification and prompt in this file says rebind, and the reason
+// is that these three are PERSISTED where the prose is not. `rescueRotate`'s
+// literal "rotate" is a component of limitRescue's `d.Notified` dedup key,
+// so renaming it re-notifies every hit the daemon has already announced;
+// `LimitHit.SwappedAt`/`SwappedTo` and the resolved outcome word "rotated"
+// are JSON fields and values in kv rows that outlive this process, and a
+// rename orphans every hit in flight at the moment of the upgrade —
+// SwappedAt in particular is the gate that stops a rebound cell being
+// rebound a second time. A future rename owes those rows a migration; until
+// then the words mean what the file's prose says, not what they say.
 type limitRescueAction string
 
 const (
@@ -62,13 +84,13 @@ const (
 )
 
 const (
-	// limitRescueSettle is how long after the swap the resume waits. Under
-	// teardown+resume it is NOT a propagation delay — a fresh process reads
-	// the keychain when it starts, so there is nothing to wait for — it is a
-	// debounce: the swap and the resume are separate arms of the decide
-	// chain, and this window is what stops a tick that has just swapped from
-	// also killing the pane, so the swap is recorded and a contended or
-	// half-failed rotation is visible before anything irreversible happens.
+	// limitRescueSettle is how long after the rebind the resume waits. It is
+	// NOT a propagation delay — a fresh process reads the keychain when it
+	// starts, so there is nothing to wait for — it is a debounce: the rebind
+	// and the resume are separate arms of the decide chain, and this window
+	// is what stops a tick that has just rebound from also killing the pane,
+	// so the new binding is recorded and a half-failed one is visible before
+	// anything irreversible happens.
 	// It is enforced ACROSS ticks by the gate chain rather than by sleeping
 	// inside one: the daemon's own DaemonInterval cadence is the timer, and
 	// a pass that blocks the tick would stall every other job's pass behind
@@ -103,7 +125,7 @@ const (
 	limitResetMaxWait = 6 * time.Hour
 )
 
-// limitRescueResumePrompt is zeus' first turn back after a swap-path rescue.
+// limitRescueResumePrompt is zeus' first turn back after a rebind-path rescue.
 // It is a PROMPT handed to a process that was just SIGKILLed and resumed,
 // not a message typed at a running agent, and everything unusual about it
 // follows from that: the reader has no memory of the last few seconds, its
@@ -112,12 +134,14 @@ const (
 // this text — an agent that assumes its crew came back with it will wait on
 // panes that will never answer.
 //
-// It names no account. It lands in a transcript, and which account kraken
-// moved to belongs in the notification carl reads, not in the cell's
-// context.
-const limitRescueResumePrompt = "kraken: your last turns failed on a usage limit. The main Claude account has been switched to a healthier one, and kraken killed and resumed you so this process would pick it up — your conversation is intact, but any background tasks and in-flight tool calls from before the resume are gone. Your teammates were NOT resumed: they are still limit-stalled or dead, and reviving or replacing them (TaskStop plus fresh spawns, or SendMessage to a live one) is your first move. Then re-check the work in flight and continue."
+// It names no account, and it says THIS CELL's account rather than the
+// machine's: since Q2 a rescue rebinds one job and touches nothing else, so
+// a prompt claiming the main login moved would tell zeus something false
+// about the rest of the machine. Which account it moved to belongs in the
+// notification carl reads, not in the cell's context.
+const limitRescueResumePrompt = "kraken: your last turns failed on a usage limit. This cell has been rebound to a healthier account — only this cell; nothing else on the machine moved — and kraken killed and resumed you so this process would pick the new credential up. Your conversation is intact, but any background tasks and in-flight tool calls from before the resume are gone. Your teammates were NOT resumed: they are still limit-stalled or dead, and reviving or replacing them (TaskStop plus fresh spawns, or SendMessage to a live one) is your first move. Then re-check the work in flight and continue."
 
-// limitResetResumePrompt is the no-swap sibling: the account never moved,
+// limitResetResumePrompt is the no-rebind sibling: the account never moved,
 // its own usage window reopened. Same shape and the same warnings — the
 // resume was just as fatal to this process' background work either way — and
 // no account is named here either.
@@ -245,11 +269,11 @@ func limitHitTriggerDue(stamp int64, now time.Time) bool {
 // never pre-empt an earlier one — and two of the orderings carry meaning:
 //
 //   - gate 6 (manual mode) sits above every rotate path, so a job carl has
-//     pinned to manual is never rotated whatever else is true.
-//   - gate 5 (a landed swap) sits ABOVE gate 6, because once the account has
-//     actually been swapped the resume must complete even if the mode changed
-//     in between: a swapped cell left un-resumed is worse than either outcome
-//     on its own — the credential moved and the crew is still latched onto
+//     pinned to manual is never rebound whatever else is true.
+//   - gate 5 (a landed rebind) sits ABOVE gate 6, because once the cell has
+//     actually been rebound the resume must complete even if the mode changed
+//     in between: a rebound cell left un-resumed is worse than either outcome
+//     on its own — its credential moved and the crew is still latched onto
 //     the old one.
 //
 // The second return is a short human reason, non-empty for every outcome
@@ -275,12 +299,12 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 	}
 	if hit.SwappedAt != 0 {
 		if now.Sub(time.Unix(hit.SwappedAt, 0)) >= limitRescueSettle {
-			return rescueResume, "credential swapped to " + hit.SwappedTo + " — resuming the cell"
+			return rescueResume, "cell rebound to " + hit.SwappedTo + " — resuming it"
 		}
 		return rescueSkip, ""
 	}
 	if mode == "manual" {
-		return rescueParkManual, "account rotation is pinned to manual — not rotating"
+		return rescueParkManual, "account rotation is pinned to manual — not rebinding"
 	}
 	// Attempts spent. With no reset time on the record this is the defensive
 	// floor it always was: limitRescueApply resolves a park at the moment the
@@ -306,161 +330,196 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 		return rescueSkip, ""
 	}
 	if !targetAvailable {
-		return rescueParkNoTarget, "no healthy pool account to rotate to"
+		return rescueParkNoTarget, "no healthy pool account to rebind to"
 	}
-	return rescueRotate, "usage limit hit — rotating the main account"
+	return rescueRotate, "usage limit hit — rebinding the cell to a healthier account"
 }
 
-// selectRescueTarget picks the pool slot the rescue would rotate into, and
-// reports main's own email alongside it (both the selector and the
-// notification need it). Shared by the pass' targetAvailable probe and by
-// rescueLimitedCell's own selection under the lock, so the two can never
-// disagree about what "a target exists" means.
+// cellAccountEmail is the account this cell is billing RIGHT NOW: its own
+// binding when it has one, else the machine's live main identity, since an
+// unbound cell runs on main. It is what the rescue must move OFF, and what
+// the notification names as the "from" side.
 //
-// main's identity comes from the mainIdentityEmail seam — ~/.claude.json,
-// read live — with the snapshot's own main row as the fallback for when
-// that file says nothing. The snapshot is a poll, and the rescue is the
-// thing most likely to have invalidated it: after its own swap the snapshot
-// still names the OUTGOING account as main until the next usage pass lands,
-// and feeding that stale name to the selector makes the account we just
-// rotated onto look like an eligible target while the freshly exhausted one
-// looks excluded — the exclusion is by email, so pointing it at the wrong
-// identity aims it at exactly the wrong row.
+// The live identity (mainIdentityEmail, ~/.claude.json) is preferred over
+// the snapshot's main row for an unbound cell because the snapshot is a
+// poll: a manual `k account <slug>` switch is invisible to it until the next
+// usage pass lands, and feeding a stale name to the selector would exclude
+// the wrong row — the exclusion is by email, so pointing it at the wrong
+// identity aims it at exactly the wrong account.
 //
-// Which is why the pool handed to the selector excludes main's own identity
-// HERE, case-insensitively, rather than leaning on the seam's production
-// value to do it: main is routinely mirrored into the pool as a save-back
-// slot (see core.SwapMainTo), and the seam is a seam — a test double, or any
-// future selector, is not obliged to repeat the filter.
+// It keys on the EMAIL rather than on AccountSlug, and that rests on an
+// invariant rather than on carelessness: a bound job always has an email,
+// because core.SelectBindTarget's candidate gates exclude a row with
+// `Email == ""` outright ("no identity"), and its two writers — bindAccount
+// and rescueLimitedCell — both stamp exactly what that selector returned. A
+// slug with no email therefore cannot reach these columns today. It matters
+// which way this fails if that ever changes: such a job would report MAIN's
+// email as the account to move off, so the rescue would exclude main, leave
+// the exhausted slot a candidate, and can rebind the cell straight back onto
+// it. A third writer, or a relaxed gate, owes this function a slug-keyed
+// arm — and `SelectBindTarget`'s exclusion set is email-only, so it owes it
+// a slug arm too.
+func cellAccountEmail(j *Job) string {
+	if j != nil && j.AccountEmail != "" {
+		return j.AccountEmail
+	}
+	return mainIdentityEmail()
+}
+
+// rescueProbeDue reports whether this tick's decision can actually USE a
+// target-availability answer, so the pass can decline to compute one.
 //
-// The exclusion is DUAL — the live identity and the snapshot main row's
-// email are both matched — because the live-identity preference above split
-// what used to be one row into two. Take a rescue that has just swapped
-// A→B: the live identity is B, so B's mirror slot is excluded, but the
-// snapshot still calls A "main" and also still carries slot(A) with the
-// stale-healthy numbers it had before A ran out. Excluding only B would
-// leave the account that was exhausted forty seconds ago sitting in the pool
-// as the best-looking candidate, and the next hit would rotate straight back
-// onto it. Identity-less rows (Email == "") are swept by neither match; they
-// are excluded downstream on their own merits ("no identity").
-// core.SelectRotationTarget still applies its own main-identity filter, and
-// the two agreeing is the point.
+// It exists because `targetAvailable` is a value parameter: limitRescueDecide
+// cannot ask for it lazily, so the probe runs before the chain does — and
+// the probe is now expensive (a usage-snapshot read, a full LoadJobs, a tmux
+// round trip and one keychain fork per pool slot) while the gates that
+// discard it cover minutes-to-forever. Each line below mirrors, in order,
+// one decide-chain gate that answers WITHOUT consulting targetAvailable;
+// mirroring rather than reordering keeps limitRescueDecide's own gate order
+// — which is its stated contract — the single source of truth, and a gate
+// added there that ignores the target simply costs a probe again rather than
+// changing an outcome.
 //
-// Deliberately no NeedsRotation check and no row-freshness filter: the limit
-// hit IS the evidence that main is exhausted, and the polled snapshot can be
-// minutes stale and still show that account as healthy. The attempt counter
-// is what bounds a selection made on stale candidate data.
+// Gates 1-4 (no hit, resolved, wrong error, dead cell) are the caller's
+// short-circuits already; this covers the four after them.
+func rescueProbeDue(hit LimitHit, mode string, now time.Time) bool {
+	if hit.SwappedAt != 0 {
+		return false // gate 5: a landed rebind owns this tick — resume or wait
+	}
+	if mode == "manual" {
+		return false // gate 6: pinned, so no account decision is taken at all
+	}
+	if hit.Attempts >= limitRescueMaxAttempts {
+		return false // gate 7: spent — the reset re-arm or the terminal park
+	}
+	if hit.Attempts > 0 && now.Sub(time.Unix(hit.LastAttempt, 0)) < limitRescueRetryInterval {
+		return false // gate 8: inside the retry backoff
+	}
+	return true
+}
+
+// selectRescueBind picks the pool slot the rescue would rebind this cell to.
+// Shared by the pass' targetAvailable probe and by rescueLimitedCell's own
+// selection under the binder mutex, so the two can never disagree about what
+// "a target exists" means.
 //
-// The selector is reached through rotation.go's selectTarget seam rather
-// than core.SelectRotationTarget directly, for the reason that seam was
-// declared: it is what lets a rescue's decision be exercised without a real
-// pool on disk, and RotationGate and the account API already go through it.
-func selectRescueTarget(now time.Time) (target, mainEmail, why string) {
-	mainEmail = mainIdentityEmail()
+// It goes through decideBind, which is what makes it the SAME decision a
+// spawn would take — the eligibility gates, the keychain-item guard and the
+// emptiest-slot ranking are all one implementation, and a rescue picking by
+// different rules than a spawn is how two paths drift into disagreeing about
+// which accounts are usable.
+//
+// Two exclusions are layered on top of decideBind's own. The mainEmail
+// argument carries the account the CELL is on rather than the machine's,
+// which is what moves the rescue off the exhausted window: rebinding to the
+// account that just 429'd would resolve the hit onto the same wall. And
+// main's own identity is excluded too, always — not only for an unbound
+// cell — because SwapMainTo mirrors main into a pool slot of its own, and
+// binding a rescued cell to that mirror would put it on carl's interactive
+// account under a different name. For an unbound cell the two collapse into
+// one, which is why the first argument alone would not be enough.
+//
+// Both needles resolve through resolvedMainEmail (binding.go), so an
+// unreadable ~/.claude.json falls back to the snapshot's own main row rather
+// than silently dropping the mirror exclusion entirely.
+//
+// Deliberately no row-freshness filter: the limit hit IS the evidence that
+// the cell's account is exhausted, and the polled snapshot can be minutes
+// stale and still show that account as healthy. The attempt counter is what
+// bounds a selection made on stale candidate data.
+//
+// prevSlug is deliberately empty. Stickiness exists so a reactivated cell
+// returns to the account that built its prompt cache; a rescue is the exact
+// opposite situation — that account is the one that ran out.
+func selectRescueBind(j *Job, now time.Time) (slug, email, why string) {
 	snap, ok := ReadUsageSnapshot()
 	if !ok {
-		return "", mainEmail, "no usage snapshot"
+		return "", "", "no usage snapshot"
 	}
-	var rows []core.AccountUsage
-	snapMain := ""
-	for _, a := range snap.Accounts {
-		if a.Slug == "main" {
-			snapMain = a.Email
-			if mainEmail == "" {
-				mainEmail = a.Email
+	mainEmail := resolvedMainEmail(snap)
+	from := cellAccountEmail(j)
+	if from == "" {
+		// An unbound cell whose ~/.claude.json could not be read: it is on
+		// main, and the snapshot is the only thing left that can name main.
+		from = mainEmail
+	}
+	// decideBind takes ONE excluded identity, so main's is applied here by
+	// dropping its rows before the snapshot goes in. Doing it as a filter
+	// rather than as a check on the result matters: rejecting a pick after
+	// the fact would answer "no target" while a perfectly good second-choice
+	// slot sat in the pool.
+	if mainEmail != "" && !strings.EqualFold(mainEmail, from) {
+		var kept []core.AccountUsage
+		for _, a := range snap.Accounts {
+			if a.Email != "" && strings.EqualFold(a.Email, mainEmail) {
+				continue
 			}
-			continue
+			kept = append(kept, a)
 		}
-		rows = append(rows, a)
+		snap.Accounts = kept
 	}
-	// Both exclusions run in a SECOND pass, and they have to: neither
-	// mainEmail (on the fallback path) nor snapMain is known until the loop
-	// above has walked past the main row, so a filter fused into that loop
-	// would compare every earlier row against an empty string and let main's
-	// own mirror through. Guarding each match on a non-empty needle is what
-	// keeps identity-less rows out of the exclusion.
-	excluded := func(email string) bool {
-		if email == "" {
-			return false
-		}
-		lower := strings.ToLower(email)
-		if mainEmail != "" && lower == strings.ToLower(mainEmail) {
-			return true
-		}
-		return snapMain != "" && lower == strings.ToLower(snapMain)
-	}
-	var pool []core.AccountUsage
-	for _, a := range rows {
-		if excluded(a.Email) {
-			continue
-		}
-		pool = append(pool, a)
-	}
-	target, why = selectTarget(pool, mainEmail, now.UnixMilli())
-	return target, mainEmail, why
+	// Same predicate a spawn-time bind uses (bindCountPredicate, binding.go):
+	// a rescue runs from the daemon tick while carl may be submitting, and
+	// counting a sibling's just-stamped binding as zero would rebind this
+	// cell onto the slot that submit is about to spawn on.
+	counts := boundCounts(LoadJobs(), bindCountPredicate(now))
+	return decideBind(snap, counts, RotationMode(), from, "", slotItemExists, now)
 }
 
-// rescueLimitedCell performs the swap half of a rotate decision. The step
-// order is the obligation: take the same cross-process lock RotationGate and
-// every manual switch take BEFORE selecting, so a target can never be chosen
-// against a pool another swap is mid-way through rewriting.
+// rescueLimitedCell performs the REBIND half of a rotate decision: pick a
+// healthier pool slot and stamp it on this one job's row. It kills nothing;
+// resumeCellAgents does that, a settle window later, once the new binding is
+// recorded.
 //
-// The swap itself is core.SwapMainTo unchanged — the journal, the save-back
-// slot, the case canonicalization and the rollback are all load-bearing and
-// belong to exactly one implementation — reached through rotation.go's
-// swapMain seam, the same identifier RotationGate and the account API use,
-// which is what makes the swapped path exercisable without a real keychain.
-// This is the swap half only — it kills nothing; resumeCellAgents does that,
-// a settle window later, once the swap is recorded.
+// It takes the binder's own mutex (bindMu, binding.go) and NOT the
+// cross-process rotation flock, and the difference is the feature. The flock
+// existed because a swap rewrote machine-wide credentials that every process
+// on the Mac shares, so two swappers had to be kept apart across processes.
+// A rebind writes one row in kraken.db and displaces nothing, so the only
+// race left is the in-process one the flock never addressed: two select-then-
+// stamp sequences reading the same bound counts and both landing on the same
+// emptiest slot. bindMu is what closes that, and it is the same mutex a
+// spawn-time bind takes, so a rescue and a submit cannot interleave either.
 //
-// A landed swap also kicks one usage pass, so the snapshot's idea of who
-// main is catches up before the next rescue tick reads it (selectRescueTarget
-// prefers the live identity for the same staleness, but the notification and
-// the board read the snapshot). Same single-flight the rotation gate's own
-// post-swap kick uses, and non-blocking for the same reason: this runs inside
-// a daemon tick that every other job's pass is queued behind.
+// core.SwapMainTo is not called here and cannot be reached from here — that
+// is Q2, and it is why a rescue no longer takes any account away from carl's
+// interactive sessions or from any other cell.
+//
+// No usage-pass kick: the rebind changed no account's usage and moved no
+// machine-wide identity, so there is nothing for a fresh snapshot to catch
+// up on.
 func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, err error) {
-	release, ok, lockErr := AcquireRotationLock()
-	if !ok {
-		// Contention is the ordinary case and is not an error — the other
-		// holder is doing the same job. A lock that cannot even be OPENED is
-		// a filesystem problem worth naming, but it is still "no swap
-		// happened", so it reports the same outcome and is logged here rather
-		// than raised: the caller's job is to count the attempt either way.
-		if lockErr != nil {
-			dlogEvent("info", "limit-rescue-skipped", "%s: rotation lock unavailable: %v", j.Slug, lockErr)
-		}
-		return "", "lock-busy", nil
-	}
-	defer release()
+	bindMu.Lock()
+	defer bindMu.Unlock()
 
-	target, _, why := selectRescueTarget(now)
-	if target == "" {
-		dlogEvent("info", "limit-rescue-skipped", "%s: no rotation target: %s", j.Slug, why)
+	slug, email, why := selectRescueBind(j, now)
+	if slug == "" {
+		dlogEvent("info", "limit-rescue-skipped", "%s: no rebind target: %s", j.Slug, why)
 		return "", "no-target", nil
 	}
-	_, to, swapErr := swapMain(target)
-	if swapErr != nil {
-		return "", "swap-failed", swapErr
+	st := ActiveStore()
+	if st == nil {
+		return "", "bind-failed", fmt.Errorf("%s: no store wired", j.Slug)
 	}
-	// runUsagePass is captured into a local before the goroutine starts
-	// (rather than read from inside it) so a test that swaps the package var
-	// back right after this call returns can never race this read — the same
-	// care RotationGate's kick takes.
-	if pass := runUsagePass; usagePassRunning.CompareAndSwap(false, true) {
-		go func() {
-			defer usagePassRunning.Store(false)
-			if err := pass(); err != nil {
-				dlog("usage pass after limit-rescue swap failed: %v", err)
-			}
-		}()
+	at := now.UnixMilli()
+	if bindErr := st.SetJobAccount(j.ID, slug, email, at); bindErr != nil {
+		return "", "bind-failed", bindErr
 	}
-	return to, "swapped", nil
+	// The in-memory Job is updated too, and it is load-bearing rather than
+	// tidy: the resume a settle window later builds zeus' command through
+	// spawnCommand, which reads j.AccountSlug for the env prefix. On this
+	// tick nothing spawns, but the same *Job is what the rest of this pass
+	// logs and notifies from.
+	j.AccountSlug, j.AccountEmail, j.AccountAt = slug, email, at
+	return email, "rebound", nil
 }
 
-// resumeCellAgents brings the cell back on the account that is current now:
+// resumeCellAgents brings the cell back on the account it is bound to NOW:
 // zeus' claude is killed in its own pane and its session is respawned there,
-// with prompt as its first turn.
+// with prompt as its first turn. The binding reaches the new process through
+// spawnCommand's env prefix, which is built from the job row this pass has
+// already rewritten — so "the account that is current" is a fact about the
+// row, not about the machine.
 //
 // ZEUS AND NOBODY ELSE, which is a measured constraint rather than a policy
 // choice. A resume needs a session id, and a tmux teammate has none: it
@@ -590,16 +649,16 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 	case rescueRotate:
 		hit.Attempts++
 		hit.LastAttempt = now.Unix()
-		if outcome == "swapped" {
+		if outcome == "rebound" {
 			hit.SwappedAt = now.Unix()
 			hit.SwappedTo = toEmail
-			// HandledAt stays zero deliberately: the swap is only half the
+			// HandledAt stays zero deliberately: the rebind is only half the
 			// rescue, and the resume a settle window later is what resolves it.
 		}
 	case rescueResume:
 		if outcome == "no-agents" {
 			// A round that respawned NOTHING. It must not resolve the hit
-			// (that strands a swapped cell), but it cannot be unbounded
+			// (that strands a rebound cell), but it cannot be unbounded
 			// either — an open hit is re-decided every tick, and a zeus that
 			// can never be reached would write this event forever.
 			// Increment-then-test, exactly as rescueParkNoTarget does, so a
@@ -608,9 +667,9 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 			// the max (the parks spent them), so capping it at the same
 			// absolute number would give its resume exactly one shot at a
 			// discovery snapshot the code below calls "not exotic" to find
-			// empty — the swap path's resume effectively gets several rounds,
-			// and the reset path gets the same allowance on top of the
-			// attempts it inherited.
+			// empty — the rebind path's resume effectively gets several
+			// rounds, and the reset path gets the same allowance on top of
+			// the attempts it inherited.
 			failCap := limitRescueMaxAttempts
 			if hit.SwappedAt == 0 && hit.ResetAt != 0 {
 				failCap = limitRescueMaxAttempts * 2
@@ -623,11 +682,11 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 			}
 			break
 		}
-		// Zeus is back on the current account: resolved. The account is
-		// already swapped, and re-running the swap because the crew it now
-		// has to revive is still down would rotate a second time for
-		// nothing. The outcome word records WHICH resume this was: a swap's
-		// completion, or the no-swap resume after the window's own reset.
+		// Zeus is back on the account the cell is bound to now: resolved. The
+		// binding already moved, and re-running the rebind because the crew it
+		// now has to revive is still down would burn a second pool slot for
+		// nothing. The outcome word records WHICH resume this was: a rebind's
+		// completion, or the no-rebind resume after the window's own reset.
 		hit.HandledAt = now.Unix()
 		if hit.SwappedAt != 0 {
 			hit.Outcome = "rotated"
@@ -668,17 +727,17 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 // (from the tick's). The rescue owns
 // Attempts, LastAttempt, SwappedAt, SwappedTo, HandledAt and Outcome; the
 // delivery side owns Deliveries and the identity fields. Writing the record
-// we read a swap ago would erase a Deliveries increment that landed in
+// we read a rebind ago would erase a Deliveries increment that landed in
 // between — and, far worse, a hook writing back ITS stale copy erases
-// SwappedAt, after which gate 5 never fires and the cell is swapped a second
-// time.
+// SwappedAt, after which gate 5 never fires and the cell is rebound a second
+// time, burning a second pool slot.
 //
 // ok is false when the stored record is a DIFFERENT hit (a fresh At, which
 // RecordLimitHit writes when the previous one was resolved, carried another
 // error, or fell outside the dedupe window). That is not a merge conflict to
 // resolve — our counters describe an event the store has already moved past,
 // and stamping them onto the new one would tell a brand-new limit it had
-// already been swapped. The caller reports it instead.
+// already been rebound. The caller reports it instead.
 //
 // A stored record that reads as zero (row missing, or JSON that no longer
 // parses) is the one case where our copy is written wholesale: it is the
@@ -701,16 +760,18 @@ func mergeLimitRescueState(cur, hit LimitHit) (LimitHit, bool) {
 }
 
 // saveLimitRescueState persists the rescue's own half of the hit record —
-// the attempt counters, the swap stamp and the resolution — merged under a
+// the attempt counters, the rebind stamp and the resolution — merged under a
 // fresh read (see mergeLimitRescueState) so a delivery that landed while the
 // pass was working is neither clobbered nor allowed to clobber.
 //
 // It RAISES its failures rather than swallowing them, and the rotate arm is
 // why: on every other arm a lost write costs one repeated decision on the
-// next tick, but a lost SwappedAt means the next tick reads a hit that was
-// never swapped and performs a SECOND machine-wide credential change, on
-// another pool account, with nothing anywhere saying why. The record is the
-// only thing standing between one swap and two.
+// next tick, but a lost SwappedAt means the next tick reads a hit whose cell
+// was never rebound and rebinds it AGAIN, onto a third pool account, with
+// nothing anywhere saying why — and the cell's own claudes are still running
+// against the binding from the first rebind, since only the resume picks a
+// new one up. The record is the only thing standing between one rebind and
+// two.
 //
 // The write is retried once, immediately and without a sleep: a tick must
 // not block, and the failure this is aimed at (a momentarily busy database)
@@ -740,8 +801,7 @@ func saveLimitRescueState(j *Job, hit LimitHit) error {
 // limitRescue is the per-cell pass, one job per tick, called from the
 // daemon's tick beside syncColor and inside the same !mirror block: a mirror
 // daemon must RECORD hits (the API handler is not gated) but must never
-// perform a machine-wide credential swap or destroy and recreate a live
-// pane's process.
+// rewrite a job's binding or destroy and recreate a live pane's process.
 //
 // The two halves of a rescue land on different ticks by design: a rotate
 // stamps SwappedAt and leaves HandledAt at zero, so the next pass that finds
@@ -753,13 +813,10 @@ func saveLimitRescueState(j *Job, hit LimitHit) error {
 // therefore the thing a test can hold: every field rule of the write-back
 // lives there rather than inline here.
 //
-// Two arms deliberately record NOTHING. A lock-busy rotate is a no-op, since
-// the lock is contended by every cell spawn and counting that as an attempt
-// parks a hit that never reached the pool; and a resume that never reached
-// zeus leaves the hit open, since resolving it would strand a cell whose
-// account moved and whose every claude is still latched onto the old one.
-// Both mean "try again next tick", and in both the absence of a write is
-// what says so.
+// One arm deliberately records NOTHING: a resume that never reached zeus
+// leaves the hit open, since resolving it would strand a cell whose binding
+// moved and whose every claude is still latched onto the old one. It means
+// "try again next tick", and the absence of a write is what says so.
 //
 // The resume arm's write lands AFTER the respawn rather than before, which
 // is the one place this pass holds a record across seconds of work. It has
@@ -776,9 +833,10 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		// both here is what keeps the pass free on the overwhelmingly common
 		// tick. The resolved half matters as much as the empty one: nothing
 		// ever deletes this row, so without it every job that has EVER hit a
-		// limit would pay a usage-snapshot read, a full SelectRotationTarget
-		// ranking and an os.ReadFile of rotation.json every 15 seconds for
-		// the rest of the daemon's life, only to be skipped by gate 2.
+		// limit would pay a usage-snapshot read, a full job load with its
+		// bound-count sweep, a keychain probe per pool slot and an
+		// os.ReadFile of rotation.json every 15 seconds for the rest of the
+		// daemon's life, only to be skipped by gate 2.
 		return
 	}
 	now := time.Now()
@@ -791,23 +849,22 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	}
 	// A parked-until-reset hit is unresolved for its whole wait — the one
 	// long-lived shape gate 2's short-circuit above cannot cover — and
-	// selectRescueTarget below costs a usage-snapshot read plus a full
-	// rotation ranking. Skip the wait ticks before paying it. In auto mode
+	// selectRescueBind below costs a usage-snapshot read, a full job load and
+	// a keychain probe per slot. Skip the wait ticks before paying it. In auto mode
 	// the decide chain would return skip anyway (its exhausted-attempts
 	// gate holds a future reset); under a MANUAL pin it would return
 	// park-manual instead, and suppressing that is deliberate — the hit has
 	// already parked once, its notification already fired, and re-parking
 	// it would resolve the record and kill the pending reset resume. The
-	// skip also makes the wait's rotate-blindness explicit: a pool account
+	// skip also makes the wait's rebind-blindness explicit: a pool account
 	// that turns healthy mid-wait is not used — the attempts were spent,
-	// the window's own reset is nearer than another swap cycle, and
-	// re-arming rotates here would re-open the uncapped-selection problem
+	// the window's own reset is nearer than another rebind cycle, and
+	// re-arming rebinds here would re-open the uncapped-selection problem
 	// the attempt cap exists for.
 	if hit.SwappedAt == 0 && hit.Attempts >= limitRescueMaxAttempts && hit.ResetAt != 0 &&
 		now.Sub(time.Unix(hit.ResetAt, 0)) < limitResetSettle {
 		return
 	}
-	target, mainEmail, _ := selectRescueTarget(now)
 	// FindCellSession rather than live[CellSession(j)]: !cellLive is an
 	// unconditional rescueSkip, so on a renamed cell whose tmux convergence
 	// has not landed the rescue does nothing at all — the hit is recorded and
@@ -815,8 +872,35 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	// costs a card rendering wrong for one tick; this one costs a cell sitting
 	// dead until something else notices, which is the failure mode the whole
 	// rescue exists to end.
+	//
+	// It is resolved BEFORE the probe and answered here rather than left to
+	// the decide chain, because "the cell is gone" is the one skip with no
+	// end: nothing deletes a hit row, so a job whose cell was torn down but
+	// which has not been archived stays in the tick's list and would pay the
+	// full probe every 15 seconds for the rest of the daemon's life.
 	_, cellLive := FindCellSession(j, live)
-	action, reason := limitRescueDecide(hit, RotationMode(), cellLive, target != "", now)
+	if !cellLive {
+		return
+	}
+	// Gate 3's caller-side twin (review finding R1): a non-rate_limit hit is
+	// recorded-but-never-acted-on, nothing ever resolves it, and the cell can
+	// stay live for the job's whole life — without this line such a job pays
+	// the full probe every tick forever and the decide chain discards the
+	// answer at its own gate 3 anyway. Same nothing, bought cheaper.
+	if hit.Error != "rate_limit" {
+		return
+	}
+	mode := RotationMode()
+	// Only probe when this tick can actually USE the answer — see
+	// rescueProbeDue. The probe is a snapshot read, a full job load, a tmux
+	// round trip and one keychain fork per pool slot, and the two waits it
+	// now skips are ten minutes and indefinite, i.e. ~40 discarded rounds
+	// per backoff window at DaemonInterval.
+	target := ""
+	if rescueProbeDue(hit, mode, now) {
+		target, _, _ = selectRescueBind(j, now)
+	}
+	action, reason := limitRescueDecide(hit, mode, cellLive, target != "", now)
 	if action == rescueSkip {
 		return
 	}
@@ -824,7 +908,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	// The dedup key carries the HIT, not just the job and the action: nothing
 	// clears d.Notified for this pass and the daemon runs for weeks, so a
 	// slug+action key would announce a job's first rescue and then silently
-	// swap the machine's login for every later one. The park-manual notice is
+	// rebind the cell for every later one. The park-manual notice is
 	// the sharpest case — it says a cell is stuck waiting on carl, which is
 	// exactly the message that must repeat.
 	notifyOnce := func(title, msg string) {
@@ -835,46 +919,53 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		notify(title, msg)
 		d.Notified[key] = now.Unix()
 	}
-	if mainEmail == "" {
-		mainEmail = "main"
+	// The "from" side of what carl is told. The RECORD's own answer wins:
+	// hit.SourceAccount is the account that was bound when this hit opened,
+	// while the row says whatever it says now, and the two diverge precisely
+	// when it matters — a rebind that landed but whose bookkeeping write was
+	// lost would otherwise be reported as "rebound B → C" when the window
+	// that failed was A. The row is the fallback for a hit recorded before
+	// this field existed and for a cell that was unbound (SourceAccount is
+	// empty for the main lane by design), and it is read HERE, before the
+	// rotate arm below rewrites the binding.
+	fromEmail := hit.SourceAccount
+	if fromEmail == "" {
+		fromEmail = cellAccountEmail(j)
+	}
+	if fromEmail == "" {
+		fromEmail = "main"
 	}
 
 	switch action {
 	case rescueRotate:
 		to, outcome, err := rescueLimitedCell(j, now)
-		if outcome == "lock-busy" {
-			// Nothing happened, so nothing is counted. This is the same lock
-			// every cell spawn takes, so losing it is an ordinary event —
-			// spending one of three attempts and starting a ten-minute
-			// backoff on it would park a hit that never once reached the pool.
-			dlogEvent("info", "limit-rescue-skipped", "%s: rotation lock busy — retrying next tick", j.Slug)
-			return
-		}
 		hit = limitRescueApply(hit, action, outcome, to, now)
 		saveErr := saveLimitRescueState(j, hit)
 		switch {
-		case outcome == "swapped":
-			notifyOnce("kraken ⇄ "+j.Slug, fmt.Sprintf("usage limit — switched %s → %s", mainEmail, to))
-			dlogEvent("info", "limit-rescue-done", "%s: %s: swapped %s → %s", j.Slug, reason, mainEmail, to)
+		case outcome == "rebound":
+			notifyOnce("kraken ⇄ "+j.Slug, fmt.Sprintf("usage limit — rebound %s → %s", fromEmail, to))
+			dlogEvent("info", "limit-rescue-done", "%s: %s: rebound %s → %s", j.Slug, reason, fromEmail, to)
 			if saveErr != nil {
 				// The one lost write in this pass that is not self-correcting:
-				// the account HAS moved, and a record with no SwappedAt sends
-				// the next tick around for a second swap onto a third account.
-				dlogEvent("error", "limit-rescue-failed", "%s: swapped to %s but recording it failed — a later tick may swap again: %v", j.Slug, to, saveErr)
+				// the binding HAS moved, and a record with no SwappedAt sends
+				// the next tick around for a second rebind onto a third
+				// account.
+				dlogEvent("error", "limit-rescue-failed", "%s: rebound to %s but recording it failed — a later tick may rebind again: %v", j.Slug, to, saveErr)
 			}
 		case err != nil:
-			dlogEvent("error", "limit-rescue-failed", "%s: rotate attempt %d failed (%s): %v", j.Slug, hit.Attempts, outcome, err)
+			dlogEvent("error", "limit-rescue-failed", "%s: rebind attempt %d failed (%s): %v", j.Slug, hit.Attempts, outcome, err)
 		default:
-			dlogEvent("info", "limit-rescue-skipped", "%s: rotate attempt %d did not swap (%s)", j.Slug, hit.Attempts, outcome)
+			dlogEvent("info", "limit-rescue-skipped", "%s: rebind attempt %d did not rebind (%s)", j.Slug, hit.Attempts, outcome)
 		}
-		if saveErr != nil && outcome != "swapped" {
+		if saveErr != nil && outcome != "rebound" {
 			dlogErr("%s: persist limit-hit record failed: %v", j.Slug, saveErr)
 		}
 
 	case rescueResume:
 		// Which resume this is decides what zeus comes back to: a landed
-		// swap means a new credential is live; a zero SwappedAt on this arm
-		// can only be the reset re-arm, where the account never moved.
+		// rebind means the cell is now pointed at a different slot; a zero
+		// SwappedAt on this arm can only be the reset re-arm, where the
+		// account never moved.
 		resumePrompt := limitRescueResumePrompt
 		if hit.SwappedAt == 0 {
 			resumePrompt = limitResetResumePrompt
@@ -882,7 +973,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		resumed, err := resumeCellAgents(j, all, resumePrompt)
 		if err != nil || resumed == 0 {
 			// A hit resolved with zeus NOT resumed is a permanently stranded
-			// cell: the account was swapped, every claude in the cell is
+			// cell: the binding moved, every claude in the cell is
 			// still latched onto the old one, and a stalled cell makes no
 			// further API calls — so it can never produce another hook, and
 			// gate 2 would skip this hit forever.
@@ -892,7 +983,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 			// stopped holding a claude between the snapshot and the kill), so
 			// the round is counted rather than resolved and a later tick
 			// tries again — but only up to limitRescueMaxAttempts of them,
-			// after which the hit parks. An unbounded open swapped hit is
+			// after which the hit parks. An unbounded open rebound hit is
 			// worse than a parked one: it re-arms the rotate gate every time
 			// a late delivery supersedes it, and it writes this event every
 			// 15s for as long as the session lives.
@@ -902,12 +993,11 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 			}
 			if hit.HandledAt != 0 {
 				// Which resume failed decides what carl is told: on the reset
-				// path no credential ever moved, and a notice claiming a
-				// switch would report a machine-wide change that never
-				// happened.
+				// path nothing ever moved, and a notice claiming a rebind
+				// would report a change that never happened.
 				if hit.SwappedAt != 0 {
-					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — account switched but the cell's zeus could not be resumed")
-					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d resume rounds reached no zeus pane — account was switched, cell was not resumed", j.Slug, hit.Attempts)
+					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — cell rebound but its zeus could not be resumed")
+					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d resume rounds reached no zeus pane — cell was rebound, not resumed", j.Slug, hit.Attempts)
 				} else {
 					notifyOnce("kraken ⚠ "+j.Slug, "usage limit — window reset but the cell's zeus could not be resumed")
 					dlogEvent("info", "limit-rescue-skipped", "%s: parked after %d resume rounds reached no zeus pane — window had reset, cell was not resumed", j.Slug, hit.Attempts)
@@ -948,7 +1038,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		}
 		// Worded for attempt 1, where the notification actually fires
 		// (notifyOnce keys on the hit, and the first park is the first
-		// chance): two more rotate attempts are still ahead, so the reset
+		// chance): two more rebind attempts are still ahead, so the reset
 		// resume is conditional, not promised. The time carries a date
 		// whenever the target is not today — a bare "10:20pm" for a
 		// tomorrow target reads as tonight.

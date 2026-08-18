@@ -21,7 +21,13 @@ import {
   steerJob,
   uploadImage,
 } from "../../api/client.ts";
-import type { JobForm, WebJob, WebJobLoad } from "../../api/types.ts";
+import type {
+  JobForm,
+  WebJob,
+  WebJobAccount,
+  WebJobLoad,
+  WebUsage,
+} from "../../api/types.ts";
 import {
   JOB_COLORS,
   SCOPE_ANCHORS,
@@ -29,6 +35,7 @@ import {
   age,
   loadRatioText,
   loadROI,
+  usageColorClass,
   type LoadBand,
 } from "../../lib/format.ts";
 import { SwatchStrip } from "./SwatchStrip.tsx";
@@ -149,6 +156,21 @@ export interface SteerOverlayProps {
    * leaves the board, which is one of the two ways this modal auto-closes.
    */
   job: WebJob | undefined;
+  /**
+   * The chrome's 60s `/api/usage` poll, threaded in so the account section can
+   * put live session/Fable bars beside the slot the job is bound to. Undefined
+   * until the first poll lands, and permanently undefined on an older server
+   * (404) or with the daemon down.
+   *
+   * OPTIONAL, unlike the two required action props below, and the difference is
+   * what the absence MEANS. An unfilled action slot is a broken feature that
+   * looks like a job with nothing in it — that is the hazard those props were
+   * made required for. Absent usage is a real, expected state the section
+   * already renders for: no rows, no bars, and never a fabricated percentage.
+   * The section's own answer — which account this cell is bound to — comes from
+   * `job` and does not depend on this at all.
+   */
+  usage?: WebUsage;
   onClose: () => void;
   /**
    * A rename succeeded — the caller re-points `slug` at the SAME job under its
@@ -241,6 +263,7 @@ function SteerBody({
   mode,
   requireText = false,
   job,
+  usage,
   onClose,
   onRenamed,
   mutate,
@@ -526,6 +549,20 @@ function SteerBody({
   const retryable = !!job?.health && !/is gone|startup prompt/.test(job.health);
   const question = job?.question;
   const showActions = mode !== "reactivate" && (retryable || !!question);
+  // Which pool account this cell is spending on. Unlike every other term in
+  // showContext this one is NOT a presence test on a wire key, and deliberately
+  // so: an unbound cell is not a cell with no account, it is a cell on the
+  // machine's MAIN login — the lane every cell ran in before per-cell binding —
+  // and "main (machine default)" is a real answer this section owes, not a
+  // blank. So the question applies to any steerable cell, bound or not.
+  //
+  // `reactivate` is the one mode it does not apply in, and that IS a fact about
+  // the world rather than a rendering choice: reactivate targets a dead cell,
+  // which is burning nothing at all, and the binder re-decides at the respawn —
+  // so whatever the row still says would be the account the NEXT run may not
+  // get. Answering it there would be the one thing this section must not do,
+  // which is state a dead fact as a current one.
+  const hasAccount = mode !== "reactivate";
 
   const showContext =
     showCrew ||
@@ -537,6 +574,7 @@ function SteerBody({
     showArtifacts ||
     hasDocq ||
     hasFeedback ||
+    hasAccount ||
     hasTokens;
 
   // ---- feedback save / delete ---------------------------------------------
@@ -869,6 +907,17 @@ function SteerBody({
               />
             ) : null}
           </div>
+          {/* which pool account this cell is burning, and how much of that
+              account is left. Ambient and READ-ONLY — there is no switch
+              control here and there is deliberately not going to be one: a
+              running claude does not re-read a swapped credential, so a button
+              that "moved" a live cell would change a row and nothing else.
+              Directly above the tokens panel because the two are the same kind
+              of fact read in the same breath — whose quota, then how much of it
+              this job has spent. */}
+          <div className="steer-account" id="steer-account" hidden={!hasAccount}>
+            {hasAccount ? <AccountPanel account={job?.account} usage={usage} /> : null}
+          </div>
           {/* last because it is ambient: nothing here is actionable, and a
               job that was never measured leaves this hidden entirely rather
               than showing a zero — see TokensPanel. */}
@@ -1073,6 +1122,162 @@ function LoadDrill({
           may legitimately be "", exactly as loadBadgeTitle's trailing clause is
           omitted rather than rendered as a dangling " — ". */}
       {load.note ? <div className="ld-drill-note">{load.note}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * One percentage off a `/api/usage` account row, or null.
+ *
+ * `WebUsageAccount` is `[k: string]: unknown` in types.ts (it mirrors
+ * core.AccountUsage, which grows fields), so every window is narrowed by a
+ * READER rather than by a cast — UsageOverlay's own rule, and the reason a
+ * renamed server-side field degrades to a missing bar here instead of a crash.
+ * The one field this panel needs is `percent`, so this is deliberately narrower
+ * than UsageOverlay's `readWindow`: no `resets_at`, because a countdown beside
+ * a job's account would be a second, quieter copy of the usage drilldown's own.
+ */
+function readPercent(v: unknown): number | null {
+  if (!v || typeof v !== "object") return null;
+  const p = (v as Record<string, unknown>).percent;
+  return typeof p === "number" ? p : null;
+}
+
+/**
+ * The Fable window's percentage off an account row's `models` array, or null.
+ *
+ * Matched case-INSENSITIVELY on the name containing "fable" rather than on an
+ * exact id: the per-model window is named by whatever `/usage` reports, and
+ * `core.ZeusModel` is an exact model id that moves when the fast tier moves.
+ * Absent — an account that has spent nothing on the tier, or a server that
+ * reports no per-model windows — renders no bar at all, never a 0%.
+ */
+function readFablePercent(v: unknown): number | null {
+  if (!Array.isArray(v)) return null;
+  for (const m of v) {
+    if (!m || typeof m !== "object") continue;
+    const name = (m as Record<string, unknown>).name;
+    if (typeof name !== "string" || !name.toLowerCase().includes("fable")) continue;
+    const p = readPercent(m);
+    if (p !== null) return p;
+  }
+  return null;
+}
+
+/**
+ * One usage bar. The MARKUP SHAPE is UsageOverlay's `Bar` — same three-part
+ * `.u-row`, same `usageColorClass` fill — rather than an import of it, and the
+ * split is deliberate: that component owns the drilldown's row, with its
+ * `resets_at` countdown and its own label column, and this panel wants the bar
+ * without the countdown. Sharing the CLASSES is what keeps the two looking like
+ * one thing; sharing the component would have meant a prop to suppress half of
+ * it. `usageColorClass` itself IS shared, because a threshold rendered in two
+ * places is exactly the thing that must not be written twice (its own header in
+ * lib/format.ts says so).
+ */
+function AccountBar({ label, percent }: { label: string; percent: number }) {
+  const pct = Math.max(0, Math.min(100, percent));
+  return (
+    <div className="u-row">
+      <span className="u-row-label">{label}</span>
+      <span className="u-bar">
+        <span
+          className={`u-bar-fill ${usageColorClass(percent)}`}
+          style={{ width: `${pct}%` }}
+        ></span>
+      </span>
+      <span className="u-row-val">{Math.round(percent)}%</span>
+    </div>
+  );
+}
+
+/**
+ * Which pool account this cell is spending on, in the steer modal's context
+ * block — the drilldown half of the card's `.ac-chip`.
+ *
+ * Two states, and the second is not an error:
+ *   - BOUND — slot slug, the account's email, and how long ago the binding was
+ *     stamped. The age is the part that makes a rebind legible: the limit
+ *     rescue moves one cell mid-run, so a fresh stamp on an old job is the
+ *     whole story of what just happened to it.
+ *   - UNBOUND — "main (machine default)". A cell with no binding is not a cell
+ *     with no account; it is the lane every cell ran in before per-cell binding
+ *     existed, which happens when the pool was dry or fully excluded at spawn
+ *     and whenever rotation is pinned manual. Saying so is the answer; a blank
+ *     section would read as the feature being broken.
+ *
+ * The bars come from the chrome's 60s `/api/usage` poll, joined to the binding
+ * by SLUG — the one key both payloads carry. A slot the poll does not report
+ * (an older server, the daemon down, a slot ccp added since the last fetch)
+ * renders NO bars rather than zeros: this panel never fabricates a percentage,
+ * which is the same rule TokensPanel applies to an unmeasured job. The poll's
+ * lag is stated in the note rather than hidden, because a number that can be a
+ * minute old and does not say so is one a reader will act on as current.
+ *
+ * Read-only throughout, with no switch control, and that is a fact about the
+ * world rather than a scope cut: a RUNNING claude resolves its credential at
+ * session start and does not re-read a swapped one, so a control that "moved" a
+ * live cell would change a database row and nothing about what the cell bills.
+ */
+function AccountPanel({
+  account,
+  usage,
+}: {
+  account: WebJobAccount | undefined;
+  usage: WebUsage | undefined;
+}) {
+  if (!account) {
+    return (
+      <div className="ac-panel" data-testid="account-panel">
+        <div className="ac-row">
+          <span className="ac-k">bound to</span>
+          <span className="ac-v">
+            main <span className="ac-dim">(machine default — no per-cell binding)</span>
+          </span>
+        </div>
+      </div>
+    );
+  }
+  // Matched on the slug, which is the slot DIRECTORY name on both sides — never
+  // on the email, which a pool row may not carry at all (a slot ccp has no
+  // identity for is exactly the case the chip falls back to the slug for).
+  const row = (usage?.accounts ?? []).find((a) => a.slug === account.slug);
+  const session = readPercent(row?.session);
+  const fable = readFablePercent(row?.models);
+  // `at` is unix MILLIS and age() takes SECONDS — the same divide LoadDrill and
+  // TokensPanel each spell out. A zero stamp drops the row rather than
+  // rendering "0s ago", which would date the binding to right now.
+  const when = age(account.at ? Math.floor(account.at / 1000) : 0);
+  const hasBars = session !== null || fable !== null;
+  return (
+    <div className="ac-panel" data-testid="account-panel">
+      <div className="ac-row">
+        <span className="ac-k">bound to</span>
+        <span className="ac-v">
+          {account.slug}
+          {account.email ? <span className="ac-dim"> · {account.email}</span> : null}
+        </span>
+      </div>
+      {when ? (
+        <div className="ac-row">
+          <span className="ac-k">since</span>
+          <span className="ac-v">{when} ago</span>
+        </div>
+      ) : null}
+      {hasBars ? (
+        <div className="u-rows">
+          {session !== null ? <AccountBar label="session 5h" percent={session} /> : null}
+          {fable !== null ? <AccountBar label="fable 7d" percent={fable} /> : null}
+        </div>
+      ) : null}
+      {/* The provenance line, and it is only ever said where a NUMBER was
+          shown: with no bars there is nothing here that can be stale, and a
+          note about a poll that contributed nothing would read as an
+          explanation for the missing bars rather than as a caveat on present
+          ones. */}
+      {hasBars ? (
+        <div className="ac-note">usage from the 60s /api/usage poll — may lag a minute</div>
+      ) : null}
     </div>
   );
 }

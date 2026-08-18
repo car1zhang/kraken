@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1319,47 +1318,20 @@ func TestContractLimitCellAgentPanesExcludesLiveThreads(t *testing.T) {
 	}
 }
 
-// --- jobs.rescueLimitedCell: the order of its three steps ---
+// --- jobs.rescueLimitedCell: what an empty pool answers ---
 //
-// Contract row `jobs.rescueLimitedCell`: "in this order, and the order is the
-// obligation — acquire the rotation lock; not acquired → outcome 'lock-busy',
-// no error, no swap. Then select a target ...; no target → outcome
-// 'no-target', no swap."
+// The lock-precedes-selection ordering test lived here and retired with Q2:
+// rescueLimitedCell takes no cross-process rotation flock any more, because
+// it changes no machine-wide credential — it serializes on the binder's own
+// in-process mutex against the other select-then-stamp, a spawn-time bind.
+// A blocking mutex has no "busy" outcome to assert an ordering against.
 //
-// Neither path below performs a swap, which is what makes them safe to run:
-// HOME is sandboxed, so the pool is empty and there is nothing to swap to.
+// What remains is the second step's own outcome, and it is safe to run for
+// the same reason it always was: HOME is sandboxed, so the pool is empty and
+// there is nothing to bind to.
 
-// TestContractLimitRescueLockPrecedesTargetSelection is the ordering
-// assertion. With the rotation lock already held AND no target available,
-// both gates would fire — the outcome must be the lock's, which is only true
-// if the lock is taken first.
-func TestContractLimitRescueLockPrecedesTargetSelection(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // empty pool: no target exists either
-
-	release, ok, err := AcquireRotationLock()
-	if err != nil {
-		t.Fatalf("acquire the lock for the test: %v", err)
-	}
-	if !ok {
-		t.Skip("rotation lock unexpectedly contended in this test process")
-	}
-	defer release()
-
-	j := &Job{Slug: "locked"}
-	to, outcome, err := rescueLimitedCell(j, contractLimitNow)
-	if err != nil {
-		t.Fatalf("err = %v, want nil — contention is not an error", err)
-	}
-	if outcome != "lock-busy" {
-		t.Fatalf("outcome = %q, want %q — target selection ran before the lock", outcome, "lock-busy")
-	}
-	if to != "" {
-		t.Errorf("toEmail = %q, want empty — nothing was swapped", to)
-	}
-}
-
-// TestContractLimitRescueNoTargetOutcome is the second step's own outcome,
-// with the lock free: an empty pool yields "no-target", no error, no swap.
+// TestContractLimitRescueNoTargetOutcome: an empty pool yields "no-target",
+// no error, no rebind.
 func TestContractLimitRescueNoTargetOutcome(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -1469,7 +1441,7 @@ func TestContractLimitHookPostsTheDocumentedFieldNames(t *testing.T) {
 // arms below are the ones that previously had no assertion anywhere.
 //
 // Dimension split for this batch: the NORMAL arms are mine (skip,
-// rotate/"swapped", resume, park-manual). The rotate-with-a-failing-outcome
+// rotate/"rebound", resume, park-manual). The rotate-with-a-failing-outcome
 // arm and park-no-target's increment-then-test threshold are boundary/refusal
 // work and belong to the sibling author.
 
@@ -1526,7 +1498,7 @@ func TestContractLimitApplySkipReturnsHitUnchanged(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// the outcome/toEmail arguments carry leftovers from a call that
 			// never happened; a skip must ignore both rather than record them
-			got := limitRescueApply(hit, rescueSkip, "swapped", "somebody@example.com", contractLimitNow)
+			got := limitRescueApply(hit, rescueSkip, "rebound", "somebody@example.com", contractLimitNow)
 			if !reflect.DeepEqual(got, hit) {
 				t.Fatalf("skip changed the record:\n got  %+v\n want %+v", got, hit)
 			}
@@ -1539,10 +1511,15 @@ func TestContractLimitApplySkipReturnsHitUnchanged(t *testing.T) {
 // sets LastAttempt = now, and leaves HandledAt zero — the resume on a later
 // tick is what resolves the hit". The HandledAt-stays-zero clause is the
 // load-bearing one: resolve here and the resume never runs, leaving a cell
-// swapped onto a fresh account and still sitting on a dead turn.
+// rebound onto a fresh account and still sitting on a dead turn.
+//
+// The outcome WORD is "rebound" since Q2 — the rescue rebinds one job row
+// rather than swapping the machine's login — but the two stamped fields
+// still carry the old names, because they mean what they always meant: when
+// the cell's account moved, and to whom.
 func TestContractLimitApplyRotateSwapped(t *testing.T) {
 	base := contractLimitApplyBase()
-	got := limitRescueApply(base, rescueRotate, "swapped", "rescued@example.com", contractLimitNow)
+	got := limitRescueApply(base, rescueRotate, "rebound", "rescued@example.com", contractLimitNow)
 
 	if got.SwappedAt != contractLimitNow.Unix() {
 		t.Errorf("SwappedAt = %d, want %d", got.SwappedAt, contractLimitNow.Unix())
@@ -1630,12 +1607,12 @@ func TestContractLimitApplyIsPure(t *testing.T) {
 	for _, action := range []limitRescueAction{rescueSkip, rescueRotate, rescueResume, rescueParkManual} {
 		t.Run(string(action), func(t *testing.T) {
 			hit := contractLimitApplyBase()
-			first := limitRescueApply(hit, action, "swapped", "x@example.com", contractLimitNow)
+			first := limitRescueApply(hit, action, "rebound", "x@example.com", contractLimitNow)
 			if !reflect.DeepEqual(hit, contractLimitApplyBase()) {
 				t.Fatalf("the argument was mutated to %+v", hit)
 			}
 			for i := 0; i < 3; i++ {
-				again := limitRescueApply(hit, action, "swapped", "x@example.com", contractLimitNow)
+				again := limitRescueApply(hit, action, "rebound", "x@example.com", contractLimitNow)
 				if !reflect.DeepEqual(again, first) {
 					t.Fatalf("call %d = %+v, want the stable %+v", i, again, first)
 				}
@@ -1655,14 +1632,14 @@ func TestContractLimitApplyTwoPhaseSequence(t *testing.T) {
 	hit := contractLimitApplyBase()
 	hit.Attempts, hit.LastAttempt = 0, 0
 
-	// tick 1: the decision rotates, the swap lands, the record remembers it
+	// tick 1: the decision rotates, the rebind lands, the record remembers it
 	action, _ := limitRescueDecide(hit, "auto", true, true, tick1)
 	if action != rescueRotate {
 		t.Fatalf("tick 1 decided %q, want rotate", action)
 	}
-	hit = limitRescueApply(hit, action, "swapped", "rescued@example.com", tick1)
+	hit = limitRescueApply(hit, action, "rebound", "rescued@example.com", tick1)
 	if hit.HandledAt != 0 {
-		t.Fatalf("the hit resolved on the swap tick: %+v", hit)
+		t.Fatalf("the hit resolved on the rebind tick: %+v", hit)
 	}
 
 	// tick 2, inside the settle window: nothing may happen yet
@@ -1720,7 +1697,7 @@ func TestContractLimitTimestampsAreUnixSeconds(t *testing.T) {
 		t.Fatal(err)
 	}
 	// SwappedAt + LastAttempt, via the rotate arm
-	rec = limitRescueApply(rec, rescueRotate, "swapped", "x@example.com", now)
+	rec = limitRescueApply(rec, rescueRotate, "rebound", "x@example.com", now)
 	// HandledAt, via the resume arm
 	rec = limitRescueApply(rec, rescueResume, "resumed", "", now)
 
@@ -1756,10 +1733,10 @@ func TestContractLimitTimestampsAreUnixSeconds(t *testing.T) {
 // the entire reason the rescue is two-phase — while every other test stays
 // green.
 func TestContractLimitSettleWindowSurvivesTheUnitRoundTrip(t *testing.T) {
-	swapped := limitRescueApply(contractLimitApplyBase(), rescueRotate, "swapped", "x@example.com", contractLimitNow)
+	swapped := limitRescueApply(contractLimitApplyBase(), rescueRotate, "rebound", "x@example.com", contractLimitNow)
 
 	if got, _ := limitRescueDecide(swapped, "auto", true, true, contractLimitNow); got != rescueSkip {
-		t.Errorf("at the swap instant the decision is %q, want skip — the settle window is not being observed", got)
+		t.Errorf("at the rebind instant the decision is %q, want skip — the settle window is not being observed", got)
 	}
 	if got, _ := limitRescueDecide(swapped, "auto", true, true, contractLimitNow.Add(limitRescueSettle-time.Second)); got != rescueSkip {
 		t.Errorf("one second short of the settle window the decision is %q, want skip", got)
@@ -2096,209 +2073,17 @@ func TestContractLimitHookTruncatesDetailsBeforePosting(t *testing.T) {
 	}
 }
 
-// --- Amendment 12: the "swapped" outcome, through rotation.go's seams ---
+// --- Retired with Q2: the "swapped" outcome, through rotation.go's seams ---
 //
-// Contract, Amendment 12: rescueLimitedCell calls the package-level swapMain
-// and selectTarget vars rather than core directly, "so that untestability was
-// self-inflicted and one identifier deep". These are the tests the contract's
-// own note said could not exist — the success path, and the property that
-// only a stub can prove rather than assert by reading.
-//
-// stubRotation (rotation_test.go) is the established harness: it sandboxes
-// HOME and saves/restores every seam on cleanup. It leaves selectTarget and
-// swapMain at their real implementations, so each test below assigns the two
-// it cares about.
-
-// contractLimitHealthySnapshot writes a usage snapshot whose MAIN row is
-// unambiguously healthy — session 5%, weekly 5%, no model windows, so
-// core.NeedsRotation returns false — beside one pool slot. It is the fixture
-// the "must not consult NeedsRotation" obligation needs: the rescue's whole
-// premise is that a limit hit is stronger evidence than a polled snapshot
-// that can be minutes stale and still show the exhausted account as fine.
-func contractLimitHealthySnapshot(t *testing.T) core.AccountUsage {
-	t.Helper()
-	fresh := time.Now().UnixMilli()
-	main := core.AccountUsage{
-		Slug:      "main",
-		Email:     "main@x.com",
-		Session:   &core.UsageWindow{Percent: 5},
-		Weekly:    &core.UsageWindow{Percent: 5},
-		FetchedAt: fresh,
-	}
-	snap := core.UsageSnapshot{
-		FetchedAt: fresh,
-		Accounts: []core.AccountUsage{
-			main,
-			{Slug: "slot-b", Email: "b@x.com", Session: &core.UsageWindow{Percent: 1}, FetchedAt: fresh},
-		},
-	}
-	if err := writeUsageSnapshot(snap, UsageSnapshotPath()); err != nil {
-		t.Fatal(err)
-	}
-	return main
-}
-
-// TestContractLimitRescueSwappedOutcome is the success path: a swap that
-// succeeds returns the TARGET'S EMAIL (not its slug — the email is what the
-// notification names and what SwappedTo records) and outcome "swapped", with
-// no error. It also pins that the slug handed to swapMain is the one
-// selectTarget chose, since those are two different identifiers for the
-// account and crossing them would swap onto the wrong slot.
-func TestContractLimitRescueSwappedOutcome(t *testing.T) {
-	stubRotation(t)
-	contractLimitHealthySnapshot(t)
-
-	var gotPool []string
-	var gotMainEmail, swappedSlug string
-	selectTarget = func(accts []core.AccountUsage, mainEmail string, now int64) (string, string) {
-		gotMainEmail = mainEmail
-		for _, a := range accts {
-			gotPool = append(gotPool, a.Slug)
-		}
-		return "slot-b", ""
-	}
-	swapMain = func(slug string) (string, string, error) {
-		swappedSlug = slug
-		return "main@x.com", "b@x.com", nil
-	}
-
-	to, outcome, err := rescueLimitedCell(&Job{Slug: "swapped-ok"}, contractLimitNow)
-	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
-	}
-	if outcome != "swapped" {
-		t.Fatalf("outcome = %q, want %q", outcome, "swapped")
-	}
-	if to != "b@x.com" {
-		t.Errorf("toEmail = %q, want the target's email b@x.com", to)
-	}
-	if swappedSlug != "slot-b" {
-		t.Errorf("swapMain got slug %q, want the slot-b selectTarget chose", swappedSlug)
-	}
-	// the selection is made over the pool with main EXCLUDED and main's own
-	// email passed alongside — SelectRotationTarget fails closed without it,
-	// and a main row left in the pool is a self-rotation candidate
-	if gotMainEmail != "main@x.com" {
-		t.Errorf("selectTarget mainEmail = %q, want main@x.com from the snapshot", gotMainEmail)
-	}
-	if !reflect.DeepEqual(gotPool, []string{"slot-b"}) {
-		t.Errorf("selectTarget pool = %v, want [slot-b] — main must be excluded", gotPool)
-	}
-}
-
-// TestContractLimitRescueIgnoresNeedsRotation is the obligation Amendment 12
-// makes provable: "It must NOT consult core.NeedsRotation — the limit hit is
-// the reason, and the polled snapshot can be five minutes stale and still show
-// the exhausted account as healthy."
-//
-// The fixture's main row is healthy by NeedsRotation's own reckoning, and the
-// test asserts that premise rather than assuming it, so the proof cannot rot
-// if the thresholds move. A rescue that consulted NeedsRotation would refuse
-// this swap; it must perform it. The fetchMainUsage sentinel closes the other
-// route to the same mistake — a live fetch inside the tick, which is both a
-// network call the pass must never make and the only other way to reach a
-// freshness judgement about main.
-func TestContractLimitRescueIgnoresNeedsRotation(t *testing.T) {
-	stubRotation(t)
-	main := contractLimitHealthySnapshot(t)
-
-	if needs, why := core.NeedsRotation(main); needs {
-		t.Fatalf("fixture is wrong: NeedsRotation says the main row already needs rotating (%s)", why)
-	}
-
-	fetched := false
-	fetchMainUsage = func() core.AccountUsage {
-		fetched = true
-		return core.AccountUsage{}
-	}
-	swapped := false
-	selectTarget = func([]core.AccountUsage, string, int64) (string, string) { return "slot-b", "" }
-	swapMain = func(slug string) (string, string, error) {
-		swapped = true
-		return "main@x.com", "b@x.com", nil
-	}
-
-	_, outcome, err := rescueLimitedCell(&Job{Slug: "ignores-needs"}, contractLimitNow)
-	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
-	}
-	if outcome != "swapped" || !swapped {
-		t.Fatalf("outcome = %q (swapMain called: %v), want a real swap — the rescue gated on NeedsRotation instead of on the limit hit", outcome, swapped)
-	}
-	if fetched {
-		t.Error("rescueLimitedCell called fetchMainUsage — a live network fetch inside the tick, and the route to a freshness judgement it must not make")
-	}
-}
-
-// TestContractLimitRescueLockBusyTouchesNoSeam upgrades the ordering proof
-// this file already carried. Before the seams existed, "the lock is taken
-// before the selection" could only be inferred from the OUTCOME string; now
-// it is directly observable — with the lock held, neither seam may be reached
-// at all. That matters beyond tidiness: selecting under someone else's swap
-// reads a pool that is mid-rewrite, and swapping would be a second concurrent
-// machine-wide credential change.
-func TestContractLimitRescueLockBusyTouchesNoSeam(t *testing.T) {
-	stubRotation(t)
-	contractLimitHealthySnapshot(t) // a target IS available, so only the lock can stop this
-
-	selected, swapped := false, false
-	selectTarget = func([]core.AccountUsage, string, int64) (string, string) {
-		selected = true
-		return "slot-b", ""
-	}
-	swapMain = func(string) (string, string, error) {
-		swapped = true
-		return "main@x.com", "b@x.com", nil
-	}
-
-	release, ok, err := AcquireRotationLock()
-	if err != nil {
-		t.Fatalf("acquire the lock for the test: %v", err)
-	}
-	if !ok {
-		t.Skip("rotation lock unexpectedly contended in this test process")
-	}
-	defer release()
-
-	to, outcome, err := rescueLimitedCell(&Job{Slug: "lock-seams"}, contractLimitNow)
-	if err != nil {
-		t.Fatalf("err = %v, want nil — contention is not an error", err)
-	}
-	if outcome != "lock-busy" || to != "" {
-		t.Fatalf("outcome/to = %q/%q, want lock-busy and no email", outcome, to)
-	}
-	if selected {
-		t.Error("selectTarget was called while another holder had the lock — the pool may be mid-rewrite")
-	}
-	if swapped {
-		t.Error("swapMain was called while another holder had the lock — two concurrent machine-wide swaps")
-	}
-}
-
-// TestContractLimitRescueSwapFailurePropagates completes the outcome set now
-// that the seam makes it reachable: a swap that errors reports "swap-failed"
-// WITH the error and no email, so limitRescue's rotate arm can raise
-// limit-rescue-failed rather than logging a silent non-swap. The distinction
-// from "no-target" is what tells a real failure apart from an empty pool.
-func TestContractLimitRescueSwapFailurePropagates(t *testing.T) {
-	stubRotation(t)
-	contractLimitHealthySnapshot(t)
-
-	wantErr := errors.New("keychain write refused")
-	selectTarget = func([]core.AccountUsage, string, int64) (string, string) { return "slot-b", "" }
-	swapMain = func(string) (string, string, error) { return "", "", wantErr }
-
-	to, outcome, err := rescueLimitedCell(&Job{Slug: "swap-fails"}, contractLimitNow)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("err = %v, want the swap's own error surfaced", err)
-	}
-	if outcome != "swap-failed" {
-		t.Fatalf("outcome = %q, want %q", outcome, "swap-failed")
-	}
-	if to != "" {
-		t.Errorf("toEmail = %q, want empty — nothing was swapped to", to)
-	}
-}
+// Four tests here drove rescueLimitedCell all the way through the rotation
+// selector and a real machine-wide swap: the success path and its returned
+// email, the "must not consult NeedsRotation" sentinel, the lock-busy
+// no-seam-touched ordering, and the swap-failure propagation. None of them
+// describes the rescue any more — it rebinds ONE job row through
+// selectRescueBind → decideBind → core.SelectBindTarget, calls
+// core.SwapMainTo nowhere, and takes no flock. The outcome set they pinned
+// ("swapped", "lock-busy", "swap-failed") is now "rebound", "no-target",
+// "bind-failed", and the surviving no-target case is asserted above.
 
 // TestContractLimitApplyResumeNormalPathSurvivesAmendment11 re-states, against
 // the amended two-path arm, what this file already asserted about the
@@ -2455,7 +2240,7 @@ func TestContractLimitSaveMergesUnderAFreshRead(t *testing.T) {
 	}
 	// ...and only then does the pass write back what it computed from its
 	// own, now-stale, copy
-	swapped := limitRescueApply(opened, rescueRotate, "swapped", "rescued@example.com", now.Add(3*time.Second))
+	swapped := limitRescueApply(opened, rescueRotate, "rebound", "rescued@example.com", now.Add(3*time.Second))
 	if err := saveLimitRescueState(j, swapped); err != nil {
 		t.Fatalf("saveLimitRescueState: %v", err)
 	}

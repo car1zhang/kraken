@@ -87,6 +87,19 @@ type LimitHit struct {
 	SwappedAt   int64  `json:"swapped_at"`
 	SwappedTo   string `json:"swapped_to"`
 	ResetAt     int64  `json:"reset_at"`
+	// SourceAccount is which account was exhausted: the job's bound account
+	// email at the moment the hit OPENED, empty for a cell that was running
+	// unbound on the machine's main login. Written on a fresh record only —
+	// a delivery fold never touches it, since the herd can outlive the
+	// rebind and would otherwise relabel the exhausted account with the
+	// destination.
+	//
+	// Its reader is the rescue's rotate arm, which prefers it over the row's
+	// CURRENT email for the "from" side of the notification and the event.
+	// The two diverge in exactly the case this file documents at length: a
+	// rebind that landed but whose saveLimitRescueState write was lost, where
+	// the row already says B while the window that actually failed was A.
+	SourceAccount string `json:"source_account,omitempty"`
 }
 
 // limitHitKey is the kv key one job's LimitHit lives under, keyed on the
@@ -291,12 +304,18 @@ func ReadLimitHit(j *Job) LimitHit {
 // That is uncapped machine-wide credential swapping, one pool account per
 // cycle, for as long as the cell lives.
 //
+// limitHitFolds is that decision's condition, named once because TWO callers
+// need it: the merge itself, and RecordLimitHit, which stamps SourceAccount
+// on fresh records only and must ask the same question rather than infer the
+// answer from the merged record (an inferred test — "At moved", "Deliveries
+// is 1" — is a second definition that can disagree with this one).
+func limitHitFolds(cur LimitHit, errorType string) bool {
+	return cur.At != 0 && cur.HandledAt == 0 && cur.Error == errorType
+}
+
 // Pure, so the whole decision is table-testable with no store and no clock.
 func mergeLimitHitDelivery(cur LimitHit, errorType, details, sessionID, agentID string, now time.Time) LimitHit {
-	fold := cur.At != 0 &&
-		cur.HandledAt == 0 &&
-		cur.Error == errorType
-	if fold {
+	if limitHitFolds(cur, errorType) {
 		cur.Deliveries++
 		if parseLimitReset(cur.Details, time.Unix(cur.At, 0)) == 0 &&
 			parseLimitReset(details, time.Unix(cur.At, 0)) != 0 {
@@ -342,7 +361,19 @@ func RecordLimitHit(j *Job, errorType, details, sessionID, agentID string, now t
 	if st == nil {
 		return LimitHit{}, fmt.Errorf("record limit hit for %s: no store wired", j.Slug)
 	}
-	hit := mergeLimitHitDelivery(ReadLimitHit(j), errorType, details, sessionID, agentID, now)
+	prev := ReadLimitHit(j)
+	hit := mergeLimitHitDelivery(prev, errorType, details, sessionID, agentID, now)
+	// Stamped here rather than inside the merge, because it is the one field
+	// that needs the JOB and the merge is pure over the record alone — and on
+	// FRESH records only, never on a fold, which is the shape that would
+	// record a falsehood: an unbound cell hits a limit (SourceAccount "", the
+	// main lane, correct), the rescue's rotate arm BINDS it, the herd is
+	// still delivering, and a fold would then stamp the account the rescue
+	// moved the cell TO as the one that ran out. A fold carries whatever the
+	// record already had, which is what the hit saw when it opened.
+	if !limitHitFolds(prev, errorType) {
+		hit.SourceAccount = j.AccountEmail
+	}
 	data, err := json.Marshal(hit)
 	if err != nil {
 		return LimitHit{}, fmt.Errorf("record limit hit for %s: %w", j.Slug, err)

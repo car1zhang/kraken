@@ -557,6 +557,13 @@ func liveThreadPanesForOK(j *Job) (panes map[string]bool, ok bool) {
 // puts on the line. It is a parameter rather than read off the row here
 // because branch has no row to read yet — the command is rendered from the
 // request, and the revive path passes the stored alias back in.
+//
+// The job's account binding rides in front of the launcher here exactly as it
+// does for zeus (accountEnvPrefix, binding.go). A thread reads the same
+// worktree and asks about the same work, so billing it to a different account
+// than the cell it hangs off would split one conversation's prompt cache
+// across two logins — and on a bound cell the main lane is carl's, not the
+// job's.
 func threadSpawnCommand(j *Job, tid, title, seed, model string, resumeArgs []string) (string, error) {
 	resolved, err := threadModel(j, model)
 	if err != nil {
@@ -565,9 +572,13 @@ func threadSpawnCommand(j *Job, tid, title, seed, model string, resumeArgs []str
 	argv := append(cellClaudeArgs(resolved), "--name", ThreadAgentName(j, tid))
 	argv = append(argv, resumeArgs...)
 	wt := threadWorktree(j)
-	return stagedCommand(argv,
+	cmd, err := stagedCommand(argv,
 		spawnInput{"--append-system-prompt", threadBrief(j, tid, title, wt), threadBriefPath(j, tid)},
 		spawnInput{"--", threadSeed(seed), threadPromptPath(j, tid)})
+	if err != nil {
+		return "", err
+	}
+	return accountEnvPrefix(j) + cmd, nil
 }
 
 // threadModel resolves the model a thread's claude is spawned on, in the one

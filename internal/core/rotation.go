@@ -13,29 +13,30 @@ import (
 	"kraken/internal/util"
 )
 
-// --- rotation thresholds ---
+// --- candidate thresholds ---
 //
-// rotate* trip an actual rotation (main account crossed into "needs to
-// swap now" territory). candidate* are the bar a pool slot must clear to be
-// considered a landing spot. candidateSessionPct deliberately mirrors
-// rotateSessionPct (both 80) so we never rotate onto a slot whose session
-// window is already at the point of needing rotation itself. candidateFablePct
-// is NOT trying to match rotateFablePct (90) — it's deliberately lower,
-// because a landing spot needs meaningful Fable headroom left, not merely to
-// be under the rotation trigger; a slot sitting right at 89% would technically
-// pass rotateFablePct but leave almost no runway before the next rotation.
+// candidate* are the bar a pool slot must clear to be considered usable —
+// as a rotation's landing spot (the two manual callers, `k account <slug>`
+// and the board's switch route) or as a cell's bind target (SelectBindTarget).
+// They are ONE set for both, since "is this slot healthy enough to send work
+// to" is one question; candidateGates is the one place they are applied.
+//
+// The trip thresholds that used to sit beside them (rotate*, read by
+// NeedsRotation) are gone with automatic main rotation itself: nothing decides
+// on its own initiative that the machine's login must move, so there is no
+// longer any "main crossed into needs-to-swap territory" to measure. What is
+// left is deliberately a landing-spot bar rather than a trigger — 80 for Fable
+// rather than the 90 the old trigger used, because a slot handed new work
+// needs meaningful headroom left, not merely to be under a threshold it would
+// trip again almost immediately.
 const (
-	rotateSessionPct    = 80
-	rotateWeeklyPct     = 90
-	rotateFablePct      = 90
 	candidateSessionPct = 80
 	candidateFablePct   = 80
 	// candidateWeeklyPct excludes a pool slot whose OWN weekly window is
-	// already at (or past) the rotation trigger. Without this, main can
-	// rotate onto a slot that is itself weekly-exhausted — which trips
-	// NeedsRotation again on the very next spawn and swaps back, ping-
-	// ponging between two exhausted accounts for days instead of landing
-	// somewhere with real headroom.
+	// already at (or past) 90%. Without this, a swap or a bind can land on a
+	// slot that is itself weekly-exhausted, which buys nothing: the account
+	// runs out again immediately and the next limit hit moves the same work
+	// straight back off it.
 	candidateWeeklyPct = 90
 )
 
@@ -70,26 +71,49 @@ func findModel(models []ModelWindow, name string) *ModelWindow {
 	return best
 }
 
-// NeedsRotation reports whether the main account's usage has crossed a
-// rotation threshold. A nil window (couldn't be fetched) never trips —
-// rotating on missing data would be a false positive, not a safe default.
-// reason lists every tripped window (there can be more than one), empty
-// when false.
-func NeedsRotation(main AccountUsage) (bool, string) {
-	var reasons []string
-	if main.Session != nil && main.Session.Percent > rotateSessionPct {
-		reasons = append(reasons, fmt.Sprintf("session %g%% > %d%%", main.Session.Percent, rotateSessionPct))
+// candidateGates applies the candidate* thresholds to ONE pool row and
+// reports why it is unusable, "" meaning eligible. fablePct comes back
+// alongside because both selectors below rank on it and re-deriving it in the
+// caller is exactly how the gate and the ranking drift apart.
+//
+// Extracted rather than written twice: SelectRotationTarget picks a landing
+// spot for a machine-wide swap and SelectBindTarget picks one for a single
+// cell, but "is this slot usable at all" is the same question with the same
+// answer, and two copies would agree on the day they were written and not
+// after. The reason strings are the ones SelectRotationTarget has always
+// emitted, so a caller logging them reads the same sentences it used to.
+func candidateGates(a AccountUsage, now int64) (fablePct float64, reason string) {
+	switch {
+	case a.NoCreds:
+		return 0, fmt.Sprintf("%s: no creds", a.Slug)
+	case a.Reauth:
+		return 0, fmt.Sprintf("%s: reauth required", a.Slug)
+	case a.Email == "":
+		return 0, fmt.Sprintf("%s: no identity", a.Slug)
+	case a.Session == nil:
+		return 0, fmt.Sprintf("%s: no session data", a.Slug)
+	case a.CooldownUntil > now:
+		return 0, fmt.Sprintf("%s: cooling", a.Slug)
 	}
-	if main.Weekly != nil && main.Weekly.Percent > rotateWeeklyPct {
-		reasons = append(reasons, fmt.Sprintf("weekly %g%% > %d%%", main.Weekly.Percent, rotateWeeklyPct))
+
+	// A missing Fable model window counts as eligible (0%), not
+	// disqualifying — plenty of tiers/plans never see a Fable line.
+	if fable := findModel(a.Models, "Fable"); fable != nil {
+		fablePct = fable.Percent
+		if fablePct >= candidateFablePct {
+			return fablePct, fmt.Sprintf("%s: fable %g%% ≥ %d%%", a.Slug, fablePct, candidateFablePct)
+		}
 	}
-	if fable := findModel(main.Models, "Fable"); fable != nil && fable.Percent > rotateFablePct {
-		reasons = append(reasons, fmt.Sprintf("fable %g%% > %d%%", fable.Percent, rotateFablePct))
+	if a.Session.Percent >= candidateSessionPct {
+		return fablePct, fmt.Sprintf("%s: session %g%% ≥ %d%%", a.Slug, a.Session.Percent, candidateSessionPct)
 	}
-	if len(reasons) == 0 {
-		return false, ""
+	// A nil Weekly window (couldn't be fetched) stays eligible, same
+	// convention as a missing Fable window above — rotating on missing
+	// data would be a false exclusion, not a safe default.
+	if a.Weekly != nil && a.Weekly.Percent >= candidateWeeklyPct {
+		return fablePct, fmt.Sprintf("%s: weekly %g%% ≥ %d%%", a.Slug, a.Weekly.Percent, candidateWeeklyPct)
 	}
-	return true, strings.Join(reasons, ", ")
+	return fablePct, ""
 }
 
 // SelectRotationTarget ranks pool rows from a usage snapshot and picks the
@@ -133,46 +157,11 @@ func SelectRotationTarget(accounts []AccountUsage, mainEmail string, now int64) 
 	var eligible []candidate
 	var excluded []string
 	for _, a := range pool {
-		switch {
-		case a.NoCreds:
-			excluded = append(excluded, fmt.Sprintf("%s: no creds", a.Slug))
-			continue
-		case a.Reauth:
-			excluded = append(excluded, fmt.Sprintf("%s: reauth required", a.Slug))
-			continue
-		case a.Email == "":
-			excluded = append(excluded, fmt.Sprintf("%s: no identity", a.Slug))
-			continue
-		case a.Session == nil:
-			excluded = append(excluded, fmt.Sprintf("%s: no session data", a.Slug))
-			continue
-		case a.CooldownUntil > now:
-			excluded = append(excluded, fmt.Sprintf("%s: cooling", a.Slug))
+		fablePct, reason := candidateGates(a, now)
+		if reason != "" {
+			excluded = append(excluded, reason)
 			continue
 		}
-
-		// A missing Fable model window counts as eligible (0%), not
-		// disqualifying — plenty of tiers/plans never see a Fable line.
-		fablePct := 0.0
-		if fable := findModel(a.Models, "Fable"); fable != nil {
-			fablePct = fable.Percent
-			if fablePct >= candidateFablePct {
-				excluded = append(excluded, fmt.Sprintf("%s: fable %g%% ≥ %d%%", a.Slug, fablePct, candidateFablePct))
-				continue
-			}
-		}
-		if a.Session.Percent >= candidateSessionPct {
-			excluded = append(excluded, fmt.Sprintf("%s: session %g%% ≥ %d%%", a.Slug, a.Session.Percent, candidateSessionPct))
-			continue
-		}
-		// A nil Weekly window (couldn't be fetched) stays eligible, same
-		// convention as a missing Fable window above — rotating on missing
-		// data would be a false exclusion, not a safe default.
-		if a.Weekly != nil && a.Weekly.Percent >= candidateWeeklyPct {
-			excluded = append(excluded, fmt.Sprintf("%s: weekly %g%% ≥ %d%%", a.Slug, a.Weekly.Percent, candidateWeeklyPct))
-			continue
-		}
-
 		eligible = append(eligible, candidate{acct: a, fablePct: fablePct})
 	}
 
@@ -191,6 +180,145 @@ func SelectRotationTarget(accounts []AccountUsage, mainEmail string, now int64) 
 		return ci.acct.Slug < cj.acct.Slug
 	})
 	return eligible[0].acct.Slug, ""
+}
+
+// bindFreshWindow is how recently a pool row's OWN FetchedAt must have been
+// stamped for SelectBindTarget to rank it ahead of an equally-loaded row whose
+// numbers are older. It is a TIE-BREAK rather than a gate: a stale row is
+// still bindable, because refusing to bind on stale data means the cell falls
+// back to main, which is the outcome this whole feature exists to avoid —
+// whereas the rotation path, which displaces a machine-wide login, refuses
+// outright on stale data.
+//
+// It carries the same 15 minutes as the jobs layer's own freshness bound
+// (jobs.rotationFreshSnapshotWindow, read this session) and is spelled out
+// again here because core sits BELOW jobs in the dependency chain and cannot
+// import it. The two are not required to move together: this one only orders
+// equals.
+const bindFreshWindow = 15 * time.Minute
+
+// SelectBindTarget picks the pool account a single CELL should bind to — the
+// per-cell sibling of SelectRotationTarget, and the reason that function's
+// gates were pulled out into candidateGates. Pure over its inputs; now is unix
+// millis, passed in rather than read from the clock so ranking is
+// deterministic and testable.
+//
+// The two selectors differ only in what they optimise for, and the difference
+// is the whole feature. A rotation is looking for the single HEALTHIEST place
+// to move the machine's one login. A bind is looking for the EMPTIEST place to
+// add one more cell, because the point is to spread cells across accounts
+// rather than to stack them on whichever account happens to be healthiest
+// right now — so boundCounts (live cells already bound per slug) leads the
+// ranking and the health numbers only break its ties.
+//
+// The gates are candidateGates', unchanged: a slot too loaded to rotate onto
+// is equally too loaded to bind a new cell to.
+//
+// excludeEmails is how a caller keeps a bind off an identity it already knows
+// is wrong — the main account's save-back mirror at spawn, and additionally
+// the cell's own exhausted account when the limit rescue rebinds. Matching is
+// case-insensitive because these are email addresses, and an empty entry is
+// IGNORED rather than treated as a match: it would otherwise silently swallow
+// every row with no identity, which candidateGates already excludes with a
+// reason naming the slug.
+//
+// prevSlug is the stickiness input (Q6): a job that was bound before — a
+// reactivated cell, most of all — goes back to the SAME account when that
+// account is still eligible, ahead of any ranking, because the account that
+// ran the session holds its prompt cache and moving the cell would burn the
+// new window on re-reading context it already paid for once. Compared
+// case-insensitively for sameSlotDir's reason: pool slugs are directory names
+// on a case-insensitive filesystem, so two spellings name one account.
+//
+// On success reason is "". When nothing survives, slug and email are "" and
+// reason carries the per-candidate exclusions, so a caller can say what the
+// pool actually looked like instead of a bare "no target".
+func SelectBindTarget(candidates []AccountUsage, excludeEmails []string, boundCounts map[string]int, prevSlug string, now int64) (slug, email, reason string) {
+	skip := make(map[string]bool, len(excludeEmails))
+	for _, e := range excludeEmails {
+		if e == "" {
+			continue
+		}
+		skip[strings.ToLower(e)] = true
+	}
+
+	var pool []AccountUsage
+	for _, a := range candidates {
+		// main is never a bind target, whatever the caller passed: the whole
+		// point of a per-cell binding is to leave the machine's login to
+		// carl's own interactive sessions.
+		if a.Slug == "main" {
+			continue
+		}
+		if skip[strings.ToLower(a.Email)] {
+			continue
+		}
+		pool = append(pool, a)
+	}
+	if len(pool) == 0 {
+		return "", "", "no pool accounts"
+	}
+
+	type bindCandidate struct {
+		acct     AccountUsage
+		fablePct float64
+		bound    int
+		fresh    bool
+	}
+	var eligible []bindCandidate
+	var excluded []string
+	for _, a := range pool {
+		fablePct, r := candidateGates(a, now)
+		if r != "" {
+			excluded = append(excluded, r)
+			continue
+		}
+		eligible = append(eligible, bindCandidate{
+			acct:     a,
+			fablePct: fablePct,
+			bound:    boundCounts[a.Slug],
+			// FetchedAt 0 is "never fetched", which is stale by definition
+			// rather than infinitely old.
+			fresh: a.FetchedAt != 0 && now-a.FetchedAt < bindFreshWindow.Milliseconds(),
+		})
+	}
+	if len(eligible) == 0 {
+		return "", "", strings.Join(excluded, "; ")
+	}
+
+	// Stickiness is checked against the ELIGIBLE set, not the pool: a previous
+	// account that has since exhausted must lose the cell rather than hold it,
+	// which is the same judgement the limit rescue makes when it rebinds.
+	if prevSlug != "" {
+		for _, c := range eligible {
+			if strings.EqualFold(c.acct.Slug, prevSlug) {
+				return c.acct.Slug, c.acct.Email, ""
+			}
+		}
+	}
+
+	sort.SliceStable(eligible, func(i, j int) bool {
+		ci, cj := eligible[i], eligible[j]
+		if ci.bound != cj.bound {
+			return ci.bound < cj.bound
+		}
+		// Fresh before stale, and only here: two rows with the same number of
+		// cells on them are ranked on health numbers next, so preferring the
+		// row whose numbers were actually measured recently is what keeps a
+		// slot that went quiet hours ago from winning on a percentage nobody
+		// has re-read since.
+		if ci.fresh != cj.fresh {
+			return ci.fresh
+		}
+		if ci.acct.Session.Percent != cj.acct.Session.Percent {
+			return ci.acct.Session.Percent < cj.acct.Session.Percent
+		}
+		if ci.fablePct != cj.fablePct {
+			return ci.fablePct < cj.fablePct
+		}
+		return ci.acct.Slug < cj.acct.Slug
+	})
+	return eligible[0].acct.Slug, eligible[0].acct.Email, ""
 }
 
 // --- ~/.claude.json access, isolated for tests ---

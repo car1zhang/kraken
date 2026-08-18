@@ -5,6 +5,7 @@ import type { Column } from "../../lib/columns.ts";
 import { age, columnFor, jobColorVar, repoColorVar } from "../../lib/format.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import { highlightSegments, type JobMatch } from "../../lib/jobSearch.ts";
+import { AccountChip, accountChipVisible } from "./chips/AccountChip.tsx";
 import { ArtifactCountChip, artifactCountVisible } from "./chips/ArtifactChips.tsx";
 import { CrewChips, crewChipsVisible } from "./chips/CrewPills.tsx";
 import { DocQuestionChip, docQuestionChipVisible } from "./chips/DocQuestionChip.tsx";
@@ -183,6 +184,7 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
     !!job.question ||
     goalChips.length > 0 ||
     stageChipVisible(job) ||
+    accountChipVisible(job) ||
     threadChipsVisible(job) ||
     docQuestionChipVisible(job) ||
     artifactCountVisible(job) ||
@@ -351,6 +353,15 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
               inventory counts. Absent entirely when the server sent no stage
               (webJob.Stage documents what absence covers). */}
           <StageChip job={job} />
+          {/* the account badge: WHICH pool account this cell is burning. A
+              fact ABOUT the job like the stage before it and the goals after
+              it, so it sits in the same identity-ish run rather than among the
+              inventory counts — between the two deliberately, because the
+              stage says WHERE the job is and the goal says WHAT it is for,
+              and "on whose quota" belongs with the first pair rather than
+              wedged in among counts. Absent entirely for an unbound cell and
+              for any card that is not live (accountChipVisible). */}
+          <AccountChip job={job} />
           {/* the job's goals, ONE CHIP PER GOAL in link order. They are not
               counts — like the ROI badge they are facts ABOUT the job rather
               than things the job contains — and they sit AFTER the crew/thread

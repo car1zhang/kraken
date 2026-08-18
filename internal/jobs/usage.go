@@ -136,11 +136,8 @@ func UsagePass() error {
 // KickUsagePass best-effort triggers a usage pass outside the daemon's own
 // poll cadence, single-flighted via the usagePassRunning atomic against a
 // concurrent pass already running IN THIS PROCESS — daemon.go's own periodic
-// tick() call routes through this function. RotationGate's post-swap kick
-// (rotation.go) does NOT call KickUsagePass — it has its own inline copy of
-// the same CompareAndSwap-then-goroutine dance, deliberately sharing this
-// same usagePassRunning atomic so the two still single-flight against each
-// other within one process rather than racing two passes at once.
+// tick() call routes through this function, and since the rotation gate and
+// the rescue's post-swap kicks retired with Q2 it is the only kick left.
 // usagePassRunning is plain in-memory process state, not a file lock: a pass
 // already in flight in the `k web` process, say, offers no guarantee
 // whatsoever about the separate `k daemon` process, which has its own copy
@@ -156,8 +153,7 @@ func UsagePass() error {
 func KickUsagePass() {
 	// pass is captured into a local before the goroutine starts (rather than
 	// read from inside it) so a test that swaps runUsagePass back right
-	// after this call returns can never race this read — same pattern as
-	// RotationGate's own inline kick (rotation.go).
+	// after this call returns can never race this read.
 	if pass := runUsagePass; usagePassRunning.CompareAndSwap(false, true) {
 		go func() {
 			defer usagePassRunning.Store(false)

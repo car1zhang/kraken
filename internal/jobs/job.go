@@ -125,6 +125,25 @@ type Job struct {
 	// card render numbers), so putting them on this struct's wire shape would
 	// be a second, less useful spelling of the same links.
 	GoalIDs []int64 `json:"-"`
+	// AccountSlug, AccountEmail and AccountAt are the cell's per-job account
+	// binding (store.Job's three account_* columns, schema v28): which
+	// ~/.claude-pool slot this job's claudes bill, who that slot belongs to,
+	// and when the binding was stamped (unix millis). All three empty/zero
+	// means UNBOUND — the cell runs on the machine's main login with no
+	// CLAUDE_SECURESTORAGE_CONFIG_DIR in its spawn command, which is how
+	// every cell ran before per-cell binding existed.
+	//
+	// Store-backed only, like Load and GoalIDs: there is no frontmatter
+	// spelling, so a file-backed Job always reads as unbound. Written by
+	// bindAccount at spawn and by the limit rescue's rebind, both through
+	// store.SetJobAccount.
+	//
+	// `json:"-"` on the pair the wire does carry differently: api builds its
+	// own webJobAccount object, so putting these on this struct's JSON shape
+	// would be a second spelling of the same three values.
+	AccountSlug  string `json:"-"`
+	AccountEmail string `json:"-"`
+	AccountAt    int64  `json:"-"`
 	// ID and Rev are storage-internal, populated only when this Job was
 	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
 	// store row id, Rev the optimistic-concurrency counter WriteJobFields/

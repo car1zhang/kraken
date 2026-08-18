@@ -822,8 +822,14 @@ func TestEdgeJGUnlinkedJobHasEmptyGoalIDsOnEveryLoader(t *testing.T) {
 // every unlabelled job comes back from the batch reader present-with-a-null.
 func TestEdgeJGMigrationV26ToV27LeavesNoRowForANullGoalID(t *testing.T) {
 	s := openTest(t)
-	if schemaVersion != 27 {
-		t.Fatalf("schemaVersion = %d, want 27 — this fixture is written against v27", schemaVersion)
+	// An EXACT pin rather than a floor, deliberately: this fixture rolls a
+	// fresh store back to v26 and lets migrate() walk it forward through every
+	// later step, so whoever appends the next migration has to come here and
+	// confirm downgradeFreshDB reverses their step before this passes again.
+	// Bumped to 28 with the account-binding columns, whose reversal is
+	// downgradeFreshDB's new v28 arm.
+	if schemaVersion != 28 {
+		t.Fatalf("schemaVersion = %d, want 28 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
 	}
 	labelled := edgeJGJob(t, s, "jg-mig-labelled")
 	unlabelled := edgeJGJob(t, s, "jg-mig-unlabelled")

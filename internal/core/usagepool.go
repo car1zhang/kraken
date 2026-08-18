@@ -216,6 +216,35 @@ func slotKeychainService(slotDir string) string {
 	return "Claude Code-credentials-" + hex.EncodeToString(sum[:])[:8]
 }
 
+// SlotItemExists reports whether a pool slot has its own credentials item in
+// the keychain, under the hash-derived service name slotKeychainService
+// computes — ccp's own slot_keychain_service name, per that function's
+// comment, and the name a claude pointed at this slot resolves its
+// credentials through. It is the per-bind guard: binding a cell to a slot
+// whose item is missing hands it a credential store with nothing in it, and
+// the cell comes up logged out.
+//
+// FAIL-CLOSED in every failure mode, including no resolvable keychain account
+// (keychainAccount's silent-degrade case): an unprobeable slot is an
+// ineligible slot, because the cost of a false negative is one cell binding
+// nothing and running on main — today's behaviour — while a false positive is
+// a cell that spawns dead.
+//
+// The probe goes through the securityFind seam rather than its own
+// exec.Command for the reason that seam exists: it is the one place tests
+// swap to keep security(1) out of a test run. That seam passes -w, so the
+// item's VALUE is read here and immediately discarded — it is never returned,
+// logged, or put in an error, the same rule every credential in this binary
+// follows.
+func SlotItemExists(slotDir string) bool {
+	account, ok := keychainAccount()
+	if !ok {
+		return false
+	}
+	_, err := securityFind(slotKeychainService(slotDir), account)
+	return err == nil
+}
+
 // claudeJSONPath mirrors the securityFind/securityAdd swappable-var pattern
 // so tests never touch the real ~/.claude.json. Lives here (rather than in
 // rotation.go, which is its heaviest consumer) so mainAccountMeta and every

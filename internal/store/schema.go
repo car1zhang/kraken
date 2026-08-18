@@ -83,7 +83,11 @@ import (
 // ANY number of goals rather than exactly one, the existing links are carried
 // across in pure SQL, and the column is dropped (see schemaV27 and
 // store/jobgoals.go).
-const schemaVersion = 27
+// Version 28 adds the three account-binding columns — the pool account a
+// cell's claudes bill, stamped on the job row at spawn so every later
+// spawn in that cell (reactivation, the limit rescue's respawn, a side
+// thread) can re-derive the same credential dir (see schemaV28).
+const schemaVersion = 28
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1532,6 +1536,47 @@ INSERT INTO job_goals (job_id, goal_id)
 ALTER TABLE jobs DROP COLUMN goal_id;
 `
 
+// schemaV28 adds the three account-binding columns: which pool account this
+// job's cell bills, and when it was bound. Three additive ALTERs with
+// same-typed DEFAULTs, no hook — the defaults land every pre-existing job on
+// the empty binding, which is exactly the state those jobs are in (their
+// claudes ran on the machine's main login, which is what an unbound job still
+// means).
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - account_slug is the pool slot directory NAME under core.PoolDir(), and
+//     it is what the spawn's CLAUDE_SECURESTORAGE_CONFIG_DIR is built from —
+//     the slot DIR is never stored, since a stored absolute path would go
+//     stale the moment $CLAUDE_POOL_DIR moved, and the slug is the only half
+//     of it that is data rather than machine layout.
+//   - account_email is the identity that slug held AT BIND TIME, stored beside
+//     the slug rather than re-read from the pool on every render: the board's
+//     chip and the limit rescue's own exclusion both need to say WHICH account
+//     a cell is on, and a pool slot's identity can change under ccp (a re-login
+//     into a different account) while the cell keeps billing the item it
+//     started with. Empty means the binder had no identity for the slot, which
+//     the clients render as the slug alone.
+//   - account_at (unix millis) is the bind stamp, which is what makes a chip
+//     able to read "bound 3h ago" and what makes a stale binding visible as
+//     stale. Zero is the never-bound state, and the three columns move
+//     together — SetJobAccount overwrites all three at once, since a rebind is
+//     an overwrite and there is no separate clear verb.
+//   - None of the three is in jobFieldColumns (jobs.go), the same
+//     blast-radius rule the four load_* columns follow and by the same
+//     mechanism: absence from the allowlist. A full form or raw save must be
+//     unable to touch a binding, because the binding is a fact about a running
+//     cell's credentials rather than part of the job's authored contract, and
+//     a client predating the feature would otherwise clear it on every save.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v27.
+const schemaV28 = `
+ALTER TABLE jobs ADD COLUMN account_slug  TEXT    NOT NULL DEFAULT '';
+ALTER TABLE jobs ADD COLUMN account_email TEXT    NOT NULL DEFAULT '';
+ALTER TABLE jobs ADD COLUMN account_at    INTEGER NOT NULL DEFAULT 0; -- unix millis
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1623,8 +1668,12 @@ type migrationStep struct {
 // expresses; a NULL link yields no row, which is the join table's own spelling
 // of "serves no particular goal", and a link naming a goal that no longer exists
 // is skipped rather than allowed to fail the whole open; see schemaV27).
+// migrations[28] adds the three account-binding columns (no hook — the
+// DEFAULTs land every pre-existing job on the empty binding, which is exactly
+// the state those jobs are in: they ran on the machine's main login, which is
+// what an unbound job still means; see schemaV28).
 // Future schema changes append
-// migrations[28], migrations[29], ... rather than editing an existing
+// migrations[29], migrations[30], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1655,6 +1704,7 @@ var migrations = map[int]migrationStep{
 	25: {sql: schemaV25},
 	26: {sql: schemaV26},
 	27: {sql: schemaV27},
+	28: {sql: schemaV28},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
