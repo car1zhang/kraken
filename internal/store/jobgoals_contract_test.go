@@ -156,14 +156,19 @@ func contractJGJobIDBySlug(t *testing.T, s *Store, slug string) int64 {
 // schema v27
 // ---------------------------------------------------------------------------
 
-// TestContractJGSchemaVersionIsV27 is the one-line pin the whole migration
-// hangs off: v27 is APPENDED, so schemaVersion moves and no released
-// schemaV<N> string is edited. A migration written into schemaV26 in place
-// would leave every existing kraken.db on this machine at v26 forever, with
-// the new table missing and nothing anywhere reporting a problem.
-func TestContractJGSchemaVersionIsV27(t *testing.T) {
-	if schemaVersion != 27 {
-		t.Fatalf("schemaVersion = %d, want 27", schemaVersion)
+// TestContractJGSchemaVersionIsAtLeastV27 is the one-line pin the whole
+// migration hangs off: v27 is APPENDED, so schemaVersion moves and no
+// released schemaV<N> string is edited. A migration written into schemaV26
+// in place would leave every existing kraken.db on this machine at v26
+// forever, with the new table missing and nothing anywhere reporting a
+// problem.
+func TestContractJGSchemaVersionIsAtLeastV27(t *testing.T) {
+	// A FLOOR rather than an exact pin (watch_contract_test.go's S1 shape):
+	// what this test claims is that v27 was APPENDED, which stays true as
+	// later migrations append past it — v28's account-binding columns are the
+	// first to do so. An exact pin would fail on that true statement.
+	if schemaVersion < 27 {
+		t.Fatalf("schemaVersion = %d, want >= 27", schemaVersion)
 	}
 }
 

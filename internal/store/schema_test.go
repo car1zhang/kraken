@@ -24,6 +24,25 @@ import (
 // so rolling back to any of those must re-add it, not leave it gone.
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v28: drop the three account-binding columns (added at v28,
+	// absent through v27). Shape-only, with no data to carry back: a binding
+	// names a pool slot a LIVE cell is billing, so a database rolled back past
+	// v28 has no place to record one and no reader that would look — the v26
+	// arm's situation rather than v27's, which had to carry links.
+	//
+	// Reversed FIRST: downgrades unwind newest-first, mirroring the order
+	// migrate() applies them.
+	if target < 28 {
+		for _, stmt := range []string{
+			`ALTER TABLE jobs DROP COLUMN account_slug`,
+			`ALTER TABLE jobs DROP COLUMN account_email`,
+			`ALTER TABLE jobs DROP COLUMN account_at`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v28) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v27: put jobs.goal_id back, repopulate it from each job's FIRST
 	// link, and drop job_goals. Unlike every other arm here this one carries
 	// DATA back, and it has to: v27 is the only migration so far that moved

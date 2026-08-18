@@ -196,7 +196,7 @@ func orchBumpMessage(n int) string {
 }
 
 // orchSendToPeer is the seam deliverOrch types through — the package's
-// existing indirection pattern (slackSendToPeer, rotationGate, dreamPass), and
+// existing indirection pattern (slackSendToPeer, bindGate, dreamPass), and
 // here it carries the only property of this pass worth pinning: the ORDER of
 // the send against the stamp. "delivered_at is stamped only after a confirmed
 // send" is invisible from the outside unless the send can be made to fail on

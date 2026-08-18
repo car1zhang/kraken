@@ -389,6 +389,74 @@ func webTokensFor(index map[int64]store.JobTokens, jobID int64) *webTokens {
 	}
 }
 
+// webJobAccount is the pool slot one cell is BOUND to — the account every
+// claude in that cell bills, delivered to the pane as
+// CLAUDE_SECURESTORAGE_CONFIG_DIR and stamped on the job row at spawn (schema
+// v28's three columns, store.SetJobAccount).
+//
+// "account", never "usage": this names WHICH login a cell spends on, while
+// /api/usage answers how much QUOTA that login has left — the same collision
+// webTokens' doc comment refuses in the other direction.
+//
+// None of the three inner fields carries omitempty, and that is the same rule
+// webTokens states: presence of the OBJECT is the whole of the answer, so once
+// a client sees the key it reads all three unconditionally. Absence is said one
+// level up, by webJob.Account being nil — see its comment for what that covers.
+// Email may legitimately be "" for a slot ccp has no identity for yet, which is
+// a real answer rather than a missing field, and is exactly why the clients
+// fall back to the slug for their visible text rather than hiding the badge.
+type webJobAccount struct {
+	// Slug is the pool slot's directory name under ~/.claude-pool — the id
+	// kraken selects and rebinds on, and what the usage payload's own rows are
+	// keyed by, so a client can join the two without a second request.
+	Slug string `json:"slug"`
+	// Email is the account's identity as ccp recorded it, carried so a card can
+	// say WHO rather than only which directory. "" when the slot has no
+	// identity yet.
+	Email string `json:"email"`
+	// At is unix MILLIS of the bind stamp — webJob.mtime's and webTokens'
+	// convention, never seconds. It is what makes a rebind legible: the same
+	// card carries a different account with a fresh stamp, so a reader can tell
+	// "bound at spawn" from "rebound ten minutes ago by the limit rescue".
+	At int64 `json:"at"`
+}
+
+// webAccountFor shapes one job's stored binding for the wire, or nil when the
+// job carries none. The nil rule lives here rather than at the call site for
+// webJobLoadFrom's reason: "unbound" is said by the ABSENCE of the key, so
+// exactly ONE function decides what absence means.
+//
+// It takes the whole *jobs.Job rather than the three columns, which is
+// webTokensFor's shape and is the point of the function existing at all: the
+// wire's presence RULE — served for every non-archived job with a binding,
+// regardless of live or display state (Load's no-flicker rule) — has to be
+// observable somewhere a test can call, and buildWebBoard is not that place
+// (calling it drags in tmux and process-table discovery, the same reason
+// archivedWebJob was split out below). Handed three loose strings, the rule
+// would live at the call site again and go back to being unreachable.
+//
+// The test is the SLUG alone. Slug is what the env var is built from and what
+// a rebind overwrites, so a row with a slug is a real binding whatever else it
+// holds — an empty Email (a slot ccp has no identity for) and a zero At (a row
+// written by something that did not stamp a time) are degraded bindings, not
+// absent ones, and hiding them would hide the account a cell is actually
+// spending on.
+//
+// There is deliberately no display-state or liveness test in here. That is the
+// whole no-flicker rule: a card moves between working and blocked tick to tick,
+// and a key that came and went with it would flicker the chip in and out. The
+// blocked/working gate the clients apply (web's accountChipVisible) is a
+// RENDERING rule, not a payload one. The one state that IS withheld is
+// archived, and it is withheld by archivedWebJob never calling this — see the
+// comment beside that omission for why an archived card is Load's case rather
+// than Tokens'.
+func webAccountFor(j *jobs.Job) *webJobAccount {
+	if j == nil || j.AccountSlug == "" {
+		return nil
+	}
+	return &webJobAccount{Slug: j.AccountSlug, Email: j.AccountEmail, At: j.AccountAt}
+}
+
 type webJob struct {
 	Slug    string `json:"slug"`
 	Repo    string `json:"repo"`
@@ -543,6 +611,34 @@ type webJob struct {
 	// omitempty for the reason Load is one: a zeroed object would claim a link
 	// to goal 0, and there is no such goal.
 	Goal *webJobGoal `json:"goal,omitempty"`
+	// Account is the pool slot this cell is bound to (webJobAccount above): the
+	// login every claude in it bills. A pointer with omitempty because ABSENCE
+	// IS THE WIRE'S ONLY SPELLING OF "unbound" — a job with no binding runs on
+	// the machine's main login exactly as every cell did before this feature,
+	// and a zeroed object would claim a binding to a slot named "".
+	//
+	// Two states share that absence and the wire deliberately does not separate
+	// them, because a client renders both the same way (no chip, and the
+	// modal's "main (machine default)" line): the pool was dry or fully
+	// excluded when the cell spawned, and rotation is pinned MANUAL, where
+	// kraken takes no account decision at all.
+	//
+	// Emitted for every NON-ARCHIVED job carrying a binding, regardless of live
+	// or display state — Load's no-flicker rule verbatim: a card moves between
+	// working and blocked tick to tick, and a key that came and went with it
+	// would flicker the chip in and out. The blocked/working gate the clients
+	// apply is a RENDERING rule, not a payload rule.
+	//
+	// archivedWebJob deliberately withholds it, which is Load's call rather
+	// than Tokens': what a job COST is retrospective and worth keeping, while
+	// which account it was spending is a fact about a cell that is running, and
+	// an archived job has none. The columns survive archival on the job row, so
+	// the key comes back on unarchive.
+	//
+	// ADDITIVE — a new optional key on an existing shape, not a retype, rename
+	// or removal — so apiContract does NOT bump. A client that does not know
+	// the key renders the card exactly as it did before per-cell binding.
+	Account *webJobAccount `json:"account,omitempty"`
 }
 
 type webBoard struct {
@@ -1041,6 +1137,15 @@ func buildWebBoard() webBoard {
 			// tick, and its chips must not flicker with it.
 			Goals: jobGoals,
 			Goal:  primaryJobGoal(jobGoals),
+			// Account: straight off the job row already loaded above — no
+			// index and no extra query, Load's path rather than Tokens', since
+			// schema v28 put the three columns on `jobs` itself. Emitted for
+			// every active job that carries a binding regardless of display
+			// state, for Load's no-flicker reason: the chip must not come and
+			// go as a card moves between working and blocked. The rule itself
+			// lives in webAccountFor so it is reachable by a test — this loop
+			// is not (LiveSessions/DiscoverAll).
+			Account: webAccountFor(j),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -1175,6 +1280,18 @@ func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]stor
 		// the same index the active cards use — and unlike a triage estimate it
 		// poses no question the card cannot answer. Goal rides along as its
 		// head, as everywhere: the two keys appear together or not at all.
+		//
+		// Account is deliberately NOT set — this function never calls
+		// webAccountFor, which is where the served-for-every-active-job rule
+		// lives — and that is Load's call for Load's
+		// reason rather than Tokens'. Token spend is what a job COST, a fact
+		// about work that happened and the whole reason its row has no
+		// cascade. A binding is which login a RUNNING cell is spending on —
+		// there is no cell here, so the badge would answer a question this
+		// card cannot pose, which is how a dead fact starts reading as a
+		// current one. The three columns live on the job row and survive
+		// archival in both directions, so the key comes back the moment the
+		// job is unarchived onto the active loop above.
 		Goals: goals,
 		Goal:  primaryJobGoal(goals),
 	}

@@ -259,7 +259,7 @@ func TestEdgeReadLimitHitDelegatesToTheKeyedRead(t *testing.T) {
 // the key is a namespace, the label is the human word for who hit the wall.
 func TestEdgeRecordLimitHitByKeyWithoutStoreErrsAndNamesTheLabel(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	got, err := recordLimitHitByKey(standingHitKey("kronos"), "kronos", "rate_limit", "d", "s", "a", edgeStandingNow)
+	got, err := recordLimitHitByKey(standingHitKey("kronos"), "kronos", "", "rate_limit", "d", "s", "a", edgeStandingNow)
 	if err == nil {
 		t.Fatalf("recordLimitHitByKey with no store = (%+v, nil), want an error", got)
 	}
@@ -282,7 +282,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 600, Deliveries: 4,
 			HandledAt: edgeStandingNow.Unix() - 300, Outcome: "rotated",
 		})
-		got, err := recordLimitHitByKey(key, "kronos", "rate_limit", "again", "s", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "again", "s", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -303,7 +303,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 		edgeStandingSeedHit(t, st, key, LimitHit{
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 60, Deliveries: 2,
 		})
-		got, err := recordLimitHitByKey(key, "kronos", "overloaded", "", "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "kronos", "", "overloaded", "", "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -322,7 +322,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 		// a DIFFERENT error type supersedes the record; the landed swap must
 		// ride across, or the next tick reads a hit that was never swapped
 		// and swaps the machine a second time.
-		got, err := recordLimitHitByKey(key, "kronos", "overloaded", "", "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "kronos", "", "overloaded", "", "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -339,7 +339,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 			SwappedAt: edgeStandingNow.Unix() - 590, SwappedTo: "pool-b@example.com",
 			HandledAt: edgeStandingNow.Unix() - 500, Outcome: "rotated",
 		})
-		got, err := recordLimitHitByKey(key, "iris", "rate_limit", "", "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "", "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -356,7 +356,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 			Details: "429 Too Many Requests",
 		})
 		const withClause = "You've hit your session limit · resets 4:50am (America/New_York)"
-		got, err := recordLimitHitByKey(key, "kronos", "rate_limit", withClause, "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", withClause, "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -376,7 +376,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 60, Deliveries: 1,
 			Details: withClause,
 		})
-		got, err := recordLimitHitByKey(key, "kronos", "rate_limit", "429 Too Many Requests", "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "429 Too Many Requests", "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -388,13 +388,13 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 	t.Run("the fold keeps the FIRST delivery's identity", func(t *testing.T) {
 		useTestStore(t)
 		key := standingHitKey("kronos")
-		first, err := recordLimitHitByKey(key, "kronos", "rate_limit", "one", "sess-a", "", edgeStandingNow)
+		first, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "one", "sess-a", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
 		// hours later, from the transcript arm: still folds (there is no
 		// time window on the fold), and At/SessionID stay the first one's.
-		got, err := recordLimitHitByKey(key, "kronos", "rate_limit", "two", "sess-b", "agent-2", edgeStandingNow.Add(9*time.Hour))
+		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "two", "sess-b", "agent-2", edgeStandingNow.Add(9*time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}

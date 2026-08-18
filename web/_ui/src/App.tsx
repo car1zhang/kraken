@@ -365,6 +365,12 @@ export function App() {
         mode={steer?.mode ?? "steer"}
         requireText={steer?.requireText ?? false}
         job={jobFor(steer?.slug)}
+        // The same poll the chrome's usage corner and the usage drilldown read
+        // — a THIRD reader of one request, never a second request. The modal's
+        // account section joins it to the job's binding by slot slug and draws
+        // that account's session/Fable bars; undefined (first paint, older
+        // server, daemon down) simply draws none.
+        usage={usage.data}
         // Both REQUIRED, deliberately: these replaced optional `artifactChips`
         // / `threadChips` slots that App never filled, which left the modal's
         // artifact list and its branch button rendering nothing at all. An

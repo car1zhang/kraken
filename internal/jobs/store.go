@@ -115,6 +115,14 @@ func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 		// reads as linked to nothing — which is true, since the only writers are
 		// store's three link verbs.
 		GoalIDs: sr.GoalIDs,
+		// The account binding carries across whole (schema v28's three
+		// account_* columns), for the same reason Load does: no frontmatter
+		// spelling, so a file-backed job always reads as unbound — which is
+		// true, since the only writers are bindAccount and the limit
+		// rescue's rebind, both store-only.
+		AccountSlug:  sr.AccountSlug,
+		AccountEmail: sr.AccountEmail,
+		AccountAt:    sr.AccountAt,
 	}
 	if sr.Archived() {
 		j.ArchivedName = sr.ArchivedName

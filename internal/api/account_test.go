@@ -191,7 +191,8 @@ func TestAccountSwitchInvalidSlug400(t *testing.T) {
 }
 
 // TestAccountSwitchLockHeldConflict409 covers K2: a manual web switch must
-// take the same cross-process rotation.lock RotationGate itself takes,
+// take the cross-process rotation.lock that serializes it against its CLI
+// twin (`k account <slug>` — the only other main swapper left),
 // refusing (409) rather than racing a swap already in flight elsewhere. The
 // lock is held directly via the real jobs.AcquireRotationLock (the same
 // seam the handler itself calls, deliberately not stubbed — see

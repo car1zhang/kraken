@@ -267,6 +267,28 @@ export type JobState = "draft" | "working" | "blocked" | "done" | "archived";
 
 export type ZeusStatus = "running" | "polling" | "waiting" | "question" | string;
 
+/**
+ * The pool slot one cell is BOUND to — the account every claude in that cell
+ * bills, stamped on the job row at spawn and overwritten by a limit-rescue
+ * rebind.
+ *
+ * "account", never "usage": this is WHICH login the cell spends on, while
+ * `WebUsage` below is how much QUOTA a login has left. The join between them is
+ * `slug`, which is the same key `/api/usage`'s own rows carry.
+ *
+ * All three fields are non-optional once the object is present — the Go type
+ * carries no omitempty inside it — but `email` may be `""` (a slot with no ccp
+ * identity yet) and `at` may be 0, so read them as values rather than as
+ * presence tests.
+ */
+export interface WebJobAccount {
+  /** the pool slot's directory name under ~/.claude-pool, and the usage-row key */
+  slug: string;
+  /** the account identity ccp recorded; "" when the slot has none yet */
+  email: string;
+  /** unix MILLIS of the bind stamp (WebJob.mtime's convention, never seconds) */
+  at: number;
+}
 export interface WebJob {
   slug: string;
   repo: string;
@@ -374,6 +396,26 @@ export interface WebJob {
    * ? [job.goal] : [])`).
    */
   goals?: WebJobGoal[];
+  /**
+   * The pool account this cell is bound to. ABSENT is the only spelling of
+   * UNBOUND — the cell runs on the machine's main login, exactly as every cell
+   * did before per-cell binding — and it covers three states no client
+   * separates:
+   *
+   *   - the pool was dry or fully excluded when the cell spawned,
+   *   - rotation is pinned MANUAL, where kraken takes no account decision,
+   *   - the job is ARCHIVED: `archivedWebJob` (internal/api/board.go)
+   *     deliberately withholds the key, the same call it makes for `load` and
+   *     for the same reason — an archived card has no cell, so it cannot pose
+   *     the question the badge answers. The columns survive archival, so the
+   *     key returns on unarchive.
+   *
+   * Served on every ACTIVE job that carries a binding whatever its display
+   * state, so the key never flickers as a card moves between working and
+   * blocked; the card's blocked/working gate is the CLIENT's rendering rule
+   * (see accountChipVisible), not a payload rule.
+   */
+  account?: WebJobAccount;
   // `start_error` is GONE from the wire with the queued state. It existed
   // because a start happened on a daemon tick nobody was watching, so its
   // failure had nowhere to land but the card. A submit is now a request carl

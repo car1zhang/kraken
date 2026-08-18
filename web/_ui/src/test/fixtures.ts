@@ -1,4 +1,9 @@
-import type { DaemonStatus, WebBoard, WebJob } from "../api/types.ts";
+import type {
+  DaemonStatus,
+  WebBoard,
+  WebJob,
+  WebJobAccount,
+} from "../api/types.ts";
 
 // Shared test fixtures.
 //
@@ -32,6 +37,26 @@ export function makeJob(over: Partial<WebJob> = {}): WebJob {
     state: "draft",
     live: false,
     mtime: 1_700_000_000_000,
+    ...over,
+  };
+}
+
+/**
+ * One job's account binding. Deliberately NOT part of makeJob's defaults: on
+ * the wire the key's ABSENCE is the whole spelling of "unbound", so a fixture
+ * that always carried one would make the unbound card — the state most jobs are
+ * in — unreachable from every test that did not remember to delete it. Pass it
+ * explicitly: `makeJob({ state: "working", account: makeAccount() })`.
+ *
+ * All three fields are non-optional on the wire, which is why they are all
+ * defaulted here rather than left to the caller — `email: ""` and `at: 0` are
+ * real degraded bindings and are set by overriding, not by omitting.
+ */
+export function makeAccount(over: Partial<WebJobAccount> = {}): WebJobAccount {
+  return {
+    slug: "dorisexplorer4",
+    email: "dorisexplorer4@gmail.com",
+    at: 1_700_000_000_000,
     ...over,
   };
 }

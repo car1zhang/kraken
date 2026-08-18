@@ -954,26 +954,23 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			d.syncColor(j, all, live)
 		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
-		// whose claudes hit the account's usage limit gets the main login
-		// swapped to a healthier pool account, and then — a settle window
-		// later — its zeus KILLED IN PLACE and respawned on its own session,
-		// since a running claude neither re-reads the swapped credential nor
-		// drops the limit it has latched onto locally. It sits in this block
-		// rather than beside the token pass because it shares this block's
-		// two reasons exactly: it makes a machine-wide credential change and
-		// it destroys and recreates a live pane's process. A --mirror daemon
-		// still RECORDS hits (the API handler is not mirror-gated) — it just
-		// never acts on one.
+		// whose claudes hit their account's usage limit is REBOUND to a
+		// healthier pool slot — one job row, nothing machine-wide — and then,
+		// a settle window later, its zeus is KILLED IN PLACE and respawned on
+		// its own session, since a running claude neither re-reads a changed
+		// credential nor drops the limit it has latched onto locally. It sits
+		// in this block for one of this block's two reasons rather than both:
+		// it destroys and recreates a live pane's process. (Since Q2 it makes
+		// no machine-wide credential change at all — the main login is
+		// reachable only from `k account` and the account API.) A --mirror
+		// daemon still RECORDS hits (the API handler is not mirror-gated) —
+		// it just never acts on one.
 		//
 		// Its own sweep rather than a line in the colour loop above, for the
 		// same reason every pass in this block has one: each is independently
-		// orderable and independently skippable, and this one in particular
-		// must run after the colour reconcile rather than interleaved with it
-		// — a rotate takes the machine-wide rotation lock and rewrites the
-		// keychain, which is not something to interleave a cosmetic pass
-		// with. The extra loop costs one kv read per job (limitRescue's first
-		// line is ReadLimitHit, and it returns immediately unless that job
-		// has an unresolved hit).
+		// orderable and independently skippable. The extra loop costs one kv
+		// read per job (limitRescue's first line is ReadLimitHit, and it
+		// returns immediately unless that job has an unresolved hit).
 		for _, j := range jobs {
 			d.limitRescue(j, all, live)
 		}
@@ -1102,8 +1099,8 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// usage poll (throttled, first-tick eager so UIs have data right after
 	// daemon start): KickUsagePass's own usagePassRunning atomic
 	// single-flights this into its own goroutine (network I/O up to ~10s,
-	// must not stretch this loop) against RotationGate's post-swap kick
-	// running in this same process. Skipped under mirror — tick() there runs
+	// must not stretch this loop) against the account API's own post-switch
+	// kick running in this same process. Skipped under mirror — tick() there runs
 	// ONLY state derivation + block-event artifact sync, nothing else.
 	if !mirror && (d.tickN == 1 || d.tickN%usageEvery == 0) {
 		KickUsagePass()

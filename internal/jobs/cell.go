@@ -711,10 +711,24 @@ func stagedCommand(argv []string, inputs ...spawnInput) (string, error) {
 // spawnCommand is stagedCommand for zeus: its brief and its initial prompt,
 // staged into the cell dir's two well-known paths. `--` must stay last, so the
 // prompt is appended after the brief flag.
+//
+// It is also the single delivery point for the job's account binding
+// (accountEnvPrefix, binding.go): a bound job's command begins with the
+// CLAUDE_SECURESTORAGE_CONFIG_DIR assignment, so the slot the job is bound to
+// is the credential every claude the cell goes on to start resolves. All
+// three zeus spawns build through here — StartCell, ReactivateJob and the
+// limit rescue's respawn — which is why there is no second place to keep in
+// step; threadSpawnCommand (thread.go) applies the identical rule for a side
+// thread. An unbound job's command is byte-identical to what it was before
+// binding existed.
 func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
-	return stagedCommand(argv,
+	cmd, err := stagedCommand(argv,
 		spawnInput{"--append-system-prompt", brief, zeusBriefPath(j)},
 		spawnInput{"--", prompt, spawnPromptPath(j)})
+	if err != nil {
+		return "", err
+	}
+	return accountEnvPrefix(j) + cmd, nil
 }
 
 // cellSpawnEnv is the environment the `tmux new-session` that creates a cell
@@ -771,14 +785,6 @@ func jobPrompt(j *Job) string {
 	return strings.TrimSpace(body)
 }
 
-// rotationGate is a package-level indirection to RotationGate. TestMain
-// (testmain_test.go) swaps it to a no-op for the whole jobs test binary —
-// StartCell/ReactivateJob must never shell out to the real keychain/network
-// from a test that spawns a cell, even one that doesn't care about rotation
-// at all; a test that specifically wants to assert on gate invocation
-// re-swaps it locally.
-var rotationGate = RotationGate
-
 // StartCell creates a job's cell: worktree off the base ref, tmux session,
 // zeus pane, identity marker, state write. Callers have validated the job
 // (parseable, unstarted, non-empty spec) — this owns mechanics only. Its one
@@ -799,8 +805,9 @@ func StartCell(j *Job, repo string) error {
 		return fmt.Errorf("worktree %s already exists — clean it up first (git -C %s worktree remove %s)", old, repo, old)
 	}
 	// below the cheap rejections above (already-live, leftover worktree): a
-	// rejected spawn must not pay for a usage fetch or a swap
-	rotationGate("start " + j.Slug)
+	// rejected spawn must not pay for a usage snapshot read, a keychain
+	// probe or a binding write
+	bindGate(j, "start "+j.Slug)
 	wt := CellWorktree(j, repo)
 	base, err := baseRef(j, repo)
 	if err != nil {
@@ -2332,8 +2339,9 @@ func ReactivateJob(j *Job, session, message string) error {
 	// below every rejection above (unparseable job, bad cell identity, no
 	// recorded session, already-live, unresolved repo, reactivateMode's
 	// worktree-exists check, and a failed artifact restore): a rejected
-	// spawn must not pay for a usage fetch or a swap
-	rotationGate("reactivate " + j.Slug)
+	// spawn must not pay for a usage snapshot read, a keychain probe or a
+	// binding write
+	bindGate(j, "reactivate "+j.Slug)
 	var reorient, rebaseNote string
 	if mode == "resume" {
 		reorient = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."

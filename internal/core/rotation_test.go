@@ -13,93 +13,10 @@ import (
 	"time"
 )
 
-// --- NeedsRotation ---
+// --- shared helpers ---
 
 func modelWindow(name string, pct float64) []ModelWindow {
 	return []ModelWindow{{Name: name, Percent: pct}}
-}
-
-func TestNeedsRotation(t *testing.T) {
-	cases := []struct {
-		name       string
-		main       AccountUsage
-		wantTrip   bool
-		wantReason string
-	}{
-		{
-			name:     "all nil windows never trip",
-			main:     AccountUsage{},
-			wantTrip: false,
-		},
-		{
-			name:     "session exactly at threshold does not trip",
-			main:     AccountUsage{Session: &UsageWindow{Percent: 80}},
-			wantTrip: false,
-		},
-		{
-			name:       "session just over threshold trips",
-			main:       AccountUsage{Session: &UsageWindow{Percent: 80.1}},
-			wantTrip:   true,
-			wantReason: "session 80.1% > 80%",
-		},
-		{
-			name:     "weekly exactly at threshold does not trip",
-			main:     AccountUsage{Weekly: &UsageWindow{Percent: 90}},
-			wantTrip: false,
-		},
-		{
-			name:       "weekly just over threshold trips",
-			main:       AccountUsage{Weekly: &UsageWindow{Percent: 90.1}},
-			wantTrip:   true,
-			wantReason: "weekly 90.1% > 90%",
-		},
-		{
-			name:     "fable exactly at threshold does not trip",
-			main:     AccountUsage{Models: modelWindow("Fable", 90)},
-			wantTrip: false,
-		},
-		{
-			name:       "fable just over threshold trips",
-			main:       AccountUsage{Models: modelWindow("Fable", 90.1)},
-			wantTrip:   true,
-			wantReason: "fable 90.1% > 90%",
-		},
-		{
-			name:     "other model names never trip",
-			main:     AccountUsage{Models: modelWindow("Opus", 99)},
-			wantTrip: false,
-		},
-		{
-			name: "session and fable both trip, joined in order",
-			main: AccountUsage{
-				Session: &UsageWindow{Percent: 85},
-				Models:  modelWindow("Fable", 92),
-			},
-			wantTrip:   true,
-			wantReason: "session 85% > 80%, fable 92% > 90%",
-		},
-		{
-			name: "all three trip",
-			main: AccountUsage{
-				Session: &UsageWindow{Percent: 85},
-				Weekly:  &UsageWindow{Percent: 95},
-				Models:  modelWindow("Fable", 92),
-			},
-			wantTrip:   true,
-			wantReason: "session 85% > 80%, weekly 95% > 90%, fable 92% > 90%",
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			gotTrip, gotReason := NeedsRotation(c.main)
-			if gotTrip != c.wantTrip {
-				t.Errorf("trip = %v, want %v (reason=%q)", gotTrip, c.wantTrip, gotReason)
-			}
-			if gotReason != c.wantReason {
-				t.Errorf("reason = %q, want %q", gotReason, c.wantReason)
-			}
-		})
-	}
 }
 
 // --- SelectRotationTarget ---
@@ -930,11 +847,11 @@ func TestSelectRotationTargetBoundaryJustUnderCandidateThresholds(t *testing.T) 
 
 // --- SelectRotationTarget: weekly-exhausted candidate exclusion (G1) ---
 //
-// Without this exclusion, main can rotate onto a slot that is ITSELF
-// weekly-exhausted: NeedsRotation trips again on the very next spawn and
-// selects a new target, which can land back on the ORIGINAL (still
-// weekly-exhausted) main account — a ping-pong that repeats for days
-// instead of ever landing somewhere with real headroom.
+// Without this exclusion, a swap can land on a slot that is ITSELF
+// weekly-exhausted: the account runs out again immediately, the next limit
+// hit selects a new target, and it can land back on the ORIGINAL (still
+// weekly-exhausted) account — a ping-pong that repeats for days instead of
+// ever landing somewhere with real headroom.
 
 func TestSelectRotationTargetExcludesWeeklyExhaustedSlot(t *testing.T) {
 	rows := []AccountUsage{
@@ -968,23 +885,18 @@ func TestSelectRotationTargetNilWeeklyStaysEligible(t *testing.T) {
 
 // --- Fable matching: case-insensitivity + duplicate-window max (F7) ---
 
-func TestNeedsRotationFableCaseInsensitive(t *testing.T) {
-	main := AccountUsage{Models: modelWindow("fable", 90.1)}
-	tripped, reason := NeedsRotation(main)
-	if !tripped || reason != "fable 90.1% > 90%" {
-		t.Errorf("tripped=%v reason=%q, want lowercase \"fable\" window to trip", tripped, reason)
+// findModel's case-insensitivity used to be measured through NeedsRotation,
+// which is gone with automatic main rotation. Re-pointed at the surviving
+// caller rather than dropped: the behaviour is unchanged and still load-
+// bearing — a snapshot spelling the window "fable" must exclude the slot
+// exactly as "Fable" does, or a lowercase spelling silently reads as 0%.
+func TestSelectRotationTargetFableCaseInsensitive(t *testing.T) {
+	rows := []AccountUsage{
+		{Slug: "lower-fable", Email: "lower-fable@example.com", Session: &UsageWindow{Percent: 10}, Models: modelWindow("fable", 85)},
 	}
-}
-
-func TestNeedsRotationFableDuplicateWindowsUseMax(t *testing.T) {
-	main := AccountUsage{Models: []ModelWindow{
-		{Name: "Fable", Percent: 50},
-		{Name: "Fable", Percent: 92},
-		{Name: "Fable", Percent: 70},
-	}}
-	tripped, reason := NeedsRotation(main)
-	if !tripped || reason != "fable 92% > 90%" {
-		t.Errorf("tripped=%v reason=%q, want the max duplicate window (92%%) to trip", tripped, reason)
+	slug, reason := SelectRotationTarget(rows, "main@example.com", 0)
+	if slug != "" || reason != "lower-fable: fable 85% ≥ 80%" {
+		t.Errorf("slug=%q reason=%q, want the lowercase \"fable\" window to exclude the slot", slug, reason)
 	}
 }
 

@@ -153,7 +153,7 @@ func TestSubmitContractRetiredRoutesAreGone(t *testing.T) {
 }
 
 // TestSubmitContractSubmitIsMirrorGated: submit starts a real cell (git
-// worktree, tmux session, rotation gate), so the old "queue/dequeue are ungated
+// worktree, tmux session, account bind), so the old "queue/dequeue are ungated
 // pure DB flips" exception dies with the flag. The gate must run BEFORE the
 // body is decoded, which is why an unresolvable slug still yields 403.
 func TestSubmitContractSubmitIsMirrorGated(t *testing.T) {

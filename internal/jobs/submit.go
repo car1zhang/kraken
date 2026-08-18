@@ -24,7 +24,7 @@ import (
 
 // submitStartCell is the start seam. It exists so a package test can assert
 // SubmitJob's validation order and its "starts exactly once" contract without
-// a git worktree, a tmux server, or the rotation gate's keychain — swap it,
+// a git worktree, a tmux server, or the account binder's keychain — swap it,
 // call SubmitJob, restore it. Nothing else in the binary may reassign it: the
 // production value is StartCell and there is no second real start path.
 var submitStartCell = StartCell

@@ -13,10 +13,17 @@ import (
 )
 
 // cmdAccount is `k account`'s dispatcher: no args shows rotation mode + the
-// usage/account table (status), "auto" re-enables auto-rotation, anything
+// usage/account table (status), "auto" releases the manual pin, anything
 // else is treated as a ~/.claude-pool slot slug for a manual switch.
 // "--help"/"-h"/"help" print usage and exit 0 rather than being treated as a
 // (nonexistent) slot slug.
+//
+// What the two modes MEAN changed with per-cell binding: in auto, kraken
+// picks a pool account for each cell it spawns and never moves the machine's
+// main login on its own; manual pins the account carl chose and stops kraken
+// taking any account decision at all, so every cell then runs on main. This
+// command and POST /api/account/switch are the only things left anywhere
+// that swap main.
 func cmdAccount(args []string) {
 	if len(args) == 0 {
 		cmdAccountStatus()
@@ -29,7 +36,7 @@ func cmdAccount(args []string) {
 	case "--help", "-h", "help":
 		fmt.Println("usage: k account [auto|<slot-slug>]")
 		fmt.Println("  k account            show rotation mode + account table")
-		fmt.Println("  k account auto       re-enable auto-rotation (release the manual pin)")
+		fmt.Println("  k account auto       release the manual pin (kraken binds each new cell to a pool account; main moves only for kronos/iris limit rescues)")
 		fmt.Println("  k account <slug>     manually switch main to a ~/.claude-pool slot slug (pins manual)")
 		return
 	}
@@ -46,7 +53,7 @@ func cmdAccount(args []string) {
 
 // cmdAccountStatus prints the rotation mode line followed by a table of
 // every known Claude account (main + every pool slot), mirroring the data
-// the auto gate itself decides against.
+// the per-cell binder itself decides against.
 func cmdAccountStatus() {
 	printRotationLine()
 	snap, ok := jobs.ReadUsageSnapshot()
@@ -197,25 +204,29 @@ func slotDisabledState(slug string) string {
 	}
 }
 
-// cmdAccountAuto re-enables the rotation gate: no swap, just clears the
-// manual pin.
+// cmdAccountAuto releases the manual pin: no swap, and main stays exactly
+// where this command leaves it. What it re-enables is per-cell BINDING —
+// kraken picking a pool account for each new cell — not any movement of the
+// machine's own login, and the printed line says so because it is the one
+// sentence carl reads after running this.
 func cmdAccountAuto() {
 	if err := jobs.SetRotationMode("auto", "cli"); err != nil {
 		util.Die("set rotation mode: %v", err)
 	}
 	util.LogEvent("cli", "info", "account", "k account auto")
-	fmt.Println("rotation: auto — the gate may swap main at the next spawn")
+	fmt.Println("rotation: auto — kraken binds each new cell to its own pool account; main moves only for a standing agent's (kronos/iris) limit rescue or by hand")
 }
 
 // cmdAccountSwitch is a manual main-login swap: it always executes
-// regardless of usage thresholds (unlike the auto gate) and pins rotation to
-// manual on success. Ordering is load-bearing: the swap runs BEFORE the mode
-// write, so a failed swap never touches the mode. The swap+pin pair runs
-// under jobs.AcquireRotationLock so a manual switch can never race the
-// daemon's own RotationGate (or a concurrent web/CLI switch) across
-// processes — without it, the gate could commit a swap mid-manual-switch and
-// this command would then stamp the (now stale) target slug's identity onto
-// whatever slot the gate just landed main on.
+// regardless of usage thresholds, and pins rotation to manual on success.
+// Ordering is load-bearing: the swap runs BEFORE the mode write, so a failed
+// swap never touches the mode. The swap+pin pair runs under
+// jobs.AcquireRotationLock so a manual switch can never race a concurrent
+// web/CLI switch across processes — without it, the other one could commit a
+// swap mid-manual-switch and this command would then stamp the (now stale)
+// target slug's identity onto whatever slot that swap just landed main on.
+// There is no daemon-side swapper left to race: per-cell binding retired the
+// only one there was.
 func cmdAccountSwitch(slug string) {
 	release, ok, err := jobs.AcquireRotationLock()
 	if err != nil {
@@ -268,8 +279,8 @@ func cmdAccountSwitch(slug string) {
 
 	// Release the cross-process rotation lock now — the swap+pin critical
 	// section is done. The usage refresh is pure read-only I/O; running it
-	// under the lock would needlessly block RotationGate or a concurrent
-	// manual switch for however long the refresh takes.
+	// under the lock would needlessly block the other manual switch surface
+	// (POST /api/account/switch) for however long the refresh takes.
 	releaseOnce()
 
 	// Synchronous, not jobs.KickUsagePass(): that fires a background

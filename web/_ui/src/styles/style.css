@@ -399,7 +399,7 @@ body {
    clickables never listed at all, OS hand in both themes. New clickables get
    added HERE, never a local cursor declaration. */
 button, a, [role="button"], summary, label.check,
-.card.editable, .card.archived, .chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip, .st-chip,
+.card.editable, .card.archived, .chip, .ac-chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip, .st-chip,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .goal, .goal .t,
 .dq-row.dq-answered, .cmd-chip, #thread-panehead,
@@ -415,7 +415,8 @@ input[type="checkbox"] {
 :root[data-theme="light"] [role="button"], :root[data-theme="light"] summary,
 :root[data-theme="light"] label.check,
 :root[data-theme="light"] .card.editable, :root[data-theme="light"] .card.archived,
-:root[data-theme="light"] .chip, :root[data-theme="light"] .ct-chip,
+:root[data-theme="light"] .chip, :root[data-theme="light"] .ac-chip,
+:root[data-theme="light"] .ct-chip,
 :root[data-theme="light"] .dq-chip, :root[data-theme="light"] .fb-chip,
 :root[data-theme="light"] .ld-chip, :root[data-theme="light"] .st-chip,
 :root[data-theme="light"] .thread-chip,
@@ -1504,6 +1505,51 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .st-chip-graph { --skill: var(--skill-graph); --skill-soft: var(--skill-graph-soft); }
 .card:hover .st-chip { border-color: var(--skill); }
 
+/* the account badge (AccountChip): WHICH pool account this cell is burning,
+   as the email's local part behind a `⬢`. Live cards only, and only when the
+   cell is BOUND — an unbound cell runs in the main lane every cell used to,
+   so it wears nothing at all.
+
+   A plain span and deliberately NOT .chip, same fall-through reason as
+   .st-chip/.ct-chip/.dq-chip above: .chip is the artifact-overlay click
+   target. It carries no local `cursor` either — the pointer ring comes from
+   the cursors section's ONE list, which that list's own note explains.
+
+   --ok rather than the accent, and it is the only chip in the row wearing it.
+   The row's other tokens are all either accent (the stage, the goal) or muted
+   (the counts), so a third hue is what separates "whose quota" from both
+   "where in the pipeline" and "how much is in here" at a glance. Green is not
+   a health claim: this chip says nothing about how much of that account is
+   LEFT (the steer modal's bars answer that), it says the cell has a lane of
+   its own — which is the good state this whole feature exists to produce, and
+   its absence, not a colour change, is what marks the other one.
+
+   Sized exactly like its siblings (9px mono, 2px 6px, 1px border) so it costs
+   the same width as any other token in a row that wraps. `white-space: nowrap`
+   because the label is one word and the glyph's space is a legal flex break
+   point — a badge split across two lines is the one shape that makes a card
+   taller. Every colour is a theme token, so both palettes follow with no
+   second block. */
+.ac-chip {
+  font: 9px var(--mono);
+  color: var(--fg);
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  padding: 2px 6px; white-space: nowrap;
+  /* .chips > * makes this chip inline-flex, so its aria-hidden glyph span and
+     the name text are two flex items and the DOM space between them sits at
+     the first item's line end, where CSS text processing removes it. The
+     VISIBLE separation is therefore this gap (the row's own 4px rhythm), not
+     that space — which stays in the DOM for textContent. .st-chip carries the
+     identical rule for the identical markup. */
+  gap: 4px;
+  transition: border-color 80ms var(--ease), box-shadow 80ms var(--ease);
+}
+/* the aria-hidden glyph carries the hue while the name stays --fg: the name is
+   what is READ and wants full contrast, the mark is what is scanned. */
+.ac-chip [aria-hidden] { color: var(--ok); }
+.card:hover .ac-chip { border-color: var(--ok); }
+
 /* the board's whole question surface: an open-count chip in the card's chip
    row, the questions themselves one click into the job (docQuestionsChipHTML).
    Deliberately NOT class .chip — that class is the artifact-overlay click
@@ -1797,6 +1843,56 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   margin-top: 5px; font-size: 10px; opacity: 0.7;
   white-space: pre-wrap; word-break: break-word;
 }
+/* which pool account this cell is burning, in the steer modal's context block
+   (AccountPanel in SteerOverlay.tsx) — the drilldown half of the card's
+   .ac-chip.
+
+   The same raised / border-left box as .tok, .ld-drill, .doc-questions and
+   .job-feedback: the modal context's drilldown panels are one family and this
+   is another member of it, not a new kind of thing. Its left rule takes the
+   chip's --ok rather than the family's neutral --border-strong, which is the
+   ONE way the two surfaces of this fact are tied together — the same argument
+   .ld-drill makes for sharing .ld-chip's band hue while sharing none of its
+   treatment.
+
+   Faded like .tok for .tok's reason: nothing here is actionable (the binding
+   is read-only on every surface — see AccountPanel), so nothing here earns
+   full --text except the values themselves. */
+.ac-panel {
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--raised);
+  border: 1px solid var(--divider);
+  border-left: 2px solid color-mix(in srgb, var(--ok) 55%, transparent);
+  font: 10px var(--mono); line-height: 1.5;
+  color: var(--muted);
+}
+/* key left, value right — .ld-drill-row's shape.
+
+   The key column is its OWN width, not .spec-meta-row's 88px and not
+   .ld-drill-k's 96px, and that is measured rather than picked: this panel has
+   exactly two keys and the longest is `bound to`, 8 characters, which at the
+   10px var(--mono) these rows are set in is ~48px. 66px clears it with room
+   and lands the values in the same eye-line as the panel's own second row.
+   Borrowing 88px would strand ~35px of empty column in a two-row box and push
+   an email — the longest value here by far — further into the wrap it is
+   already prone to. Those two panels each size to their own longest key
+   (`next step 10/10` is why .ld-drill-k is 96px); a shared number would be a
+   coincidence dressed as a rule. */
+.ac-row { display: flex; gap: 10px; }
+.ac-k { min-width: 66px; opacity: 0.7; flex: none; }
+.ac-v { color: var(--fg); word-break: break-word; }
+/* the email beside the slug, and the "(machine default)" gloss beside main:
+   both are the QUALIFIER on a value rather than the value, so they drop a
+   tier rather than changing hue. */
+.ac-dim { color: var(--muted); opacity: 0.75; }
+/* .u-rows / .u-row / .u-bar / .u-bar-fill / .u-row-val are the usage
+   drilldown's own classes, reused verbatim by AccountBar so a bar here and a
+   bar there cannot drift apart — see that component for why the COMPONENT is
+   not shared while the classes are. Only the top margin is local: the usage
+   overlay's rows follow a heading, these follow a key/value pair. */
+.ac-panel .u-rows { margin-top: 7px; }
+.ac-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
+
 .spec-meta-row .k { color: var(--g1); min-width: 88px; letter-spacing: 0.08em; }
 .spec-meta-row .v { color: var(--body); }
 /* the kit's panel: wide (carl's note — every overlay is min(1120px, 96vw),

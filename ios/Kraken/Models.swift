@@ -424,6 +424,67 @@ struct ShipIOSStartResponse: Decodable {
     let phase: String
 }
 
+// The `account` key on a webJob (api/board.go's webJobAccount): the pool slot
+// this cell is BOUND to — the login every claude in it bills, delivered to the
+// cell's panes as CLAUDE_SECURESTORAGE_CONFIG_DIR and stamped on the job row at
+// spawn (schema v28).
+//
+// "account", never "usage": `usage` in this app already means account QUOTA
+// (UsageView, UsageResponse, /api/usage) and the two are unrelated numbers —
+// the same collision WebTokens refuses in the other direction. The join between
+// them is `slug`, which is the key /api/usage's own rows carry.
+//
+// DECODE-ONLY this pass: nothing renders it yet. It is modeled now rather than
+// later so the phone's decode of the whole board cannot be surprised by the
+// key, and so the wire contract lands in one commit with its Swift model, which
+// is the repo's API-contract rule.
+//
+// `slug` is non-Optional and the other two are, which mirrors the Go type only
+// loosely and is deliberate. Nothing on this object carries omitempty
+// server-side — presence of the OBJECT is the whole answer — but `email` is ""
+// for a slot ccp has no identity for and `at` is 0 for a binding written with no
+// stamp, and a client that must not fail a board decode over a cosmetic key
+// treats "absent" and "empty" the same way. `slug` stays required because it IS
+// the binding: an object without one names no account at all — and that
+// strictness is what the tolerant wrapper below converts into a nil rather than
+// into a thrown board.
+//
+// `Decodable`, not `Codable`: nothing in this app encodes a webJob, and every
+// other model in this file states the one direction it travels.
+struct WebJobAccount: Decodable {
+    /// The pool slot's directory name under `~/.claude-pool`, and the key the
+    /// `/api/usage` rows share — join on this, never on the email.
+    let slug: String
+    /// The account identity ccp recorded; nil or "" when the slot has none yet,
+    /// in which case the slug is what a badge should show.
+    let email: String?
+    /// Unix MILLIS of the bind stamp (WebJob.mtime's convention, never
+    /// seconds). nil or 0 means the binding carries no time — render no age
+    /// rather than "now".
+    let at: Int64?
+}
+
+// One `account` object, decoded so that it CANNOT throw: a present-but-
+// malformed one yields nil instead of failing the decode above it. It is the
+// single-object sibling of TolerantWebJobGoal, exists for the same reason, and
+// the reason is the same size: `WebBoard.jobs` is a strictly decoded
+// `[WebJob]`, so a throw inside one job's `account` takes the ENTIRE board
+// payload with it — and the account badge is cosmetic while the board is not.
+//
+// A plain `WebJobAccount?` property would NOT do this job. Optional's own
+// decoding still calls WebJobAccount's throwing init for any non-null value,
+// so a `{"account": {"slug": 7}}` — a retyped key, a future server, a
+// hand-edited response — would throw exactly where it must not. Absent or null
+// is a different case entirely and never reaches here: WebJob's synthesized
+// `decodeIfPresent` nils the property before this init runs.
+private struct TolerantWebJobAccount: Decodable {
+    let account: WebJobAccount?
+
+    init(from decoder: Decoder) throws {
+        account = try? WebJobAccount(from: decoder)
+    }
+}
+
 struct WebJob: Decodable, Identifiable {
     let slug: String
     let repo: String
@@ -531,6 +592,29 @@ struct WebJob: Decodable, Identifiable {
     // one link), so no contract bump; see WebJobGoalList for why a drifted
     // value degrades to an empty list rather than failing the board.
     let goals: WebJobGoalList?
+    // The pool account this cell is bound to (WebJobAccount above). nil is the
+    // ONLY spelling of UNBOUND — the cell runs on the machine's main login,
+    // exactly as every cell did before per-cell binding — and it covers three
+    // states no client separates: the pool was dry or fully excluded at spawn,
+    // rotation is pinned MANUAL (kraken takes no account decision then), and
+    // the job is ARCHIVED, where api/board.go's `archivedWebJob` withholds the
+    // key deliberately (`load`'s call, for `load`'s reason: a card with no cell
+    // cannot pose the question a badge would answer). The three columns survive
+    // archival, so the key returns on unarchive.
+    //
+    // Served for every ACTIVE bound job whatever its display state, so the key
+    // never flickers as a card moves between working and blocked; the
+    // live-cards-only rule is a RENDERING rule each client applies. Decode-only
+    // this pass — nothing on the phone renders it yet. Additive key, absent on
+    // older servers, so no contract bump.
+    //
+    // Stored behind TolerantWebJobAccount and read through the computed
+    // `account` below, so nil covers a FOURTH case the wire does not have a
+    // spelling for: an account object that arrived MALFORMED. Every other case
+    // costs this card its badge; that one would otherwise cost the whole board
+    // its decode. Call sites see `WebJobAccount?` either way — the wrapper is
+    // the decode's business and nothing else's.
+    private let accountBox: TolerantWebJobAccount?
     // `start_error` is gone with the queued state (v6): a start is now the
     // synchronous answer to POST /api/queue, so a failure surfaces as that
     // call's own 409 rather than as a field on a job parked in a queue.
@@ -548,6 +632,10 @@ struct WebJob: Decodable, Identifiable {
     var id: String { archived == true ? "archive:" + slug : slug }
     /// What the UI shows as the job's name (archived jobs may be numbered).
     var title: String { displaySlug ?? slug }
+    /// The pool account this cell is bound to, or nil — unbound, archived, or
+    /// (see accountBox) an object that failed to decode. The stored wrapper is
+    /// private precisely so this is the only spelling a reader ever uses.
+    var account: WebJobAccount? { accountBox?.account }
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, state, err, outcome, cell, live
@@ -569,6 +657,9 @@ struct WebJob: Decodable, Identifiable {
         case color
         case goal
         case goals
+        // the wire name is `account`; the stored property is the tolerant
+        // wrapper, read back through the computed `account` above
+        case accountBox = "account"
     }
 }
 

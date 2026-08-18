@@ -14,12 +14,12 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("KRAKEN_LOGS_DIR", dir)
-	// Real RotationGate shells out to the keychain/network — no-op it for
-	// the whole package's test binary so any test that calls StartCell or
-	// ReactivateJob (now or in the future) never touches either. A test
-	// that specifically wants to assert on gate invocation re-swaps this
-	// locally.
-	rotationGate = func(string) {}
+	// Real bindAccount reads the usage snapshot and shells out to the
+	// keychain — no-op it for the whole package's test binary so any test
+	// that calls StartCell or ReactivateJob (now or in the future) never
+	// touches either. A test that specifically wants to assert on binding
+	// re-swaps this locally.
+	bindGate = func(*Job, string) {}
 	// Same reasoning for the dev-env mirror's git probe: the real gitUntracked
 	// shells out to git in a worktree, and no test fixture dir is one. A test
 	// that asserts on the probe re-swaps it locally (swapGitUntracked).

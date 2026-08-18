@@ -425,7 +425,7 @@ func TestContractStandingRecordLimitHitByKeyRecordsThenFolds(t *testing.T) {
 	key := standingHitKey("kronos")
 	first := time.Unix(1_700_000_000, 0)
 
-	hit, err := recordLimitHitByKey(key, "kronos", "rate_limit", "the banner", "kronos-sess", "", first)
+	hit, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "the banner", "kronos-sess", "", first)
 	if err != nil {
 		t.Fatalf("first delivery: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestContractStandingRecordLimitHitByKeyRecordsThenFolds(t *testing.T) {
 		t.Fatalf("first delivery lost a field: %+v", hit)
 	}
 
-	second, err := recordLimitHitByKey(key, "kronos", "rate_limit", "the banner", "kronos-sess", "", first.Add(30*time.Second))
+	second, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "the banner", "kronos-sess", "", first.Add(30*time.Second))
 	if err != nil {
 		t.Fatalf("second delivery: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestContractStandingRecordLimitHitByKeyResolvedNeverFolds(t *testing.T) {
 	})
 
 	later := at.Add(2 * time.Hour)
-	got, err := recordLimitHitByKey(key, "kronos", "rate_limit", "new banner", "kronos-sess", "", later)
+	got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "new banner", "kronos-sess", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func TestContractStandingRecordLimitHitByKeyAdoptsAResetClause(t *testing.T) {
 		t.Fatal("fixture is wrong: the incoming details carry no parseable clause")
 	}
 
-	got, err := recordLimitHitByKey(key, "kronos", "rate_limit", contractStandingUsageLimitText, "kronos-sess", "", at.Add(time.Minute))
+	got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", contractStandingUsageLimitText, "kronos-sess", "", at.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +535,7 @@ func TestContractStandingRecordLimitHitByKeySurvivesTheSwapWatermark(t *testing.
 	})
 
 	// A DIFFERENT error type supersedes rather than folds.
-	got, err := recordLimitHitByKey(key, "kronos", "overloaded", "something else", "kronos-sess", "", at.Add(time.Minute))
+	got, err := recordLimitHitByKey(key, "kronos", "", "overloaded", "something else", "kronos-sess", "", at.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1518,43 +1518,14 @@ func TestContractStandingCellPassPersistsAdoptionBeforeDeciding(t *testing.T) {
 	}
 }
 
-// TestContractStandingCellPassIsUnchangedWithNoWatermark: "The pass's
-// existing behavior with no watermark is byte-identical." With no main_swap
-// row the rotate arm runs exactly as it always did — one swap, the stamp
-// taken from the swap itself.
-func TestContractStandingCellPassIsUnchangedWithNoWatermark(t *testing.T) {
-	rig := contractStandingRigNew(t)
-	contractStandingSnapshot(t)
-	rig.Target = "pool-b"
-	j, all, live := contractStandingCell(t, rig, "no-watermark")
-
-	now := time.Now()
-	contractStandingPutHit(t, rig.st, limitHitKey(j.ID), LimitHit{
-		Error: "rate_limit", Details: "429", At: now.Add(-2 * time.Minute).Unix(), Deliveries: 1,
-	})
-
-	newDaemon().limitRescue(j, all, live)
-
-	if len(rig.Swaps) != 1 {
-		t.Fatalf("swapMain called %d times, want once", len(rig.Swaps))
-	}
-	stored := contractStandingGetHit(t, rig.st, limitHitKey(j.ID))
-	if stored.SwappedTo != rig.SwapTo {
-		t.Errorf("SwappedTo = %q, want the swap's own answer %q", stored.SwappedTo, rig.SwapTo)
-	}
-	if stored.SwappedAt == 0 {
-		t.Error("SwappedAt was not stamped after a landed swap")
-	}
-	if stored.Attempts != 1 {
-		t.Errorf("Attempts = %d, want 1", stored.Attempts)
-	}
-	if stored.HandledAt != 0 {
-		t.Errorf("the rotate arm resolved the hit (%+v) — the resume a settle window later is what resolves it", stored)
-	}
-	if len(rig.PaneRespawns) != 0 {
-		t.Errorf("the rotate tick also resumed: %v", rig.PaneRespawns)
-	}
-}
+// Retired with Q2 (job 335): TestContractStandingCellPassIsUnchangedWithNoWatermark
+// pinned the CELL pass's no-watermark rotate as a machine-wide swap through
+// swapMain. The cell rotate is a per-job REBIND now and never reaches that
+// seam; its no-watermark behavior (one attempt, stamp from the rotate itself,
+// HandledAt zero until the settle-window resume) is pinned by the limitrescue
+// contract suite's rotate/two-phase tests instead. The adoption tests around
+// this one keep their subject: adoption itself is unchanged for the owners
+// that still adopt (standing agents, unbound cells).
 
 // ---------------------------------------------------------------------------
 // slice P — rescueSwap
@@ -1612,28 +1583,12 @@ func TestContractStandingRescueSwapNoTargetOutcome(t *testing.T) {
 	}
 }
 
-// TestContractStandingRescueSwapDelegatesForACell: "rescueLimitedCell(j, now)
-// delegates with label = j.Slug and keeps its exact behavior." One body, so
-// the standing arm and the cell arm can never disagree about lock order or
-// outcome words.
-func TestContractStandingRescueSwapDelegatesForACell(t *testing.T) {
-	rig := contractStandingRigNew(t)
-	contractStandingSnapshot(t)
-	rig.Target = "pool-b"
-	row := mustCreateJob(t, rig.st, store.Job{Slug: "swap-delegate", Repo: "kraken", State: "working"})
-	j := &Job{ID: row.ID, Slug: row.Slug, Repo: row.Repo}
-
-	to, outcome, err := rescueLimitedCell(j, time.Unix(1_700_000_000, 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outcome != "swapped" || to != rig.SwapTo {
-		t.Fatalf("rescueLimitedCell = (%q, %q), want (%q, swapped)", to, outcome, rig.SwapTo)
-	}
-	if at, stampedTo := readMainSwap(); at == 0 || stampedTo != rig.SwapTo {
-		t.Fatalf("a cell's swap did not stamp the machine-wide watermark: (%d, %q)", at, stampedTo)
-	}
-}
+// Retired with Q2 (job 335): TestContractStandingRescueSwapDelegatesForACell
+// pinned rescueLimitedCell as a delegate of rescueSwap — a cell's rescue
+// performing the same machine-wide swap as a standing agent's. Cells REBIND
+// their own job row now (rescueLimitedCell in limitrescue.go, pinned by the
+// account blind suites); rescueSwap's one caller is the standing pass, and
+// TestRetirementNoAutomatedMainSwap holds the boundary.
 
 // TestContractStandingRescueSwapTakesTheLockBeforeSelecting: "same lock order
 // (AcquireRotationLock BEFORE selectRescueTarget)". Observable as contention:

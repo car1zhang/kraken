@@ -144,6 +144,12 @@ func TestEdgeKronosMigrationPreservesAPopulatedV23DB(t *testing.T) {
 
 	// Rewind to a genuine v23 shape: v24's table gone, user_version 23.
 	for _, stmt := range []string{
+		// v28 added the three account-binding columns; a genuine v23 database
+		// has none of them, and step 28 replays by adding them, which fails on
+		// a duplicate column name if they are left behind. Newest first.
+		`ALTER TABLE jobs DROP COLUMN account_slug`,
+		`ALTER TABLE jobs DROP COLUMN account_email`,
+		`ALTER TABLE jobs DROP COLUMN account_at`,
 		// v27 replaced jobs.goal_id with the job_goals join table, so
 		// reversing it takes BOTH directions: the table goes, and the column
 		// comes back — a genuine v23 database has it, and step 27 replays by

@@ -44,6 +44,23 @@ type Job struct {
 	// load_* columns), written through SetJobLoad and never through
 	// UpdateJobFields — see both methods' doc comments.
 	Load JobLoad
+	// AccountSlug/AccountEmail/AccountAt are this job's account binding
+	// (schema v28's three account_* columns): the pool slot every claude in
+	// its cell bills, the identity that slot held when the binding was made,
+	// and the millis stamp of the bind.
+	//
+	// All three empty/zero is the UNBOUND job — no per-cell credential
+	// override, so its claudes use the machine's main login. That is the
+	// state of every job that predates the feature, and the state a job stays
+	// in when the pool is dry or the rotation mode is pinned manual, so it is
+	// a normal reading rather than a missing one.
+	//
+	// Written ONLY by SetJobAccount, never by UpdateJobFields (the columns are
+	// deliberately absent from jobFieldColumns) — see SetJobAccount's doc
+	// comment for why a form save must not be able to touch a binding.
+	AccountSlug  string
+	AccountEmail string
+	AccountAt    int64 // unix millis; 0 means never bound
 	// FormerSlugs is every name this job has been renamed away from (schema
 	// v20's job_former_slugs), empty for the never-renamed job that every job
 	// is until someone renames it. Order is unspecified: nothing ranks them,
@@ -112,7 +129,8 @@ var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), solo,
 	COALESCE(session,''), COALESCE(teardown,''), run, rev, COALESCE(created_at,0),
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,''),
 	COALESCE(load_unblock,0), COALESCE(load_scope,0), COALESCE(load_note,''),
-	COALESCE(load_at,0)`
+	COALESCE(load_at,0), COALESCE(account_slug,''), COALESCE(account_email,''),
+	COALESCE(account_at,0)`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
@@ -123,6 +141,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 		&j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
+		&j.AccountSlug, &j.AccountEmail, &j.AccountAt,
 	)
 	if err != nil {
 		return nil, err
@@ -474,6 +493,52 @@ func (s *Store) SetJobLoad(jobID int64, l JobLoad) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("set job load for job %d: %w", jobID, ErrNotFound)
+	}
+	return nil
+}
+
+// SetJobAccount writes job id's account binding (schema v28's three account_*
+// columns): the pool slot its cell bills, that slot's identity at bind time,
+// and the millis stamp. All three are overwritten together — a REBIND is an
+// overwrite, and clearing a binding is the same call with the zero values, so
+// there is no separate clear verb to keep in step with this one.
+//
+// A direct UPDATE, deliberately OUTSIDE UpdateJobFields and therefore outside
+// its rev gate: this call bumps NEITHER `rev` NOR `updated_at`, exactly as
+// SetJobLoad and SetPRWatermark do not, and for the same class of reason.
+//
+// Not bumping updated_at, first: updated_at is what the board renders as each
+// card's AGE, and a binding is written at every spawn and again at every
+// limit-rescue rebind — stamping it here would reset a long-running job's age
+// on an event that says nothing about how long the job has waited.
+//
+// Not bumping rev, second: rev is the job editor's optimistic lock
+// (UpdateJobFields), so bumping it would 409 an open form save over a field
+// that form neither shows nor sends. The binding is bookkeeping about the
+// job's runtime, not part of its authored contract — which is also why the
+// three columns are absent from jobFieldColumns: a full form or raw save from
+// a client predating the feature would otherwise clear a LIVE cell's binding,
+// leaving the row claiming main while its claudes still bill the slot.
+//
+// A zero-row update is an ERROR rather than a silent no-op, SetJobLoad's rule
+// and reason: a job id matching no row means the caller was addressing
+// something that does not exist, and the binder's next move is to stamp the
+// same values onto its in-memory job and spawn against them, so a swallowed
+// miss would spawn a cell whose binding no row records.
+func (s *Store) SetJobAccount(id int64, slug, email string, at int64) error {
+	res, err := s.db.Exec(
+		`UPDATE jobs SET account_slug = ?, account_email = ?, account_at = ? WHERE id = ?`,
+		slug, email, at, id,
+	)
+	if err != nil {
+		return fmt.Errorf("set job account for job %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set job account for job %d: %w", id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("set job account for job %d: %w", id, ErrNotFound)
 	}
 	return nil
 }

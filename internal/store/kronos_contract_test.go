@@ -190,6 +190,12 @@ func TestContractKronosV24MigratesFromV23(t *testing.T) {
 	// Roll the shape back to a genuine v23: exactly the table v24 adds, gone,
 	// and the version stamp lowered.
 	for _, stmt := range []string{
+		// v28 added the three account-binding columns; a genuine v23 database
+		// has none of them, and step 28 replays by adding them, which fails on
+		// a duplicate column name if they are left behind. Newest first.
+		`ALTER TABLE jobs DROP COLUMN account_slug`,
+		`ALTER TABLE jobs DROP COLUMN account_email`,
+		`ALTER TABLE jobs DROP COLUMN account_at`,
 		// v27 replaced jobs.goal_id with the job_goals join table, so
 		// reversing it takes BOTH directions: the table goes, and the column
 		// comes back — a genuine v23 database has it, and step 27 replays by

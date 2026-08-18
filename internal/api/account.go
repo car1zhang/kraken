@@ -42,13 +42,18 @@ type accountSwitchResp struct {
 	Mode string `json:"mode"`
 }
 
-// accountSwitchHandler is a manual main-login swap: unlike the auto gate,
-// this always executes regardless of usage thresholds, and pins rotation to
-// "manual" on success — mirroring `k account <slug>`'s CLI semantics and
-// ordering. The swap runs BEFORE the mode write, so a failed swap never
-// touches the mode. The swap+pin pair runs under acquireRotationLock so a
-// web-triggered switch can never race the daemon's own RotationGate (or a
-// concurrent CLI switch) across processes.
+// accountSwitchHandler is a manual main-login swap. Since per-cell binding
+// retired the spawn-time rotation gate, this route and `k account <slug>` are
+// the only two callers of core.SwapMainTo left anywhere: no automation swaps
+// the machine-wide login, at spawn or on a usage limit (the limit rescue
+// rebinds the one affected cell instead). So it always executes regardless of
+// usage thresholds — there is no automatic threshold left for it to be an
+// exception to — and pins rotation to "manual" on success, mirroring `k
+// account <slug>`'s CLI semantics and ordering. The swap runs BEFORE the mode
+// write, so a failed swap never touches the mode. The swap+pin pair still runs
+// under acquireRotationLock, which is now a two-party lock rather than a
+// four-party one: it keeps a web-triggered switch from racing a concurrent CLI
+// switch across processes.
 func accountSwitchHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
@@ -138,9 +143,15 @@ type accountModeResp struct {
 	Mode string `json:"mode"`
 }
 
-// accountModeHandler sets rotation mode without swapping: "manual" pins
-// (parity with the web UI's banner toggle — the spec's manual pin doesn't
-// require a swap), "auto" re-enables the gate. Unlike
+// accountModeHandler sets rotation mode without swapping. The mode no longer
+// governs anything that swaps main — nothing does that automatically — it
+// governs PER-CELL BINDING: "auto" arms the binder, so each cell spawn takes
+// the emptiest eligible pool slot and the limit rescue rebinds an exhausted
+// cell to a fresh one; "manual" pins, and kraken then takes no account
+// decision at all — new cells spawn unbound in the main lane and the rescue
+// parks instead of rebinding. "manual" needing no swap to take effect is what
+// makes this route separate from the switch above (parity with the web UI's
+// banner toggle). Unlike
 // jobs.SetRotationMode's own fail-closed-to-"auto" normalization, an
 // unrecognized mode here is a validation error rather than a silent auto —
 // a client typo should surface, not quietly land as auto.

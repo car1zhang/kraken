@@ -245,6 +245,12 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// jobs.ready and the prereqs table, both of which a genuine v16 database
 	// had and this fresh one no longer does.
 	for _, stmt := range []string{
+		// v28 adds the three account-binding columns to jobs; a v16 database
+		// has none of them, and step 28 replays by adding them, which fails on
+		// a duplicate column name if they are left behind.
+		`ALTER TABLE jobs DROP COLUMN account_slug`,
+		`ALTER TABLE jobs DROP COLUMN account_email`,
+		`ALTER TABLE jobs DROP COLUMN account_at`,
 		// v27 replaces jobs.goal_id with the job_goals join table. Only the
 		// table needs dropping here: the column it replaced is already gone
 		// (v27 dropped it), and a v16 database never had either.

@@ -5,7 +5,6 @@ import (
 	"os"
 	"reflect"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -66,8 +65,9 @@ type contractResumeLogicCall struct {
 }
 
 // contractResumeLogicStubRespawn swaps the respawnPeerPane seam for a
-// recorder, restoring it on cleanup — the pattern swapMain/selectTarget
-// already established in this package. Panes listed in failPanes get a
+// recorder, restoring it on cleanup — the seam pattern this package
+// established for every decision worth exercising without its real
+// dependency. Panes listed in failPanes get a
 // non-nil error back, standing in for a guard refusal, a pane that no longer
 // holds a claude, or a failed respawn — without a tmux server.
 func contractResumeLogicStubRespawn(t *testing.T, failPanes ...string) *[]contractResumeLogicCall {
@@ -653,14 +653,21 @@ func TestContractResumeLogicPromptsCarryTheRequiredClauses(t *testing.T) {
 	if swap == reset {
 		t.Fatal("the swap-path and reset-path texts are identical — one of them tells zeus the wrong story about its account")
 	}
-	if !strings.Contains(strings.ToLower(swap), "switch") {
-		t.Errorf("clause 2 (swap): the text never says the main account was switched: %q", swap)
+	// Narrowed with Q2: the rescue rebinds THIS CELL rather than switching
+	// the machine's main login, so the clause the swap-path text has to
+	// carry is that the cell moved account — a text still claiming the main
+	// account was switched would now be false.
+	if !strings.Contains(strings.ToLower(swap), "rebound") {
+		t.Errorf("clause 2 (rebind): the text never says the cell was rebound to another account: %q", swap)
+	}
+	if strings.Contains(strings.ToLower(swap), "main claude account") {
+		t.Errorf("clause 2 (rebind): the text claims the MAIN account moved — a rescue touches one cell now: %q", swap)
 	}
 	if !strings.Contains(strings.ToLower(reset), "reset") {
 		t.Errorf("clause 2 (reset): the text never says the account's own window reset: %q", reset)
 	}
-	if strings.Contains(strings.ToLower(reset), "switch") {
-		t.Errorf("clause 2 (reset): the text claims a switch, but on this path the account never moved: %q", reset)
+	if strings.Contains(strings.ToLower(reset), "rebound") {
+		t.Errorf("clause 2 (reset): the text claims a rebind, but on this path the account never moved: %q", reset)
 	}
 	// clause 5
 	if strings.Contains(swap, "@") {
@@ -915,193 +922,14 @@ func TestContractResumeLogicApplyIsPure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// selectRescueTarget's mainEmail source and DUAL exclusion
+// Retired with Q2: selectRescueTarget's dual exclusion, and the post-swap
+// usage-pass kick
 // ---------------------------------------------------------------------------
 //
-// selectRescueTarget is exercised through rescueLimitedCell, which is where it
-// runs and the only place its inputs are observable: the selectTarget seam
-// sees the mainEmail it chose and the pool it built.
-
-// contractResumeLogicPoolSeen runs one rescueLimitedCell against the wired
-// snapshot and returns what selectTarget was handed.
-func contractResumeLogicPoolSeen(t *testing.T, slug string) (pool []string, mainEmail string) {
-	t.Helper()
-	var gotPool []string
-	var gotMain string
-	selectTarget = func(accts []core.AccountUsage, m string, _ int64) (string, string) {
-		gotMain = m
-		for _, a := range accts {
-			gotPool = append(gotPool, a.Slug)
-		}
-		return "slot-c", ""
-	}
-	swapMain = func(string) (string, string, error) { return "whoever@x.com", "c@x.com", nil }
-
-	if _, outcome, err := rescueLimitedCell(&Job{Slug: slug}, contractResumeLogicNow); err != nil || outcome != "swapped" {
-		t.Fatalf("rescueLimitedCell = (%q, %v), want (\"swapped\", nil)", outcome, err)
-	}
-	sort.Strings(gotPool)
-	return gotPool, gotMain
-}
-
-// TestContractResumeLogicTargetSelectionUsesTheLiveIdentity: mainEmail comes
-// from the mainIdentityEmail seam when it returns non-empty. The snapshot is a
-// poll behind by construction — the previous rescue's own swap rewrote
-// ~/.claude.json and the snapshot still names the account before it — so
-// selecting against the stale email aims the exclusion at the wrong row.
-func TestContractResumeLogicTargetSelectionUsesTheLiveIdentity(t *testing.T) {
-	stubRotation(t)
-	contractResumeLogicSnapshot(t,
-		core.AccountUsage{Slug: "main", Email: "stale-main@x.com"},
-		core.AccountUsage{Slug: "slot-c", Email: "c@x.com"},
-	)
-	contractResumeLogicStubMainIdentity(t, "live-main@x.com")
-
-	_, gotMain := contractResumeLogicPoolSeen(t, "live-identity")
-	if gotMain != "live-main@x.com" {
-		t.Fatalf("selectTarget mainEmail = %q, want the live identity %q, not the snapshot's %q",
-			gotMain, "live-main@x.com", "stale-main@x.com")
-	}
-}
-
-// TestContractResumeLogicTargetSelectionFallsBackToTheSnapshot is the other
-// branch: the snapshot main row's email is the fallback when the seam returns
-// "". core.SelectRotationTarget fails closed on an empty mainEmail, so the
-// fallback is the difference between a stale answer and no rescue at all.
-func TestContractResumeLogicTargetSelectionFallsBackToTheSnapshot(t *testing.T) {
-	stubRotation(t)
-	contractResumeLogicSnapshot(t,
-		core.AccountUsage{Slug: "main", Email: "snapshot-main@x.com"},
-		core.AccountUsage{Slug: "slot-c", Email: "c@x.com"},
-	)
-	contractResumeLogicStubMainIdentity(t, "")
-
-	_, gotMain := contractResumeLogicPoolSeen(t, "fallback-identity")
-	if gotMain != "snapshot-main@x.com" {
-		t.Fatalf("selectTarget mainEmail = %q, want the snapshot main row's %q", gotMain, "snapshot-main@x.com")
-	}
-}
-
-// TestContractResumeLogicPoolExclusionIsDualAndCaseInsensitive is v2's
-// amended exclusion, and the reason it is dual is a two-swap sequence: after
-// A→B the live identity is B, and the pool still holds slot(A) — the save-back
-// mirror of the account that just exhausted itself, carrying a stale-healthy
-// usage row. Excluding only B leaves that row as the top candidate, so the
-// next rescue rotates the machine straight back onto the exhausted account.
-// Excluding only the snapshot's main row (A) leaves B in the pool, which is a
-// self-rotation. Both matches are needed, and both fold case, because the
-// pool, the snapshot and ~/.claude.json are three writers of one string.
-func TestContractResumeLogicPoolExclusionIsDualAndCaseInsensitive(t *testing.T) {
-	stubRotation(t)
-	contractResumeLogicSnapshot(t,
-		// the snapshot still calls A main — it is a poll behind the A→B swap
-		core.AccountUsage{Slug: "main", Email: "exhausted-a@x.com"},
-		// A's save-back mirror, spelled in another case
-		core.AccountUsage{Slug: "slot-a", Email: "Exhausted-A@X.COM"},
-		// the account that is main RIGHT NOW, spelled in another case
-		core.AccountUsage{Slug: "slot-b", Email: "LIVE-B@X.COM"},
-		// a genuine candidate, and one row with no identity at all
-		core.AccountUsage{Slug: "slot-c", Email: "c@x.com"},
-		core.AccountUsage{Slug: "slot-blank", Email: ""},
-	)
-	contractResumeLogicStubMainIdentity(t, "live-b@x.com")
-
-	gotPool, gotMain := contractResumeLogicPoolSeen(t, "dual-exclusion")
-	if !strings.EqualFold(gotMain, "live-b@x.com") {
-		t.Errorf("selectTarget mainEmail = %q, want the live identity (any case)", gotMain)
-	}
-	want := []string{"slot-blank", "slot-c"}
-	if !reflect.DeepEqual(gotPool, want) {
-		t.Fatalf("selectTarget pool = %v, want %v — slot-b is main itself and slot-a mirrors the account that just exhausted; an identity-less row is swept by neither match",
-			gotPool, want)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// rescueLimitedCell's post-swap usage-pass kick (unchanged in v2)
-// ---------------------------------------------------------------------------
-
-// TestContractResumeLogicSwapKicksAUsagePassWithoutBlocking: a "swapped"
-// outcome kicks one pass through the existing single-flight, and the kick must
-// not block the caller. Without the kick the snapshot still names the old
-// account and the NEXT rescue selects against a main that already moved; with
-// a blocking kick the daemon's whole tick waits on a network round-trip inside
-// the rotation lock.
-func TestContractResumeLogicSwapKicksAUsagePassWithoutBlocking(t *testing.T) {
-	stubRotation(t)
-	contractResumeLogicSnapshot(t,
-		core.AccountUsage{Slug: "main", Email: "main@x.com"},
-		core.AccountUsage{Slug: "slot-b", Email: "b@x.com"},
-	)
-	contractResumeLogicStubMainIdentity(t, "main@x.com")
-
-	selectTarget = func([]core.AccountUsage, string, int64) (string, string) { return "slot-b", "" }
-	swapMain = func(string) (string, string, error) { return "main@x.com", "b@x.com", nil }
-
-	kicked := make(chan struct{})
-	release := make(chan struct{})
-	defer close(release) // never leave the stub's goroutine parked
-	var once bool
-	runUsagePass = func() error {
-		if !once {
-			once = true
-			close(kicked)
-		}
-		<-release // still running when rescueLimitedCell must already have returned
-		return nil
-	}
-
-	done := make(chan struct{})
-	var outcome string
-	var err error
-	go func() {
-		_, outcome, err = rescueLimitedCell(&Job{Slug: "kick-pass"}, contractResumeLogicNow)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("rescueLimitedCell did not return while the usage pass was still running — the kick blocks the caller")
-	}
-	if err != nil || outcome != "swapped" {
-		t.Fatalf("rescueLimitedCell = (%q, %v), want (\"swapped\", nil)", outcome, err)
-	}
-
-	select {
-	case <-kicked:
-	case <-time.After(10 * time.Second):
-		t.Fatal("no usage pass was kicked after a swap — the snapshot's idea of main never catches up")
-	}
-}
-
-// TestContractResumeLogicNoSwapKicksNoUsagePass: the kick belongs to the
-// "swapped" outcome, so a tick that swapped nothing must not spend a pass. An
-// unconditional kick would put a network fetch on every quiet rescue tick of
-// every limited cell.
-func TestContractResumeLogicNoSwapKicksNoUsagePass(t *testing.T) {
-	stubRotation(t)
-	contractResumeLogicSnapshot(t,
-		core.AccountUsage{Slug: "main", Email: "main@x.com"},
-		core.AccountUsage{Slug: "slot-b", Email: "b@x.com"},
-	)
-	contractResumeLogicStubMainIdentity(t, "main@x.com")
-
-	kicks := 0
-	runUsagePass = func() error { kicks++; return nil }
-	selectTarget = func([]core.AccountUsage, string, int64) (string, string) { return "", "nobody eligible" }
-	swapMain = func(string) (string, string, error) {
-		t.Error("swapMain was called with no target selected")
-		return "", "", nil
-	}
-
-	_, outcome, err := rescueLimitedCell(&Job{Slug: "no-kick"}, contractResumeLogicNow)
-	if err != nil || outcome != "no-target" {
-		t.Fatalf("rescueLimitedCell = (%q, %v), want (\"no-target\", nil)", outcome, err)
-	}
-	// the kick is asynchronous, so give a stray goroutine a moment to land
-	time.Sleep(200 * time.Millisecond)
-	if kicks != 0 {
-		t.Fatalf("runUsagePass was called %d times for a tick that swapped nothing", kicks)
-	}
-}
+// Both sections tested a rescue that swapped the machine's main login. It
+// does not: rescueLimitedCell rebinds ONE job row (selectRescueBind →
+// decideBind → core.SelectBindTarget), so there is no main identity to
+// exclude on the machine's behalf, no save-back mirror created, and no
+// account whose usage a fresh snapshot would need to catch up to. The
+// selection rules that replaced them are the binder's own and are exercised
+// against decideBind directly.

@@ -187,6 +187,7 @@ payload, so a client sees exactly what it has always seen.
 | `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive carl's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
 | `goal` | object (`{"id": number, "text": string, "done": bool}`) | omitempty | the job's PRIMARY goal — durably `goals[0]`, the head of the array below, present under exactly the same condition and never on its own. Retained beside `goals` so a client that predates multi-goal links keeps rendering one goal rather than none. Additive, no contract bump. Modeled in the iOS app as `WebJobGoal` on `WebJob` |
 | `goals` | array (`[{"id": number, "text": string, "done": bool}]`) | omitempty | EVERY goal this job links (`job_goals`), in link-position order, present exactly when it links at least one — each from ANY period and done or not, so a job carried over from last week still names the goals it belongs to. Written only by `POST /api/job/goal` (below), never by `saveform`: the link is deliberately absent from the job form's field set, so a full form save cannot touch it. Additive, no contract bump. Modeled in the iOS app as `WebJobGoalList` on `WebJob` (a wrapper struct, because its decode is hand-written) and rendered as ONE card chip per goal (`GoalChip`, GoalsDrawer.swift) — `◎` plus the goal text truncated by the same 24-character rule web's `goalChipText` uses, muted when `done`, full text in the accessibility label since a phone has no tooltip; no `+N` badge for the rest, the chips wrap. That decode is tolerant in two places, since chips are cosmetic and the board is not: a `goals` that is not an array degrades to an empty list, and a malformed ELEMENT is dropped while the rest survive |
+| `account` | object (`{"slug": string, "email": string, "at": number}`) | omitempty | the pool slot this cell is BOUND to (schema v28's three `jobs` columns) — the login every claude in the cell bills, delivered to its panes as `CLAUDE_SECURESTORAGE_CONFIG_DIR=~/.claude-pool/<slug>` and stamped at spawn (rebound in place by the limit rescue). `slug` is the slot directory name and is the same key `/api/usage`'s account rows carry, so a client joins the two on it and never on the email; `email` may be `""` for a slot ccp has no identity for yet; `at` is unix MILLIS of the bind stamp. **Absence is the wire's only spelling of UNBOUND** — the cell runs on the machine's main login exactly as every cell did before per-cell binding — and it covers two live states no client separates (the pool was dry or fully excluded at spawn; rotation is pinned `manual`, where kraken takes no account decision at all) plus a third, ARCHIVED: **withheld on archived jobs regardless of whether a binding exists**, which is `load`'s call rather than `tokens`' and for `load`'s reason — a card with no cell is not spending on anything, so the badge would answer a question it cannot pose. The columns survive archival and the key returns on unarchive. Served on every active bound job whatever its display state, so the key never flickers as a card moves column; the live-cards-only rule is a RENDERING rule the clients apply, not a payload rule. Additive, no contract bump. Rendered on web as one card chip (`AccountChip` — `⬢` plus the email's LOCAL PART, falling back to the slug, full address + slot + bind age in `title`/`aria-label`) and as the steer modal's read-only `.steer-account` section (bound-to, bind age, and that slot's session/Fable bars joined from the 60s `/api/usage` poll — no bars at all when the poll carries no row for it, never a fabricated percentage). Modeled in the iOS app as `WebJobAccount` on `WebJob`, **decode-only** this pass — nothing on the phone renders it yet. That decode is TOLERANT, the same way `goals` above is and for the same reason: `WebBoard.jobs` is a strictly decoded array, so a throw inside one job's `account` would take the entire board payload with it, and a cosmetic badge must never cost the board it is drawn on. A present-but-MALFORMED object (a retyped `slug`, a future server, a hand-edited response) degrades to nil — the card silently loses its badge — rather than failing the decode; absent and null are a different case absorbed one level up. `slug` stays required inside the object precisely so a malformed one is detectable: an object with no slug names no account at all |
 
 `goal` and `goals` (`webJobGoal`) are a THREE-key projection of the goal row,
 not the whole `goal` object `/api/goals` serves: a card renders the goal's
@@ -2330,10 +2331,14 @@ always `[]`, never `null`.
 
 ### `POST /api/account/switch` → `accountSwitchResp` (account.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
 
-Manually switch the main Claude login to a `~/.claude-pool` slot — always
-executes regardless of usage thresholds (unlike the auto rotation gate), and
-pins rotation to `"manual"` on success (see `jobs.RotationState` / `k
-account`). Additive, no contract bump.
+Manually switch the main Claude login to a `~/.claude-pool` slot. Since
+per-cell binding retired the spawn-time rotation gate, this route and its CLI
+twin `k account <slug>` are the ONLY things that change the machine-wide login
+at all — no automation swaps main any more, not at spawn and not on a usage
+limit (the limit rescue rebinds the one affected cell instead). So it always
+executes regardless of usage thresholds, there being no automatic threshold
+left to be unlike, and it pins rotation to `"manual"` on success (see
+`jobs.RotationState` / `k account`). Additive, no contract bump.
 
 Request:
 
@@ -2358,9 +2363,15 @@ target slot needs `ccp login`). All error bodies are the generic
 
 ### `POST /api/account/mode` → `accountModeResp` (account.go) — web-UI-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
 
-Sets rotation mode without swapping main — `"manual"` pins (parity with the
-CLI's `k account auto`/manual-switch semantics and the web UI's banner
-toggle), `"auto"` re-enables the rotation gate. Additive, no contract bump.
+Sets rotation mode without swapping main. The mode no longer governs anything
+that swaps the machine-wide login — nothing does that automatically any more —
+it governs PER-CELL ACCOUNT BINDING: `"auto"` arms the binder, so every cell
+spawn picks the emptiest eligible `~/.claude-pool` slot and stamps it on the
+job (`webJob.account`), and the daemon's limit rescue rebinds one exhausted
+cell to a fresh slot. `"manual"` pins: kraken takes no account decision at all,
+new cells spawn UNBOUND in the main lane, and the rescue parks rather than
+rebinding — parity with the CLI's `k account auto`/manual-switch semantics and
+the web UI's banner toggle. Additive, no contract bump.
 
 Request:
 

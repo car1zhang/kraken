@@ -55,7 +55,7 @@ const maxVenvDepth = 4
 // explicit --untracked-files=normal keeps a status.showUntrackedFiles=no in
 // anyone's git config from silently blinding the one check whose entire value
 // is that it cannot be wrong. Package-level var so tests can stub the git
-// call (rotationGate's pattern).
+// call (bindGate's pattern).
 var gitUntracked = func(wt string, rels []string) ([]string, error) {
 	args := append([]string{"-C", wt, "status", "--porcelain", "-z", "--untracked-files=normal", "--"}, rels...)
 	out, err := exec.Command("git", args...).Output()

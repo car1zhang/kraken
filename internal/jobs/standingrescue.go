@@ -688,7 +688,7 @@ func (d *daemonState) standingHealthPass(a standingAgent, st *store.Store, all [
 			// id the rescue's kill authorization is checked against, and a
 			// guessed one recorded here would authorize killing whatever pane
 			// the guess happened to land on.
-			if _, err := recordLimitHitByKey(standingHitKey(a.ID), a.ID, "rate_limit", reason, recorded, "", now); err != nil {
+			if _, err := recordLimitHitByKey(standingHitKey(a.ID), a.ID, "", "rate_limit", reason, recorded, "", now); err != nil {
 				dlogErr("%s: record usage-limit hit from transcript failed: %v", a.ID, err)
 			} else {
 				d.Notified[lkey] = now.Unix()

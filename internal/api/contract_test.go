@@ -340,6 +340,60 @@ var webJobSpec = map[string]fieldSpec{
 	// retained because every shipped iOS build reads it. Present under exactly
 	// the same condition as "goals": the two appear and vanish together.
 	"goal": {kind: wireObject, required: false},
+	// The pool slot this cell is BOUND to (schema v28's three columns) — the
+	// login every claude in the cell bills. Omitempty, and absence is the
+	// wire's ONLY spelling of "unbound", which covers two states the wire
+	// deliberately does not separate because a client renders both the same
+	// way: the pool was dry or fully excluded at spawn, and rotation pinned
+	// manual (where kraken takes no account decision at all). A third absence
+	// is ARCHIVED — archivedWebJob withholds the key, Load's call rather than
+	// Tokens', since a card with no cell cannot pose the question the badge
+	// answers. Served on every active job whatever its display state, so the
+	// key never flickers as a card moves column; the working/blocked gate is a
+	// RENDERING rule the clients apply. Additive, so it never bumps
+	// apiContract; listed here because assertShape rejects any key the spec
+	// doesn't document.
+	"account": {kind: wireObject, required: false},
+}
+
+// webJobAccountSpec covers board.go's webJobAccount — webJob's "account"
+// object. Every key is required: the type carries no omitempty anywhere,
+// because each is a real answer at its zero value — an empty "email" is a slot
+// ccp has no identity for, and a zero "at" is a binding written without a
+// stamp. Absence is expressed by the "account" key itself being gone
+// (webJobSpec above marks it optional), never by a missing field.
+//
+// There is no "dir" key on purpose: the slot directory is
+// `core.PoolDir()/<slug>` and is derived exactly once, where the spawn command
+// is built — a second spelling of it on the wire is the first step toward two
+// paths that can disagree, the same argument webJobLoadSpec makes for refusing
+// a stored "roi".
+var webJobAccountSpec = map[string]fieldSpec{
+	"slug":  {kind: wireString, required: true},
+	"email": {kind: wireString, required: true},
+	"at":    {kind: wireNumber, required: true},
+}
+
+func TestWebJobAccountWireShape(t *testing.T) {
+	// A DEGRADED binding — a slot ccp has no identity for, written with no
+	// stamp. Both keys must still ride, which is the whole difference between
+	// this and no "account" key at all: the object says "this cell is bound to
+	// dorisexplorer4" whatever else it does or does not know, and a client that
+	// read absence off a missing "email" would report an account-less cell that
+	// is in fact spending on one.
+	data, err := json.Marshal(webJobAccount{Slug: "dorisexplorer4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webJobAccount (identity-less slot)", data, webJobAccountSpec)
+
+	data, err = json.Marshal(webJobAccount{
+		Slug: "dorisexplorer4", Email: "dorisexplorer4@gmail.com", At: 1769040000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webJobAccount (populated)", data, webJobAccountSpec)
 }
 
 // webTokensSpec covers board.go's webTokens, webJob's "tokens" object — one
@@ -1154,6 +1208,11 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		},
 		Load: &webJobLoad{Unblock: 2, Scope: 8, Note: "one decision: which store keys the row", At: 1769040000000},
 		Goal: &webJobGoal{ID: 3, Text: "ship goal tracking", Done: false},
+		// Present here so the "account" entry in webJobSpec is actually
+		// EXERCISED: assertShape rejects any key the spec does not document, so
+		// a fixture that omitted this would leave the registration passing
+		// whether or not it existed.
+		Account: &webJobAccount{Slug: "dorisexplorer4", Email: "dorisexplorer4@gmail.com", At: 1769040000000},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {

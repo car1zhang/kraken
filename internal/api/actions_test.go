@@ -120,7 +120,7 @@ func TestWebSteerEmptyMessage(t *testing.T) {
 
 // useSubmitSeam swaps submitJobFn for the duration of one test and returns
 // the recorder. Without it every case below would need a git worktree, a
-// tmux server and the rotation gate.
+// tmux server and the account binder.
 func useSubmitSeam(t *testing.T, err error) *[]string {
 	t.Helper()
 	var got []string
