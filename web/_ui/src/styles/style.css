@@ -110,8 +110,10 @@
      cmdHighlightHTML/attachCmdChips) — each gets a glow pair mirroring
      --glow/--text-glow above. The five chips sit side by side, so dream takes
      violet: the four before it are blue/red/yellow/green, and violet is the
-     one remaining hue with real separation from all of them. It doubles as
-     the DREAM view's own accent. */
+     one remaining hue with real separation from all of them. Command surfaces
+     only (the highlight backdrop and the chips): the DREAM view and its tab
+     follow the shared --ac like the rest of the board (carl asked for the
+     view's violet to go). */
   --skill-info: #5EA8FF; --skill-info-soft: #102A45;
   --skill-aim: #FF6B6B; --skill-aim-soft: #3A1414;
   --skill-do: #F5D34D; --skill-do-soft: #332B0E;
@@ -581,14 +583,6 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
 }
 .viewtab:hover:not(.active) { color: var(--fg); border-color: var(--border-strong); }
-/* DREAM wears its skill color when active — the /dream chip, the report
-   accents and this tab are the one surface family, and the violet is the
-   cheapest way to say "this view belongs to the nightly loop, not the
-   board". Every other tab keeps the shared --accent. */
-.viewtab[data-view="dream"].active {
-  background: var(--skill-dream); color: var(--bg-board);
-  border-color: var(--skill-dream); text-shadow: none;
-}
 /* chrome control buttons sit at STAT-SEGMENT scale, never at tab scale: they
    are secondary to the tabs and the mockup set sizes them so deliberately
    (carl's compact-controls note). .upd shares this block — see below. */
@@ -2700,8 +2694,9 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 
 /* ---- DREAM view (see the DREAM section in app.js) ----
    Two independently-scrolling panes at the log view's height: the night-by-
-   night reports on the left, the open watchlist on the right. --skill-dream
-   is the accent throughout, tying the view to its /dream chip and tab. */
+   night reports on the left, the open watchlist on the right. The view wears
+   the shared --ac like the rest of the board; /dream's skill violet stays on
+   the command highlight and chips (carl asked for the view's violet to go). */
 
 .dreamview {
   height: calc(100vh - 64px);
@@ -2714,7 +2709,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   font: 600 10px var(--display); letter-spacing: 0.2em; text-transform: uppercase;
   color: var(--muted); padding-bottom: 10px;
 }
-.dream-panehdr .ct { color: var(--skill-dream); letter-spacing: 0.1em; }
+.dream-panehdr .ct { color: var(--ac); letter-spacing: 0.1em; }
 .dream-scroll {
   flex: 1; min-height: 0; overflow-y: auto;
   background: color-mix(in srgb, var(--ac) 3%, var(--b1));
@@ -2732,10 +2727,10 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   padding: 8px 10px; text-align: left; color: var(--body); font-size: 10px;
 }
 .rep-h:hover { background: color-mix(in srgb, var(--ac) 12%, var(--b1)); color: var(--fg); }
-.rep-h .tri { color: var(--skill-dream); font-size: 9px; flex: none; }
+.rep-h .tri { color: var(--ac); font-size: 9px; flex: none; }
 .rep-h .d { font: 600 11px var(--mono); color: var(--fg); flex: none; }
 .rep-h .sum { font: 9px var(--mono); color: var(--muted); flex: none; }
-.rep.open { border-color: color-mix(in srgb, var(--skill-dream) 45%, var(--b1)); }
+.rep.open { border-color: color-mix(in srgb, var(--ac) 45%, var(--b1)); }
 /* section counts pulled out of the report body (dreamSectionCount) — the
    header has to say whether a night was worth opening */
 .rep-tag {
@@ -2747,10 +2742,9 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .rep-tag.judge { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 45%, transparent); }
 .rep-b { padding: 8px 12px 12px; border-top: 1px solid var(--divider); }
 /* the report is markdown rendered by renderMD, so it arrives wearing .md —
-   only the h1 accent is retuned, to the view's own violet */
-.rep-b.md h1 { color: var(--skill-dream); }
-.rep-b.md blockquote { border-left-color: var(--skill-dream); color: var(--fg); font-style: italic; }
-.rep-b.md th { background: color-mix(in srgb, var(--skill-dream) 10%, var(--b1)); }
+   the base .md accents apply as-is; the blockquote alone is retuned, and for
+   legibility rather than accent: --fg over the base's --muted, plus italics */
+.rep-b.md blockquote { color: var(--fg); font-style: italic; }
 
 /* ---- watchlist rows: the loop's one inbound channel ---- */
 .wl { border: 1px solid var(--border); background: color-mix(in srgb, var(--ac) 2%, var(--b0)); font-size: 10px; }
@@ -2814,7 +2808,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 /* ---- GRAPH view (see 40-ui-graph-view.html) ----
    A filter rail, the sigma canvas, and an inspector, at the log/dream view's
    height. --skill-graph is the accent throughout, tying the view to its
-   /graph chip and tab exactly as --skill-dream ties the DREAM view to its own.
+   /graph chip.
    Everything here is namespaced `graph-`: the mockup's own class names (.rail,
    .stat, .fact, .pill, .desc, .canvas) are generic enough to collide with the
    board's. */

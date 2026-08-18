@@ -16,7 +16,7 @@ export function stageChipVisible(job: WebJob): boolean {
 /**
  * One glyph per pipeline skill, paired with the skill's own palette colour
  * (`.st-chip-<stage>` in style.css aliases `--skill-<stage>`, the same skill
- * palette the steer modal's cmd-chips and the DREAM/GRAPH views wear) so a
+ * palette the steer modal's cmd-chips and the GRAPH view wear) so a
  * column of stage badges sorts by eye — the argument LoadChip's colour bands
  * make for the blocked column. The iOS StageChip carries the SF Symbol
  * sibling of each glyph; the two lists move together. `⑂` is the board's
