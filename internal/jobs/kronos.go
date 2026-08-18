@@ -42,11 +42,13 @@ import (
 // carry its own tool-usage section (kronosBrief, below).
 //
 // The SETTINGS kronos runs under are a DIFFERENT set from a cell's
-// (installKronosSettings): no pr-hook (kronos opens no PRs), no limit-hook (it
-// is not a cell the rescue can respawn), no agent-teams keys (it delegates
-// nothing), plus two of its own — a PostCompact hook that re-arms graph recall
-// for the compacted session, and a statusLine that reports its own context
-// fill back to kraken.
+// (installKronosSettings): no pr-hook (kronos opens no PRs), no agent-teams
+// keys (it delegates nothing), plus two of its own — a PostCompact hook that
+// re-arms graph recall for the compacted session, and a statusLine that
+// reports its own context fill back to kraken. The limit-hook it DOES get,
+// with an --agent id where a cell's carries a slug: kronos burns the same one
+// Claude login every cell does, and an exhausted account leaves it just as
+// dead in a pane nobody is watching.
 
 // KronosSessionName is the tmux session kronos lives in, and the single fact
 // EnsureKronos gates on: present in LiveSessions() means kronos exists (or is
@@ -401,6 +403,28 @@ func kronosCtxHookCommand(krakenBin string) string {
 	return krakenBin + " ctx-hook" + hookCommandFlags()
 }
 
+// kronosLimitHookCommand is the cell limit-hook command with the slug replaced
+// by kronos' agent id. kronos has no job, so there is no slug to bake in — and
+// the id is what the route keys the record on (standingHitKey), which is the
+// whole reason the flag exists rather than a slug that names nothing.
+//
+// Built with the same hookCommandFlags run its siblings carry, for the
+// family's standing reason: this runs as a brand new OS process spawned by
+// Claude Code, inheriting none of kraken serve's flags or environment, so a
+// non-default --serve-addr has to be baked into the string itself. On a
+// default machine the run is empty and the command is exactly
+// `<bin> limit-hook --agent kronos`.
+// The id is spelled out rather than taken from KronosSessionName or
+// KronosAgentName, which happen to hold the same word: what belongs here is
+// the STANDING AGENT id the record is keyed on (standingAgentIDs). The read
+// side builds its descriptor ids from those same constants, so the spelling
+// alone would not survive a rename — what actually holds the two ends
+// together is the pin in standingrescue_contract_test.go asserting
+// standingAgents()' ids equal standingAgentIDs()' verbatim.
+func kronosLimitHookCommand(krakenBin string) string {
+	return krakenBin + " limit-hook" + hookCommandFlags() + " --agent kronos"
+}
+
 // kronosRecallHookCommand is the cell recall command with the slug dropped.
 // recallHookCommand always renders a trailing slug argument, and kronos has no
 // job — RunRecallHook takes the slug variadically and an absent one is legal,
@@ -431,6 +455,14 @@ const kronosRearmHookMarker = "rearm-hook"
 // and is deliberately out of scope here.
 const kronosBashLintMarker = "bash-lint"
 
+// kronosLimitHookMarker does the same for kronos' StopFailure entry, which is
+// REPLACE-merged like all three of its siblings and for the identical reason:
+// the command embeds the resolved binary path (and hookCommandFlags' address),
+// so append-if-absent would leave a stale entry beside a fresh one — here a
+// hook pointing at a deleted scratch binary, which is the one entry whose
+// silent failure means an exhausted kronos is never rescued at all.
+const kronosLimitHookMarker = "limit-hook"
+
 // withoutKronosRearmHooks is withoutRecallHooks for the PostCompact group, and
 // it exists because the rearm command has exactly the property that made the
 // recall entries replace-merged rather than append-if-absent: it embeds
@@ -456,6 +488,12 @@ func withoutKronosBashLint(groups []any) []any {
 	return withoutKronosHookVerb(groups, kronosBashLintMarker)
 }
 
+// withoutKronosLimitHook is the same removal for the StopFailure entry — see
+// kronosLimitHookMarker.
+func withoutKronosLimitHook(groups []any) []any {
+	return withoutKronosHookVerb(groups, kronosLimitHookMarker)
+}
+
 // withoutKronosHookVerb is the shared body. One function rather than two copies
 // because the two differ only in the verb, and a rule about which of kraken's
 // own entries get replaced is one rule.
@@ -476,6 +514,23 @@ func kronosRearmHookEntry(krakenBin string) map[string]any {
 			map[string]any{
 				"type":    "command",
 				"command": kronosRearmHookCommand(krakenBin),
+			},
+		},
+	}
+}
+
+// kronosLimitHookEntry is the StopFailure group, shaped exactly like a cell's
+// limitHookEntry: the matcher is "rate_limit" because that is the value Claude
+// Code puts in the payload's `error` field for every branch of its HTTP-429
+// handler, and a StopFailure matcher matches on that value rather than on a
+// tool name.
+func kronosLimitHookEntry(krakenBin string) map[string]any {
+	return map[string]any{
+		"matcher": "rate_limit",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": kronosLimitHookCommand(krakenBin),
 			},
 		},
 	}
@@ -514,15 +569,20 @@ func kronosRecallHookEntry(krakenBin string) map[string]any {
 //     graph recall has already delivered into, so the once-per-session facts
 //     kg_recall is suppressing are facts kronos no longer has. Clearing that
 //     session's recall rows is what lets them arrive again.
+//   - limit-hook, under StopFailure, REPLACE-merged like the rest and with a
+//     --agent id where a cell's carries a slug. kronos runs on the same one
+//     Claude login every cell does, so an exhausted account stops it exactly
+//     as dead — and nobody is watching this pane either. The hook is the FAST
+//     trigger for the standing rescue; the transcript arm covers a kronos
+//     spawned before this entry existed, hours later.
 //   - a statusLine running ctx-hook. This is the only path by which kronos'
 //     own context fill reaches kraken: Claude Code runs the statusline command
 //     with the live session's numbers on stdin, which is a measurement nothing
 //     outside the pane can otherwise take.
 //
-// And three a cell gets that kronos does NOT: pr-hook (kronos opens no PRs),
-// limit-hook (it is not a cell, and the rescue's respawn path has no job to
-// resume it from), and the agent-teams keys (it delegates nothing — a kronos
-// that could spawn teammates would be an orchestrator writing code).
+// And two a cell gets that kronos does NOT: pr-hook (kronos opens no PRs) and
+// the agent-teams keys (it delegates nothing — a kronos that could spawn
+// teammates would be an orchestrator writing code).
 //
 // autoCompactEnabled is deliberately not set either way. Auto-compact is
 // kronos' last-resort safety net and stays at the harness default; the
@@ -566,9 +626,9 @@ func mergeKronosSettings(existing []byte, krakenBin string) ([]byte, error) {
 	if !ok {
 		hooks = map[string]any{}
 	}
-	// All THREE of kronos' hook groups are REPLACE-merged, and there is no
-	// asymmetry left in this function: every one of the three commands embeds
-	// the resolved binary path, which is the component that actually varies
+	// EVERY one of kronos' hook groups is REPLACE-merged, and there is no
+	// asymmetry left in this function: each of their commands embeds the
+	// resolved binary path, which is the component that actually varies
 	// between the launchd daemon and a scratch build (see kronosBashLintMarker).
 	//
 	// Reading each existing value with a failed type assertion rather than a
@@ -581,6 +641,8 @@ func mergeKronosSettings(existing []byte, krakenBin string) ([]byte, error) {
 	hooks["PreToolUse"] = append(withoutKronosBashLint(preToolUse), bashLintHookEntry(krakenBin))
 	postCompact, _ := hooks["PostCompact"].([]any)
 	hooks["PostCompact"] = append(withoutKronosRearmHooks(postCompact), kronosRearmHookEntry(krakenBin))
+	stopFailure, _ := hooks["StopFailure"].([]any)
+	hooks["StopFailure"] = append(withoutKronosLimitHook(stopFailure), kronosLimitHookEntry(krakenBin))
 	for _, event := range recallHookEvents {
 		groups, _ := hooks[event].([]any)
 		// A fresh entry per event rather than one shared map: one shared entry

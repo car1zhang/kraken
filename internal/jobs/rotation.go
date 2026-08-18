@@ -211,6 +211,13 @@ var (
 	// successful-rotation test doesn't kick off a real network usage pass in
 	// the background.
 	runUsagePass = UsagePass
+	// standingRespawn is the standing-agent rescue's resume half —
+	// respawnPeerPane's sibling for the agents that belong to no job (kronos,
+	// iris): kill the agent's whole tmux session and bring it back through
+	// its own Ensure*. The body lives in standingrescue.go with the rest of
+	// the standing machinery; the seam lives HERE for this block's stated
+	// reason — one place to swap in a test.
+	standingRespawn = standingKillAndRespawn
 )
 
 // acquireRotationLock takes the cross-process single-flight guard at
@@ -473,6 +480,24 @@ func RotationGate(trigger string) {
 		notifyDeduped("rotation:swap-failed:"+cause, "kraken ⚠ account rotation", msg)
 		dlogEvent("error", "rotation-failed", "rotation gate (%s): swap to %s failed: %v", trigger, target, swapErr)
 		return
+	}
+
+	// Stamped inside the lock, immediately after the swap committed and before
+	// the deferred release: this gate moves the ONE login every claude on the
+	// machine shares, so a cell or a standing agent already parked on a usage
+	// limit has just had its repair performed for it (limitrescue.go's
+	// adoptLandedSwap is the reader). Without the stamp that owner's next tick
+	// still reads SwappedAt == 0 and swaps a SECOND account for a limit this
+	// swap already cleared. Logged and carried on when it fails — the account
+	// really did move, and there is nothing here worth failing a completed
+	// swap over. The stamp's clock is a FRESH read rather than this gate's own
+	// `now`, which was captured before the usage fetch and the keychain write:
+	// adoptLandedSwap tests `swapAt >= hit.At`, and the gate rotates exactly
+	// when running claudes are 429-ing, so a stamp that predates the commit by
+	// those seconds would refuse adoption to the very herd of hits the swap
+	// just repaired.
+	if stampErr := recordMainSwap(to, time.Now()); stampErr != nil {
+		dlogEvent("error", "rotation-failed", "rotation gate (%s): swapped to %s but recording the main-swap watermark failed: %v", trigger, to, stampErr)
 	}
 
 	notifyFn("kraken ⇄ rotated main", fmt.Sprintf("%s → %s (%s)", from, to, reason))

@@ -13,13 +13,15 @@ import (
 	"kraken/internal/core"
 )
 
-// limithook.go — `kraken limit-hook <slug>`, wired as a Claude Code
-// StopFailure hook in each cell's worktree (cell.go's mergeHookSettings
-// writes the entry, matcher "rate_limit"). It is the detection half of the
-// mid-run usage-limit rescue: when a claude in the cell dies on a usage
-// limit, Claude Code fires this hook, and this verb reports the failure to
-// kraken serve so the daemon can swap the main login to a healthier pool
-// account without anyone watching the pane.
+// limithook.go — `kraken limit-hook <slug>` and its standing-agent sibling
+// `kraken limit-hook --agent <id>`, wired as a Claude Code StopFailure hook
+// in each cell's worktree (cell.go's mergeHookSettings writes the entry,
+// matcher "rate_limit") and in kronos' own settings (kronos.go's
+// mergeKronosSettings). It is the detection half of the mid-run usage-limit
+// rescue: when a claude dies on a usage limit, Claude Code fires this hook,
+// and this verb reports the failure to kraken serve so the daemon can swap
+// the main login to a healthier pool account without anyone watching the
+// pane.
 //
 // The payload shapes below follow the SHIPPING binary rather than the
 // published hook docs, which disagree: Claude Code 2.1.222 builds a
@@ -42,12 +44,13 @@ import (
 // kraken serve (the sole writer) records.
 //
 // This file holds BOTH sides of that hop, which is why the ActiveStore()
-// calls below do not contradict the sentence above. LimitHook and
-// parseLimitPayload run in the cell, in a process spawned by Claude Code,
-// and touch nothing but stdin and one HTTP request. ReadLimitHit,
-// RecordLimitHit and mergeLimitHitDelivery are the server's half: they take
-// a *Job, key on its immutable id, and run only inside kraken serve — the
-// API handler on the way in, the rescue pass on the way out.
+// calls below do not contradict the sentence above. LimitHook,
+// LimitHookAgent and parseLimitPayload run in the reporting process Claude
+// Code spawned, and touch nothing but stdin and one HTTP request.
+// ReadLimitHit, RecordLimitHit, their keyed siblings and
+// mergeLimitHitDelivery are the server's half: they key on a job's immutable
+// id (or a standing agent's fixed id) and run only inside kraken serve — the
+// API handler on the way in, the rescue passes on the way out.
 
 // LimitHit is the per-job record of a usage-limit failure, stored as one kv
 // row (limitHitKey) and folded across the herd of deliveries one limit
@@ -100,6 +103,50 @@ type LimitHit struct {
 // cell came up and perform a real, machine-wide credential swap on evidence
 // from a job that no longer exists.
 func limitHitKey(id int64) string { return "limit_hit:" + strconv.FormatInt(id, 10) }
+
+// --- standing agents ---
+//
+// kronos and iris are the two long-lived claudes kraken owns that are not
+// cells: one tmux session each, one conversation each, no job behind either.
+// They hit the same wall a cell does — one exhausted account stops every
+// process on this Mac — and until this shipped nothing rescued them, because
+// every key, every record and every pass in this feature was keyed on a job
+// id there is no such thing as for them.
+//
+// The two ids are a fixed list rather than anything derived. They name real
+// singletons that exist because kraken spawns them, and a caller that could
+// hand this feature an arbitrary id would be a caller that can make the API
+// route write an unbounded number of kv rows nothing ever reads.
+
+// standingAgentIDs is that list, in a stable order — the standing arm walks
+// it, and its descriptor table (standingAgents) is pinned against it, so the
+// order being fixed is what makes those two comparable at all.
+func standingAgentIDs() []string { return []string{"kronos", "iris"} }
+
+// IsStandingAgentID reports whether id names one of them. Exported because
+// the API route is the one place an id arrives from OUTSIDE this binary (a
+// hook command string kraken itself installed, or a hand-typed POST), and
+// that is exactly where the list has to be closed rather than trusted.
+// Case-sensitive on purpose: the ids are also tmux session names and claude
+// --name values, and "Kronos" is not one of those.
+func IsStandingAgentID(id string) bool {
+	for _, a := range standingAgentIDs() {
+		if a == id {
+			return true
+		}
+	}
+	return false
+}
+
+// standingHitKey is a standing agent's LimitHit key, the same row shape a
+// job's limitHitKey names. The two namespaces cannot collide: a job's key
+// carries the decimal rendering of its int64 id and every standing id is
+// non-numeric, so no job — however its id is renumbered — can ever address
+// "limit_hit:kronos". Which matters for the reason limitHitKey is keyed on an
+// immutable id at all: nothing deletes these rows, and a record read by the
+// wrong owner is a machine-wide credential swap performed on somebody else's
+// evidence.
+func standingHitKey(agentID string) string { return "limit_hit:" + agentID }
 
 // There is deliberately no dedupe-window constant here any more: repeat
 // deliveries of the same error fold for as long as the hit is UNRESOLVED,
@@ -181,19 +228,44 @@ func parseLimitPayload(raw []byte) (errorType, details, sessionID, agentID strin
 // the payload's free text back out — the stderr lines name the slug and the
 // error TYPE only, since `details` is a message kraken doesn't author and a
 // hook's stderr is read back into the transcript.
-func LimitHook(slug string) {
+func LimitHook(slug string) { postLimitHit("slug", slug) }
+
+// LimitHookAgent is `kraken limit-hook --agent <id>`'s body: the same verb for
+// a STANDING agent (kronos, iris), which has no job and so no slug to name
+// itself with. Everything else is LimitHook's contract unchanged — one
+// payload off stdin, one POST, never an exit, never a kraken.db open, and the
+// details already truncated on this side — because the two run in exactly the
+// same place: a short-lived process Claude Code spawned inside the turn that
+// just died.
+//
+// The id is NOT validated here. This side's job is to report; the route is
+// where an id that names nothing is refused, and a hook that decided for
+// itself that its own agent id was unknown would drop a real limit rather
+// than let the server say so.
+func LimitHookAgent(agentID string) { postLimitHit("agent", agentID) }
+
+// postLimitHit is the body both verbs share, parameterised by the ONE thing
+// they differ in: which field of the request names the reporter. Shared
+// rather than copied because every rule in it is a rule about not failing the
+// turn, and a second copy is a second place for one of them to be dropped.
+//
+// label is what the stderr lines name the reporter as. Those lines carry the
+// label and the error TYPE only — never `details`, which is text kraken did
+// not author and which a hook's stderr feeds straight back into the
+// transcript.
+func postLimitHit(idField, label string) {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "limit-hook %s: read stdin: %v\n", slug, err)
+		fmt.Fprintf(os.Stderr, "limit-hook %s: read stdin: %v\n", label, err)
 		return
 	}
 	errorType, details, sessionID, agentID, ok := parseLimitPayload(raw)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "limit-hook %s: unreadable StopFailure payload — nothing recorded\n", slug)
+		fmt.Fprintf(os.Stderr, "limit-hook %s: unreadable StopFailure payload — nothing recorded\n", label)
 		return
 	}
 	body, err := json.Marshal(map[string]string{
-		"slug": slug,
+		idField: label,
 		// truncated HERE, before the POST, not only on the far side: see
 		// limitHookDetailsMax. core.TruncateOneLine also flattens control
 		// characters and newlines, so what goes on the wire is already the
@@ -204,21 +276,21 @@ func LimitHook(slug string) {
 		"agent_id":   agentID,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "limit-hook %s: encode %s: %v\n", slug, errorType, err)
+		fmt.Fprintf(os.Stderr, "limit-hook %s: encode %s: %v\n", label, errorType, err)
 		return
 	}
 	client := http.Client{Timeout: limitHookHTTPTimeout}
 	resp, err := client.Post(ServeBaseURL()+"/api/limit-hit", "application/json", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "limit-hook %s: %s NOT RECORDED (serve unreachable): %v\n", slug, errorType, err)
+		fmt.Fprintf(os.Stderr, "limit-hook %s: %s NOT RECORDED (serve unreachable): %v\n", label, errorType, err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "limit-hook %s: %s NOT RECORDED (serve answered %d)\n", slug, errorType, resp.StatusCode)
+		fmt.Fprintf(os.Stderr, "limit-hook %s: %s NOT RECORDED (serve answered %d)\n", label, errorType, resp.StatusCode)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "limit-hook %s: recorded %s\n", slug, errorType)
+	fmt.Fprintf(os.Stderr, "limit-hook %s: recorded %s\n", label, errorType)
 }
 
 // ReadLimitHit returns j's stored record, or the zero LimitHit when there
@@ -232,11 +304,22 @@ func ReadLimitHit(j *Job) LimitHit {
 	if j == nil {
 		return LimitHit{}
 	}
+	return readLimitHitByKey(limitHitKey(j.ID))
+}
+
+// readLimitHitByKey is that read with the owner reduced to its kv key, which
+// is what lets a standing agent (standingHitKey) and a job (limitHitKey) share
+// one implementation rather than two that drift. Errorless for ReadLimitHit's
+// reasons verbatim — no store, an unset key and a row that no longer parses
+// all read as "no hit", the conservative direction, because the alternative
+// reading of a failed read is a machine-wide account swap performed on no
+// evidence at all.
+func readLimitHitByKey(key string) LimitHit {
 	st := ActiveStore()
 	if st == nil {
 		return LimitHit{}
 	}
-	raw, err := st.GetKV(limitHitKey(j.ID))
+	raw, err := st.GetKV(key)
 	if err != nil || raw == "" {
 		return LimitHit{}
 	}
@@ -338,17 +421,54 @@ func RecordLimitHit(j *Job, errorType, details, sessionID, agentID string, now t
 	if j == nil {
 		return LimitHit{}, fmt.Errorf("record limit hit: no job")
 	}
+	return recordLimitHitByKey(limitHitKey(j.ID), j.Slug, errorType, details, sessionID, agentID, now)
+}
+
+// RecordStandingLimitHit is recordLimitHitByKey for the one caller outside
+// this package: the API route, which is where a standing agent's hook lands.
+// It re-checks the id against the closed list rather than trusting the route
+// to have done it — this is the function that decides which kv key gets
+// written, and an unchecked id here is an unbounded row namespace addressable
+// from a localhost POST.
+//
+// hookAgentID is the payload's own `agent_id` (an in-process subagent's id,
+// usually absent), not the standing agent id: the two are unrelated fields
+// that the StopFailure payload and this feature each happened to call the
+// same thing.
+func RecordStandingLimitHit(agentID, errorType, details, sessionID, hookAgentID string, now time.Time) (LimitHit, error) {
+	if !IsStandingAgentID(agentID) {
+		return LimitHit{}, fmt.Errorf("record limit hit: %q is not a standing agent", agentID)
+	}
+	return recordLimitHitByKey(standingHitKey(agentID), agentID, errorType, details, sessionID, hookAgentID, now)
+}
+
+// recordLimitHitByKey is RecordLimitHit's write with the owner reduced to a
+// kv key plus a LABEL, which appears in the error text and nowhere else — a
+// standing agent has no slug, and an error naming nothing is an error nobody
+// can act on.
+//
+// The read stays as LATE as it can, immediately before the marshal, and the
+// merge decides from THAT read: a read taken earlier leaves a window in which
+// the rescue's own write lands, after which this would put back a struct that
+// predates it and erase SwappedAt — one lost swap stamp is one extra
+// machine-wide credential swap.
+//
+// A missing key is the fresh-record case, not an error. No store wired IS an
+// error, for the reason RecordLimitHit's doc gives: there is nowhere to put
+// the record, and answering success for a delivery nothing will ever act on
+// is how a limit gets lost silently.
+func recordLimitHitByKey(key, label, errorType, details, sessionID, agentID string, now time.Time) (LimitHit, error) {
 	st := ActiveStore()
 	if st == nil {
-		return LimitHit{}, fmt.Errorf("record limit hit for %s: no store wired", j.Slug)
+		return LimitHit{}, fmt.Errorf("record limit hit for %s: no store wired", label)
 	}
-	hit := mergeLimitHitDelivery(ReadLimitHit(j), errorType, details, sessionID, agentID, now)
+	hit := mergeLimitHitDelivery(readLimitHitByKey(key), errorType, details, sessionID, agentID, now)
 	data, err := json.Marshal(hit)
 	if err != nil {
-		return LimitHit{}, fmt.Errorf("record limit hit for %s: %w", j.Slug, err)
+		return LimitHit{}, fmt.Errorf("record limit hit for %s: %w", label, err)
 	}
-	if err := st.SetKV(limitHitKey(j.ID), string(data)); err != nil {
-		return LimitHit{}, fmt.Errorf("record limit hit for %s: %w", j.Slug, err)
+	if err := st.SetKV(key, string(data)); err != nil {
+		return LimitHit{}, fmt.Errorf("record limit hit for %s: %w", label, err)
 	}
 	return hit, nil
 }

@@ -549,10 +549,12 @@ func TestEdgeKronosBriefStaysLean(t *testing.T) {
 // --- installKronosSettings --------------------------------------------------
 
 // TestEdgeInstallKronosSettingsExcludesCellOnlyEntries: kronos is not a cell.
-// It has no repo, no branch and no PR, so pr-hook has nothing to watch;
-// limit-hook belongs to the per-job limit rescue and would file a hit against
-// a job id that does not exist; and the agent-teams keys would let kronos
-// spawn a crew, which is not a capability it is granted anywhere.
+// It has no repo, no branch and no PR, so pr-hook has nothing to watch, and
+// the agent-teams keys would let kronos spawn a crew, which is not a
+// capability it is granted anywhere. The limit-hook is NOT on this list any
+// more: it is installed in its --agent form, which files the hit under
+// kronos' own standing-agent key rather than against a job id that does not
+// exist.
 func TestEdgeInstallKronosSettingsExcludesCellOnlyEntries(t *testing.T) {
 	edgeKronosEnv(t)
 	dir := edgeKronosStageDir(t)
@@ -566,7 +568,6 @@ func TestEdgeInstallKronosSettingsExcludesCellOnlyEntries(t *testing.T) {
 	body := string(raw)
 	for _, forbidden := range []string{
 		"pr-hook",
-		"limit-hook",
 		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 		"teammateMode",
 		"autoCompactEnabled",
