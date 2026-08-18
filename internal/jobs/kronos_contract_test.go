@@ -554,9 +554,10 @@ func contractKronosAnyContains(list []string, sub string) bool {
 // NOT a cell, so the cell's hook set is the wrong set. It needs the graph
 // (both recall hooks), the shell guard (bash-lint), the re-arm that keeps
 // recall useful across a compaction, and the statusline that feeds the context
-// sentinel — and it must NOT carry the pr-hook (there is no PR), the
-// limit-hook (there is no cell to rescue), or the agent-teams keys (kronos
-// delegates to nobody).
+// sentinel — and it must NOT carry the pr-hook (there is no PR) or the
+// agent-teams keys (kronos delegates to nobody). The limit-hook it DOES carry
+// now, in its --agent form: kronos burns the same one Claude login a cell
+// does, so the standing rescue needs the same fast trigger.
 func TestContractKronosSettingsCarryExactlyTheIntendedHooks(t *testing.T) {
 	useTestStore(t)
 	dir := t.TempDir()
@@ -593,7 +594,7 @@ func TestContractKronosSettingsCarryExactlyTheIntendedHooks(t *testing.T) {
 		t.Errorf("statusLine = %s, want it running %s ctx-hook", top["statusLine"], bin)
 	}
 
-	for _, banned := range []string{"pr-hook", "limit-hook", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "teammateMode", "autoCompactEnabled"} {
+	for _, banned := range []string{"pr-hook", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "teammateMode", "autoCompactEnabled"} {
 		if strings.Contains(raw, banned) {
 			t.Errorf("settings carry %q, which kronos' directory must not have:\n%s", banned, raw)
 		}

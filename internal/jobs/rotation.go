@@ -173,17 +173,25 @@ func rotationLockPath() string {
 // runUsagePass is KickUsagePass's (usage.go), which the account API calls
 // after a manual switch.
 //
-// The three that used to sit at the top of this block — fetchMainUsage,
-// selectTarget and swapMain — went with Q2. The rescue rebinds ONE cell now
-// instead of swapping the machine's login, so nothing here fetches main's
-// usage, ranks a rotation target, or swaps. Keeping swapMain as a
-// "never called" sentinel was the wrong shape twice over: an unreferenced
-// package var is dead code, and TestRetirementNoAutomatedMainSwap asserts
-// the stronger property statically — core.SwapMainTo may be NAMED only by
-// its own package and the two manual switch surfaces (`k account <slug>`,
-// POST /api/account/switch), both of which call it directly rather than
-// through this package. ---
+// fetchMainUsage went with Q2's rotation gate — nothing here fetches main's
+// usage any more, since no spawn-time decision needs it. selectTarget and
+// swapMain SURVIVE, but with exactly one consumer left: rescueSwap, the
+// STANDING-agent rescue's swap half (standingrescue.go). Kronos and iris are
+// main's own tenants — they have no job row to bind, their limit evidence IS
+// main's exhaustion, and moving main for them displaces only the lane they
+// live on — so theirs is the one automated main swap that outlives Q2. The
+// CELL rescue rebinds one job row instead (rescueLimitedCell) and can reach
+// neither seam; TestRetirementNoAutomatedMainSwap pins where core.SwapMainTo
+// may be named. ---
 var (
+	// selectTarget ranks a machine-level rotation target for the standing
+	// rescue's swap half — core.SelectRotationTarget unchanged. Not used by
+	// any cell path: cells select through core.SelectBindTarget.
+	selectTarget = core.SelectRotationTarget
+	// swapMain is the machine-wide login swap the standing rescue performs —
+	// core.SwapMainTo unchanged (journal, save-back, rollback all live
+	// there). A seam so rescueSwap is exercisable without a real keychain.
+	swapMain = core.SwapMainTo
 	notifyFn = notify
 	// respawnPeerPane is the limit rescue's resume half — kill the claude in
 	// ZEUS' pane (the rescue's only target) and bring its session back on
@@ -202,6 +210,13 @@ var (
 	// runUsagePass defaults to the real UsagePass; swapped out in tests so
 	// nothing here kicks off a real network usage pass in the background.
 	runUsagePass = UsagePass
+	// standingRespawn is the standing-agent rescue's resume half —
+	// respawnPeerPane's sibling for the agents that belong to no job (kronos,
+	// iris): kill the agent's whole tmux session and bring it back through
+	// its own Ensure*. The body lives in standingrescue.go with the rest of
+	// the standing machinery; the seam lives HERE for this block's stated
+	// reason — one place to swap in a test.
+	standingRespawn = standingKillAndRespawn
 )
 
 // acquireRotationLock takes the cross-process single-flight guard at
@@ -217,13 +232,13 @@ var (
 // unavailable: <err>" — one blended message sends users hunting a phantom
 // rotation instead of a filesystem problem.
 //
-// What it now guards is exactly TWO callers, and nothing else in the binary
-// takes it: `k account <slug>` and POST /api/account/switch, the only
-// surfaces left that swap the machine's main login. Per-cell binding retired
-// the daemon-side swapper, so there is no automatic rotation to race — this
-// lock's whole remaining job is keeping the two MANUAL surfaces off each
-// other, across processes, since both read the outgoing account's creds and
-// write the incoming one's.
+// What it now guards is exactly THREE callers, and nothing else in the
+// binary takes it: `k account <slug>`, POST /api/account/switch, and
+// rescueSwap — the standing-agent rescue's swap half, the one automated
+// main swapper that outlived Q2 (per-cell binding retired the spawn-time
+// gate and the CELL rescue's swap). All three read the outgoing account's
+// creds and write the incoming one's, so the lock keeps them off each other
+// across processes.
 //
 // The file's content (pid + timestamp) is human-facing only — nothing reads
 // it back to decide staleness. A process that dies while holding the fd has
@@ -322,5 +337,9 @@ func notifyDeduped(key, title, msg string) {
 // the displacement it exists to end.
 //
 // What survives above: the mode (a manual pin now means kraken takes no
-// account decision at all), notifyDeduped, and AcquireRotationLock for the
-// two remaining manual swap callers.
+// account decision at all), notifyDeduped, AcquireRotationLock for the two
+// manual swap callers plus rescueSwap, and the selectTarget/swapMain seams —
+// whose one consumer is the STANDING-agent rescue (standingrescue.go): a
+// swap for main's own tenants displaces exactly the lane whose exhaustion is
+// the evidence, which is the case the displacement argument above does not
+// reach.

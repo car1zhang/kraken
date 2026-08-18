@@ -29,6 +29,13 @@ func TestRetirementNoAutomatedMainSwap(t *testing.T) {
 		filepath.Join("internal", "core", "rotation.go"): true,
 		filepath.Join("cmd", "kraken", "cmd_account.go"): true,
 		filepath.Join("internal", "api", "account.go"):   true,
+		// rotation.go declares the swapMain seam (`= core.SwapMainTo`) whose
+		// one consumer is rescueSwap, the STANDING-agent rescue's swap half —
+		// kronos/iris are main's own tenants, so theirs is the one automated
+		// main swap that outlived Q2. Cell paths reach neither the seam nor
+		// the symbol; a cell-side reference lands in an unlisted file and
+		// still trips this guard.
+		filepath.Join("internal", "jobs", "rotation.go"): true,
 	}
 	var swapHits, gateHits []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -81,6 +88,6 @@ func TestRetirementNoAutomatedMainSwap(t *testing.T) {
 		t.Errorf("RotationGate is retired (Q2) and must not be referenced in production code; found in: %v", gateHits)
 	}
 	if len(swapHits) > 0 {
-		t.Errorf("SwapMainTo may be referenced only from its own file and the two manual switch surfaces (k account, POST /api/account/switch); found in: %v", swapHits)
+		t.Errorf("SwapMainTo may be referenced only from its own file, the two manual switch surfaces (k account, POST /api/account/switch), and jobs/rotation.go's seam for the standing-agent rescue; found in: %v", swapHits)
 	}
 }

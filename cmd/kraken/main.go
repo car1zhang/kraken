@@ -133,7 +133,7 @@ Commands:
                       Claude account (main + ~/.claude-pool slots): usage,
                       identity, flags
   k account auto      release the manual pin: each new cell binds to its own
-                      pool account, main is never moved (no swap)
+                      pool account; main moves only for standing-agent rescues
   k account <slug>    manually switch the main login to pool slot <slug>,
                       always — regardless of thresholds — and pin rotation to
                       manual (k account auto to release it). note: a pool

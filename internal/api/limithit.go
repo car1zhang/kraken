@@ -12,11 +12,13 @@ import (
 )
 
 // limithit.go — POST /api/limit-hit: the localhost mutation endpoint a
-// cell's StopFailure hook (`kraken limit-hook`, jobs/limithook.go) posts to
-// when a claude in that cell dies on a usage limit. It sits beside
-// /api/pr-attach for the same reason that one exists: the hook runs as its
-// own short-lived process and kraken serve is the sole DB writer, so the
-// hook reports and the server records.
+// StopFailure hook (`kraken limit-hook`, jobs/limithook.go) posts to when a
+// claude dies on a usage limit — a cell's, naming its job by `slug`, or a
+// STANDING agent's, naming itself by `agent` (kronos posts today; iris is on
+// the accepted list too, rescued by the transcript arm with no hook of its
+// own). It sits beside /api/pr-attach for the same reason that one exists:
+// the hook runs as its own short-lived process and kraken serve is the sole
+// DB writer, so the hook reports and the server records.
 //
 // Deliberately NOT mirror-gated. A mirror board is read-only about jobs, but
 // this route writes no job state — it records that a limit was observed, and
@@ -25,10 +27,21 @@ import (
 // which is where that policy belongs: gating the record too would leave a
 // mirror unable to say what it saw.
 
-// limitHitReq is the request body — exactly the five values
-// jobs.parseLimitPayload pulls out of one StopFailure payload.
+// limitHitReq is the request body — the values jobs.parseLimitPayload pulls
+// out of one StopFailure payload, plus the one field that says WHO is
+// reporting.
+//
+// Slug and Agent are that field, and exactly one of them is set: a cell's
+// hook names its job's slug, a standing agent's hook names its fixed agent
+// id (any id on the closed list — kronos and iris — is accepted). They are
+// separate keys rather than one tagged identifier because
+// the two resolve through entirely different machinery — a slug is looked up
+// as a job and keyed on that job's immutable id, an agent id is checked
+// against a closed list — and a single field would make an unknown value
+// ambiguous exactly where the route has to refuse it.
 type limitHitReq struct {
 	Slug      string `json:"slug"`
+	Agent     string `json:"agent"`
 	Error     string `json:"error"`
 	Details   string `json:"details"`
 	SessionID string `json:"session_id"`
@@ -53,12 +66,40 @@ func limitHitHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	if req.Slug == "" {
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": "slug is required"})
+	// The reporter names itself exactly once. Neither field set is the old
+	// "slug is required" case widened; BOTH set is refused rather than given a
+	// precedence rule, because the two record under different keys and a body
+	// carrying both is a client that does not know which owner it is reporting
+	// for — picking one for it would file a cell's limit against kronos, or the
+	// reverse, and nothing would ever say so.
+	if (req.Slug == "") == (req.Agent == "") {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "exactly one of slug or agent is required"})
 		return
 	}
 	if req.Error == "" {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "error is required"})
+		return
+	}
+	if req.Agent != "" {
+		// A standing agent (kronos, iris) has no job, so there is nothing to
+		// resolve: the id itself is the owner, checked against the closed list
+		// jobs owns. An id outside it is a 400 naming the id — this route is
+		// reachable from any localhost POST, and an unchecked id would let one
+		// write an unbounded number of limit_hit rows nothing ever reads.
+		if !jobs.IsStandingAgentID(req.Agent) {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown standing agent " + req.Agent})
+			return
+		}
+		hit, err := jobs.RecordStandingLimitHit(req.Agent, req.Error,
+			core.TruncateOneLine(req.Details, limitHitDetailsMax),
+			req.SessionID, req.AgentID, time.Now())
+		if err != nil {
+			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		util.LogEvent("web", "info", "limit-hit",
+			fmt.Sprintf("limit hit %s: %s (delivery %d)", req.Agent, req.Error, hit.Deliveries))
+		webJSON(w, http.StatusOK, map[string]any{"ok": true, "deliveries": hit.Deliveries})
 		return
 	}
 	// A slug matching no job is a 400 rather than a 404: the only client is a
