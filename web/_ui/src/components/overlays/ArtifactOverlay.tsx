@@ -57,14 +57,13 @@ const isImage = (url: string) => /\.(png|jpe?g|gif|webp)$/i.test(url);
 // only .html pages can hold a compilable diagram card; .svg/.pdf never offer 3D
 const isHtmlPage = (url: string) => /\.html?$/i.test(url);
 
-// The 3D toggle's session stickiness: compilable cards open in 3D (carl's
-// call — the compiled scene is the point of a diagram card, so it is the
-// default, with the toggle stepping back to the flat card). A reader who
-// toggles off gets the next card flat too. Module state rather than
-// per-artifact — the per-artifact reset block below deliberately re-seeds
-// from this, exactly how `raw` deliberately does NOT persist (raw is a
-// debugging posture, 3D is a reading preference).
-let isoDefault = true;
+// The 3D toggle's session stickiness: compilable cards open FLAT (carl's
+// call — the flat card is the default, with the toggle opting in to the
+// compiled scene). A reader who toggles on gets the next card in 3D too.
+// Module state rather than per-artifact — the per-artifact reset block below
+// deliberately re-seeds from this, exactly how `raw` deliberately does NOT
+// persist (raw is a debugging posture, 3D is a reading preference).
+let isoDefault = false;
 
 export interface ArtifactParts {
   slug: string;
