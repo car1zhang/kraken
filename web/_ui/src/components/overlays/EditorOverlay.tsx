@@ -730,6 +730,11 @@ function EditorBody({
           {job && hasDocq ? (
             <>
               <div className="editor-docq-head">questions</div>
+              {/* no onAskBranched: this modal has no thread door (no
+                  onOpenThread prop), and its usual subjects — draft, done,
+                  dead cards — fail the affordance's job.live gate anyway.
+                  The steer modal is where a live job's questions are asked
+                  into. */}
               <DocQuestions job={job} mutate={mutate} />
             </>
           ) : null}

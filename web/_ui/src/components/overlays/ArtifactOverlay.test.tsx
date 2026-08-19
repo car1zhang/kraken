@@ -4,12 +4,8 @@ import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebArtifact, WebJob } from "../../api/types.ts";
 import { makeJob } from "../../test/fixtures.ts";
-import {
-  ArtifactOverlay,
-  artifactParts,
-  askThreadSeed,
-  askThreadTitle,
-} from "./ArtifactOverlay.tsx";
+import { ArtifactOverlay, artifactParts } from "./ArtifactOverlay.tsx";
+import { askThreadSeed, askThreadTitle } from "./askThread.ts";
 
 vi.mock("../../api/client.ts", () => ({
   createFeedback: vi.fn(() => Promise.resolve({ ok: true })),

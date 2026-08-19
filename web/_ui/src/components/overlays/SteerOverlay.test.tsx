@@ -24,6 +24,9 @@ vi.mock("../../api/client.ts", () => ({
   uploadImage: vi.fn(),
   openTmux: vi.fn(() => Promise.resolve({ ok: true })),
   answerDocQuestion: vi.fn(() => Promise.resolve({ ok: true })),
+  // DocQuestions' per-row ask — imported by the panel this modal renders, so
+  // the wholesale mock must carry it or the import itself throws
+  threadOp: vi.fn(() => Promise.resolve({ ok: true, tid: "t1" })),
   editFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   deleteFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   setJobColor: vi.fn(() => Promise.resolve({ ok: true })),
@@ -1137,5 +1140,40 @@ describe("artifact refs in the steer detail", () => {
       "j/51-code-map.md",
       "j",
     );
+  });
+});
+
+describe("questions panel ask wiring", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // The INTEGRATION half of DocQuestions' own ask tests: the modal actually
+  // passes onAskBranched (through its onOpenThread), so a live job's question
+  // rows carry the ⑂ here — the affordance's only home. Guards the omission
+  // that shipped this modal's artifact list and branch button dead (App.tsx's
+  // onOpenArtifact note): a panel prop the integrator can silently not pass.
+  it("a live job's question rows carry ⑂, and a branch opens the thread", async () => {
+    const user = userEvent.setup();
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="steer"
+        job={makeJob({
+          slug: "j",
+          state: "working",
+          live: true,
+          doc_questions: [{ id: "Q1", text: "which?", importance: "P0" }],
+        })}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    const toggle = document.querySelector(".dq-ask-toggle") as HTMLElement;
+    expect(toggle).not.toBeNull();
+    await user.click(toggle);
+    // by class, not text: the modal's thread band has its own "⑂ branch"
+    // (BranchButton), and getByText would find both
+    await user.click(document.querySelector(".dq-ask-send") as HTMLElement);
+    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith("j", "t1"));
   });
 });

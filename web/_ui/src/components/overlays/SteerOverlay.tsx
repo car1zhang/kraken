@@ -892,7 +892,16 @@ function SteerBody({
               : null}
           </div>
           <div className="steer-docq" id="steer-docq" hidden={!hasDocq}>
-            {job && hasDocq ? <DocQuestions job={job} mutate={mutate} /> : null}
+            {job && hasDocq ? (
+              <DocQuestions
+                job={job}
+                mutate={mutate}
+                // the same door ThreadChips opens threads through, so the
+                // thread overlay stacks above this modal exactly as a chip
+                // click does — no close/reopen choreography needed here
+                onAskBranched={onOpenThread}
+              />
+            ) : null}
           </div>
           {/* carl's per-artifact feedback notes: a drilldown surface, like the
               questions panel above it. The card carries only a count chip

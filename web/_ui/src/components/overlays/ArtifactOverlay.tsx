@@ -24,6 +24,7 @@ import {
 import { cardCompilable } from "../../lib/isoscene/index.ts";
 import { libraryMatch } from "../../lib/library.ts";
 import { ArtifactPager, useArtifactKeys } from "./ArtifactPager.tsx";
+import { askThreadSeed, askThreadTitle } from "./askThread.ts";
 import { IsoSceneView } from "./IsoSceneView.tsx";
 import { Overlay, type Mutate } from "./Overlay.tsx";
 import { showToast } from "./Toast.tsx";
@@ -102,80 +103,10 @@ interface ComposerSnapshot {
   mode: ComposerMode | null;
 }
 
-/**
- * A cell-home artifact name may be a subpath — the title wants its tail. An
- * empty tail (a name that ends in the separator) falls back to the whole name
- * rather than to nothing, which would title the thread with a bare em-dash.
- */
-const baseName = (name: string) =>
-  name.slice(name.lastIndexOf("/") + 1) || name;
-
-/**
- * Cut to at most `n` UTF-16 units WITHOUT splitting a surrogate pair.
- *
- * `slice` counts code units, so a cut landing between the halves of an astral
- * character (emoji, and everything above the BMP) leaves a lone high surrogate.
- * `JSON.stringify` will happily escape it, Go's `encoding/json` decodes an
- * unpaired escape to U+FFFD, and the thread's stored title then carries a
- * replacement glyph nothing can repair but a rename.
- */
-function cutUnits(s: string, n: number): string {
-  const cut = s.slice(0, n);
-  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
-}
-
-/** The `maxLength` ThreadOverlay's rename input enforces, in UTF-16 units. */
-const TITLE_MAX = 80;
-/** How much of that a long artifact name may take before it is itself cut. */
-const TITLE_BASE_MAX = 40;
-
-/**
- * The thread name a question about an artifact branches under.
- *
- * A thread's name is what its chip says wherever threads are listed, so "which
- * artifact" alone is not enough: ask two things about `00-overview.md` and you
- * would get two chips nobody can tell apart. The first line of the question is
- * what separates them.
- *
- * Which is why the artifact half is budgeted rather than simply written first.
- * A single cut at the end would let a long section-doc name eat the whole 80
- * and truncate the question away entirely — every chip identical again, the
- * exact failure this function exists to prevent.
- *
- * Capped at 80 to match the rename input's own `maxLength` — a title longer
- * than that could be branched but never edited back to in place.
- */
-export function askThreadTitle(artifact: string, question: string): string {
-  let base = baseName(artifact);
-  if (base.length > TITLE_BASE_MAX) base = cutUnits(base, TITLE_BASE_MAX - 1) + "…";
-  const first = (question.trim().split("\n")[0] ?? "").trim();
-  const title = first ? `${base} — ${first}` : base;
-  if (title.length <= TITLE_MAX) return title;
-  return cutUnits(title, TITLE_MAX - 1).trimEnd() + "…";
-}
-
-/**
- * The seed prompt the branched thread comes up with.
- *
- * It names the artifact rather than its URL or its on-disk path: the thread is
- * a fork of zeus in the cell's own worktree, so the artifact set is already the
- * thing it knows by name, and a path derived from an /api/artifact URL would be
- * a second, weaker way of saying so.
- *
- * The last line restates the thread contract (ThreadOverlay's own banner:
- * "Threads are for asking, not for doing") — this composer sits on a doc, and
- * without it "elaborate on this section" reads as a licence to go edit it.
- */
-export function askThreadSeed(artifact: string, question: string): string {
-  return (
-    "I'm reading the artifact `" +
-    artifact +
-    "` from this job's artifact set. A question about it:\n\n" +
-    question.trim() +
-    "\n\nAnswer here in the thread — this is a question about the work, " +
-    "not a request to change it. Don't edit the artifact."
-  );
-}
+// The ask composer's title/seed builders live in askThread.ts (imported with
+// the rest of the head block), shared with the questions panel's per-row ask
+// — one module owns the title budget and the surrogate-safe cap for every
+// branch-to-ask surface.
 
 /**
  * Recover {slug, home, name} from an /api/artifact URL (app.js:1641).
