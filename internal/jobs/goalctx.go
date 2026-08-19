@@ -14,11 +14,12 @@ import (
 // three rules verbatim (graphctx.go:13-34), and each one is why a piece of
 // this file looks the way it does:
 //
-//  1. It NEVER calls a network. A goalContext call is five local reads, four
+//  1. It NEVER calls a network. A goalContext call is five local reads, all
 //     of them indexed — the job row (jobs_active_slug, or the id), its goal
 //     links (the leading column of a composite primary key), its former slugs
-//     (deliberately a whole-table read, bounded by renames — see
-//     attachFormerSlugs), then one ListGoals per current period
+//     (formerSlugsFor's indexed WHERE job_id = ? — the whole-table read in
+//     attachFormerSlugs is the board's multi-row path, not this one), then
+//     one ListGoals per current period
 //     (goals_scope_period) — plus one more per linked goal that falls outside
 //     those two lists and has to be resolved by id. Nothing here embeds,
 //     fetches or resolves anything off the machine.
