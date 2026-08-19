@@ -1,12 +1,37 @@
 package jobs
 
 import (
+	"errors"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 // prpoll_test.go — needsPoll's decision of which recorded PR URLs deserve an
-// individual gh pr view, table-tested independent of gh.
+// individual gh pr view, table-tested independent of gh, plus execErrDetail's
+// failure-log decoration.
+
+// TestExecErrDetail covers the failure-log decoration: first stderr line for
+// a command that ran and exited non-zero, the exec error itself otherwise,
+// empty on nil, and always bounded to one clean line.
+func TestExecErrDetail(t *testing.T) {
+	if got := execErrDetail(nil); got != "" {
+		t.Fatalf("nil error: got %q, want empty", got)
+	}
+	ee := &exec.ExitError{Stderr: []byte("GraphQL: API rate limit exceeded for user\nsecond line\n")}
+	if got := execErrDetail(ee); got != "GraphQL: API rate limit exceeded for user" {
+		t.Fatalf("exit error with stderr: got %q", got)
+	}
+	plain := errors.New("exec: \"gh\": executable file not found in $PATH")
+	if got := execErrDetail(plain); got != plain.Error() {
+		t.Fatalf("plain error: got %q, want %q", got, plain.Error())
+	}
+	long := &exec.ExitError{Stderr: []byte(strings.Repeat("x", 5000) + "\x1b[31m")}
+	if got := execErrDetail(long); len(got) > 210 || strings.ContainsRune(got, '\x1b') {
+		t.Fatalf("unbounded or uncleaned detail: len=%d", len(got))
+	}
+}
 
 func TestNeedsPoll(t *testing.T) {
 	pr := func(n, state string) JobPR { return JobPR{URL: "https://x/pull/" + n, State: state} }

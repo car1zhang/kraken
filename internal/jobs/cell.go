@@ -1345,22 +1345,25 @@ func installHookSettings(wt string, j *Job) {
 
 // listBranchPRs asks gh for every PR (any state) whose head is the cell's
 // branch. ok=false on any failure (auth, rate limit, no gh) — unknown must
-// never touch the recorded history. States are normalized to lowercase
-// open|merged|closed; anything else is dropped.
-func listBranchPRs(dir, branch string) ([]JobPR, bool) {
+// never touch the recorded history. detail (non-empty exactly when
+// ok=false) says WHY, for the caller's failure log — the defensive posture
+// swallows errors, and a bare "gh pr list failed" line is undiagnosable
+// across an outage (execErrDetail, prpoll.go). States are normalized to
+// lowercase open|merged|closed; anything else is dropped.
+func listBranchPRs(dir, branch string) ([]JobPR, string, bool) {
 	cmd := exec.Command("gh", "pr", "list", "--head", branch, "--state", "all",
 		"--limit", "50", "--json", "url,state")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, false
+		return nil, execErrDetail(err), false
 	}
 	var recs []struct {
 		URL   string `json:"url"`
 		State string `json:"state"`
 	}
-	if json.Unmarshal(out, &recs) != nil {
-		return nil, false
+	if err := json.Unmarshal(out, &recs); err != nil {
+		return nil, core.TruncateOneLine("unparseable gh output: "+err.Error(), 200), false
 	}
 	var prs []JobPR
 	for _, r := range recs {
@@ -1370,7 +1373,7 @@ func listBranchPRs(dir, branch string) ([]JobPR, bool) {
 		}
 		prs = append(prs, JobPR{URL: r.URL, State: state})
 	}
-	return prs, true
+	return prs, "", true
 }
 
 // VerifyCellSession confirms a tmux session is the cell kraken created for

@@ -1310,11 +1310,13 @@ func (d *daemonState) trackPRs(j *Job) {
 	if dir == "" {
 		dir = repo // worktree gone: still ask in the repo so history converges
 	}
-	fetched, ok := listBranchPRs(dir, CellBranch(j))
+	fetched, detail, ok := listBranchPRs(dir, CellBranch(j))
 	if !ok {
-		// log the outage once per stretch, not every 15s tick
+		// log the outage once per stretch, not every 15s tick — and say WHY
+		// (rate limit, auth, network): the call itself swallows the error,
+		// so this line is the outage's only diagnostic anywhere
 		if key := "ghfail:" + j.Slug; d.Notified[key] == 0 {
-			dlogErr("%s: gh pr list failed — leaving prs alone", j.Slug)
+			dlogErr("%s: gh pr list failed — leaving prs alone: %s", j.Slug, detail)
 			d.Notified[key] = time.Now().Unix()
 		}
 		return
@@ -1525,12 +1527,13 @@ func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {
 	var zeus *core.Peer
 	zeusLookedUp := false
 	for _, pr := range open {
-		fetched, ok := viewPRActivity(dir, pr.URL)
+		fetched, detail, ok := viewPRActivity(dir, pr.URL)
 		if !ok {
 			// log the outage once per stretch, not every 15s tick — same
-			// dedup shape as trackPRs' ghfail key
+			// dedup shape as trackPRs' ghfail key, and the same "say WHY"
+			// rule: this line is the fetch failure's only diagnostic
 			if key := "prwatchfail:" + j.Slug; d.Notified[key] == 0 {
-				dlogErr("%s: pr-watch fetch failed for %s — leaving watermarks alone", j.Slug, pr.URL)
+				dlogErr("%s: pr-watch fetch failed for %s — leaving watermarks alone: %s", j.Slug, pr.URL, detail)
 				d.Notified[key] = time.Now().Unix()
 			}
 			continue // gh failure: leave this PR's watermarks alone, retry next pass
