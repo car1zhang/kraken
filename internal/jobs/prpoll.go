@@ -3,9 +3,12 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"strings"
 	"time"
+
+	"kraken/internal/core"
 )
 
 // prpoll.go — trackPRs' per-URL backstop. listBranchPRs (jobs/cell.go) asks
@@ -17,6 +20,35 @@ import (
 // recorded PR's head branch (not its state) to tell a job's own PRs apart
 // from foreign ones. viewPRActivity is watchPRs' (daemon.go) one gh call per
 // open PR per pass: state, head SHA, comments, reviews, and CI rollup.
+// execErrDetail is the shared decoration those defensive callers hand their
+// failure logs, since ok=false carries no reason of its own.
+
+// execErrDetail names why an exec'd command failed, for failure logs that
+// would otherwise say only "failed": the first stderr line when the command
+// ran and exited non-zero (gh puts the reason there — auth, rate limit,
+// missing repo), else the exec error itself (no binary, a killed process).
+// Only ever a log decoration — callers' ok=false handling is unchanged — and
+// bounded through core.TruncateOneLine, since stderr is subprocess-controlled
+// text headed for the daemon's stdout and the event log: a newline-free
+// GraphQL error blob can run to the 32 KiB capture cap, and raw control
+// characters would reach a real terminal. Callers own the judgment that the
+// command's stderr is loggable at all (gh's never carries a credential; the
+// next caller's might).
+func execErrDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if line := strings.TrimSpace(string(ee.Stderr)); line != "" {
+			if i := strings.IndexByte(line, '\n'); i >= 0 {
+				line = strings.TrimSpace(line[:i])
+			}
+			return core.TruncateOneLine(line, 200)
+		}
+	}
+	return core.TruncateOneLine(err.Error(), 200)
+}
 
 // viewPRState asks gh for one PR's current state by URL. ok=false on any
 // failure (auth, rate limit, PR deleted, no gh) — like listBranchPRs,
@@ -157,9 +189,11 @@ func latestActivityAt(comments []prActivityComment, reviews []prActivityReview, 
 // per open PR per pass. ok=false
 // on any failure (auth, rate limit, no gh, bad JSON, timeout): unknown must
 // never touch a recorded watermark, same defensive style as viewPRState/
-// viewPRHead above. Bounded by prWatchTimeout so a hung network can't stall
-// the daemon's tick loop.
-func viewPRActivity(dir, url string) (prWatchFetch, bool) {
+// viewPRHead above. detail (non-empty exactly when ok=false) says WHY, for
+// the caller's failure log — the defensive posture swallows errors, and a
+// bare "fetch failed" line is undiagnosable across an outage. Bounded by
+// prWatchTimeout so a hung network can't stall the daemon's tick loop.
+func viewPRActivity(dir, url string) (prWatchFetch, string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), prWatchTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", url, "--json",
@@ -167,7 +201,14 @@ func viewPRActivity(dir, url string) (prWatchFetch, bool) {
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return prWatchFetch{}, false
+		// A deadline kill surfaces as the process's own *ExitError
+		// ("signal: killed", or whatever stderr it managed first), never as
+		// context.DeadlineExceeded — so ask the ctx, or the one failure this
+		// timeout exists for gets logged as an unrelated stderr line.
+		if ctx.Err() != nil {
+			return prWatchFetch{}, "timed out after " + prWatchTimeout.String(), false
+		}
+		return prWatchFetch{}, execErrDetail(err), false
 	}
 	var rec struct {
 		State       string `json:"state"`
@@ -185,8 +226,8 @@ func viewPRActivity(dir, url string) (prWatchFetch, bool) {
 			Conclusion string `json:"conclusion"`
 		} `json:"statusCheckRollup"`
 	}
-	if json.Unmarshal(out, &rec) != nil {
-		return prWatchFetch{}, false
+	if err := json.Unmarshal(out, &rec); err != nil {
+		return prWatchFetch{}, core.TruncateOneLine("unparseable gh output: "+err.Error(), 200), false
 	}
 	f := prWatchFetch{
 		State:         strings.ToLower(rec.State),
@@ -213,7 +254,7 @@ func viewPRActivity(dir, url string) (prWatchFetch, bool) {
 			f.FailingChecks = append(f.FailingChecks, name)
 		}
 	}
-	return f, true
+	return f, "", true
 }
 
 // needsPoll reports which recorded PR URLs deserve an individual gh pr view:
