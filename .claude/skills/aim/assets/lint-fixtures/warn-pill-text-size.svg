@@ -1,0 +1,13 @@
+<svg viewBox="0 0 860 200" role="img" aria-label="Two stadium tags at the viewBox margins, one whose label fits at the size the stylesheet renders it and one that does not.">
+  <text class="title" x="16" y="26">a tag's label is measured at the size the stylesheet gives it</text>
+
+  <g class="pill">
+    <rect x="5" y="100" width="162" height="26" rx="13"/>
+    <text x="86" y="113">SLACK_USER_TOKEN unset</text>
+  </g>
+
+  <g class="pill">
+    <rect x="696" y="100" width="156" height="26" rx="13"/>
+    <text x="774" y="113">KRAKEN_SERVE_ADDR set</text>
+  </g>
+</svg>

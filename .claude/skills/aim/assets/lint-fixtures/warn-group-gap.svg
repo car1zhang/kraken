@@ -1,0 +1,28 @@
+<svg viewBox="0 0 860 220" role="img" aria-label="Two boxes closer than the minimum gap, a third at a legal distance, and a container holding a child that is nesting rather than crowding.">
+  <text class="title" x="16" y="26">unrelated boxes keep the contract's minimum gap</text>
+
+  <g class="node">
+    <rect x="40" y="70" width="140" height="56" rx="8"/>
+    <text x="110" y="102">board</text>
+  </g>
+
+  <g class="node">
+    <rect x="192" y="70" width="140" height="56" rx="8"/>
+    <text x="262" y="102">tracker</text>
+  </g>
+
+  <g class="node">
+    <rect x="380" y="70" width="140" height="56" rx="8"/>
+    <text x="450" y="102">queue</text>
+  </g>
+
+  <g class="group">
+    <rect x="580" y="60" width="240" height="140" rx="6"/>
+    <text x="594" y="84">one machine</text>
+    <g class="proc">
+      <rect x="600" y="100" width="180" height="60" rx="2"/>
+      <rect x="604" y="104" width="172" height="52" rx="1"/>
+      <text x="690" y="136">kraken serve</text>
+    </g>
+  </g>
+</svg>

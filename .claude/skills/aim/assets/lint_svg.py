@@ -11,8 +11,15 @@ Warnings print the same way with a "(warning)" suffix and never affect the exit 
 
 Warn-tier rules, the complete list: TEXT_OVERFLOW, SHAPE_TEXT_FIT, NEST_WELL,
 HOLDS_MISSING, HOLDS_EMPTY, GEOM_UNPARSEABLE, COLOUR_NO_GLYPH, COLOUR_AS_CATEGORY,
-CODE_REF_MISSING, CODE_REF_BASENAME, SMIL_RETIRED. Every other rule is a hard failure.
-Anything this linter cannot parse or read degrades to a finding — it never raises.
+CODE_REF_MISSING, CODE_REF_BASENAME, SMIL_RETIRED, EDGE_BOX_INTRUSION,
+EDGE_EDGE_CROSSING, GROUP_GAP_UNDER_MIN, LABEL_BOX_OVERLAP. Every other rule is a hard
+failure. Anything this linter cannot parse or read degrades to a finding — it never raises.
+
+The last four are LAYOUT rules: they judge where the fragment's coordinates put things
+relative to each other, rather than what any one element says about itself. Every one of
+them is an ESTIMATOR — a curved silhouette is measured by its bounding rect, a label by an
+average-glyph width — so all four are warn-tier by construction: a borderline finding is
+expected noise, and a renderer or the lead triages it rather than the linter deciding.
 
 stdlib only: re, sys, json, argparse, pathlib, xml.parsers.expat.
 """
@@ -208,6 +215,67 @@ NESTABLE_WELLS = {
 # exemption is redundant with the NESTABLE_SHAPES gate that already excludes it.
 CONTAINER_SHAPES = {"group", "region", "lane"}
 
+# ---- layout geometry: what the four warn-tier layout rules treat as solid ----
+#
+# A COMPONENT box is a solid thing in the layout: an edge routes around it, a label never
+# sits on it. The four excluded shapes are the STRUCTURAL ones, and each is excluded
+# because the contract itself puts other things through or on it — a `group` and a `lane`
+# are boundaries an edge crosses on its way to the parts inside them, a `region` is a
+# background tint other parts sit on top of by definition, and a `cell` is data inside a
+# grid whose neighbours may abut it. Note this is a DIFFERENT split from CONTAINER_SHAPES,
+# which answers a nesting question and so keeps `cell` out of it.
+#
+# Derived by subtraction, like LEAF_SHAPES, so a shape added to SHAPE_CLASSES is measured
+# by default: an unrecognised silhouette is far more likely to be a box an edge should
+# avoid than a routing band.
+GEOM_STRUCTURAL_SHAPES = {"group", "lane", "region", "cell"}
+GEOM_COMPONENT_SHAPES = SHAPE_CLASSES - GEOM_STRUCTURAL_SHAPES
+
+# What GROUP_GAP_UNDER_MIN measures: boxes and boundaries that stand on their own in the
+# layout. Everything excluded here is a part the contract deliberately places CLOSER than
+# the minimum, so measuring it would cry wolf on conformant markup: grid `cell`s abut
+# within a grid, a `pill` stating a box's kind sits just outside that box's top edge or
+# corner, a `step` badge is placed beside the stage it numbers, `bar`s in a chart stack
+# against each other, a participant's boxes hang off a `lane`'s lifeline, and a `region`
+# is a tint other parts sit on.
+GAP_MEASURED_SHAPES = SHAPE_CLASSES - {"cell", "pill", "step", "badge", "bar",
+                                       "lane", "region"}
+
+# The contract's two spacing floors, verbatim: "Keep at least 24px of gap between
+# unrelated elements (grid cells may abut within a grid)", and, for two children sharing
+# one parent's content well, "Siblings keep ≥12px apart". Which one applies to a pair is
+# decided by whether some third box's rect contains them both.
+MIN_ELEMENT_GAP = 24.0
+MIN_SIBLING_GAP = 12.0
+
+# How much of each end of an edge segment is ATTACHMENT rather than intrusion. The
+# contract routes an edge to attach at a box border, so its first and last few px are
+# supposed to touch a box — and a rounded corner, a stroke width or an arrowhead puts the
+# real attach point a little inside the bounding rect. Not a contract number: it is this
+# estimator's tolerance, and a genuine route THROUGH a box is longer than it by far.
+#
+# The size is set by the widest gap the kit puts between a shape's FRONT face, which is
+# what an edge attaches to, and its bounding rect: an offset-stack silhouette (`queue`,
+# `pkg`) draws back cards a few px beyond the front one on each of two offsets, so an edge
+# leaving the front face correctly still starts inside the rect by that much.
+EDGE_ATTACH_TOLERANCE = 10.0
+
+# A box's rect is shrunk by this before an intrusion counts, so an edge drawn ALONG a
+# border — a legal route — never reads as passing through the box.
+EDGE_BOX_EPSILON = 1.0
+
+# How close a crossing point may sit to either path's own endpoint before it reads as two
+# edges meeting at a shared attachment point rather than crossing.
+EDGE_TOUCH_TOLERANCE = 2.0
+
+# How close to a `lane` header an edge's own end must be to count as that participant's
+# lifeline. Its own constant rather than a second use of EDGE_ATTACH_TOLERANCE even though
+# the two hold the same number today: this one answers "is this edge a lifeline", which is
+# a question about identity, while that one answers "how much of a segment is attachment",
+# which is a question about depth — and tuning either against its own evidence must never
+# silently move the other.
+LANE_ATTACH_TOLERANCE = 10.0
+
 # ---- code refs: the one metadata attribute the contract sanctions ----
 #
 # `data-code="path:line"` links a box or an edge to the code it stands for, so a
@@ -375,7 +443,36 @@ def path_points(d):
     Nothing is emitted before the first `M`/`m`. A `d` that opens with any other command
     is malformed (SVG requires a moveto first), and its implicit current point is the
     ORIGIN — so measuring it would drag the element's box to (0,0) and report a box the
-    author never drew. A leading or stray `Z` is the same case."""
+    author never drew. A leading or stray `Z` is the same case.
+
+    This is what COORD_BOUNDS and every hard-failure geometry rule read, and it stays
+    endpoint-only: a control point is not a coordinate the author placed anything at, and
+    failing a fragment for one would fail conformant markup. path_points_with_controls is
+    the variant the warn-tier layout rules use."""
+    return _walk_path(d, controls=False)
+
+
+def path_points_with_controls(d):
+    """path_points plus the OFF-CURVE control points of every cubic/quadratic command.
+
+    A curved silhouette bulges past its own on-curve endpoints — a `cloud`'s humps and a
+    `store`'s cap are the two the kit draws — so an extent measured from endpoints alone
+    UNDERSTATES what the shape covers, and a rule asking "does this edge pass through that
+    box" would then wave through a route crossing the visible hump. A Bezier stays inside
+    the convex hull of its endpoints and controls, so adding the controls gives an extent
+    that is never too small; it can be a little too large, which is the safe direction for
+    a warn-tier estimator.
+
+    Arc (`A`) parameters are radii and flags rather than points, so an arc still
+    contributes its endpoint alone and its own bulge stays unmeasured."""
+    return _walk_path(d, controls=True)
+
+
+def _walk_path(d, controls=False):
+    """The shared path walk behind path_points and path_points_with_controls. `controls`
+    additionally emits the off-curve control points of C/S/Q commands — each stated
+    relative to the point current BEFORE the command when the command is relative, which
+    is why they are converted ahead of the endpoint update."""
     tokens = _PATH_TOKEN_RE.findall(d)
     points = []
     i = 0
@@ -430,6 +527,14 @@ def path_points(d):
             cy = cy + y if relative else y
             points.append((cx, cy))
         elif letter in ("C", "S", "Q", "A"):
+            if controls and letter in ("C", "S", "Q"):
+                # Every argument pair but the last is an off-curve control point. `A`
+                # is excluded above: its leading five arguments are radii and flags.
+                for k in range(0, count - 2, 2):
+                    px, py = args[k], args[k + 1]
+                    if relative:
+                        px, py = cx + px, cy + py
+                    points.append((px, py))
             x, y = args[-2], args[-1]
             if relative:
                 x, y = cx + x, cy + y
@@ -516,7 +621,7 @@ def widest_own_rect(el):
     return max(boxes, key=lambda b: b[2]) if boxes else None
 
 
-def geom_extent(el, skip_spark=False):
+def geom_extent(el, skip_spark=False, controls=False):
     """Bounding box (x0, y0, x1, y1) over the geometry an element draws itself (see
     own_geometry) — <rect> corners, <path> on-curve endpoints, <ellipse>/<circle>
     bounds — or None when it draws none. Bezier control points and the bulge of an arc
@@ -525,9 +630,16 @@ def geom_extent(el, skip_spark=False):
     bottom cap and `cloud`'s shoulders are the two places in the kit where that bites,
     and both are handled where they are used.
 
+    `controls` switches the path walk to path_points_with_controls, which folds the
+    off-curve control points in and so measures a curved silhouette at least as wide as it
+    draws. It is off by default because the rules that fail a fragment are written against
+    the endpoint-only extent (NESTABLE_WELLS["store"] literally encodes it); the warn-tier
+    layout rules turn it on, where over-measuring a hump is the safe direction.
+
     skip_spark drops `spark` paths: the sparkle is a mark riding on a silhouette,
     never part of its outline."""
     xs, ys = [], []
+    walk = path_points_with_controls if controls else path_points
     for c in own_geometry(el):
         if skip_spark and "spark" in class_tokens(c):
             continue
@@ -537,7 +649,7 @@ def geom_extent(el, skip_spark=False):
                 xs.extend((b[0], b[0] + b[2]))
                 ys.extend((b[1], b[1] + b[3]))
         elif c.tag == "path" and "d" in c.attrib:
-            for (x, y) in path_points(c.attrib["d"]):
+            for (x, y) in walk(c.attrib["d"]):
                 xs.append(x)
                 ys.append(y)
         elif c.tag in ("ellipse", "circle"):
@@ -597,11 +709,12 @@ def holds_label(el):
 
 
 def direct_class_label(el, name):
-    """True when the CSS's direct-child rules for `name` style this text run:
+    """True when the CSS's direct-child rules for `name` style this text run — the three
+    names with such a rule are `group`, `region` and `pill`:
     the run's own text/tspan chain carries the class (`text.group` — checked on
     every element up to and including the owning <text>, so a <tspan> inside a
     `text.group` inherits its 12px/start correctly), or the owning <text>'s
-    direct parent <g> does (`.group > text`, `.region > text`). The same
+    direct parent <g> does (`.group > text`, `.region > text`, `.pill > text`). The same
     direct-parent walk as holds_label, for the same reason — `group` and
     `region` have NO descendant/inheritance rule in the stylesheet, so a
     centred label nested deeper inside one keeps its own styling. Testing
@@ -638,6 +751,12 @@ def font_size_of(el):
     if holds_label(el):
         return 12.0
     if direct_class_label(el, "group") or direct_class_label(el, "region"):
+        return 12.0
+    # `svg .pill > text` renders at 12px, and the contract's Pill/tag entry says 12px
+    # twice ("stadium, 12px text", "12px text; size the rect to the text + 20px"). Without
+    # this row a pill label falls through to the 13px default below, which over-estimates
+    # its width by ~8% — enough to report a fit or overlap problem a reader does not have.
+    if direct_class_label(el, "pill"):
         return 12.0
     cls = (el.attrib.get("class", "") + " " + el.ctx_cls).strip()
     if "cell" in cls or "step" in cls:
@@ -731,6 +850,196 @@ def code_ref_path(value):
     None — but it is guarded anyway, since a linter never raises."""
     m = CODE_REF_RE.match(value)
     return m.group("path") if m else value
+
+
+# ---- layout geometry primitives ----
+#
+# All hand-rolled and deliberately plain: the whole vocabulary is axis-aligned rects and
+# straight segments between the points a path names, which is all a diagram fragment draws.
+# Costs are O(edges × boxes) for the intrusion sweep, O(edges²) for the crossing sweep, and
+# O(boxes²) for the gap sweep — the last one degrading to O(boxes³) only across the pairs
+# that are actually too close, since a pair clearing the wider minimum answers before the
+# enclosing-box probe runs. A fragment holds tens of each.
+
+
+def element_handle(el):
+    """A short handle for naming an element in a message: its id when it carries one,
+    else its source line. A layout finding is about a PAIR, so at least one of the two
+    has to be identified in the text — the line prefix only ever names the first."""
+    eid = el.attrib.get("id")
+    return f'id "{eid}"' if eid else f"line {el.line}"
+
+
+def component_extent(el):
+    """The rect a layout rule treats as this shape's footprint: everything the <g> draws
+    ITSELF (own_geometry stops at the next shape-carrying <g>, so a parent is measured
+    without its children), sparkle marks dropped, curve control points folded in.
+
+    It is the drawn extent rather than silhouette_box's reconstructed `W`×`H`, on purpose:
+    these rules ask "what does this cover on the page", which is a question about ink, and
+    the drawn extent is defined for the shapes that draw no <rect> at all (an `actor` is a
+    circle and four strokes)."""
+    return geom_extent(el, skip_spark=True, controls=True)
+
+
+def point_in_rect(p, rect):
+    """True when a point lies within an extent, its border included. Used to ask whether
+    an edge ENDS inside a box, which is attachment rather than a route through it."""
+    return rect[0] <= p[0] <= rect[2] and rect[1] <= p[1] <= rect[3]
+
+
+def rects_overlap(a, b):
+    """True when two extents share interior area. Touching edges do not count."""
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def rect_contains(outer, inner):
+    """True when `outer` encloses `inner` entirely (a shared border still counts as
+    enclosed). Containment is sanctioned nesting, never a gap or an overlap defect."""
+    return (outer[0] <= inner[0] and outer[1] <= inner[1]
+            and outer[2] >= inner[2] and outer[3] >= inner[3])
+
+
+def rect_gap(a, b):
+    """Axis-aligned separation between two extents: the larger of the horizontal and
+    vertical gaps, negative when they overlap on both axes.
+
+    The larger rather than the diagonal distance, deliberately — two boxes offset
+    diagonally are read as clear of each other as soon as EITHER axis separates them,
+    which is how a reader sees a layout and how the contract's "24px of gap" is applied
+    by eye."""
+    dx = max(a[0] - b[2], b[0] - a[2])
+    dy = max(a[1] - b[3], b[1] - a[3])
+    return max(dx, dy)
+
+
+def trim_segment(p0, p1, tol):
+    """`p0`→`p1` with `tol` px cut off each end, or None when the segment is too short to
+    have a middle. What is cut is the part where an edge is allowed to be touching a box:
+    its attachment."""
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    length = (dx * dx + dy * dy) ** 0.5
+    if length <= 2 * tol:
+        return None
+    f = tol / length
+    return ((p0[0] + dx * f, p0[1] + dy * f), (p1[0] - dx * f, p1[1] - dy * f))
+
+
+def segment_rect_overlap(p0, p1, rect):
+    """The parameter range (t0, t1) of the part of segment `p0`→`p1` that lies inside
+    `rect`, or None when it stays out. Liang–Barsky, written out rather than pulled in:
+    the four clip tests are the whole algorithm."""
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, p0[0] - rect[0]), (dx, rect[2] - p0[0]),
+                 (-dy, p0[1] - rect[1]), (dy, rect[3] - p0[1])):
+        if p == 0:
+            # Parallel to this edge of the rect: inside it or out, for the whole segment.
+            if q < 0:
+                return None
+            continue
+        r = q / p
+        if p < 0:
+            if r > t1:
+                return None
+            t0 = max(t0, r)
+        else:
+            if r < t0:
+                return None
+            t1 = min(t1, r)
+    if t1 <= t0:
+        return None
+    return (t0, t1)
+
+
+def segments_cross(a0, a1, b0, b1):
+    """The point where segments `a0`→`a1` and `b0`→`b1` properly cross, or None.
+
+    Parallel and collinear pairs return None: a crossing is two lines meeting at an angle,
+    and two edges lying along each other are a different defect this rule does not claim
+    to judge (nor can it tell one from an edge drawn twice)."""
+    rx, ry = a1[0] - a0[0], a1[1] - a0[1]
+    sx, sy = b1[0] - b0[0], b1[1] - b0[1]
+    denom = rx * sy - ry * sx
+    if denom == 0:
+        return None
+    qx, qy = b0[0] - a0[0], b0[1] - a0[1]
+    t = (qx * sy - qy * sx) / denom
+    u = (qx * ry - qy * rx) / denom
+    if not (0.0 <= t <= 1.0 and 0.0 <= u <= 1.0):
+        return None
+    return (a0[0] + t * rx, a0[1] + t * ry)
+
+
+def points_near(p, q, tol):
+    """True when two points are within `tol` on both axes."""
+    return abs(p[0] - q[0]) <= tol and abs(p[1] - q[1]) <= tol
+
+
+def edge_polylines(elements):
+    """Every `<path class="edge …">` as (element, [(x, y), …]) — the polyline through the
+    points its `d` names, which is what an edge's route is approximated by. On-curve
+    endpoints only: folding control points in here would bend a segment away from the line
+    the reader sees, which is the opposite of what these two rules want.
+
+    A path whose `d` is missing, unparseable or a single point contributes nothing —
+    GEOM_UNPARSEABLE and COORD_BOUNDS are the rules that report unreadable geometry."""
+    out = []
+    for el in elements:
+        if el.tag != "path" or "edge" not in class_tokens(el):
+            continue
+        d = el.attrib.get("d")
+        if not d:
+            continue
+        pts = path_points(d)
+        if len(pts) >= 2:
+            out.append((el, pts))
+    return out
+
+
+def label_extent(el):
+    """Estimated ink box (x0, y0, x1, y1) of one `<text>` label, or None when it names no
+    anchor to measure from.
+
+    Two estimators, both stated so a borderline finding reads as one: width is
+    estimated_text_width's ~0.54em average glyph, taken from the widest run; height is one
+    row per non-empty run at the contract's own 1.2em line height, hung off the <text>'s
+    baseline (0.8em above it, 0.2em below). A run is the element's own text plus each
+    descendant <tspan>'s — the contract's multi-line form repeats `x` on every tspan, so
+    the block shares one horizontal anchor."""
+    raw_x, raw_y = el.attrib.get("x"), el.attrib.get("y")
+    if raw_x is None or raw_y is None:
+        return None
+    x = parse_number(raw_x.split(",")[0])
+    y = parse_number(raw_y.split(",")[0])
+    if x is None or y is None:
+        return None
+    widths = []
+    if el.text.strip():
+        widths.append(estimated_text_width(el))
+    stack = list(el.children)
+    while stack:
+        c = stack.pop()
+        if c.tag == "tspan" and c.text.strip():
+            widths.append(estimated_text_width(c))
+        stack.extend(c.children)
+    if not widths:
+        return None
+    size = font_size_of(el)
+    width = max(widths)
+    anchor = el.attrib.get("text-anchor")
+    if not anchor:
+        # An edgeLabel is middle-anchored by the stylesheet, which is the only caller.
+        anchor = "middle"
+    if anchor == "middle":
+        x0, x1 = x - width / 2, x + width / 2
+    elif anchor == "end":
+        x0, x1 = x - width, x
+    else:
+        x0, x1 = x, x + width
+    y0 = y - size * 0.8
+    y1 = y + size * 0.2 + (len(widths) - 1) * size * 1.2
+    return (x0, y0, x1, y1)
 
 
 def lint(path, marker_id=None, prefix=None, code_refs=False):
@@ -1355,6 +1664,236 @@ def lint(path, marker_id=None, prefix=None, code_refs=False):
                           f'of them is a "cell head"; colour is standing in for a category '
                           f"— add a header cell naming what the column means, or paint the "
                           f"whole group one treatment"))
+
+    # ---- layout rules (all warn-tier) ----
+    #
+    # These four judge coordinates against each other rather than any one element against
+    # its own class, and every one of them measures with an estimator: a curved silhouette
+    # by its bounding rect, a label by an average-glyph width. Warn-tier is therefore the
+    # only honest tier — a fragment can be perfectly readable and still trip one, and a
+    # crossing in particular is often the least-bad option once box positions are settled.
+    # The linter surfaces the fact and names the coordinate; a renderer or the lead decides.
+    #
+    # One extent per component box, measured once and shared by all four: this is the only
+    # place in the file that measures the same thing repeatedly enough for it to matter.
+    component_boxes = []
+    for el, shape in shape_gs:
+        if shape not in GEOM_COMPONENT_SHAPES:
+            continue
+        ext = component_extent(el)
+        if ext is not None and ext[2] > ext[0] and ext[3] > ext[1]:
+            component_boxes.append((el, shape, ext))
+
+    edges = edge_polylines(elements)
+
+    # A sequence diagram's LIFELINE is an edge in markup and a routing band in meaning: the
+    # contract draws a `lane` as a header box with a lifeline <path> hanging below it, and
+    # that participant's own boxes sit ON that line rather than beside it. So an edge that
+    # attaches to a `lane` is excluded from BOTH edge rules below — measured as a route it
+    # would report every box the participant owns, and as a crossing it would report every
+    # message arrow that reaches past a third participant. Attachment is the test rather
+    # than "is it vertical": a lifeline is defined by what it hangs off.
+    lane_extents = []
+    for el, shape in shape_gs:
+        if shape != "lane":
+            continue
+        ext = component_extent(el)
+        if ext is not None:
+            lane_extents.append(ext)
+
+    def touches_lane(pt):
+        return any(point_in_rect(pt, (ext[0] - LANE_ATTACH_TOLERANCE,
+                                      ext[1] - LANE_ATTACH_TOLERANCE,
+                                      ext[2] + LANE_ATTACH_TOLERANCE,
+                                      ext[3] + LANE_ATTACH_TOLERANCE))
+                   for ext in lane_extents)
+
+    lifelines = {id(el) for el, pts in edges
+                 if touches_lane(pts[0]) or touches_lane(pts[-1])}
+
+    # EDGE_BOX_INTRUSION (warning) — an edge routed THROUGH a box rather than around it.
+    # The contract: "Route edges to attach at box borders (not box centers/interiors) and
+    # route them around other boxes, never through them."
+    #
+    # Attachment is not intrusion, so each segment is trimmed by EDGE_ATTACH_TOLERANCE at
+    # both ends and each box shrunk by EDGE_BOX_EPSILON before the test — an edge that
+    # lands on a border, or runs along one, has nothing left inside. Structural shapes are
+    # excluded outright (see GEOM_COMPONENT_SHAPES): a group, a lane and a region are
+    # bands an edge is SUPPOSED to cross, and a cell's grid is data, not an obstacle.
+    # At most one finding per edge/box pair — a route through a box crosses it once as far
+    # as the reader is concerned, however many segments it takes to do so.
+    #
+    # A PARENT box is the other exclusion, and it is the contract's own first containment
+    # tool: shape-inside-shape, a `machine` holding a `proc`. An edge attaching to the child
+    # necessarily crosses the parent it sits inside, so there is no route "around" the
+    # parent to take and the advice in the message could not be followed. The test is
+    # narrow on both sides — the box must actually HOLD a silhouette, and the edge must
+    # actually END inside it — so an edge merely passing through a parent on its way
+    # somewhere else is still reported, and so is one whose endpoints both land inside a
+    # LEAF box, which has nothing to attach to and is the case this rule exists for.
+    for el, pts in edges:
+        if id(el) in lifelines:
+            continue
+        for bel, shape, ext in component_boxes:
+            if has_shape_descendant(bel) and (point_in_rect(pts[0], ext)
+                                              or point_in_rect(pts[-1], ext)):
+                continue
+            inner = (ext[0] + EDGE_BOX_EPSILON, ext[1] + EDGE_BOX_EPSILON,
+                     ext[2] - EDGE_BOX_EPSILON, ext[3] - EDGE_BOX_EPSILON)
+            if inner[2] <= inner[0] or inner[3] <= inner[1]:
+                continue  # thinner than 2×EDGE_BOX_EPSILON: no interior left to intrude on
+            found = None
+            for a, b in zip(pts, pts[1:]):
+                seg = trim_segment(a, b, EDGE_ATTACH_TOLERANCE)
+                if seg is None:
+                    continue
+                span = segment_rect_overlap(seg[0], seg[1], inner)
+                if span is None:
+                    continue
+                t0, t1 = span
+                sx, sy = seg[1][0] - seg[0][0], seg[1][1] - seg[0][1]
+                enter = (seg[0][0] + t0 * sx, seg[0][1] + t0 * sy)
+                depth = ((t1 - t0) ** 2 * (sx * sx + sy * sy)) ** 0.5
+                found = (enter, depth)
+                break
+            if found is None:
+                continue
+            enter, depth = found
+            warnings.append((el.line, "EDGE_BOX_INTRUSION",
+                              f'<path class="edge"> ({element_handle(el)}) passes through '
+                              f'the "{shape}" box at {element_handle(bel)} — entering near '
+                              f"({enter[0]:.0f},{enter[1]:.0f}) and running {depth:.0f}px "
+                              f"inside it; route the edge around the box, or move the box. "
+                              f"A curved silhouette is approximated by its bounding rect, "
+                              f"so an intrusion of a pixel or two is expected noise"))
+
+    # EDGE_EDGE_CROSSING (warning) — two edges' routes meet at a point that is neither
+    # one's endpoint. Named neutrally on purpose: a crossing is sometimes the least-bad
+    # option once the boxes are placed, and this rule decides nothing about which of the
+    # two should move — it says where they meet and leaves the triage to a reader.
+    #
+    # Edges that share an attachment point are not crossing: a point within
+    # EDGE_TOUCH_TOLERANCE of either polyline's own first or last point is skipped. One
+    # finding per pair — the first meeting point stands for the pair.
+    for i in range(len(edges)):
+        for j in range(i + 1, len(edges)):
+            el_a, pts_a = edges[i]
+            el_b, pts_b = edges[j]
+            if id(el_a) in lifelines or id(el_b) in lifelines:
+                continue
+            attach = (pts_a[0], pts_a[-1], pts_b[0], pts_b[-1])
+            hit = None
+            for a0, a1 in zip(pts_a, pts_a[1:]):
+                for b0, b1 in zip(pts_b, pts_b[1:]):
+                    p = segments_cross(a0, a1, b0, b1)
+                    if p is None:
+                        continue
+                    if any(points_near(p, e, EDGE_TOUCH_TOLERANCE) for e in attach):
+                        continue
+                    hit = p
+                    break
+                if hit is not None:
+                    break
+            if hit is None:
+                continue
+            warnings.append((el_a.line, "EDGE_EDGE_CROSSING",
+                              f"two edge paths cross at ({hit[0]:.0f},{hit[1]:.0f}): "
+                              f"{element_handle(el_a)} and {element_handle(el_b)}. "
+                              f"A crossing is not automatically wrong "
+                              f"— once box positions are settled one is sometimes the "
+                              f"least-bad route — so decide whether to reroute either "
+                              f"edge, move a box, or keep it"))
+
+    # GROUP_GAP_UNDER_MIN (warning) — two top-level boxes closer than the contract's
+    # minimum: "Keep at least 24px of gap between unrelated elements (grid cells may abut
+    # within a grid)", relaxed to the well rule's "Siblings keep ≥12px apart" for a pair
+    # that some third box's rect encloses, since those two are children sharing a well
+    # rather than unrelated elements.
+    #
+    # TOP-LEVEL in the markup: a box with a shape-<g> ancestor is NEST_WELL's business,
+    # and warning about it here would report one layout fact twice in two vocabularies.
+    # Containment is skipped for the same reason it is skipped everywhere else — a box
+    # drawn inside another is sanctioned nesting, not a gap.
+    gap_boxes = []
+    for el, shape in shape_gs:
+        if shape not in GAP_MEASURED_SHAPES:
+            continue
+        parent_g, _ = nearest_shape_g(el)
+        if parent_g is not None:
+            continue
+        ext = component_extent(el)
+        if ext is not None and ext[2] > ext[0] and ext[3] > ext[1]:
+            gap_boxes.append((el, shape, ext))
+
+    for i in range(len(gap_boxes)):
+        for j in range(i + 1, len(gap_boxes)):
+            el_a, shape_a, ra = gap_boxes[i]
+            el_b, shape_b, rb = gap_boxes[j]
+            if rect_contains(ra, rb) or rect_contains(rb, ra):
+                continue
+            gap = rect_gap(ra, rb)
+            # MIN_ELEMENT_GAP is the LARGER of the two minimums, so a pair that clears it
+            # clears the sibling one too whatever the enclosing-box probe below would say.
+            # Answering that here keeps the probe — the only per-pair scan in this rule —
+            # off the common case, where nearly every pair is comfortably clear.
+            if gap >= MIN_ELEMENT_GAP:
+                continue
+            # A pair enclosed by a third measured box is a pair of well siblings, whatever
+            # the markup nesting says: hermes fragments are often flat, so a group and the
+            # boxes drawn inside it can all be children of the root <svg>.
+            shared = any(k not in (i, j)
+                         and rect_contains(gap_boxes[k][2], ra)
+                         and rect_contains(gap_boxes[k][2], rb)
+                         for k in range(len(gap_boxes)))
+            minimum = MIN_SIBLING_GAP if shared else MIN_ELEMENT_GAP
+            if gap >= minimum:
+                continue
+            where = ("two children of one box" if shared else "two unrelated elements")
+            # A negative separation is an OVERLAP, and saying "-50px apart" of two boxes
+            # sitting on top of each other describes the wrong defect to whoever reads it.
+            if gap < 0:
+                measured = f"overlap by {-gap:.0f}px"
+            else:
+                measured = f"are {gap:.0f}px apart"
+            warnings.append((max(el_a.line, el_b.line), "GROUP_GAP_UNDER_MIN",
+                              f'the "{shape_a}" at {element_handle(el_a)} and the '
+                              f'"{shape_b}" at {element_handle(el_b)} {measured}, '
+                              f"under the {minimum:.0f}px the contract asks between "
+                              f"{where}; move one of them, or draw the pair as a nested "
+                              f"child and parent if that is what they are. Separation is "
+                              f"measured on the wider-apart axis, from bounding rects"))
+
+    # LABEL_BOX_OVERLAP (warning) — an edge label sitting on top of a box it does not
+    # belong to. The contract: "No overlapping elements — boxes, labels, and edges must
+    # each have clear space", with `region` and sanctioned containment the two exceptions
+    # (both already out of GEOM_COMPONENT_SHAPES / handled by the ancestor skip below).
+    # Only `edgeLabel` text is swept: every other label in the kit belongs to the box it
+    # is drawn in, where sitting on that box is the whole point.
+    for el in elements:
+        if el.tag != "text" or "edgeLabel" not in class_tokens(el):
+            continue
+        block = label_extent(el)
+        if block is None:
+            continue
+        # A label drawn inside a box is that box's own — never an overlap. In practice an
+        # edgeLabel is a root-level sibling, so this skip is usually empty.
+        owners = set()
+        p = el.parent
+        while p is not None:
+            owners.add(id(p))
+            p = p.parent
+        for bel, shape, ext in component_boxes:
+            if id(bel) in owners:
+                continue
+            if not rects_overlap(block, ext):
+                continue
+            warnings.append((el.line, "LABEL_BOX_OVERLAP",
+                              f'edge label "{el.text.strip()[:40] or "…"}" '
+                              f"[{block[0]:.0f},{block[1]:.0f} {block[2]:.0f},"
+                              f'{block[3]:.0f}] overlaps the "{shape}" box at '
+                              f"{element_handle(bel)}; move the label clear of the box. "
+                              f"The extent is estimated at ~0.54em per character over one "
+                              f"1.2em row per line, so a marginal overlap is expected noise"))
 
     failures.sort(key=lambda f: f[0])
     warnings.sort(key=lambda w: w[0])

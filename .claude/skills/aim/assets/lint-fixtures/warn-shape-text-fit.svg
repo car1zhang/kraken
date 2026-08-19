@@ -1,4 +1,4 @@
-<svg viewBox="0 0 860 220" role="img" aria-label="Four labels wider than the interior their silhouette leaves them: a function between its subroutine bars, a cylinder between its caps, a diamond between its points, and a cloud between its shoulders.">
+<svg viewBox="0 0 860 240" role="img" aria-label="Four labels wider than the interior their silhouette leaves them: a function between its subroutine bars, a cylinder between its caps, a diamond between its points, and a cloud between its shoulders.">
   <text class="title" x="16" y="26">a label wider than its silhouette's interior only warns</text>
 
   <g class="fn">
@@ -14,8 +14,8 @@
   </g>
 
   <g class="decision">
-    <path d="M 300,150 L 370,110 L 440,150 L 370,190 Z"/>
-    <text x="370" y="154">eligible for pr?</text>
+    <path d="M 300,170 L 370,130 L 440,170 L 370,210 Z"/>
+    <text x="370" y="174">eligible for pr?</text>
   </g>
 
   <g class="cloud">

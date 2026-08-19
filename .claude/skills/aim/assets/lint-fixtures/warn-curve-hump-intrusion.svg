@@ -1,0 +1,20 @@
+<svg viewBox="0 0 860 240" role="img" aria-label="An edge crossing the drawn hump of a curved silhouette, which is only visible when the shape is measured with its curve control points included.">
+  <text class="title" x="16" y="26">a curved outline covers more than its on-curve endpoints</text>
+
+  <g class="node">
+    <rect x="40" y="105" width="120" height="50" rx="8"/>
+    <text x="100" y="135">kraken</text>
+  </g>
+
+  <g class="cloud">
+    <path d="M 560,170 Q 580,85 620,140 Q 660,85 700,140 Q 720,85 740,170 Z"/>
+    <text x="650" y="164">object store</text>
+  </g>
+
+  <g class="node">
+    <rect x="770" y="105" width="70" height="50" rx="8"/>
+    <text x="805" y="135">api</text>
+  </g>
+
+  <path class="edge" d="M 160,130 H 770"/>
+</svg>

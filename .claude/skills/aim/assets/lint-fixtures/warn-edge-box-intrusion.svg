@@ -1,0 +1,22 @@
+<svg viewBox="0 0 860 240" role="img" aria-label="One edge routed straight through the box between its endpoints, and one routed around that box, to show which of the two the linter reports.">
+  <text class="title" x="16" y="26">an edge routes around a box, never through it</text>
+
+  <g class="proc">
+    <rect x="60" y="80" width="160" height="60" rx="2"/>
+    <rect x="64" y="84" width="152" height="52" rx="1"/>
+    <text x="140" y="116">kraken serve</text>
+  </g>
+
+  <g class="node">
+    <rect x="340" y="80" width="160" height="60" rx="8"/>
+    <text x="420" y="116">board</text>
+  </g>
+
+  <g class="node">
+    <rect x="620" y="80" width="160" height="60" rx="8"/>
+    <text x="700" y="116">phone</text>
+  </g>
+
+  <path class="edge" d="M 220,110 H 620"/>
+  <path class="edge" d="M 140,140 V 200 H 700 V 140"/>
+</svg>
