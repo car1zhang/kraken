@@ -906,6 +906,11 @@ Three humps on a rounded body. Every number in the path is a fraction of `W` or 
 substituting alone fits the cloud to the box you reserved: it spans `X … X+W` and
 `Y+H*0.02 … Y+H` at any size.
 
+The second `tspan`'s kind line reads `external service`, exactly as the snippet writes it —
+the kind → shape table's left column (`external third-party service (…)`) is brief
+vocabulary for CHOOSING the shape, never rendered text. When a brief's kind phrase and this
+snippet disagree, match the snippet and the set's sibling fragments.
+
 The label anchors at `Y+H*0.55+18`, not at `CY` — **both lines must sit below the humps'
 shoulder line** at `Y+H*0.55`. The three humps meet the body *tangentially* at that line: at
 `X+W*0.3` and `X+W*0.7` the outline dips all the way back down to it, so a line of text level
@@ -913,6 +918,18 @@ with the shoulder is cut by the stroke at those two cusps no matter how short it
 shoulder the body is one full-width span, which is what buys `cloud` a `W - 32` label — and
 what sets its 88px minimum height: the two-line block plus its clearance has to fit in the
 `0.45H` below the shoulder.
+
+That minimum SCALES with the label's line count, so derive `H` from the line count before
+reserving the box rather than re-deriving the geometry after text overflows: the block below
+the shoulder is `18 + (lines−1)·15.6 + 6` tall (first-baseline offset, `1.2em` steps at the
+13px size, descender clearance) and must fit in `0.45H` — 2 lines is the 88 minimum above,
+3 lines needs `H ≥ 123`, 4 needs `H ≥ 158`, 5 needs `H ≥ 192` (1 line is unreachable — the
+kind line above makes every cloud label at least two). Round up to a comfortable value
+rather than shaving to the bound. And at 3+ lines the first tspan STAYS at `dy="-0.6em"`
+with the extra rows added downward only — never re-centre the block on the anchor: the
+shoulder clearance is an absolute 18px offset while the shoulder itself is a fraction of
+`H`, so a re-centred block pushes its top line into the cusps at heights this table
+certifies as safe, and no `H` can buy that back.
 
 #### head — the header-cell modifier
 
