@@ -1333,15 +1333,15 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   color: var(--text-2); font-size: 10.5px; font-style: italic; margin-top: 3px; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
-.dq-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
-.dq-accept, .dq-send, .dq-reanswer-cancel {
+.dq-answer, .dq-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
+.dq-accept, .dq-send, .dq-ask-send, .dq-reanswer-cancel {
   font: 600 9px var(--display); letter-spacing: 0.1em;
   background: transparent; color: var(--muted);
   border: 1px solid var(--border-strong);
   padding: 3px 9px; white-space: nowrap;
 }
-.dq-accept:hover, .dq-send:hover { color: var(--fg); background: color-mix(in srgb, var(--ac) 12%, transparent); box-shadow: var(--glow); border-color: var(--ac); }
-.dq-accept:disabled, .dq-send:disabled, .dq-input:disabled, .dq-reanswer-cancel:disabled { opacity: 0.4; }
+.dq-accept:hover, .dq-send:hover, .dq-ask-send:hover { color: var(--fg); background: color-mix(in srgb, var(--ac) 12%, transparent); box-shadow: var(--glow); border-color: var(--ac); }
+.dq-accept:disabled, .dq-send:disabled, .dq-ask-send:disabled, .dq-input:disabled, .dq-reanswer-cancel:disabled { opacity: 0.4; }
 .dq-input {
   flex: 1 1 120px; min-width: 80px;
   font: 10px var(--mono); color: var(--fg);
@@ -1351,6 +1351,22 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 .dq-input:hover { border-color: var(--ac); }
 .dq-input:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
+/* the per-question ask affordance (DocQuestions' onAskBranched — steer modal
+   only): ⑂ in the head branches a side thread about the question. The toggle
+   stays quiet muted text until hover — it shares a cramped flex row with the
+   question itself. Everything else rides the shared selectors above rather
+   than copies of them — .dq-ask on the .dq-answer row rule, the input a
+   plain .dq-input, .dq-ask-send on the .dq-send lists — so the family
+   cannot drift apart. No cursor declaration: `button` is already on the
+   pointer-cursor owner list, and a local one would out-specify it. */
+.dq-ask-toggle {
+  flex: none; margin-left: auto;
+  font: 11px var(--mono);
+  background: transparent; color: var(--muted);
+  border: 1px solid transparent;
+  padding: 0 4px;
+}
+.dq-ask-toggle:hover { color: var(--ac); border-color: var(--ac); }
 /* answered rows are dimmed AND clickable — Q13: editable forever — so they
    get a hover affordance distinct from the plain read-only look */
 .dq-row.dq-answered { color: var(--muted); opacity: 0.65; font-size: 9.5px; }

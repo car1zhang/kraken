@@ -25,6 +25,7 @@ vi.mock("../../api/client.ts", () => ({
   archiveJob: vi.fn(() => Promise.resolve({ ok: true })),
   uploadImage: vi.fn(),
   answerDocQuestion: vi.fn(() => Promise.resolve({ ok: true })),
+  threadOp: vi.fn(() => Promise.resolve({ ok: true, tid: "t1" })),
   editFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   deleteFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   setJobColor: vi.fn(() => Promise.resolve({ ok: true })),

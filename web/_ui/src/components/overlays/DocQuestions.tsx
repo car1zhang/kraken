@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { answerDocQuestion } from "../../api/client.ts";
+import { answerDocQuestion, threadOp } from "../../api/client.ts";
 import type { WebDocQuestion, WebJob } from "../../api/types.ts";
+import { questionThreadSeed, questionThreadTitle } from "./askThread.ts";
 import type { Mutate } from "./Overlay.tsx";
+import { showToast } from "./Toast.tsx";
 
 // The answerable questions panel (app.js:255 docQuestionsHTML and friends).
 //
@@ -49,9 +51,18 @@ const draftKey = (slug: string, id: string) => JSON.stringify([slug, id]);
  */
 const dqDrafts = new Map<string, string>();
 
-/** Test seam: reset the cross-open draft stash. */
+/**
+ * Unsent ASK texts, same lifetime rules as dqDrafts. A separate map — unlike
+ * the artifact composer's single per-url draft, whose one box merely switches
+ * mode — because here both inputs are on screen at once: a stash keyed only
+ * by question id would restore one sentence into the other's box.
+ */
+const dqAskDrafts = new Map<string, string>();
+
+/** Test seam: reset the cross-open draft stashes. */
 export function __resetDocQuestionDrafts(): void {
   dqDrafts.clear();
+  dqAskDrafts.clear();
 }
 
 export interface DocQuestionsProps {
@@ -59,15 +70,31 @@ export interface DocQuestionsProps {
   job: WebJob;
   /** See Overlay.tsx — the injected post() with board-invalidation policy. */
   mutate: Mutate;
+  /**
+   * An ask about a question branched a side thread: show it. Wired by the
+   * steer modal (through its onOpenThread, the same door ThreadChips uses, so
+   * the thread overlay stacks above the modal exactly as a chip click does).
+   * ABSENT hides the whole ask affordance — the job editor renders this panel
+   * for settled jobs it has no thread door for, and there the rows stay as
+   * they were. Presence alone is not enough: branching forks the cell's zeus,
+   * so the affordance also needs `job.live` — the same gate ThreadChips puts
+   * on the ⑂ branch button it renders.
+   */
+  onAskBranched?: (slug: string, tid: string) => void;
 }
 
 /**
  * Renders `<div class="doc-questions">` or nothing. The wrapper with the id
  * (`#steer-docq` / `#editor-docq`) belongs to the overlay, not to this.
  */
-export function DocQuestions({ job, mutate }: DocQuestionsProps) {
+export function DocQuestions({ job, mutate, onAskBranched }: DocQuestionsProps) {
   const list = job.doc_questions || [];
   const slug = job.slug;
+  // The same job.live gate ThreadChips puts on its ⑂ branch button: a branch
+  // forks the cell's zeus, so it needs a live cell — and it needs somewhere
+  // to open the thread, which is the integrator's onAskBranched. Absent
+  // either, the rows render as before.
+  const askable = !!onAskBranched && job.live;
 
   // Which already-answered questions are reopened for a re-answer. Component
   // state, not module state: the vanilla `reansweringDocQ` Set had to be
@@ -91,16 +118,60 @@ export function DocQuestions({ job, mutate }: DocQuestionsProps) {
 
   const [busy, setBusy] = useState<Set<string>>(new Set());
 
+  // Which rows have the ask box open. Component state like `reanswering`, and
+  // deliberately NOT stashed across a close: the box reopens in one click, and
+  // what must survive is the TEXT, which dqAskDrafts carries.
+  const [asking, setAsking] = useState<Set<string>>(new Set());
+
+  // Live ask text per question id — dqAskDrafts' in-render half, seeded and
+  // poll-proof exactly as `values` is.
+  const [askValues, setAskValues] = useState<Record<string, string>>(() => {
+    const seed: Record<string, string> = {};
+    for (const q of list) {
+      const d = dqAskDrafts.get(draftKey(slug, q.id));
+      if (d) seed[q.id] = d;
+    }
+    return seed;
+  });
+
+  const [askBusy, setAskBusy] = useState<Set<string>>(new Set());
+
+  // An ANSWERED question's open ask box is stale state: the row renders as
+  // AnsweredRow (no box), and a later click to re-answer would remount the
+  // box — its autoFocus pulling the caret into a box the click never asked
+  // for. So the id is dropped the moment a row reads as
+  // answered, whether by carl's own send or by a poll payload carrying an
+  // answer written from another window. Returns `prev` untouched when
+  // nothing is stale, so the every-3s poll re-render sets no state.
+  useEffect(() => {
+    setAsking((prev) => {
+      let next: Set<string> | null = null;
+      for (const id of prev) {
+        const q = list.find((x) => x.id === id);
+        if (q?.answer && !reanswering.has(id)) {
+          next ??= new Set(prev);
+          next.delete(id);
+        }
+      }
+      return next ?? prev;
+    });
+  }, [list, reanswering]);
+
   // stash/drop on unmount — see dqDrafts' comment
-  const stashRef = useRef({ slug, values });
-  stashRef.current = { slug, values };
+  const stashRef = useRef({ slug, values, askValues });
+  stashRef.current = { slug, values, askValues };
   useEffect(
     () => () => {
-      const { slug: s, values: v } = stashRef.current;
+      const { slug: s, values: v, askValues: av } = stashRef.current;
       for (const [id, text] of Object.entries(v)) {
         const key = draftKey(s, id);
         if (text) dqDrafts.set(key, text);
         else dqDrafts.delete(key);
+      }
+      for (const [id, text] of Object.entries(av)) {
+        const key = draftKey(s, id);
+        if (text) dqAskDrafts.set(key, text);
+        else dqAskDrafts.delete(key);
       }
     },
     [],
@@ -139,6 +210,53 @@ export function DocQuestions({ job, mutate }: DocQuestionsProps) {
     [busy, mutate, slug],
   );
 
+  /**
+   * The ask box's send: branch a side thread seeded with the question row.
+   *
+   * Nothing here is new on the wire — it is the SAME `/api/threads` branch the
+   * artifact viewer's ask composer posts (ArtifactOverlay's `ask`), with the
+   * title and seed built from the question row instead of the open artifact.
+   * `text` may be EMPTY, unlike there: "I don't understand this question" is
+   * the common case, and the seed builder supplies it as the default ask.
+   */
+  const askSend = useCallback(
+    async (q: WebDocQuestion, text: string) => {
+      if (askBusy.has(q.id)) return;
+      setAskBusy((prev) => new Set(prev).add(q.id));
+      const res = await mutate(() =>
+        threadOp(slug, "branch", {
+          title: questionThreadTitle(q.id, q.text, text),
+          text: questionThreadSeed(q, text),
+        }),
+      );
+      setAskBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(q.id);
+        return next;
+      });
+      // a failed branch leaves the box open, its text intact, for a retry —
+      // same posture as a failed answer post above
+      if (!res) return;
+      setAsking((prev) => {
+        const next = new Set(prev);
+        next.delete(q.id);
+        return next;
+      });
+      dqAskDrafts.delete(draftKey(slug, q.id));
+      setAskValues((prev) => {
+        const next = { ...prev };
+        delete next[q.id];
+        return next;
+      });
+      // No tid came back (defensive — the branch op always returns one): the
+      // thread exists and the board lists it, so say so out of band, exactly
+      // as the artifact composer does.
+      if (res.tid) onAskBranched?.(slug, res.tid);
+      else showToast("branched — the thread is listed on the job");
+    },
+    [askBusy, mutate, onAskBranched, slug],
+  );
+
   if (!list.length) return null;
   const sorted = sortDocQuestions(list);
   const hasOpen = sorted.some((q) => !q.answer);
@@ -170,6 +288,22 @@ export function DocQuestions({ job, mutate }: DocQuestionsProps) {
             value={values[q.id] ?? (q.answer && reanswering.has(q.id) ? q.answer : "")}
             onChange={(v) => setValues((prev) => ({ ...prev, [q.id]: v }))}
             onSend={(text) => void send(q.id, text)}
+            askable={askable}
+            asking={asking.has(q.id)}
+            askValue={askValues[q.id] ?? ""}
+            askDisabled={askBusy.has(q.id)}
+            onToggleAsk={() =>
+              setAsking((prev) => {
+                const next = new Set(prev);
+                if (next.has(q.id)) next.delete(q.id);
+                else next.add(q.id);
+                return next;
+              })
+            }
+            onAskChange={(v) =>
+              setAskValues((prev) => ({ ...prev, [q.id]: v }))
+            }
+            onAskSend={(text) => void askSend(q, text)}
             onCancelReanswer={() => {
               setReanswering((prev) => {
                 const next = new Set(prev);
@@ -204,6 +338,13 @@ function EditableRow({
   onChange,
   onSend,
   onCancelReanswer,
+  askable,
+  asking,
+  askValue,
+  askDisabled,
+  onToggleAsk,
+  onAskChange,
+  onAskSend,
 }: {
   slug: string;
   q: WebDocQuestion;
@@ -213,6 +354,13 @@ function EditableRow({
   onChange: (v: string) => void;
   onSend: (text: string) => void;
   onCancelReanswer: () => void;
+  askable: boolean;
+  asking: boolean;
+  askValue: string;
+  askDisabled: boolean;
+  onToggleAsk: () => void;
+  onAskChange: (v: string) => void;
+  onAskSend: (text: string) => void;
 }) {
   const imp = (q.importance || "P2").toLowerCase();
   return (
@@ -222,6 +370,22 @@ function EditableRow({
         <span className="dq-q" title={q.text}>
           {q.id} — {q.text}
         </span>
+        {/* ⑂ alone, not "⑂ ask": the head is a cramped flex row and the
+            tooltip carries the words. Same glyph every thread affordance
+            wears (BranchButton, the artifact viewer's head toggle). */}
+        {askable ? (
+          <button
+            className="dq-ask-toggle"
+            data-slug={slug}
+            data-id={q.id}
+            title="branch a side thread to ask about this question"
+            aria-label="ask about this question"
+            aria-expanded={asking}
+            onClick={onToggleAsk}
+          >
+            ⑂
+          </button>
+        ) : null}
       </div>
       {q.context ? (
         <div className="dq-ctx" title={q.context}>
@@ -300,6 +464,53 @@ function EditableRow({
           </button>
         ) : null}
       </div>
+      {/* `askable` too, not just `asking`: the cell can die while the box is
+          open, and the toggle — the only control that closes it — unmounts
+          with `askable`. A box left behind would be uncloseable and could
+          only post a branch the server refuses. */}
+      {asking && askable ? (
+        <div className="dq-ask">
+          <input
+            className="dq-input dq-ask-input"
+            type="text"
+            // the parenthetical is the affordance's whole pitch: branching
+            // with nothing typed is legitimate here, unlike the artifact
+            // composer — the seed supplies the "unpack this" ask
+            placeholder="what's unclear? (optional)"
+            value={askValue}
+            data-slug={slug}
+            data-id={q.id}
+            disabled={askDisabled}
+            autoFocus
+            onChange={(e) => onAskChange(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter-to-branch, with the answer input's own IME/modifier
+              // guards — this is prose too. No empty-text bail: an empty
+              // Enter is a deliberate "just unpack it" branch.
+              if (e.key !== "Enter") return;
+              if (
+                e.nativeEvent.isComposing ||
+                e.nativeEvent.keyCode === 229 ||
+                e.shiftKey ||
+                e.altKey
+              ) {
+                return;
+              }
+              e.preventDefault();
+              onAskSend(askValue.trim());
+            }}
+          />
+          <button
+            className="dq-ask-send"
+            data-slug={slug}
+            data-id={q.id}
+            disabled={askDisabled}
+            onClick={() => onAskSend(askValue.trim())}
+          >
+            ⑂ branch
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
