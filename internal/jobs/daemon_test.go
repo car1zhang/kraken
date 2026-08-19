@@ -52,6 +52,42 @@ func TestPruneArtifactSyncStateDropsDoneArchivedAndVanished(t *testing.T) {
 	}
 }
 
+// TestPRScanDue covers the PR tracker's idle-job pacing decision: a job
+// never polled is due, one polled inside prIdleInterval is not, one polled
+// at least prIdleInterval ago is due again.
+func TestPRScanDue(t *testing.T) {
+	now := time.Now().UnixMilli()
+	if !prScanDue(0, now) {
+		t.Fatal("never-polled job not due, want due")
+	}
+	if prScanDue(now-prIdleInterval.Milliseconds()/2, now) {
+		t.Fatal("job polled half an interval ago is due, want not due")
+	}
+	if !prScanDue(now-prIdleInterval.Milliseconds(), now) {
+		t.Fatal("job polled exactly one interval ago not due, want due")
+	}
+}
+
+// TestPrunePRScanDropsVanishedSlugs covers: a PRScan stamp survives only for
+// slugs still on the board — archiving frees a slug, and a stale stamp would
+// make an unrelated later job of the same name wait out an interval it never
+// earned.
+func TestPrunePRScanDropsVanishedSlugs(t *testing.T) {
+	d := newDaemon()
+	d.PRScan["still-here"] = 42
+	d.PRScan["vanished"] = 42
+	d.prunePRScan([]*Job{{Slug: "still-here", State: "done"}})
+	if _, ok := d.PRScan["still-here"]; !ok {
+		t.Fatal("still-here stamp pruned, want it kept")
+	}
+	if _, ok := d.PRScan["vanished"]; ok {
+		t.Fatal("vanished-slug stamp survived prune, want it dropped")
+	}
+	if len(d.PRScan) != 1 {
+		t.Fatalf("want exactly 1 surviving stamp, got %+v", d.PRScan)
+	}
+}
+
 // TestDaemonGuardErr covers the single-instance startup guard underlying
 // kraken serve's GuardServeStart: refuses only when daemon.json names a
 // DIFFERENT, currently-alive pid.

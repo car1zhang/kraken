@@ -313,7 +313,14 @@ type daemonState struct {
 	// above: losing it on a restart costs one extra sum per job, which is a
 	// stat per transcript file and no writes when nothing moved.
 	TokenScan map[string]int64
-	tickN     int
+	// PRScan throttles the PR tracker over jobs with no live cell (slug →
+	// unix millis of the last poll), TokenScan's exact shape: in-process
+	// only, and losing it on a restart costs one extra gh round per idle
+	// job. Slug-keyed for TokenScan's reason (a per-tick throttle clock over
+	// the active board, whose slugs are unique), with the same freed-slug
+	// hazard closed by prunePRScan.
+	PRScan map[string]int64
+	tickN  int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
 	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
@@ -330,6 +337,7 @@ func newDaemon() *daemonState {
 		RepairTries:       map[string]int{},
 		ArtifactSyncState: map[string]string{},
 		TokenScan:         map[string]int64{},
+		PRScan:            map[string]int64{},
 	}
 }
 
@@ -918,7 +926,8 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 
 	d.pruneArtifactSyncState(jobs)
 
-	// PR tracker (every tick, 15s): record every PR shipped from a cell
+	// PR tracker (live cells every tick, 15s; idle jobs paced — see
+	// prIdleInterval beside prTrackable): record every PR shipped from a cell
 	// branch into the job's prs: list. A merge is a signal — one notification and
 	// a board chip — NEVER a teardown trigger; teardown lives only behind
 	// carl's explicit accept via board Done. Tracking continues
@@ -931,17 +940,36 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// colour reconcile's /color) — and a mirror board is read-only by
 	// policy, most of all toward panes belonging to the real deployment.
 	if !mirror {
+		idlePR := 0
 		for _, j := range jobs {
 			if !prTrackable(j) {
 				continue
 			}
+			// Idle jobs are paced — see prIdleInterval beside prTrackable
+			// for why gh traffic is worth bounding and a live cell's is not.
+			if !live[CellSession(j)] {
+				if !prScanDue(d.PRScan[j.Slug], now.UnixMilli()) {
+					continue
+				}
+				if idlePR >= prIdleBatch {
+					continue
+				}
+				idlePR++
+			}
+			// Stamped before trackPRs can bail on a bad repo — this job has
+			// had its turn whatever comes of it (tokensPass' lesson: stamping
+			// only on success leaves a bailing job due again every tick,
+			// permanently consuming an idle slot while logging nothing).
+			d.PRScan[j.Slug] = now.UnixMilli()
 			d.trackPRs(j)
 			d.scanTranscriptPRs(j, all)
 			d.repairPRs(j, all)
 		}
-		// PR watcher (same per-tick cadence, its own pass after the tracker
+		d.prunePRScan(jobs)
+		// PR watcher (every tick, 15s — its own pass after the tracker
 		// above so every job's j.PRs is fully reconciled — state transitions,
-		// transcript attaches, repair drops — before watchPRs reads it): bump
+		// transcript attaches, repair drops — before watchPRs reads it; its
+		// own live-cell gate is what keeps that cheap): bump
 		// zeus' pane when an open PR of an active job gets a new comment/
 		// review, a newly-failing CI check, or a fresh merge conflict.
 		for _, j := range jobs {
@@ -1287,6 +1315,46 @@ func autoArchivePass(jobs []*Job, live map[string]bool, now time.Time) []string 
 // should keep refreshing.
 func prTrackable(j *Job) bool {
 	return j.Err == "" && (j.Started() || len(j.PRs) > 0)
+}
+
+// prIdleInterval/prIdleBatch pace the PR tracker over trackable jobs with NO
+// live cell — done jobs awaiting archive, drafts killed back with PR history.
+// Tracking a job costs at least one gh subprocess per pass, gh's PR queries
+// bill against GitHub's hourly GraphQL point quota, and at the 15s tick a
+// couple dozen trackable jobs saturate that quota by themselves — starving
+// the PR watcher, the updater, and every other gh consumer on the machine,
+// with each poll answering exactly what it answered 15 seconds earlier. A
+// job with a live cell stays on the every-tick cadence (a merge should reach
+// its zeus within seconds); an idle job's PRs move rarely and can wait
+// prIdleInterval, at most prIdleBatch of them per tick — the same pacing
+// shape, and the same constants, as tokensPass' idle throttle, for the same
+// reason.
+const (
+	prIdleInterval = 10 * time.Minute
+	prIdleBatch    = 8
+)
+
+// prScanDue reports whether an idle job's last PR poll (unix millis, zero =
+// never polled) is old enough for another. Pure, so the pacing decision is
+// table-testable without a tick loop.
+func prScanDue(last, nowMS int64) bool {
+	return last == 0 || nowMS-last >= prIdleInterval.Milliseconds()
+}
+
+// prunePRScan drops PRScan stamps for slugs no longer on the board —
+// archiving frees a slug, and a stale stamp would make an unrelated later
+// job of the same name wait out an interval it never earned. Pure over
+// (d, jobs), same shape and reason as TokenScan's prune in tokensPass.
+func (d *daemonState) prunePRScan(jobs []*Job) {
+	present := map[string]bool{}
+	for _, j := range jobs {
+		present[j.Slug] = true
+	}
+	for slug := range d.PRScan {
+		if !present[slug] {
+			delete(d.PRScan, slug)
+		}
+	}
 }
 
 // trackPRs reconciles one job's recorded prs: list against what gh
