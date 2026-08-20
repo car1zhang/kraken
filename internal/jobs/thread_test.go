@@ -1143,6 +1143,8 @@ func TestThreadSeedCarriesTheGuard(t *testing.T) {
 		{"kraken write verbs", "the measured violation: questions add / load set from a thread"},
 		{"do not spawn agents", "the measured violation: a thread spawning a hermes teammate"},
 		{"leave the doing to zeus", "the escape hatch — say so instead of complying"},
+		{"nothing relays this thread to zeus", "the escape hatch must not promise a handoff that does not exist"},
+		{"carl steers zeus", "the one real channel: carl carrying the ask into zeus' pane"},
 	} {
 		if !strings.Contains(lower, want.token) {
 			t.Errorf("thread seed guard is missing %q (%s):\n%s", want.token, want.why, seeded)
