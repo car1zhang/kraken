@@ -205,6 +205,15 @@ func zeusBrief(j *Job) string {
 	// claude appearing in its session reads as a teammate it lost track of —
 	// and zeus would wait on it, message it, or clean it up.
 	b.WriteString("A second claude may show up in another window of your tmux session, forked from your session and reading this same worktree: that is carl's side thread asking questions about your work — not your teammate and not yours to manage. Ignore it completely: never message it, wait on it, kill it, or count it as part of your crew.\n")
+	// The consumption half of the mental model, and the ONE sentence of it that
+	// belongs here. Kraken now records what carl has actually read, decided and
+	// noted, and the graph is compiled from that alone — so the pull is a
+	// calibration move, not a research one: abstract what he knows, expand what
+	// he does not. It is in the brief for the load-estimate paragraph's reason
+	// exactly — a skill is read once per phase, and this applies at every
+	// carl-facing writing moment in every phase — and it is a POINTER, not a
+	// procedure: which artifacts a phase writes, and when, stay in the skills.
+	b.WriteString("Before writing anything carl reads — an overview, a caption, a final message, a report — search what he already knows about the subject (`k graph search`, `k mm get`): abstract what he knows, spell out what he does not, and carry the same 'carl knows / is unfamiliar with' lines into every teammate brief.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path if it wasn't ingested).\n")
 	// The tier is RESOLVED rather than named: zeus is spawned on zeusModel(j),
 	// which a job's model: field overrides, so a hardcoded "you run on Fable"

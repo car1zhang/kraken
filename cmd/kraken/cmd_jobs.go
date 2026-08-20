@@ -165,8 +165,10 @@ func hookArgs(args []string) (string, bool) {
 // --- recall-hook ---
 
 // cmdRecallHook is the thin dispatch wrapper for `kraken recall-hook` — the
-// Claude Code UserPromptSubmit/PostToolUse hook (jobs.RunRecallHook does the
-// work), kept out of usage() alongside pr-hook for the same reason. It shares
+// Claude Code UserPromptSubmit hook (jobs.RunRecallHook does the work), kept
+// out of usage() alongside pr-hook for the same reason. It was wired to
+// PostToolUse as well until Q11 retired that arm (`jobs.recallHookEvents`,
+// with `retiredRecallHookEvents` stripping the old entry on merge). It shares
 // the two flags the whole hook family carries but NOT hookArgs, whose contract
 // requires exactly one bare slug: here the slug is OPTIONAL. Graph recall is
 // keyed on the SESSION in the hook payload and needs no slug at all, which is

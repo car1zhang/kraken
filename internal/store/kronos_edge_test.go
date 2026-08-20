@@ -143,6 +143,12 @@ func TestEdgeKronosMigrationPreservesAPopulatedV23DB(t *testing.T) {
 	}
 
 	// Rewind to a genuine v23 shape: v24's table gone, user_version 23.
+	//
+	// v29 first, and through a helper rather than inline: it is the only step
+	// so far whose reversal is more than a DROP — its hook DROPs kg_watch, so
+	// replaying it finds the table missing unless something puts it back
+	// (schema_test.go's undoV29).
+	undoV29(t, s)
 	for _, stmt := range []string{
 		// v28 added the three account-binding columns; a genuine v23 database
 		// has none of them, and step 28 replays by adding them, which fails on

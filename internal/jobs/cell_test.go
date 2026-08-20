@@ -416,31 +416,49 @@ func TestMergeHookSettingsIdempotentWithNonDefaultAddr(t *testing.T) {
 }
 
 // TestRecallHookEventsPinsTheWiring pins the wiring literal itself, because
-// every other test here reads recallHookEvents and so would silently follow
-// a revert or a widening. Exactly two events: UserPromptSubmit (query = the
-// new prompt) and PostToolUse (query = the assistant's last text, per tool
-// call — safe because its additionalContext lands in a turn that is already
-// continuing). Stop is deliberately NOT wired: Claude Code's hooks reference
-// is explicit that additionalContext at Stop CONTINUES the turn, so a
-// Stop-wired recall would resume every agent past zeus' own stop-gates, hold
-// blocked cells at "working" in the roll call, and chain paid model calls
-// until retrieval ran dry (review round 1, blocking finding). Re-adding
-// "Stop" must come with a deliberate decision about those three
+// every other test here reads recallHookEvents and so would silently follow a
+// revert or a widening. Exactly ONE event: UserPromptSubmit, whose query is
+// carl's new message — the only query in this feature that is evidence of what
+// he is thinking about rather than a summary of what an agent just did.
+//
+// POSTTOOLUSE WAS WIRED AND IS NOT ANY MORE, and it came out on measurement.
+// Its query was the assistant's own last text after every tool call, which
+// makes it an echo machine independent of the corpus: the sibling
+// memory-usefulness job classified 2,556 fact deliveries across 15 days and
+// found 4 ever used, 68-79% of them echoing work the agent had just finished,
+// every measured arrival 20s-6h late. Re-adding it means re-arguing that
+// measurement.
+//
+// Stop was never wired and still must not be: Claude Code's hooks reference is
+// explicit that additionalContext at Stop CONTINUES the turn, so a Stop-wired
+// recall would resume every agent past zeus' own stop-gates, hold blocked cells
+// at "working" in the roll call, and chain paid model calls until retrieval ran
+// dry. Re-adding "Stop" must come with a deliberate decision about those three
 // consequences, not ride in on a refactor.
 func TestRecallHookEventsPinsTheWiring(t *testing.T) {
-	want := []string{"UserPromptSubmit", "PostToolUse"}
+	want := []string{"UserPromptSubmit"}
 	if !reflect.DeepEqual(recallHookEvents, want) {
 		t.Fatalf("recallHookEvents = %v, want exactly %v — see this test's comment before changing it", recallHookEvents, want)
+	}
+	// The removal half. An event dropped from recallHookEvents without being
+	// listed here stops being written and never stops FIRING: the stale group
+	// sits in every settings.json already installed, running a hook nothing
+	// intends, with no code left that mentions it.
+	wantRetired := []string{"PostToolUse"}
+	if !reflect.DeepEqual(retiredRecallHookEvents, wantRetired) {
+		t.Fatalf("retiredRecallHookEvents = %v, want exactly %v — an unwired event must be listed here, not merely absent above", retiredRecallHookEvents, wantRetired)
 	}
 }
 
 // TestMergeHookSettingsSurvivesARecallHookSlug pins the marker collision: a
 // job slugged `recall-hook` yields the pr-hook command `kraken pr-hook
 // recall-hook`, which CONTAINS withoutRecallHooks' " recall-hook" marker as
-// its slug argument — and the recall replace pass runs over PostToolUse,
-// where that pr-hook group lives. Without the pr-hook exemption the group was
-// silently dropped on every install, and the cell's PRs degraded to the
-// daemon's scan/poll attachment with nothing logged.
+// its slug argument — and a recall pass still runs over PostToolUse, where
+// that pr-hook group lives, now as the RETIREMENT strip rather than as the
+// replace. Without the verb-position exemption the group was silently dropped
+// on every install, and the cell's PRs degraded to the daemon's scan/poll
+// attachment with nothing logged. Retiring PostToolUse did not retire that
+// hazard — it renamed the pass that carries it.
 func TestMergeHookSettingsSurvivesARecallHookSlug(t *testing.T) {
 	out, err := mergeHookSettings(nil, "recall-hook", "kraken")
 	if err != nil {
@@ -450,18 +468,25 @@ func TestMergeHookSettingsSurvivesARecallHookSlug(t *testing.T) {
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	groups := parsed["hooks"].(map[string]any)["PostToolUse"].([]any)
-	prHook, recall := 0, 0
-	for _, g := range groups {
-		raw, _ := json.Marshal(g)
-		if strings.Contains(string(raw), " pr-hook") {
-			prHook++
-		} else if strings.Contains(string(raw), " recall-hook") {
-			recall++
+	count := func(event string) (prHook, recall int) {
+		groups, _ := parsed["hooks"].(map[string]any)[event].([]any)
+		for _, g := range groups {
+			raw, _ := json.Marshal(g)
+			// pr-hook FIRST: this slug's pr-hook command mentions both
+			// markers, and which one it is depends on verb position.
+			if strings.Contains(string(raw), " pr-hook") {
+				prHook++
+			} else if strings.Contains(string(raw), " recall-hook") {
+				recall++
+			}
 		}
+		return prHook, recall
 	}
-	if prHook != 1 || recall != 1 {
-		t.Fatalf("PostToolUse for slug recall-hook holds %d pr-hook and %d recall groups, want 1 and 1: %s", prHook, recall, out)
+	if prHook, recall := count("PostToolUse"); prHook != 1 || recall != 0 {
+		t.Fatalf("PostToolUse for slug recall-hook holds %d pr-hook and %d recall groups, want 1 and 0: %s", prHook, recall, out)
+	}
+	if _, recall := count("UserPromptSubmit"); recall != 1 {
+		t.Fatalf("UserPromptSubmit for slug recall-hook holds %d recall groups, want 1: %s", recall, out)
 	}
 }
 

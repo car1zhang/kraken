@@ -13,16 +13,17 @@ import (
 	"kraken/internal/store"
 )
 
-// watch_contract_test.go — athena-logic's BLIND contract tests for
-// 50-contract.md's slice A (watchlist moves into the knowledge graph),
-// written from the contract alone with no sight of internal/api/watchlist.go
-// or internal/store/watch.go. Every assertion cites the contract section it
-// traces to.
+// watch_contract_test.go — the LOGIC dimension of the watchlist routes: the
+// frozen wire shape, the happy paths of the three routes, the fold, and the
+// ownership split end to end. Boundaries, malformed bodies and refusal wording
+// belong to watch_edge_test.go.
 //
-// Dimension: LOGIC — the frozen wire shape, the happy paths of the three
-// routes, the fold→promote→create order, and the ownership split end to end.
-// Boundaries, malformed bodies and refusal wording belong to athena-edge's
-// watch_edge_test.go.
+// These began as blind tests for the round that moved a watch item INTO the
+// knowledge graph. Q9 moved it back OUT — a watch item is a `watch_items` row
+// again — so the edge, episode and node assertions are gone. What survives is
+// what was never about the backing: the wire keys never changed in either
+// direction, which is the reason neither move bumped apiContract, and the
+// column ownership held across both.
 //
 // Every package-level identifier is prefixed `contract`.
 
@@ -53,8 +54,8 @@ func contractGetWatchlist(t *testing.T, query string) *httptest.ResponseRecorder
 	return rec
 }
 
-// contractItemResp is the /api/watchlist/item response envelope A3.1/A3.3
-// freeze: {ok, id, folded} for add, {ok, unwatched} for remove.
+// contractItemResp is the /api/watchlist/item response envelope: {ok, id,
+// folded} for add and update, {ok, unwatched} for remove.
 type contractItemResp struct {
 	OK        bool  `json:"ok"`
 	ID        int64 `json:"id"`
@@ -78,8 +79,8 @@ func contractDecodeItemResp(t *testing.T, rec *httptest.ResponseRecorder) contra
 }
 
 // contractListRaw decodes GET /api/watchlist as raw key/value maps so the
-// FROZEN key set (A1) can be asserted directly — a typed struct would silently
-// swallow an extra key, which is precisely the failure A1+W3 forbid.
+// FROZEN key set can be asserted directly — a typed struct would silently
+// swallow an extra key, which is precisely the failure the freeze forbids.
 func contractListRaw(t *testing.T, query string) []map[string]json.RawMessage {
 	t.Helper()
 	rec := contractGetWatchlist(t, query)
@@ -92,7 +93,7 @@ func contractListRaw(t *testing.T, query string) []map[string]json.RawMessage {
 	}
 	items, ok := resp["watchlist"]
 	if !ok {
-		t.Fatalf("body %s has no \"watchlist\" key (A1)", rec.Body.String())
+		t.Fatalf("body %s has no \"watchlist\" key", rec.Body.String())
 	}
 	return items
 }
@@ -106,56 +107,23 @@ func contractKeys(m map[string]json.RawMessage) []string {
 	return out
 }
 
-// contractSeedWatched puts a live edge plus its watch overlay in the store
-// directly, through the frozen S3 verbs — the fixture for every GET/verdict
-// test below.
-func contractSeedWatched(t *testing.T, st *store.Store, src, dst, predicate, fact string, w store.WatchItem) int64 {
+// contractSeedWatched puts one live watch row in the store directly, through
+// the frozen store verb — the fixture for every GET/verdict test below.
+func contractSeedWatched(t *testing.T, st *store.Store, src, dst, predicate, observation string, w store.WatchItem) int64 {
 	t.Helper()
-	id := contractSeedEdge(t, st, src, dst, predicate, fact, 5)
-	if err := st.WatchEdge(id, w); err != nil {
-		t.Fatalf("WatchEdge: %v", err)
+	w.Observation = observation
+	w.Src, w.Dst, w.Predicate = src, dst, predicate
+	id, _, err := st.AddWatchItem(w)
+	if err != nil {
+		t.Fatalf("AddWatchItem %q: %v", observation, err)
 	}
 	return id
 }
 
-func contractSeedEdge(t *testing.T, st *store.Store, src, dst, predicate, fact string, strength int64) int64 {
-	t.Helper()
-	a, err := st.UpsertNode(store.GraphNode{Name: src, Type: "component"})
-	if err != nil {
-		t.Fatalf("upsert %q: %v", src, err)
-	}
-	b, err := st.UpsertNode(store.GraphNode{Name: dst, Type: "component"})
-	if err != nil {
-		t.Fatalf("upsert %q: %v", dst, err)
-	}
-	id, added, err := st.InsertEdge(store.GraphEdge{
-		SrcID: a, DstID: b, Predicate: predicate, Fact: fact, Strength: strength, ValidFrom: 1,
-	})
-	if err != nil || !added {
-		t.Fatalf("insert edge %q: added=%v err=%v", fact, added, err)
-	}
-	return id
-}
-
-func contractLiveEdgeCount(t *testing.T, st *store.Store) int {
-	t.Helper()
-	edges, err := st.AllEdges()
-	if err != nil {
-		t.Fatal(err)
-	}
-	n := 0
-	for _, e := range edges {
-		if e.ExpiredAt == 0 {
-			n++
-		}
-	}
-	return n
-}
-
-// contractAlwaysKeys / contractOmitemptyKeys are A1's frozen key list, split
-// by whether the key is omitempty. src/dst/predicate are deliberately absent
-// from BOTH: the graph routes already expose linkage, and adding a key here
-// would be an apiContract bump this job does not make (A1, W3).
+// contractAlwaysKeys / contractOmitemptyKeys are the frozen key list, split by
+// whether the key is omitempty. src/dst/predicate are deliberately absent from
+// BOTH: nothing on either client renders them, and adding a key here would be
+// an apiContract bump neither move makes.
 var contractAlwaysKeys = []string{
 	"class", "id", "last_seen", "observation", "sightings", "state", "first_seen", "updated_at",
 }
@@ -174,22 +142,22 @@ func contractSorted(ss ...[]string) []string {
 }
 
 // ---------------------------------------------------------------------------
-// A1 — GET /api/watchlist, shape frozen byte-key-identical to today's
+// GET /api/watchlist — shape frozen byte-key-identical across both moves
 // ---------------------------------------------------------------------------
 
-// TestContractWatchlistGetKeySetIsFrozen is the W1 guarantee in test form: the
-// web DREAM view and the iOS app run UNCHANGED against the new backing only if
+// TestContractWatchlistGetKeySetIsFrozen is the guarantee in test form: the web
+// DREAM view and the iOS app run UNCHANGED against a re-backed table only if
 // this exact key set survives. A response carrying src/dst/predicate — or any
-// other new key — is a FAILURE (A1, W3), not an improvement.
+// other new key — is a FAILURE, not an improvement.
 func TestContractWatchlistGetKeySetIsFrozen(t *testing.T) {
 	st := useTestStore(t)
 	full := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "zeus re-reads the same spec",
 		store.WatchItem{
-			Class: "waste", State: "watching", Sightings: 3,
-			FirstSeen: 1000, LastSeen: 2000, Evidence: `{"n":3}`,
-			SuggestedFix: "cache it", PRURL: "https://example/pr/1", UpdatedAt: 2000,
+			Class: "waste", State: "watching",
+			Evidence:     `{"n":3}`,
+			SuggestedFix: "cache it", PRURL: "https://example/pr/1",
 		})
-	if err := st.SetWatchVerdict(full, "fix", "agreed", "2026-01-02T03:04:05Z"); err != nil {
+	if err := st.SetWatchVerdict(full, "fix", "agreed"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -199,33 +167,33 @@ func TestContractWatchlistGetKeySetIsFrozen(t *testing.T) {
 	}
 	want := contractSorted(contractAlwaysKeys, contractOmitemptyKeys)
 	if got := contractKeys(items[0]); !contractEqualStrings(got, want) {
-		t.Fatalf("item keys = %v\nwant exactly %v (A1: the shape is frozen; no new keys, W3: these routes never bump apiContract)", got, want)
+		t.Fatalf("item keys = %v\nwant exactly %v (the shape is frozen; no new keys, and these routes never bump apiContract)", got, want)
 	}
-	for _, banned := range []string{"src", "dst", "predicate", "strength", "edge_id"} {
+	for _, banned := range []string{"src", "dst", "predicate", "strength", "edge_id", "expired_at"} {
 		if _, ok := items[0][banned]; ok {
-			t.Fatalf("item carries %q — A1 keeps graph linkage OFF this wire", banned)
+			t.Fatalf("item carries %q — the wire keeps the row's linkage and lifecycle OFF it", banned)
 		}
 	}
 
-	// A1: `id` is now the EDGE id and `observation` is the edge's fact sentence.
+	// `id` is the watch-row id and `observation` is the row's own sentence.
 	var gotID int64
 	if err := json.Unmarshal(items[0]["id"], &gotID); err != nil {
 		t.Fatal(err)
 	}
 	if gotID != full {
-		t.Fatalf("id = %d, want the edge id %d (A1)", gotID, full)
+		t.Fatalf("id = %d, want the watch row id %d", gotID, full)
 	}
 	var gotObs string
 	if err := json.Unmarshal(items[0]["observation"], &gotObs); err != nil {
 		t.Fatal(err)
 	}
 	if gotObs != "zeus re-reads the same spec" {
-		t.Fatalf("observation = %q, want the edge's fact sentence (A1)", gotObs)
+		t.Fatalf("observation = %q, want the row's own sentence", gotObs)
 	}
 
-	// A1: the six omitempty keys drop out of a bare item; the other eight never do.
+	// The six omitempty keys drop out of a bare item; the other eight never do.
 	bare := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "a bare observation",
-		store.WatchItem{Class: "prompting", State: "watching", Sightings: 1, FirstSeen: 9000, LastSeen: 9000, UpdatedAt: 9000})
+		store.WatchItem{Class: "prompting", State: "watching"})
 	items = contractListRaw(t, "")
 	var bareItem map[string]json.RawMessage
 	for _, it := range items {
@@ -241,13 +209,11 @@ func TestContractWatchlistGetKeySetIsFrozen(t *testing.T) {
 		t.Fatal("the bare item is missing from the list")
 	}
 	if got := contractKeys(bareItem); !contractEqualStrings(got, contractSorted(contractAlwaysKeys)) {
-		t.Fatalf("bare item keys = %v\nwant exactly %v (A1's omitempty set)", got, contractSorted(contractAlwaysKeys))
+		t.Fatalf("bare item keys = %v\nwant exactly %v (the omitempty set)", got, contractSorted(contractAlwaysKeys))
 	}
 }
 
-// contractEqualStrings is a tiny helper kept unexported-and-local to this file's
-// assertions; named without the prefix would risk colliding, so it stays
-// contract-scoped via its only callers above.
+// contractEqualStrings is a tiny helper kept local to this file's assertions.
 func contractEqualStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -260,99 +226,113 @@ func contractEqualStrings(a, b []string) bool {
 	return true
 }
 
-// TestContractWatchlistGetFiltersAndNeverNull pins A1's two carried-over
+// TestContractWatchlistGetFiltersAndNeverNull pins the two carried-over
 // conventions: `?state=` filters, an empty list serves [] rather than null,
 // and an unrecognized state is a 400 naming the enum rather than a silent [].
 func TestContractWatchlistGetFiltersAndNeverNull(t *testing.T) {
 	st := useTestStore(t)
 
 	if got := contractGetWatchlist(t, "").Body.String(); !strings.Contains(got, `"watchlist":[]`) {
-		t.Fatalf("empty body = %s, want an empty ARRAY, never null (A1)", got)
+		t.Fatalf("empty body = %s, want an empty ARRAY, never null", got)
 	}
 
 	contractSeedWatched(t, st, "zeus", "kraken", "concerns", "still watching this",
-		store.WatchItem{Class: "waste", State: "watching", Sightings: 1, FirstSeen: 1, LastSeen: 10, UpdatedAt: 10})
+		store.WatchItem{Class: "waste", State: "watching"})
 	shipped := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "already shipped this",
-		store.WatchItem{Class: "waste", State: "shipped", Sightings: 1, FirstSeen: 1, LastSeen: 20, UpdatedAt: 20})
+		store.WatchItem{Class: "waste", State: "shipped"})
 
 	items := contractListRaw(t, "?state=shipped")
 	if len(items) != 1 {
-		t.Fatalf("state=shipped returned %d items, want 1 (A1)", len(items))
+		t.Fatalf("state=shipped returned %d items, want 1", len(items))
 	}
 	var id int64
 	if err := json.Unmarshal(items[0]["id"], &id); err != nil {
 		t.Fatal(err)
 	}
 	if id != shipped {
-		t.Fatalf("filtered id = %d, want %d (A1)", id, shipped)
+		t.Fatalf("filtered id = %d, want %d", id, shipped)
 	}
 	if all := contractListRaw(t, ""); len(all) != 2 {
-		t.Fatalf("unfiltered list has %d items, want 2 (A1: empty state means all)", len(all))
+		t.Fatalf("unfiltered list has %d items, want 2 (empty state means all)", len(all))
 	}
 	if rec := contractGetWatchlist(t, "?state=pending"); rec.Code != http.StatusBadRequest {
-		t.Fatalf("bad state: status %d, want 400 (A1)", rec.Code)
+		t.Fatalf("bad state: status %d, want 400", rec.Code)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// A2 — POST /api/watchlist, carl's verdict, unchanged
+// POST /api/watchlist — carl's verdict
 // ---------------------------------------------------------------------------
 
-// TestContractWatchVerdictRoundTrip pins A2's happy path over the new backing:
-// id is the edge id, commented_at is stamped server-side as RFC3339, and the
-// documented undo (both fields empty) clears all three columns.
+// TestContractWatchVerdictRoundTrip pins the happy path: commented_at is
+// stamped server-side as RFC3339, the documented undo (both fields empty)
+// reopens the item, and carl's route moves nothing on the agent's side of the
+// split.
+//
+// The agent-side columns are compared against a READ-BACK baseline rather than
+// against literals: the store owns what an insert stamps sightings and the two
+// timestamps to, and what this test is responsible for is that the verdict
+// route leaves whatever they were exactly as they were.
 func TestContractWatchVerdictRoundTrip(t *testing.T) {
 	st := useTestStore(t)
-	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "a fact awaiting judgement",
-		store.WatchItem{Class: "correction", State: "watching", Sightings: 2, FirstSeen: 1, LastSeen: 5, UpdatedAt: 5})
+	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "an observation awaiting judgement",
+		store.WatchItem{Class: "correction", State: "watching"})
+	before, err := st.GetWatchItem(id)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if rec := contractPostVerdict(t, map[string]any{"id": id, "verdict": "fix", "comment": "  yes, do this  "}); rec.Code != http.StatusOK {
-		t.Fatalf("status %d, body %s (A2)", rec.Code, rec.Body.String())
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
 	got, err := st.GetWatchItem(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Verdict != "fix" || got.Comment != "yes, do this" {
-		t.Fatalf("verdict/comment = %q/%q (A2)", got.Verdict, got.Comment)
+		t.Fatalf("verdict/comment = %q/%q", got.Verdict, got.Comment)
 	}
 	if _, err := time.Parse(time.RFC3339, got.CommentedAt); err != nil {
-		t.Fatalf("commented_at = %q, want a server-stamped RFC3339 (A2): %v", got.CommentedAt, err)
+		t.Fatalf("commented_at = %q, want a server-stamped RFC3339: %v", got.CommentedAt, err)
 	}
-	// W2: carl's route wrote nothing on the agent's side of the split.
-	if got.Sightings != 2 || got.Class != "correction" || got.FirstSeen != 1 || got.LastSeen != 5 {
-		t.Fatalf("the verdict route moved an agent-owned column: %+v (W2)", got)
+	// The ownership split: carl's route wrote nothing on the agent's side.
+	if got.Sightings != before.Sightings || got.Class != before.Class ||
+		got.FirstSeen != before.FirstSeen || got.LastSeen != before.LastSeen {
+		t.Fatalf("the verdict route moved an agent-owned column: %+v, was %+v", got, before)
 	}
 
 	if rec := contractPostVerdict(t, map[string]any{"id": id, "verdict": ""}); rec.Code != http.StatusOK {
-		t.Fatalf("clear: status %d, body %s (A2)", rec.Code, rec.Body.String())
+		t.Fatalf("clear: status %d, body %s", rec.Code, rec.Body.String())
 	}
 	got, err = st.GetWatchItem(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Verdict != "" || got.Comment != "" || got.CommentedAt != "" {
-		t.Fatalf("the undo did not clear the trio: %+v (A2)", got)
+	if got.Verdict != "" || got.Comment != "" {
+		t.Fatalf("the undo did not reopen the item: %+v", got)
 	}
 
-	// A2: an unknown watch item is a 404 — including a LIVE edge that nobody
-	// watches (an absent overlay is an absent watch item).
-	unwatched := contractSeedEdge(t, st, "zeus", "kraken", "mentions", "a fact nobody watches", 5)
-	if rec := contractPostVerdict(t, map[string]any{"id": unwatched, "verdict": "fine"}); rec.Code != http.StatusNotFound {
-		t.Fatalf("verdict on an unwatched edge: status %d, want 404 (A2)", rec.Code)
+	// An unknown watch item is a 404 — including a row that has been CLOSED,
+	// which every read already hides.
+	closed := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "an observation nobody tracks",
+		store.WatchItem{Class: "waste", State: "watching"})
+	if err := st.ExpireWatchItem(closed, 99); err != nil {
+		t.Fatal(err)
+	}
+	if rec := contractPostVerdict(t, map[string]any{"id": closed, "verdict": "fine"}); rec.Code != http.StatusNotFound {
+		t.Fatalf("verdict on a closed row: status %d, want 404", rec.Code)
 	}
 }
 
-// TestContractWatchVerdictRefusesAgentOwnedKeys pins A2's key-rejection half
-// AND its one change: agentOwnedWatchKeys gains the add payload's new keys
-// (src, dst, predicate, strength), so an agent that posts an endpoint to
-// carl's route is told to use the other one rather than having it dropped.
+// TestContractWatchVerdictRefusesAgentOwnedKeys pins the key-rejection half:
+// every agent-owned key, the observation's endpoints included, is refused on
+// carl's route rather than being silently dropped.
 func TestContractWatchVerdictRefusesAgentOwnedKeys(t *testing.T) {
 	st := useTestStore(t)
-	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "the original fact",
-		store.WatchItem{Class: "waste", State: "watching", Sightings: 1, FirstSeen: 1, LastSeen: 2, UpdatedAt: 2})
+	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "the original observation",
+		store.WatchItem{Class: "waste", State: "watching"})
 
-	for _, key := range []string{"src", "dst", "predicate", "strength"} {
+	for _, key := range []string{"src", "dst", "predicate"} {
 		found := false
 		for _, k := range agentOwnedWatchKeys {
 			if k == key {
@@ -360,14 +340,14 @@ func TestContractWatchVerdictRefusesAgentOwnedKeys(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("agentOwnedWatchKeys is missing %q — A2 says it gains the add payload's new keys", key)
+			t.Fatalf("agentOwnedWatchKeys is missing %q — the endpoints belong to the agent's route", key)
 		}
 	}
 	for _, key := range agentOwnedWatchKeys {
 		t.Run(key, func(t *testing.T) {
 			rec := contractPostVerdict(t, map[string]any{"id": id, "verdict": "fine", key: "whatever"})
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("%s: status %d, want 400 (A2/W2), body %s", key, rec.Code, rec.Body.String())
+				t.Fatalf("%s: status %d, want 400, body %s", key, rec.Code, rec.Body.String())
 			}
 		})
 	}
@@ -375,18 +355,20 @@ func TestContractWatchVerdictRefusesAgentOwnedKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Verdict != "" || got.Observation != "the original fact" {
-		t.Fatalf("a refused request still wrote something: %+v (A2)", got)
+	if got.Verdict != "" || got.Observation != "the original observation" {
+		t.Fatalf("a refused request still wrote something: %+v", got)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// A3.1 — op add: fold, then promote, then create
+// op add — fold or create
 // ---------------------------------------------------------------------------
 
-// TestContractWatchItemAddCreates pins A3.1 step 4 end to end: the fact
-// sentence becomes a real graph edge between real nodes, with its own done
-// episode, and the overlay rides it — the whole point of the move.
+// TestContractWatchItemAddCreates pins the create path end to end: the
+// observation is normalized to one line, the row carries the endpoints and the
+// optional workflow fields the caller sent, the defaults land, carl's trio
+// stays empty, and the DREAM view sees it on the frozen wire under the same id
+// the response returned.
 func TestContractWatchItemAddCreates(t *testing.T) {
 	st := useTestStore(t)
 
@@ -396,283 +378,161 @@ func TestContractWatchItemAddCreates(t *testing.T) {
 		"src":           "zeus",
 		"dst":           "job specs",
 		"predicate":     "re-reads",
-		"strength":      7,
 		"evidence":      `{"n":3}`,
 		"suggested_fix": "cache the spec",
 		"pr_url":        "https://example/pr/2",
 	}}))
 	if resp.ID == 0 || resp.Folded {
-		t.Fatalf("add response = %+v, want a new edge id with folded:false (A3.1.4)", resp)
+		t.Fatalf("add response = %+v, want a new row id with folded:false", resp)
 	}
 
-	wantFact := contractOneLine("zeus   re-reads\nthe same spec twice")
-	edge, err := st.FindLiveEdgeByFact(wantFact)
-	if err != nil || edge == nil {
-		t.Fatalf("no live edge for the added observation: %+v %v (A3.1.4)", edge, err)
-	}
-	if edge.ID != resp.ID {
-		t.Fatalf("response id %d != the created edge %d (A3.1.4)", resp.ID, edge.ID)
-	}
-	if edge.Fact != wantFact {
-		t.Fatalf("fact = %q, want oneLine(observation) = %q (A3.1 step 1)", edge.Fact, wantFact)
-	}
-	if edge.Predicate != "re-reads" {
-		t.Fatalf("predicate = %q, want the given one (A3.1.4)", edge.Predicate)
-	}
-	if edge.Strength != 7 {
-		t.Fatalf("strength = %d, want the given 7 (A3.1.4)", edge.Strength)
-	}
-	if edge.ValidFrom == 0 {
-		t.Fatal("valid_from = 0, want now (A3.1.4)")
-	}
-
-	// The endpoints are real nodes, upserted by name.
-	nodes, err := st.AllNodes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := map[string]bool{}
-	for _, n := range nodes {
-		names[strings.ToLower(n.Name)] = true
-	}
-	if !names["zeus"] || !names["job specs"] {
-		t.Fatalf("nodes = %v, want zeus and job specs upserted by name (A3.1.4)", names)
-	}
-
-	// Its own episode: kind watchlist, ref watch:api, marked done immediately.
-	if edge.EpisodeID == 0 {
-		t.Fatal("the created edge has no episode (A3.1.4)")
-	}
-	ep, err := st.GetEpisode(edge.EpisodeID)
-	if err != nil || ep == nil {
-		t.Fatalf("episode %d missing: %v (A3.1.4)", edge.EpisodeID, err)
-	}
-	if ep.Kind != "watchlist" || ep.Ref != "watch:api" || ep.State != "done" {
-		t.Fatalf("episode = %+v, want kind watchlist / ref watch:api / state done (A3.1.4)", ep)
-	}
-
-	// The overlay: the item's fields, S3.5's defaults, and NO judgement.
 	got, err := st.GetWatchItem(resp.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantObs := contractOneLine("zeus   re-reads\nthe same spec twice")
+	if got.Observation != wantObs {
+		t.Fatalf("observation = %q, want oneLine(observation) = %q", got.Observation, wantObs)
+	}
+	if got.Src != "zeus" || got.Dst != "job specs" || got.Predicate != "re-reads" {
+		t.Fatalf("endpoints = %q/%q/%q, want the given ones", got.Src, got.Dst, got.Predicate)
+	}
 	if got.Class != "waste" || got.State != "watching" || got.Sightings != 1 {
-		t.Fatalf("overlay defaults = %+v, want class waste / state watching / sightings 1 (A3.1.4, S3.5)", got)
+		t.Fatalf("defaults = %+v, want class waste / state watching / sightings 1", got)
 	}
 	if got.Evidence != `{"n":3}` || got.SuggestedFix != "cache the spec" || got.PRURL != "https://example/pr/2" {
-		t.Fatalf("overlay optional fields did not land: %+v (A3.1.4)", got)
+		t.Fatalf("optional fields did not land: %+v", got)
 	}
 	if got.Verdict != "" || got.Comment != "" || got.CommentedAt != "" {
-		t.Fatalf("an agent add wrote carl's trio: %+v (W2)", got)
+		t.Fatalf("an agent add wrote carl's trio: %+v", got)
 	}
 
-	// W1: the DREAM view sees it on the frozen wire, keyed by the edge id.
+	// The DREAM view sees it on the frozen wire, keyed by the same id.
 	items := contractListRaw(t, "")
 	if len(items) != 1 {
-		t.Fatalf("GET returned %d items, want 1 (W1)", len(items))
+		t.Fatalf("GET returned %d items, want 1", len(items))
 	}
 	var listedID int64
 	if err := json.Unmarshal(items[0]["id"], &listedID); err != nil {
 		t.Fatal(err)
 	}
 	if listedID != resp.ID {
-		t.Fatalf("listed id = %d, want the edge id %d (A1/W1)", listedID, resp.ID)
+		t.Fatalf("listed id = %d, want the row id %d", listedID, resp.ID)
 	}
 }
 
-// TestContractWatchItemAddDefaultsPredicate pins A3.1's one optional endpoint
+// TestContractWatchItemAddDefaultsPredicate pins the one optional endpoint
 // field: an omitted predicate defaults to `concerns` rather than refusing.
 func TestContractWatchItemAddDefaultsPredicate(t *testing.T) {
 	st := useTestStore(t)
 	resp := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "add", "item": map[string]any{
 		"observation": "the daemon polls too often", "class": "waste",
-		"src": "the daemon", "dst": "kraken", "strength": 4,
+		"src": "the daemon", "dst": "kraken",
 	}}))
-	edge, err := st.FindLiveEdgeByFact("the daemon polls too often")
-	if err != nil || edge == nil {
-		t.Fatalf("no edge: %+v %v", edge, err)
-	}
-	if edge.ID != resp.ID {
-		t.Fatalf("id %d != edge %d", resp.ID, edge.ID)
-	}
-	if edge.Predicate != "concerns" {
-		t.Fatalf("predicate = %q, want the default `concerns` (A3.1)", edge.Predicate)
-	}
-}
-
-// TestContractWatchItemAddPromotesExistingEdge pins A3.1 step 3: an
-// observation whose wording already exists as an UNWATCHED live fact promotes
-// that fact — no second near-duplicate edge, and the existing edge is not
-// rewritten (W5).
-func TestContractWatchItemAddPromotesExistingEdge(t *testing.T) {
-	st := useTestStore(t)
-	existing := contractSeedEdge(t, st, "artifacts", "95 columns", "wrap-at", "artifacts wrap at 95 columns", 9)
-
-	resp := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "add", "item": map[string]any{
-		// Same sentence, different case and spacing — the same normalized fact.
-		"observation": "ARTIFACTS   wrap at 95 columns", "class": "correction",
-		"src": "somewhere else", "dst": "somewhere else again", "predicate": "ignored", "strength": 2,
-		"suggested_fix": "say so in the skill",
-	}}))
-	if resp.ID != existing {
-		t.Fatalf("add returned id %d, want the promoted edge %d (A3.1.3)", resp.ID, existing)
-	}
-	if resp.Folded {
-		t.Fatalf("promote reported folded:true — A3.1.3 responds folded:false (a fold is a repeat SIGHTING)")
-	}
-	if n := contractLiveEdgeCount(t, st); n != 1 {
-		t.Fatalf("%d live edges, want 1 — a promote must not mint a near-duplicate (A3.1.3)", n)
-	}
-	edges, err := st.GetEdges([]int64{existing})
-	if err != nil || len(edges) != 1 {
-		t.Fatal(err)
-	}
-	if edges[0].Predicate != "wrap-at" || edges[0].Strength != 9 || edges[0].Fact != "artifacts wrap at 95 columns" {
-		t.Fatalf("the promote rewrote the existing edge: %+v (W5: edges are insert-only)", edges[0])
-	}
-	got, err := st.GetWatchItem(existing)
+	got, err := st.GetWatchItem(resp.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Class != "correction" || got.SuggestedFix != "say so in the skill" || got.Sightings != 1 || got.State != "watching" {
-		t.Fatalf("the promoted overlay = %+v, want the item's fields plus S3.5's defaults (A3.1.3)", got)
+	if got.Predicate != "concerns" {
+		t.Fatalf("predicate = %q, want the default `concerns`", got.Predicate)
 	}
 }
 
-// TestContractWatchItemAddFoldsRepeat pins A3.1 step 2: re-adding the same
-// wording is a repeat SIGHTING — the server-side fold that replaces the dream
-// loop's old Find→Bump dance. src/dst/predicate/strength are IGNORED on a fold.
+// TestContractWatchItemAddFoldsRepeat pins the fold: re-adding the same
+// wording is a repeat SIGHTING — the server-side fold that replaced the dream
+// loop's old Find→Bump dance — and the endpoints of the existing row are left
+// alone, since the observation already has them.
 func TestContractWatchItemAddFoldsRepeat(t *testing.T) {
 	st := useTestStore(t)
 	first := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "add", "item": map[string]any{
 		"observation": "zeus re-reads the same spec", "class": "waste",
-		"src": "zeus", "dst": "job specs", "predicate": "re-reads", "strength": 6,
+		"src": "zeus", "dst": "job specs", "predicate": "re-reads",
 		"evidence": "sighting one",
 	}}))
-	nodesBefore, err := st.AllNodes()
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	second := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "add", "item": map[string]any{
-		"observation": "ZEUS   re-reads\tthe same SPEC", "class": "repetition",
-		"src": "ignored src", "dst": "ignored dst", "predicate": "ignored", "strength": 10,
+		"observation": "zeus   re-reads\tthe same spec", "class": "repetition",
+		"src": "ignored src", "dst": "ignored dst", "predicate": "ignored",
 		"evidence": "sighting two", "suggested_fix": "cache it", "state": "shipped",
 	}}))
 	if !second.Folded {
-		t.Fatalf("second add = %+v, want folded:true (A3.1.2)", second)
+		t.Fatalf("second add = %+v, want folded:true", second)
 	}
 	if second.ID != first.ID {
-		t.Fatalf("folded id = %d, want the existing edge %d (A3.1.2)", second.ID, first.ID)
+		t.Fatalf("folded id = %d, want the existing row %d", second.ID, first.ID)
 	}
-	if n := contractLiveEdgeCount(t, st); n != 1 {
-		t.Fatalf("%d live edges, want 1 — a fold adds no edge (A3.1.2)", n)
+	if all := contractListRaw(t, ""); len(all) != 1 {
+		t.Fatalf("%d items, want 1 — a fold adds no row", len(all))
 	}
 
 	got, err := st.GetWatchItem(first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// BumpWatchSighting: +1 and evidence replaced wholesale (S3.7).
 	if got.Sightings != 2 {
-		t.Fatalf("sightings = %d, want 2 (A3.1.2 → S3.7)", got.Sightings)
+		t.Fatalf("sightings = %d, want 2", got.Sightings)
 	}
 	if got.Evidence != "sighting two" {
-		t.Fatalf("evidence = %q, want it replaced wholesale (S3.7)", got.Evidence)
+		t.Fatalf("evidence = %q, want it replaced wholesale", got.Evidence)
 	}
-	// ...then the carried extras applied via UpdateWatchItem.
 	if got.SuggestedFix != "cache it" || got.Class != "repetition" || got.State != "shipped" {
-		t.Fatalf("overlay = %+v, want suggested_fix/class/state applied on a fold (A3.1.2)", got)
+		t.Fatalf("row = %+v, want suggested_fix/class/state applied on a fold", got)
 	}
-	// src/dst/predicate/strength IGNORED: no new nodes, edge untouched.
-	nodesAfter, err := st.AllNodes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(nodesAfter) != len(nodesBefore) {
-		t.Fatalf("a fold created %d node(s) — A3.1.2 IGNORES src/dst on a fold", len(nodesAfter)-len(nodesBefore))
-	}
-	edges, err := st.GetEdges([]int64{first.ID})
-	if err != nil || len(edges) != 1 {
-		t.Fatal(err)
-	}
-	if edges[0].Predicate != "re-reads" || edges[0].Strength != 6 {
-		t.Fatalf("a fold rewrote the edge: %+v — A3.1.2 ignores predicate/strength (W5)", edges[0])
-	}
-}
-
-// TestContractWatchItemAddFoldBeatsPromote pins A3.1's ORDER: with both a
-// watched and an unwatched live edge carrying the same normalized fact, the
-// fold branch runs first. Order matters — promoting instead would leave the
-// dream loop with two watch items for one observation.
-func TestContractWatchItemAddFoldBeatsPromote(t *testing.T) {
-	st := useTestStore(t)
-	unwatched := contractSeedEdge(t, st, "zeus", "kraken", "mentions", "the same observation twice over", 5)
-	watched := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "The Same Observation Twice Over",
-		store.WatchItem{Class: "waste", State: "watching", Sightings: 1, FirstSeen: 1, LastSeen: 50, UpdatedAt: 50})
-	if unwatched >= watched {
-		t.Fatalf("fixture: expected the unwatched edge to take the lower id (%d, %d)", unwatched, watched)
-	}
-
-	resp := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "add", "item": map[string]any{
-		"observation": "the same observation twice over", "class": "waste",
-		"src": "zeus", "dst": "kraken", "strength": 5,
-	}}))
-	if !resp.Folded || resp.ID != watched {
-		t.Fatalf("add = %+v, want a fold onto the WATCHED edge %d (A3.1: fold before promote)", resp, watched)
-	}
-	if n := contractLiveEdgeCount(t, st); n != 2 {
-		t.Fatalf("%d live edges, want the original 2 (A3.1.2)", n)
-	}
-	if _, err := st.GetWatchItem(unwatched); err == nil {
-		t.Fatalf("the unwatched edge %d gained an overlay — the fold branch must win (A3.1)", unwatched)
+	if got.Src != "zeus" || got.Dst != "job specs" || got.Predicate != "re-reads" {
+		t.Fatalf("a fold rewrote the endpoints: %q/%q/%q", got.Src, got.Dst, got.Predicate)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// A3.2 / A3.3 — update and remove
+// update and remove
 // ---------------------------------------------------------------------------
 
-// TestContractWatchItemUpdateIsPartial pins A3.2: the old GET-then-backfill
-// dance is gone, so a partial update must leave the counters and carl's
-// judgement alone by virtue of the store verb being partial (S3.6).
+// TestContractWatchItemUpdateIsPartial: a partial update must leave the
+// counters and carl's judgement alone by virtue of the store verb being
+// partial. The baselines are read back rather than asserted as literals, for
+// the reason the verdict round-trip reads them back.
 func TestContractWatchItemUpdateIsPartial(t *testing.T) {
 	st := useTestStore(t)
 	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "an observation carl judged",
-		store.WatchItem{Class: "repetition", State: "watching", Sightings: 7, FirstSeen: 1000, LastSeen: 2000, UpdatedAt: 2000})
+		store.WatchItem{Class: "repetition", State: "watching"})
 	if rec := contractPostVerdict(t, map[string]any{"id": id, "verdict": "fix", "comment": "agreed"}); rec.Code != http.StatusOK {
 		t.Fatalf("seed verdict: status %d", rec.Code)
+	}
+	before, err := st.GetWatchItem(id)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	resp := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "update", "item": map[string]any{
 		"id": id, "suggested_fix": "do X",
 	}}))
 	if resp.ID != id {
-		t.Fatalf("update response id = %d, want %d (A3.4)", resp.ID, id)
+		t.Fatalf("update response id = %d, want %d", resp.ID, id)
 	}
 	got, err := st.GetWatchItem(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.SuggestedFix != "do X" {
-		t.Fatalf("the update did not land: %+v (A3.2)", got)
+		t.Fatalf("the update did not land: %+v", got)
 	}
-	if got.Sightings != 7 || got.FirstSeen != 1000 || got.LastSeen != 2000 || got.Class != "repetition" || got.State != "watching" {
-		t.Fatalf("a partial update zeroed untouched columns: %+v (A3.2: zero = leave alone)", got)
+	if got.Sightings != before.Sightings || got.FirstSeen != before.FirstSeen ||
+		got.LastSeen != before.LastSeen || got.Class != "repetition" || got.State != "watching" {
+		t.Fatalf("a partial update zeroed untouched columns: %+v, was %+v (zero = leave alone)", got, before)
 	}
 	if got.Verdict != "fix" || got.Comment != "agreed" || got.CommentedAt == "" {
-		t.Fatalf("the agent's update erased carl's judgement: %+v (W2)", got)
+		t.Fatalf("the agent's update erased carl's judgement: %+v", got)
 	}
 
-	// A3.2: the fact is immutable on this route — the five edge-shaped keys are
-	// refused rather than silently dropped.
-	for _, key := range []string{"observation", "src", "dst", "predicate", "strength"} {
+	// The observation and its endpoints are immutable on this route — refused
+	// rather than silently dropped.
+	for _, key := range []string{"observation", "src", "dst", "predicate"} {
 		t.Run(key, func(t *testing.T) {
 			rec := contractPostItem(t, map[string]any{"op": "update", "item": map[string]any{
 				"id": id, key: "x",
 			}})
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("%s in an update item: status %d, want 400 (A3.2), body %s", key, rec.Code, rec.Body.String())
+				t.Fatalf("%s in an update item: status %d, want 400, body %s", key, rec.Code, rec.Body.String())
 			}
 		})
 	}
@@ -681,75 +541,82 @@ func TestContractWatchItemUpdateIsPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	if after.Observation != "an observation carl judged" {
-		t.Fatalf("a refused update still changed the fact: %q (A3.2, W5)", after.Observation)
+		t.Fatalf("a refused update still changed the observation: %q", after.Observation)
 	}
 }
 
-// TestContractWatchItemRemoveUnwatchesOnly pins A3.3: remove is an UNWATCH.
-// The response says so, and the fact itself survives in the graph — still
-// live, still searchable, still a promotion target for a later add.
-func TestContractWatchItemRemoveUnwatchesOnly(t *testing.T) {
+// TestContractWatchItemRemoveClosesTheRow: remove CLOSES the row. The response
+// says so, the row leaves every read, and it survives by id — carl's verdict
+// on it included, which is the whole reason nothing here is a delete.
+//
+// A later add of the same wording therefore creates a FRESH row rather than
+// reviving the closed one: the fold matches live rows only, so re-adding is
+// carl's pass noticing the thing again after having dropped it, which is a new
+// sighting count rather than a continuation of the old one.
+func TestContractWatchItemRemoveClosesTheRow(t *testing.T) {
 	st := useTestStore(t)
-	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "a fact that outlives its watch",
-		store.WatchItem{Class: "waste", State: "watching", Sightings: 1, FirstSeen: 1, LastSeen: 2, UpdatedAt: 2})
+	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "an observation that outlives its watch",
+		store.WatchItem{Class: "waste", State: "watching"})
+	if rec := contractPostVerdict(t, map[string]any{"id": id, "verdict": "fine", "comment": "noted"}); rec.Code != http.StatusOK {
+		t.Fatalf("seed verdict: status %d", rec.Code)
+	}
 
 	rec := contractPostItem(t, map[string]any{"op": "remove", "id": id})
 	resp := contractDecodeItemResp(t, rec)
 	if !resp.Unwatched {
-		t.Fatalf("remove response = %s, want {\"ok\":true,\"unwatched\":true} (A3.3)", rec.Body.String())
+		t.Fatalf("remove response = %s, want {\"ok\":true,\"unwatched\":true}", rec.Body.String())
 	}
 
-	if _, err := st.GetWatchItem(id); err == nil {
-		t.Fatal("the overlay survived a remove (A3.3)")
+	got, err := st.GetWatchItem(id)
+	if err != nil {
+		t.Fatalf("the row did not survive a remove: %v — no watch row is ever deleted", err)
+	}
+	if got.ExpiredAt == 0 {
+		t.Fatalf("row = %+v, want expired_at stamped", got)
+	}
+	if got.Verdict != "fine" || got.Comment != "noted" {
+		t.Fatalf("closing the row took carl's judgement with it: %+v", got)
 	}
 	if items := contractListRaw(t, ""); len(items) != 0 {
-		t.Fatalf("GET still lists %d item(s) after remove (A3.3)", len(items))
+		t.Fatalf("GET still lists %d item(s) after remove", len(items))
 	}
-	// The fact itself survives — that is what the response body claims.
-	edge, err := st.FindLiveEdgeByFact("a fact that outlives its watch")
-	if err != nil || edge == nil || edge.ID != id {
-		t.Fatalf("the fact did not survive the unwatch: %+v %v (A3.3)", edge, err)
-	}
-	if n := contractLiveEdgeCount(t, st); n != 1 {
-		t.Fatalf("%d live edges after remove, want 1 (A3.3)", n)
-	}
-	// ...and a later add promotes it back rather than creating a duplicate.
+
 	again := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "add", "item": map[string]any{
-		"observation": "A Fact That Outlives Its Watch", "class": "waste",
-		"src": "zeus", "dst": "kraken", "strength": 5,
+		"observation": "an observation that outlives its watch", "class": "waste",
+		"src": "zeus", "dst": "kraken",
 	}}))
-	if again.ID != id || again.Folded {
-		t.Fatalf("re-add = %+v, want a promote of edge %d (A3.1.3)", again, id)
+	if again.Folded || again.ID == id {
+		t.Fatalf("re-add = %+v, want a FRESH row — the fold matches live rows only", again)
 	}
-	if n := contractLiveEdgeCount(t, st); n != 1 {
-		t.Fatalf("%d live edges after the re-add, want 1 (A3.1.3)", n)
+	if items := contractListRaw(t, ""); len(items) != 1 {
+		t.Fatalf("%d items after the re-add, want just the fresh one", len(items))
 	}
 }
 
 // ---------------------------------------------------------------------------
-// W2 — the ownership split, end to end across both routes
+// the ownership split, end to end across both routes
 // ---------------------------------------------------------------------------
 
-// TestContractWatchOwnershipSplitSurvivesTheMove pins W2 whole: no
+// TestContractWatchOwnershipSplitSurvivesTheMove pins it whole: no
 // agent-reachable path writes verdict/comment/commented_at, no carl-reachable
 // path writes anything else, and both routes still refuse the other side's
 // keys at every level they did before.
 func TestContractWatchOwnershipSplitSurvivesTheMove(t *testing.T) {
 	st := useTestStore(t)
 	id := contractSeedWatched(t, st, "zeus", "kraken", "concerns", "the contested observation",
-		store.WatchItem{Class: "feedback", State: "watching", Sightings: 4, FirstSeen: 10, LastSeen: 20, UpdatedAt: 20})
+		store.WatchItem{Class: "feedback", State: "watching"})
 	if rec := contractPostVerdict(t, map[string]any{"id": id, "verdict": "fine", "comment": "leave it"}); rec.Code != http.StatusOK {
 		t.Fatalf("seed verdict: status %d", rec.Code)
 	}
 
-	// The agent's route refuses carl's keys at BOTH levels (A3 preamble).
+	// The agent's route refuses carl's keys at BOTH levels.
 	for _, key := range carlOwnedWatchKeys {
 		t.Run("root/"+key, func(t *testing.T) {
 			rec := contractPostItem(t, map[string]any{
 				"op": "update", key: "x", "item": map[string]any{"id": id, "class": "feedback"},
 			})
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status %d, want 400 (W2), body %s", rec.Code, rec.Body.String())
+				t.Fatalf("status %d, want 400, body %s", rec.Code, rec.Body.String())
 			}
 		})
 		t.Run("item/"+key, func(t *testing.T) {
@@ -757,15 +624,15 @@ func TestContractWatchOwnershipSplitSurvivesTheMove(t *testing.T) {
 				"id": id, "class": "feedback", key: "x",
 			}})
 			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status %d, want 400 (W2), body %s", rec.Code, rec.Body.String())
+				t.Fatalf("status %d, want 400, body %s", rec.Code, rec.Body.String())
 			}
 		})
 	}
 
 	// A legal agent write (fold via add) still cannot move carl's trio.
 	if resp := contractDecodeItemResp(t, contractPostItem(t, map[string]any{"op": "add", "item": map[string]any{
-		"observation": "THE contested   observation", "class": "waste",
-		"src": "zeus", "dst": "kraken", "strength": 5, "evidence": "again",
+		"observation": "the   contested observation", "class": "waste",
+		"src": "zeus", "dst": "kraken", "evidence": "again",
 	}})); !resp.Folded || resp.ID != id {
 		t.Fatalf("fold = %+v, want a fold onto %d", resp, id)
 	}
@@ -774,9 +641,9 @@ func TestContractWatchOwnershipSplitSurvivesTheMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Verdict != "fine" || got.Comment != "leave it" || got.CommentedAt == "" {
-		t.Fatalf("an agent add moved carl's trio: %+v (W2)", got)
+		t.Fatalf("an agent add moved carl's trio: %+v", got)
 	}
-	if got.Sightings != 5 || got.Evidence != "again" || got.Class != "waste" {
-		t.Fatalf("the fold did not apply the agent's own fields: %+v (A3.1.2)", got)
+	if got.Sightings != 2 || got.Evidence != "again" || got.Class != "waste" {
+		t.Fatalf("the fold did not apply the agent's own fields: %+v", got)
 	}
 }

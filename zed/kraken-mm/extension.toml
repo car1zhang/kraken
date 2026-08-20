@@ -1,0 +1,39 @@
+id = "kraken-mm"
+name = "Kraken Mental Model"
+description = "Shows the lines you have already marked as read in kraken's mental model, and lets you drop a mark from the editor."
+version = "0.1.0"
+schema_version = 1
+authors = ["car1zhang"]
+repository = "https://github.com/car1zhang/kraken"
+
+# One language server, `kraken mm lsp`, attached to an explicit language list.
+#
+# The list is explicit because Zed has no wildcard: a language server is bound
+# to named languages or to nothing at all. So this enumerates what the repos
+# kraken actually works in are written in — adding a language here is the whole
+# cost of covering a new one.
+#
+# The server is not a language server in any ordinary sense; it parses nothing
+# and offers no completion. All it does is publish severity-Hint diagnostics
+# on the lines carl has marked as read, plus a `drop read mark` code action.
+# That is the ONE channel a Zed extension has for painting something onto a
+# line — extensions cannot draw decorations directly.
+[language_servers.kraken-mm]
+name = "kraken mental model"
+languages = [
+  "Go",
+  "Python",
+  "TypeScript",
+  "TSX",
+  "JavaScript",
+  "Swift",
+  "Markdown",
+  "JSON",
+  "YAML",
+  "Shell Script",
+  "Rust",
+  "C",
+  "CSS",
+  "HTML",
+  "Plain Text",
+]

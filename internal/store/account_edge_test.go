@@ -95,14 +95,25 @@ func edgeAcctColumns(t *testing.T, s *Store) map[string]edgeAcctColumn {
 // schema v28
 // ---------------------------------------------------------------------------
 
-// TestEdgeAccountSchemaVersionIsTwentyEight pins both halves of the version
-// obligation: the constant, and what a freshly-migrated database actually
-// stamps into user_version. They can disagree — a migration appended without
-// bumping the constant leaves every real database one version short and
-// silently never runs — so both are asserted.
-func TestEdgeAccountSchemaVersionIsTwentyEight(t *testing.T) {
-	if schemaVersion != 28 {
-		t.Errorf("schemaVersion = %d, want 28 — the account binding is migration 28", schemaVersion)
+// TestEdgeAccountSchemaVersionIsAtLeastTwentyEight pins both halves of the
+// version obligation: the constant, and what a freshly-migrated database
+// actually stamps into user_version. They can disagree — a migration appended
+// without bumping the constant leaves every real database one version short
+// and silently never runs — so both are asserted.
+//
+// A FLOOR rather than the exact pin this started as. The account binding is
+// migration 28 and always will be, but the constant moves with every later
+// feature (v29's mental-model cutover was the first), and an exact assertion
+// here says nothing about the binding while failing on every unrelated change.
+// The migration NUMBER is what this test is about; jobgoals_edge_test.go's
+// deliberately-exact pin is the one that exists to stop a new migration
+// landing without a downgradeFreshDB reversal.
+func TestEdgeAccountSchemaVersionIsAtLeastTwentyEight(t *testing.T) {
+	if schemaVersion < 28 {
+		t.Errorf("schemaVersion = %d, want >= 28 — the account binding is migration 28", schemaVersion)
+	}
+	if _, ok := migrations[28]; !ok {
+		t.Errorf("no migration registered at 28, where the account binding lives")
 	}
 	s := openTest(t)
 	var version int

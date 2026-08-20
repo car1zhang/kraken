@@ -22,19 +22,26 @@ import (
 // injects at spawn time, delivered again when the conversation turns to
 // something the graph already knows about.
 //
-// The shape is two Claude Code hooks — UserPromptSubmit (query: the user's
-// new message) and PostToolUse (query: the assistant's last text, refreshed
-// per tool call) — in every cell worktree running `kraken recall-hook`, which
-// POSTs the hook payload to kraken serve and emits whatever comes back as
-// additionalContext. The hook is a separate, short-lived OS process — it
+// The shape is one Claude Code hook — UserPromptSubmit, whose query is the
+// user's new message — in every cell worktree running `kraken recall-hook`,
+// which POSTs the hook payload to kraken serve and emits whatever comes back
+// as additionalContext. The hook is a separate, short-lived OS process — it
 // opens no database, exactly as pr-hook doesn't (single-writer rule: `kraken
 // serve` owns kraken.db) — so the retrieval itself runs server-side in Recall
 // below.
 //
-// Nothing here is specific to those events: RunRecallHook echoes whatever
+// Nothing here is specific to that event: RunRecallHook echoes whatever
 // `hook_event_name` it was handed, and Recall never reads it. Which events are
-// wired is entirely cell.go's recallHookEvents, and Stop is deliberately not
-// among them — see that var for why.
+// wired is entirely cell.go's recallHookEvents — PostToolUse was wired and is
+// now retired on measurement, Stop was never wired at all, and that var is
+// where both arguments live.
+//
+// The machinery a per-tool-call arm needed is deliberately KEPT: the
+// per-session serialization and the same-query short-circuit below. Both are
+// still load-bearing on one event — a cell can hold several agents prompting
+// concurrently, and a resubmitted identical prompt is free rather than a
+// second retrieval — and both are cheap. What retired was the arm, not the
+// discipline.
 //
 // Two rules shape every line here, and they are the same two graphctx.go
 // states for the spawn path, read one level up:
@@ -53,11 +60,12 @@ import (
 // RecallRequest is POST /api/graph/recall's body: one hook firing, as the
 // hook itself saw it.
 //
-// Event carries hook_event_name for the server's benefit only — Recall does
-// not branch on it (a UserPromptSubmit and a PostToolUse ask the same question
-// of the graph, they just differ in where the query text comes from: the new
-// prompt vs the transcript's last assistant text), but a payload that cannot
-// say which hook produced it is one nobody can debug from a log.
+// Event carries hook_event_name for two readers. The GRAPH half does not
+// branch on it — every event asks the graph the same question and they differ
+// only in where the query text comes from (the new prompt, else the
+// transcript's last assistant text) — while the goals half does
+// (recallEmitsGoals). And a payload that cannot say which hook produced it is
+// one nobody can debug from a log.
 //
 // Slug is the CELL's job slug, baked into the hook command at install time
 // (cell.go's recallHookCommand). It is not the graph's key — that is still the
@@ -109,18 +117,20 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	if query == "" && !recallEmitsGoals(req) {
 		// No query and no goals to consider is nothing to do, and this is the
 		// one refusal cheap enough to make BEFORE the lock — which matters,
-		// because it is the PostToolUse path and the lock it would otherwise
-		// take can be held across a slow embed.
+		// because the lock it would otherwise take can be held across a slow
+		// embed.
 		return ""
 	}
-	// One firing per session at a time, from here through the mark. With
-	// PostToolUse wired, parallel tool calls in one assistant message fire
-	// CONCURRENT hooks for one session — the exact producer the old
-	// read-then-mark window had been ruled safe for lacking — and two firings
-	// interleaving in that window would both pass the same skip-set and
-	// double-inject. kraken serve is the sole server, so an in-process mutex
-	// per session closes the race outright; overlapping firings queue, and
-	// the ones behind the head see its marks (or short-circuit below).
+	// One firing per session at a time, from here through the mark. Two
+	// firings interleaving in the read-then-mark window would both pass the
+	// same skip-set and double-inject, and the producers of concurrent
+	// firings for one session outlived the per-tool-call arm that first
+	// demanded this: a cell's agents share a worktree, a session can be
+	// resumed while a slow firing is still in flight, and a retried prompt
+	// arrives before the first has marked. kraken serve is the sole server,
+	// so an in-process mutex per session closes the race outright;
+	// overlapping firings queue, and the ones behind the head see its marks
+	// (or short-circuit below).
 	state := recallSessionState(st, sessionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -171,11 +181,11 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	// carl's NEXT edit — the delivery lost silently, exactly the failure the
 	// skip-set guard prevents on the graph side.
 	//
-	// `decided` is false when the goals decision did not run at all — a
-	// PostToolUse firing, or a job that did not resolve — and then nothing is
-	// recorded: the empty string those paths return is "not asked", not "no
-	// goals", and conflating them would re-deliver the block on every prompt
-	// that follows a tool call.
+	// `decided` is false when the goals decision did not run at all — a firing
+	// on an event goals do not ride, or a job that did not resolve — and then
+	// nothing is recorded: the empty string those paths return is "not asked",
+	// not "no goals", and conflating them would re-deliver the block on the
+	// next prompt that did resolve.
 	commit := func(graphBlock string) string {
 		if decided && ctx.Err() == nil {
 			state.lastGoals = fingerprint
@@ -185,17 +195,19 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	if query == "" {
 		return commit("")
 	}
-	// Within one assistant message, every PostToolUse firing after the first
-	// carries the SAME LastAssistantText — so a query byte-identical to the
-	// last one this session completed is answered without touching the store,
-	// the embedder, or the graph. This is what makes per-tool-call wiring
-	// affordable: real retrieval re-arms exactly when the query changes (a
-	// new prompt, a new assistant message). Cost optimization only — set on
-	// COMPLETED passes alone: a canceled context, a skip-set read error, or a
-	// mark error never suppresses a retry. The one deliberate exception is a
-	// failure INSIDE retrieval, which arms like an empty graph because the
-	// seam collapses the two (see the comment at the graphFacts call below);
-	// kg_recall still owns correctness if this process restarts.
+	// A query byte-identical to the last one this session completed is
+	// answered without touching the store, the embedder, or the graph. It was
+	// what made per-tool-call wiring affordable (every firing after the first
+	// within one assistant message carried the same LastAssistantText); with
+	// that arm retired it still earns its place on a resubmitted or retried
+	// prompt, where the alternative is paying for an embed to reach the same
+	// skip set. Real retrieval re-arms exactly when the query changes. Cost
+	// optimization only — set on COMPLETED passes alone: a canceled context, a
+	// skip-set read error, or a mark error never suppresses a retry. The one
+	// deliberate exception is a failure INSIDE retrieval, which arms like an
+	// empty graph because the seam collapses the two (see the comment at the
+	// graphFacts call below); kg_recall still owns correctness if this process
+	// restarts.
 	if query == state.lastQuery {
 		return commit("")
 	}
@@ -291,11 +303,15 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 // on at all: UserPromptSubmit and nothing else.
 //
 // The narrowing is deliberate and it is about frequency, not about capability.
-// PostToolUse fires on EVERY tool call, and the goals block would be silent on
-// almost all of them (the fingerprint below suppresses an unchanged block), but
-// the ones it did fire on would land mid-tool-loop — carl's week arriving
-// between a Read and an Edit. UserPromptSubmit lands where an instruction
-// belongs: at the top of a turn, in front of the agent's own thinking.
+// It was written when PostToolUse fired this hook on EVERY tool call: the
+// goals block would have been silent on almost all of them (the fingerprint
+// below suppresses an unchanged block), but the ones it did fire on would land
+// mid-tool-loop — carl's week arriving between a Read and an Edit.
+// UserPromptSubmit lands where an instruction belongs: at the top of a turn, in
+// front of the agent's own thinking. The test is kept now that
+// recallHookEvents holds only that event, because the ROUTE accepts any
+// payload a hook sends it and the narrowing is a property of goals rather than
+// of the current wiring.
 func recallEmitsGoals(req RecallRequest) bool {
 	return req.Event == "UserPromptSubmit"
 }
@@ -305,10 +321,10 @@ func recallEmitsGoals(req RecallRequest) bool {
 //
 // The second return is what separates "carl has no goals" (block "", decided
 // true — a real state the suppressor must record) from "this firing was never
-// going to carry goals" (block "", decided false — a PostToolUse firing, or a
-// job neither the slug nor the session resolved). Both look identical from the
-// block alone, and recording the second as the first is what would re-deliver
-// an unchanged block after every tool call.
+// going to carry goals" (block "", decided false — an event goals do not ride,
+// or a job neither the slug nor the session resolved). Both look identical
+// from the block alone, and recording the second as the first is what would
+// re-deliver an unchanged block on the next firing that did resolve.
 //
 // The job is resolved by SLUG first — current name, then former names, since a
 // rename moves neither the cell's installed hook command nor the worktree it
@@ -456,12 +472,13 @@ func recallSessionState(st *store.Store, id string) *recallSession {
 // to say, and a turn that hangs is the opposite of invisible.
 const recallHookTimeout = 4 * time.Second
 
-// recallHookPayload is the subset of Claude Code's UserPromptSubmit and
-// PostToolUse hook payloads this verb reads — TranscriptPath is the busiest
-// field now, since a PostToolUse payload carries no prompt. Parsed
-// defensively, prhook.go's stance: the schema is owned by Claude Code and can
-// drift out from under this file at any time, and a field that stops arriving
-// must degrade to an empty string rather than to a failed turn.
+// recallHookPayload is the subset of Claude Code's hook payloads this verb
+// reads. Prompt is what the one wired event (UserPromptSubmit) carries;
+// TranscriptPath stays read because the verb is event-agnostic and a payload
+// with no prompt must still be able to say what the conversation is about.
+// Parsed defensively, prhook.go's stance: the schema is owned by Claude Code
+// and can drift out from under this file at any time, and a field that stops
+// arriving must degrade to an empty string rather than to a failed turn.
 type recallHookPayload struct {
 	HookEventName  string `json:"hook_event_name"`
 	SessionID      string `json:"session_id"`
@@ -523,8 +540,8 @@ func RunRecallHook(in io.Reader, out io.Writer, slug ...string) {
 	// Stop's decision:"block" continuation; whether Claude Code also sets it
 	// for a continuation caused by additionalContext alone is NOT verified —
 	// nothing in the docs says so, and no Stop firing exists here to measure.
-	// Inert while neither wired event sets it (UserPromptSubmit and
-	// PostToolUse payloads never carry the flag); kept so that re-enabling
+	// Inert while the one wired event does not set it (a UserPromptSubmit
+	// payload never carries the flag); kept so that re-enabling
 	// Stop starts from a guard that may work rather than none — but re-testing
 	// this flag against a real additionalContext continuation is part of that
 	// change, not something this comment can promise.

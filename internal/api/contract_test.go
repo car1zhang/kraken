@@ -2720,11 +2720,14 @@ var watchItemReqSpec = map[string]fieldSpec{
 	"id":   {kind: wireNumber, required: false},
 }
 
-// watchItemWireSpec carries src/dst/predicate/strength alongside the overlay
-// fields: a watch item is a graph edge, so an `add` that mints a new one has
-// to name its endpoints and state the extractor's confidence. This is a
-// REQUEST shape on the agent's CLI-facing route — never decoded by the iOS app
-// or the web UI — so the added keys are not an apiContract bump.
+// watchItemWireSpec carries src/dst/predicate alongside the workflow fields:
+// an observation names the entities it runs between. This is a REQUEST shape
+// on the agent's CLI-facing route — never decoded by the iOS app or the web UI
+// — so those keys are not an apiContract bump.
+//
+// `strength` is deliberately absent: it was the EDGE's confidence, and the
+// standalone watch_items table has no such column, so a spec listing it would
+// pin a key nothing writes and nothing reads.
 var watchItemWireSpec = map[string]fieldSpec{
 	"id":            {kind: wireNumber, required: false},
 	"observation":   {kind: wireString, required: false},
@@ -2739,7 +2742,6 @@ var watchItemWireSpec = map[string]fieldSpec{
 	"src":           {kind: wireString, required: false},
 	"dst":           {kind: wireString, required: false},
 	"predicate":     {kind: wireString, required: false},
-	"strength":      {kind: wireNumber, required: false},
 }
 
 // watchItemRespSpec is the agent write's 200: {"ok":true,"id":N} plus
@@ -2757,9 +2759,9 @@ var watchItemRespSpec = map[string]fieldSpec{
 
 // watchRemoveRespSpec is op `remove`'s own 200, and its own spec because it
 // carries NO id: the caller named the item, so echoing it back says nothing,
-// whereas `unwatched` says the thing that is easy to get wrong — the overlay
-// is gone and the FACT survives in the graph. Unlearning a fact is
-// /api/graph/add's invalidate list, a different and much louder act.
+// whereas `unwatched` says the thing that is easy to get wrong — the row is
+// CLOSED, not deleted. It leaves every list and stays readable by id, carl's
+// verdict on it included.
 var watchRemoveRespSpec = map[string]fieldSpec{
 	"ok":        {kind: wireBool, required: true},
 	"unwatched": {kind: wireBool, required: true},
@@ -2781,7 +2783,7 @@ func TestWatchlistWriteWireShapes(t *testing.T) {
 	itemWire, err := json.Marshal(watchItemWire{
 		ID: 1, Observation: "o", Class: "waste", State: "watching", Sightings: 2,
 		FirstSeen: 1, LastSeen: 2, Evidence: `{"n":1}`, SuggestedFix: "fix", PRURL: "u",
-		Src: "dream pass", Dst: "kraken", Predicate: "concerns", Strength: 5,
+		Src: "dream pass", Dst: "kraken", Predicate: "concerns",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2791,7 +2793,7 @@ func TestWatchlistWriteWireShapes(t *testing.T) {
 	useTestStore(t)
 	rec := httptest.NewRecorder()
 	body := mustJSON(t, map[string]any{"op": "add", "item": map[string]any{
-		"observation": "o", "class": "waste", "src": "dream pass", "dst": "kraken", "strength": 5,
+		"observation": "o", "class": "waste", "src": "dream pass", "dst": "kraken",
 	}})
 	watchItemHandler(rec, httptest.NewRequest(http.MethodPost, "/api/watchlist/item", bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -2815,6 +2817,188 @@ func TestWatchlistWriteWireShapes(t *testing.T) {
 		t.Fatalf("remove: status %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "POST /api/watchlist/item (remove)", rec.Body.Bytes(), watchRemoveRespSpec)
+}
+
+// --- the mental model: GET /api/mm (mm.go) ---
+//
+// ADDITIVE, like every route family above it: NEW PATHS with new shapes, no
+// key added to, retyped in, or removed from anything a shipped client already
+// decodes — so apiContract stays 6, and TestAPIContractUnchanged below pins
+// that explicitly rather than leaving it to be noticed.
+//
+// GET /api/mm/snapshot has no spec here on purpose: it serves the frozen
+// artifact BYTES, not JSON — the same reason /api/feedback/snapshot and
+// /api/artifact have none.
+//
+// The seven POSTs' success bodies are two shapes, both covered by
+// mmCreateRespSpec/mmAlreadyRespSpec below rather than by seven near-identical
+// specs: a create answers {id, episode} and an idempotent re-mark answers
+// {id, already}, and the whole point of the pair is that a caller can tell
+// them apart.
+
+var mmListSpec = map[string]fieldSpec{
+	"items": {kind: wireArray, required: true},
+}
+
+// webMMItemSpec covers mm.go's webMMItem, the elements of that array.
+//
+// The four optional keys are optional TOGETHER for one reason each: the
+// `invalid_*` trio is absent exactly when the item is LIVE — their absence is
+// the wire's only spelling of it, so a live row must not carry them — and
+// `anchor` is present only on a source=code item, since nothing else has one.
+var webMMItemSpec = map[string]fieldSpec{
+	"id":             {kind: wireNumber, required: true},
+	"kind":           {kind: wireString, required: true},
+	"source":         {kind: wireString, required: true},
+	"slug":           {kind: wireString, required: true},
+	"source_ref":     {kind: wireString, required: true},
+	"content":        {kind: wireString, required: true},
+	"context":        {kind: wireString, required: true},
+	"created_at":     {kind: wireNumber, required: true},
+	"episode_id":     {kind: wireNumber, required: true},
+	"invalidated_at": {kind: wireNumber, required: false},
+	"invalid_reason": {kind: wireString, required: false},
+	"invalid_detail": {kind: wireString, required: false},
+	"anchor":         {kind: wireObject, required: false},
+}
+
+// webMMAnchorSpec covers the `anchor` object — its own spec because
+// assertShape checks one object at a time, and an anchor's keys are exactly
+// where a code mark's provenance lives.
+//
+// `anchor_sha` is OPTIONAL and that is load-bearing rather than lax: a `dirty`
+// anchor has no commit by definition (store.AddMMCodeAnchor refuses the two
+// disagreeing), so a required key here would make the honest case
+// unrepresentable. The `checked_*` trio is absent until the first verify pass
+// has looked at the anchor, and the `invalid_*` pair until one has killed it.
+var webMMAnchorSpec = map[string]fieldSpec{
+	"repo":        {kind: wireString, required: true},
+	"path":        {kind: wireString, required: true},
+	"orig_path":   {kind: wireString, required: false},
+	"start_line":  {kind: wireNumber, required: true},
+	"end_line":    {kind: wireNumber, required: true},
+	"anchor_sha":  {kind: wireString, required: false},
+	"anchor_kind": {kind: wireString, required: true},
+	"text_sha":    {kind: wireString, required: true},
+	"checked_at":  {kind: wireNumber, required: false},
+	"checked_sha": {kind: wireString, required: false},
+	"check_error": {kind: wireString, required: false},
+	"ambiguous":   {kind: wireBool, required: false},
+	"invalid_sha": {kind: wireString, required: false},
+	"invalid_pr":  {kind: wireString, required: false},
+}
+
+var mmCreateRespSpec = map[string]fieldSpec{
+	"id":      {kind: wireNumber, required: true},
+	"episode": {kind: wireNumber, required: true},
+}
+
+var mmAlreadyRespSpec = map[string]fieldSpec{
+	"id":      {kind: wireNumber, required: true},
+	"already": {kind: wireBool, required: true},
+}
+
+// TestMMItemWireShape pins webMMItem in both of its states — a live item with
+// no anchor, and an invalidated code mark with one — because the two exercise
+// opposite halves of the omitempty set and a spec verified against only one of
+// them would let the other grow or lose a key unnoticed.
+func TestMMItemWireShape(t *testing.T) {
+	live, err := json.Marshal(webMMItemFrom(store.MMItem{
+		ID: 1, Kind: "decision", Source: "question", Slug: "mental-model",
+		SourceRef: "Q3", Content: "which table?\n→ its own", Context: "",
+		CreatedAt: 1769040000000, EpisodeID: 42,
+	}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webMMItem (live, no anchor)", live, webMMItemSpec)
+	// A LIVE item must carry none of the invalid_* keys: their absence IS how
+	// the wire says "live", so a zero value leaking through omitempty would be
+	// a live row claiming an invalidation at time 0.
+	var liveKeys map[string]any
+	if err := json.Unmarshal(live, &liveKeys); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"invalidated_at", "invalid_reason", "invalid_detail", "anchor"} {
+		if _, ok := liveKeys[k]; ok {
+			t.Errorf("live item carries %q — absence is the wire's only spelling of \"live\"", k)
+		}
+	}
+
+	dead, err := json.Marshal(webMMItemFrom(store.MMItem{
+		ID: 2, Kind: "reading", Source: "code", Slug: "",
+		SourceRef: "kraken/internal/api/mm.go:10-12", Content: "func mmSHA(s string) string {",
+		Context: "the idempotence key", CreatedAt: 1769040000000, EpisodeID: 43,
+		InvalidatedAt: 1769050000000, InvalidReason: "content-changed", InvalidDetail: "not found at head",
+	}, &store.MMCodeAnchor{
+		ItemID: 2, Repo: "kraken", Path: "internal/api/mm.go", OrigPath: "internal/api/mental.go",
+		StartLine: 10, EndLine: 12, AnchorSHA: "abc123", AnchorKind: "origin-main",
+		Text: "func mmSHA(s string) string {", TextSHA: "def456", Lang: "go",
+		CheckedAt: 1769050000000, CheckedSHA: "abc124", Ambiguous: true,
+		InvalidSHA: "abc124", InvalidPR: "https://example/pr/1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webMMItem (invalidated code mark)", dead, webMMItemSpec)
+
+	var withAnchor struct {
+		Anchor json.RawMessage `json:"anchor"`
+	}
+	if err := json.Unmarshal(dead, &withAnchor); err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webMMAnchor (populated)", withAnchor.Anchor, webMMAnchorSpec)
+
+	// The anchor's own empty-optional state: a dirty anchor never verified.
+	// `text` is deliberately NOT a key — the item's `content` is the anchored
+	// text, and carrying it twice would let a client render two spellings of
+	// one thing.
+	bare, err := json.Marshal(webMMAnchorFrom(store.MMCodeAnchor{
+		ItemID: 3, Repo: "kraken", Path: "internal/api/mm.go",
+		StartLine: 1, EndLine: 1, AnchorKind: "dirty",
+		Text: "x", TextSHA: "aa",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webMMAnchor (dirty, never verified)", bare, webMMAnchorSpec)
+}
+
+// TestMMListWireShape pins the envelope, and that it is an ARRAY even when
+// nothing has been marked — B3's convention on every list route here: a null
+// would make every consumer write a second nil check for a state that is not
+// different.
+func TestMMListWireShape(t *testing.T) {
+	useTestStore(t)
+	rec := httptest.NewRecorder()
+	mmListHandler(rec, httptest.NewRequest(http.MethodGet, "/api/mm", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/mm (GET)", rec.Body.Bytes(), mmListSpec)
+	if got := rec.Body.String(); !strings.Contains(got, `"items":[]`) {
+		t.Fatalf("body = %s, want an empty array", got)
+	}
+}
+
+// TestMMWriteRespShapes pins the two write bodies against the specs above,
+// marshaled the way the handlers build them. Round-tripping the handler for
+// every route would need a job, a question and a git checkout; the shapes are
+// what this file exists to pin, and they are the same two whichever route
+// produced them.
+func TestMMWriteRespShapes(t *testing.T) {
+	created, err := json.Marshal(map[string]any{"id": int64(7), "episode": int64(11)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "POST /api/mm/* (created)", created, mmCreateRespSpec)
+
+	already, err := json.Marshal(map[string]any{"id": int64(7), "already": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "POST /api/mm/* (already)", already, mmAlreadyRespSpec)
 }
 
 var dreamGetSpec = map[string]fieldSpec{

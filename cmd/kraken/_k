@@ -16,9 +16,10 @@ _k() {
         'questions:cell-side verb — read/write a job'"'"'s open doc questions via kraken serve'
         'goals:cell-side verb — re-read carl'"'"'s current week/day goals via kraken serve (read-only)'
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
-        'watchlist:cell-side verb — read/write the dream loop'"'"'s watch overlay on the knowledge graph, via kraken serve'
+        'watchlist:cell-side verb — read/write the dream loop'"'"'s watch items, via kraken serve'
         'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
         'graph:cell-side verb — read/write the knowledge graph via kraken serve'
+        'mm:carl'"'"'s verbs for the mental model — mark/drop code read, note, read it back, serve it to Zed'
         'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
         'job:iris-side verb — list/read jobs and write a draft via kraken serve'
         'orch:kronos-side verb — read/ack the orchestrator inbox via kraken serve'
@@ -146,9 +147,9 @@ _k() {
                 local -a ops
                 ops=(
                     'get:print watch items as JSON (optional state filter)'
-                    'add:watch one observation from a JSON object on stdin (folds when the graph already states it)'
-                    'update:update one item'"'"'s overlay fields from a JSON object on stdin'
-                    'remove:unwatch one item by edge id (the fact stays in the graph)'
+                    'add:watch one observation from a JSON object on stdin (folds when it is already tracked)'
+                    'update:update one item'"'"'s workflow fields from a JSON object on stdin'
+                    'remove:close one item by id (it leaves every list, nothing is deleted)'
                 )
                 _describe -t ops 'op' ops
             elif [[ $words[3] == get && CURRENT == 4 ]]; then
@@ -224,6 +225,49 @@ _k() {
                     '--limit:how many facts to return (default 20, capped at 200)'
                 )
                 _describe -t flags 'flag' gflags
+            fi
+            ;;
+        mm)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'mark:record a range of code as read (selection comes from $KRAKEN_MM_SELECTION)'
+                    'drop:unmark one item by id'
+                    'note:record a free note'
+                    'get:print the mental model as JSON (live items unless --all)'
+                    'lsp:stdio language server drawing code marks into Zed (run by the extension)'
+                )
+                _describe -t ops 'op' ops
+            elif (( CURRENT >= 4 )) && [[ $words[3] == mark ]]; then
+                local -a mmflags
+                mmflags=(
+                    '--worktree:absolute path of the checkout the file lives in'
+                    '--file:path of the file relative to --worktree'
+                    '--start-row:1-based row the selection starts on'
+                    '--note:why this range mattered'
+                )
+                _describe -t flags 'flag' mmflags
+                # --worktree names a directory and --file a real path, so offer
+                # the filesystem where the value goes rather than only flags.
+                [[ $words[CURRENT-1] == --worktree ]] && _directories
+                [[ $words[CURRENT-1] == --file ]] && _files
+            elif (( CURRENT >= 4 )) && [[ $words[3] == note ]]; then
+                # word 4 is the note TEXT positional, so --context is only
+                # offered past it — the same rule `load set` follows for its
+                # <slug>.
+                if (( CURRENT > 4 )); then
+                    local -a mmflags
+                    mmflags=(
+                        '--context:where this note came from'
+                    )
+                    _describe -t flags 'flag' mmflags
+                fi
+            elif (( CURRENT == 4 )) && [[ $words[3] == get ]]; then
+                local -a mmflags
+                mmflags=(
+                    '--all:include invalidated items, not just live ones'
+                )
+                _describe -t flags 'flag' mmflags
             fi
             ;;
         slack)

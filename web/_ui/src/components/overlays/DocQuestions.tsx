@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { answerDocQuestion, threadOp } from "../../api/client.ts";
 import type { WebDocQuestion, WebJob } from "../../api/types.ts";
+import type { MMItem } from "../../lib/mm.ts";
 import { questionThreadSeed, questionThreadTitle } from "./askThread.ts";
 import type { Mutate } from "./Overlay.tsx";
 import { showToast } from "./Toast.tsx";
@@ -81,13 +82,54 @@ export interface DocQuestionsProps {
    * on the ⑂ branch button it renders.
    */
   onAskBranched?: (slug: string, tid: string) => void;
+  /**
+   * The mental model, for the ANSWERED rows' → decision affordance: a row is
+   * "decided" when a LIVE item with source `question` carries this job's slug
+   * and this question's id. Server state and nothing else, the ☆ save rule —
+   * there is no local latch, so a refused mint leaves the row undecided.
+   */
+  mm?: MMItem[];
+  /**
+   * Mint one answered question as a decision. ABSENT hides the affordance
+   * entirely, exactly as `onAskBranched` hides the ask one: the job editor
+   * renders this panel too and is not wired for it, and a button whose only
+   * outcome is a refusal is worse than no button.
+   */
+  onMarkDecision?: (qid: string) => Promise<void>;
+}
+
+/**
+ * Is this question already a decision in the mental model?
+ *
+ * The frozen rule: a LIVE item whose source is `question` and whose
+ * (slug, source_ref) is this job and this question id. It deliberately does
+ * NOT compare the answer text, so a question RE-ANSWERED after being minted
+ * still reads as decided while the stored decision quotes the older answer —
+ * which is why the button stays pressable in that state (see AnsweredRow):
+ * the route is idempotent on an unchanged answer and mints the new one
+ * otherwise, so a second press is the way to catch the item up.
+ */
+function decidedIn(mm: MMItem[], slug: string, qid: string): boolean {
+  return mm.some(
+    (it) =>
+      it.source === "question" &&
+      !it.invalidated_at &&
+      it.slug === slug &&
+      it.source_ref === qid,
+  );
 }
 
 /**
  * Renders `<div class="doc-questions">` or nothing. The wrapper with the id
  * (`#steer-docq` / `#editor-docq`) belongs to the overlay, not to this.
  */
-export function DocQuestions({ job, mutate, onAskBranched }: DocQuestionsProps) {
+export function DocQuestions({
+  job,
+  mutate,
+  onAskBranched,
+  mm = [],
+  onMarkDecision,
+}: DocQuestionsProps) {
   const list = job.doc_questions || [];
   const slug = job.slug;
   // The same job.live gate ThreadChips puts on its ⑂ branch button: a branch
@@ -135,6 +177,28 @@ export function DocQuestions({ job, mutate, onAskBranched }: DocQuestionsProps) 
   });
 
   const [askBusy, setAskBusy] = useState<Set<string>>(new Set());
+
+  // Which rows have a decision mint in flight — per row, like every other
+  // guard here: the rows are independent, and one round trip must not lock the
+  // panel.
+  const [decideBusy, setDecideBusy] = useState<Set<string>>(new Set());
+
+  const decide = useCallback(
+    async (id: string) => {
+      if (!onMarkDecision || decideBusy.has(id)) return;
+      setDecideBusy((prev) => new Set(prev).add(id));
+      // No failure branch: the integrator routes this through the shared
+      // mutate, which parks the server's own sentence in the clock corner, and
+      // the row's next state is whatever the refetched mm list says.
+      await onMarkDecision(id);
+      setDecideBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    },
+    [decideBusy, onMarkDecision],
+  );
 
   // An ANSWERED question's open ask box is stale state: the row renders as
   // AnsweredRow (no box), and a later click to re-answer would remount the
@@ -271,6 +335,14 @@ export function DocQuestions({ job, mutate, onAskBranched }: DocQuestionsProps) 
               key={q.id}
               slug={slug}
               q={q}
+              // The affordance is offered on ANSWERED rows alone — the panel's
+              // other branch renders EditableRow, so an unanswered question
+              // never reaches this call at all, which is the structural half
+              // of "no answer, no decision".
+              decidable={!!onMarkDecision}
+              decided={decidedIn(mm, slug, q.id)}
+              deciding={decideBusy.has(q.id)}
+              onDecide={() => void decide(q.id)}
               onReopen={() => {
                 setReanswering((prev) => new Set(prev).add(q.id));
                 setValues((prev) => ({ ...prev, [q.id]: q.answer || "" }));
@@ -519,10 +591,18 @@ function AnsweredRow({
   slug,
   q,
   onReopen,
+  decidable,
+  decided,
+  deciding,
+  onDecide,
 }: {
   slug: string;
   q: WebDocQuestion;
   onReopen: () => void;
+  decidable: boolean;
+  decided: boolean;
+  deciding: boolean;
+  onDecide: () => void;
 }) {
   const imp = (q.importance || "P2").toLowerCase();
   const title = q.answered_at
@@ -541,6 +621,33 @@ function AnsweredRow({
         <span className="dq-q" title={q.text}>
           {q.id} — {q.text}
         </span>
+        {/* The whole row is the re-answer target, so this press must NOT be
+            one: without stopPropagation, minting a decision would also reopen
+            the answer for editing — the FeedbackPanel/PRChips rule, and here
+            it is the difference between two unrelated actions on one click. */}
+        {decidable ? (
+          <button
+            className={"dq-decide" + (decided ? " on" : "")}
+            data-slug={slug}
+            data-id={q.id}
+            aria-pressed={decided}
+            // pressable while decided, deliberately — see decidedIn: the
+            // pressed state does not know whether the answer has moved since
+            // the mint, and the route answers an unchanged one with `already`
+            disabled={deciding}
+            title={
+              decided
+                ? "in your mental model — press again to catch it up to a re-answer; drop it from the memory view"
+                : "keep this answer as a decision in your mental model"
+            }
+            onClick={(ev) => {
+              ev.stopPropagation();
+              onDecide();
+            }}
+          >
+            {decided ? "◆ decided" : "→ decision"}
+          </button>
+        ) : null}
       </div>
       <div className="dq-answered-text">✓ {q.answer}</div>
     </div>

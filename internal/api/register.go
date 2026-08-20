@@ -47,6 +47,28 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/watchlist", watchlistHandler)
 	mux.HandleFunc("/api/watchlist/item", watchItemHandler)
 	mux.HandleFunc("/api/dream", dreamHandler)
+	// The mental model (mm.go): carl's own record of what he has read,
+	// decided and noted. Every one of these is an exact pattern, so none
+	// shadows another and none is a subtree — the same property that lets
+	// "/api/feedback" and "/api/feedback/sweep" coexist above.
+	//
+	// The two GETs are ungated: a read is a read, and a mirror board must be
+	// able to SHOW the model it may not write. The seven writes are gated via
+	// mirrorGated at registration rather than inline, which is available here
+	// for the reason it is on /api/graph/add and /api/slack/ack: every one of
+	// them is a POST-ONLY path, so there is no GET on the same path that a
+	// route wrapper would take down with it — which is also why the list and
+	// the snapshot were given paths of their own rather than a GET arm on
+	// /api/mm/... alongside a write.
+	mux.HandleFunc("/api/mm", mmListHandler)
+	mux.HandleFunc("/api/mm/snapshot", mmSnapshotHandler)
+	mux.HandleFunc("/api/mm/decision", mirrorGated(mmDecisionHandler))
+	mux.HandleFunc("/api/mm/artifact", mirrorGated(mmArtifactHandler))
+	mux.HandleFunc("/api/mm/element", mirrorGated(mmElementHandler))
+	mux.HandleFunc("/api/mm/code", mirrorGated(mmCodeHandler))
+	mux.HandleFunc("/api/mm/note", mirrorGated(mmNoteHandler))
+	mux.HandleFunc("/api/mm/detail", mirrorGated(mmDetailHandler))
+	mux.HandleFunc("/api/mm/remove", mirrorGated(mmRemoveHandler))
 	// The knowledge graph. Every one of these is an exact pattern, so none
 	// shadows another and none is a subtree — the same property that lets
 	// "/api/feedback" and "/api/feedback/sweep" coexist above, and the reason

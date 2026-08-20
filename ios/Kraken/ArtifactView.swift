@@ -13,8 +13,60 @@ private enum ArtifactContent: Equatable {
     case html(String)
 }
 
+/// A live handle on the artifact screen's one WKWebView, so the pager's
+/// chrome can ask the DOCUMENT a question the SwiftUI tree cannot answer:
+/// what, if anything, is selected right now.
+///
+/// A reference type passed down rather than a value passed up, for the reason
+/// the ✓ control exists at all: the toolbar lives on the PAGER (one instance,
+/// see `showsFeedbackButton`) while the web view lives on a page, and the two
+/// are separated by a TabView that materializes up to three pages. The handle
+/// is claimed by whichever page is SELECTED, so the chrome always reads the
+/// document it is drawn over.
+///
+/// `@MainActor` because `evaluateJavaScript` is: this is UIKit's thread, not a
+/// concurrency decoration.
+@MainActor
+final class ArtifactWebViewHandle {
+    /// Weak: the web view belongs to SwiftUI's representable lifecycle, and a
+    /// strong reference here would keep a swiped-away page's rendered document
+    /// alive — the exact memory shape ArtifactPagerView's header is about.
+    fileprivate weak var webView: WKWebView?
+
+    /// The document's current selection, trimmed; `""` for none, for no web
+    /// view yet, and for any evaluation failure.
+    ///
+    /// The expression always yields a JS string (`|| ''`) rather than
+    /// `undefined`: the async `evaluateJavaScript` bridges its result as a
+    /// non-optional `Any`, and a null result is a known trap on that overload.
+    func selectionText() async -> String {
+        guard let webView else { return "" }
+        let js = "(window.getSelection && window.getSelection().toString()) || ''"
+        let result = try? await webView.evaluateJavaScript(js)
+        return ((result as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Drops the document's selection.
+    ///
+    /// Called after a selection has been marked, and it has to reach the DOM
+    /// rather than only the app's mirror of it: the mirror is refilled by the
+    /// next poll off the web view's own still-live selection, so clearing one
+    /// side alone would flip the control back within a tick. Wrapped in an IIFE
+    /// returning `''` for `selectionText`'s reason — `removeAllRanges()`
+    /// evaluates to `undefined`, which the async bridge is a known trap on.
+    func collapseSelection() async {
+        guard let webView else { return }
+        let js = "(function(){ if (window.getSelection) { window.getSelection().removeAllRanges(); } return ''; })()"
+        _ = try? await webView.evaluateJavaScript(js)
+    }
+}
+
 private struct ArtifactWebView: UIViewRepresentable {
     let content: ArtifactContent
+    /// Set on every update while this page is the selected one — never
+    /// cleared, since the next selected page claims it and a clear racing that
+    /// claim would blank a live handle.
+    var handle: ArtifactWebViewHandle?
     /// Loaded instead when `content`'s URL answers non-2xx. Exists for one
     /// case: the app and the daemon ship on independent tracks (`k ship-ios`
     /// vs `k update`), so a phone build that routes .html cards through
@@ -70,6 +122,10 @@ private struct ArtifactWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        // Claimed BEFORE the content guard below, not after: a page that is
+        // already loaded returns there, and a selection change is exactly the
+        // case where nothing about the content moved.
+        handle?.webView = webView
         // SwiftUI calls updateUIView on unrelated state changes too; only
         // (re)load when the content actually changed, else every ambient
         // re-render would restart the page / re-inject the HTML string.
@@ -108,6 +164,34 @@ private enum ArtifactKind {
             self = .plain
         } else {
             self = .markdown
+        }
+    }
+
+    /// Whether a text selection on this page may be marked into the mental
+    /// model.
+    ///
+    /// FALSE for `.page`, and that is a data-integrity gate rather than a
+    /// nicety: a `.page` artifact is loaded by URL and the document on screen
+    /// is the server's own rendering — an `.html` diagram card (via /iso.html),
+    /// an `.svg`, a `.pdf`. `window.getSelection()` there returns text out of
+    /// MARKUP, while `POST /api/mm/element` locates what it is sent in the
+    /// artifact's RAW bytes and freezes the source lines it lands on — so a
+    /// selection in a diagram card would be recorded as "what carl read" in
+    /// the form of a line of html. The web is immune by construction — its
+    /// `selectionchange` listener drops any selection whose body does not
+    /// carry the `md` class — and this gate closes the same hole, spelled
+    /// where the app decides how to render.
+    ///
+    /// It does NOT close it identically: `.plain` is allowed here, where the
+    /// web's own plain-text body (`panel-body raw`) has no `md` class and so
+    /// offers nothing. Deliberate — a `.log`/`.txt` is shown as its own bytes,
+    /// so a selection there IS a selection of the file, and the server locates
+    /// it in those same bytes. The exclusion that matters is `.page`, where
+    /// the document on screen and the file on disk are different things.
+    var allowsTextMarks: Bool {
+        switch self {
+        case .page: return false
+        case .plain, .markdown: return true
         }
     }
 }
@@ -219,6 +303,10 @@ struct ArtifactView: View {
     /// nobody is listening: the note still lands, it just isn't mirrored
     /// anywhere until the next poll. SteerView presents this view that way.
     var onFeedbackCreated: ((ArtifactRef, String) -> Void)?
+    /// Handed down by the pager for the SELECTED page only, so the ✓ control
+    /// on its toolbar can read this document's selection. nil on the two
+    /// off-screen neighbours — see `ArtifactWebViewHandle`.
+    var webViewHandle: ArtifactWebViewHandle?
 
     @State private var content: ArtifactContent?
     /// The direct artifact URL, kept beside a viewer-routed `content` so the
@@ -241,7 +329,7 @@ struct ArtifactView: View {
     var body: some View {
         Group {
             if let content {
-                ArtifactWebView(content: content, fallbackURL: pageFallback)
+                ArtifactWebView(content: content, handle: webViewHandle, fallbackURL: pageFallback)
                     .background(KTheme.ground)
             } else if let errorMessage {
                 VStack(spacing: 16) {
@@ -432,6 +520,27 @@ struct ArtifactPagerView: View {
     /// can't post a save and a remove of the same artifact past each other.
     @State private var bookmarkInFlight = false
 
+    /// The mental model as the server currently holds it — what the ✓ control
+    /// paints from, on exactly the terms `library` above is held: SERVER
+    /// state, never a local latch. It matters more here than it does for ☆,
+    /// because the daemon's verify pass invalidates marks behind the app's
+    /// back, and a latched ✓ would keep claiming a reading the server has
+    /// already retired.
+    @State private var mm = MMViewModel()
+    /// The selected page's live WKWebView, for reading its selection.
+    @State private var webHandle = ArtifactWebViewHandle()
+    /// What is selected in that document right now, "" for nothing.
+    ///
+    /// POLLED rather than observed. WebKit reports `selectionchange` only to
+    /// the page's own JS, so surfacing it would mean injecting a script and a
+    /// message handler into every artifact — including live server-rendered
+    /// ones — and unwinding that handler on teardown to avoid the classic
+    /// `userContentController` retain cycle. A cheap `evaluateJavaScript` on
+    /// an idle web view buys the same fact with none of that, and the cost is
+    /// bounded by the `.task`'s own lifetime: it runs only while an artifact
+    /// sheet is on screen.
+    @State private var selectionInPage = ""
+
     init(
         artifacts: [WebArtifact],
         selected: WebArtifact,
@@ -453,7 +562,11 @@ struct ArtifactPagerView: View {
                 ArtifactView(
                     name: artifact.name, baseURL: baseURL, path: artifact.url,
                     showsFeedbackButton: artifact.url == selection,
-                    onFeedbackCreated: onFeedbackCreated
+                    onFeedbackCreated: onFeedbackCreated,
+                    // The SELECTED page only, for `showsFeedbackButton`'s
+                    // reason: there is one toolbar, so there is one document
+                    // it can be reading.
+                    webViewHandle: artifact.url == selection ? webHandle : nil
                 )
                 // Tagging by url — the same value ForEach identifies by — is
                 // what keeps a page's identity stable across a selection
@@ -468,7 +581,32 @@ struct ArtifactPagerView: View {
         .navigationTitle(pages[index].name)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: baseURL) { await loadLibrary() }
+        .task(id: baseURL) { await mm.refresh(baseURL: baseURL) }
+        // Restarted on every page change (SwiftUI cancels a `.task(id:)` when
+        // its id moves), which is what clears the selection carried over from
+        // the page just swiped away — synchronously, in `watchSelection`'s
+        // first statement, rather than whenever the first poll of the new
+        // document answers. See there for why the gap mattered.
+        .task(id: selection) { await watchSelection() }
         .toolbar {
+            // Beside ☆ save and painted the same way — one control, on the
+            // pager's own bar, for the reason the title and the bookmark are
+            // here (see `showsFeedbackButton`): a per-page ✓ would stack up to
+            // three of them in one bar.
+            if let action = readAction {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await toggleRead(action) }
+                    } label: {
+                        Label(action.title, systemImage: action.icon)
+                    }
+                    .labelStyle(.iconOnly)
+                    .disabled(mm.writing || !mm.inFlight.isEmpty)
+                    .tint(action.isMarked ? KTheme.solved : KTheme.accent)
+                    .accessibilityLabel(action.accessibility)
+                    .accessibilityAddTraits(action.isMarked ? [.isSelected] : [])
+                }
+            }
             // The save toggle lives HERE, on the pager's own bar, for exactly
             // the reason the title does (see `showsFeedbackButton`): every
             // materialized page's `.toolbar` resolves against the same
@@ -613,5 +751,144 @@ struct ArtifactPagerView: View {
             // server refused.
         }
         await loadLibrary()
+    }
+
+    // MARK: - the ✓ read toggle
+
+    /// What the ✓ can do for the page on screen, or nil for no control.
+    ///
+    /// The SELECTION is consulted first, and that ordering IS the feature
+    /// (carl, gate R1: "leave read the same button as mark selection"). With
+    /// nothing selected the control is a whole-artifact toggle painted from
+    /// the server's list; the moment a non-empty selection exists in a
+    /// document whose kind allows text marks (allowsTextMarks — never a
+    /// .page) it becomes the mark-selection form, and the artifact's own
+    /// marked state stops being what it means — which is why that state is not
+    /// even computed on this branch.
+    ///
+    /// Every branch needs the artifact-route triple, so a page that does not
+    /// parse as one — a library SNAPSHOT url opened from the Memory tab, an
+    /// upload — gets no control at all: there is nothing for
+    /// `POST /api/mm/artifact` to address.
+    ///
+    /// That is where ✓ and ★ genuinely differ, and the asymmetry is worth
+    /// stating because the two controls sit side by side. `bookmarkAction`
+    /// above still offers a snapshot url a filled ★ with a working removal,
+    /// because a library row is addressable BY ID and the url carries that id.
+    /// A mark has no such second address: `/api/mm/artifact` takes the
+    /// {slug, home, name} triple and nothing else, so where the star is
+    /// offered the read mark cannot be.
+    private var readAction: ArtifactReadAction? {
+        guard let ref = artifactParts(from: selection) else { return nil }
+        if !selectionInPage.isEmpty, ArtifactKind(name: pages[index].name).allowsTextMarks {
+            return .markSelection(ref, selectionInPage)
+        }
+        if let item = mmMatch(items: mm.items, slug: ref.slug, name: ref.name) {
+            return .unmark(ref, item)
+        }
+        return .mark(ref)
+    }
+
+    /// Acts on the action the button was PAINTED from rather than re-deciding
+    /// here, for `toggleBookmark`'s reason: re-running the decision against an
+    /// `mm` a concurrent refresh may have replaced is how a press on a ✓ could
+    /// post a mark. Every branch refetches inside the model, so the control's
+    /// next state is the server's answer either way.
+    private func toggleRead(_ action: ArtifactReadAction) async {
+        switch action {
+        case .mark(let ref):
+            await mm.markArtifact(baseURL: baseURL, ref: ref)
+        case .unmark(_, let item):
+            await mm.remove(baseURL: baseURL, id: item.id)
+        case .markSelection(let ref, let text):
+            // The RENDERED text, exactly as the web sends it: the server
+            // locates that span in the artifact's markdown source and stores
+            // the source lines, so structure survives a mark made here.
+            let landed = await mm.markElement(baseURL: baseURL, ref: ref, text: text)
+            guard landed else { return }
+            // Both sides of the selection, on success only — the web clears
+            // its own for the same reason. A selection mark has no pressed
+            // state (there is none on the wire), so the control returning to
+            // the whole-artifact toggle IS the confirmation the press landed;
+            // left standing it invites a second press whose only outcome is
+            // `already: true`, and it holds the artifact toggle out of reach.
+            // A REFUSED mark deliberately leaves the selection alone: nothing
+            // on this screen renders the error, so clearing it there would be
+            // the app's only signal, saying the opposite of what happened.
+            selectionInPage = ""
+            await webHandle.collapseSelection()
+        }
+    }
+
+    /// Keeps `selectionInPage` in step with the document while this page is up.
+    ///
+    /// A poll rather than an event stream — see `selectionInPage` for why —
+    /// and an unconditional loop rather than a repeating timer, so its lifetime
+    /// is exactly the `.task`'s: SwiftUI cancels it when the page changes or
+    /// the sheet closes, and the sleep returns immediately once cancelled.
+    private func watchSelection() async {
+        // FIRST, before the first read: `selection` has already moved to the
+        // new page while `selectionInPage` still holds the old page's text,
+        // and the two are paired in `readAction` — so until this runs, a tap
+        // could post page A's selected text as a reading of artifact B. The
+        // handle does not close that window on its own: it is claimed inside
+        // `updateUIView`, which never runs on a page whose content is still
+        // loading or has failed, and a paging TabView keeps the swiped-away
+        // page alive with its selection intact.
+        selectionInPage = ""
+        while !Task.isCancelled {
+            let text = await webHandle.selectionText()
+            if text != selectionInPage { selectionInPage = text }
+            try? await Task.sleep(for: .milliseconds(700))
+        }
+    }
+}
+
+/// The one thing the pager's ✓ control can do for the page on screen.
+///
+/// Three cases rather than a bool plus an optional payload, for
+/// `ArtifactBookmarkAction`'s reason: the branches carry different payloads,
+/// none is derivable from another, and deciding once and carrying the decision
+/// is what keeps the glyph and the press from disagreeing about which of the
+/// two verbs — mark the artifact, or mark this selection — a tap means.
+private enum ArtifactReadAction {
+    /// Nothing selected, no live reading: mark the whole artifact read.
+    case mark(ArtifactRef)
+    /// Nothing selected, and a live whole-artifact reading exists: drop it.
+    case unmark(ArtifactRef, WebMMItem)
+    /// A non-empty selection is on screen in a kind that allows text marks
+    /// (allowsTextMarks — never a .page): mark that span instead.
+    case markSelection(ArtifactRef, String)
+
+    /// Only the whole-artifact toggle has a pressed state. A selection mark is
+    /// a verb, not a switch — the server may or may not already hold that
+    /// span, and the app never claims to know which.
+    var isMarked: Bool {
+        if case .unmark = self { return true }
+        return false
+    }
+
+    var icon: String {
+        switch self {
+        case .mark: return "checkmark.circle"
+        case .unmark: return "checkmark.circle.fill"
+        case .markSelection: return "text.badge.checkmark"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .mark: return "Mark read"
+        case .unmark: return "Read"
+        case .markSelection: return "Mark selection"
+        }
+    }
+
+    var accessibility: String {
+        switch self {
+        case .mark(let ref): return "Mark \(ref.name) read"
+        case .unmark(let ref, _): return "\(ref.name) is marked read — drop the mark"
+        case .markSelection: return "Mark the selected text read"
+        }
     }
 }

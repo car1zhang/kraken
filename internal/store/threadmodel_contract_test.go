@@ -147,6 +147,11 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 	// FIRST — this list unwinds newest-first, mirroring the order migrate()
 	// applies the steps. Only v27's TABLE is dropped: the goal_id column v23
 	// added is already gone, taken by v27 itself.
+	// v29 is reversed first, and through a helper rather than inline: it is
+	// the only step so far whose reversal is more than a DROP — its hook DROPs
+	// kg_watch, so replaying it finds the table missing unless something puts
+	// it back (schema_test.go's undoV29).
+	undoV29(t, s)
 	for _, stmt := range []string{
 		// v28's three account-binding columns go first: a v21 database has
 		// none of them, and step 28 replays by adding them, which fails on a
