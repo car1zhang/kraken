@@ -31,9 +31,13 @@ import (
 //     its last stage and returns a silent false zero.
 //   - an unquoted `--include=*.py`-style glob: zsh NOMATCH aborts before
 //     the command runs, and the abort reads as "no files match".
-//   - assigning `path=`/`fpath=`: zsh ties those to the PATH/fpath arrays,
-//     so a scratch variable named `path` wipes command lookup for the rest
-//     of the shell.
+//   - assigning `path=`/`fpath=`/`status=`: zsh ties path/fpath to the
+//     PATH/fpath arrays, so a scratch variable named `path` wipes command
+//     lookup for the rest of the shell. `status=` rides the same arm for a
+//     sibling reason:
+//     `status` is a read-only special in zsh (an alias of `$?`), so the
+//     natural idiom `out=$(cmd); status=$?` aborts the whole compound with
+//     `read-only variable: status` before anything after it runs.
 //   - a mutating `git stash` (bare, or push/pop/apply/drop/…): the one
 //     entry that is not a zsh quirk but a destructive shape — in a cell the
 //     worktree is shared with live teammates, a stash sweeps THEIR
@@ -90,8 +94,8 @@ var bashLintChecks = []struct {
 		// path=/tmp` are arguments, not assignments, and clobber nothing —
 		// so the token must open the command (start, a separator, or a
 		// keyword that precedes an assignment), never follow a bare space.
-		regexp.MustCompile(`(?:^\s*|[;&|({]\s*|\n\s*|(?:^|[\s;|&({])(?:do|then|else|elif|while|until|export|local|readonly|typeset|declare)\s+)f?path=`),
-		"assigning 'path' or 'fpath' in zsh clobbers the tied PATH/fpath arrays and breaks command lookup — use another variable name",
+		regexp.MustCompile(`(?:^\s*|[;&|({]\s*|\n\s*|(?:^|[\s;|&({])(?:do|then|else|elif|while|until|export|local|readonly|typeset|declare)\s+)(?:f?path|status)=`),
+		"assigning 'path'/'fpath' clobbers zsh's tied PATH/fpath arrays, and 'status' is read-only in zsh (it aliases $?) — use another variable name (rc=$?)",
 	},
 	{
 		// Mutating `git stash` forms only, matched by what FOLLOWS `stash`:
