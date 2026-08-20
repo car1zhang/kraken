@@ -49,7 +49,7 @@ Zed builds the extension to WebAssembly on install, so the first run needs a Rus
 
 ### What it looks like
 
-A marked block renders as a **hint-severity diagnostic** over its lines — the lightest thing Zed draws, because a mark is a fact about you and not a problem with the code. Hover, or open the diagnostic, and the message reads:
+A marked block renders as a thin **left-edge rail**: one hint-severity diagnostic per covered line, ranging over only that line's leading indentation (the first character on an unindented line) — so the block's exact extent is visible without a wavy underline running through the text itself. Zed has no background-highlight channel for extensions — diagnostics are the one thing a language server can paint, and Zed always draws them as underlines — so the design underlines the one part of a line nobody reads. Hint severity because a mark is a fact about you and not a problem with the code. Hover any covered line, or open the diagnostic, and the message reads:
 
 ```
 read mark mm 2 · origin-main e5c3497 · marked 2026-08-20
