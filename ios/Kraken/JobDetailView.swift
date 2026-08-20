@@ -792,6 +792,18 @@ struct JobDetailView: View {
     // sheet is up, so a freshly branched thread would otherwise have no chip
     // to tap until the sheet is reopened.
     @State private var branchedThreads: [WebThread] = []
+    // The mental model, for the two capture surfaces this sheet carries: ◆
+    // decision on an answered doc question, and the mark on the cell's detail
+    // block. SERVER state and nothing else — every write in MMViewModel
+    // refetches, so a refused mark leaves its control unchanged and the
+    // daemon's verify pass can retire a mark without this sheet noticing.
+    //
+    // Not folded into an overlay the way docQuestionOverlay and
+    // feedbackOverlay are: those exist because `job` is frozen for the
+    // sheet's lifetime and the wire has nowhere else to put an answer. The mm
+    // list is not on `job` at all — it is its own read, so it can simply be
+    // re-read.
+    @State private var mm = MMViewModel()
 
     private var column: BoardColumn { BoardTheme.column(for: job) }
     private var isUnhealthy: Bool { !(job.health ?? "").isEmpty }
@@ -1001,6 +1013,20 @@ struct JobDetailView: View {
                 if let detail = job.detail, !detail.isEmpty {
                     JobSectionCard("Detail") {
                         DetailCard(text: detail)
+                        // The cell's last words are the one thing on this
+                        // sheet that exists NOWHERE else — the line is
+                        // replaced on every zeus turn, so marking it read is
+                        // the only way to keep it. Hence a mark here rather
+                        // than only in the steer modal, which is where the web
+                        // puts it.
+                        MMMarkButton(
+                            marked: mmDetailMatch(items: mm.items, slug: job.slug, text: detail) != nil,
+                            busy: mm.writing,
+                            markTitle: "Mark read",
+                            markedTitle: "Read"
+                        ) {
+                            Task { await mm.markDetail(baseURL: baseURL, slug: job.slug, text: detail) }
+                        }
                     }
                 }
                 if let lastSent = job.lastSent, !lastSent.isEmpty {
@@ -1042,9 +1068,15 @@ struct JobDetailView: View {
                 if !(job.docQuestions ?? []).isEmpty {
                     JobSectionCard("Doc questions") {
                         ForEach(sortedDocQuestions) { q in
-                            DocQuestionCard(item: q) { text in
-                                answerDocQuestion(id: q.id, text: text)
-                            }
+                            DocQuestionCard(
+                                item: q,
+                                decided: mmDecisionMatch(items: mm.items, slug: job.slug, qid: q.id) != nil,
+                                markingDecision: mm.writing,
+                                onAnswer: { text in answerDocQuestion(id: q.id, text: text) },
+                                onMarkDecision: {
+                                    Task { await mm.markDecision(baseURL: baseURL, slug: job.slug, qid: q.id) }
+                                }
+                            )
                         }
                         if sortedDocQuestions.contains(where: { !$0.isAnswered }) {
                             Text("answers land in kraken.db — the agent reads them when it next resumes")
@@ -1111,6 +1143,11 @@ struct JobDetailView: View {
             }
         }
         .disabled(isBusy)
+        // One read per presentation, no poll: nothing else on this phone can
+        // change the mental model while this sheet is up, and every write from
+        // it refetches on its own — so a repeat read could only return what
+        // this one did.
+        .task(id: job.slug) { await mm.refresh(baseURL: baseURL) }
         .onAppear {
             // a deep link like kraken://job/<slug>/steer lands here with the
             // follow-on action still pending — consume it once
@@ -2185,6 +2222,49 @@ struct DetailCard: View {
     }
 }
 
+/// The small "put this in the mental model" control the job sheet uses twice:
+/// on the cell's detail block and on an answered doc question.
+///
+/// One view rather than two hand-rolled buttons because the two share the
+/// thing that matters — the marked state is SERVER state, the route is
+/// idempotent, and so the control stays PRESSABLE once marked instead of
+/// turning into a toggle. Pressing an already-marked one re-posts and gets the
+/// same id back; dropping a mark lives in the memory pane, where the row and
+/// its id are, and the label says "marked" rather than promising an unmark
+/// that would have to guess at one.
+///
+/// Not private: both call sites are in this file today, but the sibling
+/// artifact viewer's ✓ is the same idea one screen over, and a duplicate of
+/// this in a third file is how the two would drift.
+struct MMMarkButton: View {
+    let marked: Bool
+    let busy: Bool
+    let markTitle: String
+    let markedTitle: String
+    var glyph: String = "checkmark.circle"
+    var markedGlyph: String = "checkmark.circle.fill"
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(
+                marked ? markedTitle : markTitle,
+                systemImage: marked ? markedGlyph : glyph
+            )
+            .font(.data(10, weight: .semibold))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(marked ? KTheme.solved : KTheme.text2)
+        .disabled(busy)
+        .accessibilityLabel(
+            marked
+                ? "\(markedTitle) — already in the mental model"
+                : "\(markTitle) — add to the mental model"
+        )
+        .accessibilityAddTraits(marked ? [.isSelected] : [])
+    }
+}
+
 /// One pending question (header + prose + option buttons). Tapping an option
 /// answers with its 1-based index within THIS question's own options list —
 /// there's no free-text composer anymore, the tap IS the answer, sent
@@ -2282,7 +2362,17 @@ struct QuestionSummary: View {
 /// other board action.
 struct DocQuestionCard: View {
     let item: WebDocQuestion
+    /// A live `decision` item already records this question — the ◆ renders
+    /// in its decided state. Defaulted so a caller with no mental-model state
+    /// to hand (and every test constructing the card) keeps the old shape.
+    var decided: Bool = false
+    /// A mark is in flight somewhere on the sheet; the ◆ disables.
+    var markingDecision: Bool = false
     var onAnswer: (String) -> Void
+    /// Records the answered question as a decision carl has taken. nil means
+    /// no such affordance — which is what an ANSWERED row without a mental
+    /// model behind it gets, rather than a button that would 400.
+    var onMarkDecision: (() -> Void)?
 
     @State private var answerText = ""
 
@@ -2318,9 +2408,25 @@ struct DocQuestionCard: View {
                     Text("✓ \(item.answer ?? "")")
                         .font(.voice(12, weight: .semibold))
                         .foregroundStyle(KTheme.solved)
+                    // ANSWERED rows only, and the gate is `isAnswered` itself
+                    // — this whole branch is the answered one. An open
+                    // question is not a decision yet, and the route says so
+                    // with a 400; offering the control there would be an
+                    // affordance whose only outcome is a refusal.
+                    if let onMarkDecision {
+                        MMMarkButton(
+                            marked: decided, busy: markingDecision,
+                            markTitle: "decision", markedTitle: "decision",
+                            glyph: "diamond", markedGlyph: "diamond.fill",
+                            action: onMarkDecision
+                        )
+                    }
                 }
                 Spacer(minLength: 0)
             }
+            // The whole row dims, ◆ included: an answered question is settled
+            // business, and the mark on it is a quiet affordance rather than
+            // something to draw the eye away from the open questions above.
             .opacity(0.6)
             .padding(.vertical, 4)
         } else {

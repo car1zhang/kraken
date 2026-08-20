@@ -28,7 +28,9 @@ import Sigma from "sigma";
 
 import { useGraph, useGraphNode, type GraphEdge } from "../../hooks/useGraph.ts";
 import type { LibraryModel } from "../../hooks/useLibrary.ts";
+import type { MMModel } from "../../hooks/useMM.ts";
 import { filterLibrary } from "../../lib/library.ts";
+import { MentalModelPane } from "./MentalModelPane.tsx";
 import {
   colorOf,
   DEFAULT_FILTERS,
@@ -66,15 +68,16 @@ import {
 const MAX_SIGHTINGS = 10;
 
 /**
- * The two things the MEMORY view can be showing.
+ * The three things the MEMORY view can be showing.
  *
- * Both are kraken remembering something for carl, which is the whole reason
- * they share a tab: the graph is what its agents worked out, the library is
- * what he chose to keep. `"graph"` is the internal name throughout — the view's
- * id, its classes and this file all keep it (only the tab and the header say
+ * All three are kraken remembering something for carl, which is the whole
+ * reason they share a tab: the graph is what its agents worked out, the
+ * library is what he chose to keep, and the mental model is what he has
+ * actually read. `"graph"` is the internal name throughout — the view's id,
+ * its classes and this file all keep it (only the tab and the header say
  * MEMORY), so the mode value keeps it too.
  */
-type MemoryMode = "graph" | "library";
+type MemoryMode = "graph" | "library" | "mm";
 
 export interface GraphViewProps {
   /**
@@ -92,6 +95,16 @@ export interface GraphViewProps {
    * viewer's ☆/★ button so the two can never disagree about what is saved.
    */
   library: LibraryModel;
+  /**
+   * The mental model — App's ONE mm poll, shared with every capture surface
+   * (the artifact viewer's ✓ read, its table marks, the steer modal's two)
+   * so a mark dropped in this pane cannot leave a ✓ standing over there.
+   */
+  mm: MMModel;
+  /** Write a note into the mental model. Routed through the shared mutate. */
+  onAddNote: (text: string) => Promise<void>;
+  /** Drop one mark by id — invalidates the row rather than deleting it. */
+  onRemoveMM: (id: number) => Promise<void>;
   /**
    * Open a saved snapshot in the artifact viewer, by its LIBRARY url. That url
    * serves the frozen bytes rather than the live file, which is what makes a
@@ -313,6 +326,9 @@ function LibraryPane({
 export function GraphView({
   active,
   library,
+  mm,
+  onAddNote,
+  onRemoveMM,
   onOpenArtifact,
   onRemoveSaved,
 }: GraphViewProps) {
@@ -916,6 +932,14 @@ export function GraphView({
           >
             library
           </button>
+          <button
+            className={"graph-mode" + (mode === "mm" ? " on" : "")}
+            aria-pressed={mode === "mm"}
+            title="the mental model — what you have read and decided"
+            onClick={() => setMode("mm")}
+          >
+            mental model
+          </button>
         </span>
         <span className="spacer" />
         {/* the counts, the refresh error and the physics toggle are all
@@ -1004,6 +1028,13 @@ export function GraphView({
         library={library}
         onOpenArtifact={onOpenArtifact}
         onRemoveSaved={onRemoveSaved}
+      />
+
+      <MentalModelPane
+        hidden={mode !== "mm"}
+        mm={mm}
+        onAddNote={onAddNote}
+        onRemove={onRemoveMM}
       />
 
       {/* Hidden rather than unmounted, and NOT for the filter box's reason: the

@@ -9,9 +9,7 @@ description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). 
 > header above says `Base directory ... ~/.claude/skills/graph`, a personal copy shadowed this one
 > (personal beats project on a name collision).
 
-Kraken remembers what it did. The daemon does the mechanical half — it sweeps transcripts, feedback
-rows, job specs and artifacts into **episodes**, and it fills in embeddings and layout.
-It does not understand any of it. That is this job: turn episodes into a graph of **entities** and
+The graph is a compilation of CARL'S MENTAL MODEL — decisions he made, code and artifacts he read, notes he took — never of what agents wrote. Since the v29 cutover (job 349) the old transcript/feedback/job-spec/artifact sweeps are retired and the graph was cleared: every pending episode now comes from one source, the mental-model store (`mm_items`), one already-rendered episode per item (kind `mental-model`, ref `mm:<item id>`). The daemon still does the mechanical half — embeddings and layout — and still does not understand any of it. That is this job: turn episodes into a graph of **entities** and
 **facts**, or correct the graph when it has learned something wrong.
 
 The graph is read back at every cell spawn (`graphContext`), so a wrong fact does not sit quietly in
@@ -22,7 +20,7 @@ beats recall here, always. **A fact you are not confident in is a fact you do no
 
 | Thing | Is | Key property |
 |---|---|---|
-| **Episode** | one span of evidence: a transcript span, a feedback row, a job spec, an artifact — or the already-done episode a `kraken watchlist add` mints for itself, which is why watch observations never reach the pending queue | it is provenance — a fact SHOULD point back at the episode that produced it, but sweep edges may omit it and roughly one live edge in four currently does (measured 2026-08-03: 72 of 315), so a missing episode is a known state, never proof the fact is baseless |
+| **Episode** | one mental-model item's rendered statement: line 1 `mental-model <kind> mm:<id>`, then the decision/reading/note content and optional `context:` line. (The legacy kinds — transcript, feedback, job, artifact, watchlist — survive in the schema's CHECK as history; nothing mints them since the v29 cutover, and watch observations live in their own `watch_items` table now, outside the graph entirely) | it is provenance — a fact SHOULD point back at the episode that produced it; post-cutover every edge should, since every episode is a deliberate mint rather than a sweep |
 | **Node** | one entity: a name, a type, and a **description** | the description is a short natural-language gloss of what the thing IS, independent of any edge |
 | **Edge** | one fact: two endpoints, a predicate, and a **fact sentence** | the sentence IS the fact; the predicate is only how it is indexed |
 
@@ -56,24 +54,7 @@ use 25.**
 Drain in the order given (oldest first) and stop at the end of one batch — the queue is long by
 design and the nightly job is a drain, not a race.
 
-For a `transcript` episode the content is a raw JSONL span and the ref is `path#start-end`. The span
-is the evidence; when you need more than the span carries, `k mine reduce --since 1 <path>` gives
-the whole session as user prose + tool calls + assistant text, which is about an eighth of the bytes.
-The `--since 1` is load-bearing, and it goes into every extraction teammate's brief **as the
-verbatim line below, never a paraphrase**: the flag takes unix MILLIS (so `1` is an epoch floor,
-not one day) and defaults to a 24-hour floor, while ingest reads BACKLOG episodes, which are old by
-definition — two teammates in one night independently burned a zero-byte invocation each
-rediscovering this, and their escalations never reached each other. Stating the rule here and
-letting the lead transcribe it did not survive one week: the next ingest's lead composed its brief
-freehand as `--since <min ts across that session's episodes>` (episode `ts` values are sweep times,
-not record times), and all three teammates burned on it — one SILENTLY, because a floor that lands
-mid-file returns a large, plausible, wrong window with `exit=0` and nothing in the output saying
-so; only the epoch floor is immune to both failure shapes. The brief line: *Read a session's
-context with `k mine reduce --since 1 <session path>` — `--since 1` exactly, an epoch floor: any
-later floor returns zero bytes or, worse, a plausible wrong window, because episode `ts` values are
-sweep times, not record times.*
-Do not read raw transcript JSONL by hand when `reduce` will answer — you will spend the batch's whole
-budget on tool results nobody asked for.
+Every episode in the queue is a `mental-model` item: the content is already a rendered statement of something CARL committed — a decision with its context, a code range he read (repo/path:lines plus the frozen text), an artifact or passage he internalized, a meeting note. Extraction is therefore mostly canonicalization: the facts to mint are ABOUT carl's knowledge ("carl decided X because Y", "carl has internalized <thing> (<where>)"), the entities are the real subjects the item names, and the item's own words are the evidence — there is no raw-JSONL archaeology in this pipeline any more. Two rules that matter more here than they did for swept prose: the episode's `ref` (`mm:<id>`) is the item's durable handle, so never drop it from provenance; and a reading's fact should name the SUBJECT read (the component, the constant, the mechanism), never just the file path — the path rides in the sentence, the entity is the thing carl now knows. (Legacy note, delete-on-sight if found in an old brief: the `k mine reduce --since 1` transcript-span guidance served the retired transcript episodes and has no target left.)
 
 ### 2. Extract, as delimited tuples
 

@@ -170,19 +170,25 @@ struct GraphView: View {
         return base
     }
 
-    /// Which half of the MEMORY tab is on screen.
+    /// Which third of the MEMORY tab is on screen.
     ///
-    /// The two are peers rather than a screen with a drawer on it: the graph is
-    /// what kraken worked out about its own history, the library is what carl
-    /// chose to keep out of it. Both are memory, neither contains the other.
+    /// The three are peers rather than a screen with drawers on it: the graph
+    /// is what kraken worked out, the library is what carl chose to KEEP, and
+    /// the model is what he has actually READ. All three are memory, none
+    /// contains another — though the graph is now compiled from the model, so
+    /// they sit next to each other in the order they derive.
     ///
     /// Deliberately not persisted. The tab opens on the graph every time
     /// because that is the screen with the poll and the layout behind it; a
-    /// remembered LIBRARY mode would make the graph reachable only by a tap
-    /// nobody had a reason to look for.
+    /// remembered LIBRARY or MODEL mode would make the graph reachable only by
+    /// a tap nobody had a reason to look for.
+    ///
+    /// "Model" rather than "Mental model": three segments share one phone
+    /// width, and a segmented control truncates rather than wraps.
     enum Mode: String, CaseIterable {
         case graph = "Graph"
         case library = "Library"
+        case model = "Model"
     }
 
     @State private var mode: Mode = .graph
@@ -206,21 +212,25 @@ struct GraphView: View {
         // re-styling it left it reading as a drawer that had lost its handle.
     }
 
-    /// The mode switch and whichever half it selects.
+    /// The mode switch and whichever of the three panes it selects.
     ///
-    /// The unselected half is not merely hidden — it is out of the tree, and
-    /// that is what leaves the graph idle while the library is up. Two
-    /// separate mechanisms do it, and neither had to learn about this switch:
+    /// The unselected two are not merely hidden — they are out of the tree,
+    /// and that is what leaves the graph idle while the library or the model
+    /// is up. Two separate mechanisms do it for the graph, and neither had to
+    /// learn about this switch:
     /// `screen`'s own `onDisappear` stops the display loop (and drops the node
     /// selection), while the 30s poll stops because SwiftUI cancels
     /// `withPolling`'s `.task(id:)` when its subtree leaves the tree.
     private func modes(base: String) -> some View {
         VStack(spacing: 0) {
             modeSwitch
-            if mode == .graph {
+            switch mode {
+            case .graph:
                 withPolling(withDrawer(screen), base: base)
-            } else {
+            case .library:
                 LibraryList(baseURL: base)
+            case .model:
+                MentalModelList(baseURL: base)
             }
         }
     }

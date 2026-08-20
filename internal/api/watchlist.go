@@ -1,11 +1,8 @@
 package api
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,21 +13,27 @@ import (
 	"kraken/internal/util"
 )
 
-// watchlist.go — the dream loop's watchlist over HTTP. A watch item is no
-// longer a row in a flat table: it is a LIVE GRAPH EDGE (the observation IS
-// the fact sentence) carrying a thin overlay row in `kg_watch`, keyed by edge
-// id. store/watch.go is the whole surface, and the ids on this route are edge
-// ids — which is why nothing here creates a row without also creating (or
-// adopting) the fact it describes.
+// watchlist.go — the dream loop's watchlist over HTTP. A watch item is a row
+// in its OWN table (`watch_items`, internal/store/watch.go): the observation
+// is the row's own sentence, and the row carries the dream-loop workflow
+// (class, state, sightings, first/last seen, evidence, suggested_fix, pr_url)
+// beside carl's judgement trio. The ids on this route are watch-row ids.
 //
-// What that buys, and the reason for the move: an observation the nightly
-// pass is tracking becomes searchable by the same FTS/vector retrieval every
-// other fact is, and gets injected into future cells' graphContext with zero
-// extra plumbing. The overlay holds only what the graph deliberately has no
-// verbs for — the dream-loop workflow (class, state, sightings, first/last
-// seen, evidence, suggested_fix, pr_url) and carl's judgement trio.
+// It used to be a graph EDGE with a thin `kg_watch` overlay, and Q9 moved it
+// back out. The reason is what the mental model did to the graph: after the
+// cutover the graph is compiled from carl's own marks rather than from
+// anything an agent observed, so a nightly pass' observation — which is
+// exactly an agent's observation — no longer belongs in it. A watch item is
+// dream-loop workflow state, and workflow state with its own lifecycle is a
+// table, not a fact.
 //
-// Two POST routes, not one, because the overlay has two owners and
+// What that costs, stated plainly because it was the point of the edge era:
+// an observation is no longer retrievable through FTS/vector search and no
+// longer rides into a cell's graphContext. Nothing replaces that, and nothing
+// is meant to — the watchlist is read by the nightly pass and by carl on the
+// DREAM view, both of which address it directly.
+//
+// Two POST routes, not one, because the row has two owners and
 // store/watch.go enforces the split at the SQL level (UpdateWatchItem never
 // writes verdict/comment/commented_at; SetWatchVerdict never writes anything
 // else):
@@ -51,13 +54,12 @@ import (
 //
 // Unlike questions and feedback, watch items are GLOBAL — no job_id, no slug
 // on any of these requests. An observation outlives whichever job first
-// surfaced it, which is exactly why it belongs in the graph.
+// surfaced it.
 
 // watchClasses / watchStates are the value sets store/watch.go documents for
-// the overlay's class and state columns. Validated here rather than left to
-// SQL (the column is a plain TEXT with no CHECK), so a typo'd class from an
-// LLM caller is a loud 400 instead of a row that silently never matches a
-// filter.
+// the class and state columns. Validated here rather than left to SQL (the
+// column is a plain TEXT with no CHECK), so a typo'd class from an LLM caller
+// is a loud 400 instead of a row that silently never matches a filter.
 var watchClasses = []string{"feedback", "correction", "repetition", "waste", "prompting"}
 
 var watchStates = []string{"watching", "shipped", "declined"}
@@ -68,16 +70,12 @@ var watchStates = []string{"watching", "shipped", "declined"}
 var watchVerdicts = []string{"", "fine", "fix"}
 
 // watchDefaultPredicate is the predicate an add gets when it names none. The
-// endpoints of a watch fact are real entities and the sentence carries the
-// actual claim, so the predicate is the least informative part of the triple —
-// requiring the caller to invent one would buy nothing.
+// endpoints of a watch observation are entity names and the sentence carries
+// the actual claim, so the predicate is the least informative part of the
+// triple — requiring the caller to invent one would buy nothing. It is
+// defaulted HERE rather than in the store because it is a policy about what an
+// agent may leave out, not a property of the column.
 const watchDefaultPredicate = "concerns"
-
-// watchEpisodeRef is the ref every API-minted watch episode carries. The
-// episode's dedupe hash covers its CONTENT as well as kind and ref (the
-// addEpisode rule), so a shared ref does not collapse two different
-// observations — it only records where they came from.
-const watchEpisodeRef = "watch:api"
 
 func oneOf(v string, set []string) bool {
 	for _, s := range set {
@@ -88,16 +86,16 @@ func oneOf(v string, set []string) bool {
 	return false
 }
 
-// watchOneLine is the stored-text normalization the graph applies to every
-// fact (normalizeGraphAdd's oneLine): internal whitespace, newlines included,
-// collapsed to single spaces. A watch observation becomes a fact sentence, so
-// it must arrive on that same shape — core.Triples emits one fact per line,
-// and a fact carrying a newline breaks every line-oriented reader downstream.
+// watchOneLine collapses internal whitespace, newlines included, to single
+// spaces. It is what makes re-stating an observation with different wrapping
+// FOLD onto the existing row instead of adding a near-duplicate: the store's
+// fold compares the stored `Observation` byte for byte, so the normalization
+// has to happen before the value is ever stored, on every write, or the same
+// sentence typed twice would be two rows.
 //
-// It is also the matching rule: store.FindWatchItem and
-// store.FindLiveEdgeByFact both compare LOWER(oneLine(...)) against
-// LOWER(fact), which is what makes re-stating an observation with different
-// wrapping fold onto the existing edge instead of minting a near-duplicate.
+// It also keeps every observation on ONE line, which every line-oriented
+// reader downstream (the report's tables, `kraken watchlist get`'s JSON read
+// by an agent) depends on.
 func watchOneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // webWatchItem is one watch item on the wire — the whole thing, both halves of
@@ -106,13 +104,12 @@ func watchOneLine(s string) string { return strings.Join(strings.Fields(s), " ")
 // observation and carl's verdict together. Its own DTO rather than
 // store.WatchItem directly, for the same reason webJob never embeds jobs.Job.
 //
-// THE KEYS ARE FROZEN to what they were when this rode a flat table: `id` is
-// now the EDGE id and `observation` is that edge's fact sentence, but no key
-// was added, renamed or retyped, so the web DREAM view and the iOS app decode
-// this unchanged and `apiContract` does not bump. src/dst/predicate deliberately
-// stay OFF this wire — a key added to an existing shape is a contract bump
-// (graph.go's header states the policy), and the graph routes already expose
-// linkage for anything that wants it.
+// THE KEYS ARE FROZEN, across both moves this row has now made: `id` is the
+// watch_items row id again, but no key was added, renamed or retyped in either
+// direction, so the web DREAM view and the iOS app decode this unchanged and
+// `apiContract` does not bump. src/dst/predicate deliberately stay OFF this
+// wire — a key added to an existing shape is a contract bump (graph.go's
+// header states the policy), and nothing on either client renders them.
 type webWatchItem struct {
 	ID          int64  `json:"id"`
 	Observation string `json:"observation"`
@@ -145,7 +142,7 @@ func webWatchItemsFrom(ws []store.WatchItem) []webWatchItem {
 	out := make([]webWatchItem, len(ws))
 	for i, w := range ws {
 		out[i] = webWatchItem{
-			ID: w.EdgeID, Observation: w.Observation, Class: w.Class, State: w.State,
+			ID: w.ID, Observation: w.Observation, Class: w.Class, State: w.State,
 			Sightings: w.Sightings, FirstSeen: w.FirstSeen, LastSeen: w.LastSeen,
 			Evidence: w.Evidence, SuggestedFix: w.SuggestedFix, PRURL: w.PRURL,
 			UpdatedAt: w.UpdatedAt, Verdict: w.Verdict, Comment: w.Comment,
@@ -171,13 +168,15 @@ type watchVerdictReq struct {
 // only stamped a verdict — the exact failure mode the two-route split exists
 // to prevent, so it is named rather than dropped.
 //
-// src/dst/predicate/strength joined the list when the add payload gained them:
-// they describe the EDGE an observation is, which is as far from carl's
-// verdict as a key on this surface gets.
+// src/dst/predicate are on the list because they describe the observation's
+// endpoints, which is as far from carl's verdict as a key on this surface
+// gets. `strength` is NOT: it was the edge's confidence and the standalone
+// table has no such column, so refusing it would be refusing a key that no
+// longer means anything anywhere.
 var agentOwnedWatchKeys = []string{
 	"observation", "class", "state", "sightings", "first_seen", "last_seen",
 	"evidence", "suggested_fix", "pr_url", "updated_at",
-	"src", "dst", "predicate", "strength",
+	"src", "dst", "predicate",
 }
 
 // carlOwnedWatchKeys are the mirror image: the keys POST /api/watchlist/item
@@ -187,11 +186,12 @@ var agentOwnedWatchKeys = []string{
 var carlOwnedWatchKeys = []string{"verdict", "comment", "commented_at"}
 
 // immutableWatchKeys are the keys op `update` refuses inside `item`. They are
-// not carl's — they are the EDGE's. An edge is insert-only outside the two
-// sanctioned window mutations, so there is no store verb that could honor a
-// reworded observation or a moved endpoint, and accepting the key only to
-// ignore it would tell a caller its edit landed.
-var immutableWatchKeys = []string{"observation", "src", "dst", "predicate", "strength"}
+// not carl's — they are the observation's IDENTITY. The store's fold matches a
+// re-add byte for byte on `observation`, so a reworded sentence is a different
+// item by construction, and `UpdateWatchItem` writes the workflow columns
+// only. Accepting one of these keys just to ignore it would tell a caller its
+// edit landed; the way to reword is to remove and re-add.
+var immutableWatchKeys = []string{"observation", "src", "dst", "predicate"}
 
 // rejectKeys reports the first key of set present in raw, or "" if none is.
 // Operates on the raw JSON object rather than the decoded struct because the
@@ -266,17 +266,16 @@ func watchlistHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// watchlistGet lists items, newest-observation-first (store.ListWatchItems'
-// last_seen DESC, edge_id DESC), optionally filtered to one state. An absent
-// or empty `state` means EVERY item — the filter is a narrowing, not a
-// required argument. An unrecognized state is a 400 rather than an empty list:
-// a typo'd filter and a genuinely empty watchlist are different answers, and
-// the board would render both as "nothing to review".
+// watchlistGet lists LIVE items, newest-observation-first, optionally filtered
+// to one state. An absent or empty `state` means EVERY item — the filter is a
+// narrowing, not a required argument. An unrecognized state is a 400 rather
+// than an empty list: a typo'd filter and a genuinely empty watchlist are
+// different answers, and the board would render both as "nothing to review".
 //
-// An item whose edge has been INVALIDATED is absent by construction
-// (ListWatchItems joins live edges only). That is the intended coupling: the
-// graph's revision pass striking a fact through is also the DREAM view
-// dropping it, with no second bookkeeping step to forget.
+// An EXPIRED item is absent by construction (store.ListWatchItems returns live
+// rows only). Expiry is what `remove` does now, and it is a close rather than
+// a delete: the row stays readable by id forever, so nothing carl judged is
+// ever actually gone — it just stops asking for attention.
 func watchlistGet(w http.ResponseWriter, r *http.Request) {
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	if state != "" && !oneOf(state, watchStates) {
@@ -300,14 +299,35 @@ func watchlistGet(w http.ResponseWriter, r *http.Request) {
 	webJSON(w, http.StatusOK, map[string]any{"watchlist": out})
 }
 
+// watchLookup resolves an id to a real watch item, answering the 404 itself.
+// requireLive additionally refuses an EXPIRED row: judging or editing one
+// would write into something no reader can see (ListWatchItems is live-only),
+// which is the worst shape a 200 can have. `remove` passes false, because
+// re-closing a closed row is exactly the idempotent success
+// store.ExpireWatchItem documents.
+func watchLookup(w http.ResponseWriter, st *store.Store, id int64, requireLive bool) bool {
+	item, err := st.GetWatchItem(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown watch item"})
+			return false
+		}
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return false
+	}
+	if requireLive && item.ExpiredAt != 0 {
+		webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown watch item"})
+		return false
+	}
+	return true
+}
+
 // watchlistPost is carl's verdict write: SetWatchVerdict, with commented_at
 // stamped SERVER-side in RFC3339 (never accepted from the client — a
-// timestamp a caller can choose is not a record of when anything happened).
-// An empty verdict AND an empty comment clears the judgement outright,
-// commented_at included, which is store.SetWatchVerdict's documented undo.
-//
-// `id` is an EDGE id, and a 404 covers both ways it can fail to name a watch
-// item: no overlay row, or an overlay whose edge has been invalidated.
+// timestamp a caller can choose is not a record of when anything happened,
+// which is why the store stamps it rather than taking it as a parameter).
+// An empty verdict AND an empty comment clears the judgement outright, which
+// is store.SetWatchVerdict's documented undo.
 func watchlistPost(w http.ResponseWriter, r *http.Request) {
 	var req watchVerdictReq
 	raw, ok := decodeWatchBody(w, r, &req)
@@ -328,29 +348,15 @@ func watchlistPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	comment := strings.TrimSpace(req.Comment)
-	commentedAt := ""
-	if verdict != "" || comment != "" {
-		commentedAt = time.Now().UTC().Format(time.RFC3339)
-	}
 	st := jobs.ActiveStore()
 	if st == nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "no store wired"})
 		return
 	}
-	// The liveness half of the 404 is checked here rather than left to
-	// SetWatchVerdict: that verb reports ErrNotFound only for a MISSING
-	// overlay, and an overlay riding an invalidated edge is a row the board
-	// can no longer see — judging it would write into a fact kraken has
-	// unlearned.
-	if _, err := st.GetWatchItem(req.ID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown watch item"})
-			return
-		}
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if !watchLookup(w, st, req.ID, true) {
 		return
 	}
-	if err := st.SetWatchVerdict(req.ID, verdict, comment, commentedAt); err != nil {
+	if err := st.SetWatchVerdict(req.ID, verdict, comment); err != nil {
 		util.LogEvent("web", "error", "watch-verdict", "watch-verdict: "+err.Error())
 		if errors.Is(err, store.ErrNotFound) {
 			webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown watch item"})
@@ -367,10 +373,14 @@ func watchlistPost(w http.ResponseWriter, r *http.Request) {
 // only. There is deliberately no verdict/comment/commented_at field — see
 // carlOwnedWatchKeys.
 //
-// Src/Dst/Predicate/Strength describe the EDGE an `add` mints when the
-// observation is genuinely new. They are meaningless on the other two ops and
-// refused there: a fold already has endpoints, and an update cannot move them
-// (see immutableWatchKeys).
+// Src/Dst/Predicate name the entities the observation runs between. They are
+// meaningless on the other two ops and refused there: a fold already has
+// endpoints, and an update cannot move them (see immutableWatchKeys).
+//
+// There is no `strength` any more — it was the EDGE's confidence, and the
+// standalone table has no such column. A caller that still sends one is not
+// refused for it, since decodeWatchBody ignores unmodelled keys; it is simply
+// a word this surface no longer has a meaning for.
 type watchItemWire struct {
 	ID           int64  `json:"id,omitempty"`
 	Observation  string `json:"observation,omitempty"`
@@ -385,7 +395,6 @@ type watchItemWire struct {
 	Src          string `json:"src,omitempty"`
 	Dst          string `json:"dst,omitempty"`
 	Predicate    string `json:"predicate,omitempty"`
-	Strength     int64  `json:"strength,omitempty"`
 }
 
 // watchItemReq is POST /api/watchlist/item's body: an op plus either an item
@@ -452,7 +461,10 @@ func watchItemHandler(w http.ResponseWriter, r *http.Request) {
 			webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
 			return
 		}
-		if err := st.UnwatchEdge(req.ID); err != nil {
+		if !watchLookup(w, st, req.ID, false) {
+			return
+		}
+		if err := st.ExpireWatchItem(req.ID, time.Now().UnixMilli()); err != nil {
 			util.LogEvent("web", "error", "watch-remove", "watch-remove: "+err.Error())
 			if errors.Is(err, store.ErrNotFound) {
 				webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown watch item"})
@@ -462,36 +474,17 @@ func watchItemHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		util.LogEvent("web", "info", "watch-remove", "watch-remove "+strconv.FormatInt(req.ID, 10))
-		// `unwatched` rather than a bare ok because "remove" now means
-		// something narrower than it used to: the OVERLAY is dropped, the fact
-		// and its episode survive in the graph. A caller that meant to unlearn
-		// the fact itself wants /api/graph/add's invalidate list.
+		// `unwatched` rather than a bare ok because "remove" means something
+		// narrower than it reads: the row is CLOSED, not deleted — it leaves
+		// every list and stays readable by id forever, carl's verdict on it
+		// included. No watch row is ever destroyed.
 		webJSON(w, http.StatusOK, map[string]bool{"ok": true, "unwatched": true})
 	default:
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "unrecognized watchlist request — need op add|update|remove"})
 	}
 }
 
-// watchEpisodeContent renders a watch observation as episode text, in the
-// exact format the retiring `sweepWatchlist` used — kept byte-identical
-// because schema v16's migration wrote every historical row in it, and two
-// spellings of the same provenance unit would read as two different sources
-// to anything sweeping kg_episodes.
-//
-// Carl's verdict is absent by construction here: an episode is minted at ADD
-// time, when the item is definitionally unjudged.
-func watchEpisodeContent(class, state string, sightings int64, observation, suggestedFix string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "watchlist observation (%s, %s, seen %dx): %s", class, state, sightings, observation)
-	if suggestedFix != "" {
-		b.WriteString("\nsuggested fix: " + suggestedFix)
-	}
-	return b.String()
-}
-
-// watchOverlayFrom projects the agent's wire item onto the store's overlay
-// type. Only the overlay columns ride: the fact sentence and its endpoints
-// belong to the edge, not to this struct.
+// watchOverlayFrom projects the agent's wire item onto the store's row type.
 func watchOverlayFrom(it watchItemWire) store.WatchItem {
 	return store.WatchItem{
 		Class: it.Class, State: it.State, Sightings: it.Sightings,
@@ -502,25 +495,21 @@ func watchOverlayFrom(it watchItemWire) store.WatchItem {
 
 // watchItemAdd is op `add`: the agent claiming it has observed something.
 //
-// Three outcomes, probed in this order, and the order is the whole design:
+// Two outcomes, and the store decides which: a live row already stating this
+// same observation FOLDS (sightings+1, last_seen bumped, the workflow fields
+// the caller restated applied, carl's trio untouched), and anything else is a
+// new row. The fold is the signal separating a one-off from a recurring
+// pattern, which is the whole reason the nightly pass has a watchlist at all.
 //
-//  1. FOLD — an already-watched live edge states this same observation. The
-//     sighting is bumped into it, which is the signal separating a one-off
-//     from a recurring pattern. src/dst/predicate/strength are IGNORED here:
-//     the observation already has endpoints, and letting a re-add move them
-//     would rewrite history on the strength of one night's phrasing.
-//  2. PROMOTE — a live edge states it but nothing is watching it. That fact
-//     was extracted from a transcript or a feedback note; the dream loop
-//     noticing it is a reason to WATCH it, never a reason to mint a second
-//     copy of the same sentence.
-//  3. CREATE — nothing states it yet. Endpoints are upserted by name (the
-//     graphAddHandler idiom: a name that resolves merges, a new one creates a
-//     bare node), an episode is minted and closed immediately, and the edge is
-//     inserted and then watched.
+// The PROMOTE branch is gone with the edge model: there is no longer a
+// separate population of facts an observation could be adopted from, so
+// "already stated somewhere else" is not a state that exists.
 //
-// The episode is marked done at creation on purpose: extracting it later would
-// only mint a near-duplicate of the edge this handler just wrote from the same
-// sentence.
+// src/dst are OPTIONAL now, and that is a real change rather than an omission.
+// They were required because a new fact could not be inserted without two
+// endpoints to hang it between; a `watch_items` row has no such requirement,
+// and refusing an add for want of them would be enforcing a constraint that no
+// longer exists anywhere below this line.
 func watchItemAdd(w http.ResponseWriter, st *store.Store, it watchItemWire) {
 	it.Observation = watchOneLine(it.Observation)
 	it.Class = strings.TrimSpace(it.Class)
@@ -540,138 +529,41 @@ func watchItemAdd(w http.ResponseWriter, st *store.Store, it watchItemWire) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad state " + strconv.Quote(it.State) + " — want one of " + strings.Join(watchStates, "|")})
 		return
 	}
-
-	// --- fold: this observation is already watched ---
-	hit, err := st.FindWatchItem(it.Observation)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err == nil && hit != nil {
-		if err := st.BumpWatchSighting(hit.EdgeID, time.Now().UnixMilli(), it.Evidence); err != nil {
-			util.LogEvent("web", "error", "watch-add", "watch-fold: "+err.Error())
-			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		// The four workflow fields a re-add can legitimately restate ride
-		// through UpdateWatchItem's partial semantics; everything else about
-		// the item is either the edge's (immutable) or the bump's.
-		if it.SuggestedFix != "" || it.PRURL != "" || it.Class != "" || it.State != "" {
-			if err := st.UpdateWatchItem(hit.EdgeID, store.WatchItem{
-				Class: it.Class, State: it.State,
-				SuggestedFix: it.SuggestedFix, PRURL: it.PRURL,
-			}); err != nil {
-				util.LogEvent("web", "error", "watch-add", "watch-fold-update: "+err.Error())
-				webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-		}
-		util.LogEvent("web", "info", "watch-add", "watch-fold "+strconv.FormatInt(hit.EdgeID, 10)+" "+it.Class)
-		webJSON(w, http.StatusOK, map[string]any{"ok": true, "id": hit.EdgeID, "folded": true})
-		return
-	}
-
-	// --- promote: the fact exists, nothing watches it yet ---
-	edge, err := st.FindLiveEdgeByFact(it.Observation)
-	if err != nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if edge != nil {
-		if err := st.WatchEdge(edge.ID, watchOverlayFrom(it)); err != nil {
-			util.LogEvent("web", "error", "watch-add", "watch-promote: "+err.Error())
-			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		util.LogEvent("web", "info", "watch-add", "watch-promote "+strconv.FormatInt(edge.ID, 10)+" "+it.Class)
-		webJSON(w, http.StatusOK, map[string]any{"ok": true, "id": edge.ID, "folded": false})
-		return
-	}
-
-	// --- create: a genuinely new fact ---
-	//
-	// Endpoints and strength are only required on THIS path, but they are
-	// validated up front all the same: discovering halfway through that the
-	// caller named no src would leave a minted episode with no edge attached
-	// to it, and there is no transaction spanning these writes.
-	if it.Src == "" || it.Dst == "" {
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": "a new observation needs src and dst — a watch item is a fact between two entities; resolve real ones with `k graph search` rather than inventing names"})
-		return
-	}
-	if it.Strength < graphStrengthMin || it.Strength > graphStrengthMax {
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("strength %d out of range — want %d..%d, and send it explicitly rather than omitting it (an absent strength is not a default, it is an unstated confidence)", it.Strength, graphStrengthMin, graphStrengthMax)})
-		return
-	}
 	predicate := it.Predicate
 	if predicate == "" {
 		predicate = watchDefaultPredicate
 	}
-	state := it.State
-	if state == "" {
-		state = "watching"
-	}
-	srcID, err := st.UpsertNode(store.GraphNode{Name: it.Src})
+	row := watchOverlayFrom(it)
+	row.Observation = it.Observation
+	row.Src, row.Dst, row.Predicate = it.Src, it.Dst, predicate
+	id, folded, err := st.AddWatchItem(row)
 	if err != nil {
+		util.LogEvent("web", "error", "watch-add", "watch-add: "+err.Error())
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	dstID, err := st.UpsertNode(store.GraphNode{Name: it.Dst})
-	if err != nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	verb := "watch-add "
+	if folded {
+		verb = "watch-fold "
 	}
-	now := time.Now().UnixMilli()
-	content := watchEpisodeContent(it.Class, state, 1, it.Observation, it.SuggestedFix)
-	sum := sha256.Sum256([]byte("watchlist\x00" + watchEpisodeRef + "\x00" + content))
-	epID, _, err := st.AddEpisode(store.Episode{
-		Kind:    "watchlist",
-		Ref:     watchEpisodeRef,
-		Content: content,
-		Hash:    hex.EncodeToString(sum[:]),
-		TS:      now,
-	})
-	if err != nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := st.MarkEpisodeDone(epID); err != nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	edgeID, _, err := st.InsertEdge(store.GraphEdge{
-		SrcID: srcID, DstID: dstID, Predicate: predicate, Fact: it.Observation,
-		EpisodeID: epID, Strength: it.Strength, ValidFrom: now,
-	})
-	if err != nil {
-		util.LogEvent("web", "error", "watch-add", "watch-add edge: "+err.Error())
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := st.WatchEdge(edgeID, watchOverlayFrom(it)); err != nil {
-		util.LogEvent("web", "error", "watch-add", "watch-add overlay: "+err.Error())
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	util.LogEvent("web", "info", "watch-add", "watch-add "+strconv.FormatInt(edgeID, 10)+" "+it.Class)
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "id": edgeID, "folded": false})
+	util.LogEvent("web", "info", "watch-add", verb+strconv.FormatInt(id, 10)+" "+it.Class)
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id, "folded": folded})
 }
 
-// watchItemUpdate is op `update`: a partial write of the OVERLAY, and nothing
-// but the overlay.
+// watchItemUpdate is op `update`: a partial write of the workflow columns, and
+// nothing but those.
 //
-// The old GET-then-backfill dance is gone. store.UpdateWatchItem is already
-// partial (COALESCE(NULLIF(...)) per column, one statement), so a request that
-// restates only suggested_fix leaves sightings, first_seen and last_seen —
-// the history the whole feature exists to record — untouched without the
-// handler re-reading anything.
+// store.UpdateWatchItem is already partial (COALESCE(NULLIF(...)) per column,
+// one statement), so a request that restates only suggested_fix leaves
+// sightings, first_seen and last_seen — the history the whole feature exists
+// to record — untouched without the handler re-reading anything.
 //
-// The fact sentence and its endpoints are refused rather than ignored:
-// kg_edges is insert-only, so no verb here could honor a reword, and an
-// accepted-then-dropped key is exactly the silent no-op the two-route split
-// was built to avoid.
+// The observation and its endpoints are refused rather than ignored: they are
+// the row's identity (the fold matches on the sentence), so an accepted reword
+// would silently split one tracked pattern into two.
 func watchItemUpdate(w http.ResponseWriter, st *store.Store, it watchItemWire, itemKeys map[string]json.RawMessage) {
 	if bad := rejectKeys(itemKeys, immutableWatchKeys); bad != "" {
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": "item." + bad + " is the fact itself, not the overlay — a watch item IS a graph edge and edges are insert-only; remove and re-add to reword"})
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "item." + bad + " is the observation's identity, not its workflow — the fold matches on the sentence, so a reword is a different item; remove and re-add to reword"})
 		return
 	}
 	it.Class = strings.TrimSpace(it.Class)
@@ -688,17 +580,7 @@ func watchItemUpdate(w http.ResponseWriter, st *store.Store, it watchItemWire, i
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad state " + strconv.Quote(it.State) + " — want one of " + strings.Join(watchStates, "|")})
 		return
 	}
-	// "Unknown watch item" means the same thing on both writes: no overlay row,
-	// OR an overlay whose edge kraken has since unlearned. UpdateWatchItem
-	// reports ErrNotFound only for the first, so without this probe an update
-	// against an invalidated edge would answer 200 into a row no reader can
-	// see — the same reason watchlistPost carries one.
-	if _, err := st.GetWatchItem(it.ID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			webJSON(w, http.StatusNotFound, map[string]string{"error": "unknown watch item"})
-			return
-		}
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if !watchLookup(w, st, it.ID, true) {
 		return
 	}
 	if err := st.UpdateWatchItem(it.ID, watchOverlayFrom(it)); err != nil {

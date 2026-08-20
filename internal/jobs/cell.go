@@ -971,12 +971,10 @@ func recallHookCommand(slug, krakenBin string) string {
 }
 
 // recallHookEntry is the hook group kraken installs under each of
-// recallHookEvents. Unlike krakenHookEntry it carries NO matcher, for a
-// different reason per event: UserPromptSubmit has no tool to match on (a
-// matcher key there is at best ignored and at worst a config Claude Code
-// refuses to load), and on PostToolUse the absence is the point — every tool
-// call qualifies, since which tool ran says nothing about whether the
-// conversation just turned toward something the graph knows.
+// recallHookEvents. Unlike krakenHookEntry it carries NO matcher: the one
+// wired event is UserPromptSubmit, which has no tool to match on (a matcher
+// key there is at best ignored and at worst a config Claude Code refuses to
+// load).
 func recallHookEntry(slug, krakenBin string) map[string]any {
 	return map[string]any{
 		"hooks": []any{
@@ -1010,35 +1008,53 @@ func limitHookEntry(slug, krakenBin string) map[string]any {
 	}
 }
 
-// recallHookEvents are the hook events mid-conversation recall rides on.
-// UserPromptSubmit queries on carl's new message, landing in front of the
-// agent before it starts thinking; PostToolUse queries on the assistant's
-// last text after every tool call, which is what keeps memory arriving as a
-// long turn moves through new territory. PostToolUse is safe where Stop is
-// not because its additionalContext lands in a turn that is ALREADY
-// continuing — nothing is resumed. Its per-tool-call frequency is paid for
-// server-side: concurrent firings for one session serialize on a per-session
-// mutex in Recall (parallel tool calls fire parallel hooks, which would
-// otherwise race the skip-set read against the mark and double-inject), and
-// a firing whose query matches the session's last completed one — every
-// firing after the first within one assistant message — short-circuits
-// before retrieval, so the steady-state cost is one local round trip.
+// recallHookEvents are the hook events mid-conversation recall rides on: one,
+// UserPromptSubmit, which queries on carl's new message and lands in front of
+// the agent before it starts thinking. Carl's prompt is real evidence of what
+// he is currently thinking about, which is the whole basis on which unsolicited
+// text may enter someone else's conversation.
 //
-// STOP IS DELIBERATELY NOT HERE, and the reason is a property of Claude Code
-// rather than a preference. Its hooks reference is explicit that
-// additionalContext at Stop CONTINUES the turn — "The turn doesn't stop; it
-// continues so Claude can read the feedback" — so a Stop injection is not an
-// injection, it is a resume. Wired, it would resume every agent straight past
-// zeus' own stop-gates (the manual-test gate, the /do gate), hold blocked
-// cells at "working" in the daemon's roll call by keeping their zeus running,
-// and chain paid model calls until retrieval finally ran dry. A feature whose
-// whole contract is "invisible when it has nothing to say" cannot be wired to
-// an event where saying something restarts the conversation.
+// POSTTOOLUSE IS RETIRED, and it is retired on measurement rather than on
+// taste. It queried the graph with the ASSISTANT'S OWN LAST TEXT after every
+// tool call, which makes it an echo machine independent of what the corpus
+// holds: the sibling memory-usefulness job classified 2,556 fact deliveries
+// across 15 days and found 4 ever used, with 68-79% of them echoing work the
+// agent had just finished and every measured arrival 20s to 6h late to matter.
+// Query-on-own-output cannot do better than that by construction — the query
+// is a summary of what the agent already knows. Re-wiring it means re-arguing
+// that measurement, not just re-adding a string.
+//
+// STOP IS DELIBERATELY NOT HERE EITHER, and for a different, harder reason —
+// a property of Claude Code rather than a judgement. Its hooks reference is
+// explicit that additionalContext at Stop CONTINUES the turn — "The turn
+// doesn't stop; it continues so Claude can read the feedback" — so a Stop
+// injection is not an injection, it is a resume. Wired, it would resume every
+// agent straight past zeus' own stop-gates (the manual-test gate, the /do
+// gate), hold blocked cells at "working" in the daemon's roll call by keeping
+// their zeus running, and chain paid model calls until retrieval finally ran
+// dry. A feature whose whole contract is "invisible when it has nothing to
+// say" cannot be wired to an event where saying something restarts the
+// conversation.
 //
 // It is a list rather than a constant because RunRecallHook is event-agnostic
 // (it echoes hook_event_name verbatim and Recall never reads it): wiring or
-// unwiring an event is a change here and nowhere else.
-var recallHookEvents = []string{"UserPromptSubmit", "PostToolUse"}
+// unwiring an event is a change here and nowhere else — plus, for an event
+// being UNwired, one entry in retiredRecallHookEvents below, since a merge
+// that only writes the events it wants leaves the old ones installed forever.
+var recallHookEvents = []string{"UserPromptSubmit"}
+
+// retiredRecallHookEvents are events recall was once wired to and no longer
+// is. They exist because unwiring an event is not the same edit as wiring one:
+// the merge below only visits recallHookEvents, so an event dropped from that
+// list simply stops being REWRITTEN — its stale group sits in every cell
+// settings.json ever installed, firing `kraken recall-hook` on every tool call
+// forever, with the code that produced it gone and nothing anywhere reporting
+// a problem. Listing the retired event is what turns the merge into a removal.
+//
+// An event may be dropped from here once no settings.json on the machine can
+// still carry its entry — which in practice means never, since a cell's file
+// outlives the cell. The cost of keeping one is a map lookup per install.
+var retiredRecallHookEvents = []string{"PostToolUse"}
 
 // mergeHookSettings renders a cell's .claude/settings.json: kraken's
 // PostToolUse hook entry (krakenHookEntry) appended into whatever's already
@@ -1053,18 +1069,18 @@ var recallHookEvents = []string{"UserPromptSubmit", "PostToolUse"}
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
 //
-// It renders FIVE kraken groups across FOUR hook events: the pr-hook group
+// It renders FOUR kraken groups across FOUR hook events: the pr-hook group
 // under PostToolUse, the bash-lint group under PreToolUse, the limit-hook
 // group under StopFailure (limitHookEntry, the usage-limit rescue), and a
-// recall group under each of recallHookEvents — which includes PostToolUse,
-// so that key ends up holding the pr-hook group AND a recall group side by
-// side. The two kinds use DIFFERENT merge rules and the difference is
-// deliberate — pr-hook, bash-lint and limit-hook append when their exact
-// command is absent, recall REPLACES — for the reason spelled out at the
-// recall loop below; the non-obvious consequence is that the recall loop runs
-// its removal pass over the very list the pr-hook append just wrote, which is
-// why withoutRecallHooks must never match a pr-hook command. Either way,
-// groups kraken did not write and unrelated top-level keys survive untouched.
+// recall group under each of recallHookEvents (UserPromptSubmit). The two
+// kinds use DIFFERENT merge rules and the difference is deliberate — pr-hook,
+// bash-lint and limit-hook append when their exact command is absent, recall
+// REPLACES — for the reason spelled out at the recall loop below. It also
+// REMOVES: retiredRecallHookEvents strips the recall group kraken used to
+// install under PostToolUse, which is why that removal pass runs over the very
+// list the pr-hook append just wrote, and why withoutRecallHooks must never
+// match a pr-hook command. Either way, groups kraken did not write and
+// unrelated top-level keys survive untouched.
 func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) {
 	parsed := map[string]any{}
 	if len(bytes.TrimSpace(existing)) > 0 {
@@ -1099,11 +1115,34 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	// byte-identical rather than merely non-duplicating.
 	for _, event := range recallHookEvents {
 		groups, _ := hooks[event].([]any)
-		// A fresh entry per event rather than one shared map: with two wired
-		// events, one shared entry would be the SAME mutable map in two
+		// A fresh entry per event rather than one shared map: with more than
+		// one wired event, a shared entry would be the SAME mutable map in two
 		// places in the tree, where a later mutation through one key silently
 		// edits the other.
 		hooks[event] = append(withoutRecallHooks(groups), recallHookEntry(slug, krakenBin))
+	}
+	// The removal half of the same replace, for events recall is no longer
+	// wired to. Dropping PostToolUse from recallHookEvents stops kraken
+	// WRITING that entry; it does nothing to the one already sitting in every
+	// cell settings.json this machine has ever installed, which would go on
+	// firing the hook on every tool call with no code left that intended it.
+	// The strip runs over PostToolUse alongside the pr-hook append above and
+	// leaves that group untouched, because withoutRecallHooks matches the VERB
+	// a group runs rather than any substring of its command (groupRunsVerb).
+	//
+	// An event left EMPTY by the strip has its key deleted rather than set to
+	// an empty array: an empty array is a shape kraken wrote, and a settings
+	// file kraken did not need to touch should not gain a key saying so.
+	for _, event := range retiredRecallHookEvents {
+		groups, ok := hooks[event].([]any)
+		if !ok {
+			continue
+		}
+		if kept := withoutRecallHooks(groups); len(kept) > 0 {
+			hooks[event] = kept
+		} else {
+			delete(hooks, event)
+		}
 	}
 	// Assigned once, unconditionally: with the PostToolUse merge and the
 	// recall loop above both writing into `hooks`, every branch that could
@@ -1299,14 +1338,14 @@ func groupRunsVerb(group map[string]any, verb string) bool {
 }
 
 // installHookSettings writes (or merges kraken's entries into) the cell's
-// project-scoped Claude Code hook config, <wt>/.claude/settings.json. Three
-// kraken groups go in, across two events: a Bash-matcher PostToolUse group so
-// zeus' `gh pr create` calls self-report to `kraken pr-hook`, plus a
-// matcher-less recall group under each of recallHookEvents (UserPromptSubmit
-// and PostToolUse) so every prompt AND every tool call in the cell asks
-// `kraken recall-hook` whether the knowledge graph has anything to add
-// (recall.go). Called from StartCell after the worktree is up and before
-// claude launches in it.
+// project-scoped Claude Code hook config, <wt>/.claude/settings.json. Kraken's
+// groups go in across four events: a Bash-matcher PostToolUse group so zeus'
+// `gh pr create` calls self-report to `kraken pr-hook`, plus a matcher-less
+// recall group under each of recallHookEvents (UserPromptSubmit) so every
+// prompt in the cell asks `kraken recall-hook` whether the knowledge graph has
+// anything to add (recall.go) — and, on an older cell's file, the removal of
+// the retired PostToolUse recall entry. Called from StartCell after the
+// worktree is up and before claude launches in it.
 //
 // Never fails the cell, and each kind is safe to lose for its own reason:
 // PR attachment still happens via the daemon's scan/poll paths, and recall is

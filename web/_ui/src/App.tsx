@@ -26,18 +26,25 @@ import { useHashRoute } from "./hooks/useHashRoute.ts";
 import { useJobSearch } from "./hooks/useJobSearch.ts";
 import { useLibrary } from "./hooks/useLibrary.ts";
 import { useLocalStorageSet } from "./hooks/useLocalStorage.ts";
+import { useMM } from "./hooks/useMM.ts";
 import { usePoll } from "./hooks/usePoll.ts";
 import { stampBackground } from "./lib/background.ts";
 import { columnFor } from "./lib/format.ts";
 import { jobKey } from "./lib/jobKey.ts";
 import { installSfxListeners } from "./lib/sfx.ts";
 import {
+  addMMNote,
   answerQuestion,
   deleteFeedback,
   deleteJob,
   editFeedback,
+  markArtifactRead,
+  markDecision,
+  markDetail,
+  markElementRead,
   openTmux,
   removeFromLibrary,
+  removeMM,
   retryJob,
   saveToLibrary,
   unarchiveJob,
@@ -235,6 +242,64 @@ export function App() {
     [mutate, library.refetch],
   );
 
+  // -------------------------------------------------------- mental model
+  //
+  // ONE poll for what carl has read, hoisted for the library's reason and one
+  // more of its own: FOUR surfaces read it — the artifact viewer's ✓ read and
+  // its per-table ✓s, the steer modal's → decision and detail mark, and the
+  // memory view's MENTAL MODEL pane — and every one of them is a membership
+  // test rather than a latch, so two polls would be two answers to "have I
+  // read this" and the buttons would contradict the pane they were opened
+  // from.
+  //
+  // Gated on any of the three surfaces being up: the memory view showing, the
+  // artifact viewer open over anything at all, or the steer modal open. The
+  // board itself carries no mm keys (the hot payload is deliberately
+  // untouched), so with all three shut this poll costs nothing.
+  const mm = useMM(view === "memory" || artifact !== null || steer !== null);
+
+  // Every write takes the shared mutation path so a refusal lands in the clock
+  // corner like all the others, then pulls the list back at once rather than
+  // waiting out the 30s tick — the library pair's shape exactly. None returns
+  // anything: each control's next state is whatever the refetched list says,
+  // which is what keeps a refused mark reading unmarked without a line of
+  // failure handling at the call site.
+  const afterMM = useCallback(
+    async (op: () => Promise<unknown>) => {
+      await mutate(op);
+      await mm.refetch();
+    },
+    [mutate, mm.refetch],
+  );
+  const markRead = useCallback(
+    (slug: string, home: string, name: string) =>
+      afterMM(() => markArtifactRead(slug, home, name)),
+    [afterMM],
+  );
+  const markElement = useCallback(
+    (slug: string, home: string, name: string, text: string) =>
+      afterMM(() => markElementRead(slug, home, name, text)),
+    [afterMM],
+  );
+  const markQuestionDecision = useCallback(
+    (slug: string, qid: string) => afterMM(() => markDecision(slug, qid)),
+    [afterMM],
+  );
+  const markCellDetail = useCallback(
+    (slug: string, text: string) => afterMM(() => markDetail(slug, text)),
+    [afterMM],
+  );
+  const addNote = useCallback(
+    (text: string) => afterMM(() => addMMNote(text)),
+    [afterMM],
+  );
+  // Drops a mark by INVALIDATING it — the row survives in the memory pane, so
+  // this is "I no longer know this", never a delete.
+  const dropMark = useCallback(
+    (id: number) => afterMM(() => removeMM(id)),
+    [afterMM],
+  );
+
   // The job editor autosaves on a 600ms debounce, and a self-update reload
   // drops whatever is still in flight. EditorOverlay registers its flusher
   // here so Chrome can await it before location.reload().
@@ -356,6 +421,9 @@ export function App() {
         // may outlive the job entirely), so the pager and `⑂ ask` both hide.
         onOpenArtifact={(url, name) => setArtifact({ url, name, key: "" })}
         onRemoveSaved={removeSaved}
+        mm={mm}
+        onAddNote={addNote}
+        onRemoveMM={dropMark}
       />
       <KronosView active={view === "kronos"} />
 
@@ -392,6 +460,11 @@ export function App() {
           setSteer((s) => (s ? { ...s, slug } : s));
           void board.refetch();
         }}
+        // the modal's two mental-model affordances: → decision on an answered
+        // question, and the mark on what the cell last said about itself
+        mm={mm.items}
+        onMarkDetail={markCellDetail}
+        onMarkDecision={markQuestionDecision}
         mutate={mutate}
       />
 
@@ -447,6 +520,12 @@ export function App() {
         library={library.items}
         onSaveArtifact={saveArtifact}
         onRemoveSaved={removeSaved}
+        // the mental model's three artifact-side affordances: the head's
+        // ✓ read, the selection mark, and the per-table ✓s in the body
+        mm={mm.items}
+        onMarkRead={markRead}
+        onDropMark={dropMark}
+        onMarkElement={markElement}
         mutate={mutate}
       />
 

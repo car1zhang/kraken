@@ -244,6 +244,12 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	// DROPS rather than adds, so replaying it needs its targets PRESENT —
 	// jobs.ready and the prereqs table, both of which a genuine v16 database
 	// had and this fresh one no longer does.
+	//
+	// v29 goes first, and through a helper rather than inline: it is the only
+	// step so far whose reversal is more than a DROP — its hook DROPs
+	// kg_watch, so replaying it finds the table missing unless something puts
+	// it back (schema_test.go's undoV29).
+	undoV29(t, s)
 	for _, stmt := range []string{
 		// v28 adds the three account-binding columns to jobs; a v16 database
 		// has none of them, and step 28 replays by adding them, which fails on

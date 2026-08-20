@@ -87,6 +87,8 @@ func main() {
 		cmdLoad(rest)
 	case "graph":
 		cmdGraph(rest)
+	case "mm":
+		cmdMM(rest)
 	case "slack":
 		cmdSlack(rest)
 	case "orch":
@@ -255,23 +257,41 @@ Commands:
                       the full untruncated fact, E<episode id> for the
                       episode it came from — printing each bundle as JSON;
                       stats prints the node/edge/episode counts as JSON.
+  k mm mark|drop|note|get|lsp ...
+                      CARL's verbs for the mental model — what he has read,
+                      decided and noted — proxied the same way as 'k graph'.
+                      Agents never write it: these are for carl's own shell
+                      and the Zed capture task, and no skill documents them.
+                      mark --worktree <dir> --file <path> --start-row <n>
+                      [--note "..."] records a range of code as read, taking
+                      the selected text from $KRAKEN_MM_SELECTION (an empty
+                      selection means the single line at --start-row) and
+                      anchoring it to the most durable commit that holds it —
+                      origin/main, else the merge base, else HEAD, else
+                      nothing; drop <id> unmarks one item; note "<text>"
+                      [--context "..."] records a free note; get [--all]
+                      prints the model as JSON, live items only unless --all
+                      widens it to the invalidated ones; lsp runs the stdio
+                      language server that draws live code marks back into
+                      Zed as hints and offers a code action to drop one (run
+                      by the zed/kraken-mm extension, not by hand).
   k watchlist get|add|update|remove ...
                       cell-side verb the nightly dream pass uses to track
                       recurring observations, proxied the same way. A watch
-                      item IS a knowledge-graph edge (the observation is its
-                      fact sentence), so every id here is an EDGE id, and the
-                      watchlist is GLOBAL — no slug on any op. get [state]
-                      prints the items as JSON (state filter optional:
-                      watching|shipped|declined); add reads one watch-item
-                      object from stdin (observation, class, src, dst,
-                      strength 1-10, optional predicate) and FOLDS into the
-                      existing item when the graph already states it; update
-                      reads {id, ...overlay fields} and refuses the fact's own
-                      fields — edges are insert-only, so reword by removing
-                      and re-adding; remove takes a bare edge id and UNWATCHES
-                      it, leaving the fact in the graph. verdict/comment are
-                      carl's, set from the board — sending either here is a
-                      400, not a silent drop.
+                      item is a row in its own table, so every id here is a
+                      watch-row id, and the watchlist is GLOBAL — no slug on
+                      any op. get [state] prints the LIVE items as JSON (state
+                      filter optional: watching|shipped|declined); add reads
+                      one watch-item object from stdin (observation, class,
+                      optional src/dst/predicate) and FOLDS into the existing
+                      item when that same observation is already tracked;
+                      update reads {id, ...workflow fields} and refuses the
+                      observation and its endpoints — the fold matches on the
+                      sentence, so reword by removing and re-adding; remove
+                      takes a bare id and CLOSES the row, which leaves every
+                      list while staying readable by id (nothing is deleted).
+                      verdict/comment are carl's, set from the board — sending
+                      either here is a 400, not a silent drop.
   k slack inbox|status|ack ...
                       iris-side verbs for the Slack intake inbox, proxied the
                       same way as 'k questions'. inbox prints every unacked

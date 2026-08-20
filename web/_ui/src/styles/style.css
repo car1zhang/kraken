@@ -3102,6 +3102,170 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .graph-librm:hover { color: var(--ac2); }
 .graph-librm:disabled { opacity: 0.4; }
 
+/* ---- MENTAL MODEL mode: what carl has read ----
+   The LIBRARY pane's chrome (.graph-lib / .graph-libhdr / .graph-libscroll /
+   .graph-libempty are shared verbatim — the pane wears both classes) plus the
+   row shapes below, which the library has no equivalent of: a kind badge, an
+   invalidated state that is the feature rather than an error, and an
+   expansion carrying the frozen text. */
+.mm-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.mm-chip {
+  background: transparent; border: 1px solid var(--border);
+  font: 500 9px var(--mono); letter-spacing: 0.06em;
+  color: var(--muted); padding: 2px 7px; white-space: nowrap;
+}
+.mm-chip:hover:not(.on) { color: var(--fg); border-color: var(--border-strong); }
+.mm-chip.on {
+  background: color-mix(in srgb, var(--skill-graph) 16%, var(--b1));
+  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
+  color: var(--skill-graph);
+}
+.mm-addnote {
+  background: transparent; border: 1px solid var(--border-strong);
+  font: 700 8.5px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted); padding: 3px 9px; white-space: nowrap;
+}
+.mm-addnote:hover { color: var(--skill-graph); border-color: var(--skill-graph); }
+.mm-noteform { display: flex; gap: 8px; align-items: flex-start; padding-bottom: 10px; }
+.mm-noteinput {
+  flex: 1; min-width: 0; resize: vertical;
+  background: color-mix(in srgb, var(--ac) 5%, var(--b1));
+  border: 1px solid var(--border); color: var(--fg);
+  font: 10px/1.5 var(--mono); padding: 6px 8px;
+}
+.mm-noteinput:focus { outline: none; border-color: var(--skill-graph); }
+.mm-notesend {
+  flex: none; padding: 6px 12px;
+  background: color-mix(in srgb, var(--skill-graph) 14%, var(--b1));
+  border: 1px solid color-mix(in srgb, var(--skill-graph) 50%, transparent);
+  color: var(--skill-graph); font: 700 9px var(--mono); letter-spacing: 0.08em;
+}
+.mm-notesend:disabled { opacity: 0.4; }
+
+.mm-row {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--ac) 2%, var(--b0));
+}
+.mm-row + .mm-row { margin-top: 8px; }
+.mm-row:hover { border-color: color-mix(in srgb, var(--skill-graph) 45%, var(--b1)); }
+/* an invalidated item — still stored, still readable, visibly superseded.
+   Dimmed rather than struck through (the graph's .stale rule): the frozen text
+   is the payoff here, and struck-through prose is prose nobody reads. */
+.mm-row.dead { border-color: color-mix(in srgb, var(--ac2) 35%, var(--border)); }
+.mm-rowtop { display: flex; align-items: stretch; }
+.mm-open {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+  background: none; border: 0; padding: 8px 10px; text-align: left;
+}
+.mm-rowhead { display: flex; gap: 8px; align-items: baseline; max-width: 100%; }
+.mm-kind {
+  flex: none; padding: 1px 6px;
+  font: 700 8px var(--mono); letter-spacing: 0.1em; text-transform: uppercase;
+  background: color-mix(in srgb, var(--skill-graph) 14%, var(--b1));
+  color: var(--skill-graph);
+}
+.mm-kind.note { background: color-mix(in srgb, var(--ac) 14%, var(--b1)); color: var(--ac); }
+.mm-headline {
+  min-width: 0; font: 500 10px/1.5 var(--mono); color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.mm-open:hover .mm-headline { color: var(--skill-graph); }
+.mm-dead {
+  font: 8.5px var(--mono); letter-spacing: 0.04em; color: var(--ac2);
+  overflow-wrap: anywhere;
+}
+.mm-meta { font: 8.5px var(--mono); color: var(--muted); letter-spacing: 0.04em; }
+.mm-rm {
+  flex: none; width: 26px;
+  background: none; border: 0; border-left: 1px solid var(--divider);
+  color: var(--muted); font-size: 10px; line-height: 1;
+}
+.mm-rm:hover { color: var(--ac2); }
+.mm-rm:disabled { opacity: 0.3; }
+.mm-frozen {
+  border-top: 1px solid var(--divider); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.mm-frozentext {
+  margin: 0; padding: 7px 9px; max-height: 340px; overflow: auto;
+  background: color-mix(in srgb, var(--ac) 6%, var(--b1));
+  border-left: 2px solid var(--skill-graph);
+  font: 9.5px/1.55 var(--mono); color: var(--fg);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* The same frozen block as .mm-frozentext, for the one content that is
+   markdown SOURCE rather than a verbatim capture (a marked selection). It
+   carries `.md` too, which supplies the element rules — this rule only sets
+   the block's own frame and pulls the base size down to the pane's, since .md
+   is written for a full-width artifact body and this is a rail. No
+   `white-space`: the renderer has already decided where the lines are, and
+   pre-wrap here would double every soft break. */
+.mm-frozenmd {
+  padding: 7px 9px; max-height: 340px; overflow: auto;
+  background: color-mix(in srgb, var(--ac) 6%, var(--b1));
+  border-left: 2px solid var(--skill-graph);
+  font-size: 10px; overflow-wrap: anywhere;
+}
+.mm-frozenmd > :first-child { margin-top: 0; }
+.mm-frozenmd > :last-child { margin-bottom: 0; }
+.mm-ctx { font: 9px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.mm-snap { font: 9px var(--mono); color: var(--skill-graph); text-decoration: none; }
+.mm-snap:hover { text-decoration: underline; }
+
+/* ---- the capture affordances, outside the memory view ----
+   One button shape shared by the steer modal's detail mark and anything else
+   that grows one, plus the per-table ✓ the artifact body's post-render sweep
+   inserts (lib/mm.ts decorateMMTables). */
+.mm-markbtn {
+  background: transparent; border: 1px solid var(--border);
+  font: 500 9px var(--mono); letter-spacing: 0.05em;
+  color: var(--muted); padding: 2px 8px;
+}
+.mm-markbtn:hover:not(:disabled) { color: var(--skill-graph); border-color: var(--skill-graph); }
+.mm-markbtn.on {
+  color: var(--skill-graph);
+  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
+  background: color-mix(in srgb, var(--skill-graph) 12%, transparent);
+}
+.steer-detail-mark { display: flex; justify-content: flex-end; margin-top: -4px; }
+.dq-decide {
+  flex: none; background: transparent; border: 1px solid var(--border);
+  font: 500 8.5px var(--mono); letter-spacing: 0.05em;
+  color: var(--muted); padding: 1px 6px; white-space: nowrap;
+}
+.dq-decide:hover:not(:disabled) { color: var(--skill-graph); border-color: var(--skill-graph); }
+.dq-decide.on {
+  color: var(--skill-graph);
+  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
+  opacity: 1;
+}
+.dq-decide:disabled:not(.on) { opacity: 0.4; }
+
+/* The table wrapper the mm sweep inserts around every <table> in a rendered
+   artifact body. The wrapper exists because a <button> is not valid content
+   inside a <table>; it scrolls a wide table on its own so the ✓ stays put. */
+.mm-tblwrap { position: relative; overflow-x: auto; }
+.mm-tblmark {
+  position: absolute; top: 2px; right: 2px; z-index: 1;
+  width: 18px; height: 18px; padding: 0; line-height: 1;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--ac) 8%, var(--b1));
+  border: 1px solid var(--border); color: var(--muted); font-size: 10px;
+  opacity: 0; transition: opacity 120ms ease;
+}
+.mm-tblwrap:hover .mm-tblmark, .mm-tblmark:focus-visible { opacity: 1; }
+.mm-tblmark:hover { color: var(--skill-graph); border-color: var(--skill-graph); }
+/* a marked table keeps its ✓ visible — the persistent tick the mockup shows */
+.mm-tblmark.on {
+  opacity: 1; color: var(--skill-graph);
+  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
+  background: color-mix(in srgb, var(--skill-graph) 14%, var(--b1));
+}
+.mm-tblwrap.mm-marked > table {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--skill-graph) 60%, transparent);
+}
+
 @media (max-width: 900px) {
   .graphview { height: auto; }
   .graph-stage { grid-template-columns: 1fr; }

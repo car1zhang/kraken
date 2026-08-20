@@ -595,8 +595,12 @@ func TestEdgeInstallKronosSettingsWritesTheFourGroups(t *testing.T) {
 		t.Fatalf("read settings.json: %v", err)
 	}
 	body := string(raw)
+	// PostToolUse is deliberately NOT in this list any more: recall's
+	// per-tool-call arm retired on measurement (see
+	// TestRecallHookEventsPinsTheWiring) and kronos has no pr-hook, so
+	// nothing kraken writes lands under that event at all.
 	for _, want := range []string{
-		"UserPromptSubmit", "PostToolUse", "PreToolUse", "PostCompact",
+		"UserPromptSubmit", "PreToolUse", "PostCompact",
 		"recall-hook", "bash-lint", "rearm-hook", "ctx-hook", "statusLine", bin,
 	} {
 		if !strings.Contains(body, want) {

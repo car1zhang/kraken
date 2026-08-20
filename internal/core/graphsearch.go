@@ -185,7 +185,7 @@ func GraphSearch(st *store.Store, queryVec []float32, query string, o GraphSearc
 	// empty for it. The empty-query vector-only shape the (a) comment above
 	// names as a real call, and any query whose every token is under
 	// GraphTermMinRunes, therefore pay nothing for a feature they cannot use,
-	// on a path that runs inside every cell spawn and every PostToolUse hook
+	// on a path that runs inside every cell spawn and every prompt-submit hook
 	// firing. It also makes obligation (d) literal rather than merely
 	// equivalent: a query that cannot anchor executes the pre-change pipeline.
 	if terms := ContentTerms(query); len(terms) > 0 {

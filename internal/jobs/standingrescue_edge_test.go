@@ -812,11 +812,91 @@ func TestEdgeMergeKronosSettingsLeavesEverythingElseAlone(t *testing.T) {
 		t.Fatalf("an unrelated top-level key was dropped: %v", parsed["someUserKey"])
 	}
 
-	// kraken's three pre-existing groups still carry exactly one entry each
-	for _, ev := range []string{"PreToolUse", "PostCompact", "UserPromptSubmit", "PostToolUse"} {
+	// kraken's pre-existing groups still carry at least one entry each.
+	// PostToolUse is not among them since recall's per-tool-call arm retired
+	// (TestRecallHookEventsPinsTheWiring) — kronos writes nothing there now.
+	for _, ev := range []string{"PreToolUse", "PostCompact", "UserPromptSubmit"} {
 		if len(edgeHookCommands(t, merged, ev)) == 0 {
 			t.Errorf("event %q lost its kraken entry", ev)
 		}
+	}
+}
+
+// TestEdgeMergeKronosSettingsStripsTheRetiredRecallArm is a REGRESSION PIN,
+// not a spec test: the merge learned to strip retiredRecallHookEvents only
+// after the strand it fixes was diagnosed in review.
+//
+// Dropping PostToolUse from recallHookEvents stops kraken WRITING that entry
+// and does nothing at all to the one already in kronos' file — and kronos'
+// file is long-lived (its dir is `~/.kraken/kronos`, created once and merged
+// into on every spawn). Left there, a hook nothing in the binary intends fires
+// on every one of kronos' tool calls forever, POSTing to a route that answers
+// it, with no code left that a grep for the behaviour would land on.
+//
+// The fixture is the shape that actually exists on this machine: kraken's own
+// pre-retirement PostToolUse recall group, alone under that key (kronos gets
+// no pr-hook), beside a foreign StopFailure entry and a foreign key. What must
+// survive is everything that is not that group.
+func TestEdgeMergeKronosSettingsStripsTheRetiredRecallArm(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KRAKEN_DB_PATH", "")
+	const bin = "/usr/local/bin/kraken"
+
+	existing := `{
+	  "hooks": {
+	    "PostToolUse": [
+	      {"hooks": [{"type": "command", "command": "/usr/local/bin/kraken recall-hook --serve-addr 127.0.0.1:7777"}]}
+	    ],
+	    "StopFailure": [
+	      {"matcher": "rate_limit", "hooks": [{"type": "command", "command": "/opt/somebody/else --report"}]}
+	    ]
+	  },
+	  "someUserKey": {"kept": true}
+	}`
+
+	merged, err := mergeKronosSettings([]byte(existing), bin)
+	if err != nil {
+		t.Fatalf("mergeKronosSettings: %v", err)
+	}
+	for _, cmd := range edgeHookCommands(t, merged, "PostToolUse") {
+		if strings.Contains(cmd, "recall-hook") {
+			t.Errorf("the retired PostToolUse recall arm survived the merge: %q\n%s", cmd, merged)
+		}
+	}
+	// The key itself goes when nothing else is under it: an empty array is a
+	// shape kraken wrote, and this file promises to leave alone what it did
+	// not write.
+	var parsed map[string]any
+	if err := json.Unmarshal(merged, &parsed); err != nil {
+		t.Fatalf("merged settings are not valid JSON: %v\n%s", err, merged)
+	}
+	hooks, _ := parsed["hooks"].(map[string]any)
+	if _, present := hooks["PostToolUse"]; present {
+		t.Errorf("PostToolUse survived as an empty key: %s", merged)
+	}
+	// Everything else is untouched: the foreign StopFailure entry, kraken's own
+	// limit-hook beside it, the wired recall arm, and an unrelated top-level key.
+	stop := edgeHookCommands(t, merged, "StopFailure")
+	if edgeCountString(stop, "/opt/somebody/else --report") != 1 {
+		t.Errorf("a foreign StopFailure entry was disturbed: %v", stop)
+	}
+	if n := edgeCountString(stop, kronosLimitHookCommand(bin)); n != 1 {
+		t.Errorf("StopFailure carries %d copies of kraken's own entry, want 1: %v", n, stop)
+	}
+	for _, event := range recallHookEvents {
+		cmds := edgeHookCommands(t, merged, event)
+		n := 0
+		for _, cmd := range cmds {
+			if strings.Contains(cmd, "recall-hook") {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s holds %d recall commands, want exactly 1: %v", event, n, cmds)
+		}
+	}
+	if user, _ := parsed["someUserKey"].(map[string]any); user == nil || user["kept"] != true {
+		t.Errorf("an unrelated top-level key was dropped: %v", parsed["someUserKey"])
 	}
 }
 

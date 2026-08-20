@@ -189,6 +189,12 @@ func TestContractKronosV24MigratesFromV23(t *testing.T) {
 
 	// Roll the shape back to a genuine v23: exactly the table v24 adds, gone,
 	// and the version stamp lowered.
+	//
+	// v29 first, and through a helper rather than inline: it is the only step
+	// so far whose reversal is more than a DROP — its hook DROPs kg_watch, so
+	// replaying it finds the table missing unless something puts it back
+	// (schema_test.go's undoV29).
+	undoV29(t, s)
 	for _, stmt := range []string{
 		// v28 added the three account-binding columns; a genuine v23 database
 		// has none of them, and step 28 replays by adding them, which fails on
@@ -248,9 +254,19 @@ func TestContractKronosV24MigratesFromV23(t *testing.T) {
 	if v, err := s.GetKV("fixture_mark"); err != nil || v != "4242" {
 		t.Errorf("kv row lost across the migration: %q, err %v", v, err)
 	}
+	// kg_recall is the ONE bystander this walk deliberately loses, and only
+	// because the walk now runs past v29: that migration wipes every kg_*
+	// table so the knowledge graph can be re-grown as a compilation of carl's
+	// mental model, and a per-session record of which of the OLD facts had
+	// already been injected is meaningless once those facts are gone. The
+	// assertion is inverted rather than dropped, so a wipe that silently
+	// stopped covering kg_recall would still fail here.
 	ids, err := s.RecalledEdgeIDs("sess-pre")
-	if err != nil || !ids[11] || !ids[12] {
-		t.Errorf("kg_recall rows lost across the migration: %v, err %v", ids, err)
+	if err != nil {
+		t.Errorf("RecalledEdgeIDs after migrate: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("kg_recall survived the v29 wipe: %v", ids)
 	}
 
 	// re-running migrate() on the same file must be a no-op

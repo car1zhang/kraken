@@ -87,7 +87,14 @@ import (
 // cell's claudes bill, stamped on the job row at spawn so every later
 // spawn in that cell (reactivation, the limit rescue's respawn, a side
 // thread) can re-derive the same credential dir (see schemaV28).
-const schemaVersion = 28
+// Version 29 is the mental model's cutover: it adds mm_items and
+// mm_code_anchors (carl's own record of what he has decided and read), moves
+// the dream loop's watch overlay back out of the graph into a standalone
+// watch_items table, WIPES every kg_* table so the knowledge graph can be
+// re-grown as a compilation of mm items alone, and rebuilds kg_episodes so its
+// closed `kind` CHECK admits 'mental-model' (see schemaV29 and
+// migrateV29MentalModel).
+const schemaVersion = 29
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -393,12 +400,13 @@ ALTER TABLE jobs ADD COLUMN color TEXT NOT NULL DEFAULT '';
 // a row must survive its originating job's teardown, archive, and even
 // hard-delete. Attaching it to a job would have made it cascade away exactly
 // when it had finally been seen often enough to matter. (The property
-// survived the move: kg_watch is likewise global and job-free.)
+// survived both moves: kg_watch was global and job-free, and so is the
+// watch_items table v29 moved it back out into.)
 //
 // The (state, last_seen) index served the only listing the table had: the
 // v9-era ListWatchItems filtered on state and ordered by last_seen DESC, so
 // both columns were covered in the order the query used them — the same
-// argument kg_watch_state_last_seen makes for today's read (schemaV16).
+// argument watch_items_state_last_seen makes for today's read (schemaV29).
 //
 // watchlist_observation_key was an EXPRESSION index, not a plain column one,
 // and it was deliberately written as the exact expression the v9-era
@@ -910,6 +918,14 @@ CREATE TABLE kg_layout (
 // DDL below is only half the migration — migrateV16Watchlist (the hook) is
 // what carries the existing rows across, and schemaV16's own statements run
 // FIRST so the hook has somewhere to write.
+//
+// EVERYTHING BELOW IS HISTORY AS OF v29, the same standing schemaV9's own
+// doc comment carries: the kg_watch table this step creates is dropped by
+// migrateV29MentalModel, which moves the record back out of the graph into
+// the standalone watch_items (schemaV29, watch.go). The paragraphs are kept
+// because this step still RUNS — a v15 database migrating forward creates
+// kg_watch, fills it, and only then reaches v29 — and because the shape
+// argument here is the one v29 answers rather than ignores.
 //
 // THE SHAPE CHANGE, stated once: an observation stops being a row in the flat
 // `watchlist` table and becomes a live kg_edges FACT — a natural-language
@@ -1577,6 +1593,138 @@ ALTER TABLE jobs ADD COLUMN account_email TEXT    NOT NULL DEFAULT '';
 ALTER TABLE jobs ADD COLUMN account_at    INTEGER NOT NULL DEFAULT 0; -- unix millis
 `
 
+// schemaV29 is the mental model's cutover. Its SQL half CREATES the three new
+// tables and nothing else; everything destructive — the kg_watch carry-across,
+// the graph wipe, and the kg_episodes CHECK rebuild — lives in
+// migrateV29MentalModel, because migrate() runs the SQL FIRST and the hook has
+// to read kg_watch ⋈ kg_edges before any wipe statement removes what it reads.
+//
+// THE SHAPE CHANGE, stated once: kraken's long-term memory stops being
+// everything agents ever wrote and becomes exactly what carl has told it he
+// knows. mm_items is that record; the knowledge graph downstream of it is
+// emptied and re-grown as a COMPILATION of those items alone (the daemon's
+// transcript/feedback/artifact/job-spec sweeps retire in the same change).
+//
+// Shape notes, in the order they will be asked about:
+//
+//   - mm_items carries NO foreign key and NO cascade onto jobs, the
+//     saved_artifacts posture (schemaV25's first bullet) for a sharper reason:
+//     a decision minted from a question is the ESCAPE HATCH from that
+//     question's ON DELETE CASCADE. It copies the four values it needs and
+//     references nothing, so hard-deleting the job leaves the item
+//     byte-identical. An item that vanished with its job would record only
+//     what carl still had the job for.
+//   - invalidated_at is NULL when live, the archived_at precedent rather than
+//     a zero sentinel, for exactly archived_at's reason: "never invalidated"
+//     is a genuinely absent value, and NULL is the one spelling of it that no
+//     arithmetic can mistake for a timestamp at the epoch. It parts company
+//     with archived_at on the READ side, where mm.go COALESCEs it to 0 into a
+//     plain int64 rather than scanning a sql.Null*: archived_at's absence is
+//     asked about directly by half a dozen queries, while this column's is
+//     asked about in SQL (`invalidated_at IS NULL`) and only RENDERED in Go,
+//     where 0 and "absent" are the same answer to every caller.
+//   - content_sha is the identity hash of what was FROZEN: sha256 of content
+//     normally, and sha256 of the snapshot BYTES once SetMMSnapshot stores
+//     some (an artifact item's content is only its name, so hashing that would
+//     make every re-mark of a rewritten artifact look identical). One column
+//     rather than two because exactly one of the two payloads exists per row,
+//     and FindLiveMMItem asks one question of it.
+//   - snapshot is nullable BLOB rather than NOT NULL with an empty-blob default: only whole-
+//     artifact marks freeze bytes, and GetMMSnapshot has to tell "no snapshot"
+//     apart from "a zero-byte artifact" to answer ErrNotFound honestly.
+//   - mm_code_anchors is keyed by item_id as its PRIMARY KEY, which is what
+//     makes the 1:1 with a source=code item structural rather than a
+//     convention. No FK, same rule and same reason as the parent table.
+//   - watch_items is the dream loop's overlay, moved back OUT of the graph
+//     (Q9). v16 made an observation a live kg_edges fact so the graph's own
+//     retrieval could reach it; the cutover empties the graph of everything
+//     agent-observed, so a watch row riding an edge would be the one agent
+//     observation left inside carl's mental model. It goes back to a standalone
+//     table — and, unlike the v9 table it resembles, rows are EXPIRED rather
+//     than deleted (expired_at, the kg_edges spelling), so an observation carl
+//     took off the board is still readable by id afterwards.
+//   - The carl-owned trio (verdict, comment, commented_at) survives the move
+//     verbatim, ownership rule included: only SetWatchVerdict writes it, and
+//     every agent-side write preserves it. See watch.go's header.
+//
+// Appended rather than folded into an earlier step for the reason schemaV2's
+// doc comment spells out: real kraken.db files already exist at v28.
+const schemaV29 = `
+CREATE TABLE mm_items (
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind           TEXT    NOT NULL CHECK(kind IN ('decision','reading','note')),
+	source         TEXT    NOT NULL CHECK(source IN ('question','artifact','artifact-element','code','agent-output','manual')),
+	job_id         INTEGER NOT NULL DEFAULT 0,   -- no FK, no cascade: the item outlives its job
+	slug           TEXT    NOT NULL DEFAULT '',  -- display slug at capture time; identity is job_id
+	source_ref     TEXT    NOT NULL DEFAULT '',  -- qid, artifact name, repo/path:range, content hash
+	content        TEXT    NOT NULL,             -- the frozen thing carl knows
+	context        TEXT    NOT NULL DEFAULT '',
+	content_sha    TEXT    NOT NULL DEFAULT '',  -- hex sha256 of the frozen payload (see doc comment)
+	snapshot       BLOB    NULL,                 -- frozen artifact bytes; NULL = this item has none
+	snapshot_ext   TEXT    NOT NULL DEFAULT '',  -- the snapshot's extension, for its MIME on the way out
+	episode_id     INTEGER NOT NULL DEFAULT 0,   -- the kg episode this item minted; 0 = not yet
+	created_at     INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	invalidated_at INTEGER NULL,                 -- unix millis; NULL means live
+	invalid_reason TEXT    NOT NULL DEFAULT '',
+	invalid_detail TEXT    NOT NULL DEFAULT ''
+);
+-- The lookup FindLiveMMItem and SupersedeLiveMMItems both run, in the order
+-- they use the columns. Listing is a full scan of a table carl grows by hand,
+-- the saved_artifacts trade.
+CREATE INDEX mm_items_ref ON mm_items(source, job_id, source_ref);
+
+CREATE TABLE mm_code_anchors (
+	item_id     INTEGER PRIMARY KEY,          -- 1:1 with a source=code mm_items row; no FK, no cascade
+	repo        TEXT    NOT NULL DEFAULT '',  -- checkout dir basename under ~/Developer
+	path        TEXT    NOT NULL DEFAULT '',  -- repo-relative, current coordinates
+	orig_path   TEXT    NOT NULL DEFAULT '',  -- the path it was marked at, once a rename moved it
+	start_line  INTEGER NOT NULL DEFAULT 0,   -- 1-based inclusive, in anchor_sha coordinates
+	end_line    INTEGER NOT NULL DEFAULT 0,
+	anchor_sha  TEXT    NOT NULL DEFAULT '',  -- '' if and only if anchor_kind is 'dirty'
+	anchor_kind TEXT    NOT NULL DEFAULT 'dirty' CHECK(anchor_kind IN ('origin-main','merge-base','head','dirty')),
+	text        TEXT    NOT NULL DEFAULT '',  -- the exact bytes read, \n-normalized
+	text_sha    TEXT    NOT NULL DEFAULT '',  -- hex sha256 of text
+	lang        TEXT    NOT NULL DEFAULT '',
+	checked_at  INTEGER NOT NULL DEFAULT 0,   -- unix millis: last verify attempt, survived or not
+	checked_sha TEXT    NOT NULL DEFAULT '',  -- the head the last SURVIVED verify re-anchored to
+	check_error TEXT    NOT NULL DEFAULT '',  -- a failed READ; disjoint from invalidation
+	ambiguous   INTEGER NOT NULL DEFAULT 0,   -- the text was found in more than one place
+	invalid_sha TEXT    NOT NULL DEFAULT '',  -- head at the moment it died
+	invalid_pr  TEXT    NOT NULL DEFAULT ''   -- best-effort PR url; '' when none was found
+);
+-- The verify pass walks live anchors repo by repo; this is that read's order.
+CREATE INDEX mm_code_anchors_repo ON mm_code_anchors(repo, item_id);
+
+CREATE TABLE watch_items (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	observation   TEXT    NOT NULL DEFAULT '',
+	src           TEXT    NOT NULL DEFAULT '',  -- endpoint labels the v16 overlay joined from kg_nodes
+	dst           TEXT    NOT NULL DEFAULT '',
+	predicate     TEXT    NOT NULL DEFAULT '',
+	class         TEXT    NOT NULL DEFAULT '',
+	state         TEXT    NOT NULL DEFAULT 'watching',
+	sightings     INTEGER NOT NULL DEFAULT 1,
+	first_seen    INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	last_seen     INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	evidence      TEXT    NOT NULL DEFAULT '',  -- JSON, local-only — never committed
+	suggested_fix TEXT    NOT NULL DEFAULT '',
+	pr_url        TEXT    NOT NULL DEFAULT '',
+	updated_at    INTEGER NOT NULL DEFAULT 0,   -- unix millis: the AGENT's last write
+	-- carl-owned trio: only SetWatchVerdict ever writes these, exactly as
+	-- questions.answer/answered_at are kraken-owned (questions.go).
+	verdict       TEXT    NOT NULL DEFAULT '',
+	comment       TEXT    NOT NULL DEFAULT '',
+	commented_at  TEXT    NOT NULL DEFAULT '',  -- RFC3339
+	created_at    INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	expired_at    INTEGER NOT NULL DEFAULT 0    -- unix millis; 0 = live. Rows are expired, never deleted
+);
+-- The one listing this table has: live rows, filtered by state, newest
+-- sighting first — covered in the order the query uses the columns.
+CREATE INDEX watch_items_state_last_seen ON watch_items(expired_at, state, last_seen);
+-- AddWatchItem's fold probe: the live row carrying this exact observation.
+CREATE INDEX watch_items_observation ON watch_items(observation);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1672,8 +1820,14 @@ type migrationStep struct {
 // DEFAULTs land every pre-existing job on the empty binding, which is exactly
 // the state those jobs are in: they ran on the machine's main login, which is
 // what an unbound job still means; see schemaV28).
+// migrations[29] creates mm_items, mm_code_anchors and watch_items in SQL,
+// then runs migrateV29MentalModel: it carries every LIVE kg_watch overlay
+// across into watch_items (reading kg_watch ⋈ kg_edges BEFORE anything is
+// wiped, which is why the destructive half is a hook rather than more SQL),
+// drops kg_watch, empties every kg_* table, and rebuilds kg_episodes with
+// 'mental-model' added to its closed kind CHECK (see schemaV29).
 // Future schema changes append
-// migrations[29], migrations[30], ... rather than editing an existing
+// migrations[30], migrations[31], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1705,6 +1859,7 @@ var migrations = map[int]migrationStep{
 	26: {sql: schemaV26},
 	27: {sql: schemaV27},
 	28: {sql: schemaV28},
+	29: {sql: schemaV29, hook: migrateV29MentalModel},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
@@ -2472,6 +2627,191 @@ func v16Overlay(tx *sql.Tx, edgeID int64, r v16WatchRow) error {
 		return fmt.Errorf("fold watch overlay for row %d: %w", r.id, err)
 	}
 	return nil
+}
+
+// v29WatchRow is one live kg_watch overlay joined to the edge that carried its
+// observation — everything migrateV29MentalModel has to carry into watch_items,
+// read out in one pass before any wipe statement runs.
+type v29WatchRow struct {
+	observation, src, dst, predicate string
+	class, state                     string
+	sightings, firstSeen, lastSeen   int64
+	evidence, suggestedFix, prURL    string
+	updatedAt                        int64
+	verdict, comment, commentedAt    string
+	createdAt                        int64
+}
+
+// migrateV29MentalModel is migrations[29]'s Go hook: schemaV29's SQL has
+// already created mm_items, mm_code_anchors and watch_items by the time this
+// runs. What is left is everything DESTRUCTIVE, and it is a hook rather than
+// more SQL for one reason of sequencing — the carry-across reads kg_watch and
+// kg_edges, and the wipe empties both, so the two halves have to be ordered
+// against each other by something that can hold the rows in memory in between.
+//
+// The order is: read the live overlays → insert them into watch_items → drop
+// kg_watch → empty every kg_* table → rebuild kg_episodes with the widened
+// CHECK. Nothing after the first step can change what the first step saw.
+//
+// STRICT, like migrateV16Watchlist and unlike migrateV5Questions: nothing here
+// parses anything, so a failure is a broken database rather than a broken row.
+//
+// WHY THE GRAPH IS WIPED rather than filtered or carried: the graph's whole
+// corpus up to this point was swept out of transcripts, feedback, artifacts and
+// job specs, and the sibling memory-usefulness cell measured what that corpus
+// was worth — of 2,556 hand-classified fact deliveries across 15 days, 4 were
+// ever used. The cutover re-points the graph at carl's own mental model, and
+// there is no honest partial migration from one corpus to the other: an
+// episode's kind says where it came from, and every kind that exists today is
+// one the sweeps produced. This is the v11/v14 argument in a different domain —
+// derived state with no correct in-place correction is re-derived, not patched.
+// The cost is stated where carl reads it (the board renders a near-empty graph
+// until he marks things) rather than hidden, and Q10 puts a manual backup in
+// front of the upgrade.
+//
+// ALL states carry across, shipped and declined included, for
+// migrateV16Watchlist's reason: those are suppression signals, and dropping
+// them would make every declined observation come back as fresh the first
+// night after the migration.
+//
+// An overlay whose edge is NOT live is deliberately left behind. Every read in
+// the v16 design INNER JOINed the live edge, so such a row was already invisible
+// to the board and to the dream loop — carrying it into watch_items would
+// RESURRECT observations kraken had unlearned, which is the one thing this
+// migration must not do while it is otherwise moving rows sideways.
+func migrateV29MentalModel(tx *sql.Tx) error {
+	rows, err := v29LiveWatchRows(tx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	for _, r := range rows {
+		// created_at is when this watch BEGAN, and the row it comes from has
+		// no such column — first_seen is that moment by definition, the
+		// edge's own created_at is the next best witness, and now is the
+		// floor so a carried row never reads as created at the epoch.
+		created := r.firstSeen
+		if created == 0 {
+			created = r.createdAt
+		}
+		if created == 0 {
+			created = now
+		}
+		if _, err := tx.Exec(`INSERT INTO watch_items (observation, src, dst, predicate, class, state,
+			sightings, first_seen, last_seen, evidence, suggested_fix, pr_url, updated_at,
+			verdict, comment, commented_at, created_at, expired_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+			r.observation, r.src, r.dst, r.predicate, r.class, r.state,
+			r.sightings, r.firstSeen, r.lastSeen, r.evidence, r.suggestedFix, r.prURL,
+			r.updatedAt, r.verdict, r.comment, r.commentedAt, created); err != nil {
+			return fmt.Errorf("carry watch overlay into watch_items: %w", err)
+		}
+	}
+
+	// The overlay table goes, per this repo's clean-cutover ruling: one
+	// machine, one database, one move — no dual-mode read path and no dormant
+	// copy to drift out of sync with the standalone table.
+	if _, err := tx.Exec(`DROP TABLE kg_watch`); err != nil {
+		return fmt.Errorf("drop kg_watch: %w", err)
+	}
+
+	// The wipe. kg_edges goes first so its AFTER DELETE triggers can post one
+	// 'delete' command per row into the external-content FTS index; the
+	// 'rebuild' afterwards makes emptiness unconditional rather than
+	// contingent on that index having been in sync beforehand.
+	for _, stmt := range []string{
+		`DELETE FROM kg_edges`,
+		`INSERT INTO kg_edges_fts(kg_edges_fts) VALUES('rebuild')`,
+		`DELETE FROM kg_nodes`,
+		`DELETE FROM kg_node_aliases`,
+		`DELETE FROM kg_recall`,
+		`DELETE FROM kg_layout`,
+		`DELETE FROM kg_ingest_cursor`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("wipe graph (%s): %w", stmt, err)
+		}
+	}
+
+	// kg_episodes is REBUILT rather than emptied, because its `kind` CHECK is
+	// a closed set written into the table definition and SQLite has no ALTER
+	// for one. The rebuild is a drop-and-create rather than the usual
+	// create-copy-drop-rename dance precisely because the wipe means there is
+	// nothing to copy — but the new definition still has to carry both indexes
+	// forward by hand, since dropping a table drops its indexes with it.
+	//
+	// 'mental-model' is ADDED to the legacy five rather than replacing them.
+	// Widening is the safe direction: a CHECK that no longer admits a kind
+	// some straggler code path still writes would fail an INSERT at runtime,
+	// where a kind nothing writes any more is inert. The absence of writers for
+	// the retired kinds is pinned by a test, not by this constraint.
+	for _, stmt := range []string{
+		`DROP TABLE kg_episodes`,
+		`CREATE TABLE kg_episodes (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind       TEXT    NOT NULL CHECK(kind IN ('transcript','feedback','watchlist','artifact','job','mental-model')),
+			ref        TEXT    NOT NULL DEFAULT '',
+			content    TEXT    NOT NULL DEFAULT '',
+			hash       TEXT    NOT NULL,
+			ts         INTEGER NOT NULL DEFAULT 0,
+			state      TEXT    NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','done')),
+			created_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE UNIQUE INDEX kg_episodes_hash ON kg_episodes(hash)`,
+		`CREATE INDEX kg_episodes_state ON kg_episodes(state, id)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("rebuild kg_episodes: %w", err)
+		}
+	}
+	return nil
+}
+
+// v29LiveWatchRows reads every kg_watch overlay whose edge is still LIVE,
+// joined to that edge's sentence and endpoint names — the same shape
+// watchItemSelect served the v16 verbs, so a row comes across carrying exactly
+// what the board was rendering for it.
+//
+// Split out so the rows cursor is closed before this hook's writes run against
+// the same transaction, the reason v12DistinctEventSlugs and v16WatchlistRows
+// exist: this package runs on ONE connection.
+//
+// The node joins are LEFT and every column is COALESCEd for watchItemSelect's
+// reasons — kg_* carries no foreign keys, so a dangling src_id must cost the
+// row its endpoint LABEL rather than its whole observation.
+//
+// Ordered by edge id, which is what makes the migration reproducible: watch_items
+// ids are assigned in this order.
+func v29LiveWatchRows(tx *sql.Tx) ([]v29WatchRow, error) {
+	rows, err := tx.Query(`SELECT COALESCE(e.fact,''), COALESCE(sn.name,''), COALESCE(dn.name,''),
+		COALESCE(e.predicate,''), COALESCE(w.class,''), COALESCE(w.state,''),
+		COALESCE(w.sightings,0), COALESCE(w.first_seen,0), COALESCE(w.last_seen,0),
+		COALESCE(w.evidence,''), COALESCE(w.suggested_fix,''), COALESCE(w.pr_url,''),
+		COALESCE(w.updated_at,0), COALESCE(w.verdict,''), COALESCE(w.comment,''),
+		COALESCE(w.commented_at,''), COALESCE(e.created_at,0)
+		FROM kg_watch w
+		JOIN kg_edges e ON e.id = w.edge_id AND e.expired_at = 0
+		LEFT JOIN kg_nodes sn ON sn.id = e.src_id
+		LEFT JOIN kg_nodes dn ON dn.id = e.dst_id
+		ORDER BY w.edge_id`)
+	if err != nil {
+		return nil, fmt.Errorf("read kg_watch overlays: %w", err)
+	}
+	defer rows.Close()
+	var out []v29WatchRow
+	for rows.Next() {
+		var r v29WatchRow
+		if err := rows.Scan(&r.observation, &r.src, &r.dst, &r.predicate, &r.class, &r.state,
+			&r.sightings, &r.firstSeen, &r.lastSeen, &r.evidence, &r.suggestedFix, &r.prURL,
+			&r.updatedAt, &r.verdict, &r.comment, &r.commentedAt, &r.createdAt); err != nil {
+			return nil, fmt.Errorf("scan kg_watch overlay: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read kg_watch overlay rows: %w", err)
+	}
+	return out, nil
 }
 
 // legacyQuestion is parseLegacyQuestions' output shape — field-for-field the

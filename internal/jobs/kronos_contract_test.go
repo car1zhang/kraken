@@ -552,11 +552,13 @@ func contractKronosAnyContains(list []string, sub string) bool {
 
 // TestContractKronosSettingsCarryExactlyTheIntendedHooks: kronos' directory is
 // NOT a cell, so the cell's hook set is the wrong set. It needs the graph
-// (both recall hooks), the shell guard (bash-lint), the re-arm that keeps
-// recall useful across a compaction, and the statusline that feeds the context
-// sentinel — and it must NOT carry the pr-hook (there is no PR) or the
-// agent-teams keys (kronos delegates to nobody). The limit-hook it DOES carry
-// now, in its --agent form: kronos burns the same one Claude login a cell
+// (the recall hook, on whatever recallHookEvents currently wires — one event
+// since PostToolUse recall retired on measurement, see
+// TestRecallHookEventsPinsTheWiring), the shell guard (bash-lint), the re-arm
+// that keeps recall useful across a compaction, and the statusline that feeds
+// the context sentinel — and it must NOT carry the pr-hook (there is no PR) or
+// the agent-teams keys (kronos delegates to nobody). The limit-hook it DOES
+// carry now, in its --agent form: kronos burns the same one Claude login a cell
 // does, so the standing rescue needs the same fast trigger.
 func TestContractKronosSettingsCarryExactlyTheIntendedHooks(t *testing.T) {
 	useTestStore(t)
@@ -568,15 +570,26 @@ func TestContractKronosSettingsCarryExactlyTheIntendedHooks(t *testing.T) {
 	}
 	top, hooks, raw := contractKronosReadSettings(t, dir)
 
-	for _, event := range []string{"UserPromptSubmit", "PostToolUse", "PreToolUse", "PostCompact"} {
+	// Read from recallHookEvents rather than restated, so the wired set has
+	// exactly one pin (TestRecallHookEventsPinsTheWiring) and this test cannot
+	// disagree with it.
+	for _, event := range append([]string{"PreToolUse", "PostCompact"}, recallHookEvents...) {
 		if len(hooks[event]) == 0 {
 			t.Errorf("settings carry no %s hook group", event)
 		}
 	}
-	for _, event := range []string{"UserPromptSubmit", "PostToolUse"} {
+	for _, event := range recallHookEvents {
 		cmds := contractKronosHookCommands(hooks[event])
 		if !contractKronosAnyContains(cmds, "recall-hook") {
 			t.Errorf("%s does not run the recall hook: %v", event, cmds)
+		}
+	}
+	// And the retired arm is not merely unwritten, it is ABSENT: kronos runs
+	// every one of its verbs through Bash, so a stale PostToolUse recall entry
+	// here would fire on each of them forever.
+	for _, event := range retiredRecallHookEvents {
+		if cmds := contractKronosHookCommands(hooks[event]); contractKronosAnyContains(cmds, "recall-hook") {
+			t.Errorf("%s still runs the retired recall arm: %v", event, cmds)
 		}
 	}
 	if cmds := contractKronosHookCommands(hooks["PreToolUse"]); !contractKronosAnyContains(cmds, "bash-lint") {
@@ -645,7 +658,7 @@ func TestContractKronosSettingsAreIdempotent(t *testing.T) {
 		}
 	}
 	_, hooks, raw := contractKronosReadSettings(t, dir)
-	for _, event := range []string{"UserPromptSubmit", "PostToolUse", "PreToolUse", "PostCompact"} {
+	for _, event := range append([]string{"PreToolUse", "PostCompact"}, recallHookEvents...) {
 		cmds := contractKronosHookCommands(hooks[event])
 		if len(cmds) != 1 {
 			t.Errorf("%s holds %d commands after three installs (%v), want 1\n%s", event, len(cmds), cmds, raw)

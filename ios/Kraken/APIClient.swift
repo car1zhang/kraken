@@ -691,6 +691,96 @@ actor APIClient {
         )
     }
 
+    // MARK: - mental model
+
+    /// Everything carl has marked, newest first — invalidated rows included,
+    /// because those are half the point (the frozen text is what he knew, and
+    /// the app renders it back against a source that no longer says it).
+    ///
+    /// No `?live=1` variant: the memory pane filters client-side so the same
+    /// one payload serves the pane, the artifact viewer's ✓ toggle and the
+    /// job sheet's decision marks, and re-reading the wire per surface would
+    /// give three surfaces three different opinions about one list.
+    func fetchMM(baseURL: String) async throws -> MMPage {
+        try await get(baseURL: baseURL, path: "/api/mm")
+    }
+
+    /// Marks a whole artifact read, freezing its CURRENT bytes as the item's
+    /// snapshot. The {slug, home, name} triple is the artifact-route address
+    /// `saveToLibrary` sends, recovered the same way (`artifactParts`).
+    ///
+    /// Idempotent on identical bytes — the server answers `already` with the
+    /// existing id. DIFFERENT bytes supersede the earlier mark and insert a
+    /// new one, so the list never shows two live "I read this" rows for one
+    /// file. Either way the answer names the row that is now live.
+    @discardableResult
+    func markArtifactRead(baseURL: String, slug: String, home: String, name: String) async throws -> MMCreated {
+        try await post(
+            baseURL: baseURL, path: "/api/mm/artifact",
+            body: MMArtifactRequest(slug: slug, home: home, name: name)
+        )
+    }
+
+    /// Marks one SELECTION inside an artifact read. `text` is what the client
+    /// RENDERED — the server locates that span in the artifact's markdown
+    /// source and stores the source lines, so structure (pipes, list markers,
+    /// fences) survives a mark made from a rendered view.
+    @discardableResult
+    func markElementRead(baseURL: String, slug: String, home: String, name: String, text: String) async throws -> MMCreated {
+        try await post(
+            baseURL: baseURL, path: "/api/mm/element",
+            body: MMElementRequest(slug: slug, home: home, name: name, text: text)
+        )
+    }
+
+    /// Records an ANSWERED doc question as a decision carl has taken. The
+    /// server copies the row's own text, answer, context and recommendation;
+    /// an unanswered question is a 400, since there is no decision yet.
+    @discardableResult
+    func markDecision(baseURL: String, slug: String, qid: String) async throws -> MMCreated {
+        try await post(
+            baseURL: baseURL, path: "/api/mm/decision",
+            body: MMDecisionRequest(slug: slug, qid: qid)
+        )
+    }
+
+    /// Marks a cell's rendered detail line read. The text goes on the wire
+    /// because it exists nowhere else — the line is replaced on every zeus
+    /// turn, so there is no address to send instead of the sentence itself.
+    @discardableResult
+    func markDetail(baseURL: String, slug: String, text: String) async throws -> MMCreated {
+        try await post(
+            baseURL: baseURL, path: "/api/mm/detail",
+            body: MMDetailRequest(slug: slug, text: text)
+        )
+    }
+
+    /// Writes a free-standing note into the mental model. Belongs to no job
+    /// and anchors to nothing, and has no idempotence probe: two identical
+    /// notes are two things carl thought.
+    @discardableResult
+    func addMMNote(baseURL: String, text: String, context: String) async throws -> MMCreated {
+        try await post(
+            baseURL: baseURL, path: "/api/mm/note",
+            body: MMNoteRequest(text: text, context: context)
+        )
+    }
+
+    /// Carl unmarking: invalidates the item with reason `removed` and closes
+    /// the facts compiled from it. Never a delete — the row stays readable —
+    /// and re-removing an already-invalidated item is a 200 that changes
+    /// nothing, so a double tap is safe.
+    func dropMM(baseURL: String, id: Int64) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/mm/remove",
+            body: MMRemoveRequest(id: id)
+        )
+    }
+
+    // NB: there is deliberately no markCode verb. `POST /api/mm/code` needs an
+    // absolute WORKTREE path, a repo-relative file and a start row — the Zed
+    // capture task's world, not the phone's. A phone has no checkout to name.
+
     // MARK: - artifacts
 
     /// Fetches a non-html artifact's raw body as text (webArtifact.url is

@@ -32,6 +32,12 @@ import type {
   WebBoard,
   WebUsage,
 } from "./types.ts";
+// The mental model's wire types live in lib/mm.ts and not in api/types.ts,
+// which is the one inversion in this file's imports: the contract froze
+// `MMItem` as a lib/mm.ts export because its two pure consumers there are
+// leaves, and a second copy of the shape here would be a second thing to keep
+// in step. Nothing in lib/mm.ts imports this module, so there is no cycle.
+import type { MMCreated, MMPage } from "../lib/mm.ts";
 
 /**
  * Same origin in production (the bundle is served off the same mux as /api).
@@ -294,6 +300,68 @@ export const saveToLibrary = (slug: string, home: string, name: string) =>
 /** Drop one saved row by its id — the id the list served, never a slug. */
 export const removeFromLibrary = (id: number) =>
   postJSON("/api/library/remove", { id });
+
+// ------------------------------------------------- mental model
+//
+// One read and six of the family's seven writes; `/api/mm/code` is the Zed
+// task's, posted by `k mm mark` and reachable from no board surface. Kept as
+// one named function per route rather than a single union-typed `markMM`, for
+// the feedback family's reason: a union-typed one reads as "anything goes" at
+// the call site, and these differ in what they FREEZE — a whole artifact's
+// bytes, one element's text, a question's answer — which is the part a reader
+// of the call site needs to see.
+//
+// Every create is IDEMPOTENT server-side: an identical live mark answers
+// `{id, already: true}` rather than a second row, so a double press costs a
+// round trip and nothing else. Every toggle-off goes through `removeMM`,
+// which INVALIDATES (reason `removed`) — nothing in the mental model is ever
+// deleted, so a dropped mark stays readable in the memory pane.
+
+/**
+ * Every item, newest first, live and invalidated alike. `fetchLibrary`'s
+ * shape exactly, and for the same reason: the one surface that filters
+ * (the MENTAL MODEL pane) needs the invalidated rows to filter TO, and the
+ * three that only test membership discard them in one predicate.
+ */
+export const fetchMM = (signal?: AbortSignal) =>
+  getJSON<MMPage>("/api/mm", signal);
+
+/**
+ * Freeze the whole artifact as read. The same {slug, home, name} triple
+ * `createFeedback` and `saveToLibrary` send — what `artifactParts` recovers
+ * from the URL the viewer is showing, so the artifact marked is exactly the
+ * one on screen.
+ */
+export const markArtifactRead = (slug: string, home: string, name: string) =>
+  postJSON<MMCreated>("/api/mm/artifact", { slug, home, name });
+
+/** Freeze ONE passage of an artifact — a selection, or one table's text. */
+export const markElementRead = (
+  slug: string,
+  home: string,
+  name: string,
+  text: string,
+) => postJSON<MMCreated>("/api/mm/element", { slug, home, name, text });
+
+/**
+ * Mint an answered doc question as a DECISION. The server copies the
+ * question's text, context, recommendation and answer out of the questions
+ * table — the copy is what survives the job's hard delete, which the question
+ * row does not.
+ */
+export const markDecision = (slug: string, qid: string) =>
+  postJSON<MMCreated>("/api/mm/decision", { slug, qid });
+
+/** Freeze what a cell said about itself — the steer modal's detail line. */
+export const markDetail = (slug: string, text: string) =>
+  postJSON<MMCreated>("/api/mm/detail", { slug, text });
+
+/** A note carl writes himself; belongs to no job and no artifact. */
+export const addMMNote = (text: string, context = "") =>
+  postJSON<MMCreated>("/api/mm/note", { text, context });
+
+/** Drop one mark by the id the list served. Invalidates; never deletes. */
+export const removeMM = (id: number) => postJSON("/api/mm/remove", { id });
 
 // ------------------------------------------------------------ threads
 

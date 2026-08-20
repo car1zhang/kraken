@@ -70,6 +70,22 @@ var mirrorGatedRoutes = []string{
 	// a real job. It is gated at all because it renames a live tmux session and
 	// moves preserved artifact files under PlutoDir.
 	"/api/job/rename",
+	// The mental model's seven WRITES (mm.go), gated via mirrorGated at
+	// registration rather than inline for the reason the graph writes below
+	// are: every one is a POST-ONLY path, so there is no GET on the same path
+	// that a route wrapper would take down with them. Its two reads —
+	// GET /api/mm and GET /api/mm/snapshot — stay open, like every other read
+	// on this surface: a mirror board must be able to SHOW the model it may
+	// not write.
+	//
+	// All seven ride this shared table safely in BOTH sweeps: with mirror off,
+	// against this table's {"slug":"nonexistent"} body, each one 400s before it
+	// ever reaches the store — decision/artifact/element/detail on a missing
+	// required field, and code/note/remove on `slug` itself, which is not a
+	// field of theirs and so trips DisallowUnknownFields. No mm row is created
+	// or invalidated by this test.
+	"/api/mm/decision", "/api/mm/artifact", "/api/mm/element", "/api/mm/code",
+	"/api/mm/note", "/api/mm/detail", "/api/mm/remove",
 	// The knowledge graph's three WRITES (graph.go, recall.go), gated via
 	// mirrorGated at registration rather than inline — unlike
 	// feedback/questions/load these are POST-only routes, so there is no GET

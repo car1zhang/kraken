@@ -1019,14 +1019,30 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		d.tokensPass(jobs, live, now)
 	}
 
-	// graph pass (self-paced internally — see graphPass): advance the
-	// knowledge graph's ingest cursors, fill in missing embeddings, and
-	// refresh the cached layout. Beside the token pass because it shares its
-	// shape — local reads, store writes, no pane and no tmux — and skipped
-	// under mirror for the sharper of the usual two reasons: it both writes
-	// the database and spends money on an embeddings API.
+	// graph pass (self-paced internally — see graphPass): fill in missing
+	// embeddings and refresh the cached layout. It no longer INGESTS anything
+	// — episodes are minted by carl's own marks now (mm.go), not swept — so
+	// what is left is the vector and layout upkeep. Beside the token pass
+	// because it shares its shape (local reads, store writes, no pane and no
+	// tmux), and skipped under mirror for the sharper of the usual two
+	// reasons: it both writes the database and spends money on an embeddings
+	// API.
 	if !mirror {
 		graphPass(ActiveStore(), now)
+	}
+
+	// mental-model verify pass (mm.go, self-paced internally at ten minutes):
+	// check every live item against what its substrate says today — artifact
+	// rows inline, code anchors in a single-flighted goroutine that fetches.
+	// Beside the graph pass because the graph is now compiled from these items
+	// alone, so keeping them honest IS keeping the graph honest.
+	//
+	// Skipped under mirror for the sharpest form of the usual two reasons: it
+	// FETCHES INTO REAL CHECKOUTS under ~/Developer — the ones the live
+	// deployment's cells branch from — and it writes rows and fires
+	// notifications on every death.
+	if !mirror {
+		MMVerifyPass(ActiveStore(), now)
 	}
 
 	// Slack intake (slack.go, iris.go): keep iris alive while Slack is
@@ -1339,6 +1355,28 @@ func (d *daemonState) trackPRs(j *Job) {
 	}
 	for _, pr := range updated {
 		dlog("%s: pr %s %s", j.Slug, pr.State, pr.URL)
+	}
+	if len(newlyMerged) > 0 {
+		// The mental model's verify pass skips a repo whose origin/main head
+		// has not moved since it last looked, and a merge is the one moment
+		// kraken KNOWS it has. Marking the repo makes the next pass re-verify
+		// it without waiting for the watermark comparison to notice.
+		//
+		// The key is the CHECKOUT's basename, not `j.Repo`. An anchor's repo
+		// is the basename of its `git remote get-url origin` (falling back to
+		// the worktree's), while a job's `repo:` field is matched by
+		// ResolveRepo as a case-insensitive SUBSTRING of a directory name — so
+		// `repo: mono` legitimately resolves to `~/Developer/monolith` whose
+		// anchors are all stored as `monolith`, and marking the field would
+		// name a repo no anchor group ever looks up. `repo` here is that
+		// resolved directory, taken above.
+		//
+		// An accelerant, never the trigger of record: this only ever sees PRs
+		// opened from kraken's own cell branches, so a push carl made from
+		// anywhere else is still caught by the ordinary head comparison. That
+		// is why the mark is not the mechanism — losing it costs latency, and
+		// the pass would still be correct if this line were deleted.
+		MarkMMRepoDirty(filepath.Base(repo))
 	}
 	for _, url := range newlyMerged {
 		dlogEvent("info", "pr-merged", "%s: merged %s — cell left alone", j.Slug, url)

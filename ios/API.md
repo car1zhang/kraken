@@ -560,24 +560,27 @@ observation first (`last_seen` DESC, id DESC). **Additive, no contract bump.**
 Unlike questions and feedback, watch items are GLOBAL — they belong to no job,
 so there is no `slug` on this route or either of its writes.
 
-**A watch item is a knowledge-graph edge.** The observation IS the edge's fact
-sentence (`kg_edges.fact`); a thin overlay row in `kg_watch`, keyed by edge id,
-carries the dream-loop workflow and carl's judgement. Two consequences for a
-client:
+**A watch item is a row in its own `watch_items` table.** The observation is
+the row's own sentence; the same row carries the dream-loop workflow and carl's
+judgement. It spent one release as a knowledge-graph EDGE with a thin `kg_watch`
+overlay, and Q9 moved it back out: the graph is now compiled from carl's own
+mental-model marks rather than from anything an agent observed, so a nightly
+pass' observation no longer belongs in it. Two consequences for a client:
 
-- **`id` is an EDGE id** — the same id `GET /api/graph` and
-  `POST /api/graph/search` print for that fact. It is still opaque to the app,
-  and still the id both writes below take.
-- **An invalidated fact leaves the list.** The join is against LIVE edges only,
-  so the graph's revision pass striking a fact through is also the DREAM view
-  dropping it. To a client that reads as an item disappearing — the same thing
-  a removal has always looked like.
+- **`id` is a WATCH-ROW id** — no longer an edge id, and no longer something
+  `GET /api/graph` will print. It is still opaque to the app, and still the id
+  both writes below take. Ids from before the move do not survive it; a client
+  holding one refetches, exactly as it would after any restart.
+- **A CLOSED item leaves the list.** `remove` stamps `expired_at` rather than
+  deleting the row, and every read filters to live rows — so to a client an
+  item still simply disappears, which is what a removal has always looked like.
 
 Nothing else moved: the keys, their json names, their types and their
-optionality are byte-for-byte what they were before the move, so the DREAM view
-and the iOS app decode this unchanged. `src`/`dst`/`predicate` are deliberately
-NOT on this wire — adding a key to an existing shape is a contract bump, and
-the graph routes already expose linkage.
+optionality are byte-for-byte what they were before EITHER move, so the DREAM
+view and the iOS app decode this unchanged and **`Models.swift` needs no
+change**. `src`/`dst`/`predicate` are deliberately NOT on this wire — adding a
+key to an existing shape is a contract bump, and nothing on either client
+renders them.
 
 `state` narrows to one of `watching`|`shipped`|`declined`; omitted or empty
 means every item. An unrecognized state is a 400, not an empty list — a typo'd
@@ -591,11 +594,11 @@ property is `watchClass` behind an explicit CodingKey.
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `id` | number | always | the watched edge's id |
-| `observation` | string | always | what the pass noticed — the edge's fact sentence, whitespace-collapsed to one line |
+| `id` | number | always | the watch row's id |
+| `observation` | string | always | what the pass noticed, whitespace-collapsed to one line |
 | `class` | string | always | `feedback`\|`correction`\|`repetition`\|`waste`\|`prompting` |
 | `state` | string | always | `watching`\|`shipped`\|`declined` |
-| `sightings` | number | always | a repeat folds into the existing item and increments this, rather than adding a second one. Distinct from the edge's own `occurrences` (episode corroboration) — the two are deliberately not kept in sync |
+| `sightings` | number | always | a repeat folds into the existing item and increments this, rather than adding a second one |
 | `first_seen` | number | always | unix millis |
 | `last_seen` | number | always | unix millis |
 | `evidence` | string | omitempty | JSON sample of the most recent occurrence, replaced wholesale on each sighting. Local-only — it never enters git |
@@ -606,7 +609,7 @@ property is `watchClass` behind an explicit CodingKey.
 | `comment` | string | omitempty | carl-owned |
 | `commented_at` | string | omitempty | carl-owned, RFC3339, stamped server-side |
 
-The overlay's columns have two owners, and the two writes below are split to
+The row's columns have two owners, and the two writes below are split to
 match — the store enforces it column by column (`UpdateWatchItem` never
 writes carl's trio; `SetWatchVerdict` never writes anything else).
 
@@ -616,23 +619,25 @@ writes carl's trio; `SetWatchVerdict` never writes anything else).
 Nothing else: it cannot express an observation edit, and a request that even
 MENTIONS an agent-owned key (`observation`, `class`, `state`, `sightings`,
 `first_seen`, `last_seen`, `evidence`, `suggested_fix`, `pr_url`,
-`updated_at`, `src`, `dst`, `predicate`, `strength`) is refused with a 400
-rather than having it silently dropped.
+`updated_at`, `src`, `dst`, `predicate`) is refused with a 400 rather than
+having it silently dropped. `strength` is no longer on that list: it was the
+edge's confidence, and the standalone row has no such column.
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `id` | number | required | the watched edge's id |
+| `id` | number | required | the watch row's id |
 | `verdict` | string | required | `fine`\|`fix`, or `""` to CLEAR the judgement |
 | `comment` | string | omitempty | trimmed |
 
 `commented_at` is stamped server-side in RFC3339 and is never accepted from
-the client. An empty `verdict` **and** an empty `comment` clears all three
-columns (reopening the item) — the documented undo.
+the client — the store verb takes no timestamp, so there is nothing a caller
+could send. An empty `verdict` **and** an empty `comment` reopens the item —
+the documented undo.
 
 Response: `{"ok": true}`. Errors: 400 (missing/zero `id`, a verdict outside
-the set, an agent-owned key), 404 (unknown item — no overlay row, **or** an
-overlay whose edge has been invalidated), 413 (body over 1MB), 500. Gated
-under `--mirror` with the standard plain-text 403.
+the set, an agent-owned key), 404 (unknown item — an id naming no row, **or**
+a row that has been CLOSED, which every read already hides), 413 (body over
+1MB), 500. Gated under `--mirror` with the standard plain-text 403.
 
 Modeled in the iOS app (`WatchVerdictRequest` in Models.swift,
 `setWatchVerdict` in APIClient.swift) — the DREAM screen's fine/fix control
@@ -656,7 +661,7 @@ that echoed a whole row back from the GET needs to be told.
 |---|---|---|---|
 | `op` | string | required | `add`\|`update`\|`remove` |
 | `item` | object | required for add/update | a `watchItemWire` (below) |
-| `id` | number | required for remove | the watched edge's id |
+| `id` | number | required for remove | the watch row's id |
 
 `watchItemWire` — every key optional on the wire; the handler validates per op:
 
@@ -665,9 +670,8 @@ that echoed a whole row back from the GET needs to be told.
 | `id` | number | required on `update`, ignored on `add` |
 | `observation` | string | `add` only, required, non-blank after whitespace collapse. **Refused on `update`** |
 | `class` | string | required on `add`, one of the five classes above; optional on `update` |
-| `src` / `dst` | string | `add` only, required when the observation is genuinely new. Entity NAMES — a name that resolves merges into the existing node, a new one creates a bare node. **Refused on `update`**, ignored on a fold |
+| `src` / `dst` | string | `add` only, OPTIONAL — entity names describing what the observation runs between. They were required while a watch item was an edge (a new fact needs two endpoints); a row does not. **Refused on `update`**, ignored on a fold |
 | `predicate` | string | `add` only, optional, defaults to `concerns`. **Refused on `update`** |
-| `strength` | number | `add` only, 1-10, required when the observation is genuinely new — an absent strength is an unstated confidence, not a default. **Refused on `update`**, ignored on a fold |
 | `state` | string | one of the three states; blank defaults to `watching` on add, and leaves the current state alone on update |
 | `sightings` | number | blank/zero on update leaves the current count alone |
 | `first_seen` / `last_seen` | number | unix millis; blank/zero leaves the current values alone — the store's update is partial per column, so a restatement of one field never zeroes the rest |
@@ -675,33 +679,38 @@ that echoed a whole row back from the GET needs to be told.
 | `suggested_fix` | string | |
 | `pr_url` | string | |
 
-**`add` is find-or-create, in three steps.** (1) If a WATCHED live edge already
-states this observation — matched case-insensitively on the whitespace-collapsed
-sentence — the add FOLDS: `sightings` increments, `evidence` is replaced, and
+**`add` is fold-or-create.** If a LIVE row already states this observation —
+matched on the whitespace-collapsed sentence — the add FOLDS: `sightings`
+increments, `last_seen` moves, `evidence` is replaced, and
 `class`/`state`/`suggested_fix`/`pr_url` are applied when sent. `src`/`dst`/
-`predicate`/`strength` are ignored: the observation already has endpoints.
-(2) Else if an UNWATCHED live edge states it — a fact some transcript or
-feedback note already contributed — that edge is PROMOTED: the overlay attaches
-to it rather than minting a second copy of the sentence. (3) Else the endpoints
-are upserted, an episode is created (kind `watchlist`, marked done immediately —
-extracting it later would only mint a near-duplicate of the edge just written),
-the edge is inserted, and the overlay attaches.
+`predicate` are ignored: the observation already has them, and letting a re-add
+move them would rewrite history on the strength of one night's phrasing.
+Otherwise a new row is inserted, with `state` defaulting to `watching` and
+`sightings` 1.
 
-**`update` writes the overlay only.** The fact sentence and its endpoints are
-refused with a 400 rather than ignored: `kg_edges` is insert-only, so no verb
-could honor a reword — remove and re-add to reword.
+The PROMOTE branch is gone with the edge model — there is no longer a separate
+population of facts an observation could be adopted from — and an add no longer
+creates a graph episode or edge anywhere.
 
-**`remove` UNWATCHES.** The overlay row goes; the edge and its episode survive
-untouched, and the fact stays searchable. Unlearning the fact itself is
-`POST /api/graph/add`'s `invalidate` list.
+**`update` writes the workflow columns only.** The observation and its
+endpoints are refused with a 400 rather than ignored: the fold matches on the
+sentence, so an accepted reword would silently split one tracked pattern in
+two. Remove and re-add to reword.
+
+**`remove` CLOSES the row.** `expired_at` is stamped; the row leaves every read
+but stays readable by id, carl's verdict on it included — no watch row is ever
+deleted. Closing a closed row is a 200, not a 404: the caller asked for it to
+be gone and it is gone. A later add of the same wording therefore creates a
+FRESH row rather than reviving the closed one, since the fold matches live rows
+only.
 
 Responses:
 
 | op | body |
 |---|---|
-| `add` | `{"ok": true, "id": number, "folded": bool}` — `id` is the edge id, whether created, promoted or folded into; `folded` tells the caller its observation was a repeat |
+| `add` | `{"ok": true, "id": number, "folded": bool}` — `id` is the row id, whether created or folded into; `folded` tells the caller its observation was a repeat |
 | `update` | `{"ok": true, "id": number}` |
-| `remove` | `{"ok": true, "unwatched": true}` — spelled out because "remove" is narrower than it reads: the fact survives |
+| `remove` | `{"ok": true, "unwatched": true}` — spelled out because "remove" is narrower than it reads: the row is closed, not destroyed |
 
 The id on `add`/`update` is why those aren't the standard `{"ok": true}`: a
 caller that just watched something has no other way to learn its id. These
@@ -709,9 +718,10 @@ three shapes are CLI-facing only (the iOS app never calls this route), so the
 added keys are not a contract bump.
 
 Errors: 400 (unknown op, missing item, blank observation, bad class or state,
-missing `src`/`dst` or an out-of-range `strength` on a create, an immutable key
-on update, missing id on update/remove, a carl-owned key), 404 (unknown id on
-update/remove), 413 (body over 1MB), 500. Gated under `--mirror`.
+an immutable key on update, missing id on update/remove, a carl-owned key),
+404 (an id naming no row, on update/remove/verdict — and, on update and
+verdict only, a row that has been CLOSED, which every read already hides),
+413 (body over 1MB), 500. Gated under `--mirror`.
 
 ### `GET /api/dream`
 
@@ -1158,6 +1168,157 @@ malformed id is a 404. Reachable in mirror mode.
 
 ---
 
+## Mental model
+
+Nine routes over the `mm_items` + `mm_code_anchors` tables
+(internal/api/mm.go), in the order register.go wires them: `mm`,
+`mm/snapshot`, then the seven writes `mm/decision`, `mm/artifact`,
+`mm/element`, `mm/code`, `mm/note`, `mm/detail`, `mm/remove`.
+**All additive — none of them bumps `apiContract`, which stays 6.** Every one
+is a NEW PATH, never a key added to, retyped in, or removed from an existing
+shape, so a client that predates them decodes nothing differently.
+
+**Seven of the nine ARE modeled in `Models.swift` and `APIClient.swift`** — the
+phone has full parity with the board, writes included (carl, gate R2: "I need
+ios parity even in v1 with full writes"). `GET /api/mm` decodes as
+`MMPage`/`WebMMItem`/`WebMMAnchor`; the six client-reachable writes are
+`APIClient.markArtifactRead`, `markElementRead`, `markDecision`, `markDetail`,
+`addMMNote` and `dropMM`, each answering the shared `MMCreated` (`{id,
+episode}` or `{id, already}`) except the last, which answers `{"ok": true}`.
+
+The other two are **deliberately absent from the app**. `POST /api/mm/code`
+takes an absolute WORKTREE path, a repo-relative file and a start row, which is
+the Zed capture task's world — a phone has no checkout to name. And
+`GET /api/mm/snapshot` has no Swift model and no `APIClient` verb. It serves
+bytes rather than JSON, and it means something for exactly one source —
+`artifact`, whose item carries the artifact's NAME as its content and the bytes
+only behind that route — so rendering it needs an artifact viewer over a
+non-artifact URL. The web pane links it out to a browser tab; the phone's pane
+does not offer the frozen copy at all in v1, which is a real gap rather than a
+decision: a whole-artifact row there shows what was marked and when, not what
+it said.
+
+What the app renders, and where:
+
+| surface | file | what it does |
+|---|---|---|
+| MODEL pane — the Memory tab's third segment beside Graph and Library | `MentalModelView.swift` | every mark newest-first, kind chips with counts (all / decisions / read / notes / dead), a note quick-add, rows expanding to the frozen content — an `artifact-element` item through the app's NATIVE markdown pipeline (`MarkdownText`) so a marked table renders as a table, its headline being that block's first non-empty line truncated at 80 — the board's `elementHeadline` rule, held in step — and a ✕ per row. An invalidated row shows its reason and its ✕ is DISABLED rather than absent |
+| ✓ read / mark selection | `ArtifactView.swift` (the pager's toolbar, beside ☆ save) | with nothing selected it is the whole-artifact toggle, pressed from the live `artifact` item and dropping through `/api/mm/remove`; with a non-empty selection in the web view it becomes the mark-selection form and posts `/api/mm/element` with the RENDERED text, exactly as the board does — the server locates the source span — then clears the selection on a mark that landed. The selection form is offered only on a markdown or plain-text artifact, never on an `.html`/`.svg`/`.pdf`/image page, where a selection would be text out of the server's own markup. The board's equivalent gate is its `md`-class check, which is stricter still — it excludes plain-text bodies too, where the phone allows them |
+| ◆ decision | `JobDetailView.swift` (`DocQuestionCard`) | on ANSWERED question rows only, since an unanswered one is a 400. Idempotent, so it stays pressable once decided |
+| detail mark | `JobDetailView.swift` (the Detail section) | marks the cell's rendered detail line, whose text exists nowhere else |
+
+Two notes on the parity, both deliberate. **Table corner-✓ affordances are not
+on iOS**: the web board injects a control into every `<table>` of its own
+rendered body, which on the phone would mean injecting controls into a
+WKWebView — the selection path covers the same ground (select the table, mark
+it) and per-table controls are a follow-up. And every toggle in the app paints
+from SERVER state with a refetch after each write, never from a local latch,
+which is what lets the daemon's verify pass retire a mark behind the app's
+back and have the control drop back to unmarked on the next read.
+
+A mental-model item is one thing carl has **read, decided or noted**, frozen at
+the moment he marked it. The freeze is the whole feature: an artifact mark
+keeps a SNAPSHOT of the bytes, an element mark keeps the element's own text,
+and a code mark keeps the blob's text plus the commit and line range it was
+read at. A daemon pass then asks whether what he read is still there, and when
+it is not the item is **invalidated one-way** — never deleted, never
+resurrected — so the frozen copy is what the board renders as "what you knew"
+against what is there now.
+
+The mental model is **carl's**. Agents never write it: no pipeline skill
+documents these routes, and the write verbs (`k mm mark|note`) are for carl's
+own shell and his Zed capture task. It is off the board's hot payload
+entirely — no key on a job object, no board-cache interaction — with its own
+view and its own poll, exactly the artifact library's posture.
+
+### `GET /api/mm[?live=1]` → `{"items": [MMItem]}` (api/mm.go)
+
+The whole model, newest first — `created_at` descending, `id` descending as
+the tiebreak. `?live=1` narrows to items that have not been invalidated;
+anything else means EVERYTHING, invalidated included, because those are half
+the point. `items` is always present and never `null`.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | the row id — what `POST /api/mm/remove` and `GET /api/mm/snapshot` address |
+| `kind` | string | always | `decision`\|`reading`\|`note` |
+| `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual` |
+| `slug` | string | always | the job's DISPLAY slug at mark time, or `""` for the two sources that belong to no job (`code`, `manual`). Display only — the job may since have been renamed, archived or deleted |
+| `source_ref` | string | always | what was marked, per source: a `Q<n>` for a question, the artifact name for an artifact or element, `<repo>/<path>:<start>-<end>` for code, the first 16 hex of the text's sha256 for an agent detail, `""` for a note |
+| `content` | string | always | served WHOLE, never cut — it is what carl read, and the invalidated view exists to show it back in full. For an artifact mark it is the source ref: an artifact's content is its snapshot, which rides its own route |
+| `context` | string | always | the question's context, the note carl attached to a code mark, or `""` |
+| `created_at` | number | always | unix millis |
+| `episode_id` | number | always | the layer-2 episode minted with the item |
+| `invalidated_at` | number | omitempty | unix millis. **The absence of these three keys is the wire's only spelling of "live"** |
+| `invalid_reason` | string | omitempty | `removed` (carl unmarked it), `content-changed`, `artifact-deleted`, `file-deleted` |
+| `invalid_detail` | string | omitempty | free text |
+| `anchor` | object | omitempty | present on `source: "code"` only — the table below |
+
+`anchor`:
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `repo` | string | always | the repo's identity, from origin's basename — so a mark made in a cell worktree and one made in the primary checkout are the same identity |
+| `path` | string | always | relative to the repo root |
+| `orig_path` | string | omitempty | set once, the first time a verify follows a rename |
+| `start_line` / `end_line` | number | always | 1-based, inclusive |
+| `anchor_sha` | string | omitempty | **absent exactly when `anchor_kind` is `dirty`** — text that exists in no commit has no commit to name |
+| `anchor_kind` | string | always | `origin-main`\|`merge-base`\|`head`\|`dirty`, in descending order of durability |
+| `text_sha` | string | always | sha256 of the anchored text (which is the item's `content`) |
+| `checked_at` | number | omitempty | unix millis; absent until the first verify pass has looked at it |
+| `checked_sha` | string | omitempty | the head the last successful verify ran against |
+| `check_error` | string | omitempty | a failed READ (offline, repo gone, timeout). Disjoint from an invalidation — a read that failed never says the code changed |
+| `ambiguous` | bool | omitempty | the text occurs more than once; the nearest occurrence to the expected position was taken. Never an invalidation |
+| `invalid_sha` / `invalid_pr` | string | omitempty | where the item died, best effort |
+
+There is deliberately no `text` key: the item's `content` IS the anchored text,
+and carrying it twice would let a client render two spellings of one thing.
+Reachable in mirror mode (a read is a read); the seven writes below are not.
+
+### `GET /api/mm/snapshot?id=N`
+
+Not JSON — serves an artifact mark's **frozen** bytes with a `Content-Type`
+picked by the stored extension (the same mapping `GET /api/artifact/...` uses)
+and `Cache-Control: no-store`. Never the live artifact: the agent that owns it
+rewrites it in place and the cell dir goes at teardown. An unknown id, and an
+item with no snapshot, are both 404 — neither names frozen bytes. Reachable in
+mirror mode.
+
+### The seven writes
+
+All POST-only, all gated under `--mirror` with the standard plain-text 403
+body `disabled in mirror mode`, and all sharing one decode discipline: a 1 MB
+cap (413), `DisallowUnknownFields` (400 naming the route's accepted field set,
+never echoing the offending key), and an empty required field refused by name.
+
+| route | request | what it records |
+|---|---|---|
+| `POST /api/mm/decision` | `{slug, qid}` | kind `decision`, source `question`. The server copies the row's own fields — `<text>` + `"\n→ "` + `<answer>`, plus `"\nrecommendation: …"` when there is one — rather than taking text from the client, so the record is what was actually asked and answered. An UNANSWERED question is a 400: there is no decision yet |
+| `POST /api/mm/artifact` | `{slug, home, name}` | kind `reading`, source `artifact`. Freezes the artifact's current bytes as the snapshot. Same bytes as a live mark → `already`; DIFFERENT bytes → the earlier item is superseded and a new one inserted, so the list never shows two live "I read this" rows for one file |
+| `POST /api/mm/element` | `{slug, home, name, text}` | kind `reading`, source `artifact-element`. `text` ≤ 32K runes, `\r\n`-normalized. The element's own text is the anchor, so a rewrite AROUND it leaves the mark alone |
+| `POST /api/mm/code` | `{worktree, file, start_row, text, note}` | kind `reading`, source `code`, plus an `anchor`. `worktree` absolute, `file` relative to it, `start_row` ≥ 1. An EMPTY `text` means the single line at `start_row`, read from disk. The end row is derived from the selection's newline count. The anchor ladder then finds the text in the most durable commit that holds it — origin/main, else merge-base(HEAD, origin/main), else HEAD, else `dirty` — and on a commit rung the STORED text and coordinates are the BLOB's, never the editor buffer's |
+| `POST /api/mm/note` | `{text, context}` | kind `note`, source `manual`. `text` ≤ 8K runes. Belongs to no job and anchors to nothing, and has no `already` probe: two identical notes are two things carl thought |
+| `POST /api/mm/detail` | `{slug, text}` | kind `reading`, source `agent-output`. `text` ≤ 8K runes. The steer modal's rendered detail line, whose text exists nowhere else on disk — which is why the item's content IS the record |
+| `POST /api/mm/remove` | `{id}` | carl unmarking: an invalidation with reason `removed`, never a delete |
+
+Every successful create also mints the layer-2 episode and answers
+`{"id": number, "episode": number}`. An idempotent re-mark of something already
+live answers `{"id": number, "already": true}` instead — same id, no second
+row, no second episode — which is what lets a client fire a mark button without
+first checking whether it is already on. `POST /api/mm/remove` answers the
+standard `{"ok": true}`.
+
+Errors: 400 (bad json, an unrecognized field, a missing or empty required
+field, an over-long text, a non-absolute worktree, a file path that escapes it,
+`start_row` < 1, an unanswered question, an `id` ≤ 0), 403 in mirror mode, 404
+(no such job, question, artifact or item), 405 for non-POST, 413 for a body
+over 1 MB, 500 (no store wired, or a mint that failed after the item was
+already persisted — the item survives, and the `already` paths make the retry
+safe). Re-removing an already-invalidated item is a **200**, and the earlier
+reason is left in place: the caller asked for it to be gone and it is gone.
+
+---
+
 ## Knowledge graph
 
 Ten routes over the `kg_*` tables (internal/api/graph.go, plus
@@ -1501,7 +1662,7 @@ Response: `{"episodes": [webGraphEpisode]}` — always an array, never `null`.
 | key | type | optionality | notes |
 |---|---|---|---|
 | `id` | number | always | |
-| `kind` | string | always | `transcript` \| `feedback` \| `watchlist` \| `artifact` \| `job` |
+| `kind` | string | always | `mental-model` \| `transcript` \| `feedback` \| `watchlist` \| `artifact` \| `job`. `mental-model` is the only one anything still WRITES — the graph is compiled from carl's own marks now, and the legacy five survive so the episodes already in the table stay readable |
 | `ref` | string | always | source pointer: `path#start-end` for files, row id otherwise |
 | `content` | string | always | the reduced text handed to the extractor — inline, since it IS this route's payload; a URL per episode would be N round trips for nothing |
 | `ts` | number | always | unix millis — when the SOURCE material was written, not when it was ingested |

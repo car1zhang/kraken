@@ -17,9 +17,10 @@ import (
 // (k graph add arrives over HTTP) and the daemon's graphPass (cursors,
 // embeddings, layout); none of the six tables above carries a carl-owned
 // column, so none of watch.go's preserve-the-other-side splitting applies in
-// this file. kg_watch (schemaV16) is the one kg_* table that DOES carry
-// carl's trio, and it lives in watch.go precisely so that splitting stays
-// where the columns are.
+// this file. Between v16 and v29 one kg_* table did carry carl's trio — the
+// kg_watch overlay — and it lived in watch.go precisely so that splitting
+// stayed where the columns were; v29 moved that table back out of the graph
+// entirely (watch_items), so no kg_* table carries a carl-owned column now.
 //
 // Edges are never deleted. InvalidateEdge closes an edge's validity window
 // (valid_until + expired_at); the fixed set of columns it may touch is the

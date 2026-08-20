@@ -23,6 +23,12 @@ import {
 } from "../../lib/codeRefs.ts";
 import { cardCompilable } from "../../lib/isoscene/index.ts";
 import { libraryMatch } from "../../lib/library.ts";
+import {
+  artifactReadMatch,
+  decorateMMTables,
+  selectionText,
+  type MMItem,
+} from "../../lib/mm.ts";
 import { ArtifactPager, useArtifactKeys } from "./ArtifactPager.tsx";
 import { askThreadSeed, askThreadTitle } from "./askThread.ts";
 import { IsoSceneView } from "./IsoSceneView.tsx";
@@ -225,6 +231,38 @@ export interface ArtifactOverlayProps {
   onSaveArtifact: (slug: string, home: string, name: string) => Promise<void>;
   /** Drop one saved row by the id the library served. */
   onRemoveSaved: (id: number) => Promise<void>;
+  /**
+   * The mental model as the server currently reports it (App's one mm poll,
+   * shared with the memory view's MENTAL MODEL pane and the steer modal).
+   *
+   * The head's ✓ read button is `artifactReadMatch(mm, url) !== null` and the
+   * body's table ✓s are a membership test over the same list — the ☆/★ rule
+   * verbatim, and for its reason plus one of its own: this state can move
+   * without anybody clicking, because the daemon's verify pass invalidates a
+   * mark when the artifact's bytes change. A local latch would go on claiming
+   * a reading the server had already retired.
+   */
+  mm?: MMItem[];
+  /**
+   * Freeze the WHOLE artifact as read, and drop that mark again. OPTIONAL as a
+   * pair, unlike the library's required two: the affordance is HIDDEN without
+   * them (the `onAskBranched`-in-DocQuestions posture), so an unwired
+   * integrator loses a button rather than gaining a dead one. Neither returns
+   * anything — the button's next state comes from `mm`, not from the answer.
+   */
+  onMarkRead?: (slug: string, home: string, name: string) => Promise<void>;
+  onDropMark?: (id: number) => Promise<void>;
+  /**
+   * Freeze ONE passage: the live selection, or one rendered table's text.
+   * Absent leaves the head's ✓ button as the whole-artifact toggle it is
+   * without a selection and draws no table ✓ at all, for `onMarkRead`'s reason.
+   */
+  onMarkElement?: (
+    slug: string,
+    home: string,
+    name: string,
+    text: string,
+  ) => Promise<void>;
   /** See Overlay.tsx. Feedback rides the board payload, so this invalidates. */
   mutate: Mutate;
 }
@@ -326,6 +364,10 @@ function ArtifactBody({
   library,
   onSaveArtifact,
   onRemoveSaved,
+  mm = [],
+  onMarkRead,
+  onDropMark,
+  onMarkElement,
 }: ArtifactBodyProps) {
   const [raw, setRaw] = useState(false);
   // the compiled-3D toggle; seeded from (and feeding) the session-sticky
@@ -353,6 +395,15 @@ function ArtifactBody({
   // is `saved`, i.e. the server's list); this only stops a double press from
   // posting twice while the first round trip is out
   const [savingLib, setSavingLib] = useState(false);
+  // one read mark / drop in flight — the double-press guard, and like
+  // `savingLib` it never drives the button's LOOK (that is `read`, i.e. the
+  // server's list)
+  const [markingRead, setMarkingRead] = useState(false);
+  // one element mark in flight, for the selection and table affordances
+  const [markingSel, setMarkingSel] = useState(false);
+  // The live selection inside the rendered markdown body, or "". Component
+  // state so the head can show an affordance for it — see the listener below.
+  const [selText, setSelText] = useState("");
   // which artifact the state above describes — the whole reset block below
   const [shown, setShown] = useState(url);
   const composerInput = useRef<HTMLTextAreaElement | null>(null);
@@ -455,6 +506,9 @@ function ArtifactBody({
     setNote("");
     setSending(false);
     setSavingLib(false);
+    setMarkingRead(false);
+    setMarkingSel(false);
+    setSelText("");
     setSentMode(null);
     setMode(draft?.mode ?? null);
     setComposerText(draft?.text ?? "");
@@ -512,6 +566,130 @@ function ArtifactBody({
     // means this body is no longer the one that pressed the button.
     if (alive.current && latest.current.url === url) setSavingLib(false);
   }, [savingLib, saved, saveParts, onRemoveSaved, onSaveArtifact, url]);
+
+  /**
+   * The LIVE whole-artifact reading this artifact is, if any — the ✓ read
+   * button's entire state, exactly as `saved` is ☆/★'s.
+   *
+   * Only the `/api/artifact/…` shape can answer (lib/mm.ts): a library
+   * snapshot's url carries no {slug, home, name} for `POST /api/mm/artifact`
+   * to address, which is also why `markable` below is `saveParts !== null` and
+   * NOT `savable`. The two coincide on every live artifact and part company on
+   * exactly one url — a snapshot opened out of the library, where the star is
+   * offered (it is already saved, so ★ can remove it) and the read mark cannot
+   * be, since there is nothing for the server to freeze or verify against.
+   */
+  const read = useMemo(() => artifactReadMatch(mm, url), [mm, url]);
+  const markable = saveParts !== null && !!onMarkRead && !!onDropMark;
+
+  /**
+   * Which of its two jobs the ONE ✓ button is doing right now.
+   *
+   * The head carries a single control (carl's call at gate R1), and this is the
+   * whole of the switch: a live selection inside the rendered body aims it at
+   * that passage, everything else aims it at the whole artifact. It is a
+   * derived value rather than a mode the reader sets, so there is no state to
+   * get stuck in — losing the selection puts the button straight back to the
+   * whole-artifact toggle.
+   *
+   * `markable` is deliberately NOT part of it: the two halves have DIFFERENT
+   * callbacks and either can be wired without the other (they are optional as
+   * pairs — see the props block), so a body given only `onMarkElement` still
+   * offers the selection mark, and the button's `hidden` is the union of the
+   * two. Requiring `markable` here would have made the selection mark vanish
+   * for exactly the integrator that wired it.
+   */
+  const selMode = selText !== "" && !!onMarkElement && saveParts !== null;
+
+  const toggleRead = useCallback(async () => {
+    if (markingRead) return;
+    setMarkingRead(true);
+    // Silent failure path, `toggleSaved`'s verbatim: both callbacks go through
+    // the shared `mutate`, which parks the server's own sentence in the clock
+    // corner, and the button's state comes back from the refetched list — so a
+    // refused mark simply leaves it reading "○ read?".
+    if (read) await onDropMark?.(read.id);
+    else if (saveParts) {
+      await onMarkRead?.(saveParts.slug, saveParts.home, saveParts.name);
+    }
+    // Same identity question the other in-flight guards ask: a step or a close
+    // mid-flight means this body is no longer the one that pressed the button.
+    if (alive.current && latest.current.url === url) setMarkingRead(false);
+  }, [markingRead, read, saveParts, onDropMark, onMarkRead, url]);
+
+  /**
+   * Freeze one PASSAGE of this artifact — the shared end of the selection
+   * affordance and the per-table ✓, since both post the same `/api/mm/element`
+   * with the text they captured.
+   */
+  const markElement = useCallback(
+    async (text: string) => {
+      const t = text.trim();
+      if (!t || !saveParts || !onMarkElement) return;
+      setMarkingSel(true);
+      await onMarkElement(saveParts.slug, saveParts.home, saveParts.name, t);
+      if (alive.current && latest.current.url === url) {
+        setMarkingSel(false);
+        // The selection has served its purpose and the affordance goes with
+        // it: leaving the button up over an already-frozen passage invites a
+        // second press whose only outcome is `already: true`.
+        setSelText("");
+      }
+    },
+    [saveParts, onMarkElement, url],
+  );
+
+  /**
+   * The live selection, watched rather than read at click time.
+   *
+   * Two things make this work at all. The body must not REBUILD under a live
+   * selection — `useRenderedMD` memoises the `__html` object so the 3s board
+   * re-render leaves the subtree (and the selection inside it) untouched — and
+   * the affordance's own mousedown must not collapse the selection, which is
+   * what the `preventDefault` on the button does. Without either, the text is
+   * gone before the click that wants it.
+   *
+   * Scoped to the rendered markdown body by id rather than by a threaded ref:
+   * the modal is singular and `#panel-body` is pinned, which is the same
+   * lookup SteerOverlay's own sweep makes. A selection anywhere else on the
+   * page — the head, another overlay — reads as none.
+   */
+  useEffect(() => {
+    const onSelect = () => {
+      const body = document.getElementById("panel-body");
+      const sel = typeof window.getSelection === "function"
+        ? window.getSelection()
+        : null;
+      if (!body || !body.classList.contains("md") || !sel || sel.isCollapsed) {
+        setSelText("");
+        return;
+      }
+      const node = sel.anchorNode;
+      setSelText(node && body.contains(node) ? selectionText() : "");
+    };
+    document.addEventListener("selectionchange", onSelect);
+    return () => document.removeEventListener("selectionchange", onSelect);
+  }, []);
+
+  /**
+   * The passages of THIS artifact already frozen — the membership set the
+   * body's table ✓s render from. Live items only, for `read`'s reason: an
+   * invalidated element mark is history the memory pane keeps, not a claim
+   * about the bytes on screen.
+   */
+  const markedTexts = useMemo(() => {
+    if (!saveParts) return [];
+    const name = saveParts.name.replace(/^\/+/, "");
+    return mm
+      .filter(
+        (it) =>
+          it.source === "artifact-element" &&
+          !it.invalidated_at &&
+          it.slug === saveParts.slug &&
+          it.source_ref.replace(/^\/+/, "") === name,
+      )
+      .map((it) => it.content);
+  }, [mm, saveParts]);
 
   const onKey = useArtifactKeys(onStep);
 
@@ -755,6 +933,63 @@ function ArtifactBody({
         >
           {saved ? "★ saved" : "☆ save"}
         </button>
+        {/* "I have read this" — a SNAPSHOT of the artifact's current bytes,
+            frozen so the daemon's verify pass can tell you when what you read
+            stops being what the file says. Deliberately independent of ☆ save
+            (carl's call): one is a copy he wants to keep, the other is a claim
+            about his own head, and a document can easily be one without the
+            other.
+
+            ONE button rather than two (carl, gate R1: "leave read the same
+            button as mark selection"). It is the SAME gesture — "I have read
+            this" — aimed at whatever the reader has actually singled out, so
+            what it addresses follows the selection rather than sitting beside
+            it in a second control that is blank most of the time: with nothing
+            selected it marks the WHOLE artifact and reports that mark, and the
+            moment a selection exists inside the rendered body it becomes the
+            mark for exactly that passage.
+
+            `aria-pressed` from the SERVER's list (`read`), the #panel-save
+            idiom directly above, so this button cannot claim a mark that did
+            not land — nor keep claiming one the verify pass has since
+            invalidated, which is the state the "○ read?" label is for. It is
+            dropped entirely in selection mode: there is no per-selection
+            pressed state to report (the affordance's only verb is "freeze
+            this"), and an `aria-pressed` inherited from the WHOLE-artifact
+            mark would announce the wrong subject.
+
+            The mousedown preventDefault is load-bearing rather than tidy:
+            pressing anywhere outside a selection collapses it, so without it
+            the text is already gone by the time the click fires. It is
+            conditional so the read half keeps taking focus on a press exactly
+            as it did before. */}
+        <button
+          className="btn ghost"
+          id="panel-read"
+          hidden={!markable && !selMode}
+          // BOTH flags, never the mode's own: `selMode` is derived from a live
+          // selection, and a selection can collapse WHILE the element mark is
+          // in flight (carl clicks elsewhere during the round trip). Guarding
+          // on `markingSel` alone re-rendered the button as the whole-artifact
+          // toggle with `markingRead` false — enabled, mid-request — so a tap
+          // in that window posted `/api/mm/artifact` over an unresolved element
+          // mark. One press at a time, whichever press it is.
+          disabled={markingSel || markingRead}
+          aria-pressed={selMode ? undefined : read !== null}
+          title={
+            selMode
+              ? "freeze exactly this text as something you have read"
+              : read
+                ? "you have read this version — click to drop the mark"
+                : "mark this artifact read, freezing the bytes you read"
+          }
+          onMouseDown={(e) => {
+            if (selMode) e.preventDefault();
+          }}
+          onClick={() => void (selMode ? markElement(selText) : toggleRead())}
+        >
+          {selMode ? "✓ mark selection" : read ? "✓ read" : "○ read?"}
+        </button>
         {/* Branching forks the cell's zeus session, so it needs a live cell —
             the same `job.live` gate ThreadChips.tsx puts on the ⑂ it renders in
             the steer modal. Without a job resolved (a singleton open) there is
@@ -875,6 +1110,8 @@ function ArtifactBody({
         onKey={onKey}
         artifacts={job?.artifacts ?? []}
         onOpenRef={onOpenRef}
+        markedTexts={markedTexts}
+        onMarkText={onMarkElement && saveParts ? markElement : undefined}
       />
     </>
   );
@@ -982,6 +1219,8 @@ function ArtifactBodyContent({
   onKey,
   artifacts,
   onOpenRef,
+  markedTexts,
+  onMarkText,
 }: {
   url: string;
   raw: boolean;
@@ -997,6 +1236,10 @@ function ArtifactBodyContent({
   artifacts: WebArtifact[];
   /** Open a resolved artifact ref in this viewer (ArtifactBody's seq lookup). */
   onOpenRef: (hit: ArtifactRefHit) => void;
+  /** This artifact's already-frozen passages — the table ✓s' pressed state. */
+  markedTexts: string[];
+  /** Freeze one element's text. Absent = no table affordance is drawn at all. */
+  onMarkText?: (text: string) => Promise<void>;
 }) {
   // Above the branches because it is a hook, and memoised because this is the
   // component the 3s board poll used to rebuild wholesale — see useRenderedMD.
@@ -1043,10 +1286,24 @@ function ArtifactBodyContent({
    * so membership is decided here.
    */
   const bodyEl = useRef<HTMLDivElement | null>(null);
-  const lastSweep = useRef<{ md: { __html: string } | null; key: string }>({
+  const lastSweep = useRef<{
+    md: { __html: string } | null;
+    key: string;
+    marks: string;
+  }>({
     md: null,
     key: "",
+    marks: "",
   });
+  // The table sweep's click target, held on a ref so the FUNCTION the DOM
+  // listener reaches is stable. The sweep is fingerprinted and so does not
+  // re-run per render; a closure captured at sweep time would go stale the
+  // moment the artifact's parts changed under it.
+  const markRef = useRef(onMarkText);
+  markRef.current = onMarkText;
+  const onTableMark = useCallback((t: string) => {
+    void markRef.current?.(t);
+  }, []);
   const mdMounted = !raw && !image && !page && !error && text !== undefined;
   useEffect(() => {
     // A branch switch (raw toggle, page/image, error) replaces the body's
@@ -1056,18 +1313,35 @@ function ArtifactBodyContent({
     // this reset is the insurance that keeps that true if the branch
     // conditions ever stop moving `text`.
     if (!mdMounted || !bodyEl.current) {
-      lastSweep.current = { md: null, key: "" };
+      lastSweep.current = { md: null, key: "", marks: "" };
       return;
     }
     const key = artifacts.map((a) => a.url).join("\n");
+    // The mm poll hands back a fresh `markedTexts` array on every tick too, so
+    // it is fingerprinted by CONTENT exactly as `artifacts` is by url. NUL
+    // as the joiner rather than \n: a frozen passage is multi-line by nature,
+    // and a newline join would make two adjacent marks indistinguishable from
+    // one two-line mark.
+    const marks = markedTexts.join("\u0000");
     // `artifacts` is a fresh array every 3s poll; `md` is memoised per source
     // text. Re-sweeping the DOM each tick for unchanged inputs is exactly the
     // poll-path work this file avoids elsewhere, so the sweep runs only when
-    // an input actually changed.
-    if (lastSweep.current.md === md && lastSweep.current.key === key) return;
+    // an input actually changed — and here that matters twice over, because a
+    // sweep re-parents every table and a re-parented node takes the reader's
+    // selection with it.
+    if (
+      lastSweep.current.md === md &&
+      lastSweep.current.key === key &&
+      lastSweep.current.marks === marks
+    ) {
+      return;
+    }
     decorateArtifactRefs(bodyEl.current, artifacts);
-    lastSweep.current = { md, key };
-  }, [md, artifacts, mdMounted]);
+    // No handler, no affordance: an integrator that did not wire the mark gets
+    // an undecorated body rather than ✓s that can only fail.
+    if (onMarkText) decorateMMTables(bodyEl.current, markedTexts, onTableMark);
+    lastSweep.current = { md, key, marks };
+  }, [md, artifacts, mdMounted, markedTexts, onMarkText, onTableMark]);
 
   if (raw) {
     return (

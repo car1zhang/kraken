@@ -1,8 +1,6 @@
 package jobs
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,12 +9,14 @@ import (
 	"kraken/internal/store"
 )
 
-// graph_test.go — the ingest sweep's arithmetic and the graph job creator.
+// graph_test.go — the graph pass' pacing and the graph job creator.
 //
-// The cursor rules are the part worth testing directly: they are core.SumTokensDelta's
-// rules restated for a different payload, and every one of them fails SILENTLY
-// when it is wrong — a span read twice, a span never read, a cursor parked in
-// the middle of a JSON record.
+// It used to be mostly cursor arithmetic: five ingest sweeps whose watermark
+// rules were core.SumTokensDelta's restated for a different payload, every one
+// of which failed SILENTLY when wrong. Those sweeps and their tests are gone
+// (see graph.go's head comment) — the graph is compiled from carl's mental
+// model now, so what is left here is the throttle, the nightly kick's guards,
+// and the job creator's contract.
 
 func graphTestStore(t *testing.T) *store.Store {
 	t.Helper()
@@ -26,129 +26,6 @@ func graphTestStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { st.Close() })
 	return st
-}
-
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-}
-
-// TestReadSpanLandsOnNewline is the rule that makes a stored cursor safe: an
-// offset that stopped mid-record would make the next pass's episode start with
-// a JSON fragment, which nothing downstream can parse and nothing reports.
-func TestReadSpanLandsOnNewline(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeFile(t, path, "{\"a\":1}\n{\"b\":2}\n")
-	got, next, err := readSpan(path, 0)
-	if err != nil {
-		t.Fatalf("readSpan: %v", err)
-	}
-	if got != "{\"a\":1}\n{\"b\":2}\n" {
-		t.Errorf("content = %q", got)
-	}
-	if next != 16 {
-		t.Errorf("next = %d, want 16 (just past the final newline)", next)
-	}
-	if !strings.HasSuffix(got, "\n") {
-		t.Error("span does not end on a line boundary")
-	}
-}
-
-// TestReadSpanResumesAnUnterminatedTail: a transcript caught mid-write must be
-// resumed on a later pass, never skipped past. Advancing over the partial line
-// would lose that record permanently, since the cursor only moves forward.
-func TestReadSpanResumesAnUnterminatedTail(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeFile(t, path, "{\"a\":1}\n{\"partial\":")
-	got, next, err := readSpan(path, 0)
-	if err != nil {
-		t.Fatalf("readSpan: %v", err)
-	}
-	if got != "{\"a\":1}\n" || next != 8 {
-		t.Fatalf("content = %q, next = %d, want the first complete line only", got, next)
-	}
-	// Now from the tail: nothing complete, so nothing is consumed.
-	got, next, err = readSpan(path, 8)
-	if err != nil {
-		t.Fatalf("readSpan (tail): %v", err)
-	}
-	if got != "" || next != 8 {
-		t.Errorf("an unterminated tail was consumed: content = %q, next = %d", got, next)
-	}
-	// Once the writer finishes the line, the same offset picks it up.
-	writeFile(t, path, "{\"a\":1}\n{\"partial\":2}\n")
-	got, next, err = readSpan(path, 8)
-	if err != nil {
-		t.Fatalf("readSpan (completed): %v", err)
-	}
-	if got != "{\"partial\":2}\n" || next != 22 {
-		t.Errorf("content = %q, next = %d", got, next)
-	}
-}
-
-// TestReadSpanRewindsOnAShorterFile: a transcript shorter than its own cursor
-// can only be a replacement (transcripts are append-only), so it is re-read
-// whole rather than reported as having nothing new.
-func TestReadSpanRewindsOnAShorterFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeFile(t, path, "{\"new\":1}\n")
-	got, next, err := readSpan(path, 5_000)
-	if err != nil {
-		t.Fatalf("readSpan: %v", err)
-	}
-	if got != "{\"new\":1}\n" || next != 10 {
-		t.Errorf("content = %q, next = %d — a replaced file must be re-read from zero", got, next)
-	}
-	if spanStart(5_000, 10) != 0 {
-		t.Error("spanStart must report 0 for a rewound read, or the ref lies about where the bytes came from")
-	}
-}
-
-// TestReadSpanNothingNew pins the steady state: a settled file costs one open
-// and one stat, and returns nothing rather than re-reading its tail.
-func TestReadSpanNothingNew(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeFile(t, path, "{\"a\":1}\n")
-	got, next, err := readSpan(path, 8)
-	if err != nil || got != "" || next != 8 {
-		t.Errorf("readSpan at EOF = (%q, %d, %v), want (\"\", 8, nil)", got, next, err)
-	}
-}
-
-// TestReadSpanErrorsOnAnUnterminatedMonster: a "line" longer than
-// graphEpisodeMax is a corrupt file, and it is the one case that must ERROR
-// rather than silently stall — a cursor that stops advancing with nothing
-// logged is indistinguishable from a machine with no new transcripts.
-func TestReadSpanErrorsOnAnUnterminatedMonster(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeFile(t, path, strings.Repeat("x", graphEpisodeMax+16))
-	if _, _, err := readSpan(path, 0); err == nil {
-		t.Error("a line over the ceiling was accepted silently")
-	}
-}
-
-// TestReadSpanCapsALongRecord: a single record longer than one episode span
-// still advances (real ones reach tens of KB), but the stored content is
-// capped and SAYS it was truncated — the ref is what the reader follows back.
-func TestReadSpanCapsALongRecord(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	line := strings.Repeat("y", graphEpisodeBytes*2)
-	writeFile(t, path, line+"\n")
-	got, next, err := readSpan(path, 0)
-	if err != nil {
-		t.Fatalf("readSpan: %v", err)
-	}
-	if next != int64(len(line))+1 {
-		t.Errorf("next = %d, want %d (just past the record's newline)", next, len(line)+1)
-	}
-	if !strings.Contains(got, "[truncated]") {
-		t.Error("a capped record does not say it was truncated")
-	}
-	if len(got) > graphEpisodeBytes+64 {
-		t.Errorf("capped content is %d bytes, well over the %d cap", len(got), graphEpisodeBytes)
-	}
 }
 
 // TestCapStringKeepsRunesWhole guards the content column: a cut through a
@@ -168,215 +45,16 @@ func TestCapStringKeepsRunesWhole(t *testing.T) {
 	}
 }
 
-// TestAdvanceCursorNeverRegresses: a source whose watermark did not move must
-// cost zero writes, which is what makes a once-a-minute sweep over every row
-// table free in the steady state. It must also never be written BACKWARDS from
-// a batch that happened to see older rows first.
-func TestAdvanceCursorNeverRegresses(t *testing.T) {
-	st := graphTestStore(t)
-	if err := st.SetIngestCursor("rows:test", 50); err != nil {
-		t.Fatalf("seed cursor: %v", err)
-	}
-	if err := advanceCursor(st, "rows:test", 50, 40); err != nil {
-		t.Fatalf("advanceCursor: %v", err)
-	}
-	got, err := st.IngestCursor("rows:test")
-	if err != nil {
-		t.Fatalf("read cursor: %v", err)
-	}
-	if got != 50 {
-		t.Errorf("cursor regressed to %d", got)
-	}
-	if err := advanceCursor(st, "rows:test", 50, 90); err != nil {
-		t.Fatalf("advanceCursor: %v", err)
-	}
-	if got, _ := st.IngestCursor("rows:test"); got != 90 {
-		t.Errorf("cursor = %d, want 90", got)
-	}
-}
-
-// TestSweepRowsIngestsOnceThenSettles is the integration the spec asks for:
-// two passes over the same rows enqueue each episode exactly once.
-func TestSweepRowsIngestsOnceThenSettles(t *testing.T) {
-	st := graphTestStore(t)
-	if _, err := st.AddFeedback(store.Feedback{Artifact: "50-components.md", Note: "edges run through boxes", TS: 100}); err != nil {
-		t.Fatalf("add feedback: %v", err)
-	}
-	if _, err := st.CreateJob(&store.Job{Slug: "demo", Repo: "kraken", Body: "do the thing"}); err != nil {
-		t.Fatalf("create job: %v", err)
-	}
-
-	sweep := func() int {
-		cursors, err := st.AllIngestCursors()
-		if err != nil {
-			t.Fatalf("cursors: %v", err)
-		}
-		if err := sweepRows(st, cursors); err != nil {
-			t.Fatalf("sweepRows: %v", err)
-		}
-		eps, err := st.PendingEpisodes(100)
-		if err != nil {
-			t.Fatalf("pending: %v", err)
-		}
-		return len(eps)
-	}
-	first := sweep()
-	if first != 2 {
-		t.Fatalf("first sweep enqueued %d episodes, want 2 (feedback, job)", first)
-	}
-	if second := sweep(); second != first {
-		t.Errorf("second sweep enqueued %d more episodes — a settled source must cost nothing", second-first)
-	}
-}
-
-// TestSweepRowsReIngestsAnEditedSpec pins the reason job specs are swept on
-// updated_at rather than on id: the first version of a spec is routinely the
-// wrong version, and the hash dedupe is what makes re-crossing the cursor safe.
-func TestSweepRowsReIngestsAnEditedSpec(t *testing.T) {
-	st := graphTestStore(t)
-	id, err := st.CreateJob(&store.Job{Slug: "demo", Repo: "kraken", Body: "first wording"})
-	if err != nil {
-		t.Fatalf("create job: %v", err)
-	}
-	cursors, _ := st.AllIngestCursors()
-	if err := sweepRows(st, cursors); err != nil {
-		t.Fatalf("sweepRows: %v", err)
-	}
-	row, err := st.GetJobByID(id)
-	if err != nil {
-		t.Fatalf("get job: %v", err)
-	}
-	if _, err := st.UpdateJobFields(id, row.Rev, map[string]any{"body": "second, much clearer wording"}); err != nil {
-		t.Fatalf("update job: %v", err)
-	}
-	cursors, _ = st.AllIngestCursors()
-	if err := sweepRows(st, cursors); err != nil {
-		t.Fatalf("sweepRows: %v", err)
-	}
-	eps, err := st.PendingEpisodes(100)
-	if err != nil {
-		t.Fatalf("pending: %v", err)
-	}
-	n := 0
-	for _, e := range eps {
-		if e.Kind == "job" {
-			n++
-		}
-	}
-	if n != 2 {
-		t.Errorf("an edited spec produced %d job episodes, want 2 (the old wording and the new)", n)
-	}
-}
-
-// TestSweepTranscriptsAdvancesAndSettles: a growing transcript is ingested in
-// spans, each exactly once, and a settled one costs nothing.
-func TestSweepTranscriptsAdvancesAndSettles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".claude", "projects", "-Users-x-wt-kraken")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	path := filepath.Join(dir, "session.jsonl")
-	// The fixture lines must SURVIVE reduction (user/assistant records):
-	// sweepTranscripts stores core.ReduceJSONLBytes' output, and a line with
-	// no type field reduces to nothing and produces no episode at all —
-	// which is itself pinned below.
-	line1 := "{\"type\":\"user\",\"message\":{\"content\":\"one\"}}\n"
-	line2 := "{\"type\":\"user\",\"message\":{\"content\":\"two\"}}\n"
-	writeFile(t, path, line1)
-
-	st := graphTestStore(t)
-	sweep := func() []store.Episode {
-		cursors, err := st.AllIngestCursors()
-		if err != nil {
-			t.Fatalf("cursors: %v", err)
-		}
-		if err := sweepTranscripts(st, cursors); err != nil {
-			t.Fatalf("sweepTranscripts: %v", err)
-		}
-		eps, err := st.PendingEpisodes(100)
-		if err != nil {
-			t.Fatalf("pending: %v", err)
-		}
-		return eps
-	}
-	eps := sweep()
-	if len(eps) != 1 || eps[0].Kind != "transcript" {
-		t.Fatalf("first sweep produced %d episodes, want 1 transcript", len(eps))
-	}
-	if !strings.Contains(eps[0].Ref, fmt.Sprintf("#0-%d", len(line1))) {
-		t.Errorf("ref %q does not record the RAW byte span (cursor advances over raw bytes, not reduced)", eps[0].Ref)
-	}
-	if !strings.Contains(eps[0].Content, "one") || strings.Contains(eps[0].Content, "type") {
-		t.Errorf("content %q is not the reduced form", eps[0].Content)
-	}
-	if got := sweep(); len(got) != 1 {
-		t.Errorf("a settled transcript produced %d more episodes", len(got)-1)
-	}
-	// Append: only the NEW bytes become an episode.
-	writeFile(t, path, line1+line2)
-	eps = sweep()
-	if len(eps) != 2 {
-		t.Fatalf("an appended transcript produced %d episodes, want 2", len(eps))
-	}
-	if !strings.Contains(eps[1].Content, "two") || strings.Contains(eps[1].Content, "one") {
-		t.Errorf("second episode re-read old bytes or lost new ones: %q", eps[1].Content)
-	}
-	// A span that reduces to NOTHING (tool results, bookkeeping) advances the
-	// cursor without writing an episode — backfill must not fill kg_episodes
-	// with empty rows just to move a cursor.
-	writeFile(t, path, line1+line2+"{\"type\":\"file-history\"}\n")
-	eps = sweep()
-	if len(eps) != 2 {
-		t.Fatalf("a reduced-to-empty span wrote an episode: %d rows", len(eps))
-	}
-	cursors, err := st.AllIngestCursors()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cursors[graphSrcTranscript(path)]; got != int64(len(line1+line2)+len("{\"type\":\"file-history\"}\n")) {
-		t.Errorf("cursor did not advance over the empty-reduction span: %d", got)
-	}
-}
-
-// TestTranscriptFilesFindsSidecars: the subagents/agent-*.jsonl sidecars carry
-// ~24% of all tool calls and core/tokens.go is otherwise the only reader that
-// opens them — a sweep that missed them would miss a quarter of the evidence.
-func TestTranscriptFilesFindsSidecars(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	proj := filepath.Join(home, ".claude", "projects", "-Users-x-wt-kraken")
-	side := filepath.Join(proj, "sess-1", "subagents")
-	if err := os.MkdirAll(side, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	writeFile(t, filepath.Join(proj, "sess-1.jsonl"), "{}\n")
-	writeFile(t, filepath.Join(side, "agent-7.jsonl"), "{}\n")
-
-	files, err := transcriptFiles()
-	if err != nil {
-		t.Fatalf("transcriptFiles: %v", err)
-	}
-	if len(files) != 2 {
-		t.Fatalf("found %d transcripts, want 2 (root + sidecar): %v", len(files), files)
-	}
-	// Sorted, which is what makes the drain deterministic and monotonic.
-	if files[0].path > files[1].path {
-		t.Error("transcriptFiles is not sorted")
-	}
-}
-
-// TestTranscriptFilesAbsentProjectsDirIsNotAnError: a machine where claude has
-// never run has provably zero transcripts. That is an answer, not a
-// degradation — the same split anyTranscriptSince and JobProjectDirs both make.
-func TestTranscriptFilesAbsentProjectsDirIsNotAnError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	files, err := transcriptFiles()
-	if err != nil || len(files) != 0 {
-		t.Errorf("transcriptFiles on a bare home = (%d files, %v), want (0, nil)", len(files), err)
-	}
-}
+// RETIRED WITH THE SWEEPS. TestAdvanceCursorNeverRegresses,
+// TestSweepRowsIngestsOnceThenSettles, TestSweepRowsReIngestsAnEditedSpec,
+// TestSweepTranscriptsAdvancesAndSettles, TestTranscriptFilesFindsSidecars,
+// TestTranscriptFilesAbsentProjectsDirIsNotAnError and the six readSpan cases
+// above them stood here. They were the cursor arithmetic's whole safety net,
+// and every one of them tested a function this change deletes — the graph is
+// compiled from carl's mental model now, not swept from rows and transcripts,
+// so there is no cursor left to park and no span left to split. The coverage
+// they carried moves with the mechanism: mm.go's mint and verify pass, and the
+// blind suites written against them.
 
 // TestCreateGraphJobBothModes pins the creator's contract: a row the existing
 // queue pass can start unmodified, whose spec reads the skill BY PATH.

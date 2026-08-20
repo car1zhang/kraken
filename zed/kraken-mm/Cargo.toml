@@ -1,0 +1,15 @@
+[package]
+name = "kraken-mm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+# cdylib is what Zed's extension host loads: the crate is compiled to
+# wasm32-wasip1 and instantiated as a component.
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+zed_extension_api = "0.7"

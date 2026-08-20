@@ -214,8 +214,9 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // load-estimate rule (the `kraken load set` paragraph in zeusBrief, which
 // measured 1,017 bytes AT THAT TIME, when it spelled its 1-10 scale out inline
 // — see the 2026-07-31 restatement below for what it measures now), 12,000 ->
-// 13,000 to admit blind test authorship, and 13,000 -> 13,500 for the
-// feedback-ownership contract. That
+// 13,000 to admit blind test authorship, 13,000 -> 13,500 for the
+// feedback-ownership contract, and 13,500 -> 14,000 for the mental-model pull
+// (see WHY 14,000 below). That
 // number is the ONLY thing this test's failure message tells you not to
 // touch, so EACH move is reasoned out below rather than left to the diff.
 //
@@ -354,6 +355,43 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // per section), or the accepted conclusion that per-turn contract has
 // outgrown a single system prompt and needs somewhere else to live.
 //
+// WHY 14,000 RATHER THAN 13,500, AND WHY THIS IS THE LAST ONE THE CONDITION
+// ABOVE ALLOWS. The condition names 14,000 as the number at which raising
+// stops being an answer. This raise lands exactly ON it, which makes it the
+// last one available rather than an exception to the rule: the next author who
+// needs bytes here has to build the second test or move the contract, because
+// the ratchet has no notch left.
+//
+// What it admits is ONE sentence: before writing anything carl reads, search
+// what he already knows about the subject and calibrate to it — abstract what
+// he knows, expand what he does not, and carry the same lines into teammate
+// briefs. It belongs here on this file's own criterion, and it is the SAME
+// criterion the load-estimate paragraph was admitted on: a skill is read once
+// per phase, this applies at every carl-facing writing moment in every phase,
+// and a job can be in any of them. The alternative was three copies (aim,
+// info, do each own a phase), which is the drift
+// TestZeusBriefDoesNotRestateSkills exists to prevent. It is a POINTER and
+// stays one — which artifacts a phase writes, and when, is procedure and stays
+// in the skills, and this test's sibling above bans the tokens that would
+// signal otherwise.
+//
+// Why not paid for by a trim instead. The 13-byte headroom the restatement
+// above recorded is smaller than any honest spelling of the sentence, so a
+// pure trim would have had to delete a different contract clause to fund a new
+// one — trading one obligation for another with no argument about the trade.
+// The sentence WAS trimmed rather than merely written: "and calibrate to it"
+// folded into the colon, "the brief of every teammate that writes for him"
+// shortened to "every teammate brief", 47 bytes, before this number moved.
+//
+// The measurement, on the standing instruction below: the brief went from
+// 13,487 to **13,797** at the 48-character slug (the sentence renders 310
+// bytes there; the interpolation count is unchanged at nine, so every other
+// basis follows at 9 bytes per slug character). That leaves **203** under the
+// ceiling now in `const ceiling` — about the 156 the untrimmed version would
+// have left, and in the same range as the 550 and 635 previous authors sized
+// and reasoned about, rather than the 13 and 31 that made the last two changes
+// arithmetic.
+//
 // One practice note, because it cost real confusion here. THREE figures in
 // this block had silently drifted before anyone re-measured — TEN
 // interpolations when the answer was nine, a 12,450 that was 12,682 by then,
@@ -377,7 +415,7 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // Anyone raising this number again should be able to write a paragraph like
 // this one first.
 func TestZeusBriefStaysLean(t *testing.T) {
-	const ceiling = 13_500
+	const ceiling = 14_000
 	// Longer than any slug observed on this machine (41), so the nine
 	// interpolations make every real brief cheaper than this one.
 	slug := strings.Repeat("s", 48)

@@ -1,0 +1,6 @@
+# cargo's build output. `cargo check` and Zed's own extension build both drop
+# it here; it is hundreds of MB of intermediates and never belongs in a commit.
+# Kept beside the crate rather than in the repo root .gitignore so the
+# extension directory is self-contained — everything cargo needs to know about
+# this crate is in this directory.
+/target/

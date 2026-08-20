@@ -19,22 +19,24 @@ import (
 // The agent learns these verbs from .claude/skills/dream/SKILL.md; the
 // spellings here match it.
 //
-// A watch item IS a knowledge-graph edge — the observation is the edge's fact
-// sentence, and a thin overlay row carries the dream-loop workflow (class,
+// A watch item is a row in its own `watch_items` table: the observation is
+// the row's own sentence, and the row carries the dream-loop workflow (class,
 // state, sightings, evidence, suggested_fix, pr_url) plus carl's verdict (see
 // store/watch.go). Three consequences reach this file, all of them the
 // server's rules rather than local ones:
 //
-//   - Every `id` here is an EDGE id, and it is the id `k graph` prints for the
-//     same fact.
-//   - `add` names endpoints: an item carries src, dst, optional predicate and
-//     a 1-10 strength alongside observation and class. Re-adding an
-//     observation the graph already states folds into it server-side — a
-//     sighting bump, not a second row — so there is no find-then-bump dance
-//     to run here.
-//   - `remove` UNWATCHES: the overlay goes, the fact and its episode stay in
-//     the graph. Unlearning the fact itself is `k graph add`'s invalidate
-//     list, a different and much louder act.
+//   - Every `id` here is a WATCH-ROW id. It briefly was a graph edge id (the
+//     watchlist lived in the knowledge graph for one release); Q9 moved it
+//     back out, since the graph is now compiled from carl's own mental-model
+//     marks rather than from anything an agent observed.
+//   - `add` may name endpoints — src, dst and an optional predicate beside
+//     observation and class — but none of them is required any more, and
+//     there is no `strength`: that was the edge's confidence and the row has
+//     no such column. Re-adding an observation already tracked folds into it
+//     server-side — a sighting bump, not a second row — so there is no
+//     find-then-bump dance to run here.
+//   - `remove` CLOSES the row: it leaves every list and stays readable by id,
+//     carl's verdict on it included. No watch row is ever deleted.
 //
 // Two more things make this verb family different from `k questions`/`k
 // feedback`, and both are load-bearing:
@@ -80,7 +82,7 @@ func cmdWatchlist(args []string) {
 		if err != nil {
 			util.Die("%v", err)
 		}
-		// the edge id is echoed on stderr because it is the ONLY way a caller
+		// the row id is echoed on stderr because it is the ONLY way a caller
 		// learns the id of the item it just wrote without re-reading the whole
 		// list — and every later `update` needs it. On a fold it is the id of
 		// the EXISTING item the observation landed on, which is the answer a
@@ -140,10 +142,10 @@ func runWatchlistGet(args []string) ([]byte, error) {
 // questions add/update are — an observation is prose full of quotes and
 // unicode that shell-quoting mangles) and posts {op, item}.
 //
-// add takes {observation, class, src, dst, strength, [predicate], [state],
+// add takes {observation, class, [src], [dst], [predicate], [state],
 // [evidence], [suggested_fix], [pr_url]}; update takes {id, ...} and refuses
-// the fact's own fields (observation/src/dst/predicate/strength), since an
-// edge is insert-only — reword by removing and re-adding.
+// the observation's own identity fields (observation/src/dst/predicate) — the
+// fold matches on the sentence, so reword by removing and re-adding.
 //
 // The object is forwarded as raw JSON rather than decoded into a local
 // struct: this verb is a thin proxy, not a second copy of the wire schema —
@@ -153,7 +155,7 @@ func runWatchlistGet(args []string) ([]byte, error) {
 // server-side "bad json" 400 for plainly malformed stdin.
 func runWatchlistUpsert(op string, args []string, stdin io.Reader) ([]byte, error) {
 	if len(args) != 0 {
-		return nil, fmt.Errorf("usage: k watchlist %s (JSON watch-item object on stdin — add: observation, class, src, dst, strength; update: id plus the overlay fields; no slug — the watchlist is global)", op)
+		return nil, fmt.Errorf("usage: k watchlist %s (JSON watch-item object on stdin — add: observation, class, optional src/dst/predicate; update: id plus the workflow fields; no slug — the watchlist is global)", op)
 	}
 	if stdinIsInteractiveTTY(stdin) {
 		return nil, fmt.Errorf("usage: k watchlist %s (JSON watch-item object on stdin) — refusing to wait on an interactive terminal; pipe the JSON in instead", op)
@@ -176,15 +178,16 @@ func runWatchlistUpsert(op string, args []string, stdin io.Reader) ([]byte, erro
 	return qfPost("/api/watchlist/item", body)
 }
 
-// runWatchlistRemove is `kraken watchlist remove <edge id>`: an id carries no
+// runWatchlistRemove is `kraken watchlist remove <id>`: an id carries no
 // quoting hazard, so it's a plain arg rather than stdin — same split
 // `k questions remove <slug> <qid>` makes.
 //
-// It UNWATCHES: the dream loop stops tracking the observation, and the fact
-// stays in the graph as a fact. Nothing here can delete an edge.
+// It CLOSES the row: the dream loop stops tracking the observation, and the
+// row stays readable by id with carl's verdict on it intact. Nothing here can
+// delete a watch row.
 func runWatchlistRemove(args []string) error {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
-		return fmt.Errorf("usage: k watchlist remove <edge id> (unwatches the observation; the fact stays in the graph)")
+		return fmt.Errorf("usage: k watchlist remove <id> (stops tracking the observation; the row stays readable by id)")
 	}
 	id, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
 	if err != nil {

@@ -555,10 +555,12 @@ func kronosRecallHookEntry(krakenBin string) map[string]any {
 // The GROUP SET is deliberately different from a cell's, and each difference
 // is a fact about kronos rather than a preference:
 //
-//   - recall, under both recallHookEvents, REPLACE-merged like a cell's. Same
-//     reason: the command varies with serve's address, so append-if-absent
-//     leaves a stale entry POSTing at a dead port and adds a second one beside
-//     it on every install.
+//   - recall, under each of recallHookEvents (UserPromptSubmit), REPLACE-merged
+//     like a cell's. Same reason: the command varies with serve's address, so
+//     append-if-absent leaves a stale entry POSTing at a dead port and adds a
+//     second one beside it on every install. And, like a cell's, the merge also
+//     REMOVES — retiredRecallHookEvents strips the PostToolUse entry kraken
+//     installed before that arm retired.
 //   - bash-lint, under PreToolUse, REPLACE-merged like its two siblings (the
 //     command embeds the resolved binary path, the one varying component).
 //     kronos runs every one of its verbs through Bash, so the four zsh shapes
@@ -649,6 +651,30 @@ func mergeKronosSettings(existing []byte, krakenBin string) ([]byte, error) {
 		// would be the SAME mutable map in two places in the tree, where a
 		// later mutation through one key silently edits the other.
 		hooks[event] = append(withoutRecallHooks(groups), kronosRecallHookEntry(krakenBin))
+	}
+	// The removal half, cell.go's rule applied to kronos' own file: an event
+	// dropped from recallHookEvents stops being REWRITTEN and does not stop
+	// FIRING, so the entry kraken installed under PostToolUse before the
+	// per-tool-call arm retired would sit in this file forever, running a hook
+	// nothing intends. It bites harder here than in a cell: kronos runs every
+	// one of its verbs through Bash, so a stale entry fires on each of them.
+	//
+	// Whether the whole KEY goes depends on what else is under it, and for
+	// kronos that is normally nothing — it gets no pr-hook (it opens no PRs),
+	// so PostToolUse holds kraken's recall group and nothing else. A group
+	// somebody else put there survives and keeps the key; an emptied key is
+	// deleted rather than left as `[]`, since an empty array is a shape kraken
+	// wrote and this file promises to leave alone what it did not write.
+	for _, event := range retiredRecallHookEvents {
+		groups, ok := hooks[event].([]any)
+		if !ok {
+			continue
+		}
+		if kept := withoutRecallHooks(groups); len(kept) > 0 {
+			hooks[event] = kept
+		} else {
+			delete(hooks, event)
+		}
 	}
 	parsed["hooks"] = hooks
 	mergeKronosStatusLine(parsed, krakenBin)

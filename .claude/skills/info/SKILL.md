@@ -34,6 +34,8 @@ a list — and keep going with a stated default while you wait.
 
 ## First pass: one brief overview
 
+**Search carl's mental model first.** Before writing a word of the overview, run `k graph search "<subject>"` (and `k mm get` where the raw items matter) for what carl already knows about the subject: abstract what he knows down to a clause, spend the page on what he is unfamiliar with, and carry the same "carl knows / is unfamiliar with" lines into any teammate brief that produces carl-facing prose. Mandated, not suggested — measured across 15 days, agents never pulled spontaneously.
+
 The default first deliverable is exactly one file: `00-overview.md`, and it stays short — a page
 at most. Assume the reader wants orientation, not the complete tour. It covers, tersely:
 

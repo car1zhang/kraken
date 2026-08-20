@@ -2024,3 +2024,197 @@ struct LibrarySaveResponse: Decodable {
 struct LibraryRemoveRequest: Encodable {
     let id: Int64
 }
+
+// MARK: - mental model
+
+// Carl's own committed memory (internal/api/mm.go) — one row per thing he has
+// READ, DECIDED or NOTED, frozen at the moment he marked it. Additive routes
+// throughout; `apiContract` stays 6.
+//
+// Two properties of this family drive every shape below. It is CARL'S: agents
+// never write it, so every wire field here is a record of something he did.
+// And it is FROZEN: an item keeps the text as it was, and a daemon pass
+// invalidates it one-way when the source moves — never deletes it, never
+// resurrects it. The invalidated rows are therefore half the payload rather
+// than debris, which is why nothing here filters them out on the way in.
+//
+// `Decodable` only, and no `Equatable`: unlike the graph and library types
+// above, nothing here round-trips a payload through an encode — the tests
+// build wire JSON as literals (per the contract), and every write sends its
+// own small request struct instead.
+
+// One code reading's anchor: where in which repo the frozen text was read, and
+// what the last verify pass found there. Mirrors `webMMItem.anchor`, a pointer
+// with `omitempty` on every empty field — so this file's rule applies
+// literally, and each omitempty key is an Optional.
+//
+// The one pairing worth knowing when reading a row: `anchorSHA` is absent
+// EXACTLY when `anchorKind` is "dirty" (text that exists in no commit has no
+// commit to name). The server refuses to store any other combination, so a
+// decoded value may rely on it.
+struct WebMMAnchor: Decodable {
+    let repo: String
+    /// Relative to the repo root.
+    let path: String
+    /// Set once, the first time a verify followed a rename.
+    let origPath: String?
+    /// 1-based, inclusive.
+    let startLine: Int
+    let endLine: Int
+    let anchorSHA: String?
+    /// origin-main | merge-base | head | dirty, in descending durability.
+    let anchorKind: String
+    /// sha256 of the anchored text — which IS the item's `content`; there is
+    /// deliberately no `text` key for a client to render a second spelling of.
+    let textSHA: String
+    /// Unix millis; absent until the first verify pass has looked at it.
+    let checkedAt: Int64?
+    let checkedSHA: String?
+    /// A failed READ (offline, repo gone, timeout) — disjoint from an
+    /// invalidation. A read that failed never says the code changed.
+    let checkError: String?
+    /// The text occurs more than once and the nearest occurrence was taken.
+    /// Never an invalidation.
+    let ambiguous: Bool?
+    /// Where the item died, best effort.
+    let invalidSHA: String?
+    let invalidPR: String?
+
+    enum CodingKeys: String, CodingKey {
+        case repo, path
+        case origPath = "orig_path"
+        case startLine = "start_line"
+        case endLine = "end_line"
+        case anchorSHA = "anchor_sha"
+        case anchorKind = "anchor_kind"
+        case textSHA = "text_sha"
+        case checkedAt = "checked_at"
+        case checkedSHA = "checked_sha"
+        case checkError = "check_error"
+        case ambiguous
+        case invalidSHA = "invalid_sha"
+        case invalidPR = "invalid_pr"
+    }
+}
+
+// One mental-model item, as GET /api/mm lists it.
+//
+// `context` is Optional against this file's usual rule — the server tags it
+// without `omitempty` and always sends it, even as "". It is Optional because
+// the frozen contract says so, and the reason the contract says so is that an
+// absent key and an empty string mean the same thing here (no context), so a
+// non-Optional would make an older or hand-built payload a hard decode
+// failure over a field nothing renders when empty.
+struct WebMMItem: Decodable, Identifiable {
+    let id: Int64
+    /// decision | reading | note.
+    let kind: String
+    /// question | artifact | artifact-element | code | agent-output | manual.
+    let source: String
+    /// The job's DISPLAY slug at mark time, or "" for the two sources that
+    /// belong to no job (code, manual). Display only — the job may since have
+    /// been renamed, archived or deleted, and the row outlives all three.
+    let slug: String
+    /// What was marked, per source: `Q<n>`, the artifact name, the
+    /// `<repo>/<path>:<start>-<end>` triple, the first 16 hex of an agent
+    /// detail's sha256, or "" for a note.
+    let sourceRef: String
+    /// Served WHOLE, never cut. For an artifact mark it is the source ref —
+    /// an artifact's content is its snapshot, which rides its own route.
+    let content: String
+    let context: String?
+    /// Unix millis.
+    let createdAt: Int64
+    /// The layer-2 episode minted with the item.
+    let episodeId: Int64
+    /// Unix millis. **The absence of these three keys is the wire's only
+    /// spelling of "live"** — there is no boolean to read.
+    let invalidatedAt: Int64?
+    /// removed | content-changed | artifact-deleted | file-deleted.
+    let invalidReason: String?
+    let invalidDetail: String?
+    /// Present on `source: "code"` only.
+    let anchor: WebMMAnchor?
+
+    /// Live is the ABSENCE of `invalidated_at`, per the paragraph above. Every
+    /// predicate in the app tests this rather than a stamp's value, so a
+    /// server that ever sent an explicit 0 would still read as live.
+    var live: Bool { invalidatedAt == nil }
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, source, slug
+        case sourceRef = "source_ref"
+        case content, context
+        case createdAt = "created_at"
+        case episodeId = "episode_id"
+        case invalidatedAt = "invalidated_at"
+        case invalidReason = "invalid_reason"
+        case invalidDetail = "invalid_detail"
+        case anchor
+    }
+}
+
+// GET /api/mm — `items` is always an array, never null; newest first
+// (created_at DESC, id DESC), and never re-sorted on this side.
+struct MMPage: Decodable {
+    let items: [WebMMItem]
+}
+
+// What every successful mm create answers with: `{id, episode}` for a new
+// row, `{id, already: true}` for an idempotent re-mark of something already
+// live. One type for both shapes rather than two, because the caller's
+// question is the same either way — which row is this now? — and the server
+// picks the branch, not the client.
+struct MMCreated: Decodable {
+    let id: Int64
+    let episode: Int64?
+    let already: Bool?
+}
+
+// POST /api/mm/decision — the answered question to record as a decision. The
+// server copies the row's own text and answer; nothing here restates them.
+struct MMDecisionRequest: Encodable {
+    let slug: String
+    let qid: String
+}
+
+// POST /api/mm/artifact — the {slug, home, name} triple `artifactParts`
+// recovers from an artifact's own URL, exactly as LibrarySaveRequest carries
+// it. Its own type for that struct's reason: the server refuses an unknown
+// field outright, so a request may only ever carry the keys its route names.
+struct MMArtifactRequest: Encodable {
+    let slug: String
+    let home: String
+    let name: String
+}
+
+// POST /api/mm/element — the same triple plus the RENDERED text of what was
+// selected. The client sends what it displayed; the server locates that span
+// in the artifact's markdown source and stores the source lines, which is why
+// the item's `content` that comes back is usually not this string.
+struct MMElementRequest: Encodable {
+    let slug: String
+    let home: String
+    let name: String
+    let text: String
+}
+
+// POST /api/mm/note — a note belonging to no job and anchoring to nothing.
+struct MMNoteRequest: Encodable {
+    let text: String
+    let context: String
+}
+
+// POST /api/mm/detail — the rendered detail line a cell last reported. Its
+// text exists nowhere else on disk, which is why the item's content IS the
+// record rather than a pointer to one.
+struct MMDetailRequest: Encodable {
+    let slug: String
+    let text: String
+}
+
+// POST /api/mm/remove — the item id and nothing else. An invalidation with
+// reason `removed`, never a delete.
+struct MMRemoveRequest: Encodable {
+    let id: Int64
+}
