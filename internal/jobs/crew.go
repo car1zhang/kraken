@@ -333,7 +333,13 @@ func threadBrief(j *Job, tid, title, worktree string) string {
 // token, so the restatement goes here — where the recency gradient actually
 // points at it — and stays short: the brief owns the full contract, this owns
 // the moment of reading the question.
-const threadPromptGuard = "\n\n(Answer here in this thread. This is a question ABOUT the job's work, never a request to do it: do not edit artifacts or repo files, do not run kraken write verbs, and do not spawn agents — if a good answer seems to need any of those, say so in your answer and leave the doing to zeus.)"
+//
+// The escape hatch names its own limit because "leave the doing to zeus"
+// otherwise reads as a handoff: zeus is briefed to ignore threads completely,
+// so an answer's "that's a zeus ask" reaches nobody unless carl carries it —
+// measured as real findings (a gap list a thread itself labelled actionable)
+// dying in torn-down thread transcripts while zeus worked on, unaware.
+const threadPromptGuard = "\n\n(Answer here in this thread. This is a question ABOUT the job's work, never a request to do it: do not edit artifacts or repo files, do not run kraken write verbs, and do not spawn agents — if a good answer seems to need any of those, say so in your answer and leave the doing to zeus. Say it as a handoff carl must carry, because NOTHING relays this thread to zeus — zeus is briefed to ignore it and will never read your answer — so name the concrete ask and end with the point that it happens only if carl steers zeus with it himself.)"
 
 // threadSeed renders a thread's staged initial prompt: carl's question with
 // the standing guard under it. An empty seed stays empty — the revive path
