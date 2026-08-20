@@ -1053,15 +1053,15 @@ var recallHookEvents = []string{"UserPromptSubmit", "PostToolUse"}
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
 //
-// It renders FIVE kraken groups across FOUR hook events: the pr-hook group
-// under PostToolUse, the bash-lint group under PreToolUse, the limit-hook
-// group under StopFailure (limitHookEntry, the usage-limit rescue), and a
-// recall group under each of recallHookEvents — which includes PostToolUse,
-// so that key ends up holding the pr-hook group AND a recall group side by
-// side. The two kinds use DIFFERENT merge rules and the difference is
-// deliberate — pr-hook, bash-lint and limit-hook append when their exact
-// command is absent, recall REPLACES — for the reason spelled out at the
-// recall loop below; the non-obvious consequence is that the recall loop runs
+// It renders SIX kraken groups across FOUR hook events: the pr-hook group
+// under PostToolUse, the bash-lint and wakeup-guard groups under PreToolUse,
+// the limit-hook group under StopFailure (limitHookEntry, the usage-limit
+// rescue), and a recall group under each of recallHookEvents — which includes
+// PostToolUse, so that key ends up holding the pr-hook group AND a recall
+// group side by side. The two kinds use DIFFERENT merge rules and the
+// difference is deliberate — pr-hook, bash-lint, wakeup-guard and limit-hook
+// append when their exact command is absent, recall REPLACES — for the
+// reason spelled out at the recall loop below; the recall loop runs
 // its removal pass over the very list the pr-hook append just wrote, which is
 // why withoutRecallHooks must never match a pr-hook command. Either way,
 // groups kraken did not write and unrelated top-level keys survive untouched.
@@ -1078,10 +1078,14 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	}
 	ensureHookGroup(hooks, "PostToolUse", prHookCommand(slug, krakenBin), krakenHookEntry(slug, krakenBin))
 	ensureHookGroup(hooks, "PreToolUse", bashLintCommand(krakenBin), bashLintHookEntry(krakenBin))
+	// The ScheduleWakeup guard (wakeupguard.go): a cell never arms the
+	// autonomous-loop heartbeat — the rationale, and why prose alone
+	// measurably fails to hold this line, lives on that file's header.
+	ensureHookGroup(hooks, "PreToolUse", wakeupGuardCommand(krakenBin), wakeupGuardHookEntry(krakenBin))
 	// The usage-limit hook (limithook.go): StopFailure fires when a turn dies
 	// on an API error, and the entry's matcher narrows it to the rate_limit
 	// error type — the bucket every 429 lands in, subscription plan limits
-	// included. Append-if-absent like its two neighbours above, since the
+	// included. Append-if-absent like its three neighbours above, since the
 	// command carries the slug and the binary path and is therefore its own
 	// identity test.
 	ensureHookGroup(hooks, "StopFailure", limitHookCommand(slug, krakenBin), limitHookEntry(slug, krakenBin))
@@ -1299,14 +1303,11 @@ func groupRunsVerb(group map[string]any, verb string) bool {
 }
 
 // installHookSettings writes (or merges kraken's entries into) the cell's
-// project-scoped Claude Code hook config, <wt>/.claude/settings.json. Three
-// kraken groups go in, across two events: a Bash-matcher PostToolUse group so
-// zeus' `gh pr create` calls self-report to `kraken pr-hook`, plus a
-// matcher-less recall group under each of recallHookEvents (UserPromptSubmit
-// and PostToolUse) so every prompt AND every tool call in the cell asks
-// `kraken recall-hook` whether the knowledge graph has anything to add
-// (recall.go). Called from StartCell after the worktree is up and before
-// claude launches in it.
+// project-scoped Claude Code hook config, <wt>/.claude/settings.json — the
+// six groups mergeHookSettings' own header enumerates — that header is the
+// single list, kept there so this one cannot drift from it again.
+// Called from StartCell after the worktree is up and before claude launches
+// in it.
 //
 // Never fails the cell, and each kind is safe to lose for its own reason:
 // PR attachment still happens via the daemon's scan/poll paths, and recall is
