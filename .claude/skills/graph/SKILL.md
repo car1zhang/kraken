@@ -56,9 +56,16 @@ use 25.**
 Drain in the order given (oldest first) and stop at the end of one batch — the queue is long by
 design and the nightly job is a drain, not a race.
 
-For a `transcript` episode the content is a raw JSONL span and the ref is `path#start-end`. The span
-is the evidence; when you need more than the span carries, `k mine reduce --since 1 <path>` gives
-the whole session as user prose + tool calls + assistant text, which is about an eighth of the bytes.
+For a `transcript` episode the ref is `path#start-end` and the content is that span REDUCED — the
+same reduction `k mine reduce` performs: thinking, tool results and attachments dropped, prose
+kept whole, and every tool call clipped to a 100-rune signature with no truncation marker.
+Measured medians land near 2% of the span's bytes, and a third or more of a night's batch reduces
+to a single clipped `[tool]` line. The span's raw bytes are the evidence the content summarizes.
+`k mine reduce --since 1 <path>` recovers the session CONTEXT around the span — the same
+reduction, wider, about an eighth of the session's bytes — never the dropped bytes themselves;
+those live only in the raw JSONL at the ref, worth opening exactly when the reduced views hint at
+more than they carry. Most tool-call-only episodes do close empty, but that call is made after
+the context read, never from the pointer alone.
 The `--since 1` is load-bearing, and it goes into every extraction teammate's brief **as the
 verbatim line below, never a paraphrase**: the flag takes unix MILLIS (so `1` is an epoch floor,
 not one day) and defaults to a 24-hour floor, while ingest reads BACKLOG episodes, which are old by
@@ -74,6 +81,27 @@ later floor returns zero bytes or, worse, a plausible wrong window, because epis
 sweep times, not record times.*
 Do not read raw transcript JSONL by hand when `reduce` will answer — you will spend the batch's whole
 budget on tool results nobody asked for.
+
+**Check the batch for fork replays before slicing it.** A forked conversation replays its parent's
+records into a NEW transcript file, so the same evidence enters the queue once per fork:
+byte-identical multi-line content across two session paths is one conversation twice, and
+extracting both is false corroboration, not a second sighting — replays have burned 18–36% of a
+night's cap. Group the batch by content (an md5 group-by is three lines), skipping two populations
+whose identical bytes prove nothing: empty or whitespace-only content, and content with NO
+unclipped line — all-`[tool]` content at any line count, since the 100-rune signature is a
+grouping key kraken already measured collapsing DISTINCT calls (scratchpad and staged-transcript
+paths share their first hundred runes routinely, and lines built on a shared prefix collide
+together), while prose is kept whole, so only byte-identity on a group carrying prose means
+anything. Where a
+surviving group spans DIFFERENT session paths, extract under the lowest id and close the others:
+`k graph done` takes only the id, so which representative absorbed which replays is recorded in
+the report's queue line, nowhere else. A group confined to ONE session path is not closed from the
+hash either way — two different spans can reduce to the same line, while a genuinely duplicated
+same-path episode also exists (a queued mid-turn steer straddling a span boundary enters twice) —
+so flag same-path groups to the teammate holding them, who reads before deciding. Only the lead
+can run this check (a teammate sees one slice), it recovers no cap (§1's one-batch rule stands,
+and closed replays still consumed their slots), and a fork pair that straddles two nights' batches
+escapes it — inflated `occurrences` on such facts is a known hazard, not corroboration.
 
 ### 2. Extract, as delimited tuples
 
@@ -323,8 +351,20 @@ sweeps, because the sweep walks the graph, not the batch.
   an edge invented to raise a degree number is exactly the wrong-fact-in-a-brief failure this
   skill exists to prevent. An edge whose result comes back `added: false` folded into a fact
   already there — report it as already known, not as a new link, and never restate a fact whose
-  only evidence is that same fact, which counts the graph as its own witness. And like
-  canonicalization, the sweep needs the whole graph at once: never hand slices of it to a crew.
+  only evidence is that same fact, which counts the graph as its own witness. The witness rule's
+  blind spot is the fold key: `InsertEdge` folds only an EXACT match on
+  `src + predicate + dst + fact` (§4), so a restatement lands as a fresh live edge by moving
+  EITHER the wording OR the
+  endpoints — one fact has accumulated three live edges under three endpoint pairs, each at
+  `occurrences: 1`, the corroboration-signal death §4 describes, minted by the same pass that
+  guards against it. So before writing sweep edges, check each candidate SENTENCE for restatement
+  — against the batch's own facts (the tuple files are already on disk; a shared distinctive
+  phrase is the tell) and against the `/api/graph` payload already in hand for facts earlier
+  nights wrote — and drop any restatement however it is worded and wherever it is hung; on an
+  episode-less run the batch half is vacuous and the graph half still applies. A fact that
+  genuinely needs re-stating against better endpoints is revision mode's Merge row, never a sweep
+  edge. And like canonicalization, the sweep needs the whole graph at once: never hand slices of
+  it to a crew.
 
 ---
 
