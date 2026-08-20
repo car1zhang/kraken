@@ -671,13 +671,15 @@ func (s *mmLSPServer) publish(uri string) {
 				// and it asks the question against origin/main.
 				continue
 			}
-			found = append(found, mmLSPDiag{id: it.ID, diag: lspDiagnostic{
-				Range:    mmLSPRange(lines, start, end),
-				Severity: lspSeverityHint,
-				Source:   "kraken-mm",
-				Message:  mmLSPMessage(it),
-				Data:     map[string]any{"mm": it.ID},
-			}})
+			for _, r := range mmLSPRailRanges(lines, start, end) {
+				found = append(found, mmLSPDiag{id: it.ID, diag: lspDiagnostic{
+					Range:    r,
+					Severity: lspSeverityHint,
+					Source:   "kraken-mm",
+					Message:  mmLSPMessage(it),
+					Data:     map[string]any{"mm": it.ID},
+				}})
+			}
 		}
 	}
 	s.diags[uri] = found
@@ -724,20 +726,44 @@ func (s *mmLSPServer) sendDiags(uri string, found []mmLSPDiag) {
 	s.notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": out})
 }
 
-// mmLSPRange turns a 1-based inclusive line range into the 0-based LSP range
-// covering those whole lines. The end character is the last line's length in
-// UTF-16 code units, which is what LSP's default position encoding counts —
-// on a line of ASCII it is the byte count, and on a line with an emoji in it
-// the two differ by enough to underline the wrong span.
-func mmLSPRange(lines []string, start, end int) lspRange {
-	endChar := 0
-	if end >= 1 && end <= len(lines) {
-		endChar = len(utf16.Encode([]rune(lines[end-1])))
+// mmLSPRailRanges turns a 1-based inclusive line range into one SMALL range
+// per covered line: the line's leading whitespace, or its first rune when the
+// line has no indent, zero-width on an empty line.
+//
+// The shape is carl's readability call. Zed draws every diagnostic as a wavy
+// underline and gives an extension no background-highlight channel, so a
+// single block-spanning diagnostic put a squiggle under every word of a
+// marked block — "makes it unreadable". Underlining only what nobody reads —
+// the indent — leaves a thin left-edge rail that still shows the block's
+// exact extent line by line, and because every covered line carries its own
+// diagnostic, hover and the drop code action still work anywhere in the
+// block, not just on its first line.
+//
+// Characters are UTF-16 code units, LSP's default position encoding. The
+// indent run is ASCII (tabs and spaces), where bytes and UTF-16 units agree;
+// the first-rune fallback measures the whole RUNE, so a line opening with an
+// emoji is never cut mid-surrogate-pair.
+func mmLSPRailRanges(lines []string, start, end int) []lspRange {
+	var out []lspRange
+	for l := start; l <= end && l-1 < len(lines); l++ {
+		if l < 1 {
+			continue
+		}
+		line := lines[l-1]
+		ws := 0
+		for ws < len(line) && (line[ws] == ' ' || line[ws] == '\t') {
+			ws++
+		}
+		endChar := ws
+		if ws == 0 && line != "" {
+			endChar = len(utf16.Encode([]rune(line)[:1]))
+		}
+		out = append(out, lspRange{
+			Start: lspPosition{Line: l - 1, Character: 0},
+			End:   lspPosition{Line: l - 1, Character: endChar},
+		})
 	}
-	return lspRange{
-		Start: lspPosition{Line: start - 1, Character: 0},
-		End:   lspPosition{Line: end - 1, Character: endChar},
-	}
+	return out
 }
 
 // mmLSPMessage is the line Zed shows on hover. It carries the item id (so the
@@ -778,12 +804,20 @@ func (s *mmLSPServer) codeAction(id json.RawMessage, raw json.RawMessage) {
 		return
 	}
 	actions := make([]lspCodeAction, 0, 1)
+	seen := make(map[int64]bool)
 	for _, d := range s.diags[p.TextDocument.URI] {
-		// Line-granular intersection: a mark's diagnostic covers whole lines,
-		// so a cursor anywhere on one of them is on the mark.
+		// Line-granular intersection: a mark publishes one rail diagnostic
+		// per covered line, so a cursor anywhere on one of those lines is on
+		// the mark — the rail's columns are deliberately not consulted. The
+		// per-line shape also means one mark can intersect a multi-line
+		// request several times over; `seen` keeps that one action, not N.
 		if d.diag.Range.Start.Line > p.Range.End.Line || p.Range.Start.Line > d.diag.Range.End.Line {
 			continue
 		}
+		if seen[d.id] {
+			continue
+		}
+		seen[d.id] = true
 		title := fmt.Sprintf("drop read mark (mm %d)", d.id)
 		actions = append(actions, lspCodeAction{
 			Title:       title,
