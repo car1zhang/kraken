@@ -86,7 +86,7 @@ The list is **open**. When something genuinely is not one of these, name a new t
 lowercase-hyphenated style and use it consistently across the batch — a type invented once and never
 reused is noise, so prefer the closest seed type unless the new one will recur.
 
-Five rules about what a good tuple looks like:
+The rules of a good tuple (a count here goes stale — trust the list):
 
 - **The fact sentence must stand alone.** "It is skipped under mirror" is unreadable a month later;
   "tokensPass is skipped under --mirror because mirror runs only state derivation and the block-event
@@ -94,6 +94,18 @@ Five rules about what a good tuple looks like:
   none of this context.
 - **Prefer durable over incidental.** "carl prefers stdlib-only Go" is worth a row. "the build failed
   at 14:02" is not. The test is whether it would still be true, and still useful, in three months.
+- **A fact that enumerates a SET carries the sweep that regenerates it, not only the members.** An
+  enumeration reads as exhaustive to every later consumer and goes stale silently the moment a new
+  member is added — a fact naming "the schema companion set" as two test files was injected into a
+  cell mid-contract-freeze, the cell fixed exactly the two named sites, and a third inline copy the
+  fact predated surfaced only at the full suite run an hour later. Write the sentence with its
+  regenerator ("…find every member with `grep -rn 'PRAGMA user_version =' internal/store/*_test.go`"),
+  so the fact stays true when the membership moves — and put the regenerator BEFORE the member list,
+  or keep the sentence short enough to survive injection: graphContext clause-cuts each injected fact
+  at ~180 runes, so a regenerator appended after a long enumeration is exactly the substring that gets
+  clipped (possibly mid-command), delivering the bare enumeration the rule exists to prevent. The
+  `k graph get F<id>` dereference recovers the full sentence, but only for a reader who suspects there
+  is more.
 - **Strength is your confidence that this is a durable, correct fact**, 1-10 — not how important it
   feels. An explicit instruction from carl is a 9; something you inferred from one agent's behaviour
   is a 3, and a 3 is usually a sign you should not add it at all. It is **required** on every edge:
