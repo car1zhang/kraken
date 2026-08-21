@@ -20,8 +20,8 @@
   {
     "file": "fail-target-surfaces.svg",
     "expect": "fail",
-    "warnings": 7,
-    "note": "embedded <style> block + hex color literals -> STYLE_BLOCK + COLOR_LITERAL; four of the warnings are pre-existing TEXT_OVERFLOW near the right margin, and three are COLOUR_NO_GLYPH on its \"node blue\" boxes. Its fourth blue box escapes only because its label reads \"first 3 + [+N more]\": the rule demands the treatment's OWN glyph, and blue's is \"+\", a character prose uses too. That residual is recorded rather than fixed — see the KNOWN LIMITATION note on COLOUR_NO_GLYPH — because the alternative is taking \"+\" away from blue, and \"+\" is the diff convention every reader already knows. This fixture is the pin for it"
+    "warnings": 13,
+    "note": "embedded <style> block + hex color literals -> STYLE_BLOCK + COLOR_LITERAL; four of the warnings are pre-existing TEXT_OVERFLOW near the right margin, three are COLOUR_NO_GLYPH on its \"node blue\" boxes, and six are GROUP_GAP_UNDER_MIN on its two stacks of boxes set 18px and 14px apart — true positives on a fragment that was captured from the wild precisely because it does not conform, and left standing rather than respaced so that this entry keeps measuring the real thing. Its fourth blue box escapes only because its label reads \"first 3 + [+N more]\": the rule demands the treatment's OWN glyph, and blue's is \"+\", a character prose uses too. That residual is recorded rather than fixed — see the KNOWN LIMITATION note on COLOUR_NO_GLYPH — because the alternative is taking \"+\" away from blue, and \"+\" is the diff convention every reader already knows. This fixture is the pin for it"
   },
   {
     "file": "fail-component-map.svg",
@@ -81,7 +81,7 @@
     "file": "warn-shape-text-fit.svg",
     "expect": "pass",
     "warnings": 4,
-    "note": "four SHAPE_TEXT_FIT warnings, never a failure: an fn label wider than W-40, and — since the rule measures path-drawn silhouettes too — a store wider than W-40, a decision wider than W-60 and a cloud wider than W-60"
+    "note": "four SHAPE_TEXT_FIT warnings, never a failure: an fn label wider than W-40, and — since the rule measures path-drawn silhouettes too — a store wider than W-40, a decision wider than W-60 and a cloud wider than W-60. The diamond sits 20px lower than the boxes around it need it to, and the viewBox is 20px taller to hold it: it used to clear the fn by 8px, which GROUP_GAP_UNDER_MIN reports, and this fixture pins a text rule — a second rule's warning in the count would blunt it"
   },
   {
     "file": "warn-nest-well.svg",
@@ -117,7 +117,7 @@
     "file": "pass-lane-siblings.svg",
     "expect": "pass",
     "warnings": 0,
-    "note": "two swimlane headers with lifelines dropping below them and each participant's boxes drawn as SIBLINGS on its lifeline -> clean; this is the markup a sequence diagram uses, and the shape a lane may never take is in fail-nest-parent-lane.svg"
+    "note": "two swimlane headers with lifelines dropping below them and each participant's boxes drawn as SIBLINGS on its lifeline -> clean; this is the markup a sequence diagram uses, and the shape a lane may never take is in fail-nest-parent-lane.svg. Its lifelines also pin the EDGE_BOX_INTRUSION/EDGE_EDGE_CROSSING lane exclusion: each is an `edge` path attached to a lane header, running straight through the participant's own boxes, so dropping the exclusion — or moving those boxes off the line — turns this entry's zero into findings"
   },
   {
     "file": "pass-degenerate-geometry.svg",
@@ -198,6 +198,54 @@
     "expect": "pass",
     "warnings": 2,
     "note": "three tables, two COLOUR_AS_CATEGORY. (1) five flat cells in three treatments with no header cell -> hue is doing a category's job. (2) the same colouring row-grouped, with the \"cell head\" in a <g> row of its own and the data cells in another: MUST NOT fire, and did fire before the rule grouped cells by their table instead of by their immediate parent — the cry-wolf case, on completely ordinary markup. (3) the same rainbow split across two row <g>s with no header anywhere: MUST fire, and was silent for the mirror-image reason. Every cell states its glyph, so the count isolates this rule from COLOUR_NO_GLYPH"
+  },
+  {
+    "file": "warn-edge-box-intrusion.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "one straight edge run from the left box to the right one, straight through the box between them -> exactly one EDGE_BOX_INTRUSION. The second edge is the control and must stay quiet: it leaves the same box, drops below the row, crosses under the middle box and comes back up, which is what routing AROUND looks like. Both edges also start and end ON a box border, which is what pins the attachment tolerance — an edge is supposed to touch the boxes it connects"
+  },
+  {
+    "file": "warn-edge-into-parent.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "the one EDGE_BOX_INTRUSION is the edge running clean through an fn, which holds nothing and so had a route around it. The edge on the left is the control and must stay quiet: it attaches to a proc nested inside a machine, and the contract's first containment tool is exactly that shape-inside-shape, so crossing the parent is the only way to reach the child — there is no route around it and the rule's advice could not be followed. Both halves of the test are narrow on purpose: the box has to HOLD a silhouette and the edge has to END inside it, so an edge merely passing through a parent still warns, and so does one buried in a leaf"
+  },
+  {
+    "file": "warn-curve-hump-intrusion.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "an edge crossing a cloud at a height that is inside the humps it DRAWS but above every on-curve endpoint of its outline -> one EDGE_BOX_INTRUSION, and the pin for measuring a curved silhouette with its control points folded in. Measured from endpoints alone the cloud reads as 30px tall instead of 85px and this edge misses it entirely, so a regression to endpoint-only extents shows up here as a silent zero"
+  },
+  {
+    "file": "warn-pill-text-size.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "two stadium tags, one TEXT_OVERFLOW: the left tag's label is too wide for the margin at any size and must fire, which is what proves the rule reaches a pill label at all; the right one clears the margin by 2px at the 12px the stylesheet renders a pill and would MISS it by 4px at the 13px default, so it must stay quiet. That is the pin for font_size_of's pill row — drop the row and this entry reads 2. Both tags sit hard against the viewBox edge on purpose: an 8% difference between two width estimates is only observable within a few px of the boundary the rule measures against"
+  },
+  {
+    "file": "warn-edge-edge-crossing.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "two edges running corner to corner between four boxes meet in open space -> exactly one EDGE_EDGE_CROSSING, reported once for the pair rather than once per segment. The two edges on the right are the control: they leave one box from the SAME point and fan out to two others, which is an attachment rather than a crossing and must stay quiet"
+  },
+  {
+    "file": "warn-group-gap.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "two boxes 12px apart -> one GROUP_GAP_UNDER_MIN against the contract's 24px. The third box is 48px from its neighbour and stays quiet, and the group on the right holds a proc: containment is sanctioned nesting rather than crowding, and a markup-nested child is NEST_WELL's business, so neither the pair nor the child is reported here"
+  },
+  {
+    "file": "warn-label-box-overlap.svg",
+    "expect": "pass",
+    "warnings": 1,
+    "note": "an edge label drifted onto the box its edge points at -> one LABEL_BOX_OVERLAP. The second label is the control: same size, same edge shape, placed above its own edge in clear space. Only edgeLabel text is swept — every other label in the kit belongs to the box it is drawn in, where sitting on that box is the whole point"
+  },
+  {
+    "file": "pass-layout-clean.svg",
+    "expect": "pass",
+    "warnings": 0,
+    "note": "the clean side of all four layout rules in one figure: four boxes at legal distances, an edge routed down and around the box below it, two edges leaving one box from a shared point, and two edge labels in clear space -> nothing at all. A layout rule that starts firing on conformant markup is a cry-wolf regression, and this is the fixture that catches it"
   },
   {
     "file": "pass-code-refs.svg",

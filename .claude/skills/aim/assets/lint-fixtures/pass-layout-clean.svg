@@ -1,0 +1,35 @@
+<svg viewBox="0 0 860 260" role="img" aria-label="Four boxes at legal distances, an edge routed around the box below it, two edges leaving one box from the same point, and two edge labels in clear space.">
+  <text class="title" x="16" y="26">a layout every geometry rule is happy with</text>
+
+  <g class="proc">
+    <rect x="60" y="80" width="170" height="60" rx="2"/>
+    <rect x="64" y="84" width="162" height="52" rx="1"/>
+    <text x="145" y="116">ingest</text>
+  </g>
+
+  <g class="node">
+    <rect x="300" y="80" width="170" height="60" rx="8"/>
+    <text x="385" y="116">planner</text>
+  </g>
+
+  <g class="node">
+    <rect x="560" y="80" width="170" height="60" rx="8"/>
+    <text x="645" y="116">board</text>
+  </g>
+
+  <g class="node">
+    <rect x="300" y="180" width="170" height="60" rx="8"/>
+    <text x="385" y="216">archive</text>
+  </g>
+
+  <path class="edge" d="M 230,110 H 300"/>
+  <text class="edgeLabel" x="265" y="96">spec</text>
+
+  <path class="edge" d="M 470,110 H 560"/>
+  <text class="edgeLabel" x="515" y="96">rows</text>
+
+  <path class="edge" d="M 145,140 V 210 H 300"/>
+
+  <path class="edge" d="M 385,140 V 180"/>
+  <path class="edge" d="M 385,140 L 320,180"/>
+</svg>

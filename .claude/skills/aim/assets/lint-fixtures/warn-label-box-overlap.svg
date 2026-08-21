@@ -1,0 +1,24 @@
+<svg viewBox="0 0 860 220" role="img" aria-label="An edge label that has drifted onto the box its edge points at, beside one placed in clear space above its own edge.">
+  <text class="title" x="16" y="26">an edge label keeps clear of every box</text>
+
+  <g class="node">
+    <rect x="60" y="80" width="140" height="56" rx="8"/>
+    <text x="130" y="112">daemon</text>
+  </g>
+
+  <g class="node">
+    <rect x="380" y="80" width="140" height="56" rx="8"/>
+    <text x="450" y="112">tracker</text>
+  </g>
+
+  <g class="node">
+    <rect x="700" y="80" width="140" height="56" rx="8"/>
+    <text x="770" y="112">cache</text>
+  </g>
+
+  <path class="edge" d="M 200,108 H 380"/>
+  <text class="edgeLabel" x="420" y="112">writes</text>
+
+  <path class="edge" d="M 520,108 H 700"/>
+  <text class="edgeLabel" x="610" y="98">reads</text>
+</svg>

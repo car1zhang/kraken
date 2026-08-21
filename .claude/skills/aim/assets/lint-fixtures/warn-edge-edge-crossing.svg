@@ -1,0 +1,44 @@
+<svg viewBox="0 0 860 260" role="img" aria-label="Two edges that cross in open space between four boxes, beside two edges that leave one box from the same point and only meet there.">
+  <text class="title" x="16" y="26">two edges meeting away from either one's endpoint</text>
+
+  <g class="node">
+    <rect x="60" y="70" width="140" height="50" rx="8"/>
+    <text x="130" y="100">daemon</text>
+  </g>
+
+  <g class="node">
+    <rect x="60" y="170" width="140" height="50" rx="8"/>
+    <text x="130" y="200">board</text>
+  </g>
+
+  <g class="node">
+    <rect x="420" y="70" width="140" height="50" rx="8"/>
+    <text x="490" y="100">tracker</text>
+  </g>
+
+  <g class="node">
+    <rect x="420" y="170" width="140" height="50" rx="8"/>
+    <text x="490" y="200">queue</text>
+  </g>
+
+  <g class="node">
+    <rect x="640" y="70" width="140" height="50" rx="8"/>
+    <text x="710" y="100">router</text>
+  </g>
+
+  <g class="node">
+    <rect x="600" y="180" width="100" height="44" rx="8"/>
+    <text x="650" y="207">east</text>
+  </g>
+
+  <g class="node">
+    <rect x="740" y="180" width="100" height="44" rx="8"/>
+    <text x="790" y="207">west</text>
+  </g>
+
+  <path class="edge" d="M 200,95 L 420,195"/>
+  <path class="edge" d="M 200,195 L 420,95"/>
+
+  <path class="edge" d="M 710,120 L 650,180"/>
+  <path class="edge" d="M 710,120 L 790,180"/>
+</svg>

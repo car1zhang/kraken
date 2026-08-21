@@ -1,0 +1,28 @@
+<svg viewBox="0 0 860 260" role="img" aria-label="An edge attaching to a box nested inside a parent, which has to cross that parent, beside an edge that runs through a box holding nothing.">
+  <text class="title" x="16" y="26">an edge reaching a nested box crosses its parent by definition</text>
+
+  <g class="node">
+    <rect x="40" y="100" width="120" height="50" rx="8"/>
+    <text x="100" y="130">daemon</text>
+  </g>
+
+  <g class="machine holds">
+    <rect x="240" y="60" width="260" height="150" rx="2"/>
+    <path d="M 240,72 L 252,60 H 512 L 500,72 M 512,60 V 198 L 500,210"/>
+    <text x="254" y="86">build host</text>
+    <g class="proc">
+      <rect x="290" y="110" width="180" height="60" rx="2"/>
+      <rect x="294" y="114" width="172" height="52" rx="1"/>
+      <text x="380" y="146">kraken serve</text>
+    </g>
+  </g>
+
+  <g class="fn">
+    <rect x="600" y="100" width="180" height="50" rx="2"/>
+    <path d="M 608,100 V 150 M 772,100 V 150"/>
+    <text x="690" y="130">Serve()</text>
+  </g>
+
+  <path class="edge" d="M 160,125 H 290"/>
+  <path class="edge" d="M 640,125 H 750"/>
+</svg>
