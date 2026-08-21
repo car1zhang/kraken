@@ -304,8 +304,10 @@ func runMMLSP(in io.Reader, out io.Writer) error {
 // mark carl makes on the board or with the capture keybind appears in an
 // UNTOUCHED buffer within this long — before the ticker existed it appeared
 // on the next edit, save or reopen, which read as "adding marks does
-// nothing" whenever carl was only looking.
-const mmLSPPollInterval = 5 * time.Second
+// nothing" whenever carl was only looking. 2s on carl's ask ("can we make it
+// poll faster?"): a tick is one local GET answered from sqlite, cheap enough
+// that mark-to-visible latency wins.
+const mmLSPPollInterval = 2 * time.Second
 
 // poll is the background refresh: every tick, refetch the mark list and
 // republish every open document IF the list changed. The fetch runs outside
@@ -418,13 +420,6 @@ func (s *mmLSPServer) handle(msg lspMessage) (stop bool, err error) {
 		s.didClose(msg.Params)
 	case "textDocument/codeAction":
 		s.codeAction(msg.ID, msg.Params)
-	case "textDocument/documentColor":
-		s.documentColor(msg.ID, msg.Params)
-	case "textDocument/colorPresentation":
-		// No presentations to offer: the "colors" are read-mark highlights,
-		// not values a user edits. An empty list is the protocol's way to
-		// say so; not answering would hang the client's request.
-		s.respond(msg.ID, []any{})
 	case "workspace/executeCommand":
 		s.executeCommand(msg.ID, msg.Params)
 	default:
@@ -451,7 +446,6 @@ func (s *mmLSPServer) initializeResult() any {
 				"save":      map[string]any{"includeText": false},
 			},
 			"codeActionProvider":     true,
-			"colorProvider":          true,
 			"executeCommandProvider": map[string]any{"commands": []string{mmLSPDropCommand}},
 		},
 		"serverInfo": map[string]any{"name": "kraken-mm", "version": util.Build()},
@@ -797,56 +791,14 @@ func (s *mmLSPServer) locateDocMarks(doc *mmLSPDoc) []locatedMark {
 	return out
 }
 
-// mmLSPBarColor is the highlight painted behind every marked line when Zed's
-// `lsp_document_colors` setting is `background` — the bar rendering carl
-// asked for, and the one channel that can paint a background at all:
-// diagnostics only ever draw as underlines, and Zed renders LSP
-// documentColor results as a background, a border, or a swatch inlay per
-// that setting. A soft blue at low alpha, so it reads as a wash over either
-// theme rather than a block of paint.
-var mmLSPBarColor = map[string]any{"red": 0.33, "green": 0.60, "blue": 0.90, "alpha": 0.16}
-
-// documentColor serves textDocument/documentColor: one ColorInformation per
-// covered line of every mark located in the buffer, ranging over the WHOLE
-// line, colored mmLSPBarColor. Under `lsp_document_colors: "background"` Zed
-// paints each range's background — read lines render as tinted bars; the
-// default `inlay` renders a small swatch at the line start instead, also a
-// usable marker. Zed pulls colors on open and on edit and defines no
-// server-initiated refresh for them (unlike inlay hints, code lenses and
-// semantic tokens, which all have workspace/*/refresh requests — measured
-// against Zed's lsp_store, which registers exactly those three), so this
-// layer can lag a brand-new mark until the buffer is next touched; the poll
-// ticker's diagnostics are the always-fresh layer.
-func (s *mmLSPServer) documentColor(id json.RawMessage, raw json.RawMessage) {
-	var p struct {
-		TextDocument struct {
-			URI string `json:"uri"`
-		} `json:"textDocument"`
-	}
-	if err := json.Unmarshal(raw, &p); err != nil {
-		s.respondError(id, lspInvalidParams, "bad documentColor params")
-		return
-	}
-	out := []map[string]any{}
-	if doc := s.docs[p.TextDocument.URI]; doc != nil && doc.ok {
-		lines := strings.Split(strings.ReplaceAll(doc.text, "\r\n", "\n"), "\n")
-		for _, m := range s.locateDocMarks(doc) {
-			for l := m.start; l <= m.end && l-1 < len(lines); l++ {
-				if l < 1 {
-					continue
-				}
-				out = append(out, map[string]any{
-					"range": lspRange{
-						Start: lspPosition{Line: l - 1, Character: 0},
-						End:   lspPosition{Line: l - 1, Character: len(utf16.Encode([]rune(lines[l-1])))},
-					},
-					"color": mmLSPBarColor,
-				})
-			}
-		}
-	}
-	s.respond(id, out)
-}
+// (A documentColor "bars" layer lived here for one round: whole-line LSP
+// color ranges that Zed's `lsp_document_colors: "background"` painted as
+// tinted line bars. Carl withdrew it — "the bars can just be underlines" —
+// because the setting is global (it also flips real CSS color literals to
+// background rendering) and Zed defines no server-initiated color refresh,
+// so bars lagged the poll-fresh diagnostics. The first-word underline rail
+// is the one rendering; if bars come back, that round's shape is in the
+// contract's amendment trail.)
 
 // locateMark finds one mark's lines in a buffer, resolving the AMBIGUOUS case
 // before `core.LocateBlock` can decide it the wrong way.
