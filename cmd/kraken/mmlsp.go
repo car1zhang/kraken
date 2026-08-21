@@ -727,43 +727,74 @@ func (s *mmLSPServer) sendDiags(uri string, found []mmLSPDiag) {
 }
 
 // mmLSPRailRanges turns a 1-based inclusive line range into one SMALL range
-// per covered line: the line's leading whitespace, or its first rune when the
-// line has no indent, zero-width on an empty line.
+// per covered line: start of line through the end of the line's FIRST WORD
+// (its first run of non-whitespace), capped at mmLSPRailCap UTF-16 units.
 //
-// The shape is carl's readability call. Zed draws every diagnostic as a wavy
-// underline and gives an extension no background-highlight channel, so a
-// single block-spanning diagnostic put a squiggle under every word of a
-// marked block — "makes it unreadable". Underlining only what nobody reads —
-// the indent — leaves a thin left-edge rail that still shows the block's
-// exact extent line by line, and because every covered line carries its own
-// diagnostic, hover and the drop code action still work anywhere in the
-// block, not just on its first line.
+// The shape is carl's readability call, arrived at twice. Zed draws every
+// diagnostic as a wavy underline and gives an extension no
+// background-highlight channel, so a single block-spanning diagnostic put a
+// squiggle under every word of a marked block — "makes it unreadable". The
+// first replacement underlined only the leading indent (first rune when
+// unindented), which Zed renders so faintly that carl's report was "there
+// are no markers" — a squiggle under one character or under whitespace is
+// invisible in practice. So the rail covers the first word: enough glyphs to
+// catch the eye on every covered line, still never running through the body
+// of the text, and because every covered line carries its own diagnostic,
+// hover and the drop code action still work anywhere in the block.
 //
-// Characters are UTF-16 code units, LSP's default position encoding. The
-// indent run is ASCII (tabs and spaces), where bytes and UTF-16 units agree;
-// the first-rune fallback measures the whole RUNE, so a line opening with an
-// emoji is never cut mid-surrogate-pair.
+// A whitespace-only or empty line keeps a zero-width range at column 0 —
+// nothing to draw under, but the line still intersects codeAction requests.
+//
+// Characters are UTF-16 code units, LSP's default position encoding. The cap
+// and the word walk both advance by RUNE, measured in UTF-16 units, so a
+// word opening with an emoji is never cut mid-surrogate-pair.
 func mmLSPRailRanges(lines []string, start, end int) []lspRange {
 	var out []lspRange
 	for l := start; l <= end && l-1 < len(lines); l++ {
 		if l < 1 {
 			continue
 		}
-		line := lines[l-1]
-		ws := 0
-		for ws < len(line) && (line[ws] == ' ' || line[ws] == '\t') {
-			ws++
-		}
-		endChar := ws
-		if ws == 0 && line != "" {
-			endChar = len(utf16.Encode([]rune(line)[:1]))
-		}
 		out = append(out, lspRange{
 			Start: lspPosition{Line: l - 1, Character: 0},
-			End:   lspPosition{Line: l - 1, Character: endChar},
+			End:   lspPosition{Line: l - 1, Character: mmLSPRailEnd(lines[l-1])},
 		})
 	}
 	return out
+}
+
+// mmLSPRailCap bounds the WORD portion of the rail in UTF-16 units: long
+// enough that a keyword-led line reads as marked, short enough that a long
+// identifier does not turn the rail back into the block underline it
+// replaced. The indent is not counted against it — cap the total and a
+// deeply indented line's rail ends inside its own whitespace, which is the
+// invisible shape this function exists to avoid.
+const mmLSPRailCap = 16
+
+// mmLSPRailEnd is the rail's end column for one line: the UTF-16 length of
+// the leading whitespace plus the first word (its first run of
+// non-whitespace, capped at mmLSPRailCap). A line with no word at all —
+// empty, or only whitespace — ends at 0, a zero-width range: there is
+// nothing to draw under, and the line still intersects codeAction requests.
+func mmLSPRailEnd(line string) int {
+	ws, word := 0, 0
+	for _, r := range line {
+		w := len(utf16.Encode([]rune{r}))
+		if r == ' ' || r == '\t' {
+			if word > 0 {
+				break
+			}
+			ws += w
+			continue
+		}
+		if word+w > mmLSPRailCap {
+			break
+		}
+		word += w
+	}
+	if word == 0 {
+		return 0
+	}
+	return ws + word
 }
 
 // mmLSPMessage is the line Zed shows on hover. It carries the item id (so the
