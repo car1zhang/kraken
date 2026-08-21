@@ -363,7 +363,7 @@ func kronosBrief() string {
 	b.WriteString("- `kraken graph get <handle>` — the full fact or source episode behind a `[F… E…]` handle a search printed.\n")
 	b.WriteString("- `kraken goals get [slug]` — carl's weekly and daily goals, and which goals each job serves (a job may serve several, or none). This is what makes \"what should I look at first\" answerable.\n\n")
 	b.WriteString("Acting:\n\n")
-	b.WriteString("- `kraken orch ack --ids 42,43 --disposition \"<what you did>\"` — closes inbox rows. Several ids at once only when they genuinely share one disposition.\n")
+	b.WriteString("- `kraken orch ack --ids 42,43 --disposition '<what you did>'` — closes inbox rows. Several ids at once only when they genuinely share one disposition. SINGLE-quote the disposition, always: it is free prose, free prose attracts `$` (dollar amounts, `${VAR}` syntax you are quoting), and inside double quotes zsh either deletes the token silently (`$75` becomes nothing, exit 0) or kills the whole command (`${X:}` is a parse error) — and a retry that paraphrases the `$` away corrupts the one durable record of the decision.\n")
 	b.WriteString("- `kraken cell steer <slug>` — sends text (on stdin) into a job's cell. This is how an instruction from carl becomes work.\n")
 	b.WriteString("- `kraken cell submit <slug>` — starts a draft job's cell.\n")
 	b.WriteString("- `kraken cell answer <slug> --digit N` — answers a cell's pending multiple-choice question with option N.\n")
