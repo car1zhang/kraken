@@ -429,6 +429,22 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// connection error.
 	updateSleep(updateRestartSettle)
 
+	// The Zed mental-model language server, swept once the runtime is
+	// replaced. A running `kraken mm lsp` is Zed's child still holding the
+	// OLD binary's inode — `make install` renames rather than rewrites
+	// precisely so live processes survive — and Zed never restarts a server
+	// that keeps running, so without this sweep every update leaves the
+	// editor's read marks served by the previous build until carl remembers
+	// `editor: restart language server`. Zed DOES demand-start a fresh
+	// server from PATH the next time a buffer of a registered language
+	// opens (measured 2026-08-21: a killed server stayed down while the
+	// editor idled, and the next file open respawned it within a second),
+	// so killing the stale one is the whole job. The extension's wasm needs
+	// nothing here: it is a static shim whose body is "run `kraken mm lsp`",
+	// rebuilt only when the crate itself changes — and only Zed can build
+	// it (its extension builder does the WASM component encoding).
+	sweepZedMMLSP(out)
+
 	// The mac app, last (installMacApp's definition carries the why). The
 	// running Kraken.app is deliberately not killed or relaunched — the
 	// recipe renames the live bundle aside and swaps the new one in, never
@@ -457,6 +473,37 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 // `kraken serve` listening, short enough that nobody watching the button
 // notices it.
 const updateRestartSettle = 2 * time.Second
+
+// sweepZedMMLSP kills any running `kraken mm lsp` process so that Zed's next
+// buffer open demand-starts a fresh server on the just-installed binary (the
+// call site in runUpdate carries the full why). Best-effort in every
+// direction — no pgrep, no match, a pid gone by the time it is signalled —
+// because a missed sweep costs one manual `editor: restart language server`
+// and a failed sweep must never fail an update whose runtime work is done.
+//
+// pgrep -f matches the phrase anywhere in any argv — a `grep kraken mm lsp`
+// in flight matches too, and pids recycle — so each candidate is re-read
+// from ps and killed only when its argv is exactly the server's: a first
+// token whose basename is `kraken`, followed by exactly `mm lsp`.
+func sweepZedMMLSP(out io.Writer) {
+	pids, err := exec.Command("pgrep", "-f", "kraken mm lsp").Output()
+	if err != nil {
+		return // exit 1 is "no match"; anything else is equally not worth an update's attention
+	}
+	for _, pid := range strings.Fields(string(pids)) {
+		argv, err := exec.Command("ps", "-o", "command=", "-p", pid).Output()
+		if err != nil {
+			continue
+		}
+		f := strings.Fields(strings.TrimSpace(string(argv)))
+		if len(f) != 3 || f[0][strings.LastIndex(f[0], "/")+1:] != "kraken" || f[1] != "mm" || f[2] != "lsp" {
+			continue
+		}
+		if exec.Command("kill", pid).Run() == nil {
+			fmt.Fprintf(out, "swept stale zed mm language server (pid %s); zed starts a fresh one on the next file open\n", pid)
+		}
+	}
+}
 
 // gitExitError carries git's exit STATUS alongside the message, because one
 // caller has to tell git's answers apart from git's failures: `merge-base
