@@ -300,15 +300,23 @@ authority is what makes it expensive: a scout distrusts the digest because the b
 trusts the BRIEF, which nothing told it to distrust. Two rules follow. Every counter you quote into a
 brief is a hypothesis — write it as "the digest reports X; verify before building on it". One
 counter has now minted the same false finding two nights running: `Lines` counts TIMESTAMPED
-records inside the window — roughly half of a transcript's physical lines carry no parseable
-timestamp and are excluded — so quoted into a brief as "N lines" it reads as stale the moment the
-scout line-counts the file, and a 719-vs-1,112 "staleness" diagnosis was corroborated and shipped
-as a finding while the refutation sat in the field's own doc comment. Brief it as "N timestamped
-in-window records — about half a transcript's lines carry no timestamp, so `wc -l` reads at least
-double, and more when the window starts inside the file", never "N lines": a label that drops
-TIMESTAMPED sends the verifying scout to a record
-count that is ~2N even when the window covers the whole file, which re-derives the exact false
-finding. And phrase
+records inside the window, so quoted into a brief as "N lines" it reads as stale the moment the
+scout line-counts the file — a "staleness" diagnosis of exactly that shape was corroborated and shipped
+as a finding while the refutation sat in the field's own doc comment. The undated remainder differs
+by transcript kind, and its generator is session METADATA, not conversation: undated records arrive as
+blocks of metadata types (custom-title, agent-name, mode, permission-mode, bridge-session, last-prompt
+and kin) written at stamp events that track neither prompts nor records — the undated share varies
+widely from file to file — while a subagent SIDECAR carries none at all. So `wc -l` runs above `Lines`
+on a root transcript by a file-varying amount, and equals it on a sidecar the window fully covers
+(a window starting inside any file, sidecars included, pushes `wc -l` higher still). Brief it as
+"N timestamped in-window records — `wc -l` reads higher on a root (undated session-metadata blocks,
+amount varies by file) and equals N on a sidecar the window fully covers", never "N lines" and never
+with a ratio: the first shipped form of this rule said "at least double" (a number read off a code
+comment, never counted), a drafted correction replaced it with a measured-sounding band a reviewer
+then measured wrong in both value and denominator, and a scout holding any such number who measures
+a file outside its band has a fresh unexplained anomaly — the same false-staleness trigger re-armed.
+A number inside a brief-phrasing rule is itself a counter quoted into a brief: state the generator,
+never a number. And phrase
 an anomaly as a question, not as a claim: "say what that shape means" got a scout to reject the
 implied reading and find the real cause, where "confirm that X" would have got X. The same sentence
 pasted into every brief is its own defect — when you suspect a cross-cutting cause, investigate it

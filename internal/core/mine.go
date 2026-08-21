@@ -421,7 +421,10 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 		}
 		// A record with no parseable timestamp (custom-title, agent-name,
 		// mode, permission-mode, bridge-session, last-prompt, agent-setting —
-		// about half of all records) can't be dated and so can't be excluded:
+		// session-metadata blocks written at stamp events that track neither
+		// prompts nor records, so their share varies widely from file to
+		// file; subagent sidecars carry none at all) can't be dated and so
+		// can't be excluded:
 		// it stays eligible for its signals rather than being dropped on a
 		// technicality. It does NOT count toward Lines, which is exactly the
 		// dated-and-inside-the-window population FirstTS/LastTS bound, so a
