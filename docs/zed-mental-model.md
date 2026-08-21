@@ -38,7 +38,7 @@ Mechanics worth knowing, so the behavior does not surprise:
 
 The task above is write-only: it records a mark and shows nothing. The other half is a small Zed extension that draws the marks you have already made back onto the lines they cover, and gives you a code action to drop one.
 
-The mechanism is worth knowing because it explains everything odd about it. A Zed extension cannot draw a decoration, read a selection, or register a command — the only channel it has for painting something onto a line is **diagnostics published by a language server**. So kraken itself is the language server: `kraken mm lsp`, a stdio JSON-RPC server, and the extension in `zed/kraken-mm` is a shim whose entire body is "run `kraken mm lsp`".
+The mechanism is worth knowing because it explains everything odd about it. A Zed extension cannot draw a decoration, read a selection, or register a command — only a language server can put anything on a line, and of its channels only **LSP document colors** can paint a background (diagnostics, the other one, draw wavy underlines only). So kraken itself is the language server: `kraken mm lsp`, a stdio JSON-RPC server, and the extension in `zed/kraken-mm` is a shim whose entire body is "run `kraken mm lsp`".
 
 ### Install
 
@@ -50,22 +50,18 @@ Zed builds the extension to WebAssembly on install, so the first run needs a Rus
 
 ### What it looks like
 
-A marked block renders as a **left-edge rail**: one hint-severity diagnostic per covered line, underlining that line's leading indentation plus its **first word** (capped, so a long identifier never turns it back into a full underline) — the block's exact extent stays visible line by line without a squiggle running through the body of the text. Zed draws every diagnostic as a wavy underline (a true background highlight was tried via LSP document colors and withdrawn: the setting it needs is global and the layer cannot refresh without touching the buffer), and an underline needs a few glyphs under it to be visible at all, so the first word is the shape. Hint severity because a mark is a fact about you and not a problem with the code. Hover any covered line, or open the diagnostic, and the message reads:
+A marked block renders as **tinted line bars**: the server reports every covered line as an LSP *document color* (a soft blue at low alpha), and `"lsp_document_colors": "background"` in `settings.json` makes Zed paint each line's background with it — an actual highlight, and the only way to get one, since the alternative channel (diagnostics) only ever draws wavy underlines. The setting is global: real color values (CSS literals, say) also render as backgrounds instead of swatch chips. No underlines are published at all.
 
-```
-read mark mm 2 · origin-main e5c3497 · marked 2026-08-20
-```
+Bars are **pulled** by Zed — on open, on edit, and on scroll — with no push channel, so a brand-new mark's bar appears on the next of those rather than instantly; the server's 2-second poll guarantees whatever pulls next sees a mark list at most a tick old. The item id a drop needs is in the code action itself (`drop read mark (mm 2)`), and the full anchor detail lives on the board's memory pane.
 
-That is the item id (the same one `k mm drop <id>` takes), the commit the mark is anchored to (or `dirty` for text that lives in no commit), and the day you made it.
-
-Put the cursor on a marked line and open code actions (**cmd-.**): `drop read mark (mm 2)`. Taking it posts the unmark to `kraken serve` and republishes immediately, so the hint disappears without a reload. `k mm drop <id>` does the same thing from a shell.
+Put the cursor on a marked line and open code actions (**cmd-.**): `drop read mark (mm 2)`. Taking it posts the unmark to `kraken serve` and force-refreshes the server's list; the bar disappears on the next color pull (an edit, a scroll, a reopen). `k mm drop <id>` does the same thing from a shell.
 
 Mechanics that will otherwise surprise:
 
 - **The buffer is the truth.** Marks are located in what you are looking at, unsaved edits included — that is exactly when you want to know you are about to touch something you read.
 - **Editing a marked block hides its mark; it does not kill it.** The server only draws what it can find, and it searches with the same two primitives the verify pass does — exact text, then whitespace-normalized — so a reindent still shows. The editor's search is the more PERMISSIVE of the two, though, not the same one: it will also find a block a formatter has reflowed across a different number of lines, which the nightly pass would not. So "it still draws" is not a promise that it will still be there tomorrow. Whether a mark is still *true* is the daemon's question, asked against `origin/main` every ~10 minutes — never the editor's.
 - **`kraken serve` down means no marks and one log line** (`window/logMessage`, visible under `dev: open language server logs`), never an error dialog and never a crash.
-- The mark list refreshes **on its own, every ~2 seconds**: the server polls `kraken serve` and republishes open buffers whenever the model changed, so a mark made on the board or with the capture keybind appears in an untouched buffer within a tick — no edit, save or reopen needed. The same tick heals outages in both directions: `kraken serve` going down blanks the marks (plus one log line), and its return repaints them, neither needing a keystroke. A drop you make from the editor refreshes immediately.
+- The server's mark list refreshes **on its own, every ~2 seconds** (a poll against `kraken serve`), but bars are *pulled* by Zed with no push channel — so what the poll buys is that any pull (open, edit, scroll) answers from a list at most a tick old, not that an untouched, unscrolled buffer repaints by itself. `kraken serve` going down costs the bars (plus one log line in `dev: open language server logs`) and its return restores them, both on the next pull.
 - Identity is repo + path. The REPO half is computed exactly as the capture task computes it (origin's basename, `.git` stripped, falling back to the worktree directory name), which is why a mark made in `~/Developer/kraken` draws in every `wt-kraken` cell worktree of the same repo, and vice versa. The PATH half is relative to the **git root** — and `k mm mark` walks up to that same root before it posts, so opening a sub-directory as your Zed project (`~/Developer/monolith/agent-service`, say) still stores and finds the mark under `agent-service/…`. The walk starts at the marked file itself, so even a project folder *above* the repo (`~/Developer` holding several checkouts) resolves each mark to the checkout its file actually lives in. Before that walk existed, a mark made from a sub-directory project was invisible in the file it named.
 
 ### If nothing shows up

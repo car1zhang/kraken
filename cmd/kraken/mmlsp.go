@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,14 +25,17 @@ import (
 // already marked as read — and to let him drop one from there.
 //
 // WHY A LANGUAGE SERVER AT ALL. A Zed extension cannot draw a decoration, read
-// a selection, or register a command; the phase-1 research found exactly one
-// supported channel for painting something onto a line, which is diagnostics
-// published by a language server (the zed-bookmark extension is the
-// precedent). So kraken becomes the language server. The extension in
+// a selection, or register a command; only a language server can put anything
+// on a line. Marks render as LSP DOCUMENT COLORS — one whole-line color per
+// covered line, which Zed's `lsp_document_colors: "background"` setting
+// paints as a tinted bar (three rounds of carl's steering landed here:
+// block-underline diagnostics were unreadable, indent-only rails invisible,
+// first-word rails still underlines — "keep the bars, get rid of the
+// underlines"). So kraken becomes the language server. The extension in
 // zed/kraken-mm is a WASM shim that does nothing but say "run `kraken mm lsp`".
 //
 // WHAT IT IS NOT. It is not a language server in any other sense: it does no
-// parsing, offers no completion, and its diagnostics are severity Hint — a
+// parsing, offers no completion, and publishes no diagnostics at all — a
 // mark is a fact about carl, never a problem with the code. And it never
 // invalidates anything. Text that has left the buffer simply stops being
 // drawn; the daemon's MMVerifyPass owns the question of whether a mark is
@@ -53,11 +55,13 @@ import (
 // unsaved edits are precisely when he wants to see whether he is about to
 // touch something he marked.
 
-// mmLSPItemTTL bounds how stale the mark list may be. didChange fires on
-// every keystroke, and one HTTP round trip per keystroke would make kraken
-// serve the editor's typing latency. Fifteen seconds is short enough that a
-// mark made in the board shows up in the editor while carl is still thinking
-// about it, and long enough that a burst of typing costs one fetch.
+// mmLSPItemTTL bounds how stale the mark list may be on the PULL paths
+// (documentColor, codeAction). It is the fallback bound only: the poll
+// ticker stamps a fresh list every mmLSPPollInterval, so in practice a pull
+// answers from a list at most one tick old. The TTL exists because a pull
+// can arrive with the ticker idle (no open docs a moment ago), and one HTTP
+// round trip per keystroke-driven pull would make kraken serve the editor's
+// typing latency.
 //
 // A DROP force-refreshes rather than waiting this out: the one moment the
 // cached list is provably wrong is immediately after this process changed it.
@@ -139,19 +143,6 @@ type lspRange struct {
 	End   lspPosition `json:"end"`
 }
 
-type lspDiagnostic struct {
-	Range    lspRange `json:"range"`
-	Severity int      `json:"severity"`
-	Source   string   `json:"source"`
-	Message  string   `json:"message"`
-	Data     any      `json:"data,omitempty"`
-}
-
-// lspSeverityHint is the LSP DiagnosticSeverity for Hint. A read mark is
-// information about carl, not a defect, and Zed renders Hint without the
-// error/warning furniture that would make a marked line look broken.
-const lspSeverityHint = 4
-
 type lspCommand struct {
 	Title     string `json:"title"`
 	Command   string `json:"command"`
@@ -159,10 +150,9 @@ type lspCommand struct {
 }
 
 type lspCodeAction struct {
-	Title       string          `json:"title"`
-	Kind        string          `json:"kind"`
-	Diagnostics []lspDiagnostic `json:"diagnostics,omitempty"`
-	Command     *lspCommand     `json:"command,omitempty"`
+	Title   string      `json:"title"`
+	Kind    string      `json:"kind"`
+	Command *lspCommand `json:"command,omitempty"`
 }
 
 // mmLSPDropCommand is the one command this server registers. Namespaced so it
@@ -210,16 +200,6 @@ type mmLSPDoc struct {
 	ok   bool // false: not in a git worktree, or an unparseable uri
 }
 
-// mmLSPDiag is a published diagnostic remembered alongside the mark it came
-// from, so codeAction can answer "which mark is under the cursor" without
-// re-deriving it. The client's own `context.diagnostics` carries the same
-// ranges, but trusting it would mean trusting a client to hand back the id it
-// was given — this server keeps its own copy of what it published.
-type mmLSPDiag struct {
-	id   int64
-	diag lspDiagnostic
-}
-
 type mmLSPServer struct {
 	out io.Writer
 
@@ -239,13 +219,11 @@ type mmLSPServer struct {
 	mu sync.Mutex
 
 	docs  map[string]*mmLSPDoc
-	diags map[string][]mmLSPDiag
 	roots map[string]string // worktree root -> repo identity
 
-	items    []mmLSPItem
-	itemsRaw []byte // last successful fetch's body, the ticker's change test
-	fetched  time.Time
-	warned   bool
+	items   []mmLSPItem
+	fetched time.Time
+	warned  bool
 
 	initialized bool
 	gotShutdown bool
@@ -255,7 +233,6 @@ func newMMLSPServer(out io.Writer) *mmLSPServer {
 	return &mmLSPServer{
 		out:   out,
 		docs:  map[string]*mmLSPDoc{},
-		diags: map[string][]mmLSPDiag{},
 		roots: map[string]string{},
 	}
 }
@@ -309,18 +286,18 @@ func runMMLSP(in io.Reader, out io.Writer) error {
 // that mark-to-visible latency wins.
 const mmLSPPollInterval = 2 * time.Second
 
-// poll is the background refresh: every tick, refetch the mark list and
-// republish every open document IF the list changed. The fetch runs outside
-// mu — a dead serve stalls the tick, never the protocol loop — and the
-// change test is on the response's raw bytes (item order is stable,
-// created_at DESC), so an unchanged model costs no publishes at all.
-//
-// A FAILED fetch clears the marks, exactly as the event-driven path does:
-// the published set is the state, and keeping the last good list would draw
-// marks that may have been dropped minutes ago. The same tick discipline
-// makes the outage self-healing in both directions — serve down blanks every
-// open buffer within a tick (plus one log line), serve back repaints them
-// within a tick, neither needing a keystroke.
+// poll is the background refresh: every tick, refetch the mark list so the
+// client's NEXT PULL answers from a model at most one tick old. The marks
+// render as document colors, and colors are pulled by Zed — on open, edit,
+// scroll (new lines shown) — with no server-initiated refresh defined for
+// them (unlike inlay hints, code lenses and semantic tokens, which each have
+// a workspace/*/refresh request; measured against Zed's lsp_store, which
+// registers exactly those), so there is nothing here to PUSH: the tick's
+// whole job is that whatever pulls next — documentColor after a scroll, a
+// codeAction on cmd-. — sees marks made seconds ago, not mmLSPItemTTL ago.
+// The fetch runs outside mu — a dead serve stalls the tick, never the
+// protocol loop. A FAILED fetch clears the list, exactly as the event-driven
+// path does — served state is the state — and logs once.
 func (s *mmLSPServer) poll(done <-chan struct{}) {
 	t := time.NewTicker(mmLSPPollInterval)
 	defer t.Stop()
@@ -336,25 +313,15 @@ func (s *mmLSPServer) poll(done <-chan struct{}) {
 		if idle {
 			continue
 		}
-		raw, items, err := mmLSPFetch()
+		_, items, err := mmLSPFetch()
 		s.mu.Lock()
 		s.fetched = time.Now()
 		if err != nil {
-			if s.items != nil || s.itemsRaw != nil {
-				s.items, s.itemsRaw = nil, nil
-				for uri := range s.docs {
-					s.publish(uri)
-				}
-			}
+			s.items = nil
 			s.logOnce("kraken mm: " + jobs.ServeBaseURL() + " unreachable, read marks are not being shown (" + err.Error() + ")")
 		} else {
+			s.items = items
 			s.warned = false
-			if !bytes.Equal(raw, s.itemsRaw) {
-				s.items, s.itemsRaw = items, raw
-				for uri := range s.docs {
-					s.publish(uri)
-				}
-			}
 		}
 		s.mu.Unlock()
 	}
@@ -415,11 +382,20 @@ func (s *mmLSPServer) handle(msg lspMessage) (stop bool, err error) {
 	case "textDocument/didChange":
 		s.didChange(msg.Params)
 	case "textDocument/didSave":
-		s.didSave(msg.Params)
+		// Nothing to do: the buffer is already current (full sync on every
+		// change), and marks render as client-pulled document colors, so
+		// there is nothing to push on save either.
 	case "textDocument/didClose":
 		s.didClose(msg.Params)
 	case "textDocument/codeAction":
 		s.codeAction(msg.ID, msg.Params)
+	case "textDocument/documentColor":
+		s.documentColor(msg.ID, msg.Params)
+	case "textDocument/colorPresentation":
+		// No presentations to offer: the "colors" are read-mark highlights,
+		// not values a user edits. An empty list is the protocol's way to
+		// say so; not answering would hang the client's request.
+		s.respond(msg.ID, []any{})
 	case "workspace/executeCommand":
 		s.executeCommand(msg.ID, msg.Params)
 	default:
@@ -446,6 +422,7 @@ func (s *mmLSPServer) initializeResult() any {
 				"save":      map[string]any{"includeText": false},
 			},
 			"codeActionProvider":     true,
+			"colorProvider":          true,
 			"executeCommandProvider": map[string]any{"commands": []string{mmLSPDropCommand}},
 		},
 		"serverInfo": map[string]any{"name": "kraken-mm", "version": util.Build()},
@@ -545,7 +522,6 @@ func (s *mmLSPServer) didOpen(raw json.RawMessage) {
 	}
 	repo, rel, ok := s.resolveDoc(p.TextDocument.URI)
 	s.docs[p.TextDocument.URI] = &mmLSPDoc{text: p.TextDocument.Text, repo: repo, rel: rel, ok: ok}
-	s.publish(p.TextDocument.URI)
 }
 
 func (s *mmLSPServer) didChange(raw json.RawMessage) {
@@ -575,18 +551,6 @@ func (s *mmLSPServer) didChange(raw json.RawMessage) {
 			break
 		}
 	}
-	s.publish(p.TextDocument.URI)
-}
-
-// didSave republishes from the BUFFER, not from disk. The two agree at this
-// instant, and reading the file would introduce the one code path that can
-// disagree with what carl is looking at.
-func (s *mmLSPServer) didSave(raw json.RawMessage) {
-	var p lspDocIDParams
-	if json.Unmarshal(raw, &p) != nil || p.TextDocument.URI == "" {
-		return
-	}
-	s.publish(p.TextDocument.URI)
 }
 
 func (s *mmLSPServer) didClose(raw json.RawMessage) {
@@ -595,11 +559,6 @@ func (s *mmLSPServer) didClose(raw json.RawMessage) {
 		return
 	}
 	delete(s.docs, p.TextDocument.URI)
-	delete(s.diags, p.TextDocument.URI)
-	// Diagnostics are owned by the server until it says otherwise, so a closed
-	// document is cleared explicitly — otherwise Zed keeps rendering the last
-	// set it was sent.
-	s.sendDiags(p.TextDocument.URI, nil)
 }
 
 // --- identity ---
@@ -694,23 +653,23 @@ func mmLSPRepoName(root string) string {
 // list fresher than the TTL requires and this remains as the fallback.
 //
 // EVERY failure returns an empty list and stamps the clock. Empty means the
-// caller publishes zero diagnostics, which is the honest rendering of "kraken
+// caller answers with zero marks, which is the honest rendering of "kraken
 // serve cannot tell me what is marked" — the alternative, keeping the last
-// good list, would draw marks that may have been dropped from the board
+// good list, would serve marks that may have been dropped from the board
 // minutes ago. Stamping the clock on failure matters as much: without it a
-// dead serve would be re-dialled on every keystroke.
+// dead serve would be re-dialled on every pull.
 func (s *mmLSPServer) mmItems(force bool) []mmLSPItem {
 	if !force && !s.fetched.IsZero() && time.Since(s.fetched) < mmLSPItemTTL {
 		return s.items
 	}
 	s.fetched = time.Now()
-	raw, items, err := mmLSPFetch()
+	_, items, err := mmLSPFetch()
 	if err != nil {
-		s.items, s.itemsRaw = nil, nil
+		s.items = nil
 		s.logOnce("kraken mm: " + jobs.ServeBaseURL() + " unreachable, read marks are not being shown (" + err.Error() + ")")
 		return nil
 	}
-	s.items, s.itemsRaw = items, raw
+	s.items = items
 	s.warned = false
 	return s.items
 }
@@ -732,32 +691,53 @@ func mmLSPFetch() ([]byte, []mmLSPItem, error) {
 	return raw, page.Items, nil
 }
 
-// --- diagnostics ---
+// --- rendering: document colors ---
 
-// publish rebuilds and publishes this document's diagnostics as a FULL
-// replacement. Every path through here ends in exactly one
-// publishDiagnostics, empty array included: LSP has no "remove one
-// diagnostic" message, so the published set IS the state, and a path that
-// returned early without publishing would leave a stale mark drawn on screen
-// forever.
-func (s *mmLSPServer) publish(uri string) {
-	var found []mmLSPDiag
-	if doc := s.docs[uri]; doc != nil && doc.ok {
+// mmLSPBarColor is the highlight painted behind every marked line: the
+// server reports each covered line as an LSP document color, and Zed's
+// `lsp_document_colors: "background"` setting (set in carl's settings.json)
+// paints that range's background — the bar rendering. It is the ONE channel
+// that can paint a background: diagnostics only ever draw as wavy underlines,
+// and the two prior rounds' underline shapes (whole block, then first word)
+// were both rejected — "get rid of the underlines". A soft blue at low
+// alpha, so it reads as a wash over either theme rather than a block of
+// paint.
+var mmLSPBarColor = map[string]any{"red": 0.33, "green": 0.60, "blue": 0.90, "alpha": 0.16}
+
+// documentColor serves textDocument/documentColor: one ColorInformation per
+// covered line of every mark located in the buffer, ranging over the WHOLE
+// line, colored mmLSPBarColor.
+//
+// Colors are PULLED by Zed — on open, on edit, and on scroll (new lines
+// shown), with no server-initiated refresh defined for them — so a brand-new
+// mark's bar appears on the next of those, and the poll ticker's job is that
+// the answer given then is at most one tick old. This is the accepted trade
+// of the bars rendering; the poll.go comment carries the measurement.
+func (s *mmLSPServer) documentColor(id json.RawMessage, raw json.RawMessage) {
+	var p lspDocIDParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		s.respondError(id, lspInvalidParams, "bad documentColor params")
+		return
+	}
+	out := []map[string]any{}
+	if doc := s.docs[p.TextDocument.URI]; doc != nil && doc.ok {
 		lines := strings.Split(strings.ReplaceAll(doc.text, "\r\n", "\n"), "\n")
 		for _, m := range s.locateDocMarks(doc) {
-			for _, r := range mmLSPRailRanges(lines, m.start, m.end) {
-				found = append(found, mmLSPDiag{id: m.it.ID, diag: lspDiagnostic{
-					Range:    r,
-					Severity: lspSeverityHint,
-					Source:   "kraken-mm",
-					Message:  mmLSPMessage(m.it),
-					Data:     map[string]any{"mm": m.it.ID},
-				}})
+			for l := m.start; l <= m.end && l-1 < len(lines); l++ {
+				if l < 1 {
+					continue
+				}
+				out = append(out, map[string]any{
+					"range": lspRange{
+						Start: lspPosition{Line: l - 1, Character: 0},
+						End:   lspPosition{Line: l - 1, Character: len(utf16.Encode([]rune(lines[l-1])))},
+					},
+					"color": mmLSPBarColor,
+				})
 			}
 		}
 	}
-	s.diags[uri] = found
-	s.sendDiags(uri, found)
+	s.respond(id, out)
 }
 
 // locatedMark is one live code mark found in one open buffer: the item and
@@ -791,15 +771,6 @@ func (s *mmLSPServer) locateDocMarks(doc *mmLSPDoc) []locatedMark {
 	return out
 }
 
-// (A documentColor "bars" layer lived here for one round: whole-line LSP
-// color ranges that Zed's `lsp_document_colors: "background"` painted as
-// tinted line bars. Carl withdrew it — "the bars can just be underlines" —
-// because the setting is global (it also flips real CSS color literals to
-// background rendering) and Zed defines no server-initiated color refresh,
-// so bars lagged the poll-fresh diagnostics. The first-word underline rail
-// is the one rendering; if bars come back, that round's shape is in the
-// contract's amendment trail.)
-
 // locateMark finds one mark's lines in a buffer, resolving the AMBIGUOUS case
 // before `core.LocateBlock` can decide it the wrong way.
 //
@@ -829,110 +800,6 @@ func locateMark(buffer string, it mmLSPItem) (startLine, endLine int, ok bool) {
 	return core.LocateBlock(buffer, it.Content)
 }
 
-func (s *mmLSPServer) sendDiags(uri string, found []mmLSPDiag) {
-	// make, never nil: `"diagnostics": null` is what a nil slice marshals to,
-	// and a client is entitled to treat that as "no update" rather than as
-	// "clear everything".
-	out := make([]lspDiagnostic, 0, len(found))
-	for _, d := range found {
-		out = append(out, d.diag)
-	}
-	s.notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": out})
-}
-
-// mmLSPRailRanges turns a 1-based inclusive line range into one SMALL range
-// per covered line: start of line through the end of the line's FIRST WORD
-// (its first run of non-whitespace), capped at mmLSPRailCap UTF-16 units.
-//
-// The shape is carl's readability call, arrived at twice. Zed draws every
-// diagnostic as a wavy underline and gives an extension no
-// background-highlight channel, so a single block-spanning diagnostic put a
-// squiggle under every word of a marked block — "makes it unreadable". The
-// first replacement underlined only the leading indent (first rune when
-// unindented), which Zed renders so faintly that carl's report was "there
-// are no markers" — a squiggle under one character or under whitespace is
-// invisible in practice. So the rail covers the first word: enough glyphs to
-// catch the eye on every covered line, still never running through the body
-// of the text, and because every covered line carries its own diagnostic,
-// hover and the drop code action still work anywhere in the block.
-//
-// A whitespace-only or empty line keeps a zero-width range at column 0 —
-// nothing to draw under, but the line still intersects codeAction requests.
-//
-// Characters are UTF-16 code units, LSP's default position encoding. The cap
-// and the word walk both advance by RUNE, measured in UTF-16 units, so a
-// word opening with an emoji is never cut mid-surrogate-pair.
-func mmLSPRailRanges(lines []string, start, end int) []lspRange {
-	var out []lspRange
-	for l := start; l <= end && l-1 < len(lines); l++ {
-		if l < 1 {
-			continue
-		}
-		out = append(out, lspRange{
-			Start: lspPosition{Line: l - 1, Character: 0},
-			End:   lspPosition{Line: l - 1, Character: mmLSPRailEnd(lines[l-1])},
-		})
-	}
-	return out
-}
-
-// mmLSPRailCap bounds the WORD portion of the rail in UTF-16 units: long
-// enough that a keyword-led line reads as marked, short enough that a long
-// identifier does not turn the rail back into the block underline it
-// replaced. The indent is not counted against it — cap the total and a
-// deeply indented line's rail ends inside its own whitespace, which is the
-// invisible shape this function exists to avoid.
-const mmLSPRailCap = 16
-
-// mmLSPRailEnd is the rail's end column for one line: the UTF-16 length of
-// the leading whitespace plus the first word (its first run of
-// non-whitespace, capped at mmLSPRailCap). A line with no word at all —
-// empty, or only whitespace — ends at 0, a zero-width range: there is
-// nothing to draw under, and the line still intersects codeAction requests.
-func mmLSPRailEnd(line string) int {
-	ws, word := 0, 0
-	for _, r := range line {
-		w := len(utf16.Encode([]rune{r}))
-		if r == ' ' || r == '\t' {
-			if word > 0 {
-				break
-			}
-			ws += w
-			continue
-		}
-		if word+w > mmLSPRailCap {
-			break
-		}
-		word += w
-	}
-	if word == 0 {
-		return 0
-	}
-	return ws + word
-}
-
-// mmLSPMessage is the line Zed shows on hover. It carries the item id (so the
-// code action's title and the `k mm drop <id>` verb name the same thing), the
-// commit the mark is anchored to, and when it was made — the three facts that
-// answer "what is this and can I trust it" without a round trip to the board.
-func mmLSPMessage(it mmLSPItem) string {
-	where := "dirty"
-	if it.Anchor != nil && it.Anchor.AnchorKind != "" && it.Anchor.AnchorKind != "dirty" {
-		where = it.Anchor.AnchorKind
-		if sha := it.Anchor.AnchorSHA; sha != "" {
-			if len(sha) > 7 {
-				sha = sha[:7]
-			}
-			where += " " + sha
-		}
-	}
-	msg := fmt.Sprintf("read mark mm %d · %s", it.ID, where)
-	if it.CreatedAt > 0 {
-		msg += " · marked " + time.UnixMilli(it.CreatedAt).Local().Format("2006-01-02")
-	}
-	return msg
-}
-
 // --- code action + command ---
 
 type lspCodeActionParams struct {
@@ -949,27 +816,24 @@ func (s *mmLSPServer) codeAction(id json.RawMessage, raw json.RawMessage) {
 		return
 	}
 	actions := make([]lspCodeAction, 0, 1)
-	seen := make(map[int64]bool)
-	for _, d := range s.diags[p.TextDocument.URI] {
-		// Line-granular intersection: a mark publishes one rail diagnostic
-		// per covered line, so a cursor anywhere on one of those lines is on
-		// the mark — the rail's columns are deliberately not consulted. The
-		// per-line shape also means one mark can intersect a multi-line
-		// request several times over; `seen` keeps that one action, not N.
-		if d.diag.Range.Start.Line > p.Range.End.Line || p.Range.Start.Line > d.diag.Range.End.Line {
-			continue
+	if doc := s.docs[p.TextDocument.URI]; doc != nil && doc.ok {
+		for _, m := range s.locateDocMarks(doc) {
+			// Line-granular intersection against the mark's located span —
+			// there are no published diagnostics to key on any more, so the
+			// action is derived from the same locate the color build uses,
+			// which is what keeps "which mark is under the cursor" one
+			// answer. A cursor anywhere on a covered line is on the mark;
+			// columns are deliberately not consulted.
+			if m.start-1 > p.Range.End.Line || p.Range.Start.Line > m.end-1 {
+				continue
+			}
+			title := fmt.Sprintf("drop read mark (mm %d)", m.it.ID)
+			actions = append(actions, lspCodeAction{
+				Title:   title,
+				Kind:    "quickfix",
+				Command: &lspCommand{Title: title, Command: mmLSPDropCommand, Arguments: []any{m.it.ID}},
+			})
 		}
-		if seen[d.id] {
-			continue
-		}
-		seen[d.id] = true
-		title := fmt.Sprintf("drop read mark (mm %d)", d.id)
-		actions = append(actions, lspCodeAction{
-			Title:       title,
-			Kind:        "quickfix",
-			Diagnostics: []lspDiagnostic{d.diag},
-			Command:     &lspCommand{Title: title, Command: mmLSPDropCommand, Arguments: []any{d.id}},
-		})
 	}
 	s.respond(id, actions)
 }
@@ -1007,15 +871,11 @@ func (s *mmLSPServer) executeCommand(id json.RawMessage, raw json.RawMessage) {
 		s.respondError(id, lspInternalError, err.Error())
 		return
 	}
-	// The one moment the cache is provably wrong is right now, and EVERY open
-	// document is republished rather than just this one: the same mark can be
-	// visible in more than one buffer (the primary checkout and a cell
-	// worktree of the same repo), and republishing only the requesting
-	// document would leave the other still drawing a mark that no longer
-	// exists.
+	// The one moment the cache is provably wrong is right now, so it is
+	// force-refetched: the dropped mark's bar disappears on the client's next
+	// color pull (edit, scroll, reopen — there is no push channel for
+	// colors), and that pull must not be answered from a list still carrying
+	// the mark carl just watched himself drop.
 	s.mmItems(true)
-	for uri := range s.docs {
-		s.publish(uri)
-	}
 	s.respond(id, nil)
 }
