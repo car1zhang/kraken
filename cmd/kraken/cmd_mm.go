@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -398,10 +399,10 @@ func runMMNote(f mmNoteFields) (string, error) {
 	return mmWriteLine(raw, "noted", "noted"), nil
 }
 
-const mmGetUsage = "usage: k mm get [--all]"
+const mmGetUsage = "usage: k mm get [--all] [--file <path>]"
 
-// runMMGet is `k mm get [--all]`: GET /api/mm — prints {"items": [...]}
-// straight through, newest first.
+// runMMGet is `k mm get [--all] [--file <path>]`: GET /api/mm — prints
+// {"items": [...]} straight through, newest first.
 //
 // The DEFAULT is live items only, and `--all` is what widens it to include
 // the invalidated ones. That way round because the common read is "what do I
@@ -409,18 +410,67 @@ const mmGetUsage = "usage: k mm get [--all]"
 // carl knew that has since stopped being true — and putting them in the
 // default answer would make every read carry claims the model has already
 // withdrawn.
+//
+// --file narrows to code marks anchored in one file — the read an agent makes
+// before explaining that file, citing it, or briefing a diagram over it. The
+// path is resolved exactly the way `k mm mark` resolves its capture pair
+// (mmGetFileQuery), so the query asks about the same identity the marks were
+// stored under.
 func runMMGet(args []string) ([]byte, error) {
 	all := false
-	for _, a := range args {
-		if a != "--all" {
-			return nil, fmt.Errorf("%s (unexpected argument %q)", mmGetUsage, a)
+	file := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--all":
+			all = true
+		case "--file":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("%s (--file needs a value)", mmGetUsage)
+			}
+			i++
+			file = args[i]
+		default:
+			return nil, fmt.Errorf("%s (unexpected argument %q)", mmGetUsage, args[i])
 		}
-		all = true
 	}
-	if all {
-		return qfGet("/api/mm")
+	q := url.Values{}
+	if !all {
+		q.Set("live", "1")
 	}
-	return qfGet("/api/mm?live=1")
+	if file != "" {
+		f, wt := mmGetFileQuery(file)
+		q.Set("file", f)
+		if wt != "" {
+			q.Set("worktree", wt)
+		}
+	}
+	return qfGet("/api/mm?" + q.Encode())
+}
+
+// mmGetFileQuery turns --file's path into the (file, worktree) query pair:
+// absolute against the cwd, then re-rooted onto the git root found by walking
+// up from the FILE's own directory — mmGitRoot, the same walk capture and the
+// LSP use, so all three surfaces answer "which file is this" identically. The
+// returned worktree is that root (the server derives the repo half from it
+// with the same rule the mark route applies); no root anywhere, or a path
+// that will not resolve, degrades to the path as typed with no worktree — a
+// path-only match server-side, never an error, because a filtered read that
+// refuses is worse than one that matches a little loosely.
+func mmGetFileQuery(file string) (string, string) {
+	abs := file
+	if !filepath.IsAbs(abs) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return filepath.ToSlash(strings.TrimPrefix(file, "./")), ""
+		}
+		abs = filepath.Join(cwd, file)
+	}
+	if root, ok := mmGitRoot(filepath.Dir(abs)); ok {
+		if rel, err := filepath.Rel(root, abs); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel), root
+		}
+	}
+	return filepath.ToSlash(strings.TrimPrefix(file, "./")), ""
 }
 
 // mmWriteLine renders a write's confirmation from the server's own response:

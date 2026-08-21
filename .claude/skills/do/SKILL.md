@@ -153,7 +153,7 @@ Two truthfulness rules, both from measured failures, because this is the one art
 
 ### 8. Report Back
 
-- **Search carl's mental model before writing the report or the summary** — `k graph search "<subject>"` (and `k mm get` where the raw items matter): abstract what he already knows, spell out what he is unfamiliar with. Mandated, not suggested — measured across 15 days, agents never pulled spontaneously. This binds `90-build-report.md`'s prose too.
+- **Search carl's mental model before writing the report or the summary** — `k graph search "<subject>"` (and `k mm get` where the raw items matter): abstract what he already knows, spell out what he is unfamiliar with. Mandated, not suggested — measured across 15 days, agents never pulled spontaneously. This binds `90-build-report.md`'s prose too. The per-file half is equally mandated: before explaining a file or citing a code ref in anything carl reads, run `k mm get --file <path>` for that file — the exact lines he has read there decide whether the reference gets a clause or a walkthrough — and any teammate brief that produces carl-facing prose citing code carries the same mandate.
 - One short summary in chat: what shipped, which P0 answers shaped it, what verification was run,
   and the headline discrepancy if there was one.
 - Link `90-build-report.md` and `00-overview.md` — do not re-summarize either in chat.
