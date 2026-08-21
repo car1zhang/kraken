@@ -399,7 +399,11 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		"they are tomorrow's evidence — while a session that STRADDLES the ceiling is read\n" +
 		"whole and its post-ceiling tail comes back tomorrow, expected rather than a bug\n" +
 		"(two earlier passes, 2026-08-01 and 2026-08-02, each had to rediscover the\n" +
-		"ceiling). The floor is where the last pass stopped, so a row is normally\n" +
+		"ceiling). Every timestamp the digest emits — `FirstTS`, `LastTS`,\n" +
+		"`FileFirstTS` — is unix millis too: compare them as INTEGERS, because an\n" +
+		"ISO-parse ceiling check silently no-ops (the parse fails, nothing is set\n" +
+		"aside) and two later passes each rediscovered that the hard way.\n" +
+		"The floor is where the last pass stopped, so a row is normally\n" +
 		"read exactly once. The skill names the two seams where it is not, and what to do\n" +
 		"about each: a long enough gap between passes drops the oldest evidence entirely,\n" +
 		"and a note written between this job's creation and your sweep comes back\n" +
