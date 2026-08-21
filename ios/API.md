@@ -1231,12 +1231,21 @@ own shell and his Zed capture task. It is off the board's hot payload
 entirely — no key on a job object, no board-cache interaction — with its own
 view and its own poll, exactly the artifact library's posture.
 
-### `GET /api/mm[?live=1]` → `{"items": [MMItem]}` (api/mm.go)
+### `GET /api/mm[?live=1][&file=<path>[&worktree=<abs>]]` → `{"items": [MMItem]}` (api/mm.go)
 
 The whole model, newest first — `created_at` descending, `id` descending as
 the tiebreak. `?live=1` narrows to items that have not been invalidated;
 anything else means EVERYTHING, invalidated included, because those are half
 the point. `items` is always present and never `null`.
+
+`?file=` (additive, contract unchanged) narrows to CODE marks whose anchor
+names that repo-relative path — the read an agent makes before explaining a
+file, citing it, or briefing a diagram over it. `?worktree=` (an absolute
+local path) resolves the repo half of the identity through the same rule the
+mark route uses, so a filtered read from any checkout of a repo matches marks
+made in any other; without it the path matches alone, with the combined
+`repo/path` spelling accepted. `k mm get --file <path>` is the CLI front and
+does the worktree resolution itself. iOS does not send these params.
 
 | key | type | optionality | notes |
 |---|---|---|---|

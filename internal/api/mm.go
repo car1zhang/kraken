@@ -508,6 +508,23 @@ func mmListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	live := r.URL.Query().Get("live") == "1"
+	// ?file= narrows to CODE marks whose anchor names that path — the read an
+	// agent makes before explaining a file, citing it, or briefing a diagram
+	// over it ("which exact lines has carl read here"). Notes and artifact
+	// marks have no path, so under the filter they are simply not the
+	// question being asked. ?worktree= (an absolute local path) resolves the
+	// repo half through mmRepoName — the SAME identity rule the mark route
+	// applies to its own worktree — so a filtered read from a cell worktree
+	// matches marks made in the primary checkout, exactly as the marks
+	// themselves do. Without it, the path matches alone, with `repo/path`
+	// accepted for hand-typed disambiguation.
+	fileFilter := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(r.URL.Query().Get("file"))), "./")
+	repoFilter := ""
+	if fileFilter != "" {
+		if wt := strings.TrimSpace(r.URL.Query().Get("worktree")); wt != "" {
+			repoFilter = mmRepoName(wt)
+		}
+	}
 	rows, err := st.ListMMItems(!live)
 	if err != nil {
 		util.LogEvent("web", "error", "mm-list", "mm-list: "+err.Error())
@@ -535,6 +552,13 @@ func mmListHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		util.LogEvent("web", "error", "mm-list", "mm-list anchors: "+err.Error())
+		// Decoration on the plain list, but the SELECTOR under ?file= — an
+		// unreadable anchor table there would return an empty list that reads
+		// as "carl has read nothing here", which is the one wrong answer.
+		if fileFilter != "" {
+			webJSON(w, http.StatusInternalServerError, map[string]string{"error": "code anchors unreadable: " + err.Error()})
+			return
+		}
 	}
 	items := make([]webMMItem, 0, len(rows))
 	for _, it := range rows {
@@ -542,9 +566,24 @@ func mmListHandler(w http.ResponseWriter, r *http.Request) {
 		if a, ok := byItem[it.ID]; ok {
 			anchor = &a
 		}
+		if fileFilter != "" && (anchor == nil || !mmAnchorMatchesFile(*anchor, repoFilter, fileFilter)) {
+			continue
+		}
 		items = append(items, webMMItemFrom(it, anchor))
 	}
 	webJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// mmAnchorMatchesFile is `?file=` deciding whether one code anchor names the
+// asked-about file. With a repo (derived from ?worktree=) both halves of the
+// identity must match; without one the path alone decides, with the combined
+// `repo/path` spelling accepted so a hand query can disambiguate a name like
+// `README.md` that exists in every repo.
+func mmAnchorMatchesFile(a store.MMCodeAnchor, repo, file string) bool {
+	if repo != "" {
+		return a.Repo == repo && a.Path == file
+	}
+	return a.Path == file || a.Repo+"/"+a.Path == file
 }
 
 // --- GET /api/mm/snapshot?id=N ---
