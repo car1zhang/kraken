@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -222,21 +223,29 @@ type mmLSPDiag struct {
 type mmLSPServer struct {
 	out io.Writer
 
-	// wmu is belt and braces. This server runs on ONE goroutine — the read
-	// loop reads, dispatches and writes — so nothing here is contended, and
-	// none of the state below is guarded either. Anyone adding a background
-	// refresh (a poll ticker is the obvious one) must guard `docs`, `diags`,
-	// `roots`, `items`, `fetched` and `warned` too; this mutex is not a
-	// promise that concurrent access is already handled.
+	// wmu guards the WRITER alone: one frame's bytes reach out contiguously.
+	// It is ordered strictly under mu — a frame is only ever written while mu
+	// is held (or from the single-threaded pre-loop), and wmu never acquires
+	// anything — so the two cannot deadlock.
 	wmu sync.Mutex
+
+	// mu guards every field below it. The server ran on ONE goroutine until
+	// the poll ticker (mmLSPPoll) arrived — the read loop reads, dispatches
+	// and writes, and the ticker is the second goroutine the old wmu comment
+	// warned would need real locking: the read loop takes mu around each
+	// message's dispatch, the ticker takes it around applying a fetch, and
+	// the HTTP fetch itself happens OUTSIDE mu on the ticker (a dead serve
+	// must stall the tick, never the protocol loop).
+	mu sync.Mutex
 
 	docs  map[string]*mmLSPDoc
 	diags map[string][]mmLSPDiag
 	roots map[string]string // worktree root -> repo identity
 
-	items   []mmLSPItem
-	fetched time.Time
-	warned  bool
+	items    []mmLSPItem
+	itemsRaw []byte // last successful fetch's body, the ticker's change test
+	fetched  time.Time
+	warned   bool
 
 	initialized bool
 	gotShutdown bool
@@ -260,6 +269,9 @@ func newMMLSPServer(out io.Writer) *mmLSPServer {
 // every window close.
 func runMMLSP(in io.Reader, out io.Writer) error {
 	s := newMMLSPServer(out)
+	done := make(chan struct{})
+	defer close(done)
+	go s.poll(done)
 	r := bufio.NewReader(in)
 	for {
 		payload, err := core.ReadLSPFrame(r)
@@ -279,9 +291,70 @@ func runMMLSP(in io.Reader, out io.Writer) error {
 			s.respondError(json.RawMessage("null"), lspParseError, "malformed JSON-RPC message")
 			continue
 		}
-		if stop, err := s.handle(msg); stop {
+		s.mu.Lock()
+		stop, err := s.handle(msg)
+		s.mu.Unlock()
+		if stop {
 			return err
 		}
+	}
+}
+
+// mmLSPPollInterval is how often the poll ticker refetches the mark list. A
+// mark carl makes on the board or with the capture keybind appears in an
+// UNTOUCHED buffer within this long — before the ticker existed it appeared
+// on the next edit, save or reopen, which read as "adding marks does
+// nothing" whenever carl was only looking.
+const mmLSPPollInterval = 5 * time.Second
+
+// poll is the background refresh: every tick, refetch the mark list and
+// republish every open document IF the list changed. The fetch runs outside
+// mu — a dead serve stalls the tick, never the protocol loop — and the
+// change test is on the response's raw bytes (item order is stable,
+// created_at DESC), so an unchanged model costs no publishes at all.
+//
+// A FAILED fetch clears the marks, exactly as the event-driven path does:
+// the published set is the state, and keeping the last good list would draw
+// marks that may have been dropped minutes ago. The same tick discipline
+// makes the outage self-healing in both directions — serve down blanks every
+// open buffer within a tick (plus one log line), serve back repaints them
+// within a tick, neither needing a keystroke.
+func (s *mmLSPServer) poll(done <-chan struct{}) {
+	t := time.NewTicker(mmLSPPollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+		}
+		s.mu.Lock()
+		idle := len(s.docs) == 0 || !s.initialized || s.gotShutdown
+		s.mu.Unlock()
+		if idle {
+			continue
+		}
+		raw, items, err := mmLSPFetch()
+		s.mu.Lock()
+		s.fetched = time.Now()
+		if err != nil {
+			if s.items != nil || s.itemsRaw != nil {
+				s.items, s.itemsRaw = nil, nil
+				for uri := range s.docs {
+					s.publish(uri)
+				}
+			}
+			s.logOnce("kraken mm: " + jobs.ServeBaseURL() + " unreachable, read marks are not being shown (" + err.Error() + ")")
+		} else {
+			s.warned = false
+			if !bytes.Equal(raw, s.itemsRaw) {
+				s.items, s.itemsRaw = items, raw
+				for uri := range s.docs {
+					s.publish(uri)
+				}
+			}
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -345,6 +418,13 @@ func (s *mmLSPServer) handle(msg lspMessage) (stop bool, err error) {
 		s.didClose(msg.Params)
 	case "textDocument/codeAction":
 		s.codeAction(msg.ID, msg.Params)
+	case "textDocument/documentColor":
+		s.documentColor(msg.ID, msg.Params)
+	case "textDocument/colorPresentation":
+		// No presentations to offer: the "colors" are read-mark highlights,
+		// not values a user edits. An empty list is the protocol's way to
+		// say so; not answering would hang the client's request.
+		s.respond(msg.ID, []any{})
 	case "workspace/executeCommand":
 		s.executeCommand(msg.ID, msg.Params)
 	default:
@@ -371,6 +451,7 @@ func (s *mmLSPServer) initializeResult() any {
 				"save":      map[string]any{"includeText": false},
 			},
 			"codeActionProvider":     true,
+			"colorProvider":          true,
 			"executeCommandProvider": map[string]any{"commands": []string{mmLSPDropCommand}},
 		},
 		"serverInfo": map[string]any{"name": "kraken-mm", "version": util.Build()},
@@ -613,7 +694,10 @@ func mmLSPRepoName(root string) string {
 // --- the mark list ---
 
 // mmItems returns the live mental model, refetched at most every
-// mmLSPItemTTL. force is what a drop uses.
+// mmLSPItemTTL. force is what a drop uses. Called with mu held, like every
+// state reader here; the poll ticker's per-tick fetch stamps `fetched` too,
+// so in practice this TTL path almost never dials — the ticker keeps the
+// list fresher than the TTL requires and this remains as the fallback.
 //
 // EVERY failure returns an empty list and stamps the clock. Empty means the
 // caller publishes zero diagnostics, which is the honest rendering of "kraken
@@ -626,23 +710,32 @@ func (s *mmLSPServer) mmItems(force bool) []mmLSPItem {
 		return s.items
 	}
 	s.fetched = time.Now()
-	raw, err := qfGet("/api/mm?live=1")
+	raw, items, err := mmLSPFetch()
 	if err != nil {
-		s.items = nil
+		s.items, s.itemsRaw = nil, nil
 		s.logOnce("kraken mm: " + jobs.ServeBaseURL() + " unreachable, read marks are not being shown (" + err.Error() + ")")
 		return nil
+	}
+	s.items, s.itemsRaw = items, raw
+	s.warned = false
+	return s.items
+}
+
+// mmLSPFetch is one GET + decode of the live model, touching no server
+// state — the shared half of mmItems and the poll ticker, which need the
+// same read but hold the lock at different times around it.
+func mmLSPFetch() ([]byte, []mmLSPItem, error) {
+	raw, err := qfGet("/api/mm?live=1")
+	if err != nil {
+		return nil, nil, err
 	}
 	var page struct {
 		Items []mmLSPItem `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &page); err != nil {
-		s.items = nil
-		s.logOnce("kraken mm: could not read the mental model from " + jobs.ServeBaseURL() + " (" + err.Error() + ")")
-		return nil
+		return nil, nil, err
 	}
-	s.items = page.Items
-	s.warned = false
-	return s.items
+	return raw, page.Items, nil
 }
 
 // --- diagnostics ---
@@ -657,33 +750,102 @@ func (s *mmLSPServer) publish(uri string) {
 	var found []mmLSPDiag
 	if doc := s.docs[uri]; doc != nil && doc.ok {
 		lines := strings.Split(strings.ReplaceAll(doc.text, "\r\n", "\n"), "\n")
-		for _, it := range s.mmItems(false) {
-			if it.Source != "code" || it.Anchor == nil {
-				continue
-			}
-			if it.Anchor.Repo != doc.repo || it.Anchor.Path != doc.rel {
-				continue
-			}
-			start, end, ok := locateMark(doc.text, it)
-			if !ok {
-				// Not in the buffer: no diagnostic. A local edit hides the
-				// mark rather than killing it — MMVerifyPass owns invalidation,
-				// and it asks the question against origin/main.
-				continue
-			}
-			for _, r := range mmLSPRailRanges(lines, start, end) {
-				found = append(found, mmLSPDiag{id: it.ID, diag: lspDiagnostic{
+		for _, m := range s.locateDocMarks(doc) {
+			for _, r := range mmLSPRailRanges(lines, m.start, m.end) {
+				found = append(found, mmLSPDiag{id: m.it.ID, diag: lspDiagnostic{
 					Range:    r,
 					Severity: lspSeverityHint,
 					Source:   "kraken-mm",
-					Message:  mmLSPMessage(it),
-					Data:     map[string]any{"mm": it.ID},
+					Message:  mmLSPMessage(m.it),
+					Data:     map[string]any{"mm": m.it.ID},
 				}})
 			}
 		}
 	}
 	s.diags[uri] = found
 	s.sendDiags(uri, found)
+}
+
+// locatedMark is one live code mark found in one open buffer: the item and
+// the 1-based inclusive line span it occupies there.
+type locatedMark struct {
+	it         mmLSPItem
+	start, end int
+}
+
+// locateDocMarks finds every live code mark in one open document — the shared
+// half of the diagnostics build and the documentColor build, so the two
+// layers can never disagree about which lines are marked. A mark not located
+// in the buffer contributes nothing: a local edit hides the mark rather than
+// killing it — MMVerifyPass owns invalidation, and it asks the question
+// against origin/main.
+func (s *mmLSPServer) locateDocMarks(doc *mmLSPDoc) []locatedMark {
+	var out []locatedMark
+	for _, it := range s.mmItems(false) {
+		if it.Source != "code" || it.Anchor == nil {
+			continue
+		}
+		if it.Anchor.Repo != doc.repo || it.Anchor.Path != doc.rel {
+			continue
+		}
+		start, end, ok := locateMark(doc.text, it)
+		if !ok {
+			continue
+		}
+		out = append(out, locatedMark{it: it, start: start, end: end})
+	}
+	return out
+}
+
+// mmLSPBarColor is the highlight painted behind every marked line when Zed's
+// `lsp_document_colors` setting is `background` — the bar rendering carl
+// asked for, and the one channel that can paint a background at all:
+// diagnostics only ever draw as underlines, and Zed renders LSP
+// documentColor results as a background, a border, or a swatch inlay per
+// that setting. A soft blue at low alpha, so it reads as a wash over either
+// theme rather than a block of paint.
+var mmLSPBarColor = map[string]any{"red": 0.33, "green": 0.60, "blue": 0.90, "alpha": 0.16}
+
+// documentColor serves textDocument/documentColor: one ColorInformation per
+// covered line of every mark located in the buffer, ranging over the WHOLE
+// line, colored mmLSPBarColor. Under `lsp_document_colors: "background"` Zed
+// paints each range's background — read lines render as tinted bars; the
+// default `inlay` renders a small swatch at the line start instead, also a
+// usable marker. Zed pulls colors on open and on edit and defines no
+// server-initiated refresh for them (unlike inlay hints, code lenses and
+// semantic tokens, which all have workspace/*/refresh requests — measured
+// against Zed's lsp_store, which registers exactly those three), so this
+// layer can lag a brand-new mark until the buffer is next touched; the poll
+// ticker's diagnostics are the always-fresh layer.
+func (s *mmLSPServer) documentColor(id json.RawMessage, raw json.RawMessage) {
+	var p struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		s.respondError(id, lspInvalidParams, "bad documentColor params")
+		return
+	}
+	out := []map[string]any{}
+	if doc := s.docs[p.TextDocument.URI]; doc != nil && doc.ok {
+		lines := strings.Split(strings.ReplaceAll(doc.text, "\r\n", "\n"), "\n")
+		for _, m := range s.locateDocMarks(doc) {
+			for l := m.start; l <= m.end && l-1 < len(lines); l++ {
+				if l < 1 {
+					continue
+				}
+				out = append(out, map[string]any{
+					"range": lspRange{
+						Start: lspPosition{Line: l - 1, Character: 0},
+						End:   lspPosition{Line: l - 1, Character: len(utf16.Encode([]rune(lines[l-1])))},
+					},
+					"color": mmLSPBarColor,
+				})
+			}
+		}
+	}
+	s.respond(id, out)
 }
 
 // locateMark finds one mark's lines in a buffer, resolving the AMBIGUOUS case
