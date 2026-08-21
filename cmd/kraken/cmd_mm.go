@@ -62,7 +62,7 @@ func cmdMM(args []string) {
 		if err != nil {
 			util.Die("%v", err)
 		}
-		line, err := runMMMark(f, os.Getenv(mmSelectionEnv))
+		line, err := runMMMark(f, mmSelection())
 		if err != nil {
 			util.Die("%v", err)
 		}
@@ -114,16 +114,36 @@ func cmdMM(args []string) {
 	}
 }
 
-// mmSelectionEnv is where `mark` reads the selected text from. An environment
-// variable rather than an argument because the Zed task passes
-// `${ZED_SELECTED_TEXT:}` and a whole marked block can be far past what an
-// exec argument list will carry — and because a selection full of quotes,
-// backticks and newlines is exactly what shell-quoting mangles.
+// mmSelectionEnv is where `mark` reads the selected text from — an
+// environment variable rather than an argument because a whole marked block
+// can be far past what an exec argument list will carry, and because a
+// selection full of quotes, backticks and newlines is exactly what
+// shell-quoting mangles.
 //
-// An UNSET variable is not an error: an empty selection means "the single line
-// at start_row", which the server reads off disk. That is the commonest way
-// this verb is reached — a keystroke with the cursor parked on a line.
+// mmSelection falls back to ZED_SELECTED_TEXT, which Zed itself EXPORTS into
+// every task's environment (task_template.rs extends the spawned env with
+// all task variables), so the Zed task never mentions the selection at all.
+// It used to: the task command carried
+// `KRAKEN_MM_SELECTION="${ZED_SELECTED_TEXT:}"`, and Zed substitutes
+// `${VAR:}` TEXTUALLY into the command string before any shell parses it —
+// so the first selection containing a double quote broke out of the
+// assignment and ran the rest of carl's selected test code as shell (exit
+// 127, `command not found: cell-demo-2:`), and newlines were mangled
+// besides. An env value has neither problem. KRAKEN_MM_SELECTION stays
+// first so a hand invocation or a non-Zed editor can still pass a selection
+// explicitly.
+//
+// Neither variable set is not an error: an empty selection means "the single
+// line at start_row", which the server reads off disk. That is the commonest
+// way this verb is reached — a keystroke with the cursor parked on a line.
 const mmSelectionEnv = "KRAKEN_MM_SELECTION"
+
+func mmSelection() string {
+	if s := os.Getenv(mmSelectionEnv); s != "" {
+		return s
+	}
+	return os.Getenv("ZED_SELECTED_TEXT")
+}
 
 const mmMarkUsage = "usage: k mm mark --worktree <dir> --file <path relative to it> --start-row <n> [--note \"...\"]  (selection read from $" + mmSelectionEnv + ")"
 

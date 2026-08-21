@@ -8,7 +8,7 @@ Add to `~/.config/zed/tasks.json`:
 [
   {
     "label": "kraken: mark lines read",
-    "command": "KRAKEN_MM_SELECTION=\"${ZED_SELECTED_TEXT:}\" kraken mm mark --worktree \"$ZED_WORKTREE_ROOT\" --file \"$ZED_RELATIVE_FILE\" --start-row \"$ZED_ROW\"",
+    "command": "kraken mm mark --worktree \"$ZED_WORKTREE_ROOT\" --file \"$ZED_RELATIVE_FILE\" --start-row \"$ZED_ROW\"",
     "hide": "on_success",
     "reveal": "no_focus",
     "allow_concurrent_runs": true,
@@ -28,6 +28,7 @@ Add to `~/.config/zed/keymap.json` (pick any free binding):
 Mechanics worth knowing, so the behavior does not surprise:
 
 - `$ZED_ROW` is the 1-based row of the selection's START (regardless of drag direction); the end row is derived server-side from the selection's newline count, with the whole-line trailing-newline shape handled. With NO selection, the single line at the cursor is marked (read from disk — save first).
+- The selection reaches kraken through Zed's own task environment (`ZED_SELECTED_TEXT`, which Zed exports to every task it spawns), never through the command line — the command must NOT mention it. Zed substitutes `${VAR}` references textually into the command before any shell parses it, so a command carrying the selection breaks on the first selection containing a double quote (the selected text runs as shell) and mangles newlines; the env value carries both intact.
 - Bind `task::Spawn` with the explicit `task_name`, never `task::Rerun` — rerun reuses stale variable values (open Zed bug).
 - `hide: on_success` + `reveal: no_focus` keeps failures visible (kraken serve down, bad path) without stealing focus on success.
 - The mark's identity keys on repo + relative path, so marking from a kraken cell worktree and from `~/Developer/<repo>` are the same mark. The anchor ladder prefers `origin/main`, then the merge base, then `HEAD`; unsaved or uncommitted content falls back to a text-only "dirty" anchor, flagged as such.
@@ -49,7 +50,7 @@ Zed builds the extension to WebAssembly on install, so the first run needs a Rus
 
 ### What it looks like
 
-A marked block renders as a thin **left-edge rail**: one hint-severity diagnostic per covered line, ranging over only that line's leading indentation (the first character on an unindented line) — so the block's exact extent is visible without a wavy underline running through the text itself. Zed has no background-highlight channel for extensions — diagnostics are the one thing a language server can paint, and Zed always draws them as underlines — so the design underlines the one part of a line nobody reads. Hint severity because a mark is a fact about you and not a problem with the code. Hover any covered line, or open the diagnostic, and the message reads:
+A marked block renders as a **left-edge rail**: one hint-severity diagnostic per covered line, underlining that line's leading indentation plus its **first word** (capped, so a long identifier never turns it back into a full underline) — the block's exact extent stays visible line by line without a squiggle running through the body of the text. Zed has no background-highlight channel for extensions — diagnostics are the one thing a language server can paint, and Zed always draws them as underlines — and an underline needs a few glyphs under it to be visible at all (a rail over the indent alone measured invisible in practice), so the first word is the compromise. Hint severity because a mark is a fact about you and not a problem with the code. Hover any covered line, or open the diagnostic, and the message reads:
 
 ```
 read mark mm 2 · origin-main e5c3497 · marked 2026-08-20
