@@ -388,7 +388,7 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		"\n" +
 		"## The sweep window\n" +
 		"\n" +
-		"Everything from **" + sinceISO + "** to **" + untilISO + "**.\n" +
+		"Everything from **" + sinceISO + "** to **" + untilISO + "** (ceiling in millis: " + fmt.Sprint(until) + ").\n" +
 		"\n" +
 		"- Feedback: `kraken feedback sweep --since " + fmt.Sprint(since) + "`\n" +
 		"- Transcripts: every claude session touched in that window.\n" +
@@ -399,10 +399,12 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		"they are tomorrow's evidence — while a session that STRADDLES the ceiling is read\n" +
 		"whole and its post-ceiling tail comes back tomorrow, expected rather than a bug\n" +
 		"(two earlier passes, 2026-08-01 and 2026-08-02, each had to rediscover the\n" +
-		"ceiling). Every timestamp the digest emits — `FirstTS`, `LastTS`,\n" +
-		"`FileFirstTS` — is unix millis too: compare them as INTEGERS, because an\n" +
-		"ISO-parse ceiling check silently no-ops (the parse fails, nothing is set\n" +
-		"aside) and two later passes each rediscovered that the hard way.\n" +
+		"ceiling). The digest's timestamps — `FirstTS`/`LastTS` and\n" +
+		"`FileFirstTS`/`FileLastTS` — are unix millis too: compare them as INTEGERS.\n" +
+		"The type is its own trap, separate from the ceiling itself: an ISO-parse\n" +
+		"ceiling check silently no-ops (the parse fails, nothing is set aside), and\n" +
+		"the 2026-08-20 and 2026-08-21 passes each lost their first ceiling check to\n" +
+		"exactly that.\n" +
 		"The floor is where the last pass stopped, so a row is normally\n" +
 		"read exactly once. The skill names the two seams where it is not, and what to do\n" +
 		"about each: a long enough gap between passes drops the oldest evidence entirely,\n" +
