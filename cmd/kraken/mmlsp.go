@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -222,21 +223,29 @@ type mmLSPDiag struct {
 type mmLSPServer struct {
 	out io.Writer
 
-	// wmu is belt and braces. This server runs on ONE goroutine — the read
-	// loop reads, dispatches and writes — so nothing here is contended, and
-	// none of the state below is guarded either. Anyone adding a background
-	// refresh (a poll ticker is the obvious one) must guard `docs`, `diags`,
-	// `roots`, `items`, `fetched` and `warned` too; this mutex is not a
-	// promise that concurrent access is already handled.
+	// wmu guards the WRITER alone: one frame's bytes reach out contiguously.
+	// It is ordered strictly under mu — a frame is only ever written while mu
+	// is held (or from the single-threaded pre-loop), and wmu never acquires
+	// anything — so the two cannot deadlock.
 	wmu sync.Mutex
+
+	// mu guards every field below it. The server ran on ONE goroutine until
+	// the poll ticker (mmLSPPoll) arrived — the read loop reads, dispatches
+	// and writes, and the ticker is the second goroutine the old wmu comment
+	// warned would need real locking: the read loop takes mu around each
+	// message's dispatch, the ticker takes it around applying a fetch, and
+	// the HTTP fetch itself happens OUTSIDE mu on the ticker (a dead serve
+	// must stall the tick, never the protocol loop).
+	mu sync.Mutex
 
 	docs  map[string]*mmLSPDoc
 	diags map[string][]mmLSPDiag
 	roots map[string]string // worktree root -> repo identity
 
-	items   []mmLSPItem
-	fetched time.Time
-	warned  bool
+	items    []mmLSPItem
+	itemsRaw []byte // last successful fetch's body, the ticker's change test
+	fetched  time.Time
+	warned   bool
 
 	initialized bool
 	gotShutdown bool
@@ -260,6 +269,9 @@ func newMMLSPServer(out io.Writer) *mmLSPServer {
 // every window close.
 func runMMLSP(in io.Reader, out io.Writer) error {
 	s := newMMLSPServer(out)
+	done := make(chan struct{})
+	defer close(done)
+	go s.poll(done)
 	r := bufio.NewReader(in)
 	for {
 		payload, err := core.ReadLSPFrame(r)
@@ -279,9 +291,70 @@ func runMMLSP(in io.Reader, out io.Writer) error {
 			s.respondError(json.RawMessage("null"), lspParseError, "malformed JSON-RPC message")
 			continue
 		}
-		if stop, err := s.handle(msg); stop {
+		s.mu.Lock()
+		stop, err := s.handle(msg)
+		s.mu.Unlock()
+		if stop {
 			return err
 		}
+	}
+}
+
+// mmLSPPollInterval is how often the poll ticker refetches the mark list. A
+// mark carl makes on the board or with the capture keybind appears in an
+// UNTOUCHED buffer within this long — before the ticker existed it appeared
+// on the next edit, save or reopen, which read as "adding marks does
+// nothing" whenever carl was only looking.
+const mmLSPPollInterval = 5 * time.Second
+
+// poll is the background refresh: every tick, refetch the mark list and
+// republish every open document IF the list changed. The fetch runs outside
+// mu — a dead serve stalls the tick, never the protocol loop — and the
+// change test is on the response's raw bytes (item order is stable,
+// created_at DESC), so an unchanged model costs no publishes at all.
+//
+// A FAILED fetch clears the marks, exactly as the event-driven path does:
+// the published set is the state, and keeping the last good list would draw
+// marks that may have been dropped minutes ago. The same tick discipline
+// makes the outage self-healing in both directions — serve down blanks every
+// open buffer within a tick (plus one log line), serve back repaints them
+// within a tick, neither needing a keystroke.
+func (s *mmLSPServer) poll(done <-chan struct{}) {
+	t := time.NewTicker(mmLSPPollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+		}
+		s.mu.Lock()
+		idle := len(s.docs) == 0 || !s.initialized || s.gotShutdown
+		s.mu.Unlock()
+		if idle {
+			continue
+		}
+		raw, items, err := mmLSPFetch()
+		s.mu.Lock()
+		s.fetched = time.Now()
+		if err != nil {
+			if s.items != nil || s.itemsRaw != nil {
+				s.items, s.itemsRaw = nil, nil
+				for uri := range s.docs {
+					s.publish(uri)
+				}
+			}
+			s.logOnce("kraken mm: " + jobs.ServeBaseURL() + " unreachable, read marks are not being shown (" + err.Error() + ")")
+		} else {
+			s.warned = false
+			if !bytes.Equal(raw, s.itemsRaw) {
+				s.items, s.itemsRaw = items, raw
+				for uri := range s.docs {
+					s.publish(uri)
+				}
+			}
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -613,7 +686,10 @@ func mmLSPRepoName(root string) string {
 // --- the mark list ---
 
 // mmItems returns the live mental model, refetched at most every
-// mmLSPItemTTL. force is what a drop uses.
+// mmLSPItemTTL. force is what a drop uses. Called with mu held, like every
+// state reader here; the poll ticker's per-tick fetch stamps `fetched` too,
+// so in practice this TTL path almost never dials — the ticker keeps the
+// list fresher than the TTL requires and this remains as the fallback.
 //
 // EVERY failure returns an empty list and stamps the clock. Empty means the
 // caller publishes zero diagnostics, which is the honest rendering of "kraken
@@ -626,23 +702,32 @@ func (s *mmLSPServer) mmItems(force bool) []mmLSPItem {
 		return s.items
 	}
 	s.fetched = time.Now()
-	raw, err := qfGet("/api/mm?live=1")
+	raw, items, err := mmLSPFetch()
 	if err != nil {
-		s.items = nil
+		s.items, s.itemsRaw = nil, nil
 		s.logOnce("kraken mm: " + jobs.ServeBaseURL() + " unreachable, read marks are not being shown (" + err.Error() + ")")
 		return nil
+	}
+	s.items, s.itemsRaw = items, raw
+	s.warned = false
+	return s.items
+}
+
+// mmLSPFetch is one GET + decode of the live model, touching no server
+// state — the shared half of mmItems and the poll ticker, which need the
+// same read but hold the lock at different times around it.
+func mmLSPFetch() ([]byte, []mmLSPItem, error) {
+	raw, err := qfGet("/api/mm?live=1")
+	if err != nil {
+		return nil, nil, err
 	}
 	var page struct {
 		Items []mmLSPItem `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &page); err != nil {
-		s.items = nil
-		s.logOnce("kraken mm: could not read the mental model from " + jobs.ServeBaseURL() + " (" + err.Error() + ")")
-		return nil
+		return nil, nil, err
 	}
-	s.items = page.Items
-	s.warned = false
-	return s.items
+	return raw, page.Items, nil
 }
 
 // --- diagnostics ---
