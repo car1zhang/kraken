@@ -50,7 +50,9 @@ Zed builds the extension to WebAssembly on install, so the first run needs a Rus
 
 ### What it looks like
 
-A marked block renders as a **left-edge rail**: one hint-severity diagnostic per covered line, underlining that line's leading indentation plus its **first word** (capped, so a long identifier never turns it back into a full underline) — the block's exact extent stays visible line by line without a squiggle running through the body of the text. Zed has no background-highlight channel for extensions — diagnostics are the one thing a language server can paint, and Zed always draws them as underlines — and an underline needs a few glyphs under it to be visible at all (a rail over the indent alone measured invisible in practice), so the first word is the compromise. Hint severity because a mark is a fact about you and not a problem with the code. Hover any covered line, or open the diagnostic, and the message reads:
+A marked block renders as **tinted line bars**: the server reports every covered line as an LSP *document color* (a soft blue at low alpha), and with `"lsp_document_colors": "background"` in `settings.json` Zed paints each line's background with it — an actual highlight, the one channel that can paint one, since diagnostics only ever draw as underlines. (Without that setting Zed's default renders a small color swatch at each marked line instead; the setting also applies to real color values, e.g. CSS literals, which then render as backgrounds too.) Zed pulls colors on open and on edit and has no server-initiated refresh for them, so a brand-new mark's bar can lag until the buffer is next touched.
+
+Under the bars, each covered line also carries one **hint-severity diagnostic** over its leading indentation plus its first word — the layer that hovers, holds the drop action, and refreshes on the 5-second poll even in an untouched buffer. Hint severity because a mark is a fact about you and not a problem with the code. Hover any covered line, or open the diagnostic, and the message reads:
 
 ```
 read mark mm 2 · origin-main e5c3497 · marked 2026-08-20

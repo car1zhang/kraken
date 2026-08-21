@@ -418,6 +418,13 @@ func (s *mmLSPServer) handle(msg lspMessage) (stop bool, err error) {
 		s.didClose(msg.Params)
 	case "textDocument/codeAction":
 		s.codeAction(msg.ID, msg.Params)
+	case "textDocument/documentColor":
+		s.documentColor(msg.ID, msg.Params)
+	case "textDocument/colorPresentation":
+		// No presentations to offer: the "colors" are read-mark highlights,
+		// not values a user edits. An empty list is the protocol's way to
+		// say so; not answering would hang the client's request.
+		s.respond(msg.ID, []any{})
 	case "workspace/executeCommand":
 		s.executeCommand(msg.ID, msg.Params)
 	default:
@@ -444,6 +451,7 @@ func (s *mmLSPServer) initializeResult() any {
 				"save":      map[string]any{"includeText": false},
 			},
 			"codeActionProvider":     true,
+			"colorProvider":          true,
 			"executeCommandProvider": map[string]any{"commands": []string{mmLSPDropCommand}},
 		},
 		"serverInfo": map[string]any{"name": "kraken-mm", "version": util.Build()},
@@ -742,33 +750,102 @@ func (s *mmLSPServer) publish(uri string) {
 	var found []mmLSPDiag
 	if doc := s.docs[uri]; doc != nil && doc.ok {
 		lines := strings.Split(strings.ReplaceAll(doc.text, "\r\n", "\n"), "\n")
-		for _, it := range s.mmItems(false) {
-			if it.Source != "code" || it.Anchor == nil {
-				continue
-			}
-			if it.Anchor.Repo != doc.repo || it.Anchor.Path != doc.rel {
-				continue
-			}
-			start, end, ok := locateMark(doc.text, it)
-			if !ok {
-				// Not in the buffer: no diagnostic. A local edit hides the
-				// mark rather than killing it — MMVerifyPass owns invalidation,
-				// and it asks the question against origin/main.
-				continue
-			}
-			for _, r := range mmLSPRailRanges(lines, start, end) {
-				found = append(found, mmLSPDiag{id: it.ID, diag: lspDiagnostic{
+		for _, m := range s.locateDocMarks(doc) {
+			for _, r := range mmLSPRailRanges(lines, m.start, m.end) {
+				found = append(found, mmLSPDiag{id: m.it.ID, diag: lspDiagnostic{
 					Range:    r,
 					Severity: lspSeverityHint,
 					Source:   "kraken-mm",
-					Message:  mmLSPMessage(it),
-					Data:     map[string]any{"mm": it.ID},
+					Message:  mmLSPMessage(m.it),
+					Data:     map[string]any{"mm": m.it.ID},
 				}})
 			}
 		}
 	}
 	s.diags[uri] = found
 	s.sendDiags(uri, found)
+}
+
+// locatedMark is one live code mark found in one open buffer: the item and
+// the 1-based inclusive line span it occupies there.
+type locatedMark struct {
+	it         mmLSPItem
+	start, end int
+}
+
+// locateDocMarks finds every live code mark in one open document — the shared
+// half of the diagnostics build and the documentColor build, so the two
+// layers can never disagree about which lines are marked. A mark not located
+// in the buffer contributes nothing: a local edit hides the mark rather than
+// killing it — MMVerifyPass owns invalidation, and it asks the question
+// against origin/main.
+func (s *mmLSPServer) locateDocMarks(doc *mmLSPDoc) []locatedMark {
+	var out []locatedMark
+	for _, it := range s.mmItems(false) {
+		if it.Source != "code" || it.Anchor == nil {
+			continue
+		}
+		if it.Anchor.Repo != doc.repo || it.Anchor.Path != doc.rel {
+			continue
+		}
+		start, end, ok := locateMark(doc.text, it)
+		if !ok {
+			continue
+		}
+		out = append(out, locatedMark{it: it, start: start, end: end})
+	}
+	return out
+}
+
+// mmLSPBarColor is the highlight painted behind every marked line when Zed's
+// `lsp_document_colors` setting is `background` — the bar rendering carl
+// asked for, and the one channel that can paint a background at all:
+// diagnostics only ever draw as underlines, and Zed renders LSP
+// documentColor results as a background, a border, or a swatch inlay per
+// that setting. A soft blue at low alpha, so it reads as a wash over either
+// theme rather than a block of paint.
+var mmLSPBarColor = map[string]any{"red": 0.33, "green": 0.60, "blue": 0.90, "alpha": 0.16}
+
+// documentColor serves textDocument/documentColor: one ColorInformation per
+// covered line of every mark located in the buffer, ranging over the WHOLE
+// line, colored mmLSPBarColor. Under `lsp_document_colors: "background"` Zed
+// paints each range's background — read lines render as tinted bars; the
+// default `inlay` renders a small swatch at the line start instead, also a
+// usable marker. Zed pulls colors on open and on edit and defines no
+// server-initiated refresh for them (unlike inlay hints, code lenses and
+// semantic tokens, which all have workspace/*/refresh requests — measured
+// against Zed's lsp_store, which registers exactly those three), so this
+// layer can lag a brand-new mark until the buffer is next touched; the poll
+// ticker's diagnostics are the always-fresh layer.
+func (s *mmLSPServer) documentColor(id json.RawMessage, raw json.RawMessage) {
+	var p struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		s.respondError(id, lspInvalidParams, "bad documentColor params")
+		return
+	}
+	out := []map[string]any{}
+	if doc := s.docs[p.TextDocument.URI]; doc != nil && doc.ok {
+		lines := strings.Split(strings.ReplaceAll(doc.text, "\r\n", "\n"), "\n")
+		for _, m := range s.locateDocMarks(doc) {
+			for l := m.start; l <= m.end && l-1 < len(lines); l++ {
+				if l < 1 {
+					continue
+				}
+				out = append(out, map[string]any{
+					"range": lspRange{
+						Start: lspPosition{Line: l - 1, Character: 0},
+						End:   lspPosition{Line: l - 1, Character: len(utf16.Encode([]rune(lines[l-1])))},
+					},
+					"color": mmLSPBarColor,
+				})
+			}
+		}
+	}
+	s.respond(id, out)
 }
 
 // locateMark finds one mark's lines in a buffer, resolving the AMBIGUOUS case
