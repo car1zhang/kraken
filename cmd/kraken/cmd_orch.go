@@ -68,7 +68,7 @@ func cmdOrch(args []string) {
 // not have to go find the other somewhere else.
 const (
 	orchInboxUsage = "usage: k orch inbox (no arguments — it prints the oldest 100 unacked items, with the full count in `total`)"
-	orchAckUsage   = `usage: k orch ack --ids 42,43 --disposition "steered:csv-export-timeout"`
+	orchAckUsage   = `usage: k orch ack --ids 42,43 --disposition 'steered:csv-export-timeout' (single-quote the disposition — $ inside double quotes is silently eaten)`
 )
 
 // runOrchInbox is `k orch inbox`: GET /api/orch/inbox — prints {"items":

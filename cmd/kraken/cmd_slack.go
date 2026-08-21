@@ -73,7 +73,7 @@ func cmdSlack(args []string) {
 // so both required flags stay visible whichever check fails — an ack missing
 // either one is refused, and a caller who just mistyped a flag should not
 // have to go find the other somewhere else.
-const slackAckUsage = `usage: k slack ack --ids 42,43 --disposition "drafted:csv-export-timeout"`
+const slackAckUsage = `usage: k slack ack --ids 42,43 --disposition 'drafted:csv-export-timeout' (single-quote the disposition — $ inside double quotes is silently eaten)`
 
 // runSlackInbox is `k slack inbox`: GET /api/slack/inbox — prints
 // {"messages": [...]} (every unacked row, arrival order) straight through.

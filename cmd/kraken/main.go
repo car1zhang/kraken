@@ -297,10 +297,11 @@ Commands:
                       same way as 'k questions'. inbox prints every unacked
                       message as JSON, arrival order — one row per DM, group
                       DM or direct @-mention the daemon's poll pass has seen;
-                      ack --ids 42,43 --disposition "<what happened>" retires
+                      ack --ids 42,43 --disposition '<what happened>' retires
                       a batch (all-or-nothing: an unknown or already-acked id
                       fails the whole call), and the disposition is the only
-                      record of WHY a message left, so it is required;
+                      record of WHY a message left, so it is required
+                      (single-quote it — $ inside double quotes is eaten);
                       status prints whether Slack is configured, when the poll
                       last ran, and how deep the backlog is. Reading Slack
                       itself is the daemon's job — no token is reachable here.
@@ -312,11 +313,12 @@ Commands:
                       without shipping it whole — one row per transition the
                       daemon enqueued (a job went blocked, a cell died or
                       went unhealthy, a PR merged, a daemon-created job
-                      failed to start); ack --ids 42,43 --disposition "<what
-                      happened>" retires a batch (all-or-nothing: an unknown
+                      failed to start); ack --ids 42,43 --disposition '<what
+                      happened>' retires a batch (all-or-nothing: an unknown
                       or already-acked id fails the whole call), and the
                       disposition is the only record of WHY an item left, so
-                      it is required.
+                      it is required (single-quote it — $ inside double
+                      quotes is eaten).
   k board get [slug]  kronos-side read of the job board, proxied the same
                       way: with no slug it prints the whole /api/board
                       payload the web board and the phone render, with a slug
