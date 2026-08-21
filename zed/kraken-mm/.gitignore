@@ -4,3 +4,11 @@
 # extension directory is self-contained — everything cargo needs to know about
 # this crate is in this directory.
 /target/
+
+# Zed's `install dev extension` compiles the crate and writes the built wasm
+# INTO this source directory, then loads it from here — so the file must stay
+# on disk for the installed dev extension to keep working, and must stay out
+# of git for the same reason /target/ does. Untracked, it also read as a
+# dirty tree to `k update`'s clean-tree preflight, blocking every update on a
+# machine that had merely installed the extension.
+extension.wasm
