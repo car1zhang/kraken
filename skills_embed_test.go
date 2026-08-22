@@ -197,11 +197,44 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"Deferred", "Verification",
 			// the cell section: the crew, the gate, the handoff to /pr
 			"Inside A Kraken Cell", "hephaestus", "athena-logic", "athena-edge", "athena-style",
-			// the crew are TEAMMATES, but the skill must POINT at the brief
-			// for the contract rather than copy it — pinning the copy here
-			// is what would freeze a duplicate the brief later drifts from
+			// the crew are TEAMMATES. The ownership line moved on 2026-08-21:
+			// the brief keeps the crew's IDENTITY (what makes an agent a
+			// teammate, when delegating is earned, teardown-on-acceptance,
+			// solo) and the skill still points there for it — while the
+			// dispatch/join/arbitration/review CHOREOGRAPHY is this file's,
+			// stated crew-neutrally in its step 4 and bound to the crew names
+			// in the cell bullet. The choreography pins below split three
+			// ways, and saying which is which is the point: most are clauses
+			// crew_test.go BANS from the brief, so if they vanish from here
+			// they exist nowhere; "BOTH gates have cleared its slice" is
+			// deliberately in BOTH places — TestZeusBriefBlindTestAuthorship
+			// pins it PRESENT in the brief, the same treatment the verdict
+			// names get below — so its pin here is a duplication guard, not a
+			// sole-home guard; and the three athena dimension descriptions
+			// plus the read-the-implementation rule carry no counter-ban (a
+			// ban on prose that generic would false-positive), so this list
+			// is their only pin anywhere.
 			"The crew is the brief's crew, and the crew are TEAMMATES",
 			"read it there rather than re-deriving it here",
+			"Dispatch the implementer and the test authors in ONE message",
+			"no test list",
+			"never the failing assertion",
+			"a requirement nobody set", "a genuine product decision",
+			"never resolve a contract defect by sending an author to read the implementation",
+			"ONE new Agent call, not three", "only the flagging variant(s)",
+			"BOTH gates have cleared its slice",
+			"correctness, bugs, and scalability", "edge cases and boundary conditions",
+			"CLAUDE.md compliance",
+			// step 9's acceptance sentence — the reworded survivor of the
+			// brief's "gate that judges its output" elaboration, whose old
+			// wording appears in no skill; this pin is what keeps the rule's
+			// one home from silently vanishing while its brief-side ban stands
+			"once the join has produced no `code bug` against it",
+			// the researcher-spawn mechanics — a separate move from the
+			// choreography above: the brief's Explore-roster/heredoc clause
+			// dropped to a pointer, and this file's researcher bullet is a
+			// home the pointer relies on
+			"`Explore` does not have one",
 			// The blind-authorship split, anchored on both sides of the line.
 			// The first four are skill-ONLY: crew_test.go's forbidden-token
 			// list pins the brief not to name the artifact, its columns, or
