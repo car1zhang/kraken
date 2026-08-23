@@ -423,6 +423,19 @@ func TestEdgeIrisBriefNeverAuthorizesQueueing(t *testing.T) {
 	}
 }
 
+// TestEdgeIrisBriefStaysLean mirrors TestEdgeKronosBriefStaysLean, at the same
+// deliberately generous number and for the same reason: a system prompt
+// re-sent on every turn of an eternal conversation must stay lean, and this
+// catches a brief that swallowed a skill, not one that gained a paragraph.
+// iris had no size guard at all before 2026-08-21 — the only standing brief
+// without one.
+func TestEdgeIrisBriefStaysLean(t *testing.T) {
+	edgeSandboxHome(t)
+	if n := len(irisBrief()); n > 16000 {
+		t.Fatalf("irisBrief() is %d bytes — a system prompt re-sent every turn must stay lean", n)
+	}
+}
+
 // --- irisSpawnCommand ------------------------------------------------------
 
 // edgeIrisCommand builds one spawn command with IrisDir already present, so a

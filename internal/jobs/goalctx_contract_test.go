@@ -362,9 +362,10 @@ func TestContractGoalCtxTruncatesOnWholeGoalBoundaries(t *testing.T) {
 }
 
 // TestContractGoalCtxKeepsTheStagedBriefUnderItsCeiling is the integration
-// half: cell.go stages zeusBrief + goalContext + graphContext, and the ceiling
-// is the brief's own 13,500 plus each injection's declared cap. Stated as a
-// sum so a future bump shows up here as one number to update.
+// half: cell.go stages zeusBrief + goalContext + graphContext, and the
+// ceiling is zeusBriefCeiling (crew_test.go's shared const — a ratchet there
+// moves this sum with it, with no number here to go stale) plus each
+// injection's declared cap.
 func TestContractGoalCtxKeepsTheStagedBriefUnderItsCeiling(t *testing.T) {
 	st := contractGoalCtxStore(t)
 	week, day := contractGoalCtxPeriods(t)
@@ -377,7 +378,7 @@ func TestContractGoalCtxKeepsTheStagedBriefUnderItsCeiling(t *testing.T) {
 	}
 	j := contractGoalCtxJob(t, st, "ceiling", "")
 
-	const ceiling = 13_500 + graphContextBytes + goalContextBytes
+	const ceiling = zeusBriefCeiling + graphContextBytes + goalContextBytes
 	if n := len(zeusBrief(j) + goalContext(j) + graphContext(j)); n > ceiling {
 		t.Errorf("staged brief is %d bytes, over the %d-byte combined ceiling", n, ceiling)
 	}

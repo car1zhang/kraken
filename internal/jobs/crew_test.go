@@ -56,15 +56,13 @@ func TestZeusBrief(t *testing.T) {
 		"Never mark an entry ADDRESSED unless the skill you are following for this job",
 		"does NOT stop reading as open once you have handled it",
 		".claude/skills/dream/SKILL.md",
-		// three named single-dimension athena review variants, dispatched in
-		// parallel, with a targeted (not full) re-review on a blocking finding.
-		// Two of them are already live from the authoring dispatch, so the
-		// round is one message but only ONE Agent call — spawning three would
-		// duplicate a bare name and hand the "fix your own assertion" brief to
-		// an agent that never wrote a test.
+		// three named single-dimension athena review variants. The review
+		// round's choreography (one-message dispatch, the ONE-Agent-call
+		// resume, re-review scoping) moved to do/SKILL.md's cell section on
+		// 2026-08-21 — pinned there by TestSkillsOwnTheCellContract, banned
+		// from returning here by TestZeusBriefDoesNotRestateSkills — so the
+		// brief pins only the variants' NAMES, which are cell identity.
 		"athena-logic", "athena-edge", "athena-style",
-		"dispatched in parallel in one message", "ONE new Agent call, not three",
-		"re-review with only the flagging variant(s)",
 		// the crew are TEAMMATES: named Agent-tool spawns with real panes, not
 		// anonymous in-process subagents
 		"delegate real work, it goes to TEAMMATES",
@@ -178,6 +176,34 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			{"symbol · signature · obligations · owner", "do"},
 			{"_contract_test.go", "do"},
 			{"_edge_test.go", "do"},
+			// the crew dispatch/join/arbitration/review choreography, moved
+			// out of the brief 2026-08-21 (the brief keeps the classification
+			// CORE: the three verdict names, arbitrate-before-review, the
+			// both-gates hold). The bans come in pairs where the brief's old
+			// wording and do/SKILL.md's differ — Contains is case-sensitive,
+			// so banning only the skill's casing ("author but do not run")
+			// would wave a verbatim restore of the brief's own sentence
+			// ("They author but do NOT run") straight back in, and the
+			// review round measured exactly that gap on three tokens. One
+			// entry is a drop rather than a move: "gate that judges its
+			// output" appears in no skill — the RULE survives reworded in
+			// do/SKILL.md's step 9 acceptance sentence (pinned by
+			// TestSkillsOwnTheCellContract) — and its ban keeps the
+			// elaboration from re-accreting here.
+			{"in ONE message", "do"},
+			{"In the SAME message that dispatches", "do"},
+			{"dispatched in parallel in one message", "do"},
+			{"NO test list", "do"},
+			{"author but do not run", "do"},
+			{"author but do NOT run", "do"},
+			{"EVERY implementation slice", "do"},
+			{"EVERY hephaestus slice is done", "do"},
+			{"ONE new Agent call", "do"},
+			{"flagging variant", "do"},
+			{"a requirement nobody set", "do"},
+			{"a genuine product decision", "do"},
+			{"never the failing assertion", "do"},
+			{"gate that judges its output", "do"},
 			// PR mechanics — pr/SKILL.md
 			{"gh pr create", "pr"},
 			{"checkout -B", "pr"},
@@ -204,6 +230,18 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 	}
 }
 
+// zeusBriefCeiling is the live ceiling, package-visible so the two
+// combined-budget mirrors (goalctx_contract_test.go and graphctx_test.go)
+// reference it instead of restating it. Both used to hardcode `13_500 + …`
+// with a "shows up here as one number to update" comment, and that mechanism
+// had already failed once — at the 14,000 ceiling both mirrors still said
+// 13,500, silently TIGHTENING the combined-budget guard: the mirrors bounded
+// a budget 500 bytes below the one they claim to mirror, a false-alarm risk
+// rather than a hole, but drift either way — exactly the restated-constant
+// class the TestZeusBriefStaysLean comment below documents. A shared const
+// cannot drift.
+const zeusBriefCeiling = 13_500
+
 // TestZeusBriefStaysLean caps the brief well under tmux's ~16KB command limit.
 // spawnCommand means that limit no longer applies to the brief at all, so this
 // is not a mechanism guard — it is a second, cruder net under
@@ -221,8 +259,9 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // touch, so EACH move is reasoned out below rather than left to the diff.
 //
 // Deliberately no literal ceiling value appears in the prose from here on as
-// a statement of the CURRENT limit: `const ceiling` is the one place the live
-// number lives. Section headings and the history list below do name specific
+// a statement of the CURRENT limit: `zeusBriefCeiling` above (which the
+// test's local `const ceiling` aliases) is the one place the live number
+// lives. Section headings and the history list below do name specific
 // values, and they should — they describe a MOVE, which a later raise cannot
 // falsify, rather than a state that goes stale the moment one happens. Three separate figures
 // in this block went stale across the reviews of one change, which is what
@@ -392,6 +431,50 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // and reasoned about, rather than the 13 and 31 that made the last two changes
 // arithmetic.
 //
+// RESTATED 2026-08-21 — THE FIRST RATCHET DOWN, under the standing
+// instruction below. The condition two sections up said that at 14,000 the
+// answer is not another raise, and it fired: PR #249's mm per-file sentence
+// had taken the measured headroom to 40 bytes (13,960 at the 48-char slug),
+// one clause from red. The discharge was the third option the condition did
+// not name — a TRIM that moves procedure back out, then a ratchet DOWN so the
+// space cannot be silently re-spent. What moved: the crew
+// dispatch/join/arbitration/review choreography (three paragraphs, ~2.6KB)
+// went to do/SKILL.md — whose main body already stated it crew-neutrally and
+// whose cell section now binds the names — leaving a ~1.2KB residual core
+// (who authors what, the three verdict names, arbitrate-before-review, the
+// both-gates hold, teardown-on-acceptance: what zeus must classify a failure
+// with WITHOUT re-reading a skill mid-phase); the Explore-roster/heredoc
+// researcher mechanics dropped to a pointer (the researcher-spawning skills
+// state them); and word-level trims in the lightly-pinned paragraphs
+// funded the rest. TestSkillsOwnTheCellContract pins every moved clause in
+// do/SKILL.md and TestZeusBriefDoesNotRestateSkills bans the distinctive ones
+// from returning, so the move is one-way. Measured: 13,960 -> 11,938 at the
+// 48-char slug (11,924 before the review round's fix pass re-pointed the
+// researcher pointer at the reader's own skill; interpolation count unchanged
+// at nine). The ceiling moved 14,000 -> 13,500: the smallest multiple of 500
+// leaving at least 1,500 bytes
+// of headroom over the measurement, headroom being the point of the exercise
+// — 40 bytes had made every future contract line a forced trade. The WHY
+// 13,000 section's judgment that the choreography was "irreducible" brief
+// content is hereby revised, not contradicted: what it argued was that the
+// crew CONTRACT lives here, and the contract's classification core still
+// does; what left is the procedure that had accreted around it, which
+// do/SKILL.md had come to state independently anyway — the exact duplication
+// this file's sibling test exists to prevent, invisible only because the
+// token list did not happen to name those clauses. One of WHY 13,000's four
+// named irreducibles did leave with it: "when they run" — the author-run
+// barrier — which this revision reclassifies as procedure, since it fires at
+// one moment of one phase with do/SKILL.md freshly read.
+//
+// AND THE CONDITION GOING FORWARD, replacing the discharged one: the ceiling
+// only ratchets DOWN from here. A future author who needs bytes trims or
+// moves procedure first, exactly as this change did; a RAISE — any raise, to
+// any number — requires the second brief-level test the old condition
+// described (a structural bound on procedure creep: paragraph count, or a
+// per-section budget), built first, in the same change. A third option now
+// exists as precedent and should be preferred to both: find the skill that
+// already owns the procedure and finish the move.
+//
 // One practice note, because it cost real confusion here. THREE figures in
 // this block had silently drifted before anyone re-measured — TEN
 // interpolations when the answer was nine, a 12,450 that was 12,682 by then,
@@ -401,11 +484,11 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // note has for itself. Restate the measurement on every change that touches
 // the brief; do not trust the last one written down, including this one.
 //
-// And at the headroom the restatement above records, "the next brief change is
-// a trim" stops being advice and becomes arithmetic: 13 bytes is a couple of
-// words. Any clause added anywhere in zeusBrief has to be paid for by a
-// deletion somewhere in it, and the paragraph the clause belongs to is where
-// to look first — that is how the 2026-07-31 change's own trims were found.
+// However much headroom the latest restatement records — read the live number
+// from the test log, never from prose here — the way to fund a new clause is
+// unchanged: look for a trim in the paragraph the clause belongs to first
+// (that is how the 2026-07-31 change's own trims were found), and reach for a
+// move to the owning skill when a trim is not enough.
 //
 // What the net still catches is unchanged, and the scale is worth stating
 // because it is what makes the ceiling a bound rather than a formality: the
@@ -415,7 +498,7 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 // Anyone raising this number again should be able to write a paragraph like
 // this one first.
 func TestZeusBriefStaysLean(t *testing.T) {
-	const ceiling = 14_000
+	const ceiling = zeusBriefCeiling
 	// Longer than any slug observed on this machine (41), so the nine
 	// interpolations make every real brief cheaper than this one.
 	slug := strings.Repeat("s", 48)
@@ -647,10 +730,13 @@ func TestZeusBriefSubagentHygiene(t *testing.T) {
 	// the lint run, the athena round — and the fix round then has to address
 	// an agent that no longer exists, which is exactly what the skills forbid
 	// (they require resuming the same one). This clause is what sequences the
-	// two rules; without it they contradict each other.
+	// two rules; without it they contradict each other. (The which-gate
+	// elaboration left the brief in two directions: its slice half is
+	// do/SKILL.md's both-gates binding, and its rendering-agent half lives in
+	// aim's and info's done-test rules — the PRINCIPLE and the both-gates
+	// hold stay resident, pinned here and in TestZeusBriefBlindTestAuthorship.)
 	for _, want := range []string{
 		"the moment its work is ACCEPTED, not the moment it reports done",
-		"the gate that judges its output has passed it",
 		"Once accepted, stop it immediately",
 	} {
 		if !strings.Contains(brief, want) {
@@ -681,10 +767,9 @@ func TestZeusBriefTeammatesNotSubagents(t *testing.T) {
 	for _, want := range []struct{ token, why string }{
 		// (a) the crew is named as teammates, not subagents
 		{"implementation slices to teammates you name hephaestus", "hephaestus is a teammate"},
-		// the authoring pair and the review-only third are introduced in two
-		// different sentences now, so the teammate-ness of each is pinned where
-		// it is actually claimed rather than in one merged phrase.
-		{"dispatch ONE athena-logic and ONE athena-edge", "the test-authoring variants are named agents"},
+		// the authoring pair and the review-only third are pinned where each
+		// is actually claimed rather than in one merged phrase.
+		{"teammates you name athena-logic and athena-edge", "the test-authoring variants are named agents"},
 		{"a third teammate you name athena-style", "the review-only variant is a teammate too"},
 		// (b) the mechanism: a `name` on the Agent tool, and what it buys
 		{"A teammate is an Agent-tool call that passes a `name`", "the teammate mechanism"},
@@ -742,36 +827,29 @@ func TestZeusBriefTeammatesNotSubagents(t *testing.T) {
 //   - the regression carve-out: hephaestus may still pin a defect it fixes, so
 //     the rule needs its boundary stated or it reads as "hephaestus never
 //     touches a test file" and a fixed bug ships unpinned.
-//   - "SAME message": the authors are blind because they start before there is
-//     an implementation to read, not because they promised not to look. A brief
-//     that drops this leaves a promise nobody can audit.
-//   - "do NOT run": tests written against absent code fail for uninteresting
-//     reasons; the barrier is what makes the first real run meaningful.
 //   - the three verdict names: a failing blind test is ambiguous by
 //     construction, and a brief without the trichotomy leaves zeus to invent one
 //     — the tempting invention being "the test must be wrong, weaken it".
-//   - "never send athena to read the implementation": the one resolution that
-//     silently converts every later round back to sighted authorship.
+//     (Deliberately in BOTH the brief and do/SKILL.md — the brief has to be
+//     able to classify a failure without re-reading a skill.)
+//   - "Arbitrate the join BEFORE any review": an author must finish while
+//     still blind — reviewing means reading the implementation.
+//
+// The choreography anchors this test used to hold (same-message dispatch, the
+// author-but-do-not-run barrier, the ONE-Agent-call review round, the silence
+// sub-rules, the fix-brief citation form) moved to do/SKILL.md on 2026-08-21:
+// TestSkillsOwnTheCellContract pins them there, and
+// TestZeusBriefDoesNotRestateSkills bans them from returning here.
 func TestZeusBriefBlindTestAuthorship(t *testing.T) {
 	brief := zeusBrief(&Job{Slug: "blind"})
 	for _, want := range []struct{ token, why string }{
-		{"NO test list", "the slice brief stops enumerating cases"},
 		{"never writes a test for the spec", "the implementer does not author the requirement's tests"},
 		{"regression pin", "…but a defect it fixes may still be pinned"},
 		{"tests bugs, athena tests requirements", "the line between the two"},
-		{"SAME message", "authoring starts before there is code to read"},
-		{"ONE athena-logic and ONE athena-edge", "one authoring pair for the fan-out, not one per slice"},
 		{"no sight of the implementation", "the blindness is stated, not implied"},
-		{"do NOT run", "authoring and running are separate steps"},
-		{"EVERY hephaestus slice is done", "one barrier for the whole fan-out"},
-		{"ONE new Agent call, not three", "the live authors are resumed, not re-spawned"},
 		{"code bug", "verdict 1"},
 		{"test bug", "verdict 2"},
 		{"contract defect", "verdict 3"},
-		{"a requirement nobody set", "silence defaults to a test bug, not an amendment"},
-		{"a genuine product decision", "…and to a contract defect only when it is a real decision"},
-		{"read the implementation", "the resolution that would destroy the property"},
-		{"contract obligation, never the failing assertion", "the test must not become the requirement"},
 		{"BOTH gates have cleared its slice", "the implementer outlives both gates, not just the join"},
 		{"Arbitrate the join BEFORE any review", "an author must finish while still blind"},
 	} {
@@ -786,24 +864,15 @@ func TestZeusBriefBlindTestAuthorship(t *testing.T) {
 	// while the solo brief carried procedure it cannot act on. Deliberately count-free:
 	// this comment has been wrong twice already, each time because an anchor was
 	// added and the number was not.
-	// The four omitted are the bare verdict names and "read the implementation":
-	// generic enough English that unrelated future prose could plausibly contain
-	// one, so asserting their ABSENCE would pin a coincidence rather than a rule.
+	// The omitted are the bare verdict names: generic enough English that
+	// unrelated future prose could plausibly contain one, so asserting their
+	// ABSENCE would pin a coincidence rather than a rule.
 	solo := zeusBrief(&Job{Slug: "blind-solo", Solo: true})
 	for _, want := range []struct{ token, why string }{
-		{"NO test list", "the slice brief stops enumerating cases"},
 		{"never writes a test for the spec", "the implementer does not author the requirement's tests"},
 		{"regression pin", "…but a defect it fixes may still be pinned"},
 		{"tests bugs, athena tests requirements", "the line between the two"},
-		{"SAME message", "authoring starts before there is code to read"},
-		{"ONE athena-logic and ONE athena-edge", "one authoring pair for the fan-out, not one per slice"},
 		{"no sight of the implementation", "the blindness is stated, not implied"},
-		{"do NOT run", "authoring and running are separate steps"},
-		{"EVERY hephaestus slice is done", "one barrier for the whole fan-out"},
-		{"ONE new Agent call, not three", "the live authors are resumed, not re-spawned"},
-		{"a requirement nobody set", "silence defaults to a test bug, not an amendment"},
-		{"a genuine product decision", "…and to a contract defect only when it is a real decision"},
-		{"contract obligation, never the failing assertion", "the test must not become the requirement"},
 		{"BOTH gates have cleared its slice", "the implementer outlives both gates, not just the join"},
 		{"Arbitrate the join BEFORE any review", "an author must finish while still blind"},
 	} {

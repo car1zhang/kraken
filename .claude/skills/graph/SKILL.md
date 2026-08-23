@@ -385,7 +385,9 @@ the brief being wrong is the one thing that goes up immediately.
 Any agent that only READS — surveying what the graph already holds, say — is an unnamed subagent and
 must be spawned `general-purpose` or another type whose roster includes `Write`; **never `Explore`**,
 which has no `Write` tool at all, so a brief naming a report path is unsatisfiable by construction and
-the agent rationalises rather than saying so, while you wait on a file that is never coming.
+the agent rationalises rather than saying so, while you wait on a file that is never coming. Tell it
+that if it has no `Write` tool, or `Write` refuses the path, it writes the report with a Bash heredoc
+(`cat > <path> <<'EOF'`) — read-only bars the graph and the repo, never its own report.
 
 For how to WAIT on several report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait"
 bullet and the sub-bullets under it; it is the one specification of the protocol, and it applies
