@@ -54,12 +54,24 @@ const dreamFirstWindow = 24 * time.Hour
 // into the job body rather than clamping silently.
 const dreamMaxWindow = 7 * 24 * time.Hour
 
+// DreamReportName is the artifact every dream cell writes its night report
+// to — spelled the same way in .claude/skills/dream/SKILL.md. Exported
+// because internal/api's DREAM view resolves the same file: one Go spelling,
+// so the two readers of "does this night have a report" cannot drift apart
+// on the filename alone.
+const DreamReportName = "00-dream-report.md"
+
 // DreamRun is the nightly pass' watermark: what the last pass decided, and
-// the floor the next sweep starts from.
+// the floor the next sweep starts from. Floor and JobID are omitempty as a
+// unit: zero means "no claim" to the fallback below (it gates on Floor > 0),
+// so absent and zero are deliberately one value and a pre-Floor watermark
+// decodes to exactly the no-claim state.
 type DreamRun struct {
-	Date    string `json:"date"`     // local calendar date, "2006-01-02"
-	SweptTo int64  `json:"swept_to"` // unix millis — the floor the NEXT sweep uses
-	Job     string `json:"job"`      // slug created, "" if the night was skipped
+	Date    string `json:"date"`             // local calendar date, "2006-01-02"
+	SweptTo int64  `json:"swept_to"`         // unix millis — the floor the NEXT sweep uses
+	Job     string `json:"job"`              // the job the current claim belongs to, "" if none
+	JobID   int64  `json:"job_id,omitempty"` // Job's immutable jobs.id — the identity the report check resolves, since a slug can be renamed or freed
+	Floor   int64  `json:"floor,omitempty"`  // unix millis — the floor Job was told to sweep; lets the next pass re-sweep when Job died reportless
 }
 
 // ReadDreamRun loads the watermark, degrading EVERY failure — no store
@@ -233,6 +245,20 @@ func runDreamPass(now time.Time, prev DreamRun) (*Job, DreamRun, bool) {
 	today := now.Format(dreamDateLayout)
 	nowMS := now.UnixMilli()
 	since := prev.SweptTo
+	// A created job is not a swept window. SweptTo advances when the night's
+	// job is CREATED, and the pass itself runs later, in a cell — so a job
+	// that died before writing its report leaves its whole window swept zero
+	// times with the floor already past it. Floor records what that job was
+	// told to sweep; when the job produced no 00-dream-report.md, tonight
+	// re-sweeps from there. Re-swept rows are the overlap seam the skill
+	// already handles (a row read twice is the same sighting), so a false
+	// positive here costs deduplication, never duplication — which is why
+	// every unanswerable case in dreamReportExists degrades to "it ran".
+	if prev.Job != "" && prev.Floor > 0 && prev.Floor < since && !dreamReportExists(st, prev) {
+		dlogErr("previous dream pass %s never wrote its report — re-opening its floor %s",
+			prev.Job, time.UnixMilli(prev.Floor).Format(time.RFC3339))
+		since = prev.Floor
+	}
 	if since <= 0 {
 		// <= rather than == 0: a corrupt or hand-edited negative floor would
 		// otherwise render as a 1969 date in the job body and a negative
@@ -286,7 +312,14 @@ func runDreamPass(now time.Time, prev DreamRun) (*Job, DreamRun, bool) {
 		// evidence in the window to lose.
 		dlogEvent("info", "dream-skip", "dream %s: nothing to corroborate (0 feedback, 0 sessions since %s)",
 			today, time.UnixMilli(since).Format(time.RFC3339))
-		return nil, DreamRun{Date: today, SweptTo: nowMS}, true
+		// The claim rides forward here exactly as on the collision path
+		// below. In the common quiet night it is already settled — the gate
+		// above ran over the WIDENED since, so a reportless predecessor's
+		// window was just measured empty — and re-checking a settled claim
+		// later costs one empty overlap. But when dreamReportExists could
+		// not answer (its degrade-to-ran) the claim was never checked at
+		// all, and zeroing it here would be the one path that loses it.
+		return nil, DreamRun{Date: today, SweptTo: nowMS, Job: prev.Job, JobID: prev.JobID, Floor: prev.Floor}, true
 	}
 
 	slug := "dream-" + today
@@ -307,7 +340,11 @@ func runDreamPass(now time.Time, prev DreamRun) (*Job, DreamRun, bool) {
 	// hot path.
 	if existing, err := st.GetJobBySlug(slug); err == nil && existing != nil {
 		dlogEvent("info", "dream-skip", "dream %s: slug %s already taken — skipping tonight", today, slug)
-		return nil, DreamRun{Date: today, SweptTo: prev.SweptTo, Job: ""}, true
+		// prev's claim rides forward untouched: the watermark still
+		// describes the last job actually created against this floor, so a
+		// reportless predecessor keeps its re-sweep claim across a skipped
+		// night instead of losing it to the skip.
+		return nil, DreamRun{Date: today, SweptTo: prev.SweptTo, Job: prev.Job, JobID: prev.JobID, Floor: prev.Floor}, true
 	}
 	j, err := CreateDreamJob(st, slug, since, nowMS, clamped)
 	if err != nil {
@@ -317,7 +354,56 @@ func runDreamPass(now time.Time, prev DreamRun) (*Job, DreamRun, bool) {
 	dlogEvent("info", "dream-job-created", "dream %s: created %s (%d feedback rows, sessions %v, window %s → %s)",
 		today, slug, feedback, sessions,
 		time.UnixMilli(since).Format(time.RFC3339), time.UnixMilli(nowMS).Format(time.RFC3339))
-	return j, DreamRun{Date: today, SweptTo: nowMS, Job: slug}, true
+	return j, DreamRun{Date: today, SweptTo: nowMS, Job: slug, JobID: j.ID, Floor: since}, true
+}
+
+// dreamReportExists reports whether prev's job holds a synced, NON-EMPTY
+// DreamReportName artifact — the pass' deliverable, and so the one durable
+// sign the created job actually ran its sweep. Non-empty matters: the store
+// mirror has no size filter, so a placeholder or a write killed mid-run
+// syncs as a real zero-byte row, and the DREAM view's own reader already
+// counts only `len > 0` as a report — the two readers of one file must not
+// disagree about whether it exists. Every case that cannot answer degrades
+// to TRUE: re-sweeping is the move that needs positive evidence (a job that
+// exists and demonstrably has no report), because a wrongly-kept floor
+// costs one window's evidence exactly once, while this fallback exists to
+// spend the cheaper error — an extra overlapping sweep — only when the loss
+// is real. An ARCHIVED predecessor also reads as ran: archiving is carl's
+// explicit act, and resurrecting its window against his hand would
+// re-litigate a night he closed. A predecessor whose stored state is still
+// "working" is deliberately NOT excused: blocked is derived and never
+// written back, so a cell that wedged at spawn holds "working" in its row
+// forever — the exact predecessor this fallback exists for — and the price
+// is that a pass genuinely still mid-run a full day later gets its window
+// swept again, by a second pass whose rows and verdicts DUPLICATE rather
+// than fold (folding is byte-identical, and two passes word one finding two
+// ways), repeating nightly with a widening window until dreamMaxWindow
+// clamps it or a report lands. Accepted because the alternative loses the
+// window outright: excusing is not deferring — the next created job
+// overwrites the claim — and no stored field distinguishes wedged from
+// healthy. Identity
+// resolves by the immutable JobID when the watermark carries one (a slug
+// can be renamed, or freed by archiving and minted onto a different job),
+// with the slug kept as the fallback for a hand-edited row.
+func dreamReportExists(st *store.Store, prev DreamRun) bool {
+	var j *store.Job
+	var err error
+	if prev.JobID > 0 {
+		j, err = st.GetJobByID(prev.JobID)
+	} else {
+		j, err = st.GetJobBySlug(prev.Job)
+	}
+	if err != nil || j == nil {
+		return true
+	}
+	if j.Archived() {
+		return true
+	}
+	a, err := st.GetArtifact(j.ID, DreamReportName)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && len(a.Bytes) == 0) {
+		return false
+	}
+	return true
 }
 
 // CreateDreamJob writes the night's job row and returns it loaded, for the
