@@ -25,10 +25,6 @@ import (
 // the filter and (with it stripped) the report's date.
 const dreamSlugPrefix = "dream-"
 
-// dreamReportName is the artifact every dream cell writes its night report
-// to — spelled the same way in .claude/skills/dream/SKILL.md.
-const dreamReportName = "00-dream-report.md"
-
 // webDreamReport is one night's report on the wire. Additive endpoint — no
 // apiContract bump. body is the raw markdown, served inline rather than as a
 // URL because a report is one short page and the DREAM view renders every
@@ -56,7 +52,7 @@ func dreamJobHome(j *jobs.Job) string {
 // the normal state of a dream job that is still running.
 func dreamReportBody(j *jobs.Job) (string, bool) {
 	for _, home := range []string{"cell", dreamJobHome(j)} {
-		if data, _, ok := resolveArtifact(j, home, dreamReportName); ok && len(data) > 0 {
+		if data, _, ok := resolveArtifact(j, home, jobs.DreamReportName); ok && len(data) > 0 {
 			return string(data), true
 		}
 	}

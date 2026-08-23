@@ -22,7 +22,7 @@ func seedDreamReport(t *testing.T, st *store.Store, slug, body string) *jobs.Job
 	if body == "" {
 		return j
 	}
-	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: dreamReportName, Bytes: []byte(body), Mtime: 1}}, nil); err != nil {
+	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: jobs.DreamReportName, Bytes: []byte(body), Mtime: 1}}, nil); err != nil {
 		t.Fatalf("SyncArtifacts: %v", err)
 	}
 	return j
