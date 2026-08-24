@@ -1417,7 +1417,9 @@ func waitAvailIdle(t *testing.T) {
 
 // stubNoUsagePass keeps tick()'s first-tick-eager usage poll off the network:
 // it is unrelated to what these tests assert, and a real pass would fetch
-// every account's usage.
+// every account's usage. TestMain already stubs runUsagePass for the whole
+// binary; this local swap is kept as belt-and-braces and as the marker of
+// the tests that reach the eager path, and restores whatever it found.
 func stubNoUsagePass(t *testing.T) {
 	t.Helper()
 	prev := runUsagePass

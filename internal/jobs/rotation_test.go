@@ -35,8 +35,10 @@ func stubRotation(t *testing.T) *[]notifyCall {
 	t.Setenv("HOME", t.TempDir())
 	// usagePassRunning is a process-global atomic shared with the daemon's
 	// own periodic poll (see daemon.go); some daemon tests exercise tick()'s
-	// first-tick-eager path directly against the real UsagePass and its
-	// background goroutine can still be in flight when this test starts.
+	// first-tick-eager path directly, and its background goroutine — a no-op
+	// since TestMain stubs runUsagePass for this binary, but still a
+	// goroutine that flips this flag — can still be in flight when this test
+	// starts.
 	// Force a known state so that lingering goroutine (harmless — it only
 	// flips the flag back on completion) can't make CompareAndSwap below
 	// spuriously fail.
@@ -47,10 +49,11 @@ func stubRotation(t *testing.T) *[]notifyCall {
 
 	var calls []notifyCall
 	notifyFn = func(title, msg string) { calls = append(calls, notifyCall{title, msg}) }
-	// Default to a no-op: nothing in this package kicks a usage pass any
-	// more, but a test that reaches KickUsagePass directly would otherwise
-	// fire a real background network fetch (and race the usagePassRunning
-	// flag against whichever test runs next).
+	// Default to a no-op locally too: TestMain already stubs runUsagePass
+	// for the whole binary, so this is belt-and-braces against a test that
+	// swaps the real pass back in — a real pass here would fire a background
+	// network fetch and race the usagePassRunning flag against whichever
+	// test runs next.
 	runUsagePass = func() error { return nil }
 	return &calls
 }
