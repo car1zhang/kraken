@@ -438,6 +438,34 @@ agent was instructed, and a sentence is cheaper to get wrong than a function. La
 allowed and sometimes right — a subagent definition, a brief, orchestration, real Go — and they
 carry the same obligations any other change would: tests, and the review the cell's brief specifies.
 
+Two of `do/SKILL.md`'s implementation rules bind YOU from the first repo edit, and they are restated
+here rather than pointed at because the pointers do not reach them: this file sends you into
+`do/SKILL.md` step 4 for the shell dialect and the wait protocol, and the brief's own two pointers
+at that file are the crew-choreography line (which lands in step 4's dispatch procedure and the
+cell section) and the phase-2 line a dream job never reaches (no dream job is sent a `/do`), so
+the rules under steps 5 and 6 are the ones nobody reliably arrives at — both were broken by two
+dream leads on two sightings, the second while shipping fixes to this very loop. **Edit repo files
+with the Edit tool, never through Bash.** A `python3 - <<'EOF' … read … replace … write`
+heredoc, a `python3 -c` one-liner, `sed -i`, `perl -pi`, or a `>`/`>>` redirect into a checkout
+is the same banned route whatever idiom it wears: a `str.replace` whose needle matches nothing
+writes the file UNCHANGED and exits 0, so the compound goes on to print your own "applied" line
+and a green gate over the unmodified file, and the diff you then commit is missing the fix your
+report says landed — while `Edit` fails the turn loudly when its `old_string` no longer matches,
+which is the
+whole difference. A NEW repo file goes through `Write`; `CLAUDE.md` and test files are repo
+files, and so is any git checkout, a scratch clone included; and the ban goes verbatim into
+the brief of any agent you let edit the repo, exactly as the dialect line does. **Never filter a
+suite's output through `head`.** `go test -tags sqlite_fts5 ./... 2>&1 | grep -v "^ok" | head -5`
+has reported green over a red tree — a failing package is exactly the noisy one whose `FAIL` line
+falls outside the five-line window — and a trailing `echo "exit: $?"` reports `head`'s status,
+never the suite's.
+Use the count form, `go test -tags sqlite_fts5 ./... 2>&1 | grep -cv "^ok"`, and read the COUNT,
+never `$?` after it: `grep -c` exits 1 on a zero count, so its status is inverted against the
+answer. A non-zero count is the signal to read the FULL output before concluding anything, since
+test-free packages and stray log lines count too — and the tag is not optional, because a tagless
+build has no FTS5 and every store-opening package fails at migration, which is a red count over a
+green tree.
+
 Two hard fences: never `.claude/settings.json` (per-cell, gitignored, kraken-written — never a
 durable improvement), and never anything outside the kraken repo.
 
