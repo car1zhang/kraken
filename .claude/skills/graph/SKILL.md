@@ -272,7 +272,15 @@ sweeps, because the sweep walks the graph, not the batch.
   night's walk sees them as ordinary low-degree nodes; nothing is lost, only deferred. A node a
   previous report already recorded as refused (its
   `## Sweep refusals` section — the format the cell section below specifies) gives
-  its slot to one not yet considered, so a standing backlog cannot pin the head of the queue. For each, ask what existing node it is genuinely related to, and whether that
+  its slot to one not yet considered, so a standing backlog cannot pin the head of the queue —
+  a rule about CONTENTION, in force only when the qualifying low-degree nodes plus this batch's
+  exceed the cap. When they all fit, walk every qualifying node, refused ones included, and list a
+  re-refused node again (the section is this run's refusals, not a cumulative ledger): one run on
+  a twelve-node graph (2026-08-23) yielded the slots of its three standing refusals, found only
+  the single node its own batch had minted to spend them on, refused that too, and closed having
+  linked nothing — a fourth name on a refusal list nothing ever shortens, on a graph whose
+  measured shape was the hub-and-spoke star this section exists to catch. For each, ask what
+  existing node it is genuinely related to, and whether that
   relation stands alone as a fact sentence supported by a node's description, one of this batch's
   episodes, or a live fact the graph already holds. A world-closed edge (`valid_until` set, still
   live) counts toward degree, but is not evidence for a new fact — the world moved past it.
@@ -419,7 +427,9 @@ specific, and it is the only place the cell's real paths appear:
   leave the same report in both), and take the most recent few INGEST reports across the union
   (a revision-mode report has no refusals section and would silently spend one of the slots).
   A flat-only glob has come up empty against a dozen archived reports, leaving the sweep to
-  re-walk every node past nights had already recorded as refused. The sweep
+  re-walk every node past nights had already recorded as refused (a cost only when the pool and
+  this batch overflow the cap — under it that re-walk is the rule, per the sweep bullet above).
+  The sweep
   reads those recent reports for the nodes already recorded as refused — the only cross-run state
   it has. So the sweep's refusals are
   written machine-readably: a `## Sweep refusals` section — heading always present, bare node
