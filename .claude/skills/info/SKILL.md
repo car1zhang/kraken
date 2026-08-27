@@ -43,7 +43,7 @@ at most. Assume the reader wants orientation, not the complete tour. It covers, 
 |---|---|---|
 | The answer | 2-5 sentences | The direct answer to what was asked, up front. |
 | Mental model | 3-6 sentences or a small table | The handful of moving parts and how they relate — the shape a reader needs to reason about the rest. |
-| How it actually flows | 3-8 lines | One concrete pass through the system, real names and values, in order. |
+| How it actually flows | 3-8 lines | One concrete pass through the system, real names and values, in order — real system names; a real person's production data gets invented replacements (see explain-mode discipline). |
 | Where it lives | small table | The 3-8 files/functions that matter, one line each, so the reader can jump into source. |
 | Not confirmed | 0-3 lines | Anything research could not settle. Omit the section entirely when there is nothing. |
 | Go deeper | 3-6 bullets | Named areas you researched but deliberately did not expand, one line each — the menu the reader picks from. |
@@ -89,6 +89,12 @@ generated spec.
   one parenthetical observation at most, or the reader's cue to start an /aim spec.
 - **Cite real code.** File paths (and functions) for every load-bearing claim, so any paragraph
   is jumpable into source. `file.go:120` style is ideal.
+- **Fictionalize person-level production data at first write.** Real system identifiers keep the
+  explanation concrete; a real customer's name, phone, address, account id, call sid, or
+  conversation text pulled from a live system does not enter the artifact, the diagram, or a
+  teammate brief — swap in invented replacements at the first write and say so ("identifiers
+  fictionalized"), and make the label true of every field. The artifact set and the briefs are
+  durable stores no reviewer reads; the git edge is not the boundary.
 - **Verification over assertion.** For a key behavior, say how to SEE it: the test that covers it,
   the log line, the command to run, the fixture that encodes it. One pointer beats a paragraph.
 - **Uncertainty is content, not a question.** Say what you could not confirm, in place, and move on.
