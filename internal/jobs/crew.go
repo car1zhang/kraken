@@ -215,7 +215,7 @@ func zeusBrief(j *Job) string {
 	// exactly — a skill is read once per phase, and this applies at every
 	// carl-facing writing moment in every phase — and it is a POINTER, not a
 	// procedure: which artifacts a phase writes, and when, stay in the skills.
-	b.WriteString("Before writing anything carl reads — an overview, a caption, a final message, a report — search what he already knows about the subject (`k graph search`, `k mm get`): abstract what he knows, spell out what he does not, and carry the same 'carl knows / is unfamiliar with' lines into every teammate brief. When explaining code, citing a file, or briefing a diagram, run `k mm get --file <path>` per file cited; mandate the same in every teammate brief that cites code.\n")
+	b.WriteString("Before writing anything carl reads — an overview, a caption, a final message, a report — search what he already knows about the subject (`kraken graph search`, `kraken mm get` — the full binary, as its own command: monolith's guardrail kills any compound containing bare `k`): abstract what he knows, spell out what he does not, and carry the same 'carl knows / is unfamiliar with' lines into every teammate brief. When explaining code, citing a file, or briefing a diagram, run `kraken mm get --file <path>` per file cited; mandate the same in every teammate brief that cites code.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path if it wasn't ingested).\n")
 	// The tier is RESOLVED rather than named: zeus is spawned on zeusModel(j),
 	// which a job's model: field overrides, so a hardcoded "you run on Fable"
