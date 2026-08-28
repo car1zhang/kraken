@@ -44,6 +44,16 @@ The corollary is freeing — because the local side never travels, the report an
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
 the report worth reading.
 
+One class of value is excluded from that freedom: **person-level PRODUCTION data** — a real
+customer's name, phone, address, account id. Fictionalize or elide it at first write in every
+output of the pass — the report, a watch row's sentence and evidence, and above all the FINAL
+STATUS LINE, which kraken harvests into orch inbox rows and standing-agent transcripts that never
+compact — citing the transcript path that holds the real value instead of copying it. Scout
+briefs say to flag person-level production identifiers wherever they ask about credential values:
+the two leak by the same copy-forward mechanics, and a brief that named only credentials has
+measured scouts relaying a real customer's name, phone and account id verbatim into completion
+summaries and onward into permanent standing-agent context.
+
 ## Order of operations
 
 Read in this order. It is not a preference — proposing something carl already settled wastes the
@@ -148,16 +158,22 @@ pressing escape), `<synthetic>` API failures, output-ceiling deaths (`MaxTokensS
 at stop_reason max_tokens, the failure that burns a whole budget while reading as a clean session),
 turn durations, literally repeated calls, and the four
 **token counters** (`In`, `Out`, `CacheWrite`, `CacheRead`) per session plus a roll-up across the
-whole sweep. Three counter caveats, all measured, for anything you build on those numbers:
+whole sweep. Four counter caveats, all measured, for anything you build on those numbers:
 `ErrorCounts` includes the benign tail-exit-1 shape (a `;`-compound whose last command is a grep
 that matched nothing — every wanted byte arrived, exit 1 anyway) while missing aborts that exit 0,
 so read an error cluster as a hypothesis about command SHAPES rather than as N failures;
 `RepeatedCalls` keys `Read`/`Edit` on file path alone, so careful paged reads of one large file and
-distinct edits to one file both present as repetition; and `SyntheticErrors` counts every
-`<synthetic>` assistant record, which on this machine is mostly USAGE-LIMIT BANNERS and null turns
-rather than transport failures — three scouts in one night independently re-derived this after
-their briefs relayed the counter as "API failures", so brief it as "session-interrupting records"
-and let the scout classify them. Each row also says WHOSE session it is and how it sits in the
+distinct edits to one file both present as repetition; `SyntheticErrors` counts every
+`<synthetic>` assistant record — a mix whose composition FLIPS night to night (all usage-limit
+banners one night, every one a machine-sleep API error another, null turns between), so never
+pre-classify it in a brief in EITHER direction: scouts have burned calls on an "API failures"
+gloss when the night was banners, and a lead's "mostly usage-limit banners" gloss was falsified
+by its own transcript's sleep error twenty-five minutes before it wrote the brief — brief it as
+"session-interrupting records" and let the scout classify them; and a subagent SIDECAR's `Out`
+can be a stale partial stamp bearing no relation to the message's true total — identical on
+every record of its group yet measured several-fold below what the group's own emitted bytes
+would cost, a shape last-wins cannot correct — so never rank, brief, or build a finding on a
+sidecar row's `Out`. Each row also says WHOSE session it is and how it sits in the
 window — `AgentName` (the head agentName: a teammate's `athena-…`/`hephaestus-…`, the lead's
 `zeus-…`), `Delegated` (the token splitter's lead-vs-delegated file classification), and
 `FileFirstTS`/`FileLastTS`, the file's whole dated span beside the windowed `FirstTS`/`LastTS` —
@@ -300,14 +316,18 @@ authority is what makes it expensive: a scout distrusts the digest because the b
 trusts the BRIEF, which nothing told it to distrust. Two rules follow. Every counter you quote into a
 brief is a hypothesis — write it as "the digest reports X; verify before building on it". One
 counter has now minted the same false finding two nights running: `Lines` counts TIMESTAMPED
-records inside the window — roughly half of a transcript's physical lines carry no parseable
-timestamp and are excluded — so quoted into a brief as "N lines" it reads as stale the moment the
+records inside the window — a share of a transcript's physical lines carry no parseable
+timestamp and are excluded, measured at ~1.4-1.6x `wc -l` inflation on ROOT transcripts and
+~1.0x on subagent SIDECARS (an earlier "about half, so at least double" here was itself a
+generalization measured wrong on both counts, and briefs repeated it as fact) — so quoted into a
+brief as "N lines" it reads as stale the moment the
 scout line-counts the file, and a 719-vs-1,112 "staleness" diagnosis was corroborated and shipped
 as a finding while the refutation sat in the field's own doc comment. Brief it as "N timestamped
-in-window records — about half a transcript's lines carry no timestamp, so `wc -l` reads at least
-double, and more when the window starts inside the file", never "N lines": a label that drops
+in-window records — `wc -l` reads higher (~1.4-1.6x on a root transcript, ~1.0x on a sidecar,
+more when the window starts inside the file); an upward disagreement is expected, not
+staleness", never "N lines": a label that drops
 TIMESTAMPED sends the verifying scout to a record
-count that is ~2N even when the window covers the whole file, which re-derives the exact false
+count well above N even when the window covers the whole file, which re-derives the exact false
 finding. And phrase
 an anomaly as a question, not as a claim: "say what that shape means" got a scout to reject the
 implied reading and find the real cause, where "confirm that X" would have got X. The same sentence
