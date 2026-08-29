@@ -1128,3 +1128,102 @@ func TestReactivateJobRestoresArtifacts(t *testing.T) {
 		t.Fatal("ReactivateJob no longer calls restoreCellArtifacts — a revived cell comes up without its artifacts, and the empty dir wipes the stored mirror at the next teardown")
 	}
 }
+
+// --- sleepCutTeammates ---
+
+// TestSleepCutTeammates pins the teammate half of the sleep rescue as a pure
+// decision over a discovery snapshot and a pane capture: only depth-0 claude
+// TEAMMATES of the cell — never zeus, never a side thread, never a pane
+// mid-turn or holding a question prompt — and only when the pane's TAIL
+// shows the sleep banner with no nudge typed in below it.
+func TestSleepCutTeammates(t *testing.T) {
+	j := &Job{Slug: "widget-fix"}
+	sess := CellSession(j)
+	banner := "some output\nAPI Error: Your computer went to sleep mid-response. The response above may be incomplete.\n> "
+	panes := map[string]string{
+		"%1": banner, // zeus — excluded by identity, not by content
+		"%2": banner, // teammate at its prompt, cut: nudged
+		"%3": banner, // teammate still running: never nudged mid-turn
+		"%4": "all quiet\n> ",
+		"%5": banner, // side thread by name
+		"%6": banner, // another cell's session
+		"%7": banner, // nested claude, not the pane owner
+		"%8": banner, // teammate with a question prompt open
+	}
+	capture := func(pane string) string { return panes[pane] }
+	// "waiting" is what a real tmux teammate carries at its prompt (discovery
+	// leaves a teammate's status "unknown" and refinedStatus maps a spinnerless
+	// pane to "waiting"); "idle" is what a session-file peer carries. Both
+	// must pass the gate, which is a blacklist for that reason.
+	all := []*core.Peer{
+		{Name: ZeusName(j), Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%1", Status: "idle"},
+		{Name: "hephaestus-worker", Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%3", Status: "running"},
+		{Name: "athena-logic", Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%2", Status: "waiting"},
+		{Name: "athena-edge", Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%4", Status: "idle"},
+		{Name: ThreadAgentName(j, "1"), Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%5", Status: "idle"},
+		{Name: "athena-style", Agent: "claude", Depth: 0, TmuxSession: "cell-other", Pane: "%6", Status: "idle"},
+		{Name: "nested", Agent: "claude", Depth: 1, TmuxSession: sess, Pane: "%7", Status: "idle"},
+		{Name: "hephaestus-fe", Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%8", Status: "question"},
+	}
+	names := func(ps []*core.Peer) []string {
+		var out []string
+		for _, p := range ps {
+			out = append(out, p.Name+"@"+p.Pane)
+		}
+		return out
+	}
+	got := sleepCutTeammates(j, all, capture)
+	if len(got) != 1 || got[0].Pane != "%2" {
+		t.Fatalf("sleepCutTeammates = %v, want exactly athena-logic@%%2", names(got))
+	}
+
+	// Pane order, not discovery order: a stable log line per tick.
+	all = append(all, &core.Peer{Name: "hephaestus-backend", Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%10", Status: "idle"})
+	panes["%10"] = banner
+	all = append([]*core.Peer{all[len(all)-1]}, all[:len(all)-1]...)
+	got = sleepCutTeammates(j, all, capture)
+	if len(got) != 2 || got[0].Pane != "%2" || got[1].Pane != "%10" {
+		t.Fatalf("pane order: got %v, want [athena-logic@%%2 hephaestus-backend@%%10] — panes sort numerically, not lexically (%%10 < %%2 as strings)", names(got))
+	}
+
+	// No zeus at all (still starting): CellZeus' positional fallback elects
+	// the lone claude AS zeus, so it is excluded by identity and NOT nudged —
+	// the alternative types a teammate resume into zeus' own pane.
+	noZeus := []*core.Peer{{Name: "athena-logic", Agent: "claude", Depth: 0, TmuxSession: sess, Pane: "%2", Status: "idle"}}
+	if got := sleepCutTeammates(j, noZeus, capture); len(got) != 0 {
+		t.Fatalf("with no named zeus the positional fallback elects the lone claude as zeus; it must not be nudged as a teammate, got %v", names(got))
+	}
+}
+
+// TestPaneShowsUnhandledSleepCut pins the text half: the banner counts only
+// in the last sleepCutTailLines, and only when no sentinel sits below its
+// last occurrence — which is what makes a nudge self-limiting on a pane
+// whose banner never scrolls away, and what bounds a pane that merely quotes
+// the string to one spurious nudge.
+func TestPaneShowsUnhandledSleepCut(t *testing.T) {
+	if strings.Contains(sleepCutSentinel, sleepCutMarker) {
+		t.Fatalf("sleepCutSentinel %q contains sleepCutMarker %q — every nudge would re-trigger itself on the next tick", sleepCutSentinel, sleepCutMarker)
+	}
+	if !strings.HasPrefix(sleepCutResumeMsg, sleepCutSentinel) {
+		t.Fatal("sleepCutResumeMsg must open with sleepCutSentinel — the typed message is what marks a banner handled")
+	}
+	bannerLine := "API Error: Your computer went to sleep mid-response. The response above may be incomplete."
+	deep := strings.Repeat("filler line\n", sleepCutTailLines+5)
+	cases := []struct {
+		name string
+		pane string
+		want bool
+	}{
+		{"banner at the tail", "output\n" + bannerLine + "\n> ", true},
+		{"no banner", "output\n> ", false},
+		{"banner scrolled above the tail window", bannerLine + "\n" + deep + "> ", false},
+		{"banner quoted at the tail, then nudged", bannerLine + "\n> " + sleepCutSentinel + " — pick up\n> ", false},
+		{"nudged, then cut AGAIN", "> " + sleepCutSentinel + " — pick up\nworking\n" + bannerLine + "\n> ", true},
+		{"sentinel ABOVE the banner still counts as unhandled", sleepCutSentinel + "\n" + bannerLine + "\n> ", true},
+	}
+	for _, c := range cases {
+		if got := paneShowsUnhandledSleepCut(c.pane); got != c.want {
+			t.Errorf("%s: paneShowsUnhandledSleepCut = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

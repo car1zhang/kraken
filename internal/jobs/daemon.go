@@ -282,7 +282,7 @@ var probeOnline = func() bool {
 // one; tick runs a single scheduler pass.
 type daemonState struct {
 	Notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
-	Poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
+	Poked    map[string]int64 // "retry:" + slug (zeus) or "retry:" + slug + ":" + pane (a teammate) → unix time last auto-retried
 	// Repaired marks a job's PR-repair pass as fully done for this process
 	// (slug → done) — see repairPRs. In-memory only, like Notified/Poked
 	// above, but re-running the pass across a daemon restart is safe BY
@@ -815,6 +815,33 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			}
 		}
 
+		// the teammate half of the sleep rescue, independent of zeus' own
+		// health: a machine sleep cuts every live pane at once, the health
+		// pass above classifies only zeus' transcript, and a tmux teammate
+		// has no transcript kraken can resolve — so the crew's stalls were
+		// invisible here and the lead hand-wrote every resume (measured: 26
+		// nudges over 8h45m in one cell, 6 in another, one teammate stall
+		// left 1h47m). gateRetry's connectivity probe and backoff window are
+		// shared with zeus' retry, keyed per pane so one teammate's poke never
+		// debounces another's — and, as on the zeus arm, the Poked stamp lands
+		// only for a send that succeeded, so a refused send retries next tick.
+		if isLive && !mirror {
+			nudged, err := RetrySleptTeammates(j, all, func(pane string) bool {
+				poke, title, msg := d.gateRetry(now, "retry:"+j.Slug+":"+pane, checkOnline)
+				if title != "" {
+					notify(title, msg)
+				}
+				return !poke
+			})
+			if err != nil {
+				dlogErr("auto-retry teammates %s failed: %v", j.Slug, err)
+			}
+			for _, pane := range nudged {
+				d.Poked["retry:"+j.Slug+":"+pane] = now.Unix()
+				dlog("auto-retried %s teammate %s (machine slept mid-response)", j.Slug, pane)
+			}
+		}
+
 		// state derivation: working ⇄ blocked, driven off a live ROLL-CALL of
 		// the cell's pane agents and team members (ResolveRepo stays here
 		// only for its error-notification side effect — state derivation
@@ -1241,16 +1268,19 @@ func (d *daemonState) startCreatedJob(j *Job) bool {
 	return true
 }
 
-// gateRetry decides whether a due auto-retry poke for rkey ("retry:"+slug)
-// is allowed to proceed, gating it behind reachability of the endpoint the
+// gateRetry decides whether a due auto-retry poke for rkey ("retry:"+slug
+// for zeus, "retry:"+slug+":"+pane for a sleep-cut teammate) is allowed to
+// proceed, gating it behind reachability of the endpoint the
 // retry actually depends on: a stall caused by an outage can't be nudged
 // away, and hammering RetryCell every repokeAfter during one just burns
 // pokes for nothing. checkOnline is expected to memoize its dial for the
 // tick, so calling this for several stalled cells in one pass costs at most
 // one probe. Mutates d.offline/d.Notified/d.Poked; never touches tmux or
 // osascript itself — the caller fires the returned notification (title
-// non-empty) and, on poke==true, performs the actual RetryCell + Poked
-// stamp so gateRetry stays pure enough to unit test without a live cell.
+// non-empty) and, on poke==true, performs the actual send (RetryCell, or
+// RetrySleptTeammates' per-pane SendMessage) and stamps Poked only for a
+// send that succeeded, so gateRetry stays pure enough to unit test without
+// a live cell.
 func (d *daemonState) gateRetry(now time.Time, rkey string, checkOnline func() bool) (poke bool, notifyTitle, notifyMsg string) {
 	pokeDue := now.Unix()-d.Poked[rkey] >= int64(repokeAfter/time.Second)
 	if !pokeDue && !d.offline {
