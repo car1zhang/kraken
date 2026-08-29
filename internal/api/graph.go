@@ -941,21 +941,13 @@ func graphSearchHandler(w http.ResponseWriter, r *http.Request) {
 	// The shared thing is the JUDGMENT (core.RelevantEdge), not the inputs each
 	// caller can afford to feed it.
 	terms := core.ContentTerms(query)
-	facts := make([]webGraphFact, 0, len(res.Edges))
-	// Split for `triples` only. `facts` keeps PIPELINE order — ranked facts
-	// then expansion — because that order is the ranking, and a client reading
-	// the structured list has the `weak` flag to group by itself.
-	strong := make([]store.GraphEdge, 0, len(res.Edges))
-	var weak []store.GraphEdge
-	for _, e := range res.Edges {
+	// isWeakEdge is the one relevance verdict, judged once per edge below.
+	isWeakEdge := func(e store.GraphEdge) bool {
 		// Judged on the edge's REAL vector: the hydrated copy where the
 		// pipeline elided one, the edge as returned otherwise. A row that has
 		// never been embedded hydrates to an empty blob and falls to the
 		// lexical gate — which is the correct verdict for it rather than a
 		// fallback, since there is no vector to disagree with.
-		//
-		// Judged ONCE per edge, too: RelevantEdge decodes the blob, and the
-		// verdict feeds both `facts` and the `triples` split below.
 		judged := e
 		if blob, ok := hydrated[e.ID]; ok {
 			judged.Embedding = blob
@@ -971,8 +963,73 @@ func graphSearchHandler(w http.ResponseWriter, r *http.Request) {
 		// the injection paths take (jobs' keepRelevantFacts), reached through
 		// the same res.Anchors, so the two consequences of one judgment stay
 		// one judgment. Non-anchored facts are judged exactly as before.
-		isWeak := !res.Anchors[e.SrcID] && !res.Anchors[e.DstID] &&
+		return !res.Anchors[e.SrcID] && !res.Anchors[e.DstID] &&
 			!core.RelevantEdge(judged, vec, terms)
+	}
+	// Judged ONCE per edge: RelevantEdge decodes the blob, and the verdict
+	// feeds `facts`, the `triples` split, and the expansion decision.
+	//
+	// That decision: whether any RANKED fact is strong decides whether the
+	// expansion is served at all. Expansion widens the top ranked facts'
+	// neighbourhood, so when every ranked fact is a coincidence the
+	// expansion is that coincidence's neighbourhood — and since the graph
+	// compiles from carl's mental model, one node (carl) is an endpoint of
+	// every has-read fact, so a weak top fact that touches him seeds the
+	// expansion with his OLDEST facts in NeighborEdges' (occurrences DESC,
+	// id) order, whatever was asked. Measured: every graph search from a
+	// non-kraken cell opened with the same eleven kraken-internals entities
+	// under the "nothing strongly matched" headline, ~40% of each ~9.5 KB
+	// answer a constant prefix, and a caller that piped the result through
+	// `head` lost the part that answered. So with zero strong ranked facts
+	// the expansion is dropped and the entity list is pruned to what the
+	// surviving facts touch: the caller still gets the weak facts (the
+	// "weakly related" list is the honest answer), never a neighbourhood of
+	// something the query was not about.
+	//
+	// An anchored fact is strong by the exemption above, and it licenses
+	// the expansion from ANY position — ranked or expanded — so a query
+	// whose named entity anchors (AnchorNodes withholds anchor status above
+	// AnchorMaxDegree, so a hub name does not) keeps its expansion as
+	// before. Today an anchored expansion fact always implies an anchored
+	// ranked one (the name leg feeds every anchor's edges into the ranked
+	// list and nameBoost ranks them up), so the any-position clause is a
+	// statement of intent rather than a reachable branch; it is written so
+	// that a later change to the name leg's candidate cap, Floor or Limit
+	// cannot silently turn a named entity's answer into a pruned one.
+	verdicts := make([]bool, len(res.Edges))
+	anyStrong := false
+	for i, e := range res.Edges {
+		verdicts[i] = isWeakEdge(e)
+		if !verdicts[i] && (i < res.Ranked || res.Anchors[e.SrcID] || res.Anchors[e.DstID]) {
+			anyStrong = true
+		}
+	}
+	// Ranked > 0 as well as Ranked < len: a producer that never set Ranked
+	// (its zero value) must degrade to the old serve-everything behaviour,
+	// not to an empty answer.
+	served := res.Edges
+	if !anyStrong && res.Ranked > 0 && res.Ranked < len(res.Edges) {
+		served = res.Edges[:res.Ranked]
+		verdicts = verdicts[:res.Ranked]
+		touched := make(map[int64]store.GraphNode, 2*len(served))
+		for _, e := range served {
+			for _, id := range [2]int64{e.SrcID, e.DstID} {
+				if n, ok := res.Nodes[id]; ok {
+					touched[id] = n
+				}
+			}
+		}
+		res.Nodes = touched
+	}
+
+	facts := make([]webGraphFact, 0, len(served))
+	// Split for `triples` only. `facts` keeps PIPELINE order — ranked facts
+	// then expansion — because that order is the ranking, and a client reading
+	// the structured list has the `weak` flag to group by itself.
+	strong := make([]store.GraphEdge, 0, len(served))
+	var weak []store.GraphEdge
+	for i, e := range served {
+		isWeak := verdicts[i]
 		if isWeak {
 			weak = append(weak, e)
 		} else {

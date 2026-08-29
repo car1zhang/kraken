@@ -105,6 +105,14 @@ type GraphResult struct {
 	Nodes   map[int64]store.GraphNode // every node referenced by Edges
 	Scores  map[int64]float32         // edge id -> fused score
 	Anchors map[int64]bool            // node ids the query named; never nil
+	// Ranked is how many leading entries of Edges are RANKED facts — the
+	// three legs' fused result after Floor and Limit, so at most Limit —
+	// and everything after them is the 1-hop expansion. A consumer
+	// that judges relevance after the fact (the search route's weak gate)
+	// needs the seam, because an expansion is only ever as good as the
+	// facts it widened: widen a coincidence and the answer is the
+	// coincidence's neighbourhood, whatever was asked.
+	Ranked int
 }
 
 // GraphSearch runs the whole read path against st.
@@ -317,6 +325,7 @@ func GraphSearch(st *store.Store, queryVec []float32, query string, o GraphSearc
 		return res, err
 	}
 	res.Edges = append(scored, expanded...)
+	res.Ranked = len(scored)
 	out := res.Edges
 
 	// Every node either endpoint of a returned edge names, so the caller can
