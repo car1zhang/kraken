@@ -200,7 +200,14 @@ cross-check the parent session's `SendMessage`/`Agent` calls before attributing 
 the agent's own judgment. Two more lines the brief owes every scout. A reduced view's LINES are
 unbounded — a single line can be an entire inlined skill body — so a page size that worked on page
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
-(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep. And
+(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep — and
+name BOTH ceilings, because the Bash tool spills inline output past ~30KB to a file as well, and
+that is the one scouts actually hit (seven of nine in one measured night): three of them answered a
+spill by narrowing COLUMNS (`cut -c1-N`, a truncating `awk` printf) instead of rows, which silently
+cuts every long line's remainder while the row still files as READ — the exact inflation the
+delivery axis exists to catch — so the brief says shrink the LINE RANGE, never the columns (a
+line-range page of the staged view's own lines is still READ; a filter or extract over it is RAW).
+And
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch overlay and the graph that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost the graph
@@ -359,9 +366,13 @@ inflated.** Three scouts in one measured night claimed "reduced in full" on tran
 sidecars show were touched only by `grep '^\[assistant\]' -A4 | head -80` — twelve files, eighty
 grep'd lines, twelve rows saying READ — and the lead's "97 READ / 9 SAMPLED" aggregate was exact
 arithmetic over false inputs, while its one verification habit checked that the LEAD had read its
-eleven reports, the link that was never the problem. So before trusting the aggregate, spot-check
-the scouts of at least the two LARGEST assignments against their own transcripts, and say in
-Coverage which scouts were spot-checked. The spot-check needs a DENOMINATOR: compare the scout's
+eleven reports, the link that was never the problem. So before trusting the aggregate, spot-check at
+least two scouts against their own transcripts, chosen for where coverage arithmetic is easiest to
+get wrong — the assignments with the most independently counted units (many files, many pages) —
+not for raw transcript volume: the error hides in ROW COUNT, not byte count, and two consecutive
+passes that sampled their two biggest each missed the one slice whose rows were wrong, the second
+after reading the first's correction in full. Say in Coverage which scouts were spot-checked and
+why those. The spot-check needs a DENOMINATOR: compare the scout's
 read offsets against the staged file's own line count (a `wc -l` you run yourself), because offsets
 alone prove contiguity, not completion — a lead extracted both scouts' offset lists, never fetched
 either file's length, and certified "coverage spot-checks passed" on an instrument structurally
