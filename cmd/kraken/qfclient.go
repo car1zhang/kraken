@@ -108,7 +108,8 @@ func qfIsTimeout(err error) bool {
 // qfGet issues a GET against kraken serve's base URL plus path, returning
 // the raw response body verbatim on a 2xx (the CLI layer prints it to
 // stdout unmodified — no re-encoding, so it stays byte-identical to what
-// the server sent) and an error otherwise: qfServerError for a non-2xx
+// the server sent; the one exception is `watchlist get`, which re-indents —
+// see runWatchlistGet) and an error otherwise: qfServerError for a non-2xx
 // response, qfTimeoutError for a client-side deadline expiry, or
 // qfUnreachableError for any other transport-level failure.
 func qfGet(path string) ([]byte, error) {

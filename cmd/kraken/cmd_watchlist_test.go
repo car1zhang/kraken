@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -12,20 +13,26 @@ import (
 
 // cmd_watchlist_test.go — `kraken watchlist get|add|update|remove`'s testable
 // core (runWatchlistGet/Upsert/Remove), mirroring cmd_questions_test.go's
-// coverage of the same behavior contract: get prints server JSON verbatim;
+// coverage of the same behavior contract: get prints server JSON re-indented
+// (this family's one departure from the questions verbs' verbatim rule — see
+// runWatchlistGet);
 // add/update read stdin and POST the right op shape; remove takes a bare id;
 // a 400 surfaces the server's own message; connection-refused names the
 // address; missing args produce a usage error. The dispatch layer's util.Die
 // branches go through TestHelperProcess/runDispatchSubprocess (defined in
 // cmd_questions_test.go, same package).
 
-func TestRunWatchlistGetPrintsServerJSONVerbatim(t *testing.T) {
-	want := `{"watchlist":[{"id":1,"observation":"o","class":"waste","state":"watching","sightings":2,"first_seen":1,"last_seen":2,"updated_at":2}]}` + "\n"
+// TestRunWatchlistGetReindentsServerJSON pins the get contract: the server's
+// one-line list comes back as the SAME JSON document, multi-line — the
+// single-line form had passed the Read tool's cap, so every nightly consumer
+// was hand-parsing it — with the trailing newline kept.
+func TestRunWatchlistGetReindentsServerJSON(t *testing.T) {
+	served := `{"watchlist":[{"id":1,"observation":"o","class":"waste","state":"watching","sightings":2,"first_seen":1,"last_seen":2,"updated_at":2}]}` + "\n"
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path + "?" + r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(want))
+		w.Write([]byte(served))
 	}))
 	defer srv.Close()
 	t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
@@ -34,11 +41,43 @@ func TestRunWatchlistGetPrintsServerJSONVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runWatchlistGet: %v", err)
 	}
-	if string(got) != want {
-		t.Fatalf("body = %q, want %q (verbatim passthrough)", got, want)
+	if !strings.HasSuffix(string(got), "\n") {
+		t.Fatalf("body = %q, want a trailing newline", got)
+	}
+	if lines := strings.Count(string(got), "\n"); lines < 10 {
+		t.Fatalf("body has %d lines, want the re-indented multi-line form:\n%s", lines, got)
+	}
+	// same document: re-compacting the output reproduces the served bytes
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, got)
+	}
+	if buf.String()+"\n" != served {
+		t.Fatalf("re-compacted output = %q, want the served document %q", buf.String(), served)
 	}
 	if gotPath != "/api/watchlist?" {
 		t.Fatalf("path = %q, want the unfiltered read", gotPath)
+	}
+}
+
+// TestIndentJSONDegradesToVerbatimOnNonJSON: the re-indent is a courtesy,
+// never a gate — a body that does not parse passes through byte-identical.
+// The rows are the shapes a dying kraken serve actually produces (empty,
+// newline-only, truncated JSON) plus a proxy-injected error page.
+func TestIndentJSONDegradesToVerbatimOnNonJSON(t *testing.T) {
+	for _, body := range []string{
+		"<html>bad gateway</html>",
+		"",
+		"\n",
+		`{"watchlist":[{"id":1,"observation":"tr`,
+	} {
+		got, err := indentJSON([]byte(body), nil)
+		if err != nil {
+			t.Fatalf("indentJSON(%q): %v", body, err)
+		}
+		if string(got) != body {
+			t.Fatalf("body %q came back %q, want the verbatim bytes", body, got)
+		}
 	}
 }
 
@@ -216,15 +255,15 @@ func TestWatchlistConnectionRefusedNamesAddress(t *testing.T) {
 }
 
 func TestCmdWatchlistGetDispatchWritesStdout(t *testing.T) {
-	want := `{"watchlist":[]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(want))
+		w.Write([]byte(`{"watchlist":[]}`))
 	}))
 	defer srv.Close()
 	t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
 
+	want := "{\n  \"watchlist\": []\n}\n"
 	if got := captureStdout(t, func() { cmdWatchlist([]string{"get"}) }); got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+		t.Fatalf("stdout = %q, want the re-indented form %q", got, want)
 	}
 }
 
