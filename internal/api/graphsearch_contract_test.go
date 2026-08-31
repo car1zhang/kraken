@@ -137,7 +137,11 @@ func TestKgcontractSearchExpansionCapTracksTheLimit(t *testing.T) {
 			fmt.Sprintf("quiet unrelated wiring number %02d", i))
 	}
 
-	narrow := kgcontractSearch(t, `{"query":"zephyrite","limit":1}`)
+	// Two content words shared with the hit's sentence: the ranked fact is
+	// STRONG under the lexical gate, which is what lets its expansion be
+	// served at all — a weak-only answer serves no expansion (see
+	// TestKgcontractWeakOnlyAnswerServesNoExpansion).
+	narrow := kgcontractSearch(t, `{"query":"zephyrite calibration","limit":1}`)
 	if len(narrow.Facts) > 2 {
 		t.Errorf("limit 1 returned %d facts, want at most 2 — the expansion cap must be min(50, limit), not a fixed 50", len(narrow.Facts))
 	}
@@ -145,7 +149,7 @@ func TestKgcontractSearchExpansionCapTracksTheLimit(t *testing.T) {
 		t.Fatal("limit 1 returned no facts at all — the ranked hit must survive")
 	}
 
-	wide := kgcontractSearch(t, `{"query":"zephyrite","limit":20}`)
+	wide := kgcontractSearch(t, `{"query":"zephyrite calibration","limit":20}`)
 	if len(wide.Facts) < 15 {
 		t.Errorf("limit 20 returned %d facts, want at least 15 — a larger ask must still get a wide neighbourhood", len(wide.Facts))
 	}
@@ -492,5 +496,51 @@ func TestKgcontractSearchEverythingElseIsUnchanged(t *testing.T) {
 	}
 	if rec := postGraph(graphSearchHandler, "/api/graph/search", `{"query":"x","strong":1}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown request field: status %d, want 400 — `strong` is a RESPONSE key only", rec.Code)
+	}
+}
+
+// TestKgcontractWeakOnlyAnswerServesNoExpansion: when no RANKED fact clears
+// the relevance gate, the 1-hop expansion is dropped and the entity list is
+// pruned to what the surviving facts touch. The graph compiles from carl's
+// mental model, so one node is an endpoint of every has-read fact; a weak
+// top fact touching it seeded the expansion with his oldest facts in
+// NeighborEdges' fixed order, and every search from a non-kraken cell opened
+// with the same eleven kraken-internals entities under "nothing strongly
+// matched". The star here is that shape: the one lexical hit shares a
+// single content word with the query (weak), and the thirty leaves hang off
+// its endpoint.
+func TestKgcontractWeakOnlyAnswerServesNoExpansion(t *testing.T) {
+	st := kgcontractGraph(t)
+	nodes := map[string]int64{}
+	kgcontractEdge(t, st, nodes, "hubnode", "calibrates", "targetnode",
+		"zephyrite calibration lives inside the hubnode")
+	for i := 0; i < 30; i++ {
+		kgcontractEdge(t, st, nodes, "hubnode", "touches", fmt.Sprintf("leafnode%02d", i),
+			fmt.Sprintf("quiet unrelated wiring number %02d", i))
+	}
+
+	weak := kgcontractSearch(t, `{"query":"zephyrite","limit":20}`)
+	if weak.Strong == nil || *weak.Strong != 0 {
+		t.Fatalf("one-word query: strong = %v, want 0 — the fixture's hit shares one content word with the query", weak.Strong)
+	}
+	if len(weak.Facts) != 1 {
+		t.Fatalf("weak-only answer served %d facts, want exactly the ranked hit — no expansion widens a coincidence", len(weak.Facts))
+	}
+	if len(weak.Nodes) != 2 {
+		t.Fatalf("weak-only answer listed %d entities, want the hit's two endpoints — the leaves must not ride along", len(weak.Nodes))
+	}
+	for _, line := range kgcontractLines(weak.Triples) {
+		if strings.Contains(line, "leafnode") {
+			t.Fatalf("triples carry an expansion line on a weak-only answer: %q", line)
+		}
+	}
+
+	// The same graph, a strong query: expansion is served exactly as before.
+	strong := kgcontractSearch(t, `{"query":"zephyrite calibration","limit":20}`)
+	if strong.Strong == nil || *strong.Strong < 1 {
+		t.Fatalf("two-word query: strong = %v, want >= 1", strong.Strong)
+	}
+	if len(strong.Facts) < 15 {
+		t.Fatalf("strong answer served %d facts, want its expansion (>= 15) — the rule drops expansion only when nothing is strong", len(strong.Facts))
 	}
 }
