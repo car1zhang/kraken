@@ -1695,11 +1695,7 @@ func CellZeus(j *Job, all []*core.Peer) *core.Peer {
 	if len(inSess) == 0 {
 		return nil
 	}
-	sort.Slice(inSess, func(a, b int) bool {
-		ai, _ := strconv.Atoi(strings.TrimPrefix(inSess[a].Pane, "%"))
-		bi, _ := strconv.Atoi(strings.TrimPrefix(inSess[b].Pane, "%"))
-		return ai < bi
-	})
+	sortPeersByPane(inSess)
 	return inSess[0]
 }
 
@@ -1869,6 +1865,150 @@ func RetryCell(j *Job) error {
 		return core.SendMessage(zeus, "you stalled ("+reason+") — pick up exactly where you left off and continue the job")
 	}
 	return core.SendMessage(zeus, "you stalled (API error or an interrupted turn) — pick up exactly where you left off and continue the job")
+}
+
+// sleepCutMarker is the banner Claude Code paints into a pane whose turn the
+// machine's own sleep cut short (`API Error: Your computer went to sleep
+// mid-response. The response above may be incomplete.`). It is the one stall
+// that hits EVERY live pane at once, which is what makes a rescue keyed on
+// the lead's transcript alone structurally insufficient for it.
+const sleepCutMarker = "went to sleep mid-response"
+
+// sleepCutTailLines bounds how far up a pane the marker may sit: the real
+// banner is what aborted the turn, so it is always at the tail, directly
+// above the prompt box — the same 20-line window containsQuestionMarker
+// reads for the same reason (pane text is agent-writable, and a grep hit or
+// a quoted error higher up must not count). Measured while this shipped: a
+// reviewer's own pane matched the marker after one grep for it, and this
+// very file now carries the string.
+const sleepCutTailLines = 20
+
+// sleepCutTeammates returns the cell's tmux TEAMMATES that a machine sleep
+// cut mid-turn and left sitting at their prompt: depth-0 claudes in the
+// cell's sessions that are neither zeus nor a side thread; not running,
+// polling or holding an open question prompt; and whose pane TAIL shows
+// sleepCutMarker with no sleepCutSentinel after it — a nudge already typed
+// in below the banner means that banner was handled, whether or not the
+// agent has produced enough output since to scroll it away.
+//
+// This is the teammate half of a rescue RetryCell has always run for zeus
+// alone. CellHealth classifies zeus' TRANSCRIPT and RetryCell nudges zeus'
+// pane, and a tmux teammate has neither — discovery leaves its SessionID
+// empty — so on the measured nights a laptop that slept ~10 times cut every
+// teammate mid-turn while the daemon auto-retried the lead, and the lead
+// became the rescue loop by hand: 26 resume messages over 8h45m in one
+// cell, 6 in another, with one teammate stall sitting 1h47m until the lead
+// happened to be awake to notice. The pane is the only signal a teammate
+// has, so this reads it, and three things bound the false positives the
+// CellHealth comment's objection to pane scraping is about: the tail
+// window, the not-running gate (a claude mid-turn is never nudged,
+// whatever its scrollback quotes), and the sentinel — a pane that merely
+// quotes the banner at its prompt gets ONE spurious nudge per quote (a
+// fresh quote below the sentinel counts again, bounded by the daemon's
+// per-pane backoff), since the nudge itself then sits below the quote;
+// zeus' transcript-keyed arm never had this problem because a transcript
+// clears itself.
+//
+// capture is injected so the decision is a pure function of a snapshot; the
+// daemon passes core.CapturePane. Returned in pane order for a stable log.
+func sleepCutTeammates(j *Job, all []*core.Peer, capture func(pane string) string) []*core.Peer {
+	sessions := cellSessionCandidates(j)
+	inCell := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		inCell[s] = true
+	}
+	threadPrefixes := threadNamePrefixes(j)
+	threadPanes := liveThreadPanesFor(j)
+	zeusPane := ""
+	if zeus := CellZeus(j, all); zeus != nil {
+		zeusPane = zeus.Pane
+	}
+	var out []*core.Peer
+	for _, p := range all {
+		if !inCell[p.TmuxSession] || p.Agent != "claude" || p.Depth != 0 || p.Pane == "" {
+			continue
+		}
+		if p.Pane == zeusPane || hasAnyPrefix(p.Name, threadPrefixes) || threadPanes[p.Pane] {
+			continue
+		}
+		if p.Status == "running" || p.Status == "polling" || p.Status == "question" {
+			continue
+		}
+		if !paneShowsUnhandledSleepCut(capture(p.Pane)) {
+			continue
+		}
+		out = append(out, p)
+	}
+	sortPeersByPane(out)
+	return out
+}
+
+// paneShowsUnhandledSleepCut is the text half of the decision: the marker
+// appears in the last sleepCutTailLines of the capture, and no sentinel
+// appears after its last occurrence.
+func paneShowsUnhandledSleepCut(capture string) bool {
+	lines := strings.Split(strings.TrimRight(capture, "\n"), "\n")
+	if start := len(lines) - sleepCutTailLines; start > 0 {
+		lines = lines[start:]
+	}
+	tail := strings.Join(lines, "\n")
+	banner := strings.LastIndex(tail, sleepCutMarker)
+	if banner < 0 {
+		return false
+	}
+	return strings.LastIndex(tail, sleepCutSentinel) < banner
+}
+
+// sortPeersByPane orders peers by pane NUMBER: tmux pane ids sort
+// lexically as strings (%10 < %2), and both CellZeus' positional election
+// and the sleep rescue's log order depend on the numeric order.
+func sortPeersByPane(peers []*core.Peer) {
+	sort.Slice(peers, func(a, b int) bool {
+		ai, _ := strconv.Atoi(strings.TrimPrefix(peers[a].Pane, "%"))
+		bi, _ := strconv.Atoi(strings.TrimPrefix(peers[b].Pane, "%"))
+		return ai < bi
+	})
+}
+
+// sleepCutSentinel opens the resume message. It is what marks a banner as
+// handled once typed below it, so it must NOT contain sleepCutMarker — or
+// the nudge would re-trigger itself on the next tick — and a test pins that.
+const sleepCutSentinel = "you stalled (the machine slept mid-turn)"
+
+// sleepCutResumeMsg is what a sleep-cut teammate is told. It names the cause
+// so the agent does not diagnose one, and it states the two rules the leads
+// measured writing by hand every time: resume from what is already on disk,
+// and never redo finished work.
+const sleepCutResumeMsg = sleepCutSentinel + " — pick up exactly where you left off: re-read your own staged files first, never redo finished work, and if your assignment was already complete reply with its report path only"
+
+// RetrySleptTeammates nudges every sleep-cut teammate of a live cell whose
+// pane skip does not veto (the daemon's per-pane backoff), returning the
+// panes it actually nudged — the caller stamps its backoff off that list,
+// so a refused send (a permission prompt that opened between discovery and
+// the send, a pane that vanished) is retried on the next tick rather than
+// debounced. Errors from individual sends are collected rather than
+// aborting the sweep: one gone pane must not leave its siblings stalled.
+func RetrySleptTeammates(j *Job, all []*core.Peer, skip func(pane string) bool) ([]string, error) {
+	capture := func(pane string) string {
+		out, _ := core.CapturePane(pane)
+		return out
+	}
+	var nudged []string
+	var errs []string
+	for _, p := range sleepCutTeammates(j, all, capture) {
+		if skip != nil && skip(p.Pane) {
+			continue
+		}
+		if err := core.SendMessage(p, sleepCutResumeMsg); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", p.Pane, err))
+			continue
+		}
+		nudged = append(nudged, p.Pane)
+	}
+	if len(errs) > 0 {
+		return nudged, fmt.Errorf("teammate nudge failed: %s", strings.Join(errs, "; "))
+	}
+	return nudged, nil
 }
 
 // KillJob tears a live job's cell down completely and returns the job to
