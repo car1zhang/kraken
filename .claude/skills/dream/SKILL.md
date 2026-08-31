@@ -254,8 +254,11 @@ killed mid-write leaves a non-empty, truncated report, the same on-disk shape as
 so non-empty is not the test. For how
 to WAIT on that many report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet
 and the sub-bullets under it; it is the one specification of the protocol and it applies here
-unchanged. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor` and
-`SendMessage` in one `ToolSearch`, arm ONE background until-loop over every report path using `-s`
+unchanged. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor`,
+`SendMessage` and `TaskStop` in one `ToolSearch` — TaskStop included, because the pass's fixed shape
+ends by stopping its resident agents and armed watches, and a lead that skips it pays the extra
+round trip at the stop boundary, seconds before teardown — arm ONE background until-loop over
+every report path using `-s`
 not `-f`, end the turn, and treat an expiry as "one of them is missing" rather than as a reason to
 re-arm.)
 
@@ -397,7 +400,7 @@ line out of it — name the scout file even when you also cite the underlying tr
 report whose findings cite only cells and transcripts is indistinguishable, on this format's own
 check, from one synthesized from task notifications.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
-snapshot, the watched fact's edge id — and a `solo: true` night says so once at the top and cites what it read
+snapshot, the watched observation's row id — and a `solo: true` night says so once at the top and cites what it read
 directly. A night synthesized from notifications cannot produce the scout citations, so it fails its
 own report format rather than merely disobeying a paragraph. Cite the source you HAVE; a citation
 invented to satisfy the format is worse than none, in the one document whose whole value is that its
@@ -483,8 +486,8 @@ specific, and it is the only place the cell's real paths appear:
   directory is the only board-visible one, and the report is the deliverable; it is also what the
   board's `DREAM` view renders, so a pass that ships changes but writes no report is invisible.
 - **Read and write watched observations with `kraken watchlist get|add|update|remove`** — the same four
-  verbs, now backed by graph edges: an item's `id` IS its edge id, `add` folds server-side on a repeat
-  wording, and `remove` unwatches without deleting the fact. Sweep feedback with
+  verbs over the standalone `watch_items` store: an item's `id` is its watch-row id, `add` folds
+  server-side on a repeat wording, and `remove` closes the row without deleting it. Sweep feedback with
   `kraken feedback sweep --since <ts>`. Run `kraken feedback addressed <slug> <id> <text>` **only for
   a note you shipped a change for**, naming the PR in the text — see Evidence 1. **No other cell runs
   that verb at all**, so nothing closes a note if you do not. The slug is the one the note was left on,
