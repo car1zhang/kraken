@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,10 +52,12 @@ import (
 //     row back from `get` is told what it did wrong instead of believing a
 //     write landed.
 //
-// Behavior contract, identical to cmd_questions.go's (all four ops):
-//   - success: `get` prints the server's JSON to stdout verbatim, exit 0; a
-//     write prints one short confirmation line to STDERR (stdout stays
-//     parseable), exit 0.
+// Behavior contract, cmd_questions.go's with one deliberate delta (all four
+// ops):
+//   - success: `get` prints the server's JSON to stdout RE-INDENTED (same
+//     JSON, one field per line — see runWatchlistGet for why this verb alone
+//     departs from the family's verbatim rule), exit 0; a write prints one
+//     short confirmation line to STDERR (stdout stays parseable), exit 0.
 //   - a 400/404 (bad class, unknown id, a carl-owned key, malformed body)
 //     prints the server's own error message to stderr, exit non-zero.
 //   - kraken serve unreachable: a stderr message naming the address this
@@ -117,24 +120,57 @@ func watchlistRespID(body []byte) int64 {
 }
 
 // runWatchlistGet is `kraken watchlist get [state]`: GET /api/watchlist —
-// prints {"watchlist": [...]} straight through. The optional positional is
+// prints {"watchlist": [...]} re-indented. The optional positional is
 // the state filter (watching|shipped|declined); omitted means every row,
 // whatever its state. An unrecognized state is the SERVER's 400, not a local
 // check — one validation, one place, same thin-proxy rule the questions verbs
 // follow.
+//
+// The re-indent is this family's one departure from "print the server's bytes
+// verbatim", and it is for the verb's actual reader: the server emits the
+// whole list as ONE line, which passed 400KB on this machine — a size the
+// Read tool refuses outright at its single-line cap, so every nightly
+// consumer (the dream lead, each scout handed the overlay) was writing its
+// own throwaway parser just to look at the rows. Indented, the same JSON
+// pages normally and greps per-field; jq and json.loads consumers see the
+// identical document. It is still a LARGE document — parse it or narrow it
+// with the state filter rather than eyeballing the head, which under-reads
+// the list. Indent failure (a non-JSON error body some proxy
+// injected) degrades to the verbatim bytes rather than an error — the
+// re-indent is a readability courtesy, never a gate.
 func runWatchlistGet(args []string) ([]byte, error) {
 	switch len(args) {
 	case 0:
-		return qfGet("/api/watchlist")
+		return indentJSON(qfGet("/api/watchlist"))
 	case 1:
 		state := strings.TrimSpace(args[0])
 		if state == "" {
 			return nil, fmt.Errorf("usage: k watchlist get [watching|shipped|declined]")
 		}
-		return qfGet("/api/watchlist?state=" + url.QueryEscape(state))
+		return indentJSON(qfGet("/api/watchlist?state=" + url.QueryEscape(state)))
 	default:
 		return nil, fmt.Errorf("usage: k watchlist get [watching|shipped|declined]")
 	}
+}
+
+// indentJSON re-indents a JSON body for human/agent reading, passing the
+// fetch error through untouched and degrading to the original bytes when the
+// body does not indent (not JSON). Indented output always ends in exactly one
+// newline; a non-JSON body passes through byte-for-byte. json.Indent rather
+// than an Unmarshal/MarshalIndent round trip is load-bearing: Indent is
+// byte-preserving (key order, duplicate keys, number spellings, big-int
+// precision, raw UTF-8 all survive), so the output re-compacts to the exact
+// served document — a map round trip would break every one of those silently.
+func indentJSON(body []byte, err error) ([]byte, error) {
+	if err != nil {
+		return body, err
+	}
+	var buf bytes.Buffer
+	if json.Indent(&buf, bytes.TrimRight(body, "\n"), "", "  ") != nil {
+		return body, nil
+	}
+	buf.WriteByte('\n')
+	return buf.Bytes(), nil
 }
 
 // runWatchlistUpsert is `kraken watchlist add|update`: reads ONE watch-item
