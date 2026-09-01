@@ -361,13 +361,19 @@ func TestMineInputSummaryKeepsCDOnDisplay(t *testing.T) {
 	if a, b := id(short), id("cd /Users/carl/repo && sed -i '' 's|a|b|' main.go"); a != b || strings.Contains(a, "cd ") {
 		t.Errorf("identity should drop the cd: %q vs %q", a, b)
 	}
-	// compactPath's bound: three components stay whole, four compact.
+	// compactPath's bound: three components stay whole, four compact — and a
+	// trailing slash is trimmed first, or the kept "last component" would be
+	// the empty string (measured: 501 of 19,301 cd-prefixed commands in this
+	// machine's corpus end in a slash, every one long enough to compact).
 	for in, want := range map[string]string{
 		"/tmp/d831/probe":        "/tmp/d831/probe",
 		"/Users/carl/dev/wt-x":   "/Users/…/wt-x",
 		"api-service":            "api-service",
 		"a/b/c/d/e":              "a/b/…/e",
 		"/private/tmp/x/y/z/scr": "/private/…/scr",
+		"/Users/carl/dev/wt-x/.claude/skills/aim/assets/": "/Users/…/assets",
+		"/tmp/d831/probe/": "/tmp/d831/probe",
+		"/":                "/",
 	} {
 		if got := compactPath(in); got != want {
 			t.Errorf("compactPath(%q) = %q, want %q", in, got, want)

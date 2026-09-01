@@ -670,9 +670,10 @@ type mineSummaryKeys struct {
 // shellBoilerplateRE matches the boilerplate a Bash command can open with —
 // any run of `VAR=value;` assignments and `cd <path>` fragments terminated by
 // `;`, `&&` or a NEWLINE — which mineInputSummaryN strips so a signature
-// window (mineDisplayWindow for display, mineIdentityWindow for grouping)
-// lands on the command itself rather than on a path prefix longer than the
-// display window. Three deliberate bounds, each measured against the
+// window lands on the command itself rather than on a path prefix longer
+// than the display window: wholly for the identity window
+// (mineIdentityWindow, grouping), all but the `cd` fragments for the display
+// one (mineDisplayWindow — displayCDPrefix puts those back compacted). Three deliberate bounds, each measured against the
 // full command corpus: the value/path classes exclude WHITESPACE, so an
 // env-prefix form (`HOME=/tmp/x go test …`) is one command and never
 // stripped; the newline is a terminator, because `cd <path>\n<cmd>` is the
@@ -713,13 +714,23 @@ func displayCDPrefix(boilerplate string) string {
 	return b.String()
 }
 
-// compactPath keeps a path's first and last components with an ellipsis
-// between when it runs longer than three components — `/tmp/d831/probe`
-// stays whole, a cell worktree becomes `/Users/…/wt-monolith`. The first
-// component is the one that answers scratch-or-repo (`/tmp` vs `/Users`),
-// the last names the directory the command acts in, and the middle is what
-// ran a real worktree path past the whole display window.
+// compactPath keeps a path's ends with an ellipsis between when it runs
+// longer than three components — `/tmp/d831/probe` stays whole, a cell
+// worktree becomes `/Users/…/wt-monolith`, and a RELATIVE path keeps its
+// first TWO components (`a/b/…/e`), since for an absolute one "parts[0]" is
+// the empty segment before the leading slash. The first component is the one
+// that answers scratch-or-repo (`/tmp` vs `/Users`), the last names the
+// directory the command acts in, and the middle is what ran a real worktree
+// path past the whole display window (the bound is components, not runes —
+// a short-component path can still spend window, which is the stated trade).
+// A trailing slash is trimmed first: split raw, `cd <dir>/` would make the
+// kept "last component" the empty string and erase exactly the token this
+// function exists to keep — measured at 501 of 19,301 cd-prefixed commands
+// in this machine's corpus, every one of them long enough to compact.
 func compactPath(p string) string {
+	if trimmed := strings.TrimRight(p, "/"); trimmed != "" {
+		p = trimmed
+	}
 	parts := strings.Split(p, "/")
 	if len(parts) <= 4 {
 		return p
