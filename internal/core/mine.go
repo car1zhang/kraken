@@ -673,7 +673,8 @@ type mineSummaryKeys struct {
 // window lands on the command itself rather than on a path prefix longer
 // than the display window: wholly for the identity window
 // (mineIdentityWindow, grouping), all but the `cd` fragments for the display
-// one (mineDisplayWindow — displayCDPrefix puts those back compacted). Three deliberate bounds, each measured against the
+// one (mineDisplayWindow — displayCDPrefix puts those back compacted).
+// Three deliberate bounds, each measured against the
 // full command corpus: the value/path classes exclude WHITESPACE, so an
 // env-prefix form (`HOME=/tmp/x go test …`) is one command and never
 // stripped; the newline is a terminator, because `cd <path>\n<cmd>` is the
@@ -722,7 +723,8 @@ func displayCDPrefix(boilerplate string) string {
 // that answers scratch-or-repo (`/tmp` vs `/Users`), the last names the
 // directory the command acts in, and the middle is what ran a real worktree
 // path past the whole display window (the bound is components, not runes —
-// a short-component path can still spend window, which is the stated trade).
+// a path of few but individually long components still spends window, which
+// is the stated trade).
 // A trailing slash is trimmed first: split raw, `cd <dir>/` would make the
 // kept "last component" the empty string and erase exactly the token this
 // function exists to keep — measured at 501 of 19,301 cd-prefixed commands
