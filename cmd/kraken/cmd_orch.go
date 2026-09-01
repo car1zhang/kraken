@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"kraken/internal/core"
 	"kraken/internal/util"
 )
 
@@ -200,20 +201,33 @@ func runOrchAck(ids []int64, disposition string) ([]byte, error) {
 // the longest 6.9x the cap) was invisible from inside its loop. The stored
 // text is printed, and a cut gets a second line naming what survived.
 //
-// A body with no `disposition` (an older serve, still mid-update) falls back
-// to echoing the input, marked as an echo rather than passed off as storage.
+// A body with no `disposition` KEY (an older serve, still mid-update) falls
+// back to echoing the input, marked as an echo rather than passed off as
+// storage. The field is a pointer so that fallback keys on ABSENCE: a current
+// server can legitimately store an empty string (a control-character-only
+// disposition passes the route's TrimSpace gate and one-lines to nothing),
+// and reporting that server as an old one would revert to the input echo this
+// function exists to remove.
+//
+// Both counts in the warning line come from core.TruncateOneLine — the same
+// function the server measures with — never a local reimplementation: the
+// one-lining maps control runes to spaces BEFORE collapsing, so a hand-rolled
+// Fields-join disagrees with the server on any input carrying them, and this
+// repo has already paid once for one rule written out twice. The stored form
+// ends in the server's own ellipsis, so the callers'-runes-kept figure is the
+// stored count minus one.
 func renderOrchAck(body []byte, n int, sent string) string {
 	var resp struct {
-		Disposition string `json:"disposition"`
-		Truncated   bool   `json:"truncated"`
+		Disposition *string `json:"disposition"`
+		Truncated   bool    `json:"truncated"`
 	}
-	if err := json.Unmarshal(body, &resp); err != nil || resp.Disposition == "" {
+	if err := json.Unmarshal(body, &resp); err != nil || resp.Disposition == nil {
 		return fmt.Sprintf("acked %s (stored text not reported; sent): %s", plural(n, "item", "items"), sent)
 	}
-	line := fmt.Sprintf("acked %s: %s", plural(n, "item", "items"), resp.Disposition)
+	line := fmt.Sprintf("acked %s: %s", plural(n, "item", "items"), *resp.Disposition)
 	if resp.Truncated {
-		line += fmt.Sprintf("\nwarning: disposition truncated — the server kept the %d runes printed above of the %d you sent; the ack landed, the rest of the text did not",
-			utf8.RuneCountInString(resp.Disposition), utf8.RuneCountInString(strings.Join(strings.Fields(sent), " ")))
+		line += fmt.Sprintf("\nwarning: disposition truncated — the server kept the first %d of the %d runes you sent; the ack landed, the rest of the text did not",
+			utf8.RuneCountInString(*resp.Disposition)-1, utf8.RuneCountInString(core.TruncateOneLine(sent, 1<<30)))
 	}
 	return line
 }
