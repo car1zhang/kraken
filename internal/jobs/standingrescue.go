@@ -61,6 +61,10 @@ type standingAgent struct {
 	ID        string // the agent id: the kv key's suffix, and what carl reads
 	Session   string // the tmux session it lives in
 	AgentName string // the claude --name it runs under
+	// Model is the exact model id kraken pins this agent to on its command
+	// line (core.KronosModel / core.IrisModel) — what the model-drift pass in
+	// standingmodel.go holds the transcript against.
+	Model string
 	// Enabled is the feature gate: kronos' env file, iris' Slack credential.
 	// Consulted on every tick by both passes, so it must stay cheap.
 	Enabled func() bool
@@ -89,6 +93,7 @@ func standingAgents() []standingAgent {
 			ID:        KronosSessionName,
 			Session:   KronosSessionName,
 			AgentName: KronosAgentName,
+			Model:     core.KronosModel,
 			Enabled:   KronosEnabled,
 			RecordedSession: func(st *store.Store) (string, bool) {
 				a, ok := ReadKronosAgent(st)
@@ -101,6 +106,7 @@ func standingAgents() []standingAgent {
 			ID:        IrisSessionName,
 			Session:   IrisSessionName,
 			AgentName: IrisAgentName,
+			Model:     core.IrisModel,
 			Enabled:   irisEnabled,
 			RecordedSession: func(st *store.Store) (string, bool) {
 				// readIrisAgent dereferences the store without checking it,

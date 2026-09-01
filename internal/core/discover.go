@@ -664,8 +664,9 @@ func gitBranch(cwd string) string {
 	return ""
 }
 
-// readModel finds the model of the transcript's last assistant record.
-func readModel(path string) string {
+// readModelID finds the full model id of the transcript's last assistant
+// record, reading only the file's tail window.
+func readModelID(path string) string {
 	if path == "" {
 		return ""
 	}
@@ -708,7 +709,26 @@ func readModel(path string) string {
 			model = rec.Message.Model
 		}
 	}
-	return shortModel(model)
+	return model
+}
+
+// readModel is readModelID rendered for a table column: the newest assistant
+// record's model id in its short form (claude-fable-5 → fable-5).
+func readModel(path string) string {
+	return shortModel(readModelID(path))
+}
+
+// TranscriptModelID is readModelID exported: the FULL model id stamped on the
+// newest assistant record in the transcript's tail window, or "" when the
+// file cannot be read or holds no such record. It exists for one caller that
+// COMPARES rather than renders — the daemon's standing-agent model-drift pass,
+// which holds the id against a pinned constant such as KronosModel — and the
+// un-shortened form is what makes that comparison exact: the constants are
+// full ids, and a `<synthetic>` stamp (a limit banner's record) comes back as
+// itself, so the caller can refuse to act on it rather than reading it as a
+// drift to a model named "<synthetic>".
+func TranscriptModelID(path string) string {
+	return readModelID(path)
 }
 
 // shortModel compacts a model id for display: claude-fable-5 → fable-5.
