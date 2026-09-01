@@ -664,20 +664,36 @@ func gitBranch(cwd string) string {
 	return ""
 }
 
-// readModelID finds the full model id of the transcript's last assistant
-// record, reading only the file's tail window.
-func readModelID(path string) string {
+// TranscriptModelStamp finds the newest assistant record in the transcript's
+// tail window and returns its FULL model id plus that record's timestamp in
+// unix millis. It exists for a caller that COMPARES rather than renders — the
+// daemon's standing-agent model-drift pass, which holds the id against a
+// pinned constant such as KronosModel and the timestamp against the agent's
+// own spawn stamp (a `-r` resume appends to the SAME transcript, so a tail
+// record can belong to the previous process) — and the un-shortened form is
+// what makes the id comparison exact: the constants are full ids, and a
+// `<synthetic>` stamp (a limit banner's record) comes back as itself, so the
+// caller can refuse to act on it rather than reading it as a drift to a model
+// named "<synthetic>".
+//
+// Three empty-return cases, all "no answer" rather than errors: the file
+// cannot be read, its tail window holds no assistant record — or the newest
+// such record is itself longer than the window, whose partial line fails to
+// decode like any other torn line. The timestamp is 0 whenever the record
+// carries none that parses; the model can therefore arrive with a zero stamp,
+// and a caller that needs the clock must treat that as "no answer" too.
+func TranscriptModelStamp(path string) (model string, at int64) {
 	if path == "" {
-		return ""
+		return "", 0
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	const window = 64 * 1024
 	start := info.Size() - window
@@ -685,20 +701,20 @@ func readModelID(path string) string {
 		start = 0
 	}
 	if _, err := f.Seek(start, 0); err != nil {
-		return ""
+		return "", 0
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return ""
+		return "", 0
 	}
-	model := ""
 	for _, line := range strings.Split(string(data), "\n") {
 		if !strings.Contains(line, `"model"`) {
 			continue
 		}
 		var rec struct {
-			Type    string `json:"type"`
-			Message struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
 				Model string `json:"model"`
 			} `json:"message"`
 		}
@@ -707,28 +723,21 @@ func readModelID(path string) string {
 		}
 		if rec.Type == "assistant" && rec.Message.Model != "" {
 			model = rec.Message.Model
+			at = 0
+			if t, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil {
+				at = t.UnixMilli()
+			}
 		}
 	}
-	return model
+	return model, at
 }
 
-// readModel is readModelID rendered for a table column: the newest assistant
-// record's model id in its short form (claude-fable-5 → fable-5).
+// readModel is TranscriptModelStamp rendered for a table column: the newest
+// assistant record's model id in its short form (claude-fable-5 → fable-5),
+// clock dropped.
 func readModel(path string) string {
-	return shortModel(readModelID(path))
-}
-
-// TranscriptModelID is readModelID exported: the FULL model id stamped on the
-// newest assistant record in the transcript's tail window, or "" when the
-// file cannot be read or holds no such record. It exists for one caller that
-// COMPARES rather than renders — the daemon's standing-agent model-drift pass,
-// which holds the id against a pinned constant such as KronosModel — and the
-// un-shortened form is what makes that comparison exact: the constants are
-// full ids, and a `<synthetic>` stamp (a limit banner's record) comes back as
-// itself, so the caller can refuse to act on it rather than reading it as a
-// drift to a model named "<synthetic>".
-func TranscriptModelID(path string) string {
-	return readModelID(path)
+	model, _ := TranscriptModelStamp(path)
+	return shortModel(model)
 }
 
 // shortModel compacts a model id for display: claude-fable-5 → fable-5.

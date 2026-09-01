@@ -28,21 +28,37 @@ import (
 //
 // The evidence is the transcript, on the file's standing rule: the newest
 // assistant record of the RECORDED session id, never a discovered one
-// (core.TranscriptModelID). Peer.Model is not used even though `k ls` renders
-// the same drift from it, because for a flag-spawned process discovery takes
-// the model off the ARGV — exactly the value the drift departs from.
+// (core.TranscriptModelStamp). Peer.Model is not used even though `k ls`
+// renders the same drift from it, because it is the shortened display form
+// (`opus-4-8`, which cannot be compared against the full-id constants) and it
+// is read off the peer's DISCOVERED session id, where this pass's whole rule
+// is the recorded one.
 //
-// Three gates keep a respawn from becoming a loop, each measured against the
-// shape that would trip it. An open usage-limit hit defers the pass entirely:
-// that pane belongs to the rescue for the duration, and two passes killing
-// one session on one tick's snapshot would kill the fresh process with the
-// stale peer's evidence. A backoff stamp (kv, per agent) is written BEFORE
+// Two clocks and three gates keep a respawn honest, each against a measured
+// or probed shape. The record's own TIMESTAMP is held against the agent's
+// spawn stamp: a `-r` resume appends to the SAME transcript, so between any
+// restart (the limit rescue's, or carl's own `k k`) and the new process'
+// first assistant record, the tail still says the previous process' model —
+// judged without the clock, a freshly resumed, correctly-pinned agent reads
+// as drifted and eats one spurious kill plus a false notification. An open
+// RATE-LIMIT hit defers the pass entirely: that pane belongs to the rescue
+// for the duration, and two passes killing one session on one tick's
+// snapshot would kill the fresh process on the stale peer's evidence — but
+// only a hit the rescue will actually act on defers, because a hit of any
+// other error type is never resolved by anything (the rescue skips it
+// unresolved by design), and deferring to one would disable this pass
+// silently forever. And a backoff stamp (kv, per agent) is written BEFORE
 // the kill and honoured for standingModelDriftBackoff, so a refusal that
 // re-fires on the resumed session costs one respawn per window rather than
-// one per tick, and a stamp that cannot be written refuses the kill outright
-// — an unwritable watermark is the loop. And the identity gate is the
-// rescue's own (standingKillTarget): a nameless or unmatched pane defers the
-// round, never kills on the positional fallback.
+// one per tick; a stamp that cannot be written refuses the kill outright —
+// an unwritable watermark is the loop.
+//
+// Identity is standingKillTarget's, and it is the ONLY peer read the pass
+// makes: the drift judgment itself is peer-free (a transcript comparison),
+// so the kill gate is also the presence gate — a session holding no pane
+// that is the agent by name or by the recorded session id defers the round,
+// exactly as the rescue's resume arm does, and a still-booting claude (no
+// session file yet, so neither signature) is refused by the same check.
 
 // standingModelDriftBackoff is the least time between two drift respawns of
 // one agent. Six hours: long enough that a fallback which re-fires on every
@@ -58,26 +74,25 @@ func standingModelDriftKey(agentID string) string { return "model_drift:" + agen
 // standingModelDrift answers whether the agent's recorded transcript says it
 // is running on a model other than the one it is pinned to, returning the id
 // it found either way. Every quiet arm is a refusal to judge rather than a
-// verdict of "no drift": no pinned model (nothing to hold against), no live
-// peer or a NAMELESS one (a claude still starting, whose transcript tail is
-// the previous process'), no recorded session, no resolvable transcript, and
-// a tail record whose model is not a claude id at all — `<synthetic>` is a
-// limit banner's stamp, and acting on it would respawn an agent the rescue
-// is about to handle for the real reason.
-func standingModelDrift(a standingAgent, all []*core.Peer, recorded string) (got string, drifted bool) {
-	if a.Model == "" || a.Find == nil || recorded == "" {
-		return "", false
-	}
-	p := a.Find(all)
-	if p == nil || p.Name == "" {
+// verdict of "no drift": no pinned model (nothing to hold against), no
+// recorded session, no resolvable transcript, a tail record whose model is
+// not a claude id at all (`<synthetic>` is a limit banner's stamp, and acting
+// on it would respawn an agent the rescue is about to handle for the real
+// reason), a record with no parseable clock, and a record OLDER than the
+// agent's spawn stamp — the previous process' tail, not this one's evidence.
+func standingModelDrift(a standingAgent, recorded string, spawnedAt int64) (got string, drifted bool) {
+	if a.Model == "" || recorded == "" {
 		return "", false
 	}
 	transcript := core.TranscriptPathForSession(recorded)
 	if transcript == "" {
 		return "", false
 	}
-	got = core.TranscriptModelID(transcript)
+	got, at := core.TranscriptModelStamp(transcript)
 	if !strings.HasPrefix(got, "claude-") {
+		return got, false
+	}
+	if at == 0 || (spawnedAt > 0 && at < spawnedAt) {
 		return got, false
 	}
 	return got, got != a.Model
@@ -101,9 +116,11 @@ func readStandingModelStamp(st *store.Store, agentID string) int64 {
 }
 
 // standingModelPass is the tick's drift arm for one standing agent. It runs
-// BEFORE the health pass and the limit rescue on the daemon's loop, and defers
-// to an unresolved limit hit, which together are what keep the two kill
-// paths from both acting on one snapshot.
+// BEFORE the health pass and the limit rescue on the daemon's loop and defers
+// to an unresolved rate-limit hit, so at most one kill path acts per tick —
+// and the `<synthetic>` refusal above makes the two mutually exclusive on one
+// tail even without the ordering: a tail that classifies as a stall is
+// exactly one this pass refuses to judge.
 //
 // A respawn that FAILS keeps its stamp: the failure is logged and notified,
 // and the next attempt is a backoff window away rather than a tick away —
@@ -117,14 +134,21 @@ func (d *daemonState) standingModelPass(a standingAgent, st *store.Store, all []
 	if a.RecordedSession != nil {
 		recorded, _ = a.RecordedSession(st)
 	}
-	got, drifted := standingModelDrift(a, all, recorded)
+	spawnedAt := int64(0)
+	if a.SpawnStamp != nil {
+		spawnedAt = a.SpawnStamp(st)
+	}
+	got, drifted := standingModelDrift(a, recorded, spawnedAt)
 	if !drifted {
 		return
 	}
-	if hit := readLimitHitByKey(standingHitKey(a.ID)); hit.At != 0 && hit.HandledAt == 0 {
+	if hit := readLimitHitByKey(standingHitKey(a.ID)); hit.At != 0 && hit.HandledAt == 0 && hit.Error == "rate_limit" {
 		// The rescue owns this pane until the hit resolves; the drift is
 		// re-read next tick and every tick after, so nothing is lost by
-		// waiting for it.
+		// waiting for it. Scoped to rate_limit — the one error the rescue
+		// acts on — because any other hit stays unresolved forever by
+		// design, and an unscoped deferral would let one stray delivery
+		// disable this pass silently for the daemon's life.
 		return
 	}
 	if last := readStandingModelStamp(st, a.ID); last != 0 && now.Sub(time.Unix(last, 0)) < standingModelDriftBackoff {
@@ -133,6 +157,15 @@ func (d *daemonState) standingModelPass(a standingAgent, st *store.Store, all []
 	peer, why := standingKillTarget(a, all, recorded)
 	if peer == nil {
 		dlogEvent("info", "model-drift-skipped", "%s: on %s, pinned to %s — %s", a.ID, got, a.Model, why)
+		return
+	}
+	if peer.Status == "running" {
+		// This is the binary's one unprompted kill of a HEALTHY agent (the
+		// rescue only ever kills a latched one), so it does not land
+		// mid-turn: the pass runs every tick and the drift is not going
+		// anywhere, so deferring to an idle tick costs seconds and saves
+		// whatever the turn was doing. Silent — a log line per tick of a
+		// long turn would be spam.
 		return
 	}
 	// Stamped BEFORE the kill, and a stamp that cannot be written refuses the

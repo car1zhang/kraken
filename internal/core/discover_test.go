@@ -549,6 +549,50 @@ func TestShortModel(t *testing.T) {
 	}
 }
 
+// TranscriptModelStamp serves a caller that COMPARES against pinned full-id
+// constants and holds the record's clock against a spawn stamp, so it must
+// return the id un-shortened, the NEWEST assistant record's values, and a
+// zero clock for a record with no parseable timestamp.
+func TestTranscriptModelStamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	write := func(lines ...string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(
+		`{"type":"assistant","timestamp":"2026-08-25T10:00:00Z","message":{"model":"claude-fable-5","content":[]}}`,
+		`{"type":"assistant","timestamp":"2026-08-26T11:14:00Z","message":{"model":"claude-opus-4-8","content":[]}}`,
+	)
+	model, at := TranscriptModelStamp(path)
+	want := time.Date(2026, 8, 26, 11, 14, 0, 0, time.UTC).UnixMilli()
+	if model != "claude-opus-4-8" || at != want {
+		t.Fatalf("newest record: model=%q at=%d, want claude-opus-4-8/%d", model, at, want)
+	}
+
+	// A newest record with no parseable timestamp keeps its model and
+	// reports a zero clock — the caller's "no answer" for the stale-tail
+	// comparison.
+	write(`{"type":"assistant","message":{"model":"claude-opus-4-8","content":[]}}`)
+	if model, at = TranscriptModelStamp(path); model != "claude-opus-4-8" || at != 0 {
+		t.Fatalf("clockless record: model=%q at=%d, want claude-opus-4-8/0", model, at)
+	}
+
+	// No assistant record at all, an empty path, a missing file: no answer.
+	write(`{"type":"user","timestamp":"2026-08-26T11:14:00Z","message":{"content":[]}}`)
+	if model, at = TranscriptModelStamp(path); model != "" || at != 0 {
+		t.Fatalf("no assistant record: model=%q at=%d", model, at)
+	}
+	if model, at = TranscriptModelStamp(""); model != "" || at != 0 {
+		t.Fatalf("empty path: model=%q at=%d", model, at)
+	}
+	if model, at = TranscriptModelStamp(filepath.Join(t.TempDir(), "missing.jsonl")); model != "" || at != 0 {
+		t.Fatalf("missing file: model=%q at=%d", model, at)
+	}
+}
+
 func TestBranchGuard(t *testing.T) {
 	if err := BranchGuard(&Peer{Name: "x"}); err == nil {
 		t.Errorf("missing session id must be rejected")
