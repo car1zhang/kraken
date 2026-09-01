@@ -181,7 +181,7 @@ func (d *daemonState) standingModelPass(a standingAgent, st *store.Store, all []
 		// forbids asking, so that state is not a working turn).
 		//
 		// This is the binary's one unprompted kill of a HEALTHY agent (the
-		// rescue only ever kills a latched one), so it does not land
+		// rescue only ever kills a latched one), so it does not usually land
 		// mid-turn: the pass runs every tick and the drift is not going
 		// anywhere, so deferring to an idle tick costs seconds and saves
 		// whatever the turn was doing. Silent — a log line per tick of a
