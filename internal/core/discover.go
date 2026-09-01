@@ -723,10 +723,11 @@ func TranscriptModelStamp(path string) (model string, at int64) {
 		}
 		if rec.Type == "assistant" && rec.Message.Model != "" {
 			model = rec.Message.Model
-			at = 0
-			if t, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil {
-				at = t.UnixMilli()
-			}
+			// isoMillis, not an inline parse: same package, same job, and it
+			// also accepts the fractional-seconds form every real record
+			// carries. Reset per record so a clockless newest record cannot
+			// inherit an older one's time.
+			at = isoMillis(rec.Timestamp)
 		}
 	}
 	return model, at

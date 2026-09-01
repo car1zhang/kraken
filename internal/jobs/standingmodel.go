@@ -34,8 +34,10 @@ import (
 // is read off the peer's DISCOVERED session id, where this pass's whole rule
 // is the recorded one.
 //
-// Two clocks and three gates keep a respawn honest, each against a measured
-// or probed shape. The record's own TIMESTAMP is held against the agent's
+// Two clocks and four gates keep a respawn honest, each against a measured
+// or probed shape — the rate-limit deferral, the backoff stamp, the identity
+// gate, and the idle-peer deferral at the kill site (a working agent is not
+// killed mid-turn). The record's own TIMESTAMP is held against the agent's
 // spawn stamp: a `-r` resume appends to the SAME transcript, so between any
 // restart (the limit rescue's, or carl's own `k k`) and the new process'
 // first assistant record, the tail still says the previous process' model —
@@ -53,8 +55,10 @@ import (
 // one per tick; a stamp that cannot be written refuses the kill outright —
 // an unwritable watermark is the loop.
 //
-// Identity is standingKillTarget's, and it is the ONLY peer read the pass
-// makes: the drift judgment itself is peer-free (a transcript comparison),
+// Identity is standingKillTarget's, and that is the only LOOKUP into the
+// discovery snapshot the pass makes (the idle check below reads a field off
+// the peer that lookup returned): the drift judgment itself is peer-free (a
+// transcript comparison),
 // so the kill gate is also the presence gate — a session holding no pane
 // that is the agent by name or by the recorded session id defers the round,
 // exactly as the rescue's resume arm does, and a still-booting claude (no
@@ -117,10 +121,12 @@ func readStandingModelStamp(st *store.Store, agentID string) int64 {
 
 // standingModelPass is the tick's drift arm for one standing agent. It runs
 // BEFORE the health pass and the limit rescue on the daemon's loop and defers
-// to an unresolved rate-limit hit, so at most one kill path acts per tick —
-// and the `<synthetic>` refusal above makes the two mutually exclusive on one
-// tail even without the ordering: a tail that classifies as a stall is
-// exactly one this pass refuses to judge.
+// to an unresolved rate-limit hit — those two are what keep the kill paths to
+// at most one per tick. The `<synthetic>` refusal above usually separates the
+// two on the tail as well, but not always: LastStall skips sidechain and meta
+// records where TranscriptModelStamp does not, so one sidechain assistant
+// record after a limit banner splits which record each reads (probed) — the
+// ordering and the deferral are the guards, not the refusal.
 //
 // A respawn that FAILS keeps its stamp: the failure is logged and notified,
 // and the next attempt is a backoff window away rather than a tick away —
@@ -156,10 +162,24 @@ func (d *daemonState) standingModelPass(a standingAgent, st *store.Store, all []
 	}
 	peer, why := standingKillTarget(a, all, recorded)
 	if peer == nil {
-		dlogEvent("info", "model-drift-skipped", "%s: on %s, pinned to %s — %s", a.ID, got, a.Model, why)
+		// Deduped on the reason: a sustained refusal (a live session whose
+		// only pane is not the agent — in practice something carl started in
+		// a session named kronos/iris) would otherwise log every tick for as
+		// long as it lasts, the exact unbounded-event hazard the rescue's
+		// no-agents arm names. One line per distinct reason per daemon run.
+		nkey := "model-drift-skip:" + a.ID + "|" + why
+		if d.Notified[nkey] == 0 {
+			dlogEvent("info", "model-drift-skipped", "%s: on %s, pinned to %s — %s", a.ID, got, a.Model, why)
+			d.Notified[nkey] = now.Unix()
+		}
 		return
 	}
 	if peer.Status == "running" {
+		// Makes a mid-turn kill unlikely rather than impossible — the status
+		// is the tick's snapshot, so a turn starting after it is not seen,
+		// and a pane at a question prompt reads "question" (kronos' brief
+		// forbids asking, so that state is not a working turn).
+		//
 		// This is the binary's one unprompted kill of a HEALTHY agent (the
 		// rescue only ever kills a latched one), so it does not land
 		// mid-turn: the pass runs every tick and the drift is not going
