@@ -1029,6 +1029,10 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				// reading inside limitRescue; the standing signature makes the
 				// clock a parameter, so the freshness is the call site's job.
 				standingNow := time.Now()
+				// Drift first, and it defers to an open hit: the two kill
+				// paths read one snapshot, so at most one of them may act on
+				// it per tick (standingmodel.go).
+				d.standingModelPass(a, st, all, live, standingNow)
 				d.standingHealthPass(a, st, all, live, standingNow)
 				d.standingLimitRescue(a, st, all, live, standingNow)
 			}

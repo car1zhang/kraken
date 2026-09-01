@@ -664,19 +664,36 @@ func gitBranch(cwd string) string {
 	return ""
 }
 
-// readModel finds the model of the transcript's last assistant record.
-func readModel(path string) string {
+// TranscriptModelStamp finds the newest assistant record in the transcript's
+// tail window and returns its FULL model id plus that record's timestamp in
+// unix millis. It exists for a caller that COMPARES rather than renders — the
+// daemon's standing-agent model-drift pass, which holds the id against a
+// pinned constant such as KronosModel and the timestamp against the agent's
+// own spawn stamp (a `-r` resume appends to the SAME transcript, so a tail
+// record can belong to the previous process) — and the un-shortened form is
+// what makes the id comparison exact: the constants are full ids, and a
+// `<synthetic>` stamp (a limit banner's record) comes back as itself, so the
+// caller can refuse to act on it rather than reading it as a drift to a model
+// named "<synthetic>".
+//
+// Three empty-return cases, all "no answer" rather than errors: the file
+// cannot be read, its tail window holds no assistant record — or the newest
+// such record is itself longer than the window, whose partial line fails to
+// decode like any other torn line. The timestamp is 0 whenever the record
+// carries none that parses; the model can therefore arrive with a zero stamp,
+// and a caller that needs the clock must treat that as "no answer" too.
+func TranscriptModelStamp(path string) (model string, at int64) {
 	if path == "" {
-		return ""
+		return "", 0
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	const window = 64 * 1024
 	start := info.Size() - window
@@ -684,20 +701,20 @@ func readModel(path string) string {
 		start = 0
 	}
 	if _, err := f.Seek(start, 0); err != nil {
-		return ""
+		return "", 0
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return ""
+		return "", 0
 	}
-	model := ""
 	for _, line := range strings.Split(string(data), "\n") {
 		if !strings.Contains(line, `"model"`) {
 			continue
 		}
 		var rec struct {
-			Type    string `json:"type"`
-			Message struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
 				Model string `json:"model"`
 			} `json:"message"`
 		}
@@ -706,8 +723,20 @@ func readModel(path string) string {
 		}
 		if rec.Type == "assistant" && rec.Message.Model != "" {
 			model = rec.Message.Model
+			// isoMillis, not an inline parse: same package, same job, the
+			// package's one spelling of this parse. Reset per record so a
+			// clockless newest record cannot inherit an older one's time.
+			at = isoMillis(rec.Timestamp)
 		}
 	}
+	return model, at
+}
+
+// readModel is TranscriptModelStamp rendered for a table column: the newest
+// assistant record's model id in its short form (claude-fable-5 → fable-5),
+// clock dropped.
+func readModel(path string) string {
+	model, _ := TranscriptModelStamp(path)
 	return shortModel(model)
 }
 

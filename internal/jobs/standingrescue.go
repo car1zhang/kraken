@@ -61,13 +61,22 @@ type standingAgent struct {
 	ID        string // the agent id: the kv key's suffix, and what carl reads
 	Session   string // the tmux session it lives in
 	AgentName string // the claude --name it runs under
+	// Model is the exact model id kraken pins this agent to on its command
+	// line (core.KronosModel / core.IrisModel) — what the model-drift pass in
+	// standingmodel.go holds the transcript against.
+	Model string
 	// Enabled is the feature gate: kronos' env file, iris' Slack credential.
-	// Consulted on every tick by both passes, so it must stay cheap.
+	// Consulted on every tick by every pass, so it must stay cheap.
 	Enabled func() bool
 	// RecordedSession returns the session id kraken minted for this agent, and
 	// whether one has ever been recorded. The ONLY session id anything here
 	// classifies or kills on.
 	RecordedSession func(*store.Store) (string, bool)
+	// SpawnStamp returns the agent's SpawnedAt (unix millis; 0 when never
+	// recorded) — the clock the model-drift pass holds a transcript tail
+	// against, since a resume appends to the same transcript and a tail
+	// record older than the spawn belongs to the previous process.
+	SpawnStamp func(*store.Store) int64
 	// Find locates the agent's live peer in a discovery snapshot. Its
 	// positional fallback (a nameless depth-0 claude, still starting) is fine
 	// for "is it there?" and is deliberately NOT enough to authorize a kill —
@@ -89,10 +98,15 @@ func standingAgents() []standingAgent {
 			ID:        KronosSessionName,
 			Session:   KronosSessionName,
 			AgentName: KronosAgentName,
+			Model:     core.KronosModel,
 			Enabled:   KronosEnabled,
 			RecordedSession: func(st *store.Store) (string, bool) {
 				a, ok := ReadKronosAgent(st)
 				return a.SessionID, ok
+			},
+			SpawnStamp: func(st *store.Store) int64 {
+				a, _ := ReadKronosAgent(st)
+				return a.SpawnedAt
 			},
 			Find:    findKronos,
 			Respawn: respawnKronos,
@@ -101,6 +115,7 @@ func standingAgents() []standingAgent {
 			ID:        IrisSessionName,
 			Session:   IrisSessionName,
 			AgentName: IrisAgentName,
+			Model:     core.IrisModel,
 			Enabled:   irisEnabled,
 			RecordedSession: func(st *store.Store) (string, bool) {
 				// readIrisAgent dereferences the store without checking it,
@@ -111,6 +126,14 @@ func standingAgents() []standingAgent {
 				}
 				a, ok := readIrisAgent(st)
 				return a.SessionID, ok
+			},
+			SpawnStamp: func(st *store.Store) int64 {
+				// Same nil gate as RecordedSession above, same reason.
+				if st == nil {
+					return 0
+				}
+				a, _ := readIrisAgent(st)
+				return a.SpawnedAt
 			},
 			Find:    findIris,
 			Respawn: respawnIris,
