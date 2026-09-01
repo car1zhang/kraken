@@ -3773,8 +3773,15 @@ var orchAckReqSpec = map[string]fieldSpec{
 	"disposition": {kind: wireString, required: true},
 }
 
+// The response carries the disposition AS STORED and whether storing it cut
+// anything: the server truncates silently, and the CLI used to echo the
+// caller's own input back as its success line, so an overrun was invisible
+// from inside kronos' loop (measured: 21 of 25 acks in one day over the cap,
+// 26.5% of what kronos composed surviving). Both additive — no bump.
 var orchAckRespSpec = map[string]fieldSpec{
-	"ok": {kind: wireBool, required: true},
+	"ok":          {kind: wireBool, required: true},
+	"disposition": {kind: wireString, required: true},
+	"truncated":   {kind: wireBool, required: true},
 }
 
 // orchContextReqSpec / orchContextRespSpec cover POST /api/orch/context —

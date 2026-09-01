@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"kraken/internal/util"
 )
@@ -53,10 +55,11 @@ func cmdOrch(args []string) {
 		if err != nil {
 			util.Die("%v", err)
 		}
-		if err := runOrchAck(ids, disposition); err != nil {
+		body, err := runOrchAck(ids, disposition)
+		if err != nil {
 			util.Die("%v", err)
 		}
-		fmt.Fprintf(os.Stderr, "acked %s: %s\n", plural(len(ids), "item", "items"), disposition)
+		fmt.Fprintln(os.Stderr, renderOrchAck(body, len(ids), disposition))
 	default:
 		util.Die("usage: k orch inbox|ack ... (unknown op %q)", op)
 	}
@@ -185,7 +188,32 @@ func parseOrchIDs(raw string) ([]int64, error) {
 // runOrchAck posts the batch. The disposition is sent as typed — the server
 // one-lines and truncates it (200 runes) rather than refusing an over-long
 // one, so no local cap is duplicated here where it could drift.
-func runOrchAck(ids []int64, disposition string) error {
-	_, err := qfPost("/api/orch/ack", map[string]any{"ids": ids, "disposition": disposition})
-	return err
+func runOrchAck(ids []int64, disposition string) ([]byte, error) {
+	return qfPost("/api/orch/ack", map[string]any{"ids": ids, "disposition": disposition})
+}
+
+// renderOrchAck is the success line `k orch ack` prints, built from what the
+// SERVER says it stored rather than from what the caller sent. The route
+// one-lines and caps a disposition at 200 runes silently, and the old line
+// echoed the caller's own string back — so the tool result kronos read was
+// a mirror of its input, and an overrun (measured: 21 of 25 acks in one day,
+// the longest 6.9x the cap) was invisible from inside its loop. The stored
+// text is printed, and a cut gets a second line naming what survived.
+//
+// A body with no `disposition` (an older serve, still mid-update) falls back
+// to echoing the input, marked as an echo rather than passed off as storage.
+func renderOrchAck(body []byte, n int, sent string) string {
+	var resp struct {
+		Disposition string `json:"disposition"`
+		Truncated   bool   `json:"truncated"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil || resp.Disposition == "" {
+		return fmt.Sprintf("acked %s (stored text not reported; sent): %s", plural(n, "item", "items"), sent)
+	}
+	line := fmt.Sprintf("acked %s: %s", plural(n, "item", "items"), resp.Disposition)
+	if resp.Truncated {
+		line += fmt.Sprintf("\nwarning: disposition truncated — the server kept the %d runes printed above of the %d you sent; the ack landed, the rest of the text did not",
+			utf8.RuneCountInString(resp.Disposition), utf8.RuneCountInString(strings.Join(strings.Fields(sent), " ")))
+	}
+	return line
 }

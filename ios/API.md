@@ -2183,7 +2183,7 @@ Request: `{"ids": [number], "disposition": string}`.
 - `disposition` is a free string carrying what happened (`steered:<slug>`, `answered:<slug>`, `ignored:<reason>`). It is one-lined and truncated to **200 runes** server-side rather than refused, the same treatment `/api/slack/ack`'s disposition gets. An EMPTY one (after trim) IS refused: "acked, reason unknown" is indistinguishable from a bug that acks everything.
 - The body is decoded with **unknown fields rejected**: `ids`, `disposition`, and nothing else.
 
-Response: `{"ok": true}`.
+Response: `{"ok": true, "disposition": string, "truncated": bool}` (`orchAckResp`, orch.go) — `disposition` is the text AS STORED (one-lined, capped), and `truncated` says whether the cap cut it. Both exist because the cap is silent and the caller is the only party that can act on an overrun: `k orch ack` prints the stored text and a warning line when `truncated` is true, where it used to echo the caller's own input back. Additive keys; the iOS app and web UI do not call this route.
 
 Errors: 405 (non-POST), 400 (bad json; an unrecognized field; empty or absent `ids`; empty `disposition`), 409 carrying the store's own sentence — which names the offending id — for an unknown or already-acked id, 413 (body over 1 MiB), 500 (no store wired). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
 
