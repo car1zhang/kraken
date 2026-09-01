@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
+	"kraken/internal/core"
 	"kraken/internal/util"
 )
 
@@ -53,10 +56,11 @@ func cmdOrch(args []string) {
 		if err != nil {
 			util.Die("%v", err)
 		}
-		if err := runOrchAck(ids, disposition); err != nil {
+		body, err := runOrchAck(ids, disposition)
+		if err != nil {
 			util.Die("%v", err)
 		}
-		fmt.Fprintf(os.Stderr, "acked %s: %s\n", plural(len(ids), "item", "items"), disposition)
+		fmt.Fprintln(os.Stderr, renderOrchAck(body, len(ids), disposition))
 	default:
 		util.Die("usage: k orch inbox|ack ... (unknown op %q)", op)
 	}
@@ -185,7 +189,46 @@ func parseOrchIDs(raw string) ([]int64, error) {
 // runOrchAck posts the batch. The disposition is sent as typed — the server
 // one-lines and truncates it (200 runes) rather than refusing an over-long
 // one, so no local cap is duplicated here where it could drift.
-func runOrchAck(ids []int64, disposition string) error {
-	_, err := qfPost("/api/orch/ack", map[string]any{"ids": ids, "disposition": disposition})
-	return err
+func runOrchAck(ids []int64, disposition string) ([]byte, error) {
+	return qfPost("/api/orch/ack", map[string]any{"ids": ids, "disposition": disposition})
+}
+
+// renderOrchAck is the success line `k orch ack` prints, built from what the
+// SERVER says it stored rather than from what the caller sent. The route
+// one-lines and caps a disposition at 200 runes silently, and the old line
+// echoed the caller's own string back — so the tool result kronos read was
+// a mirror of its input, and an overrun (measured: 21 of 25 acks in one day,
+// the longest 6.9x the cap) was invisible from inside its loop. The stored
+// text is printed, and a cut gets a second line naming what survived.
+//
+// A body with no `disposition` KEY (an older serve, still mid-update) falls
+// back to echoing the input, marked as an echo rather than passed off as
+// storage. The field is a pointer so that fallback keys on ABSENCE: a current
+// server can legitimately store an empty string (a control-character-only
+// disposition passes the route's TrimSpace gate and one-lines to nothing),
+// and reporting that server as an old one would revert to the input echo this
+// function exists to remove.
+//
+// Both counts in the warning line come from core.TruncateOneLine — the same
+// function the server measures with — never a local reimplementation: the
+// one-lining maps control runes to spaces BEFORE collapsing, so a hand-rolled
+// Fields-join disagrees with the server on any input carrying them, and this
+// repo has already paid once for one rule written out twice. The stored form
+// ends in the server's own ellipsis, so the callers'-runes-kept figure trims
+// it off — a TrimSuffix rather than a -1, so it states the convention instead
+// of encoding it and cannot go negative on a body this server never produces.
+func renderOrchAck(body []byte, n int, sent string) string {
+	var resp struct {
+		Disposition *string `json:"disposition"`
+		Truncated   bool    `json:"truncated"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil || resp.Disposition == nil {
+		return fmt.Sprintf("acked %s (stored text not reported; sent): %s", plural(n, "item", "items"), sent)
+	}
+	line := fmt.Sprintf("acked %s: %s", plural(n, "item", "items"), *resp.Disposition)
+	if resp.Truncated {
+		line += fmt.Sprintf("\nwarning: disposition truncated — the server kept the first %d of the %d runes you sent; the ack landed, the rest of the text did not",
+			utf8.RuneCountInString(strings.TrimSuffix(*resp.Disposition, "…")), utf8.RuneCountInString(core.TruncateOneLine(sent, 1<<30)))
+	}
+	return line
 }

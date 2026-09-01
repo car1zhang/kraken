@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"kraken/internal/core"
 	"kraken/internal/jobs"
@@ -67,6 +68,22 @@ import (
 // different thing and IS refused: "I handled this" with no statement of how
 // is the one answer the inbox cannot use.
 const orchDispositionMax = 200
+
+// orchAckResp is POST /api/orch/ack's success body. It carries the
+// disposition AS STORED beside the bare ok, plus whether storing it cut
+// anything, because the truncation above is silent by design and the caller
+// is the one party that can act on it: kronos composes its ack from the tool
+// result it reads back, and measured over one day it composed 18,887 runes
+// into 25 acks of which the column kept 26.5% — 21 of 25 over the cap, the
+// longest 6.9x — while the CLI's success line echoed kronos' own input back,
+// so nothing in its loop could see that the tail of every record it wrote
+// was gone. The stored text is what the echo now prints, and `truncated` is
+// what turns a quiet overrun into a line the agent reads.
+type orchAckResp struct {
+	OK          bool   `json:"ok"`
+	Disposition string `json:"disposition"`
+	Truncated   bool   `json:"truncated"`
+}
 
 // orchInboxMax caps how many rows GET /api/orch/inbox SERVES in one call —
 // the oldest 100, since the read is oldest-first and the oldest item is the
@@ -282,6 +299,10 @@ func orchAckHandler(w http.ResponseWriter, r *http.Request) {
 	// RUNES, which is what keeps a multi-byte disposition from blowing the cap
 	// where a byte count would not.
 	disposition := core.TruncateOneLine(req.Disposition, orchDispositionMax)
+	// Truncation is judged on the one-lined form at an uncapped width, so a
+	// disposition whose only excess was whitespace runs or newlines — which
+	// one-lining collapses without losing a word — is not reported as cut.
+	truncated := utf8.RuneCountInString(core.TruncateOneLine(req.Disposition, 1<<30)) > orchDispositionMax
 	if err := st.AckOrchItems(req.IDs, disposition, time.Now().UnixMilli()); err != nil {
 		// 409 rather than 400/500 for slackAckHandler's reason: every refusal
 		// this call makes is about the CURRENT STATE of the named rows (an id
@@ -293,7 +314,7 @@ func orchAckHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	webJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	webJSON(w, http.StatusOK, orchAckResp{OK: true, Disposition: disposition, Truncated: truncated})
 }
 
 // orchContextHandler serves POST /api/orch/context — the statusline hook
