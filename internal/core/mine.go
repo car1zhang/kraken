@@ -645,7 +645,7 @@ const mineIdentityWindow = 1000
 // short `description` precedes `prompt` — so a cluster on those tools says
 // "same key", not "same call".
 func callIdentity(name string, input json.RawMessage) string {
-	return name + "(" + mineInputSummaryN(input, mineIdentityWindow) + ")"
+	return name + "(" + mineInputSummaryN(input, mineIdentityWindow, false) + ")"
 }
 
 // mineSummaryKeys are the input keys that identify a call, in the priority
@@ -684,6 +684,49 @@ type mineSummaryKeys struct {
 // values stay distinct, so nothing collapses.
 var shellBoilerplateRE = regexp.MustCompile(`^(?:[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|]*[ \t]*(?:;|\n)|cd[ \t]+[^\s;&|]+[ \t]*(?:;|&&|\n))\s*)+`)
 
+// shellCDRE picks the `cd <path>` fragments back out of a boilerplate prefix
+// shellBoilerplateRE matched, for the display form to keep.
+var shellCDRE = regexp.MustCompile(`cd[ \t]+([^\s;&|]+)`)
+
+// displayCDPrefix renders the `cd` half of a stripped boilerplate prefix back
+// in front of the command, as `cd <compact path> && ` per fragment (the
+// original separator — `;`, `&&` or a newline — is not preserved; the
+// fragment's meaning is WHERE, and `&&` reads it). The env-assignment half
+// stays stripped: a `S=<scratchpad>; ` says nothing about where the command
+// acts, and it is the prefix that measurably ate the whole window.
+//
+// The DISPLAY form keeps `cd` where the identity form drops it because the
+// two answer different questions. Identity groups literal re-runs, and a
+// command re-issued from another directory is the same command — dropping
+// the prefix there is the strip working as intended. Display is what a
+// reader judges a call BY, and a Bash write's directory is the one token
+// that says whether it landed in scratch or in the repo: rendered without
+// it, `cd /tmp/probe && sed -i … main.go` reads as an in-place edit of a
+// repo file, and two nights of dream scouts filed exactly that against
+// reviewers whose every write was under /tmp — each cleared only by a raw
+// query the reduced view exists to make unnecessary.
+func displayCDPrefix(boilerplate string) string {
+	var b strings.Builder
+	for _, m := range shellCDRE.FindAllStringSubmatch(boilerplate, -1) {
+		b.WriteString("cd " + compactPath(m[1]) + " && ")
+	}
+	return b.String()
+}
+
+// compactPath keeps a path's first and last components with an ellipsis
+// between when it runs longer than three components — `/tmp/d831/probe`
+// stays whole, a cell worktree becomes `/Users/…/wt-monolith`. The first
+// component is the one that answers scratch-or-repo (`/tmp` vs `/Users`),
+// the last names the directory the command acts in, and the middle is what
+// ran a real worktree path past the whole display window.
+func compactPath(p string) string {
+	parts := strings.Split(p, "/")
+	if len(parts) <= 4 {
+		return p
+	}
+	return parts[0] + "/" + parts[1] + "/…/" + parts[len(parts)-1]
+}
+
 // mineRawSummaryCap bounds the bytes a key-less input contributes to a
 // signature, so converting the raw never copies a multi-megabyte input to
 // keep a window of it. It must stay comfortably above the WIDEST caller's
@@ -695,9 +738,10 @@ var shellBoilerplateRE = regexp.MustCompile(`^(?:[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*
 const mineRawSummaryCap = 8192
 
 // mineInputSummary is the display-window form of mineInputSummaryN — the
-// one callers use for anything a person reads.
+// one callers use for anything a person reads — and the form that keeps a
+// command's `cd` prefix (displayCDPrefix).
 func mineInputSummary(input json.RawMessage) string {
-	return mineInputSummaryN(input, mineDisplayWindow)
+	return mineInputSummaryN(input, mineDisplayWindow, true)
 }
 
 // mineInputSummaryN is summarizeInput's rule applied to a still-encoded tool
@@ -721,7 +765,11 @@ func mineInputSummary(input json.RawMessage) string {
 // can cut a credential to a fragment below its shape's minimum length, and
 // the fragment then walks through the redactor — the exact case is a Slack
 // cookie sitting past rune 100 of a `printf … >> slack.env` command.
-func mineInputSummaryN(input json.RawMessage, window int) string {
+//
+// keepCD is the display/identity split for a Bash command's boilerplate
+// prefix: the identity form drops `cd <path>` fragments with the rest of the
+// boilerplate, the display form keeps them compacted (displayCDPrefix).
+func mineInputSummaryN(input json.RawMessage, window int, keepCD bool) string {
 	if len(input) == 0 {
 		return ""
 	}
@@ -742,8 +790,13 @@ func mineInputSummaryN(input json.RawMessage, window int) string {
 		// distinct commands distinct). Stripping reveals the command; if the
 		// command WAS only boilerplate, keep the original rather than an
 		// empty signature.
-		if cmd := shellBoilerplateRE.ReplaceAllString(k.Command, ""); strings.TrimSpace(cmd) != "" {
-			return TruncateOneLine(redactSecrets(cmd), window)
+		if pre := shellBoilerplateRE.FindString(k.Command); pre != "" {
+			if cmd := k.Command[len(pre):]; strings.TrimSpace(cmd) != "" {
+				if keepCD {
+					cmd = displayCDPrefix(pre) + cmd
+				}
+				return TruncateOneLine(redactSecrets(cmd), window)
+			}
 		}
 		return TruncateOneLine(redactSecrets(k.Command), window)
 	}
