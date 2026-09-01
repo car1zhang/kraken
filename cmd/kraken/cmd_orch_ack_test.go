@@ -48,7 +48,8 @@ func TestRenderOrchAckSentCountMatchesTheServersOneLining(t *testing.T) {
 	// "a \x1b\x1b byyy…" one-lines to "a byyy…": the controls become spaces
 	// and collapse into the single separator, so the count is
 	// 1 ("a") + 1 (space) + 301 ("b" + 300 y's) = 303 — where a Fields-join
-	// that never mapped the controls would keep them as two extra runes plus their separator and say 306.
+	// that never mapped the controls would keep them as two extra runes plus
+	// their separator and say 306.
 	want := "of the 303 runes you sent"
 	if !strings.Contains(got, want) {
 		t.Fatalf("sent count diverges from the server's one-lining: %q (want %q)", got, want)

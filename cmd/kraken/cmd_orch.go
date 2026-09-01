@@ -214,8 +214,9 @@ func runOrchAck(ids []int64, disposition string) ([]byte, error) {
 // one-lining maps control runes to spaces BEFORE collapsing, so a hand-rolled
 // Fields-join disagrees with the server on any input carrying them, and this
 // repo has already paid once for one rule written out twice. The stored form
-// ends in the server's own ellipsis, so the callers'-runes-kept figure is the
-// stored count minus one.
+// ends in the server's own ellipsis, so the callers'-runes-kept figure trims
+// it off — a TrimSuffix rather than a -1, so it states the convention instead
+// of encoding it and cannot go negative on a body this server never produces.
 func renderOrchAck(body []byte, n int, sent string) string {
 	var resp struct {
 		Disposition *string `json:"disposition"`
@@ -227,7 +228,7 @@ func renderOrchAck(body []byte, n int, sent string) string {
 	line := fmt.Sprintf("acked %s: %s", plural(n, "item", "items"), *resp.Disposition)
 	if resp.Truncated {
 		line += fmt.Sprintf("\nwarning: disposition truncated — the server kept the first %d of the %d runes you sent; the ack landed, the rest of the text did not",
-			utf8.RuneCountInString(*resp.Disposition)-1, utf8.RuneCountInString(core.TruncateOneLine(sent, 1<<30)))
+			utf8.RuneCountInString(strings.TrimSuffix(*resp.Disposition, "…")), utf8.RuneCountInString(core.TruncateOneLine(sent, 1<<30)))
 	}
 	return line
 }
