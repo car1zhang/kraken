@@ -1064,7 +1064,17 @@ const mineTextCap = 64 * 1024
 // one and the cookie's high-entropy tail was emitted verbatim (or, with one
 // inside the first 8 chars, the cookie never matched at all). None of the
 // three can START a match, so admitting them only extends redaction.
-var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+// The dotted-pair arm is the one structural (non-prefix) shape admitted: an
+// 8-rune alnum key id, a dot, then a 32-44-rune alnum secret — the
+// `<id>.<secret>` form Baseten-family API keys take, measured leaking
+// through this scrubber verbatim (2026-09-01: a live key rode 11 transcript
+// records and 10 command lines unredacted, because every arm here was
+// prefix-keyed). RE2 has no lookahead to demand mixed case, so the lengths
+// are banded tight instead of open-ended, both ends anchored on \b: the
+// nearest legitimate look-alikes (webpack `chunk123.<contenthash>` names,
+// `short.fullsha` pairs) miss on length or charset, and the cost of a rare
+// false positive is one redacted token in a reduced view, not lost meaning.
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,}|[A-Za-z0-9]{8}\.[A-Za-z0-9]{32,44}\b)`)
 
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough

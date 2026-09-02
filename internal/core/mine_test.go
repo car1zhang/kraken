@@ -1138,6 +1138,16 @@ func TestRedactSecrets(t *testing.T) {
 		{"compact eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig", "compact eyJhb…[redacted]"},
 		{"d=xoxd-9Aa1Bb2C/c3Dd4Ee+5Ff6Gg7Hh8Ii9Jj0Kk=", "d=xoxd-…[redacted]"},
 		{"d=xoxd-AA+BBBBBBBBBBBBBBBBBBBBBBBBBB", "d=xoxd-…[redacted]"},
+		// The dotted-pair arm: an 8-rune alnum id, a dot, a 32-44-rune alnum
+		// secret — the <id>.<secret> form Baseten-family keys take (the value
+		// here is invented; the real leak's shape was 8.32).
+		{"key aB3dE6gH.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPq set", "key aB3dE…[redacted] set"},
+		// Suffix under the band: a webpack-style chunk hash stays readable.
+		{"chunk mainapp1.abcdef1234 stays", "chunk mainapp1.abcdef1234 stays"},
+		// A longer id has no \b-anchored 8-rune prefix, so module.hash names miss.
+		{"path somelongword.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPq stays", "path somelongword.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPq stays"},
+		// Suffix over the band: the trailing \b cannot land inside an alnum run.
+		{"run abcdefgh.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZaBcD stays", "run abcdefgh.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZaBcD stays"},
 		{"plain prose about a session token and a cookie", "plain prose about a session token and a cookie"},
 		{"use sk-learn and deriveState()", "use sk-learn and deriveState()"},
 		{"branch sk-abcdefghijklmno stays", "branch sk-abcdefghijklmno stays"},
