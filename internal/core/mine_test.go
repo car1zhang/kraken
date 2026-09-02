@@ -1146,6 +1146,12 @@ func TestRedactSecrets(t *testing.T) {
 		{"chunk mainapp1.abcdef1234 stays", "chunk mainapp1.abcdef1234 stays"},
 		// A longer id has no \b-anchored 8-rune prefix, so module.hash names miss.
 		{"path somelongword.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPq stays", "path somelongword.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPq stays"},
+		// In-band hex pairs REDACT on purpose (over-redaction is the chosen
+		// direction — excluding all-hex would excuse an all-hex secret).
+		{"sha pair abcdef12.0123456789abcdef0123456789abcdef01234567 gone", "sha pair abcde…[redacted] gone"},
+		// The charset cliff, also deliberate: one `-` in the secret half and
+		// the arm declines entirely — silently. The tight charset's price.
+		{"key aB3dE6gH.ZmNoPqRsTuVwXy-aBcDeFgHiJkLmNoPq stays", "key aB3dE6gH.ZmNoPqRsTuVwXy-aBcDeFgHiJkLmNoPq stays"},
 		// Suffix over the band: the trailing \b cannot land inside an alnum run.
 		{"run abcdefgh.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZaBcD stays", "run abcdefgh.ZmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZaBcD stays"},
 		{"plain prose about a session token and a cookie", "plain prose about a session token and a cookie"},
