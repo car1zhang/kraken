@@ -1522,8 +1522,20 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 			// one finding only a bot notice where carl's review sat inline.
 			// The PR number is substituted from the url ({owner}/{repo} gh
 			// expands itself; a bare N it does not).
+			//
+			// The bare-approval clause exists because this bump also fires
+			// on a review with no body and no inline comments — the
+			// timestamp advances on any non-author review event, whether or
+			// not it carries a body (latestActivityAt skips only the PR
+			// author's own reviews and the viewer's own comments) — and
+			// without a branch for that state the imperative "address it"
+			// sends the cell hunting through both commands for a comment
+			// that does not exist before it can conclude there is nothing
+			// to do. "Bare approval" is a sound conclusion rather than a
+			// guess: GitHub requires a body for COMMENT and REQUEST_CHANGES
+			// reviews, so APPROVE is the only bodyless review kind.
 			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
+				prWatchPrefix+" %s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue. If both are empty it was a bare approval with nothing to address — note it and continue",
 				url, url, url[strings.LastIndex(url, "/")+1:]))
 			newLastCommentAt = f.LastCommentAt
 		}
@@ -1567,14 +1579,22 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 		// rewrite is the wrong move, and a lead correctly refused the old
 		// prescription three times in one afternoon (merging instead, no
 		// force needed, every time) — a canned bump the recipient must
-		// overrule on every occurrence is a hazard, not advice.
+		// overrule on every occurrence is a hazard, not advice. The merge
+		// preference then turned out to have its own wrong case, refused
+		// the same way: a cell branch stale after its previous PR
+		// squash-merged replays already-merged content as spurious
+		// conflicts under a merge, and the recycle (fetch, checkout -B off
+		// the base, cherry-pick, force-push) is the right move there — so
+		// the message names both routes, the state that selects the
+		// exception, and the check that verifies it, keeping the
+		// destructive route self-gating rather than trust-me.
 		if f.BaseRef != "" {
 			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with %s — get the branch mergeable: git fetch origin, then merge origin/%s into your branch (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
-				url, f.BaseRef, f.BaseRef))
+				prWatchPrefix+" %s has merge conflicts with %s — get the branch mergeable: git fetch origin, then merge origin/%s into your branch (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue. One exception: if the conflicts are your own earlier PR's changes reappearing because it was SQUASH-merged (check `gh pr view <that PR> --json state`, and that the conflicting hunks are already on origin/%s), merging only replays already-merged content — recycle instead: git fetch origin && git checkout -B <branch> origin/%s, cherry-pick the unmerged commits (they stay on origin/<branch> until your force-push), then force-push",
+				url, f.BaseRef, f.BaseRef, f.BaseRef, f.BaseRef))
 		} else {
 			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with its base branch — get the branch mergeable: fetch, merge the base branch in (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
+				prWatchPrefix+" %s has merge conflicts with its base branch — get the branch mergeable: fetch, merge the base branch in (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue. One exception: if the conflicts are your own earlier PR's changes reappearing because it was SQUASH-merged (check `gh pr view <that PR> --json state`, and that the conflicting hunks are already on the base), merging only replays already-merged content — recycle instead: fetch, checkout -B off the base, cherry-pick the unmerged commits (they stay on origin/<branch> until your force-push), then force-push",
 				url))
 		}
 		newConflictState = "conflicting"
