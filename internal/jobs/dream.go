@@ -367,7 +367,10 @@ func CreateDreamJob(st *store.Store, slug string, since, until int64, clamped bo
 // itself on the same pass (daemon.go's startCreatedJob).
 //
 // The body says as little as possible: the procedure lives in the skill, and
-// the only things the skill cannot know are the window's two edges. It is
+// the only things the skill cannot know are the window's two edges — plus the
+// ceiling-application rule, which looks redundant and is not: the mine verbs
+// take --since alone, the skill only presupposes the outcome, and two early
+// passes each had to re-derive the rule when the body did not state it. It is
 // read BY PATH because a personal ~/.claude/skills/dream would otherwise
 // shadow the repo-owned copy materialized into the cell's worktree.
 func dreamJobContent(slug string, since, until int64, clamped bool) string {
@@ -395,15 +398,10 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		"\n" +
 		"Both edges are unix millis in kraken's own watermark (`dream_last_run.swept_to`),\n" +
 		"but only the FLOOR is a tool argument: `kraken mine digest`/`reduce` take `--since`\n" +
-		"alone, so apply the ceiling yourself: skip sessions whose records all postdate it —\n" +
-		"they are tomorrow's evidence — while a session that STRADDLES the ceiling is read\n" +
-		"whole and its post-ceiling tail comes back tomorrow, expected rather than a bug\n" +
-		"(two earlier passes, 2026-08-01 and 2026-08-02, each had to rediscover the\n" +
-		"ceiling). The floor is where the last pass stopped, so a row is normally\n" +
-		"read exactly once. The skill names the two seams where it is not, and what to do\n" +
-		"about each: a long enough gap between passes drops the oldest evidence entirely,\n" +
-		"and a note written between this job's creation and your sweep comes back\n" +
-		"tomorrow. Do not widen the window on your own initiative.\n" +
+		"alone, so apply the ceiling yourself — a session whose records all postdate it is\n" +
+		"tomorrow's evidence; one that straddles it is read whole, its post-ceiling tail\n" +
+		"coming back tomorrow. The window's seams and everything else about reading it\n" +
+		"are the skill's. Do not widen the window on your own initiative.\n" +
 		clampNote(clamped) +
 		"\n" +
 		"Findings never enter git. The PR carries the hardened diff and nothing else; the\n" +
