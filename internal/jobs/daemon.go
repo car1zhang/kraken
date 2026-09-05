@@ -916,7 +916,15 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 						// deleted whenever the derived state reads working
 						// again, so a job that blocks, unblocks and blocks
 						// again enqueues once per block rather than once ever.
-						enqueueOrchNotice(orchKindJobBlocked, j.Slug, "blocked — the cell is waiting; the board carries the question")
+						// The summary claims only what this branch established:
+						// blocked means the roll-call found no agent running —
+						// or the cell session is gone entirely (deriveState's
+						// !live arm reaches here too) — which covers a pending
+						// question, a stop-gate park, a plain idle turn and a
+						// dead cell alike. A summary asserting which one would
+						// usually be wrong, and the recipient would spend its
+						// turn disproving its own wake-up notice.
+						enqueueOrchNotice(orchKindJobBlocked, j.Slug, "blocked — no agent running in the cell; the board carries whatever the cell last said")
 					}
 					d.Notified[key] = now.Unix()
 				}
