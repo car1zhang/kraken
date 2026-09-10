@@ -731,6 +731,113 @@ func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
 	return accountEnvPrefix(j) + cmd, nil
 }
 
+// codexModelArgs is codex's model flag for a cell: `-m <model>` only when the
+// job pins a model:, else nil. Q10: an unset model means NO flag, so codex
+// falls back to its own config default — kraken never pins a codex model id the
+// way zeusModel pins a claude tier, because codex's own config is the source of
+// truth for its default.
+func codexModelArgs(j *Job) []string {
+	if j.Model != "" {
+		return []string{"-m", j.Model}
+	}
+	return nil
+}
+
+// codexCellArgs is the fixed codex launcher argv for a cell: launcher first,
+// then --dangerously-bypass-approvals-and-sandbox (a cell agent works
+// unattended in its own worktree — the codex analogue of claude's
+// --dangerously-skip-permissions in cellClaudeArgs), then the model flag if the
+// job pins one. No --dangerously-bypass-hook-trust: Wave 2 installs no codex
+// hooks, so there is no unreviewed hooks file to bypass trust for.
+func codexCellArgs(j *Job) []string {
+	args := []string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox"}
+	return append(args, codexModelArgs(j)...)
+}
+
+// codexAgentsMD is the AGENTS.md body a codex cell reads its brief from: a short
+// kraken-written header marking the file as generated and NOT to be committed —
+// unmistakable and first, because AGENTS.md is untracked and a zeus that ran
+// `git add -A` would otherwise sweep the brief into its PR (a per-worktree git
+// exclude is not an option: `git rev-parse --git-path info/exclude` resolves to
+// the SHARED main checkout, so writing it would edit carl's real tree) — then
+// the brief verbatim. codex obeys a repo's AGENTS.md as a project instruction
+// even non-interactively (measured this build), which is how zeus' brief reaches
+// a codex cell — the claude path delivers the same text through
+// --append-system-prompt instead.
+func codexAgentsMD(brief string) string {
+	return "<!-- kraken-generated brief — DO NOT COMMIT. Not part of the repo; rewritten every spawn. -->\n\n" + brief
+}
+
+// codexZeusLaunch builds the launch command for a codex-zeus cell, the codex
+// analogue of spawnCommand's claude path. A resume inserts `resume <id>` right
+// after the launcher, so the command reads `codex resume <id>
+// --dangerously-bypass-approvals-and-sandbox [-m …]`. The account binding prefix
+// (accountEnvPrefix) leads the command exactly as it does for claude — empty for
+// an unbound v1 codex job.
+//
+// The brief reaches codex one of two ways, and the choice is about never
+// destroying a repo's own file. AGENTS.md is the STANDARD codex
+// project-instructions filename, so the target repo may already ship one:
+//   - No AGENTS.md in the worktree → write <worktree>/AGENTS.md =
+//     codexAgentsMD(brief) (the persistent-brief case codex reads as project
+//     instructions) and stage the prompt on its own.
+//   - AGENTS.md already exists → NEVER overwrite it (that would lose the repo's
+//     real instructions and dirty the PR). Deliver the brief by PREPENDING it to
+//     the staged prompt instead, so the session still gets kraken's instructions
+//     while the repo's AGENTS.md is left untouched.
+//
+// Either way the prompt (with the brief prepended in the second case) is staged
+// to the same spawnPromptPath the claude path uses and appended LAST as a
+// positional "$(cat …)" word.
+func codexZeusLaunch(j *Job, wt, brief, prompt, resumeSession string) (string, error) {
+	agentsPath := filepath.Join(wt, "AGENTS.md")
+	staged := prompt
+	if _, err := os.Stat(agentsPath); os.IsNotExist(err) {
+		if werr := os.WriteFile(agentsPath, []byte(codexAgentsMD(brief)), 0o644); werr != nil {
+			return "", werr
+		}
+	} else {
+		// The repo (or a prior spawn) already has an AGENTS.md — preserve it and
+		// carry the brief on the prompt instead. Empty prompt → the brief alone.
+		if prompt != "" {
+			staged = brief + "\n\n" + prompt
+		} else {
+			staged = brief
+		}
+	}
+	argv := codexCellArgs(j)
+	if resumeSession != "" {
+		argv = append([]string{argv[0], "resume", resumeSession}, argv[1:]...)
+	}
+	cmd := core.ShellCmdString(argv)
+	if staged != "" {
+		if err := os.WriteFile(spawnPromptPath(j), []byte(staged), 0o644); err != nil {
+			return "", err
+		}
+		cmd += " " + core.ShellReadFileArg(spawnPromptPath(j))
+	}
+	return accountEnvPrefix(j) + cmd, nil
+}
+
+// zeusLaunch is the agent-aware launch builder both spawn paths (StartCell and
+// ReactivateJob) route through. It composes the brief the same way both call
+// sites did inline — zeusBrief + goalContext + graphContext — then dispatches on
+// the job's agent: a codex job goes through codexZeusLaunch, everything else
+// takes the claude path unchanged (spawnCommand over zeusSpawnArgv, with an
+// `-r <session>` resume when resumeSession is set). A claude job's command is
+// therefore byte-identical to what the two call sites produced before.
+func zeusLaunch(j *Job, wt, prompt, resumeSession string) (string, error) {
+	brief := zeusBrief(j) + goalContext(j) + graphContext(j)
+	if j.Agent == "codex" {
+		return codexZeusLaunch(j, wt, brief, prompt, resumeSession)
+	}
+	var resume []string
+	if resumeSession != "" {
+		resume = []string{"-r", resumeSession}
+	}
+	return spawnCommand(j, zeusSpawnArgv(j, resume...), brief, prompt)
+}
+
 // cellSpawnEnv is the environment the `tmux new-session` that creates a cell
 // runs under: this process' own, with the directory holding the resolved `go`
 // prepended to PATH. nil means "changed nothing" — an exec.Cmd with a nil Env
@@ -847,7 +954,7 @@ func StartCell(j *Job, repo string) error {
 	// goalContext rides in the same position and for the same reasons — it is
 	// carl's week, so it is variable-length, board-dependent, and holds the
 	// identical ""-on-any-failure guarantee (goalctx.go's rule 2).
-	launch, err := spawnCommand(j, zeusSpawnArgv(j), zeusBrief(j)+goalContext(j)+graphContext(j), jobPrompt(j))
+	launch, err := zeusLaunch(j, wt, jobPrompt(j), "")
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
@@ -1616,6 +1723,16 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 // on — that IS the trust decision — and an unanswered dialog blocks startup
 // entirely: no session file, no name, no work, and a cell that reads as
 // broken.
+// isTrustPrompt reports whether a pane's rendered text is a folder-trust
+// dialog blocking startup — claude's ("Is this a project you created or one you
+// trust") or codex's ("Do you trust the contents of this directory"). Both
+// pre-select the trust/yes option, so acceptTrustPrompts' single `send-keys
+// Enter` clears either.
+func isTrustPrompt(text string) bool {
+	return strings.Contains(text, "Is this a project you created or one you trust") ||
+		strings.Contains(text, "Do you trust the contents of this directory")
+}
+
 func acceptTrustPrompts(sess string) {
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1627,9 +1744,11 @@ func acceptTrustPrompts(sess string) {
 		rendered := 0
 		for _, pane := range strings.Fields(string(out)) {
 			text := core.PaneTail(pane, 30)
-			if strings.Contains(text, "Is this a project you created or one you trust") {
+			if isTrustPrompt(text) {
 				sawDialog = true
-				// "Yes, I trust this folder" is the pre-selected option
+				// the trust/yes option is pre-selected either way: claude
+				// pre-selects "Yes, I trust this folder", codex "1. Yes,
+				// continue" — Enter accepts both.
 				_ = exec.Command("tmux", "send-keys", "-t", pane, "Enter").Run()
 			} else if strings.TrimSpace(text) != "" {
 				rendered++
@@ -1688,7 +1807,7 @@ func CellZeus(j *Job, all []*core.Peer) *core.Peer {
 		if p.Name == ZeusName(j) && p.Depth == 0 {
 			return p
 		}
-		if p.Agent == "claude" && p.Depth == 0 {
+		if (p.Agent == "claude" || p.Agent == "codex") && p.Depth == 0 {
 			inSess = append(inSess, p)
 		}
 	}
@@ -2480,7 +2599,7 @@ func ReactivateJob(j *Job, session, message string) error {
 	// not. Same ""-on-no-match guarantee. goalContext rides beside it with the
 	// sharper version of the same argument: a job reactivated days later is a
 	// job whose week has almost certainly turned over.
-	launch, err := spawnCommand(j, zeusSpawnArgv(j, "-r", session), zeusBrief(j)+goalContext(j)+graphContext(j), prompt)
+	launch, err := zeusLaunch(j, wt, prompt, session)
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
