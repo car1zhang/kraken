@@ -1,6 +1,7 @@
 package core
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -356,28 +357,53 @@ func readCodexModelTail(path string) string {
 	return model
 }
 
-// readCodexNames returns Codex's user-visible thread titles. The index is
-// append-only and can contain several entries for a thread as its title is
-// generated or renamed, so the last valid record wins.
-func readCodexNames() map[string]string {
+// codexStatePath is the live SQLite index Codex maintains — the successor to
+// the retired append-only session_index.jsonl.
+func codexStatePath() string {
+	return filepath.Join(util.Home(), ".codex", "state_5.sqlite")
+}
+
+// readCodexThreadNames returns Codex's user-visible thread titles keyed by
+// thread id, read from the live state_5.sqlite index. It opens the db
+// read-only and immutable (so it never blocks Codex's own writes and ignores
+// the WAL), and follows the defensive-read convention: a missing file, an open
+// error, a query error, or a corrupt db all yield an empty (non-nil) map and
+// never an error or panic. Rows with a NULL or empty title are omitted.
+func readCodexThreadNames() map[string]string {
 	names := map[string]string{}
-	data, err := os.ReadFile(filepath.Join(util.Home(), ".codex", "session_index.jsonl"))
+	db, err := sql.Open("sqlite3", "file:"+codexStatePath()+"?mode=ro&immutable=1")
 	if err != nil {
 		return names
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.Contains(line, `"thread_name"`) {
-			continue
+	defer db.Close()
+	rows, err := db.Query(`SELECT id, title FROM threads`)
+	if err != nil {
+		return names
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var title sql.NullString
+		if err := rows.Scan(&id, &title); err != nil {
+			return map[string]string{}
 		}
-		var rec struct {
-			ID   string `json:"id"`
-			Name string `json:"thread_name"`
-		}
-		if json.Unmarshal([]byte(line), &rec) == nil && rec.ID != "" && rec.Name != "" {
-			names[rec.ID] = rec.Name
+		if id != "" && title.Valid && title.String != "" {
+			names[id] = title.String
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return map[string]string{}
+	}
 	return names
+}
+
+// claudeModelFallbackApplies is the guard for the model-fallback call site in
+// DiscoverAll: a claude peer with an empty model and a real (non-guessed)
+// session id gets its model read from its transcript. A codex peer must return
+// false here — its session id is a rollout uuid that would otherwise be fed to
+// transcriptPath's ~/.claude/projects glob.
+func claudeModelFallbackApplies(p *Peer) bool {
+	return p.Model == "" && p.SessionID != "" && !p.SessionIDGuessed && p.Agent != "codex"
 }
 
 func readSessionFile(pid int) (sessionFile, bool) {
@@ -453,7 +479,7 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 	if os.Getenv("KRAKEN_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "kraken: discover: %d panes, %d ps entries\n", len(panes), len(cmds))
 	}
-	codexNames := readCodexNames()
+	codexNames := readCodexThreadNames()
 	pruneCWDCache(cmds)
 	selfPane := os.Getenv("TMUX_PANE")
 	// selfAncestors disambiguates panes holding nested agents: only the agent
@@ -565,7 +591,7 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 				}
 			}
 			peer.Branch = gitBranch(peer.CWD)
-			if peer.Model == "" && peer.SessionID != "" && !peer.SessionIDGuessed {
+			if claudeModelFallbackApplies(peer) {
 				peer.Model = readModel(transcriptPath(peer.SessionID))
 			}
 			refineStatus(peer)

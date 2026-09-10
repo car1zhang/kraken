@@ -75,24 +75,6 @@ func TestAgentPIDsUnder(t *testing.T) {
 	}
 }
 
-func TestReadCodexNamesLastEntryWins(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".codex"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	data := []byte("{\"id\":\"abc\",\"thread_name\":\"first prompt\"}\n" +
-		"{not json}\n" +
-		"{\"id\":\"abc\",\"thread_name\":\"renamed thread\"}\n")
-	if err := os.WriteFile(filepath.Join(dir, ".codex", "session_index.jsonl"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
-	names := readCodexNames()
-	if names["abc"] != "renamed thread" {
-		t.Fatalf("want latest title, got %q", names["abc"])
-	}
-}
-
 func TestProjectDirName(t *testing.T) {
 	if got := projectDirName("/Users/car1zhang/Developer/kraken"); got != "-Users-car1zhang-Developer-kraken" {
 		t.Errorf("got %q", got)

@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"kraken/internal/util"
@@ -21,6 +23,57 @@ func ClaudeLauncher() string {
 		return p
 	}
 	return "claude"
+}
+
+// CodexLauncher is the codex analogue of ClaudeLauncher: the override env var
+// KRAKEN_CODEX verbatim when set, else the bare name "codex". It mirrors
+// ClaudeLauncher exactly — no exec.LookPath fallback beyond the bare name —
+// since a launcher name is all any caller needs and PATH resolution is the
+// shell's job at spawn time.
+func CodexLauncher() string {
+	if c := os.Getenv("KRAKEN_CODEX"); c != "" {
+		return c
+	}
+	return "codex"
+}
+
+// codexMinVersion is the version floor separating the two codex generations
+// installed on this machine — 0.39.0 (stale) below it, 0.144.6 (current) at or
+// above. codexVersionAtLeast compares a `codex --version` line against it; the
+// spawn-time refusal that consumes that comparison is a later PR.
+const codexMinVersion = "0.100.0"
+
+// codexVersionTriple pulls the first dotted X.Y.Z triple out of a version
+// string — `codex-cli 0.144.6`, with leading/trailing whitespace and any
+// trailing text after the version tolerated.
+var codexVersionTriple = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
+
+// codexVersionAtLeast reports whether the X.Y.Z version in versionOutput is at
+// least floor, comparing per component NUMERICALLY (so 0.39.0 reads as less
+// than 0.100.0, which a string compare gets wrong). It takes the version
+// output as a string — it never runs `codex --version` itself, so it is pure
+// and needs no binary to test. Input with no X.Y.Z triple is unparseable and
+// returns false: an unidentifiable binary is not trusted (fail-closed).
+func codexVersionAtLeast(versionOutput, floor string) bool {
+	got := codexVersionTriple.FindStringSubmatch(versionOutput)
+	if got == nil {
+		return false
+	}
+	want := codexVersionTriple.FindStringSubmatch(floor)
+	if want == nil {
+		return false
+	}
+	for i := 1; i <= 3; i++ {
+		// Submatches are all-digit by the regex; the only Atoi error left is
+		// int64 overflow (a component >= 2^63), unreachable for a real codex
+		// version string, and a dropped error there floors the component at 0.
+		g, _ := strconv.Atoi(got[i])
+		w, _ := strconv.Atoi(want[i])
+		if g != w {
+			return g > w
+		}
+	}
+	return true
 }
 
 // DefaultModel is the claude model kraken STARTS a general-purpose claude on —
