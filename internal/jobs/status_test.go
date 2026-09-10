@@ -582,3 +582,75 @@ func TestListArtifactsSorted(t *testing.T) {
 		t.Errorf("got %v, want %v", got, want)
 	}
 }
+
+// --- codex pending-question scan (C5) ---
+
+func writeCodexRollout(t *testing.T, lines ...string) string {
+	t.Helper()
+	// a path under /.codex/sessions/ so FindPendingQuestion's dispatch routes
+	// it to the codex scanner
+	dir := filepath.Join(t.TempDir(), ".codex", "sessions", "2026", "09", "10")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "rollout-2026-09-10T00-00-00-abc.jsonl")
+	if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestFindPendingQuestionCodexUnanswered(t *testing.T) {
+	p := writeCodexRollout(t,
+		`{"type":"session_meta","payload":{"id":"abc","cwd":"/w"}}`,
+		`{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call_1","arguments":"{\"questions\":[{\"header\":\"Scope\",\"question\":\"How far?\",\"options\":[{\"label\":\"A\",\"description\":\"da\"},{\"label\":\"B\",\"description\":\"db\"}]}]}"}}`,
+	)
+	pq := FindPendingQuestion(p)
+	if pq == nil {
+		t.Fatal("want a pending question, got nil")
+	}
+	if pq.ToolUseID != "call_1" {
+		t.Errorf("ToolUseID = %q, want call_1", pq.ToolUseID)
+	}
+	if len(pq.Questions) != 1 || pq.Questions[0].Header != "Scope" || pq.Questions[0].Question != "How far?" {
+		t.Fatalf("unexpected questions: %+v", pq.Questions)
+	}
+	if len(pq.Questions[0].Options) != 2 || pq.Questions[0].Options[0].Label != "A" || pq.Questions[0].Options[1].Description != "db" {
+		t.Errorf("unexpected options: %+v", pq.Questions[0].Options)
+	}
+	if pq.Questions[0].MultiSelect {
+		t.Errorf("codex has no multi-select; MultiSelect should be false")
+	}
+}
+
+func TestFindPendingQuestionCodexAnswered(t *testing.T) {
+	p := writeCodexRollout(t,
+		`{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call_1","arguments":"{\"questions\":[{\"header\":\"H\",\"question\":\"Q\",\"options\":[{\"label\":\"A\",\"description\":\"d\"}]}]}"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"A"}}`,
+	)
+	if pq := FindPendingQuestion(p); pq != nil {
+		t.Errorf("an answered request_user_input must not be pending, got %+v", pq)
+	}
+}
+
+func TestFindPendingQuestionCodexNewestWins(t *testing.T) {
+	// an answered older call followed by a fresh unanswered one → pending is the new one
+	p := writeCodexRollout(t,
+		`{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"old","arguments":"{\"questions\":[{\"header\":\"H1\",\"question\":\"Q1\",\"options\":[{\"label\":\"A\",\"description\":\"d\"}]}]}"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"old","output":"A"}}`,
+		`{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"new","arguments":"{\"questions\":[{\"header\":\"H2\",\"question\":\"Q2\",\"options\":[{\"label\":\"B\",\"description\":\"d\"}]}]}"}}`,
+	)
+	pq := FindPendingQuestion(p)
+	if pq == nil || pq.ToolUseID != "new" || pq.Questions[0].Header != "H2" {
+		t.Fatalf("newest unanswered should win, got %+v", pq)
+	}
+}
+
+func TestFindPendingQuestionCodexNonQuestionToolIgnored(t *testing.T) {
+	p := writeCodexRollout(t,
+		`{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c","arguments":"{\"cmd\":\"ls\"}"}}`,
+	)
+	if pq := FindPendingQuestion(p); pq != nil {
+		t.Errorf("a non-request_user_input tool call must not be a pending question, got %+v", pq)
+	}
+}
