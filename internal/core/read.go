@@ -57,7 +57,10 @@ func ReadTranscriptPath(p *Peer) (string, error) {
 		return "", fmt.Errorf("%s is a shell pane — no transcript to read", DisplayName(p))
 	}
 	if p.Agent == "codex" {
-		return "", fmt.Errorf("reading Codex transcripts is not supported yet")
+		if rp := codexRolloutPath(p.SessionID); rp != "" {
+			return rp, nil
+		}
+		return "", fmt.Errorf("no rollout resolved for %s", DisplayName(p))
 	}
 	if p.SessionID == "" {
 		return "", fmt.Errorf("no session id resolved for %s", DisplayName(p))
@@ -142,6 +145,12 @@ func tailLines(path string, window int64) []string {
 // transcripts stay fast, stopping at the file's head or at
 // lastBlocksScanLimit — whichever comes first — and returning whatever it
 // found by then (counted < n is a normal answer, not an error).
+//
+// Dispatch is by PATH: a Codex rollout transcript lives under
+// /.codex/sessions/ and is parsed by parseCodexBlocks; every other path is a
+// claude transcript and takes the parseBlocks path unchanged. The tail-read,
+// window-growth and counting logic is shared — both parsers emit the same
+// block vocabulary, so "count the non-tool blocks" reads the same either way.
 func LastBlocks(path string, n int) ([]block, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -153,12 +162,18 @@ func LastBlocks(path string, n int) ([]block, int, error) {
 		return nil, 0, fmt.Errorf("stat transcript: %v", err)
 	}
 	size := info.Size()
+	codex := strings.Contains(path, "/.codex/sessions/")
 	for window := tailStartWindow; ; window *= 2 {
 		lines, err := tailWindow(f, size, window)
 		if err != nil {
 			return nil, 0, err
 		}
-		blocks := parseBlocks(lines)
+		var blocks []block
+		if codex {
+			blocks = parseCodexBlocks(lines)
+		} else {
+			blocks = parseBlocks(lines)
+		}
 		counted := 0
 		cut := 0
 		for i := len(blocks) - 1; i >= 0; i-- {
@@ -503,6 +518,95 @@ func parseBlocks(lines []string) []block {
 		}
 	}
 	return blocks
+}
+
+// parseCodexBlocks maps a Codex rollout transcript's JSONL records to the same
+// block vocabulary parseBlocks produces, so LastBlocks' counting and every
+// reader downstream treat a codex tail exactly like a claude one. Each record
+// is {timestamp,type,payload}; the four shapes that carry display content map
+// as: event_msg/user_message → "user", event_msg/agent_message → "text",
+// response_item/function_call → "tool" (name + a one-lined argument summary),
+// response_item/reasoning → "thinking" (the plaintext summary/content, when the
+// reasoning is not encrypted-only). Every other type — turn_context,
+// token_count, session_meta, function_call_output, an encrypted-only reasoning,
+// an unknown payload, or a malformed line — is skipped silently, and an
+// empty-text user/agent/reasoning record is dropped like parseBlocks drops its
+// empty content parts, so a codex tail never contributes blank blocks.
+func parseCodexBlocks(lines []string) []block {
+	var blocks []block
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue // partial trailing line mid-append, or non-JSON
+		}
+		t, _ := rec["type"].(string)
+		payload, ok := rec["payload"].(map[string]any)
+		if !ok {
+			continue
+		}
+		pt, _ := payload["type"].(string)
+		switch {
+		case t == "event_msg" && pt == "user_message":
+			if s, _ := payload["message"].(string); strings.TrimSpace(s) != "" {
+				blocks = append(blocks, block{Kind: "user", Text: s})
+			}
+		case t == "event_msg" && pt == "agent_message":
+			if s, _ := payload["message"].(string); strings.TrimSpace(s) != "" {
+				blocks = append(blocks, block{Kind: "text", Text: s})
+			}
+		case t == "response_item" && pt == "function_call":
+			name, _ := payload["name"].(string)
+			args, _ := payload["arguments"].(string)
+			blocks = append(blocks, block{Kind: "tool", Text: name + "(" + TruncateOneLine(args, 100) + ")"})
+		case t == "response_item" && pt == "reasoning":
+			if s := codexReasoningText(payload); strings.TrimSpace(s) != "" {
+				blocks = append(blocks, block{Kind: "thinking", Text: s})
+			}
+		}
+	}
+	return blocks
+}
+
+// codexReasoningText pulls the human-readable text out of a codex reasoning
+// payload. Codex records the visible chain-of-thought summary as a `summary`
+// array of {type:"summary_text", text:…} parts and leaves `content` null; when
+// summaries are off the summary is empty and only an `encrypted_content` blob
+// remains, which carries no plaintext and yields "". `content` is honoured as a
+// fallback (a string, or the same part-array shape) for forward compatibility.
+func codexReasoningText(payload map[string]any) string {
+	var b strings.Builder
+	appendPart := func(part any) {
+		pm, ok := part.(map[string]any)
+		if !ok {
+			return
+		}
+		if s, _ := pm["text"].(string); s != "" {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(s)
+		}
+	}
+	if summary, ok := payload["summary"].([]any); ok {
+		for _, part := range summary {
+			appendPart(part)
+		}
+	}
+	if b.Len() == 0 {
+		switch c := payload["content"].(type) {
+		case string:
+			b.WriteString(c)
+		case []any:
+			for _, part := range c {
+				appendPart(part)
+			}
+		}
+	}
+	return b.String()
 }
 
 // userBlocks extracts what the user actually typed from a user record's

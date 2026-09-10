@@ -397,6 +397,67 @@ func readCodexThreadNames() map[string]string {
 	return names
 }
 
+// codexThread is the metadata row for one Codex thread, read from the live
+// state_5.sqlite index.
+type codexThread struct {
+	ID, Title, Model, RolloutPath, CWD string
+	TokensUsed                         int64
+}
+
+// readCodexThreadByCWD returns the newest-updated Codex thread for a given cwd,
+// the identity source since codex 0.144.6 stopped holding its rollout fd open
+// (lsof-based readCodexSession returns nothing). Opens state_5.sqlite
+// read-only+immutable (the readCodexThreadNames idiom). An empty cwd returns
+// (zero,false) without querying; a no match, a missing/locked/corrupt db, or
+// any error also returns (zero,false), never a panic or a surfaced error.
+func readCodexThreadByCWD(cwd string) (codexThread, bool) {
+	var ct codexThread
+	if cwd == "" {
+		return ct, false
+	}
+	db, err := sql.Open("sqlite3", "file:"+codexStatePath()+"?mode=ro&immutable=1")
+	if err != nil {
+		return ct, false
+	}
+	defer db.Close()
+	row := db.QueryRow(
+		`SELECT id, title, model, tokens_used, rollout_path, cwd FROM threads WHERE cwd=? ORDER BY updated_at DESC LIMIT 1`,
+		cwd)
+	var id, title, model, rollout, rowCWD sql.NullString
+	var tokens sql.NullInt64
+	if err := row.Scan(&id, &title, &model, &tokens, &rollout, &rowCWD); err != nil {
+		return ct, false
+	}
+	ct = codexThread{
+		ID:          id.String,
+		Title:       title.String,
+		Model:       model.String,
+		RolloutPath: rollout.String,
+		CWD:         rowCWD.String,
+		TokensUsed:  tokens.Int64,
+	}
+	return ct, true
+}
+
+// codexRolloutPath resolves a Codex thread's rollout transcript path by session
+// id, using the same read-only+immutable open. An empty id, a no match, or any
+// error returns "".
+func codexRolloutPath(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	db, err := sql.Open("sqlite3", "file:"+codexStatePath()+"?mode=ro&immutable=1")
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	var rollout sql.NullString
+	if err := db.QueryRow(`SELECT rollout_path FROM threads WHERE id=?`, sessionID).Scan(&rollout); err != nil {
+		return ""
+	}
+	return rollout.String
+}
+
 // claudeModelFallbackApplies is the guard for the model-fallback call site in
 // DiscoverAll: a claude peer with an empty model and a real (non-guessed)
 // session id gets its model read from its transcript. A codex peer must return
@@ -479,7 +540,6 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 	if os.Getenv("KRAKEN_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "kraken: discover: %d panes, %d ps entries\n", len(panes), len(cmds))
 	}
-	codexNames := readCodexThreadNames()
 	pruneCWDCache(cmds)
 	selfPane := os.Getenv("TMUX_PANE")
 	// selfAncestors disambiguates panes holding nested agents: only the agent
@@ -536,17 +596,24 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 				Self:        selfPane != "" && p.ID == selfPane && selfAncestors[pid],
 			}
 			if hit.agent == "codex" {
-				if cs, ok := readCodexSession(pid, cmds[pid]); ok {
+				// Identity by cwd: codex 0.144.6 holds no rollout fd open, so
+				// the newest threads row for the pane's cwd is the session.
+				// readCodexSession (lsof) stays as a fallback for older codex
+				// that still holds the rollout open.
+				cwd := procCWD(pid, cmds[pid])
+				if ct, ok := readCodexThreadByCWD(cwd); ok {
+					peer.SessionID = ct.ID
+					peer.Name = ct.Title
+					peer.Model = ct.Model
+					peer.CWD = ct.CWD
+				} else if cs, ok := readCodexSession(pid, cmds[pid]); ok {
 					peer.SessionID = cs.ID
 					peer.CWD = cs.CWD
-					peer.Name = codexNames[cs.ID]
-					if peer.Name == "" {
-						peer.Name = cs.Name
-					}
+					peer.Name = cs.Name
 					peer.Model = cs.Model
 					peer.StatusAt = cs.UpdatedAt
 				} else {
-					peer.CWD = procCWD(pid, cmds[pid])
+					peer.CWD = cwd
 				}
 			} else if sf, ok := readSessionFile(pid); ok {
 				peer.SessionID = sf.SessionID
