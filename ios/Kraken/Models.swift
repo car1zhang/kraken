@@ -577,6 +577,10 @@ struct WebJob: Decodable, Identifiable {
     // bump; render through BoardTheme.jobColor, which degrades an unknown
     // name from a newer server to "no color".
     let color: String?
+    // Which coding agent the cell's zeus runs — "codex" for a codex cell,
+    // absent for the claude default. Additive key, absent on older servers, so
+    // no contract bump; a client that ignores it renders as it always has.
+    let agent: String?
     // The PRIMARY goal this job is linked to: the head of `goals` below,
     // present under exactly the same condition and never on its own. From
     // ANY period and done or not, so a job carried over from last week
@@ -655,6 +659,7 @@ struct WebJob: Decodable, Identifiable {
         case tokens
         case load
         case color
+        case agent
         case goal
         case goals
         // the wire name is `account`; the stored property is the tolerant

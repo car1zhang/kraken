@@ -468,6 +468,10 @@ type webJob struct {
 	// card exactly as it did before colours existed. Additive, so
 	// apiContract stays put.
 	Color string `json:"color,omitempty"`
+	// Agent is which coding agent the cell's zeus runs — "codex" for a codex
+	// cell, omitted for the claude default so a client that predates the field
+	// renders the card exactly as before. Additive, so apiContract stays put.
+	Agent string `json:"agent,omitempty"`
 	// start_error and prereqs used to sit here and are gone in v6. start_error
 	// was a side channel for a failure the board could not otherwise see: the
 	// daemon's queue pass started jobs in the background, so the reason a
@@ -1104,6 +1108,7 @@ func buildWebBoard() webBoard {
 			Slug: j.Slug, Repo: j.Repo,
 			State: displayState, Err: j.Err, Outcome: j.Outcome,
 			Color:     jobs.EffectiveColor(j),
+			Agent:     j.Agent,
 			Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
 			ModTime:   j.ModTime.Unix(),
 			PRs:       j.PRs,
@@ -1236,7 +1241,7 @@ func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]stor
 	return webJob{
 		Slug: a.ArchivedName, Repo: a.Repo,
 		State: "archived", Archived: true, DisplaySlug: a.Slug,
-		Err: a.Err, Outcome: a.Outcome, Color: jobs.EffectiveColor(a),
+		Err: a.Err, Outcome: a.Outcome, Color: jobs.EffectiveColor(a), Agent: a.Agent,
 		Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
 		// Feedback (Q2: works for archived jobs too) is keyed on the
 		// job's own immutable id — same as the active loop above — not
