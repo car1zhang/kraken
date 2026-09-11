@@ -546,6 +546,7 @@ func JobTemplate(slug string) string {
 		"                          # applied once at cell start, default = " + core.ZeusModel + "\n" +
 		"# color: purple           # optional: board/pane colour (red | blue | green | yellow | purple | orange | pink | cyan);\n" +
 		"                          # unset = no colour\n" +
+		"# agent: codex            # optional: which coding agent zeus runs (claude | codex); default claude\n" +
 		"---\n"
 }
 

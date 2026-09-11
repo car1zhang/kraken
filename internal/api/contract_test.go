@@ -278,6 +278,7 @@ var webJobSpec = map[string]fieldSpec{
 	"err":     {kind: wireString, required: false},
 	"outcome": {kind: wireString, required: false},
 	"color":   {kind: wireString, required: false},
+	"agent":   {kind: wireString, required: false},
 	"cell":    {kind: wireString, required: false},
 	"live":    {kind: wireBool, required: true},
 	// no "prereqs" and no "start_error": both left this shape in v6, and this

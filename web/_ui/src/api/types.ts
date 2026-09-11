@@ -306,6 +306,12 @@ export interface WebJob {
    * palette entry must not fail the decode.
    */
   color?: JobColor | string;
+  /**
+   * Which coding agent the cell's zeus runs — "codex" for a codex cell,
+   * omitted for the claude default so a card without the key renders exactly
+   * as it always has. Additive, no contract bump.
+   */
+  agent?: string;
   cell?: string;
   live: boolean;
   artifacts?: WebArtifact[];
