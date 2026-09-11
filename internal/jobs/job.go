@@ -48,6 +48,10 @@ type Job struct {
 	// means NO colour, not "pick one" — every surface renders exactly what
 	// it rendered before the field existed.
 	Color string `json:"color,omitempty"`
+	// Agent is the coding agent zeus runs on: "" (default, = claude),
+	// "claude", or "codex". Hand-authored like Model — kraken never writes it
+	// on its own. A value other than claude/codex errs the job (ParseJob).
+	Agent string `json:"agent,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
 	State   string `json:"state,omitempty"`
@@ -365,6 +369,18 @@ func ParseJob(name string, data []byte) *Job {
 				j.addErr(fmt.Sprintf("bad color value %q", core.TruncateOneLine(val, 24)))
 			} else {
 				j.Color = val
+			}
+		case "agent":
+			// Which coding agent zeus runs on — claude (default) or codex. It is
+			// lowercased so agent: Codex works (model: is a case-sensitive id). Like
+			// color, this case is load-bearing beyond validation: the default:
+			// arm marks any unknown key Err, so without it every job file
+			// carrying agent: would pin to draft.
+			a := strings.ToLower(strings.TrimSpace(val))
+			if a != "" && a != "claude" && a != "codex" {
+				j.addErr("agent must be claude or codex")
+			} else {
+				j.Agent = a
 			}
 		case "skip-doc":
 			// tolerated legacy key: pluto job files predating the

@@ -192,7 +192,16 @@ func FindPendingQuestion(transcript string) *PendingQuestion {
 		pendingQuestionCacheMu.Unlock()
 	}
 
-	q := scanPendingQuestion(transcript)
+	// A codex zeus writes a rollout under ~/.codex/sessions/, not a claude
+	// JSONL transcript, so its pending-question shape (request_user_input) is
+	// scanned differently. Dispatch by path exactly as core.LastBlocks does, so
+	// the caller (board.go) hands us one path and stays agent-agnostic.
+	var q *PendingQuestion
+	if strings.Contains(transcript, "/.codex/sessions/") {
+		q = scanPendingQuestionCodex(transcript)
+	} else {
+		q = scanPendingQuestion(transcript)
+	}
 
 	if statErr == nil {
 		pendingQuestionCacheMu.Lock()
@@ -264,6 +273,77 @@ func scanPendingQuestion(transcript string) *PendingQuestion {
 		// rather than risk reporting a phantom pending question off a
 		// truncated scan.
 		return nil
+	}
+	if lastID == "" || answered || len(lastQuestions) == 0 {
+		return nil
+	}
+	return &PendingQuestion{ToolUseID: lastID, Questions: lastQuestions}
+}
+
+// scanPendingQuestionCodex is the codex-rollout analogue of scanPendingQuestion.
+// Codex asks with a `request_user_input` tool call recorded as a response_item /
+// function_call whose `arguments` is a JSON STRING (the Responses API shape);
+// the answer is a function_call_output sharing the same call_id. The newest
+// unanswered request wins, mapped onto the same PendingQuestion the board
+// already renders — codex's per-question {header, question, options[label,
+// description]} lines up 1:1 with claude's AskUserQuestion; codex has no
+// multi-select, so MultiSelect stays false.
+func scanPendingQuestionCodex(transcript string) *PendingQuestion {
+	f, err := os.Open(transcript)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var lastID string
+	var lastQuestions []QuestionItem
+	answered := false
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var rec struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type      string `json:"type"`
+				Name      string `json:"name"`
+				CallID    string `json:"call_id"`
+				Arguments string `json:"arguments"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &rec) != nil || rec.Type != "response_item" {
+			continue // malformed or not a response item: skip, keep scanning
+		}
+		switch rec.Payload.Type {
+		case "function_call":
+			if rec.Payload.Name != "request_user_input" {
+				continue
+			}
+			// newest ask wins, even if its arguments fail to decode: reset the
+			// tracked id/questions so a malformed newer call yields nil rather
+			// than leaving a superseded older question looking pending.
+			lastID = rec.Payload.CallID
+			lastQuestions = nil
+			answered = false
+			var args struct {
+				Questions []QuestionItem `json:"questions"`
+			}
+			if json.Unmarshal([]byte(rec.Payload.Arguments), &args) != nil {
+				continue // malformed arguments: not a usable question
+			}
+			lastQuestions = args.Questions
+		case "function_call_output":
+			if lastID != "" && rec.Payload.CallID == lastID {
+				answered = true
+			}
+		}
+	}
+	if sc.Err() != nil {
+		return nil // fail closed on a truncated scan, as the claude path does
 	}
 	if lastID == "" || answered || len(lastQuestions) == 0 {
 		return nil

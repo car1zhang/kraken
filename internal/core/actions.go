@@ -628,7 +628,7 @@ func SendMessage(p *Peer, msg string) error {
 	}
 	// re-check right before typing: a permission/question prompt has an option
 	// pre-highlighted, so our trailing Enter would answer it for the user
-	if p.Status == "question" || PaneShowsQuestion(p.Pane) {
+	if p.Status == "question" || PaneShowsQuestionFor(p.Agent, p.Pane) {
 		return fmt.Errorf("%s has a question/permission prompt open — sending would answer it; resolve it first", DisplayName(p))
 	}
 	msg = guardBareSlashCommand(msg)

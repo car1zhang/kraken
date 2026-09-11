@@ -137,12 +137,29 @@ var questionOptionRe = regexp.MustCompile(`^\s*❯ \d+\. `)
 // grows in a later CLI build without another pane capture to confirm it.
 var spinnerLineRe = regexp.MustCompile(`(?m)^\s*[✢✳✶✻✽·∗✦✧⚹] \S.{0,58}… \(\d`)
 
+// codexBusyRe matches codex's busy line — measured (codex 0.144.6) as
+// "<glyph> Working (<N>s • esc to interrupt)" with the glyph cycling {•,◦}.
+// The load-bearing shape is "Working (" immediately followed by a digit (the
+// elapsed seconds), which the leading glyph/indent does not affect; requiring
+// the digit keeps this from matching ordinary agent prose that merely contains
+// the lowercased word "working".
+var codexBusyRe = regexp.MustCompile(`Working \(\d`)
+
+// codexQuestionOptionRe matches a codex approval/trust prompt's selected or
+// numbered option line — measured as "› 1. Yes, continue" / "2. No, quit".
+// Mirrors questionOptionRe's role for the claude path.
+var codexQuestionOptionRe = regexp.MustCompile(`^\s*[›❯]\s*\d+\.\s`)
+
 func refineStatus(p *Peer) {
 	if p.Pane == "" {
 		return
 	}
 	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", p.Pane).Output()
 	if err != nil {
+		return
+	}
+	if p.Agent == "codex" {
+		p.Status = refinedCodexStatus(p.Status, string(out))
 		return
 	}
 	p.Status = refinedStatus(p.Status, string(out), busyOverridable(p, time.Now().UnixMilli()))
@@ -229,6 +246,58 @@ func containsQuestionMarker(text string) bool {
 func PaneShowsQuestion(pane string) bool {
 	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
 	return err == nil && containsQuestionMarker(string(out))
+}
+
+// codexPaneShowsQuestion is the codex-side sibling of containsQuestionMarker:
+// true when the LAST ~20 lines of text hold a codex approval/trust prompt,
+// identified by either a selected/numbered option line
+// (codexQuestionOptionRe — the trust prompt's "› 1. Yes, continue") or one of
+// the approval header needles ("Allow command?" / "Apply changes?").
+// Bottom-anchored exactly like containsQuestionMarker so prose mentioning
+// these strings higher in scrollback does not false-positive.
+func codexPaneShowsQuestion(text string) bool {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	start := len(lines) - 20
+	if start < 0 {
+		start = 0
+	}
+	for _, l := range lines[start:] {
+		if codexQuestionOptionRe.MatchString(l) {
+			return true
+		}
+		if strings.Contains(l, "Allow command?") || strings.Contains(l, "Apply changes?") {
+			return true
+		}
+	}
+	return false
+}
+
+// refinedCodexStatus is refineStatus's pure decision logic for a codex pane,
+// split out for testing without shelling out to tmux. current is accepted for
+// signature parallelism with refinedStatus and is otherwise unused (a codex
+// peer always arrives "unknown").
+func refinedCodexStatus(current, paneText string) string {
+	if codexPaneShowsQuestion(paneText) {
+		return "question"
+	}
+	if codexBusyRe.MatchString(paneText) {
+		return "running"
+	}
+	return "waiting"
+}
+
+// PaneShowsQuestionFor captures pane and applies the agent's question needle:
+// codexPaneShowsQuestion for a codex pane, else containsQuestionMarker (the
+// existing claude path). Returns false on capture error.
+func PaneShowsQuestionFor(agent, pane string) bool {
+	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
+	if err != nil {
+		return false
+	}
+	if agent == "codex" {
+		return codexPaneShowsQuestion(string(out))
+	}
+	return containsQuestionMarker(string(out))
 }
 
 // TeamMembersForLead loads the members of the team config whose

@@ -873,6 +873,18 @@ func TestZeusSpawnPathsResolveTheModel(t *testing.T) {
 // cannot have this, since thread.go's cellClaudeArgs call — fed by
 // threadModel's resolution rather than zeusModel's — IS legal.
 func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
+	// A briefless zeus can leave its whole crew inheriting zeus' own tier
+	// instead of Opus, so every zeus spawn must stage the full brief. Since the
+	// codex-cells work, StartCell and ReactivateJob no longer call spawnCommand
+	// directly — both route through zeusLaunch, which computes the brief ONCE
+	// (zeusBrief + the sanctioned injections goalContext/graphContext) and hands
+	// it to spawnCommand for a claude job or to codexZeusLaunch→codexAgentsMD
+	// for a codex one. This guard protects that topology: the two entry paths
+	// must go through the single seam, the seam must build the full brief and
+	// use it for both agents, and the limit rescue's own spawnCommand must still
+	// stage a zeusBrief-led brief. A NEW zeus spawn path must route through
+	// zeusLaunch (or stage the brief itself and be covered here) rather than
+	// silently skipping it.
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
 		return !strings.HasSuffix(fi.Name(), "_test.go")
@@ -880,61 +892,123 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse package: %v", err)
 	}
-	calls := 0
-	inspect := func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		fn, ok := call.Fun.(*ast.Ident)
-		if !ok || fn.Name != "spawnCommand" || len(call.Args) != 4 {
-			return true
-		}
-		calls++
-		// The sanctioned shapes are zeusBrief(...) alone, or zeusBrief(...)
-		// followed by any run of the sanctioned INJECTIONS — goalContext and
-		// graphContext. Both are deliberately OUTSIDE zeusBrief (its two
-		// pinning tests measure static policy text), so the concatenation is
-		// part of the spawn contract this guard protects — the brief half must
-		// still lead, and each addition is one whose ""-on-any-failure
-		// guarantee is what keeps a briefless spawn impossible.
-		injections := map[string]bool{"goalContext": true, "graphContext": true}
-		arg := call.Args[2]
-		for {
-			bin, ok := arg.(*ast.BinaryExpr)
-			if !ok || bin.Op != token.ADD {
-				break
-			}
-			y, ok := bin.Y.(*ast.CallExpr)
-			if !ok {
-				t.Errorf("%s: spawnCommand's brief concatenates something other than goalContext(...)/graphContext(...)", fset.Position(call.Pos()))
-				break
-			}
-			if fn, ok2 := y.Fun.(*ast.Ident); !ok2 || !injections[fn.Name] {
-				t.Errorf("%s: spawnCommand's brief concatenates something other than goalContext(...)/graphContext(...)", fset.Position(call.Pos()))
-			}
-			arg = bin.X
-		}
-		brief, ok := arg.(*ast.CallExpr)
-		if !ok {
-			t.Errorf("%s: spawnCommand's brief argument is not zeusBrief(j) — a briefless zeus can leave its whole crew inheriting zeus' own tier instead of Opus",
-				fset.Position(call.Pos()))
-			return true
-		}
-		if inner, ok := brief.Fun.(*ast.Ident); !ok || inner.Name != "zeusBrief" {
-			t.Errorf("%s: spawnCommand's brief argument is not zeusBrief(...)", fset.Position(call.Pos()))
-		}
-		return true
-	}
+	funcs := map[string]*ast.FuncDecl{}
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
-			ast.Inspect(file, inspect)
+			for _, decl := range file.Decls {
+				if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil {
+					funcs[fd.Name.Name] = fd
+				}
+			}
 		}
 	}
-	// package-wide, so this is also the tripwire for a third zeus spawn path
-	// appearing anywhere in the package rather than only in cell.go
-	if calls != 3 {
-		t.Fatalf("found %d spawnCommand calls in package jobs, want 3 (StartCell, ReactivateJob, the limit rescue's zeus resume) — a new zeus spawn path must stage the brief too, so cover it here rather than re-aiming this guard", calls)
+	// callsIdent reports whether fn's body calls a bare function named `name`.
+	callsIdent := func(fn *ast.FuncDecl, name string) bool {
+		if fn == nil {
+			return false
+		}
+		found := false
+		ast.Inspect(fn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+			return true
+		})
+		return found
+	}
+	// hasBriefConcat reports whether fn builds the full brief: a `zeusBrief(...)`
+	// call added to the sanctioned injections goalContext/graphContext. Both are
+	// deliberately OUTSIDE zeusBrief (its two pinning tests measure static policy
+	// text), so the concatenation is part of the spawn contract this guard
+	// protects — the brief half must lead, and each addition is one whose
+	// ""-on-any-failure guarantee keeps a briefless spawn impossible.
+	injections := map[string]bool{"goalContext": true, "graphContext": true}
+	hasBriefConcat := func(fn *ast.FuncDecl) bool {
+		if fn == nil {
+			return false
+		}
+		ok := false
+		ast.Inspect(fn, func(n ast.Node) bool {
+			bin, isBin := n.(*ast.BinaryExpr)
+			if !isBin || bin.Op != token.ADD {
+				return true
+			}
+			// walk the left-associated chain down to its head
+			arg := ast.Expr(bin)
+			good := true
+			for {
+				b, isB := arg.(*ast.BinaryExpr)
+				if !isB || b.Op != token.ADD {
+					break
+				}
+				y, isCall := b.Y.(*ast.CallExpr)
+				if !isCall {
+					good = false
+					break
+				}
+				if id, isID := y.Fun.(*ast.Ident); !isID || !injections[id.Name] {
+					good = false
+					break
+				}
+				arg = b.X
+			}
+			head, isCall := arg.(*ast.CallExpr)
+			if !isCall {
+				return true
+			}
+			if id, isID := head.Fun.(*ast.Ident); good && isID && id.Name == "zeusBrief" {
+				ok = true
+			}
+			return true
+		})
+		return ok
+	}
+
+	// The two entry paths must route through the single seam, never spawn directly.
+	for _, entry := range []string{"StartCell", "ReactivateJob"} {
+		fn := funcs[entry]
+		if fn == nil {
+			t.Fatalf("%s not found in package jobs", entry)
+		}
+		if !callsIdent(fn, "zeusLaunch") {
+			t.Errorf("%s does not route through zeusLaunch — a zeus spawn that skips the single brief-staging seam can leave the crew on the wrong tier", entry)
+		}
+		if callsIdent(fn, "spawnCommand") || callsIdent(fn, "codexZeusLaunch") {
+			t.Errorf("%s spawns zeus directly instead of via zeusLaunch — route through the seam so the brief is always staged", entry)
+		}
+	}
+	// The seam builds the full brief and stages it for BOTH agents.
+	seam := funcs["zeusLaunch"]
+	if seam == nil {
+		t.Fatal("zeusLaunch not found in package jobs")
+	}
+	if !hasBriefConcat(seam) {
+		t.Errorf("zeusLaunch does not build zeusBrief(j) + goalContext(j) + graphContext(j) — the single brief source is missing or altered")
+	}
+	if !callsIdent(seam, "spawnCommand") {
+		t.Errorf("zeusLaunch's claude path no longer calls spawnCommand with the brief")
+	}
+	if !callsIdent(seam, "codexZeusLaunch") {
+		t.Errorf("zeusLaunch's codex path no longer routes to codexZeusLaunch")
+	}
+	// The codex path stages the brief via AGENTS.md.
+	if !callsIdent(funcs["codexZeusLaunch"], "codexAgentsMD") {
+		t.Errorf("codexZeusLaunch does not write the brief through codexAgentsMD — a codex zeus would spawn briefless")
+	}
+	// The limit rescue is the one remaining direct spawnCommand zeus path; it
+	// must still stage a zeusBrief-led brief. Find every spawnCommand caller
+	// other than the seam and require it builds the full brief.
+	for name, fn := range funcs {
+		if name == "zeusLaunch" || !callsIdent(fn, "spawnCommand") {
+			continue
+		}
+		if !hasBriefConcat(fn) {
+			t.Errorf("%s calls spawnCommand without staging zeusBrief(j) + the sanctioned injections — a new zeus spawn path must stage the brief too", name)
+		}
 	}
 }
 
