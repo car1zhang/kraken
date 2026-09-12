@@ -51,6 +51,10 @@ night and teaches him the loop does not listen.
 
 1. **Carl's verdicts and comments** on watched observations, and **open dream PRs**. Both are suppression:
    a rule already in flight must not be re-proposed, and an observation he has ruled on is already decided.
+   (A previous night's report survives at `~/Documents/pluto/<slug>-<id>.00-dream-report.md` once its cell
+   is torn down, and moves into `~/Documents/pluto/archive/` when the job is archived — the cell's artifacts
+   dir is gone by then, so go straight there rather than probing dead cell paths; two agents in one night
+   paid three calls each rediscovering this.)
 2. **The rest of the watch overlay** — what previous nights are still watching. A row whose state
    reads `shipped` is a CLAIM, not a settled fact: before letting it suppress a fresh sighting,
    verify the fix actually landed — a `pr_url` that points at a MERGED change covering the
@@ -204,7 +208,23 @@ one can blow the Read tool's token ceiling on page two: say to page large views 
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch overlay and the graph that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost the graph
-already held as an entity, because nothing in any brief said what was already known.
+already held as an entity, because nothing in any brief said what was already known. State each entry as the
+row's OBSERVATION sentence plus its id — never its stated cause or its suggested lever, which are a prior
+night's inferences: of four rows fed to scouts as established across two nights, two were false, and each was
+"corroborated" on the same wrong surface because the brief handed the inference over as fact. The block also
+carries one standing line — *a row is a prior night's inference; if your measurement contradicts it, say so
+and say on what surface* — because both false premises were caught only where a brief happened to leave a
+refuting question open.
+
+**A credential under investigation never enters a command line, a filename, or a script source string — write
+that into any brief whose assignment touches one.** The report-side rule ("state the SHAPE, never the value")
+governs a scout's output and says nothing about its tool calls, and a scout sent to measure a leaked token has
+typed both live literals into its own Bash commands, minting fresh copies in its Claude-owned sidecar that no
+cleanup can reach — which the NEXT night's reduce then re-propagated into a staged view. Match a NON-IDENTIFYING prefix (the
+vendor tag plus a character or two — short enough that the fragment carries no entropy, and note that a
+fragment this short is below every redactor floor, so it will be emitted verbatim), read the value from the
+file already being grepped into a shell variable, or count occurrences by the vendor-prefix shape; and when remediation is recorded, name the copies that CANNOT be deleted (the sidecars)
+beside the one that could, or the next pass reads "deleted after verification" as the whole story.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
@@ -368,18 +388,24 @@ either file's length, and certified "coverage spot-checks passed" on an instrume
 unable to tell a scout that finished from one that stopped a page short (both happened to have
 finished; the check could not have known). Two axes decide a row's label, and they answer
 different questions. PAGE COVERAGE — not tool choice — separates READ from SAMPLED: READ means
-the reads collectively reach the staged file's LAST line, so a `Read` capped
+the reads collectively cover every line of the staged file — its LAST line and every interior span — so a `Read` capped
 at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row says — a brief
 that banned "a capped grep" while blessing "paged reads" was violated twice in one night by
 capped Reads and a `head`, forms that sentence literally permits, one row even stating the true
 line count its reads never reached. Write that rule into scout briefs as coverage ("a row claiming
-full means your pages reached the last line"), never as a list of banned tools. And give the
+full means your pages covered every line, with no unread interior span"), never as a list of banned tools.
+Line coverage also has one blind spot the tooling itself creates: `kraken mine reduce` truncates an
+oversized section IN PLACE (`mineTextCap`), leaving a mid-line `more characters elided` marker, so pages
+can cover every line while thousands of characters inside one line were never emitted — grep each staged
+view for `more characters elided` at staging time, and treat an elided span as a SAMPLED span whatever the
+pages covered. And give the
 Coverage format a THIRD label, because the binary one manufactures false rows: a scout that did its
 real work in the raw JSONL — exactly what the brief encourages — has nothing honest to write in a
 format that only certifies the reduced view, and two such scouts (three nights running) resolved
 the tension by writing "READ in full" about reduced files they never opened, one enumerating its
 own 82-line hole inside the sentence claiming completeness. The labels are: READ (reduced pages
-reached the last line), SAMPLED (say what was skipped), and RAW (targeted) — covered primarily by
+covered every line — no unread interior span; a row that DISCLOSES a gap is SAMPLED carrying that span,
+whatever its furthest reach), SAMPLED (say what was skipped), and RAW (targeted) — covered primarily by
 raw-JSONL queries, saying which queries; a RAW row is honest coverage, not a downgrade, but like
 SAMPLED it cannot carry a "clean, nothing found" verdict on its own. DELIVERY MECHANISM is the
 second axis, and it separates READ from RAW: a READ row's pages entered your context through
@@ -472,7 +498,7 @@ Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it op
 | Owed human actions | Every action only carl can take — a credential rotation, an external revoke — still outstanding, each with its watch row id, re-raised EVERY night until it is done. Done means carl's `fine` verdict on that row, or the row's evidence recording who performed the action — then unwatch it; never unwatch a row while its action is still owed, and never write the verdict yourself. The watch row is what makes an owed action durable; this report and the closing line are the only channel that re-SURFACES it, and one live credential's rotation, named in a closing line but not re-raised by the next pass, ceased to exist for two nights while the value stayed live. |
 | Your prompting | The prompting feedback, quoted. |
 | Seen, not actionable | One line each, capped around ten. It is what distinguishes a quiet night from a blind one. |
-| Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. Also the pass's OWN stalls: limit banners, dead stretches, and carl interventions in your own pane tonight — your session is tomorrow's sweep evidence, so tonight's report is the only one that can carry them, and one pass reported four cells' outages while omitting its own 10h37m, 2.5× the four combined. |
+| Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. Also the pass's OWN stalls: limit banners, dead stretches, and carl interventions in your own pane tonight — your session is tomorrow's sweep evidence, so tonight's report is the only one that can carry them, and one pass reported four cells' outages while omitting its own 10h37m, 2.5× the four combined. Coverage also states how many scout completions arrived by task notification versus were found on disk (the channel has twice measured 2 of 6 — plan around it rather than rediscover it), and the lead's OWN spend split — output tokens, and the visible versus invisible-thinking share, computed the same way a scout computes it for another agent: the pass cannot price waste it does not measure in itself. |
 
 ## Inside A Kraken Cell
 
