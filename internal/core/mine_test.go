@@ -1142,6 +1142,9 @@ func TestRedactSecrets(t *testing.T) {
 		{"use sk-learn and deriveState()", "use sk-learn and deriveState()"},
 		{"branch sk-abcdefghijklmno stays", "branch sk-abcdefghijklmno stays"},
 		{"key sk-abcdefghijklmnop goes", "key sk-ab…[redacted] goes"},
+		{"grep -c vcp_Fak3Fak3Fak3Fak3Fak3Fak3Fak3Fak3 file", "grep -c vcp_F…[redacted] file"},
+		{"a=vca_Inv3nt3dInv3nt3dInv3nt3dInv3nt3d", "a=vca_I…[redacted]"},
+		{"short probe vcp_Fak3 stays", "short probe vcp_Fak3 stays"},
 	}
 	for _, c := range cases {
 		if got := redactSecrets(c.in); got != c.want {

@@ -1053,7 +1053,9 @@ const mineTextCap = 64 * 1024
 
 // secretRE matches the token shapes that are unambiguous at a glance —
 // vendor-prefixed credentials (Slack xox*, OpenAI/Anthropic sk-*, GitHub
-// gh?_/github_pat_, AWS AKIA) plus JWTs (two or more dot-separated base64url
+// gh?_/github_pat_, AWS AKIA, Vercel vcp_/vca_ — whose floor is 24, well
+// under the vendor's ~56-char tokens while sparing the short prefix-probe
+// fragments greps use) plus JWTs (two or more dot-separated base64url
 // parts; the header arm's floor is 10 so a compact `{"alg":"HS256"}` header
 // still matches). Deliberately prefix-keyed and nothing looser: a generic
 // `key=<long value>` rule would redact code and prose that merely talk about
@@ -1064,7 +1066,7 @@ const mineTextCap = 64 * 1024
 // one and the cookie's high-entropy tail was emitted verbatim (or, with one
 // inside the first 8 chars, the cookie never matched at all). None of the
 // three can START a match, so admitting them only extends redaction.
-var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|vc[pa]_[A-Za-z0-9]{24,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
 
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough
