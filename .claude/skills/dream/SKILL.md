@@ -243,13 +243,12 @@ of the fan-out, not mid-crisis, because a lead that has not loaded `SendMessage`
 two just-started scouts at full brief re-payment (~123K cache-write) before its first
 `ToolSearch`, then resumed every one of six later deaths at no loss. Any OTHER death — an output
 ceiling, a resume that does not take — is a respawn under the rule that follows (a hook-blocked
-report write is not a death: that case is specified below — report the refusal and stop). **A
+report write is not a death: that case is specified below — report the block and stop). **A
 respawn — however the scout died — gets a FRESH report path** (`<name>-B.md`, then `-C` and so
 on), and you check
 the original path first — a killed scout may have finished its report before dying, and a respawn's
-heredoc fallback overwrites without the Write tool's read-first guard, so handing it the same path
-destroys the one copy of a finished report (a finished 22 KB report survived exactly this only
-because `Write` happened to refuse). "Finished" means it ends with its Coverage section — a scout
+heredoc overwrites without the Write tool's read-first guard, so handing it the same path
+destroys the one copy of a finished report (a finished 22 KB report once survived exactly this only because the respawn tried `Write` first and was refused — a heredoc-first respawn has no such accident left to save it). "Finished" means it ends with its Coverage section — a scout
 killed mid-write leaves a non-empty, truncated report, the same on-disk shape as a complete one,
 so non-empty is not the test. For how
 to WAIT on that many report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet
@@ -267,14 +266,7 @@ saying so, while you wait on a file that is never coming. But `general-purpose` 
 including this cell's worktree, and this pass's one hard rule is that findings never enter git — so
 the guarantee that used to be structural is now a sentence in the brief, and it has to actually be
 there: *write nothing under the repo; "read-only" bars the repo, not your own report, which goes at
-the scratch path above.* When the brief mentions the heredoc report fallback, it says FALLBACK —
-"if `Write` is refused" and nothing wider: briefed with "or any other refusal, use a heredoc",
-scouts with a working `Write` tool have shipped 20 KB reports through `cat <<EOF` (three of five in
-one measured wave), and a heredoc routes report PROSE through Bash, where a text-matching guardrail
-hook can block the whole write because the findings quote a banned command. `do/SKILL.md` names the
-same failure for review fleets; it applies to scout briefs identically. And the brief says what to
-do when BOTH paths are closed — `Write` refused and the heredoc blocked by a hook: report the
-refusal in the reply and stop, never trim or reword the findings until the hook passes. One more
+the scratch path above.* The report goes out through a Bash heredoc (`cat > <path> <<'EOF'`), stated in the brief as the PRIMARY channel, not a fallback: the harness refuses an unnamed subagent's `Write` of a report file outright ("Subagents should return findings as text, not write report files"), the refusal is deterministic — every scout across two measured nights hit it — and a brief that frames the heredoc as "if `Write` is refused" makes each scout author the full report into `Write` first and re-emit the same bytes through the heredoc after the refusal, which cost one night 19% of its entire scout output on duplicate emissions. The refusal text then induces a THIRD copy: its own "include this content in your final response instead" line competes with the brief, and scouts have obeyed both — so the brief also says the final REPLY is a pointer (the report path plus at most five lines of headline), never a restatement of the report. `Write` stays in the roster for the scout's working notes only — it is not a recovery channel for the report, since the same refusal closes it — that inversion follows the refusal, and the refusal keys on the agent being an UNNAMED subagent, not on its being a scout: a NAMED teammate's `Write` is not refused (measured the same night, same worktree), which is why `do/SKILL.md`'s teammate review fleets still write files normally, while its read-only-researcher bullet — which briefs unnamed subagents — gets the same heredoc-first rule. And the brief says what to do when a text-matching guardrail hook blocks the heredoc because the findings quote a banned command — the one way the report channel closes: report the block in the reply and stop, never retry through `Write` and never trim or reword the findings until the hook passes. One more
 brief clause, and it binds you as much as any scout: `kraken.db` is read through the verbs —
 `kraken watchlist get`, `kraken feedback sweep`, `k graph search|get` — never by opening the file
 (`kraken serve` is its single writer, and a second handle would run migrations — `graph/SKILL.md`
