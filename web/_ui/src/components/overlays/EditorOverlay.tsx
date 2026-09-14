@@ -248,6 +248,7 @@ function EditorBody({
   const [repo, setRepo] = useState("");
   const [base, setBase] = useState("");
   const [model, setModel] = useState("");
+  const [agent, setAgent] = useState("");
   const [solo, setSolo] = useState(false);
   const [spec, setSpec] = useState("");
   const [chips, setChips] = useState<AttChip[]>([]);
@@ -289,6 +290,7 @@ function EditorBody({
       setRepo(d.repo || "");
       setBase(d.base || "");
       setModel(d.model || "");
+      setAgent(d.agent || "");
       setSolo(!!d.solo);
       setSpec(d.spec || "");
       setSyncWarn(!!d.err);
@@ -319,6 +321,7 @@ function EditorBody({
       repo: repo.trim(),
       base: base.trim(),
       model: model.trim(),
+      agent: agent.trim(),
       solo,
       spec,
       mtime: 0, // no optimistic lock — see the header comment
@@ -332,7 +335,7 @@ function EditorBody({
       setNoteTone("");
       setNote("sync failed: " + (e instanceof Error ? e.message : e));
     }
-  }, [base, form, model, readOnly, repo, slug, solo, spec]);
+  }, [agent, base, form, model, readOnly, repo, slug, solo, spec]);
 
   const autosave = useDebouncedCallback(() => void save(), 600);
   const { call: scheduleSave, cancel: cancelSave } = autosave;
@@ -363,7 +366,7 @@ function EditorBody({
     setNoteTone("dim");
     setNote("syncing…");
     scheduleSave();
-  }, [repo, base, model, solo, spec, slug, readOnly, form, scheduleSave]);
+  }, [repo, base, model, agent, solo, spec, slug, readOnly, form, scheduleSave]);
 
   // ---- checkStaleModals (app.js:567) --------------------------------------
   // Same rule as steer's, with one wrinkle: capture is LAZY. A freshly-created
@@ -818,6 +821,19 @@ function EditorBody({
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
               />
+            </label>
+            <label>
+              agent{" "}
+              <select
+                id="f-agent"
+                title="which coding agent zeus runs — claude (default) or codex; applied once at cell start"
+                disabled={readOnly}
+                value={agent}
+                onChange={(e) => setAgent(e.target.value)}
+              >
+                <option value="">claude</option>
+                <option value="codex">codex</option>
+              </select>
             </label>
             {/* job colour. It is the ONE control in this form that is not
                 disabled while read-only, and that is deliberate rather than an

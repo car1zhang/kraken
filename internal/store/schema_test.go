@@ -82,6 +82,15 @@ func undoV29(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v30: drop the jobs.agent column (added at v30, absent through
+	// v29). Shape-only, no data carried back — the codex/claude choice has no
+	// place to live in a pre-v30 database. Reversed FIRST, since downgrades
+	// unwind newest-first, mirroring the order migrate() applies them.
+	if target < 30 {
+		if _, err := s.db.Exec(`ALTER TABLE jobs DROP COLUMN agent`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v30) drop agent: %v", target, err)
+		}
+	}
 	// Reverse v29: drop the mental model's two tables and the standalone
 	// watch_items, put kg_watch back in its exact v16 shape (index included),
 	// and rebuild kg_episodes with the LEGACY five-kind CHECK — a real

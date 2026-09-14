@@ -153,9 +153,11 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 	// it back (schema_test.go's undoV29).
 	undoV29(t, s)
 	for _, stmt := range []string{
-		// v28's three account-binding columns go first: a v21 database has
-		// none of them, and step 28 replays by adding them, which fails on a
-		// duplicate column name if they are left behind.
+		// Newest columns first, so each replay's ADD COLUMN finds its column
+		// absent. v30's agent leads (a v21 db has none), then v28's three
+		// account-binding columns: leaving any behind fails the replay on a
+		// duplicate column name.
+		`ALTER TABLE jobs DROP COLUMN agent`,
 		`ALTER TABLE jobs DROP COLUMN account_slug`,
 		`ALTER TABLE jobs DROP COLUMN account_email`,
 		`ALTER TABLE jobs DROP COLUMN account_at`,

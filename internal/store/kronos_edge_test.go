@@ -152,7 +152,9 @@ func TestEdgeKronosMigrationPreservesAPopulatedV23DB(t *testing.T) {
 	for _, stmt := range []string{
 		// v28 added the three account-binding columns; a genuine v23 database
 		// has none of them, and step 28 replays by adding them, which fails on
-		// a duplicate column name if they are left behind. Newest first.
+		// a duplicate column name if they are left behind. Newest first, so
+		// v30's agent leads.
+		`ALTER TABLE jobs DROP COLUMN agent`,
 		`ALTER TABLE jobs DROP COLUMN account_slug`,
 		`ALTER TABLE jobs DROP COLUMN account_email`,
 		`ALTER TABLE jobs DROP COLUMN account_at`,

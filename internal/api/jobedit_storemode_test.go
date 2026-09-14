@@ -362,3 +362,49 @@ func TestWebJobCreateStoreModeRowMatchesParsedTemplate(t *testing.T) {
 // TestWebJobFormStoreModePrereqsRoundTrip is gone with the field: the form
 // carried a prereqs array in both directions, and that removal — together
 // with `ready` — is the v6 break. There is nothing left to round-trip.
+
+// TestWebJobSaveFormStoreModeAgentRoundTrip proves the create/edit form's
+// agent control actually persists (store mode): saving agent=codex and reading
+// the form back returns agent=codex, and clearing it returns to the claude
+// default. This is the toggle carl looked for, end to end through the wire.
+func TestWebJobSaveFormStoreModeAgentRoundTrip(t *testing.T) {
+	useTestStore(t)
+	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "agent-form", Repo: "kraken"})
+
+	save := func(agent string) {
+		t.Helper()
+		body := mustJSON(t, jobFormFields{Slug: "agent-form", Repo: "kraken", Agent: agent, Force: true})
+		rec := httptest.NewRecorder()
+		webJobSaveForm(rec, httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("saveform agent=%q: status %d, body %s", agent, rec.Code, rec.Body.String())
+		}
+	}
+	readAgent := func() string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		webJobForm(rec, httptest.NewRequest(http.MethodGet, "/api/job/form?slug=agent-form", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("job/form: status %d, body %s", rec.Code, rec.Body.String())
+		}
+		var m map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		s, _ := m["agent"].(string)
+		return s
+	}
+
+	save("codex")
+	if got := readAgent(); got != "codex" {
+		t.Fatalf("form did not persist agent: got %q, want codex", got)
+	}
+	// StartCell reads j.Agent off the loaded job — confirm the store-loaded job carries it
+	if j := jobs.JobBySlug(jobs.LoadJobs(), "agent-form"); j == nil || j.Agent != "codex" {
+		t.Fatalf("store-loaded job.Agent = %v, want codex", j)
+	}
+	save("")
+	if got := readAgent(); got != "" {
+		t.Fatalf("form did not clear agent: got %q, want empty (claude default)", got)
+	}
+}

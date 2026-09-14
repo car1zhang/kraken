@@ -1957,6 +1957,7 @@ var jobFormSpec = map[string]fieldSpec{
 	"solo":     {kind: wireBool, required: true},
 	"model":    {kind: wireString, required: true},
 	"color":    {kind: wireString, required: true},
+	"agent":    {kind: wireString, required: true},
 	"spec":     {kind: wireString, required: true},
 	"mtime":    {kind: wireNumber, required: true},
 	"editable": {kind: wireBool, required: true},

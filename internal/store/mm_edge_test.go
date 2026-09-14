@@ -1169,10 +1169,11 @@ func TestEdgeMMListWatchItemsIsLiveOnly(t *testing.T) {
 // both of which are empty by the time the migration finishes.
 func TestEdgeMMMigrationV29CarriesOnlyLiveWatchedEdges(t *testing.T) {
 	// EXACT rather than a floor: this fixture seeds a v28 shape and lets
-	// migrate() walk forward, so whoever appends v30 has to come here and
+	// migrate() walk forward, so whoever appends v31 has to come here and
 	// confirm downgradeFreshDB reverses their step before this passes again.
-	if schemaVersion != 29 {
-		t.Fatalf("schemaVersion = %d, want 29 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
+	// (v30 added jobs.agent; downgradeFreshDB's v30 arm drops it.)
+	if schemaVersion != 30 {
+		t.Fatalf("schemaVersion = %d, want 30 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
 	}
 	s := edgeMMOpen(t)
 
