@@ -187,6 +187,17 @@ read it, so its number is the one figure in the sweep that will not reproduce, a
 headlined a ratio for a cell they were executing inside. Per-job totals are also on the board (each
 job's `tokens`), which is the same number aggregated the other way — by job rather than by night.
 
+**A corpus small enough to read whole needs no fan-out.** When the night's reduced views together
+are smaller than the scout briefs they would take — a few thousand lines — the lead reading every
+view itself, raw supplements included, is the cheaper correct form, not a deviation to apologize
+for. The same coverage rules bind the lead that would bind a scout: page every view to its last
+line, label each READ / SAMPLED / RAW honestly, and say in Coverage that the reading was the
+lead's own. Like a `solo: true` night, say so once at the top of the report and cite what you
+read directly — there are no scout files to cite, and Coverage's scout-report list and
+spot-check slots read "None — lead-read night" rather than being dropped. Name the call in
+Judgment calls. This is not `solo: true` (the cell section below), which declares the semantic
+pass skipped: a small corpus earns a lead-read semantic pass, never a skipped one.
+
 **The reduction is a cost control, not an access control.** Say so in the scout brief, and hand over
 the raw transcript's path alongside the reduced one. Thinking, tool results and attachments are
 exactly what `reduce` drops, so a question about where output tokens went, what a command actually
@@ -206,8 +217,9 @@ from the watch overlay and the graph that touch this scout's assignment — mark
 re-derive": six scouts in one night each independently re-derived from raw a cost the graph
 already held as an entity, because nothing in any brief said what was already known.
 
-**The scouts** are one subagent per transcript, each reading that session's reduced view plus its
-digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
+**The scouts** — when the corpus warrants a fan-out at all — are one subagent per transcript,
+each reading that session's reduced view plus its digest. They are read-only exploration — they
+change nothing in the repo and judge nothing — so they are
 unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
 channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
@@ -397,8 +409,9 @@ line out of it — name the scout file even when you also cite the underlying tr
 report whose findings cite only cells and transcripts is indistinguishable, on this format's own
 check, from one synthesized from task notifications.** A finding
 from anywhere else cites what it actually came from — the digest metric, the feedback row and its
-snapshot, the watched fact's edge id — and a `solo: true` night says so once at the top and cites what it read
-directly. A night synthesized from notifications cannot produce the scout citations, so it fails its
+snapshot, the watched fact's edge id — and a `solo: true` or lead-read night (the small-corpus
+carve-out above) says so once at the top and cites what it read directly. A night synthesized
+from notifications cannot produce the scout citations, so it fails its
 own report format rather than merely disobeying a paragraph. Cite the source you HAVE; a citation
 invented to satisfy the format is worse than none, in the one document whose whole value is that its
 evidence is real.
