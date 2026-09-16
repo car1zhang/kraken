@@ -20,6 +20,12 @@ interface FieldSelectProps {
    * name would swallow the selection, the exact case SteerOverlay's label
    * comment warns against. */
   label?: string;
+  /** What the empty value ("") reads as. Defaults to the em-dash the repo
+   * field has always shown, but a field whose empty value MEANS something —
+   * the agent field, where absent is claude — names it instead, so the
+   * button and the row both say the default rather than showing a dash the
+   * user has to decode. The value picked and stored is still "". */
+  emptyLabel?: string;
 }
 
 /** What a value reads as: itself, or the em-dash the empty value has always
@@ -42,11 +48,21 @@ const EMPTY = "—";
  * form state, and its autosave rides the state effect watching `repo`, so
  * there is nothing here to contain.
  */
-export function FieldSelect({ id, value, options, onPick, disabled, label }: FieldSelectProps) {
+export function FieldSelect({
+  id,
+  value,
+  options,
+  onPick,
+  disabled,
+  label,
+  emptyLabel,
+}: FieldSelectProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement | null>(null);
 
   useMenuDismiss(open, setOpen, rootRef);
+
+  const empty = emptyLabel ?? EMPTY;
 
   const row = (val: string) => {
     const sel = value === val;
@@ -64,7 +80,7 @@ export function FieldSelect({ id, value, options, onPick, disabled, label }: Fie
           setOpen(false);
         }}
       >
-        {val || EMPTY}
+        {val || empty}
         {sel ? <span className="tick">✓</span> : null}
       </span>
     );
@@ -77,12 +93,12 @@ export function FieldSelect({ id, value, options, onPick, disabled, label }: Fie
         id={id}
         className="colorsel-btn"
         disabled={disabled}
-        aria-label={label ? `${label}: ${value || EMPTY}` : undefined}
+        aria-label={label ? `${label}: ${value || empty}` : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        {value || EMPTY} <span className="caret">▾</span>
+        {value || empty} <span className="caret">▾</span>
       </button>
       {/* gated on !disabled too, not just the button: a disabled button
           cannot re-open the menu, but one already open when disabled flips

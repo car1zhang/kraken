@@ -822,19 +822,26 @@ function EditorBody({
                 onChange={(e) => setModel(e.target.value)}
               />
             </label>
-            <label>
+            {/* a DIV for the repo field's reason (FieldSelect menu rows live
+                inside the wrapper; a label would forward a row's click back to
+                the button). The empty value means claude — the wire's default
+                spelling — so emptyLabel names it instead of the "—" the repo
+                field shows. */}
+            <div
+              className="f-field"
+              title="which coding agent zeus runs — claude (default) or codex; applied once at cell start"
+            >
               agent{" "}
-              <select
+              <FieldSelect
                 id="f-agent"
-                title="which coding agent zeus runs — claude (default) or codex; applied once at cell start"
+                label="agent"
                 disabled={readOnly}
                 value={agent}
-                onChange={(e) => setAgent(e.target.value)}
-              >
-                <option value="">claude</option>
-                <option value="codex">codex</option>
-              </select>
-            </label>
+                onPick={setAgent}
+                options={["codex"]}
+                emptyLabel="claude"
+              />
+            </div>
             {/* job colour. It is the ONE control in this form that is not
                 disabled while read-only, and that is deliberate rather than an
                 oversight (setFormReadOnly says so out loud): everything else
