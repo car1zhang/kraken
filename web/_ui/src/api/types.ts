@@ -624,6 +624,9 @@ export interface JobForm {
   base?: string;
   solo?: boolean;
   model?: string;
+  /** which coding agent zeus runs — "codex" or "" (claude default). Unlike
+   * color it is form-writable, so saveJobForm persists it. */
+  agent?: string;
   spec?: string;
   mtime: number;
   editable?: boolean;

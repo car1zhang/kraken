@@ -16,13 +16,18 @@ import (
 // minimal churn, but is a store-local type: store must not import jobs
 // (that would invert util ← store ← core ← jobs ← api ← web into a cycle).
 type Job struct {
-	ID           int64
-	Slug         string
-	Repo         string
-	Base         string
-	Solo         bool
-	Model        string
-	Color        string
+	ID    int64
+	Slug  string
+	Repo  string
+	Base  string
+	Solo  bool
+	Model string
+	Color string
+	// Agent is which coding agent a cell's zeus runs — "" (the claude
+	// default) or "codex". Part of the job's authored contract like Model, so
+	// it joins jobFieldColumns and a form/raw save may set it (unlike the
+	// account_* columns, which are cell-runtime state).
+	Agent        string
 	Body         string
 	State        string
 	Outcome      string
@@ -130,7 +135,7 @@ var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), solo,
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,''),
 	COALESCE(load_unblock,0), COALESCE(load_scope,0), COALESCE(load_note,''),
 	COALESCE(load_at,0), COALESCE(account_slug,''), COALESCE(account_email,''),
-	COALESCE(account_at,0)`
+	COALESCE(account_at,0), COALESCE(agent,'')`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
@@ -141,7 +146,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 		&j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
-		&j.AccountSlug, &j.AccountEmail, &j.AccountAt,
+		&j.AccountSlug, &j.AccountEmail, &j.AccountAt, &j.Agent,
 	)
 	if err != nil {
 		return nil, err
@@ -188,10 +193,10 @@ func (s *Store) CreateJob(j *Job) (int64, error) {
 		j.Rev = 1
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO jobs (slug, repo, base, solo, model, color,
+		`INSERT INTO jobs (slug, repo, base, solo, model, color, agent,
 			body, state, outcome, session, teardown, run, rev, created_at, updated_at, err)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color, j.Agent,
 		j.Body, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.Rev,
 		j.CreatedAt, j.UpdatedAt, j.Err,
 	)
@@ -375,7 +380,7 @@ func loadJobsWithChildrenTx(tx *sql.Tx, query string) ([]*Job, map[int64][]PR, e
 // into the generated statement.
 var jobFieldColumns = map[string]bool{
 	"slug": true, "repo": true, "base": true,
-	"solo": true, "model": true, "color": true, "body": true, "state": true,
+	"solo": true, "model": true, "color": true, "agent": true, "body": true, "state": true,
 	"outcome": true, "session": true, "teardown": true, "run": true, "err": true,
 }
 
@@ -584,11 +589,11 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 			run = 1
 		}
 		res, err := s.db.Exec(
-			`INSERT INTO jobs (slug, repo, base, solo, model, color,
+			`INSERT INTO jobs (slug, repo, base, solo, model, color, agent,
 				body, state, outcome, session, teardown, run, rev, created_at, updated_at,
 				archived_at, archived_name)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color, j.Agent,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			rev, created, archivedAt, archivedAt, j.ArchivedName,
 		)
@@ -613,9 +618,9 @@ func (s *Store) CreateArchivedJob(j *Job) (int64, error) {
 		}
 		if _, err := s.db.Exec(
 			`UPDATE jobs SET slug = ?, repo = ?, base = ?, solo = ?,
-				model = ?, color = ?, body = ?, state = ?, outcome = ?, session = ?,
+				model = ?, color = ?, agent = ?, body = ?, state = ?, outcome = ?, session = ?,
 				teardown = ?, run = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
-			j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color,
+			j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color, j.Agent,
 			j.Body, j.State, j.Outcome, j.Session, j.Teardown, run,
 			archivedAt, archivedAt, id,
 		); err != nil {

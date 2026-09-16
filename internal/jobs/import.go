@@ -445,7 +445,7 @@ func upsertActiveJobRow(st *store.Store, j *Job, modTime time.Time) (int64, erro
 		millis := modTime.UnixMilli()
 		row := &store.Job{
 			Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-			Solo: j.Solo, Model: j.Model, Color: j.Color,
+			Solo: j.Solo, Model: j.Model, Color: j.Color, Agent: j.Agent,
 			Body: j.Body, State: j.State, Outcome: j.Outcome,
 			Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),
 			CreatedAt: millis, UpdatedAt: millis,
@@ -615,7 +615,7 @@ func importArchivedJobs(st *store.Store, files []parsedJobFile, dryRun bool) (St
 func upsertArchivedJobRow(st *store.Store, j *Job, archivedAtMillis int64) (int64, error) {
 	row := &store.Job{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-		Solo: j.Solo, Model: j.Model, Color: j.Color,
+		Solo: j.Solo, Model: j.Model, Color: j.Color, Agent: j.Agent,
 		Body: j.Body, State: j.State, Outcome: j.Outcome,
 		Session: j.Session, Teardown: j.Teardown, Run: runValue(j.Run),
 		ArchivedAt: archivedAtMillis, ArchivedName: j.ArchivedName,

@@ -72,7 +72,7 @@ func composeRawJobContent(j *jobs.Job) string {
 	spec, logSection := splitBodyLog(j.Body)
 	fields := jobFormFields{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
-		Solo: j.Solo, Model: j.Model, Color: j.Color,
+		Solo: j.Solo, Model: j.Model, Color: j.Color, Agent: j.Agent,
 		Spec: strings.TrimSpace(spec),
 	}
 	return serializeJobFile(fields, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
@@ -94,7 +94,7 @@ func composeRawJobContent(j *jobs.Job) string {
 func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	return map[string]any{
 		"repo": p.Repo, "base": p.Base,
-		"solo": p.Solo, "model": p.Model, "color": p.Color,
+		"solo": p.Solo, "model": p.Model, "color": p.Color, "agent": p.Agent,
 		"body": p.Body, "state": p.State, "outcome": p.Outcome,
 		"session": p.Session, "teardown": p.Teardown, "run": int64(p.Run),
 		// L6: p.Err is "" on a clean parse, which is exactly the value that
@@ -218,7 +218,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		if _, err := st.CreateJob(&store.Job{
 			Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
 			Solo: parsed.Solo, Model: parsed.Model,
-			Color: parsed.Color, Body: parsed.Body,
+			Color: parsed.Color, Agent: parsed.Agent, Body: parsed.Body,
 		}); err != nil {
 			// ErrSlugTaken is a name clash the caller can fix by typing a
 			// different one, so it is a 409 like the pre-check above and never
@@ -401,6 +401,10 @@ type jobFormFields struct {
 	Base  string `json:"base"`
 	Solo  bool   `json:"solo"`
 	Model string `json:"model"`
+	// Agent is which coding agent the cell's zeus runs — "" (claude default)
+	// or "codex". Unlike Color it IS form-writable (part of the job's authored
+	// contract, like Model), so it round-trips through the form save.
+	Agent string `json:"agent"`
 	// Color is RENDER-ONLY on the save path: serializeJobFile emits the
 	// color: line from it so the raw view keeps showing the field, but
 	// webJobSaveForm overwrites it from the stored job before serializing —
@@ -442,6 +446,7 @@ func webJobForm(w http.ResponseWriter, r *http.Request) {
 		"solo":  j.Solo,
 		"model": j.Model,
 		"color": j.Color,
+		"agent": j.Agent,
 		"spec":  strings.TrimSpace(spec),
 		"mtime": jobEditMTime(j), "editable": editableJob(j),
 		"err": j.Err, "slugs": slugs, "repos": jobs.RepoCandidates(),
@@ -468,6 +473,9 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 	}
 	if f.Color != "" {
 		fmt.Fprintf(&b, "color: %s\n", jobs.OneLine(f.Color))
+	}
+	if f.Agent != "" {
+		fmt.Fprintf(&b, "agent: %s\n", jobs.OneLine(f.Agent))
 	}
 	if state != "" {
 		fmt.Fprintf(&b, "state: %s\n", state)
@@ -574,7 +582,7 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(content))
 		fields := map[string]any{
 			"repo": req.Repo, "base": req.Base,
-			"solo": req.Solo, "model": req.Model,
+			"solo": req.Solo, "model": req.Model, "agent": req.Agent,
 			"body": body, "err": parsed.Err,
 		}
 		// L10: form saves never touch PRs (they're not part of

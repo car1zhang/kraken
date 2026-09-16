@@ -94,7 +94,7 @@ import (
 // re-grown as a compilation of mm items alone, and rebuilds kg_episodes so its
 // closed `kind` CHECK admits 'mental-model' (see schemaV29 and
 // migrateV29MentalModel).
-const schemaVersion = 29
+const schemaVersion = 30
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1725,6 +1725,15 @@ CREATE INDEX watch_items_state_last_seen ON watch_items(expired_at, state, last_
 CREATE INDEX watch_items_observation ON watch_items(observation);
 `
 
+// schemaV30 adds the job's coding-agent column: which agent a cell's zeus
+// runs, "" (the claude default) or "codex". It is part of the job's authored
+// contract like model:/color:, so unlike the v28 account columns it DOES join
+// jobFieldColumns (a form/raw save may set it). Appended rather than folded
+// in, same reason as v28: real kraken.db files already exist at v29.
+const schemaV30 = `
+ALTER TABLE jobs ADD COLUMN agent TEXT NOT NULL DEFAULT '';
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1860,6 +1869,7 @@ var migrations = map[int]migrationStep{
 	27: {sql: schemaV27},
 	28: {sql: schemaV28},
 	29: {sql: schemaV29, hook: migrateV29MentalModel},
+	30: {sql: schemaV30},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

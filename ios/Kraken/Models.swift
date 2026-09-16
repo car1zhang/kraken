@@ -1399,6 +1399,10 @@ struct JobForm: Decodable {
     // here for the same wire tolerance as `model`: an older server's payload
     // simply lacks the key.
     let color: String?
+    // Which coding agent the cell's zeus runs — "codex" or "" (claude
+    // default). Optional for the same wire tolerance as `model`/`color`; unlike
+    // color it IS form-writable (see JobFormSaveRequest below).
+    let agent: String?
     let spec: String
     let mtime: Int64
     let editable: Bool
@@ -1410,6 +1414,7 @@ struct JobForm: Decodable {
         case slug, repo, base, solo
         case model
         case color
+        case agent
         case spec, mtime, editable, err, slugs, repos
     }
 }
@@ -1426,12 +1431,16 @@ struct JobFormSaveRequest: Encodable {
     let base: String
     let solo: Bool
     let model: String
+    // agent rides here (unlike color, which has its own endpoint): it is
+    // form-writable, so the create/edit form persists the claude/codex choice.
+    let agent: String
     let spec: String
     let mtime: Int64
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, base, solo
         case model
+        case agent
         case spec, mtime
     }
 }

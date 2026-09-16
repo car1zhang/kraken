@@ -253,7 +253,9 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 	for _, stmt := range []string{
 		// v28 adds the three account-binding columns to jobs; a v16 database
 		// has none of them, and step 28 replays by adding them, which fails on
-		// a duplicate column name if they are left behind.
+		// a duplicate column name if they are left behind. v30's agent (also
+		// absent in a v16 db) is dropped first, same reason.
+		`ALTER TABLE jobs DROP COLUMN agent`,
 		`ALTER TABLE jobs DROP COLUMN account_slug`,
 		`ALTER TABLE jobs DROP COLUMN account_email`,
 		`ALTER TABLE jobs DROP COLUMN account_at`,

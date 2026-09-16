@@ -827,11 +827,11 @@ func TestEdgeJGMigrationV26ToV27LeavesNoRowForANullGoalID(t *testing.T) {
 	// later step, so whoever appends the next migration has to come here and
 	// confirm downgradeFreshDB reverses their step before this passes again.
 	// Bumped to 28 with the account-binding columns, then to 29 with the
-	// mental-model cutover, whose reversal is downgradeFreshDB's new v29 arm
-	// (it drops the three new tables, puts kg_watch back, and rebuilds
-	// kg_episodes with its pre-v29 CHECK).
-	if schemaVersion != 29 {
-		t.Fatalf("schemaVersion = %d, want 29 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
+	// mental-model cutover, then to 30 with jobs.agent (downgradeFreshDB's v30
+	// arm drops that column; v29's arm drops the three mm tables, puts kg_watch
+	// back, and rebuilds kg_episodes with its pre-v29 CHECK).
+	if schemaVersion != 30 {
+		t.Fatalf("schemaVersion = %d, want 30 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
 	}
 	labelled := edgeJGJob(t, s, "jg-mig-labelled")
 	unlabelled := edgeJGJob(t, s, "jg-mig-unlabelled")

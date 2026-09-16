@@ -829,3 +829,46 @@ func TestCreateArchivedJobKeepsColor(t *testing.T) {
 		t.Fatalf("archived update lost color: %+v", list)
 	}
 }
+
+// TestJobAgentRoundTrip is the guard the codex-cells W2 work lacked: the
+// agent choice must survive the store, or a store-backed `agent: codex` job
+// loads with Agent=="" and StartCell spawns claude regardless. It covers
+// CreateJob → read back, and UpdateJobFields (the form/raw save path) → read
+// back, both by slug and by id.
+func TestJobAgentRoundTrip(t *testing.T) {
+	s := openTest(t)
+	id, err := s.CreateJob(&Job{Slug: "cdx", Repo: "kraken", Agent: "codex"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	bySlug, err := s.GetJobBySlug("cdx")
+	if err != nil {
+		t.Fatalf("GetJobBySlug: %v", err)
+	}
+	if bySlug.Agent != "codex" {
+		t.Fatalf("CreateJob dropped agent: got %q, want codex", bySlug.Agent)
+	}
+	byID, err := s.GetJobByID(id)
+	if err != nil {
+		t.Fatalf("GetJobByID: %v", err)
+	}
+	if byID.Agent != "codex" {
+		t.Fatalf("GetJobByID dropped agent: got %q, want codex", byID.Agent)
+	}
+
+	// a claude default persists as "" (absent key, not a spurious value)
+	if _, err := s.CreateJob(&Job{Slug: "cla", Repo: "kraken"}); err != nil {
+		t.Fatalf("CreateJob claude: %v", err)
+	}
+	if cla, _ := s.GetJobBySlug("cla"); cla == nil || cla.Agent != "" {
+		t.Fatalf("claude job should have empty agent, got %+v", cla)
+	}
+
+	// the form/raw save path (UpdateJobFields) can set and clear agent
+	if _, err := s.UpdateJobFields(id, byID.Rev, map[string]any{"agent": ""}); err != nil {
+		t.Fatalf("UpdateJobFields clear agent: %v", err)
+	}
+	if got, _ := s.GetJobByID(id); got == nil || got.Agent != "" {
+		t.Fatalf("UpdateJobFields did not clear agent: %+v", got)
+	}
+}
