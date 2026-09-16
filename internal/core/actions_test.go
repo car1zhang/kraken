@@ -25,7 +25,7 @@ func TestSpawnModelsArePinnedIDs(t *testing.T) {
 	if DefaultModel != "claude-opus-5" {
 		t.Fatalf("DefaultModel = %q; changing kraken's default model is a deliberate edit — update this test with it", DefaultModel)
 	}
-	if ZeusModel != "claude-fable-5" {
+	if ZeusModel != "claude-fable-5-1" {
 		t.Fatalf("ZeusModel = %q; changing the model a cell's zeus runs on is a deliberate edit — update this test with it", ZeusModel)
 	}
 	if ZeusModel == DefaultModel {

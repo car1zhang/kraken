@@ -85,7 +85,7 @@ func TestEdgeValidateThreadModelRefusals(t *testing.T) {
 		{"exact opus id", "claude-opus-5"},
 		{"exact haiku id", "claude-haiku-4-5-20251001"},
 		{"exact sonnet id", "claude-sonnet-5"},
-		{"exact fable id", "claude-fable-5"},
+		{"exact fable id", "claude-fable-5-1"},
 		{"title case", "Haiku"},
 		{"upper case", "OPUS"},
 		{"mixed case", "SoNnEt"},

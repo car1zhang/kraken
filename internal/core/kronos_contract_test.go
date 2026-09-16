@@ -14,7 +14,7 @@ import "testing"
 // section exists to prevent. (Whether it EQUALS IrisModel/ZeusModel today is
 // deliberately not asserted in either direction; see branch.go's rationale.)
 func TestContractKronosModelIsTheExactID(t *testing.T) {
-	if KronosModel != "claude-fable-5" {
-		t.Fatalf("KronosModel = %q, want %q", KronosModel, "claude-fable-5")
+	if KronosModel != "claude-fable-5-1" {
+		t.Fatalf("KronosModel = %q, want %q", KronosModel, "claude-fable-5-1")
 	}
 }

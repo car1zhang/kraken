@@ -217,13 +217,19 @@ func zeusBrief(j *Job) string {
 	// procedure: which artifacts a phase writes, and when, stay in the skills.
 	b.WriteString("Before writing anything carl reads — an overview, a caption, a final message, a report — search what he already knows about the subject (`kraken graph search`, `kraken mm get` — the full binary, as its own command: monolith's guardrail kills any compound containing bare `k`): abstract what he knows, spell out what he does not, and carry the same 'carl knows / is unfamiliar with' lines into every teammate brief. When explaining code, citing a file, or briefing a diagram, run `kraken mm get --file <path>` per file cited; mandate the same in every teammate brief that cites code.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path if it wasn't ingested).\n")
-	// The tier is RESOLVED rather than named: zeus is spawned on zeusModel(j),
-	// which a job's model: field overrides, so a hardcoded "you run on Fable"
-	// asserts a model zeus is not on for exactly the jobs that set one — and
-	// then forbids working around a tier it never had. JobTemplate advertises
-	// that override, so the false case is the documented one.
+	// The tier is RESOLVED rather than named: zeus is spawned on zeusModel(j)
+	// — codexZeusModel(j) for a codex cell, the same rule on the other
+	// launcher — which a job's model: field overrides, so a hardcoded "you
+	// run on Fable" asserts a model zeus is not on for exactly the jobs that
+	// set one — and then forbids working around a tier it never had.
+	// JobTemplate advertises that override, so the false case is the
+	// documented one.
+	briefModel := zeusModel(j)
+	if j.Agent == "codex" {
+		briefModel = codexZeusModel(j)
+	}
 	fmt.Fprintf(&b, "kraken spawned you on `%s` — zeus' tier is kraken's deliberate choice (the lead plans, briefs, arbitrates and integrates, so its turnaround is the cell's latency), not something to work around. EVERY OTHER agent in this cell runs on Claude Opus 5: every teammate and every subagent you ever spawn, no exceptions, always passing `model: opus` on the Agent tool (a tier alias — `opus` IS Claude Opus 5). Never drop one to a cheaper tier or leave the model unset — an unset model can inherit YOURS, the one way the crew stops being Opus unnoticed. The deep work is what you delegate, so that is where the deep tier goes.\n",
-		zeusModel(j))
+		briefModel)
 	// The one block of facts a skill genuinely cannot derive. Every skill
 	// below writes "<cellDir>/artifacts" and "<cellDir>/doc/fragments" in the
 	// abstract; this is where those resolve, stated once instead of ~15 times.

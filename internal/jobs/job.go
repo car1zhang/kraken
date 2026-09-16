@@ -542,8 +542,8 @@ func JobTemplate(slug string) string {
 		"                          # no match → job errors, surfaced in the viewer\n" +
 		"# base: origin/main       # optional: ref the worktree branches from (default origin/main, else main)\n" +
 		"solo: false               # true → zeus works alone: no teammate crew at all, prose-only doc (no diagram agents)\n" +
-		"# model: opus             # optional: claude model for zeus (any --model value, e.g. fable | opus | sonnet | haiku);\n" +
-		"                          # applied once at cell start, default = " + core.ZeusModel + "\n" +
+		"# model: opus             # optional: model for zeus (any claude --model / codex -m value, e.g. fable | opus | sonnet | haiku);\n" +
+		"                          # applied once at cell start, default = " + core.ZeusModel + " (codex cells: " + core.CodexZeusModel + ")\n" +
 		"# color: purple           # optional: board/pane colour (red | blue | green | yellow | purple | orange | pink | cyan);\n" +
 		"                          # unset = no colour\n" +
 		"# agent: codex            # optional: which coding agent zeus runs (claude | codex); default claude\n" +

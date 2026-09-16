@@ -56,7 +56,7 @@ var edgeBadModels = []string{
 	"claude-opus-5",
 	"claude-haiku-4-5-20251001",
 	"claude-sonnet-5",
-	"claude-fable-5",
+	"claude-fable-5-1",
 	"Haiku",
 	"OPUS",
 	"SoNnEt",

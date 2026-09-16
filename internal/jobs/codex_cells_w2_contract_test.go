@@ -65,8 +65,8 @@ func TestCodexW2ContractParseJobAgentAbsent(t *testing.T) {
 
 // --- W2-cell: codexModelArgs --------------------------------------------
 //
-// Contract: `["-m", j.Model]` when j.Model != "". (The Model-unset → nil
-// branch is the edge author's dimension.)
+// Contract: `["-m", j.Model]` when j.Model != "". (The Model-unset branch —
+// the pinned core.CodexZeusModel default — is the edge author's dimension.)
 
 func TestCodexW2ContractCodexModelArgsSet(t *testing.T) {
 	j := &Job{Agent: "codex", Slug: "demo", Model: "gpt-5-codex"}

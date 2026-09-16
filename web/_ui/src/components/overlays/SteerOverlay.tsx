@@ -1448,7 +1448,9 @@ export function specMetaHTML(d: JobForm): string {
   const rows: [string, string, string?][] = [
     ["repo", esc(d.repo || "—")],
     ["base", esc(d.base || "origin/main")],
-    ["model", esc(d.model || "claude-fable-5")],
+    // the fallback is the agent-matched default: a codex cell with no model:
+    // runs on kraken's pinned codex default, not the claude one
+    ["model", esc(d.model || (d.agent === "codex" ? "gpt-6-astra" : "claude-fable-5-1"))],
     ["solo", d.solo ? "✓" : "✗"],
   ];
   // The `prereqs` row stood here — a "wide" row spanning both meta columns,

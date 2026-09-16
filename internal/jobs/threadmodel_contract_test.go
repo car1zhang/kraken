@@ -35,7 +35,7 @@ var contractThreadModelIDs = map[string]string{
 	"haiku":  "claude-haiku-4-5-20251001",
 	"sonnet": "claude-sonnet-5",
 	"opus":   "claude-opus-5",
-	"fable":  "claude-fable-5",
+	"fable":  "claude-fable-5-1",
 }
 
 // contractModelFlagValue returns the single --model value on a rendered

@@ -240,7 +240,7 @@ struct JobFormView: View {
                     .listRowBackground(Color.clear)
             }
             kSection("Model") {
-                TextField("model for zeus (optional, default = claude-fable-5)", text: $model)
+                TextField("model for zeus (optional, default = claude-fable-5-1; codex cells: gpt-6-astra)", text: $model)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .font(.data(13))
