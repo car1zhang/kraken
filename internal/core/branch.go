@@ -1,14 +1,18 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"kraken/internal/util"
 )
@@ -25,22 +29,213 @@ func ClaudeLauncher() string {
 	return "claude"
 }
 
-// CodexLauncher is the codex analogue of ClaudeLauncher: the override env var
-// KRAKEN_CODEX verbatim when set, else the bare name "codex". It mirrors
-// ClaudeLauncher exactly — no exec.LookPath fallback beyond the bare name —
-// since a launcher name is all any caller needs and PATH resolution is the
-// shell's job at spawn time.
-func CodexLauncher() string {
+// codexSystemDirs are the machine-wide install dirs ResolveCodex searches
+// after the per-user rungs, in order. A package var rather than a const so a
+// test can point it at a temp dir: the real /opt/homebrew/bin on this machine
+// holds the stale 0.39.0, and a test asserting "nothing resolvable" must not
+// be able to find it.
+var codexSystemDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
+
+// codexProbeTimeout bounds one `codex --version` probe. A launcher that cannot
+// report its version inside it is rejected rather than waited on: the probe
+// runs inside SubmitJob's POST, and a hung candidate would hang the board's
+// submit button.
+const codexProbeTimeout = 5 * time.Second
+
+// ResolveCodex finds the codex launcher a cell may run on: the absolute path
+// of the first candidate whose `--version` passes codexVersionAtLeast against
+// codexMinVersion. A bare `codex` on the pane command line is not enough:
+// `kraken serve` runs under launchd with a PATH that carries no nvm dir, so
+// job 428 (2026-09-16) resolved it to homebrew 0.39.0, which exits at startup
+// on the modern config.toml, and the cell died four seconds in. It is the
+// same launchd-PATH problem jobs.lookToolchain solves for `go`, so this is
+// the same shape of answer — a ladder of known install locations — plus the
+// version gate.
+//
+// The ladder: $KRAKEN_CODEX when set is the ONLY candidate (an explicit
+// override that fails is a refusal naming it, never a silent fallthrough —
+// a bare name is PATH-looked-up, anything else used as given); then PATH;
+// then every ~/.nvm/versions/node/<v>/bin, newest node first; then
+// ~/.local/bin; then codexSystemDirs. A rung that does not stat as an
+// executable file is skipped silently; candidates dedupe on their
+// symlink-resolved path so a PATH hit is probed once; the path returned is the
+// candidate AS FOUND (a ~/.local/bin symlink reads as that path, which is what
+// carl put there), made absolute. The error names every rejected candidate
+// with its reason, or every location searched when there was none — "codex
+// not found" with no list is unactionable.
+func ResolveCodex() (string, error) {
 	if c := os.Getenv("KRAKEN_CODEX"); c != "" {
-		return c
+		path := c
+		if strings.HasPrefix(c, "~/") {
+			// launchd hands serve no shell, so nothing else would expand it.
+			path = filepath.Join(util.Home(), c[2:])
+		}
+		if !strings.ContainsRune(path, os.PathSeparator) {
+			p, err := exec.LookPath(path)
+			if err != nil {
+				return "", fmt.Errorf("KRAKEN_CODEX=%s: not found on PATH", c)
+			}
+			path = p
+		}
+		if _, err := os.Stat(path); err != nil {
+			return "", fmt.Errorf("KRAKEN_CODEX=%s: %s does not exist", c, path)
+		}
+		if !isExecutableFile(path) {
+			return "", fmt.Errorf("KRAKEN_CODEX=%s: %s is not an executable file", c, path)
+		}
+		if reason, ok := codexProbe(path); !ok {
+			return "", fmt.Errorf("KRAKEN_CODEX=%s: no codex at or above %s — %s: %s", c, codexMinVersion, path, reason)
+		}
+		return absPath(path), nil
 	}
-	return "codex"
+
+	var candidates, searched []string
+	if p, err := exec.LookPath("codex"); err == nil {
+		candidates = append(candidates, p)
+	}
+	searched = append(searched, "PATH")
+	nvm := filepath.Join(util.Home(), ".nvm", "versions", "node")
+	for _, d := range nvmNodeDirs(nvm) {
+		candidates = append(candidates, filepath.Join(nvm, d, "bin", "codex"))
+	}
+	searched = append(searched, "~/.nvm/versions/node/*/bin")
+	candidates = append(candidates, filepath.Join(util.Home(), ".local", "bin", "codex"))
+	searched = append(searched, "~/.local/bin")
+	for _, d := range codexSystemDirs {
+		candidates = append(candidates, filepath.Join(d, "codex"))
+		searched = append(searched, d)
+	}
+
+	seen := map[string]bool{}
+	var rejected []string
+	for _, c := range candidates {
+		if !isExecutableFile(c) {
+			continue
+		}
+		key := c
+		if r, err := filepath.EvalSymlinks(c); err == nil {
+			key = r
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		reason, ok := codexProbe(c)
+		if ok {
+			return absPath(c), nil
+		}
+		rejected = append(rejected, c+": "+reason)
+	}
+	if len(rejected) == 0 {
+		return "", fmt.Errorf("codex not found — searched %s", strings.Join(searched, ", "))
+	}
+	return "", fmt.Errorf("no codex at or above %s — %s", codexMinVersion, strings.Join(rejected, "; "))
+}
+
+// codexProbe runs `<path> --version` under codexProbeTimeout and classifies
+// the answer: (reported version, true) when it passes the floor; otherwise
+// the rejection reason — the version it reported when that is what fell
+// short, "unparseable version" when the output carries no X.Y.Z triple, and
+// "no version" when the probe could not run, exited non-zero, or timed out,
+// carrying the probe's first stderr line when it left one: the nvm codex is
+// a `#!/usr/bin/env node` wrapper, so on a PATH with no node it fails with
+// `env: node: No such file or directory`, and a bare "no version" would point
+// away from that cause. WaitDelay bounds the wait on a killed probe's
+// stdout: a wrapper script whose child outlives it would otherwise hold the
+// pipe open past the deadline, which is the one way a timeout could still
+// hang the caller.
+func codexProbe(path string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), codexProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "--version")
+	cmd.WaitDelay = time.Second
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if line, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n"); line != "" {
+			return "no version (" + line + ")", false
+		}
+		return "no version", false
+	}
+	triple := codexVersionTriple.FindString(string(out))
+	if triple == "" {
+		return "unparseable version", false
+	}
+	return triple, codexVersionAtLeast(string(out), codexMinVersion)
+}
+
+// nvmNodeDirs lists an nvm versions dir's entries newest node first: names
+// of the form v<X>.<Y>.<Z> sort by numeric X, Y, Z descending, and anything
+// else sorts after all of those, lexically — so the codex installed under the
+// node carl uses day to day is the first one tried.
+func nvmNodeDirs(nvm string) []string {
+	entries, err := os.ReadDir(nvm)
+	if err != nil {
+		return nil
+	}
+	type dir struct {
+		name  string
+		ver   [3]int
+		isVer bool
+	}
+	var dirs []dir
+	for _, e := range entries {
+		d := dir{name: e.Name()}
+		if m := nvmVersionDir.FindStringSubmatch(e.Name()); m != nil {
+			d.isVer = true
+			for i := 0; i < 3; i++ {
+				d.ver[i], _ = strconv.Atoi(m[i+1])
+			}
+		}
+		dirs = append(dirs, d)
+	}
+	sort.SliceStable(dirs, func(a, b int) bool {
+		x, y := dirs[a], dirs[b]
+		if x.isVer != y.isVer {
+			return x.isVer
+		}
+		if !x.isVer {
+			return x.name < y.name
+		}
+		for i := 0; i < 3; i++ {
+			if x.ver[i] != y.ver[i] {
+				return x.ver[i] > y.ver[i]
+			}
+		}
+		return x.name < y.name
+	})
+	out := make([]string, len(dirs))
+	for i, d := range dirs {
+		out[i] = d.name
+	}
+	return out
+}
+
+// nvmVersionDir matches nvm's node install dir names (`v24.6.0`).
+var nvmVersionDir = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
+
+// isExecutableFile reports whether path stats as a non-directory with any
+// execute bit — the same test jobs.lookToolchain applies to its candidates.
+func isExecutableFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+}
+
+// absPath is filepath.Abs with the input as its own fallback: Abs fails only
+// when the working directory is unreadable, and a relative launcher then
+// still beats no launcher.
+func absPath(path string) string {
+	if a, err := filepath.Abs(path); err == nil {
+		return a
+	}
+	return path
 }
 
 // codexMinVersion is the version floor separating the two codex generations
 // installed on this machine — 0.39.0 (stale) below it, 0.144.6 (current) at or
-// above. codexVersionAtLeast compares a `codex --version` line against it; the
-// spawn-time refusal that consumes that comparison is a later PR.
+// above. codexVersionAtLeast compares a `codex --version` line against it, and
+// ResolveCodex is the spawn-time refusal that consumes the comparison.
 const codexMinVersion = "0.100.0"
 
 // codexVersionTriple pulls the first dotted X.Y.Z triple out of a version

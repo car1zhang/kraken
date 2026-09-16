@@ -17,26 +17,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// P1 — CodexLauncher (branch.go)
-// Obligation: returns $KRAKEN_CODEX verbatim when non-empty; otherwise the
-// literal "codex" (mirrors ClaudeLauncher, no LookPath fallback).
-// ---------------------------------------------------------------------------
-
-func TestCodexContractLauncherEnvWinsVerbatim(t *testing.T) {
-	t.Setenv("KRAKEN_CODEX", "/opt/custom/codex-real")
-	if got := CodexLauncher(); got != "/opt/custom/codex-real" {
-		t.Fatalf("CodexLauncher() with $KRAKEN_CODEX set = %q, want the env value verbatim %q", got, "/opt/custom/codex-real")
-	}
-}
-
-func TestCodexContractLauncherDefaultsToBareName(t *testing.T) {
-	t.Setenv("KRAKEN_CODEX", "")
-	if got := CodexLauncher(); got != "codex" {
-		t.Fatalf("CodexLauncher() with empty $KRAKEN_CODEX = %q, want literal %q", got, "codex")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // P1 — codexMinVersion + codexVersionAtLeast (branch.go)
 // Obligation: floor const == "0.100.0"; parse "codex-cli X.Y.Z" (leading/
 // trailing whitespace + extra trailing text tolerated) and compare X.Y.Z to

@@ -84,14 +84,15 @@ func TestCodexW2ContractCodexModelArgsSet(t *testing.T) {
 
 // --- W2-cell: codexCellArgs ---------------------------------------------
 //
-// Contract: `[]string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox"}`
-// followed by codexModelArgs(j). Launcher first; bypass flag present; model
-// args appended. No --dangerously-bypass-hook-trust in Wave 2.
+// Contract (Wave 3a signature): `[]string{launcher, "--dangerously-bypass-approvals-and-sandbox"}`
+// followed by codexModelArgs(j) — the launcher is the resolved path the caller
+// passes in, verbatim. Bypass flag present; model args appended. No
+// --dangerously-bypass-hook-trust in Wave 2.
 
 func TestCodexW2ContractCodexCellArgsWithModel(t *testing.T) {
 	j := &Job{Agent: "codex", Slug: "demo", Model: "gpt-5-codex"}
-	got := codexCellArgs(j)
-	want := []string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox", "-m", "gpt-5-codex"}
+	got := codexCellArgs(j, "/fake/bin/codex")
+	want := []string{"/fake/bin/codex", "--dangerously-bypass-approvals-and-sandbox", "-m", "gpt-5-codex"}
 	if len(got) != len(want) {
 		t.Fatalf("codexCellArgs = %v, want %v", got, want)
 	}
@@ -104,12 +105,12 @@ func TestCodexW2ContractCodexCellArgsWithModel(t *testing.T) {
 
 func TestCodexW2ContractCodexCellArgsLauncherFirstAndBypass(t *testing.T) {
 	j := &Job{Agent: "codex", Slug: "demo"}
-	got := codexCellArgs(j)
+	got := codexCellArgs(j, "/fake/bin/codex")
 	if len(got) == 0 {
 		t.Fatalf("codexCellArgs returned empty")
 	}
-	if got[0] != core.CodexLauncher() {
-		t.Fatalf("launcher not first: got[0]=%q, want %q", got[0], core.CodexLauncher())
+	if got[0] != "/fake/bin/codex" {
+		t.Fatalf("launcher not first: got[0]=%q, want %q", got[0], "/fake/bin/codex")
 	}
 	if !codexW2ContractHas(got, "--dangerously-bypass-approvals-and-sandbox") {
 		t.Fatalf("bypass flag absent: %v", got)
@@ -155,8 +156,24 @@ func TestCodexW2ContractCodexAgentsMDContainsBrief(t *testing.T) {
 // "$(cat <promptPath>)" via core.ShellReadFileArg. Returns accountEnvPrefix(j)
 // + command (empty prefix for an unbound v1 job).
 
+// w2FakeCodex puts a passing fake codex (an executable sh script reporting
+// 0.144.6) first on PATH with KRAKEN_CODEX cleared, so codexZeusLaunch's
+// Wave 3a resolution lands on it, and returns its path.
+func w2FakeCodex(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho codex-cli 0.144.6\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("KRAKEN_CODEX", "")
+	return path
+}
+
 func TestCodexW2ContractCodexZeusLaunchFresh(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	launcher := w2FakeCodex(t)
 	wt := t.TempDir()
 	j := &Job{Agent: "codex", Slug: "demo"} // unbound: AccountSlug == ""
 	// StartCell creates the cell dir before spawning; stagedCommand does no
@@ -183,9 +200,10 @@ func TestCodexW2ContractCodexZeusLaunchFresh(t *testing.T) {
 		t.Fatalf("AGENTS.md does not contain the brief:\n%s", string(data))
 	}
 
-	// Command runs codex and carries the staged prompt positionally via cat.
-	if !strings.Contains(cmd, "codex") {
-		t.Fatalf("command does not invoke codex: %q", cmd)
+	// Command runs the RESOLVED codex and carries the staged prompt
+	// positionally via cat.
+	if !strings.HasPrefix(cmd, launcher+" ") {
+		t.Fatalf("command does not begin with the resolved launcher %q: %q", launcher, cmd)
 	}
 	if !strings.Contains(cmd, core.ShellReadFileArg(spawnPromptPath(j))) {
 		t.Fatalf("command lacks positional $(cat <promptPath>): %q", cmd)
@@ -202,6 +220,7 @@ func TestCodexW2ContractCodexZeusLaunchFresh(t *testing.T) {
 
 func TestCodexW2ContractCodexZeusLaunchResume(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	w2FakeCodex(t)
 	wt := t.TempDir()
 	j := &Job{Agent: "codex", Slug: "demo"}
 	if err := os.MkdirAll(cellDir(j), 0o755); err != nil {
@@ -239,6 +258,7 @@ func TestCodexW2ContractCodexZeusLaunchResume(t *testing.T) {
 
 func TestCodexW2ContractZeusLaunchCodexRoutes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	launcher := w2FakeCodex(t)
 	wt := t.TempDir()
 	j := &Job{Agent: "codex", Slug: "demo"}
 	if err := os.MkdirAll(cellDir(j), 0o755); err != nil {
@@ -252,8 +272,8 @@ func TestCodexW2ContractZeusLaunchCodexRoutes(t *testing.T) {
 	if _, rerr := os.ReadFile(filepath.Join(wt, "AGENTS.md")); rerr != nil {
 		t.Fatalf("codex job did not write AGENTS.md into the worktree: %v", rerr)
 	}
-	if !strings.Contains(cmd, "codex") {
-		t.Fatalf("codex job command does not invoke codex: %q", cmd)
+	if !strings.HasPrefix(cmd, launcher+" ") {
+		t.Fatalf("codex job command does not begin with the resolved launcher %q: %q", launcher, cmd)
 	}
 }
 
@@ -277,8 +297,8 @@ func TestCodexW2ContractZeusLaunchClaudeShape(t *testing.T) {
 	if _, rerr := os.Stat(filepath.Join(wt, "AGENTS.md")); rerr == nil {
 		t.Fatalf("claude job must not write AGENTS.md into the worktree")
 	}
-	if strings.Contains(cmd, core.CodexLauncher()+" ") {
-		t.Fatalf("claude job command must not invoke the codex launcher: %q", cmd)
+	if strings.Contains(cmd, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("claude job command must not carry codex's bypass flag: %q", cmd)
 	}
 }
 

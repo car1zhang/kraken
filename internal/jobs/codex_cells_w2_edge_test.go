@@ -79,13 +79,13 @@ func TestCodexW2EdgeCodexModelArgsEmpty(t *testing.T) {
 }
 
 // TestCodexW2EdgeCodexCellArgsNoModel — the no-model cell-args shape.
-// Contract: codexCellArgs = [CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox"]
+// Contract: codexCellArgs = [launcher, "--dangerously-bypass-approvals-and-sandbox"]
 // followed by codexModelArgs(j). With no model, that trailing slice is the
 // pinned default (supersedes Q10), so the result is EXACTLY launcher + bypass
 // flag + `-m core.CodexZeusModel`, launcher first.
 func TestCodexW2EdgeCodexCellArgsNoModel(t *testing.T) {
-	got := codexCellArgs(&Job{Agent: "codex"})
-	want := []string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox", "-m", core.CodexZeusModel}
+	got := codexCellArgs(&Job{Agent: "codex"}, "/fake/bin/codex")
+	want := []string{"/fake/bin/codex", "--dangerously-bypass-approvals-and-sandbox", "-m", core.CodexZeusModel}
 	if len(got) != len(want) {
 		t.Fatalf("codexCellArgs(no model) = %#v, want exactly %#v", got, want)
 	}
@@ -103,6 +103,7 @@ func TestCodexW2EdgeCodexCellArgsNoModel(t *testing.T) {
 // appears. It still writes AGENTS.md into the worktree unconditionally.
 func TestCodexW2EdgeCodexZeusLaunchEmptyPromptUnbound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	launcher := w2FakeCodex(t)
 	wt := t.TempDir()
 	j := &Job{Slug: "cdx-unbound", Agent: "codex"} // Model unset, AccountSlug == "" (unbound)
 
@@ -127,8 +128,8 @@ func TestCodexW2EdgeCodexZeusLaunchEmptyPromptUnbound(t *testing.T) {
 		t.Errorf("codexZeusLaunch(unbound) carries a CODEX_HOME prefix: %q", got)
 	}
 	// sanity: it is a codex command and it wrote the brief file.
-	if !strings.Contains(got, core.CodexLauncher()) {
-		t.Errorf("codexZeusLaunch command %q does not invoke the codex launcher %q", got, core.CodexLauncher())
+	if !strings.HasPrefix(got, launcher+" ") {
+		t.Errorf("codexZeusLaunch command %q does not begin with the resolved launcher %q", got, launcher)
 	}
 	if _, statErr := os.Stat(filepath.Join(wt, "AGENTS.md")); statErr != nil {
 		t.Errorf("codexZeusLaunch did not write AGENTS.md into the worktree: %v", statErr)

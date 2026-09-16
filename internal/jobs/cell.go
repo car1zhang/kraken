@@ -754,15 +754,19 @@ func codexModelArgs(j *Job) []string {
 	return []string{"-m", codexZeusModel(j)}
 }
 
-// codexCellArgs is the fixed codex launcher argv for a cell: launcher first,
+// codexCellArgs is the fixed codex argv for a cell: the launcher first —
+// the ABSOLUTE path core.ResolveCodex returned, never a bare name the pane's
+// shell would resolve against launchd's PATH (ResolveCodex's doc has why) —
 // then --dangerously-bypass-approvals-and-sandbox (a cell agent works
 // unattended in its own worktree — the codex analogue of claude's
 // --dangerously-skip-permissions in cellClaudeArgs), then the model flag —
 // always present, the job's model: or the codex default (codexModelArgs).
-// No --dangerously-bypass-hook-trust: Wave 2 installs no codex
-// hooks, so there is no unreviewed hooks file to bypass trust for.
-func codexCellArgs(j *Job) []string {
-	args := []string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox"}
+// No --dangerously-bypass-hook-trust: kraken installs no codex hooks yet, so
+// there is no unreviewed hooks file to bypass trust for. The launcher is a
+// parameter rather than resolved here so the resolution (and its refusal)
+// happens once, in codexZeusLaunch, before anything is written.
+func codexCellArgs(j *Job, launcher string) []string {
+	args := []string{launcher, "--dangerously-bypass-approvals-and-sandbox"}
 	return append(args, codexModelArgs(j)...)
 }
 
@@ -802,6 +806,13 @@ func codexAgentsMD(brief string) string {
 // to the same spawnPromptPath the claude path uses and appended LAST as a
 // positional "$(cat …)" word.
 func codexZeusLaunch(j *Job, wt, brief, prompt, resumeSession string) (string, error) {
+	// Resolve the launcher before writing anything: a refusal here (no codex
+	// at or above the floor) must leave no AGENTS.md and no staged prompt
+	// behind, so a half-failed reactivation looks exactly like no attempt.
+	launcher, err := core.ResolveCodex()
+	if err != nil {
+		return "", err
+	}
 	agentsPath := filepath.Join(wt, "AGENTS.md")
 	staged := prompt
 	if _, err := os.Stat(agentsPath); os.IsNotExist(err) {
@@ -817,7 +828,7 @@ func codexZeusLaunch(j *Job, wt, brief, prompt, resumeSession string) (string, e
 			staged = brief
 		}
 	}
-	argv := codexCellArgs(j)
+	argv := codexCellArgs(j, launcher)
 	if resumeSession != "" {
 		argv = append([]string{argv[0], "resume", resumeSession}, argv[1:]...)
 	}
@@ -2465,6 +2476,13 @@ func ReactivateJob(j *Job, session, message string) error {
 	}
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	// The codex launcher must resolve before any git or filesystem work, for
+	// SubmitJob's reason: refused here, a reactivation leaves no fresh
+	// worktree, account binding or run stamp behind (codexZeusLaunch would
+	// refuse too, but only after all of those had happened).
+	if err := codexPreflight(j); err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
 	wt := ExistingWorktree(j, repo)

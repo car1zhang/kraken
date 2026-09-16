@@ -3,6 +3,8 @@ package jobs
 import (
 	"fmt"
 	"sync"
+
+	"kraken/internal/core"
 )
 
 // submit.go — SubmitJob, the ONE start surface.
@@ -79,11 +81,13 @@ func submitLock(id int64) *sync.Mutex {
 //  4. empty spec — the one refusal the old auto-start path never made, which
 //     is exactly how a cell could come up with an empty prompt.
 //
-// Only then does it resolve the repo, and only then does it start. ResolveRepo
-// is deliberately inside the refusal sequence rather than folded into
-// StartCell: a bad `repo:` is a job-file mistake with a fixable message, and
-// discovering it before any worktree/tmux/rotation work happens is what makes
-// it a clean refusal rather than a half-built cell.
+// Only then does it resolve the repo, then — for a codex job — the codex
+// launcher (codexPreflight), and only then does it start. Both resolutions
+// are deliberately inside the refusal sequence rather than folded into
+// StartCell: a bad `repo:` is a job-file mistake with a fixable message and a
+// missing or stale codex is a machine mistake with one, and discovering
+// either before any worktree/tmux/rotation work happens is what makes it a
+// clean refusal rather than a half-built cell.
 func SubmitJob(j *Job) error {
 	mu := submitLock(j.ID)
 	mu.Lock()
@@ -104,5 +108,23 @@ func SubmitJob(j *Job) error {
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
+	if err := codexPreflight(j); err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
 	return submitStartCell(j, repo)
+}
+
+// codexPreflight is the ladder's last rung, for codex jobs only: the launcher
+// the cell would spawn on must resolve (core.ResolveCodex — at or above the
+// version floor) BEFORE any cell dir, worktree or tmux work exists, so a
+// stale codex is a refusal here rather than a cell that comes up and dies
+// (ResolveCodex's doc has the incident). A claude job never probes codex,
+// whatever KRAKEN_CODEX says: the probe execs a binary, and a claude submit
+// must not depend on one it will never run.
+func codexPreflight(j *Job) error {
+	if j.Agent != "codex" {
+		return nil
+	}
+	_, err := core.ResolveCodex()
+	return err
 }
