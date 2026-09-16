@@ -814,9 +814,13 @@ function EditorBody({
               <input
                 id="f-model"
                 list="model-list"
-                placeholder="claude-fable-5"
+                placeholder={agent === "codex" ? "gpt-6-astra" : "claude-fable-5-1"}
                 spellCheck={false}
-                title="claude model for zeus (--model value) — applied once at cell start; empty = kraken's default for zeus, claude-fable-5 (the crew it spawns is opus regardless)"
+                title={
+                  agent === "codex"
+                    ? "codex model for zeus (-m value) — applied once at cell start; empty = kraken's default for a codex zeus, gpt-6-astra"
+                    : "claude model for zeus (--model value) — applied once at cell start; empty = kraken's default for zeus, claude-fable-5-1 (the crew it spawns is opus regardless)"
+                }
                 disabled={readOnly}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
@@ -968,13 +972,28 @@ function EditorBody({
           input above, which was its only `list=` consumer. `JobForm.slugs`
           stays on the wire type: whether the server keeps sending it is the Go
           slice's call, and an unread key costs nothing here. */}
+      {/* agent-aware: the suggestions follow the agent toggle, so a codex
+          job's model field offers codex ids and a claude job's the claude
+          set — the typed value itself stays free-form wire text either way. */}
       <datalist id="model-list">
-        <option value="claude-fable-5" />
-        <option value="claude-opus-5" />
-        <option value="fable" />
-        <option value="opus" />
-        <option value="sonnet" />
-        <option value="haiku" />
+        {agent === "codex" ? (
+          <>
+            <option value="gpt-6-astra" />
+            <option value="gpt-5.6-sol" />
+            <option value="gpt-5.6-luna" />
+            <option value="gpt-5.6-terra" />
+            <option value="gpt-5.5" />
+          </>
+        ) : (
+          <>
+            <option value="claude-fable-5-1" />
+            <option value="claude-opus-5" />
+            <option value="fable" />
+            <option value="opus" />
+            <option value="sonnet" />
+            <option value="haiku" />
+          </>
+        )}
       </datalist>
     </>
   );

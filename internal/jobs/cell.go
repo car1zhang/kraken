@@ -731,23 +731,35 @@ func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
 	return accountEnvPrefix(j) + cmd, nil
 }
 
-// codexModelArgs is codex's model flag for a cell: `-m <model>` only when the
-// job pins a model:, else nil. Q10: an unset model means NO flag, so codex
-// falls back to its own config default — kraken never pins a codex model id the
-// way zeusModel pins a claude tier, because codex's own config is the source of
-// truth for its default.
-func codexModelArgs(j *Job) []string {
+// codexZeusModel is zeusModel's codex arm: the model a codex cell's zeus runs
+// on — the job's own model: when it pins one, else core.CodexZeusModel. One
+// resolver for the same reason zeusModel is one: codexModelArgs puts it on the
+// command line and zeusBrief states it to zeus, and two hand-written
+// fallbacks could drift.
+func codexZeusModel(j *Job) string {
 	if j.Model != "" {
-		return []string{"-m", j.Model}
+		return j.Model
 	}
-	return nil
+	return core.CodexZeusModel
+}
+
+// codexModelArgs is codex's model flag for a cell: `-m codexZeusModel(j)`.
+// Always a flag, which is zeusModel's rule applied to the codex arm: kraken
+// names the model it spawns rather than leaving it to the agent's own config,
+// so the tier a cell runs on is always visible in its command line and only
+// moves when someone edits the constant. (This supersedes Q10's no-flag
+// default — carl's call, 2026-09-16: the codex default is kraken's to pin,
+// exactly like claude's.)
+func codexModelArgs(j *Job) []string {
+	return []string{"-m", codexZeusModel(j)}
 }
 
 // codexCellArgs is the fixed codex launcher argv for a cell: launcher first,
 // then --dangerously-bypass-approvals-and-sandbox (a cell agent works
 // unattended in its own worktree — the codex analogue of claude's
-// --dangerously-skip-permissions in cellClaudeArgs), then the model flag if the
-// job pins one. No --dangerously-bypass-hook-trust: Wave 2 installs no codex
+// --dangerously-skip-permissions in cellClaudeArgs), then the model flag —
+// always present, the job's model: or the codex default (codexModelArgs).
+// No --dangerously-bypass-hook-trust: Wave 2 installs no codex
 // hooks, so there is no unreviewed hooks file to bypass trust for.
 func codexCellArgs(j *Job) []string {
 	args := []string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox"}

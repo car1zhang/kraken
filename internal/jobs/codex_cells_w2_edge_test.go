@@ -6,8 +6,8 @@ package jobs
 // reading internal/jobs/job.go or internal/jobs/cell.go. These cover the
 // boundaries, error paths, and degradation modes the contract mandates:
 //   - ParseJob's agent-validation error path (and its non-empty guard);
-//   - codexModelArgs' nil (no-model) return;
-//   - codexCellArgs' exact no-model shape (launcher + bypass flag, no -m);
+//   - codexModelArgs' no-model return (the pinned codex default);
+//   - codexCellArgs' exact no-model shape (launcher + bypass flag + default -m);
 //   - codexZeusLaunch's negatives: empty prompt → no positional cat, and an
 //     unbound job → no account/CODEX_HOME env prefix;
 //   - zeusLaunch's claude arm: resume becomes -r <id> and NO AGENTS.md is
@@ -65,37 +65,33 @@ func TestCodexW2EdgeParseJobBadAgent(t *testing.T) {
 }
 
 // TestCodexW2EdgeCodexModelArgsEmpty — codexModelArgs with no model.
-// Contract (Q10): j.Model == "" → nil, so codex uses its config default and no
-// -m flag is ever emitted. nil is the strict answer, not an empty non-nil
-// slice.
+// Contract (supersedes Q10, carl 2026-09-16): j.Model == "" → the pinned
+// default, ["-m", core.CodexZeusModel] — kraken names the model it spawns,
+// never leaving it to codex's own config, zeusModel's exact rule.
 func TestCodexW2EdgeCodexModelArgsEmpty(t *testing.T) {
-	if got := codexModelArgs(&Job{}); got != nil {
-		t.Errorf("codexModelArgs(no model) = %#v, want nil (no -m for a config-default codex)", got)
-	}
-	if got := codexModelArgs(&Job{Agent: "codex"}); got != nil {
-		t.Errorf("codexModelArgs(codex, no model) = %#v, want nil", got)
+	want := []string{"-m", core.CodexZeusModel}
+	for _, j := range []*Job{{}, {Agent: "codex"}} {
+		got := codexModelArgs(j)
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("codexModelArgs(no model) = %#v, want %#v (the pinned codex default)", got, want)
+		}
 	}
 }
 
 // TestCodexW2EdgeCodexCellArgsNoModel — the no-model cell-args shape.
 // Contract: codexCellArgs = [CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox"]
-// followed by codexModelArgs(j). With no model, that trailing slice is nil, so
-// the result is EXACTLY launcher + bypass flag, launcher first, and carries no
-// -m.
+// followed by codexModelArgs(j). With no model, that trailing slice is the
+// pinned default (supersedes Q10), so the result is EXACTLY launcher + bypass
+// flag + `-m core.CodexZeusModel`, launcher first.
 func TestCodexW2EdgeCodexCellArgsNoModel(t *testing.T) {
 	got := codexCellArgs(&Job{Agent: "codex"})
-	want := []string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox"}
+	want := []string{core.CodexLauncher(), "--dangerously-bypass-approvals-and-sandbox", "-m", core.CodexZeusModel}
 	if len(got) != len(want) {
 		t.Fatalf("codexCellArgs(no model) = %#v, want exactly %#v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("codexCellArgs[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-	for _, a := range got {
-		if a == "-m" {
-			t.Errorf("codexCellArgs(no model) = %#v, must not contain -m", got)
 		}
 	}
 }

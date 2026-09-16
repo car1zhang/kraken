@@ -571,6 +571,17 @@ func TestZeusBriefModelSplit(t *testing.T) {
 	if !strings.Contains(pinned, "kraken spawned you on `sonnet`") {
 		t.Error("a job with model: set must have its own tier stated in the brief, not core.ZeusModel")
 	}
+	// a codex cell resolves through codexZeusModel: the pinned codex default
+	// with no model:, the job's own model: when set — never the claude id,
+	// which a codex zeus is not running on
+	codexBrief := zeusBrief(&Job{Slug: "model-codex", Agent: "codex"})
+	if !strings.Contains(codexBrief, "kraken spawned you on `"+core.CodexZeusModel+"`") {
+		t.Error("a codex cell's brief must state core.CodexZeusModel, not the claude tier")
+	}
+	codexPinned := zeusBrief(&Job{Slug: "model-codex-pinned", Agent: "codex", Model: "gpt-5.6-sol"})
+	if !strings.Contains(codexPinned, "kraken spawned you on `gpt-5.6-sol`") {
+		t.Error("a codex job with model: set must have its own model stated in the brief")
+	}
 	if !strings.Contains(pinned, "EVERY OTHER agent in this cell runs on Claude Opus 5") {
 		t.Error("the crew stays Opus regardless of zeus' own tier")
 	}

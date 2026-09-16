@@ -166,8 +166,8 @@ func TestContractLoadSlackConfigUnconfiguredIsErrNoSlack(t *testing.T) {
 // pinned id, never an alias (an alias silently follows whatever claude ships
 // next), and it sits beside the other two spawn constants.
 func TestContractIrisModelIsAnExactID(t *testing.T) {
-	if IrisModel != "claude-fable-5" {
-		t.Fatalf("IrisModel = %q, want %q", IrisModel, "claude-fable-5")
+	if IrisModel != "claude-fable-5-1" {
+		t.Fatalf("IrisModel = %q, want %q", IrisModel, "claude-fable-5-1")
 	}
 	if !strings.Contains(IrisModel, "-") || IrisModel == "opus" || IrisModel == "fable" {
 		t.Fatalf("IrisModel = %q, want an exact model id rather than a tier alias", IrisModel)

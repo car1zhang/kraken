@@ -481,9 +481,9 @@ func TestEdgeKronosSpawnCommandCarriesTheFixedFlags(t *testing.T) {
 				t.Errorf("resume=%v: command %q missing %q", resume, cmd, want)
 			}
 		}
-		if core.KronosModel != "claude-fable-5" {
+		if core.KronosModel != "claude-fable-5-1" {
 			t.Errorf("core.KronosModel = %q, want the exact id %q (an alias silently follows whatever ships next)",
-				core.KronosModel, "claude-fable-5")
+				core.KronosModel, "claude-fable-5-1")
 		}
 	}
 }

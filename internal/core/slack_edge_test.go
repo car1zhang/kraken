@@ -216,8 +216,8 @@ func TestEdgeLoadSlackConfigNeverLeaksTheTokenValue(t *testing.T) {
 // ships next, so this must be a full id — and it must not have been written
 // as one of the Agent-tool tier names.
 func TestEdgeIrisModelIsAnExactID(t *testing.T) {
-	if IrisModel != "claude-fable-5" {
-		t.Fatalf("IrisModel = %q, want the exact id claude-fable-5", IrisModel)
+	if IrisModel != "claude-fable-5-1" {
+		t.Fatalf("IrisModel = %q, want the exact id claude-fable-5-1", IrisModel)
 	}
 	for _, alias := range []string{"fable", "opus", "sonnet", "haiku", "default", ""} {
 		if IrisModel == alias {

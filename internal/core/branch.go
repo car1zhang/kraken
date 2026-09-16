@@ -97,7 +97,16 @@ const DefaultModel = "claude-opus-5"
 // reader that puts it on a command line (`jobs.JobTemplate` also reads it, but
 // only to print a new job file's documented default), so `k c` and the board's
 // spawn action never see it.
-const ZeusModel = "claude-fable-5"
+const ZeusModel = "claude-fable-5-1"
+
+// CodexZeusModel is ZeusModel's codex-cell analogue: the model a codex zeus
+// runs on when the job's `model:` field is empty, passed as `-m` by
+// jobs.codexModelArgs — its only command-line reader. Pinned for the reason
+// every claude constant here is: kraken names the model it spawns, never
+// leaving it to the agent's own config, so the tier a cell runs on only moves
+// when someone edits this line (codex's config.toml default would otherwise
+// decide it silently). An exact model id, never a codex config alias.
+const CodexZeusModel = "gpt-6-astra"
 
 // IrisModel is the tier the Slack intake agent runs on. Iris is a triage loop
 // — read a bumped inbox batch, decide ignore / draft / edit, write a short job
@@ -107,7 +116,7 @@ const ZeusModel = "claude-fable-5"
 // because the two answer different questions, and pinning them separately is
 // what lets either move without dragging the other. Like both of its
 // neighbours it is an exact model id, never the `fable` alias.
-const IrisModel = "claude-fable-5"
+const IrisModel = "claude-fable-5-1"
 
 // KronosModel is the tier the orchestrator agent runs on. Kronos is the pane
 // that reads an inbox of board transitions and carl's instructions (typed
@@ -124,7 +133,7 @@ const IrisModel = "claude-fable-5"
 // resolver in front of it: kronos belongs to no job, so no `model:` field
 // exists anywhere that could override it, and jobs.kronosSpawnCommand puts this
 // constant on the command line directly.
-const KronosModel = "claude-fable-5"
+const KronosModel = "claude-fable-5-1"
 
 // ThreadModels is the menu a SIDE THREAD may be branched on, alias → exact
 // model id. It is the one place in the binary where a tier alias is RESOLVED
@@ -150,7 +159,7 @@ var ThreadModels = map[string]string{
 	"haiku":  "claude-haiku-4-5-20251001",
 	"sonnet": "claude-sonnet-5",
 	"opus":   "claude-opus-5",
-	"fable":  "claude-fable-5",
+	"fable":  "claude-fable-5-1",
 }
 
 // ModelArgs is the `--model` flag pair for a spawn: the caller's explicit model
