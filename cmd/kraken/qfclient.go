@@ -25,7 +25,8 @@ import (
 // NEVER open kraken.db directly: only kraken serve writes it (single-writer
 // rule), so every op here is exactly one HTTP round trip.
 
-// qfHTTPTimeout bounds every questions/feedback proxy call: these run
+// qfHTTPTimeout is the default deadline for every proxy call (`cell submit`
+// overrides it — cmd_cell.go's cellSubmitHTTPTimeout): these run
 // synchronously inside a zeus tool turn, so a dead kraken serve must fail
 // fast rather than hang the agent waiting on a dead connection — same
 // reasoning as prhook.go's prAttachHTTPTimeout, just a little more generous
