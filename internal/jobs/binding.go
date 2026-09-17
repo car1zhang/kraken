@@ -15,6 +15,19 @@ import (
 // binding.go — per-cell account binding: which pool account a job's cell
 // bills, decided once at spawn and re-decided only by the limit rescue.
 //
+// There are TWO pools, one per agent, and they share nothing. A claude cell
+// binds a ~/.claude-pool slot and receives it as
+// CLAUDE_SECURESTORAGE_CONFIG_DIR (the credential lives in the keychain, under
+// a name derived from the slot directory). A codex cell binds a ~/.codex-pool
+// slot and receives it as CODEX_HOME (the credential is a file, auth.json,
+// inside the slot). A slug therefore only means something next to the agent it
+// was picked for, which is why the candidate list, the bound counts, the
+// usability probe and the env prefix all have an agent arm below. Two rules
+// differ between the arms and both are deliberate: codex takes no account
+// decision from the rotation pin (carl's call — the pin governs the claude
+// machine login, and a codex cell's binding does not touch it), and a codex
+// slot is judged usable by its own auth.json rather than by a keychain probe.
+//
 // It replaces the retired RotationGate, and the difference is the whole
 // point of the feature. The gate moved the MACHINE's login — one keychain
 // item every claude on this Mac resolves — off a nearly-exhausted account
@@ -77,17 +90,46 @@ func slotUsable(dir string) bool {
 	return core.SlotItemExists(dir)
 }
 
+// codexSlotUsable is the codex arm's usability probe, seamed here for the
+// reason slotItemExists above is: a test must never be able to reach the real
+// ~/.codex-pool through it. It is deliberately a different QUESTION from the
+// claude one rather than the same question against a different directory — a
+// codex slot carries its credential in a file (auth.json) inside the slot, so
+// "is this slot usable" is a stat of that file and never a keychain lookup.
+// Fail-closed on every axis, same as slotItemExists: an unprobeable slot is an
+// ineligible slot.
+var codexSlotUsable = core.CodexSlotUsable
+
 // bindNoticeKey is notifyDeduped's key for "the pool had nothing to give
 // this cell". It carries no slug on purpose: a dry pool is a standing
 // machine-level condition, and one notice an hour about it is the signal —
 // one per cell spawn is noise.
 const bindNoticeKey = "bind:no-target"
 
+// codexBindNoticeKey is bindNoticeKey's codex arm. The two pools run dry
+// independently, and one key for both would let a dry claude pool suppress
+// the notice that says the codex pool is dry too — an hour of silence about a
+// condition carl has to act on separately, since the two are refilled by
+// different tools.
+const codexBindNoticeKey = bindNoticeKey + ":codex"
+
 // slotDir is the ONE derivation of a pool slot's directory from its slug.
 // Both readers — the keychain probe's argument and the env value the spawn
 // command carries — go through it, so the directory a slot is PROBED at can
 // never differ from the one a cell is pointed at.
 func slotDir(slug string) string { return filepath.Join(core.PoolDir(), slug) }
+
+// slotDirFor is slotDir with the agent made explicit: the same slug names a
+// different directory in each pool, so every caller that can be handed either
+// kind of job resolves through here rather than through slotDir. The claude
+// answer is byte-identical to slotDir's — a claude job's directory does not
+// move.
+func slotDirFor(agent, slug string) string {
+	if agent == "codex" {
+		return core.CodexSlotDir(slug)
+	}
+	return slotDir(slug)
+}
 
 // resolvedMainEmail is who main belongs to, for the ONE purpose every caller
 // here has: excluding main's own save-back mirror slot from the pool.
@@ -205,6 +247,91 @@ func decideBind(snap core.UsageSnapshot, counts map[string]int, mode, mainEmail,
 	return "", "", strings.Join(excluded, "; ")
 }
 
+// decideBindCodex is decideBind's codex arm: which ~/.codex-pool slot a codex
+// cell should bind to, pure over the six facts it is handed. The ranking
+// itself is core.SelectBindTarget's, exactly as the claude arm's is — one
+// selector for both pools, so "which slot is emptiest" can never mean two
+// different things.
+//
+// Three differences from decideBind, and each is a decision rather than an
+// omission.
+//
+// NO ROTATION MODE. The manual pin (`k account <slug>`) pins the machine's
+// CLAUDE login, and a codex binding does not touch that login: it points one
+// cell's CODEX_HOME at a slot directory. So a pinned machine still binds codex
+// cells, and the codex limit rescue still rebinds them — carl's call, and it
+// is why this function takes no mode argument at all rather than ignoring one
+// it was given.
+//
+// excludeSlug INSTEAD OF an excluded email for the rescue. The rescue has to
+// move a cell OFF the slot that just ran out, and the claude arm names that
+// slot by the email bound to it. A codex slot's email comes out of the JWT in
+// its auth.json and may be absent (an unreadable or half-written file reads as
+// ""), so an email-keyed exclusion would silently exclude nothing and let the
+// rescue rebind straight back onto the exhausted slot. The slug is the slot's
+// directory name, which always exists.
+//
+// "no auth.json" AS THE EXCLUSION REASON. A codex slot with no credential file
+// produces a cell whose CODEX_HOME points at a directory codex cannot log in
+// from — the codex spelling of the claude arm's "no keychain item", named for
+// what carl would actually go and look at.
+//
+// mainEmail excludes the machine's own ~/.codex login the way the claude arm
+// excludes main's save-back mirror: a pool slot holding the same account carl
+// is signed into interactively is not a private lane, whatever it is called.
+// An empty mainEmail is NO exclusion rather than a weaker one, so it is
+// guarded.
+//
+// An empty result is never an error: "" means bind nothing, which leaves the
+// cell on the machine's own ~/.codex login — every codex cell's behaviour
+// before this feature.
+func decideBindCodex(snap core.UsageSnapshot, counts map[string]int, mainEmail, prevSlug, excludeSlug string, usable func(slotDir string) bool, now time.Time) (slug, email, reason string) {
+	if len(snap.Accounts) == 0 {
+		// Said here rather than left to the selector's own "no pool accounts",
+		// which would be true of the claude pool at the same moment and is the
+		// one sentence a reader of the log cannot tell the two pools apart by.
+		return "", "", "no codex pool accounts"
+	}
+	mainLower := strings.ToLower(strings.TrimSpace(mainEmail))
+	var candidates []core.AccountUsage
+	var excluded []string
+	for _, a := range snap.Accounts {
+		if excludeSlug != "" && a.Slug == excludeSlug {
+			continue // the slot this cell is already on — see the header
+		}
+		if mainLower != "" && strings.ToLower(a.Email) == mainLower {
+			continue // the machine's own ~/.codex account, not a candidate
+		}
+		if usable != nil && !usable(core.CodexSlotDir(a.Slug)) {
+			excluded = append(excluded, a.Slug+": no auth.json")
+			continue
+		}
+		candidates = append(candidates, a)
+	}
+	if len(candidates) == 0 && len(excluded) > 0 {
+		// Every row was skipped HERE, so the selector has nothing to add and
+		// would only say "no pool accounts" — false and misleading when the
+		// pool is full of slots whose credentials are missing. Same call
+		// decideBind makes for the same reason.
+		return "", "", strings.Join(excluded, "; ")
+	}
+	var exclude []string
+	if mainEmail != "" {
+		exclude = append(exclude, mainEmail)
+	}
+	slug, email, reason = core.SelectBindTarget(candidates, exclude, counts, prevSlug, now.UnixMilli())
+	if slug != "" {
+		return slug, email, reason
+	}
+	if reason != "" {
+		excluded = append(excluded, reason)
+	}
+	if len(excluded) == 0 {
+		return "", "", "no codex pool accounts"
+	}
+	return "", "", strings.Join(excluded, "; ")
+}
+
 // bindGraceWindow is how long a freshly stamped binding keeps counting
 // toward its slot's load even though no cell is live under it yet.
 //
@@ -239,6 +366,40 @@ func boundCounts(jobs []*Job, isLive func(*Job) bool) map[string]int {
 	counts := map[string]int{}
 	for _, j := range jobs {
 		if j == nil || j.AccountSlug == "" {
+			continue
+		}
+		if isLive != nil && !isLive(j) {
+			continue
+		}
+		counts[j.AccountSlug]++
+	}
+	return counts
+}
+
+// boundCountsFor is boundCounts restricted to ONE pool, and it is what every
+// binding decision counts through now that there are two.
+//
+// The two pools have independent slug namespaces: a claude slot named "alpha"
+// and a codex slot named "alpha" are different accounts owned by different
+// people. Counted together, a live codex cell on codex-alpha makes
+// claude-alpha look loaded and pushes the next claude cell onto a slot it did
+// not need to move to — and, worse in the other direction, it hides a claude
+// slot that really is carrying two cells behind a count borrowed from the
+// other pool. Neither shows up as a failure: the cells come up, they just
+// spread wrongly.
+//
+// agent == "codex" selects codex jobs; anything else (including "" and
+// "claude") selects every job that is NOT codex, which is how a job written
+// before the agent field existed still counts against the claude pool it is
+// actually running on.
+func boundCountsFor(jobs []*Job, agent string, isLive func(*Job) bool) map[string]int {
+	wantCodex := agent == "codex"
+	counts := map[string]int{}
+	for _, j := range jobs {
+		if j == nil || j.AccountSlug == "" {
+			continue
+		}
+		if (j.Agent == "codex") != wantCodex {
 			continue
 		}
 		if isLive != nil && !isLive(j) {
@@ -352,6 +513,10 @@ func bindAccount(j *Job, trigger string) {
 	defer bindMu.Unlock()
 
 	now := time.Now()
+	if j.Agent == "codex" {
+		bindCodexAccount(j, trigger, now)
+		return
+	}
 	mode := RotationMode()
 	// A missing snapshot is not distinguished from an empty one here: both
 	// mean "no candidate rows", decideBind says so in its reason, and the
@@ -362,7 +527,7 @@ func bindAccount(j *Job, trigger string) {
 	// moments ago — and liveOrFreshlyBound is what stops that sibling from
 	// reading as zero just because its tmux session is still forty lines
 	// away.
-	counts := boundCounts(LoadJobs(), bindCountPredicate(now))
+	counts := boundCountsFor(LoadJobs(), "claude", bindCountPredicate(now))
 	// prevSlug is this job's OWN previous binding (Q6): a reactivated cell
 	// goes back to the account that built its prompt cache when that account
 	// is still eligible, which is the whole reason stickiness outranks the
@@ -380,6 +545,53 @@ func bindAccount(j *Job, trigger string) {
 		dlogEvent("info", "bind-skipped", "bind (%s): %s", trigger, reason)
 		return
 	}
+	stampBinding(j, trigger, slug, email, now)
+}
+
+// bindCodexAccount is bindAccount's codex arm, called with bindMu already
+// held. Same three steps as the claude arm — gather, decide, stamp — over the
+// codex pool's own snapshot, counts and usability probe.
+//
+// No rotation mode is read anywhere on this path, which is also why the
+// no-target notice is unconditional here where the claude arm suppresses it
+// under a manual pin: there is no pin to suppress it for. A dry codex pool is
+// a condition carl acts on (refill it, or accept that codex cells run on the
+// machine login), so it gets a notice — deduped on its own key for an hour,
+// since the two pools run dry independently.
+//
+// prevSlug is this job's own previous binding, for the claude arm's reason: a
+// reactivated cell goes back to the slot that built its context when that slot
+// is still eligible. excludeSlug is empty — a spawn has no slot to move off;
+// that argument is the rescue's (selectRescueBind).
+func bindCodexAccount(j *Job, trigger string, now time.Time) {
+	// A missing snapshot is not distinguished from an empty one, exactly as
+	// the claude arm does not distinguish them: both mean "no candidate rows",
+	// decideBindCodex says so in its reason, and the outcome — a cell on the
+	// machine's own ~/.codex login — is identical.
+	snap, _ := ReadCodexUsageSnapshot()
+	counts := boundCountsFor(LoadJobs(), "codex", bindCountPredicate(now))
+	slug, email, reason := decideBindCodex(snap, counts, core.CodexMainEmail(), j.AccountSlug, "", codexSlotUsable, now)
+	if slug == "" {
+		// The job's existing stamp is left exactly as it is. Clearing it would
+		// make a transiently empty snapshot (a poll that has not run yet after
+		// a restart) forget a binding that is still perfectly good.
+		notifyDeduped(codexBindNoticeKey, "kraken ⚠ account binding", fmt.Sprintf("%s: no codex account to bind (%s)", trigger, reason))
+		dlogEvent("info", "bind-skipped", "bind (%s): %s", trigger, reason)
+		return
+	}
+	stampBinding(j, trigger, slug, email, now)
+}
+
+// stampBinding writes a pick to the job row AND to the in-memory *Job the
+// caller is about to spawn from. Shared by both arms because that second write
+// is load-bearing rather than tidy — accountEnvPrefix reads j.AccountSlug a
+// few lines later, so a stamp that only reached the database would produce a
+// bound row and an unbound cell — and one copy of it is one place for that
+// pairing to be got right.
+//
+// Every failure here leaves the job unbound and logs why, which is the whole
+// file's contract: a bind never blocks or fails a spawn.
+func stampBinding(j *Job, trigger, slug, email string, now time.Time) {
 	st := ActiveStore()
 	if st == nil {
 		dlogEvent("error", "bind-skipped", "bind (%s): picked %s but no store is wired — the cell runs unbound", trigger, slug)
@@ -395,10 +607,28 @@ func bindAccount(j *Job, trigger string) {
 }
 
 // accountEnvPrefix is the WHOLE delivery mechanism for a binding: the
-// environment assignment that rides in front of a cell claude's launcher in
+// environment assignment that rides in front of a cell agent's launcher in
 // the command string tmux runs. Empty for an unbound job, which is what
 // keeps an unbound cell's command byte-identical to what it was before this
 // feature.
+//
+// One function, two variables, chosen by the job's AGENT. A claude cell gets
+// CLAUDE_SECURESTORAGE_CONFIG_DIR pointing at a ~/.claude-pool slot; a codex
+// cell gets CODEX_HOME pointing at a ~/.codex-pool slot. Neither ever gets the
+// other's variable: a codex process ignores the claude one, and pointing
+// CODEX_HOME at a claude slot would hand codex a directory with no auth.json
+// in it.
+//
+// The codex arm re-checks the slot before emitting anything, and that guard is
+// the most important line in this file. CODEX_HOME is not advisory: codex
+// treats it as its entire home, so a value naming a directory with no
+// credential in it produces a pane that comes up logged out and does nothing,
+// under a board card that reads "working". The two ways to get there are a
+// slot deleted since the bind and a slug stamped by the CLAUDE binder before
+// this feature existed (it names a ~/.claude-pool slot, which has no
+// auth.json). Both answer "" here, which drops the cell onto the machine's own
+// ~/.codex login — a working cell on the wrong account, which is recoverable,
+// rather than a dead one.
 //
 // It has to be part of the COMMAND STRING rather than the exec.Cmd
 // environment, and that is measured rather than assumed: `tmux
@@ -417,6 +647,22 @@ func accountEnvPrefix(j *Job) string {
 	if j == nil || j.AccountSlug == "" {
 		return ""
 	}
+	if j.Agent == "codex" {
+		dir := core.CodexSlotDir(j.AccountSlug)
+		if !core.CodexSlotUsable(dir) {
+			return ""
+		}
+		return "CODEX_HOME='" + shellSingleQuote(dir) + "' "
+	}
 	dir := slotDir(j.AccountSlug)
-	return "CLAUDE_SECURESTORAGE_CONFIG_DIR='" + strings.ReplaceAll(dir, "'", `'\''`) + "' "
+	return "CLAUDE_SECURESTORAGE_CONFIG_DIR='" + shellSingleQuote(dir) + "' "
+}
+
+// shellSingleQuote escapes what goes INSIDE a pair of single quotes: each
+// embedded single quote is rewritten to close the quote, emit a backslashed
+// one and reopen — the same escape core.ShellQuote uses. Shared by both arms
+// above so a pool slug carrying an apostrophe cannot end the quote early in
+// either one.
+func shellSingleQuote(s string) string {
+	return strings.ReplaceAll(s, "'", `'\''`)
 }

@@ -1764,6 +1764,15 @@ struct UsageResponse: Decodable {
     let ageSeconds: Int64
     let daemonOK: Bool
     let accounts: [UsageAccount]
+    // The CODEX pool's rows — ~/.codex-pool/accounts/<slug>, a pool of its
+    // own, disjoint from `accounts`' ~/.claude-pool. The server always sends
+    // an array; Optional here because an older server omits the key entirely,
+    // and the same row shape serves both pools (a codex row carries `session`,
+    // `weekly`, `tier` and `no_creds`, and never `models`, `current` or
+    // `cooldown_until`). Decode-only today: nothing on the phone renders it.
+    // Added additively — no contract bump.
+    let codexAccounts: [UsageAccount]?
+    let codexFetchedAt: Int64?
     // Rotation mode fields (Slice C), added additively — Optional so an
     // older server (missing these keys entirely) still decodes fine.
     let rotationMode: String?
@@ -1776,6 +1785,8 @@ struct UsageResponse: Decodable {
         case ageSeconds = "age_seconds"
         case daemonOK = "daemon_ok"
         case accounts
+        case codexAccounts = "codex_accounts"
+        case codexFetchedAt = "codex_fetched_at"
         case rotationMode = "rotation_mode"
         case rotationSetBy = "rotation_set_by"
         case rotationSetAt = "rotation_set_at"

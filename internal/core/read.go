@@ -57,6 +57,16 @@ func ReadTranscriptPath(p *Peer) (string, error) {
 		return "", fmt.Errorf("%s is a shell pane — no transcript to read", DisplayName(p))
 	}
 	if p.Agent == "codex" {
+		// Discovery already read this peer's rollout out of the threads row
+		// it identified the session from, and that row came from the pane's
+		// OWN codex home. Re-deriving it by session id would re-query the
+		// machine login's index, which holds no row at all for a session a
+		// pool-bound cell recorded — so the lookup below is the fallback for
+		// a peer discovery did not resolve a rollout for, never the answer
+		// for one it did.
+		if p.RolloutPath != "" {
+			return p.RolloutPath, nil
+		}
 		if rp := codexRolloutPath(p.SessionID); rp != "" {
 			return rp, nil
 		}
@@ -146,11 +156,14 @@ func tailLines(path string, window int64) []string {
 // lastBlocksScanLimit — whichever comes first — and returning whatever it
 // found by then (counted < n is a normal answer, not an error).
 //
-// Dispatch is by PATH: a Codex rollout transcript lives under
-// /.codex/sessions/ and is parsed by parseCodexBlocks; every other path is a
-// claude transcript and takes the parseBlocks path unchanged. The tail-read,
-// window-growth and counting logic is shared — both parsers emit the same
-// block vocabulary, so "count the non-tool blocks" reads the same either way.
+// Dispatch is by PATH, through IsCodexRollout: a Codex rollout is parsed by
+// parseCodexBlocks; every other path is a claude transcript and takes the
+// parseBlocks path unchanged. The test is the file's SHAPE rather than a
+// "/.codex/sessions/" substring, because a pool-bound cell writes its
+// rollout under <pool>/accounts/<slug>/sessions/ — no ".codex" anywhere in
+// it. The tail-read, window-growth and counting logic is shared — both
+// parsers emit the same block vocabulary, so "count the non-tool blocks"
+// reads the same either way.
 func LastBlocks(path string, n int) ([]block, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -162,7 +175,7 @@ func LastBlocks(path string, n int) ([]block, int, error) {
 		return nil, 0, fmt.Errorf("stat transcript: %v", err)
 	}
 	size := info.Size()
-	codex := strings.Contains(path, "/.codex/sessions/")
+	codex := IsCodexRollout(path)
 	for window := tailStartWindow; ; window *= 2 {
 		lines, err := tailWindow(f, size, window)
 		if err != nil {

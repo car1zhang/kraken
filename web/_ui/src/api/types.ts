@@ -577,6 +577,20 @@ export interface WebUsage {
   age_seconds?: number;
   daemon_ok?: boolean;
   accounts?: WebUsageAccount[];
+  /**
+   * The CODEX pool's rows — `~/.codex-pool/accounts/<slug>`, a separate pool
+   * from `accounts`' `~/.claude-pool`. The server always sends an array (never
+   * null), sorted by slug; optional here only because an older server omits
+   * the key entirely, and its absence must read as "no codex pool" rather than
+   * as a decode failure. Additive — no contract bump.
+   *
+   * The two arrays are joined to a job by AGENT plus slug, never by slug
+   * alone: a pool slug is a slugified email, so the same person's account can
+   * name a slot in both pools (see pickUsageRow in SteerOverlay.tsx).
+   */
+  codex_accounts?: WebUsageAccount[];
+  /** unix millis of the codex usage pass; absent/0 when it has never run */
+  codex_fetched_at?: number;
   rotation_mode?: "auto" | "manual" | string;
   rotation_set_by?: string;
   rotation_set_at?: string;

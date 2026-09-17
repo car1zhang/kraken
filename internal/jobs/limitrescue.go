@@ -3,12 +3,16 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kraken/internal/core"
+	"kraken/internal/util"
 )
 
 // --- mid-run usage-limit rescue ---
@@ -147,6 +151,117 @@ const limitRescueResumePrompt = "kraken: your last turns failed on a usage limit
 // no account is named here either.
 const limitResetResumePrompt = "kraken: your last turns failed on a usage limit. That account's usage window has since reset — the account never changed — and kraken killed and resumed you so this process would drop the limit it had latched onto. Your conversation is intact, but any background tasks and in-flight tool calls from before the resume are gone. Your teammates were NOT resumed: they are still limit-stalled or dead, and reviving or replacing them (TaskStop plus fresh spawns, or SendMessage to a live one) is your first move. Then re-check the work in flight and continue."
 
+// codexCrewTokens are the words a codex prompt must not contain. They are all
+// CLAUDE CODE vocabulary — TaskStop and SendMessage are Claude Code tools, and
+// a "teammate" is a Claude Code agent in a tmux pane — and a codex zeus has
+// none of them: it delegates nothing, so it has no crew to revive and no tool
+// to revive one with. Telling it to use them costs a whole turn spent hunting
+// for tools that do not exist before it gets to the work.
+var codexCrewTokens = []string{"TaskStop", "SendMessage", "teammate"}
+
+// codexResumePrompt translates one of the two claude resume prompts for a
+// codex zeus by DROPPING every sentence that talks about the crew, keeping the
+// rest verbatim.
+//
+// Filtering rather than a second pair of hand-written constants, because the
+// part that must not drift is the part that is kept: which rescue this was
+// (rebound to another account, or the same account's window reopened) and what
+// the resume itself destroyed. Two hand-written codex constants would be two
+// more strings to keep in step with the claude pair every time either is
+// reworded, and the failure would be silent — a codex zeus told it was rebound
+// when the window had merely reset, say.
+//
+// Splitting on ". " rather than on a marker string is what makes the exclusion
+// an INVARIANT rather than a guess about today's wording: any sentence that
+// grows one of these tokens later is dropped by the same rule, and no rewrite
+// of the claude prompts can leak crew vocabulary into a codex pane.
+func codexResumePrompt(base string) string {
+	return filterPromptSentences(base, hasCodexCrewToken)
+}
+
+// filterPromptSentences rebuilds a prompt from the sentences drop does not
+// reject, splitting on ". " and rejoining with a single space so a kept
+// sentence survives byte-identical. Shared by the two codex prompts below, so
+// "which sentences of the claude prompt reach a codex pane" is one rule with
+// two predicates rather than two hand-maintained copies of the text.
+func filterPromptSentences(base string, drop func(string) bool) string {
+	var kept []string
+	for _, s := range strings.SplitAfter(base, ". ") {
+		if drop(s) {
+			continue
+		}
+		if s = strings.TrimSpace(s); s != "" {
+			kept = append(kept, s)
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
+// hasCodexCrewToken reports whether a sentence carries claude-crew vocabulary.
+// Case-insensitive so a reworded "Teammates were not resumed" is caught too.
+func hasCodexCrewToken(s string) bool {
+	lower := strings.ToLower(s)
+	for _, tok := range codexCrewTokens {
+		if strings.Contains(lower, strings.ToLower(tok)) {
+			return true
+		}
+	}
+	return false
+}
+
+// codexHandoffClaims are the sentences of a claude resume prompt that become
+// FALSE on a fresh session, and so are dropped on top of the crew tokens.
+//
+// "your conversation is intact" is the sharp one: a handoff is precisely the
+// case where it is not, and a zeus told its history survived will act as
+// though it can recall decisions it has no record of — worse than being told
+// nothing. The re-check-and-continue tail is dropped only to move it: it is
+// re-stated as the LAST sentence of the handoff, after the pointers that make
+// re-checking possible, instead of sitting ahead of them.
+var codexHandoffClaims = []string{"conversation is intact", "re-check the work in flight"}
+
+// codexHandoffPrompt is what a codex zeus is resumed with when its
+// conversation could NOT be carried to the home it is about to run under —
+// the placement of its rollout file failed, there was no rollout to place, or
+// no session id to resume — so the process comes back as a fresh codex session
+// with no history at all.
+//
+// It says so plainly, because the alternative is worse than a lost
+// conversation: a zeus that believes it is mid-task with an empty context will
+// re-plan from nothing and redo work that is already committed. Then it hands
+// over the things that let it recover by reading rather than by guessing — the
+// old rollout's absolute path (the entire previous conversation, still on disk
+// under the OLD home) and the cell's artifacts dir, which is where the job's
+// own written record lives.
+//
+// The rollout clause is omitted when oldRollout is empty rather than printing
+// an empty path: there are real handoffs with no rollout to name (discovery
+// never identified one), and "still on disk at " followed by nothing is an
+// instruction zeus cannot act on and will waste a turn trying to.
+//
+// The rescue's own account-moved sentence rides along through
+// filterPromptSentences, so this prompt still says which kind of rescue
+// happened, and it inherits the crew-token exclusion by construction.
+func codexHandoffPrompt(j *Job, oldRollout, base string) string {
+	out := filterPromptSentences(base, func(s string) bool {
+		if hasCodexCrewToken(s) {
+			return true
+		}
+		lower := strings.ToLower(s)
+		for _, claim := range codexHandoffClaims {
+			if strings.Contains(lower, claim) {
+				return true
+			}
+		}
+		return false
+	})
+	out += " Your previous conversation could NOT be carried over, so this is a fresh codex session with no history of it."
+	if oldRollout != "" {
+		out += " The whole previous conversation is still on disk at " + oldRollout + " — read it before doing anything else."
+	}
+	return out + " This cell's written record (the artifact set, including any build report) is in " + CellArtifacts(j) + ". Then re-check the work in flight and continue."
+}
+
 // limitResetRe matches the reset clause the SESSION-limit banner carries:
 // "resets 4:50am (America/New_York)", "resets 10:20pm" — an hour, optional
 // minutes, am/pm, and an optional IANA zone in parens. That family is the
@@ -157,6 +272,138 @@ const limitResetResumePrompt = "kraken: your last turns failed on a usage limit.
 // scoping matters: a bare time can only describe a window at most a day
 // out, so a distant weekly reset must never reach the re-arm through it.
 var limitResetRe = regexp.MustCompile(`(?i)resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)]+)\))?`)
+
+// limitResetsAtRe matches the EXACT reset moment a codex hit carries:
+// `resets_at=<unix seconds>`, written by codexLimitReason straight out of the
+// rollout's own rate-limit record. It is a machine-written field rather than a
+// banner rendered for a human, which is why the parse below trusts it
+// completely — see parseLimitReset.
+var limitResetsAtRe = regexp.MustCompile(`resets_at=(\d+)`)
+
+// codexLimitReason is CellHealth's codex classifier: the usage-limit reason
+// for a codex zeus whose rollout says its account is exhausted, and "" for
+// every other state (no such record, an unreadable file, a record whose
+// rate_limit_reached_type is null).
+//
+// It is built to be read back by parseLimitReset, which is why the reset
+// moment rides in the string as `resets_at=<unix seconds>` rather than as
+// prose. Codex states the moment exactly; the claude banner states a wall
+// time with no date and no year, which is why the claude side needs a regex,
+// an anchor and a staleness cap to guess at what it meant. Carrying the exact
+// number through means the codex arm needs none of that.
+//
+// The prefix is usageLimitReasonPrefix, so IsUsageLimitReason is true of this
+// string and the daemon's health pass routes a codex hit into exactly the same
+// rescue a claude hit takes.
+func codexLimitReason(rolloutPath string) string {
+	reachedType, resetsAt, ok := core.CodexLimitReached(rolloutPath)
+	if !ok {
+		return ""
+	}
+	if !codexReachedTypeOK(reachedType) {
+		// The rejection is deliberate (see codexReachedTypeOK), but it is
+		// also the only usage-limit trigger a codex cell has, and the field's
+		// real vocabulary has never been observed on this machine. A value
+		// kraken does not recognise therefore gets one line naming it, so a
+		// vocabulary change on codex's side reads as "unrecognised limit
+		// type" in the log rather than as a rescue that silently never fires.
+		// The memo in front of this function (cachedCodexLimitReason) keys on
+		// the rollout's size and mtime, so the line repeats per rollout
+		// change, not per tick.
+		dlogEvent("info", "limit-rescue-skipped", "%s: rate_limit_reached_type %.80q is not a shape kraken recognises — not treating it as a usage limit", rolloutPath, reachedType)
+		return ""
+	}
+	return usageLimitReasonPrefix + "codex " + reachedType + " resets_at=" + strconv.FormatInt(resetsAt, 10)
+}
+
+// codexLimitCache memoizes codexLimitReason per rollout path, keyed on (size,
+// mtime) via os.Stat — the same shape, and for the same reason, as status.go's
+// pendingQuestionCache.
+//
+// The daemon calls CellHealth for every live cell on every 15-second tick, and
+// the board and viewer call it again on their own polls. Without this, each of
+// those calls scans a rollout file that only grows: core.CodexLimitReached has
+// to reach the LAST rate-limit record, so the cost is the whole file every
+// time, and a cell that has been running for a day has a large one. A claude
+// cell never paid that — core.LastStall reads its transcript's tail — so the
+// codex arm needs the memo to be as cheap per tick as the arm it replaced.
+//
+// An unstattable file is scanned and NOT cached: a path that cannot be stat'd
+// has no key to cache under, and caching the answer under a stale key would
+// pin a verdict that can never be invalidated.
+var (
+	codexLimitCacheMu sync.Mutex
+	codexLimitCache   = map[string]codexLimitCacheEntry{}
+)
+
+type codexLimitCacheEntry struct {
+	size   int64
+	mtime  time.Time
+	reason string
+}
+
+// cachedCodexLimitReason is codexLimitReason behind that memo. Split from
+// codexLimitReason itself so the classification stays a pure function of the
+// file's bytes and can be exercised without the cache in the way.
+func cachedCodexLimitReason(rolloutPath string) string {
+	info, statErr := os.Stat(rolloutPath)
+	if statErr == nil {
+		codexLimitCacheMu.Lock()
+		if e, ok := codexLimitCache[rolloutPath]; ok && e.size == info.Size() && e.mtime.Equal(info.ModTime()) {
+			codexLimitCacheMu.Unlock()
+			return e.reason
+		}
+		codexLimitCacheMu.Unlock()
+	}
+	reason := codexLimitReason(rolloutPath)
+	if statErr == nil {
+		codexLimitCacheMu.Lock()
+		codexLimitCache[rolloutPath] = codexLimitCacheEntry{size: info.Size(), mtime: info.ModTime(), reason: reason}
+		codexLimitCacheMu.Unlock()
+	}
+	return reason
+}
+
+// codexReachedTypeMaxRunes bounds the enum value copied out of a rollout.
+// The field's real values have never been observed on this machine — every
+// record seen carries null — so the bound is set off the window KEYS beside
+// it ("primary", "secondary"), which are short words: 64 runes is far past
+// anything of that shape and short enough that the reason string stays a line.
+const codexReachedTypeMaxRunes = 64
+
+// codexReachedTypeOK is the gate on the one piece of FOREIGN TEXT that reaches
+// a kraken reason string. `rate_limit_reached_type` is a JSON string kraken did
+// not write: it comes out of a rollout file, and a rollout file is written by
+// codex on behalf of a conversation whose contents nobody controls. Whatever
+// it holds is then carried into the CellHealth reason, the limit-hit record's
+// details, the event log and carl's notification.
+//
+// So it is treated as an enum rather than as prose: at most
+// codexReachedTypeMaxRunes, and only word characters and dashes. A value
+// outside that is not sanitized into something shorter — it reads as NO HIT,
+// because a rate_limit_reached_type that is not one of codex's own short enum
+// words is evidence of something other than a usage limit, and rescuing on it
+// would rebind a cell on a string a conversation happened to contain. The
+// upper bound also keeps `resets_at=` (which parseLimitReset reads back out of
+// the same string) from being pushed out of a log line by a megabyte of text.
+func codexReachedTypeOK(reachedType string) bool {
+	if reachedType == "" {
+		return false
+	}
+	n := 0
+	for _, r := range reachedType {
+		n++
+		if n > codexReachedTypeMaxRunes {
+			return false
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // parseLimitReset extracts the banner's stated reset moment from a hit's
 // recorded details, as unix seconds — the first wall-clock occurrence of the
@@ -171,6 +418,25 @@ var limitResetRe = regexp.MustCompile(`(?i)resets\s+(\d{1,2})(?::(\d{2}))?\s*(am
 // walk the target forward a day the moment the first computation's day
 // passed, and the re-arm would never fire.
 func parseLimitReset(details string, hitAt time.Time) int64 {
+	// An EXACT reset moment wins outright, and every guard the banner path
+	// applies below is deliberately skipped for it. The banner path exists
+	// because "resets 4:50am" names a wall time with no date: it has to be
+	// anchored at the hit, rolled to the next occurrence, and capped at
+	// limitResetMaxWait so a banner read hours late cannot park a cell for a
+	// day. `resets_at=` is unix seconds written by codexLimitReason out of the
+	// rollout's own record — it already says which day it means, so anchoring
+	// it would be meaningless and capping it would silently rewrite a weekly
+	// limit's real reset (legitimately days out) into "due now", resuming the
+	// cell straight back onto the wall.
+	//
+	// A number too large for int64 falls through to the banner path rather
+	// than to zero: the fallthrough can only find a clause or not, and it is
+	// the same answer this function gives any details string it cannot read.
+	if m := limitResetsAtRe.FindStringSubmatch(details); m != nil {
+		if v, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+			return v
+		}
+	}
 	m := limitResetRe.FindStringSubmatch(details)
 	if m == nil {
 		return 0
@@ -480,11 +746,41 @@ func limitRescueDecide(hit LimitHit, mode string, cellLive, targetAvailable bool
 // it. A third writer, or a relaxed gate, owes this function a slug-keyed
 // arm — and `SelectBindTarget`'s exclusion set is email-only, so it owes it
 // a slug arm too.
+//
+// A CODEX cell's binding has no email exclusion to feed (see
+// selectCodexRescueBind, which excludes by slug instead), so the codex arm of
+// selectRescueBind never calls this. limitRescue's notification "from" side
+// does reach it for a codex job, and there the mainIdentityEmail fallback is a
+// CLAUDE identity — consulted only when the hit recorded no SourceAccount and
+// the row carries no AccountEmail, i.e. an unbound cell.
 func cellAccountEmail(j *Job) string {
 	if j != nil && j.AccountEmail != "" {
 		return j.AccountEmail
 	}
 	return mainIdentityEmail()
+}
+
+// rescueMode is the rotation mode the decide chain sees for one job, and for a
+// codex job it is always "auto" whatever ~/.kraken/rotation.json says.
+//
+// The manual pin means "kraken takes no ACCOUNT decisions", and what it is
+// pinning is the machine's claude login — the one keychain item every claude
+// on this Mac resolves. A codex binding touches none of that: it points one
+// cell's CODEX_HOME at a slot directory and displaces nothing. So the pin has
+// nothing to protect on this path, and honouring it would mean a codex cell
+// sits dead on an exhausted account for the sake of a setting about a
+// different pool. Carl's call.
+//
+// Read through one function rather than branched at the two call sites
+// (rescueProbeDue and limitRescueDecide) so the probe and the decision can
+// never disagree about which mode this job is in — the disagreement would show
+// up as a probe computed and thrown away, or worse, a decision taken on a
+// target nobody looked for.
+func rescueMode(j *Job) string {
+	if j != nil && j.Agent == "codex" {
+		return "auto"
+	}
+	return RotationMode()
 }
 
 // rescueProbeDue reports whether this tick's decision can actually USE a
@@ -553,6 +849,9 @@ func rescueProbeDue(hit LimitHit, mode string, now time.Time) bool {
 // returns to the account that built its prompt cache; a rescue is the exact
 // opposite situation — that account is the one that ran out.
 func selectRescueBind(j *Job, now time.Time) (slug, email, why string) {
+	if j != nil && j.Agent == "codex" {
+		return selectCodexRescueBind(j, now)
+	}
 	snap, ok := ReadUsageSnapshot()
 	if !ok {
 		return "", "", "no usage snapshot"
@@ -583,8 +882,39 @@ func selectRescueBind(j *Job, now time.Time) (slug, email, why string) {
 	// a rescue runs from the daemon tick while carl may be submitting, and
 	// counting a sibling's just-stamped binding as zero would rebind this
 	// cell onto the slot that submit is about to spawn on.
-	counts := boundCounts(LoadJobs(), bindCountPredicate(now))
+	counts := boundCountsFor(LoadJobs(), "claude", bindCountPredicate(now))
 	return decideBind(snap, counts, RotationMode(), from, "", slotItemExists, now)
+}
+
+// selectCodexRescueBind is selectRescueBind's codex arm: which ~/.codex-pool
+// slot to move an exhausted codex cell onto.
+//
+// The exhausted account is excluded BY SLUG (excludeSlug), not by email, and
+// that is the one structural difference from the claude arm. A codex slot's
+// email is decoded from the JWT in its auth.json and can legitimately be
+// absent — a half-written or unreadable file reads as "" — so an email-keyed
+// exclusion would exclude nothing at all and the rescue would rebind the cell
+// straight back onto the slot that just ran out, resolving the hit onto the
+// same wall. The slug is the slot's directory name and always exists.
+//
+// The machine's own ~/.codex identity is excluded too (core.CodexMainEmail),
+// for the claude arm's reason: a pool slot holding the account carl is signed
+// into interactively is not a private lane, whatever it is named.
+//
+// prevSlug is empty, exactly as it is on the claude arm: stickiness exists so
+// a reactivated cell returns to the slot that built its context, and a rescue
+// is the opposite situation — that slot is the one that ran out.
+//
+// No snapshot is a refusal rather than an empty pool, so the log says which
+// one it was: a codex pool that has never been polled and a codex pool with
+// nothing eligible in it call for different fixes.
+func selectCodexRescueBind(j *Job, now time.Time) (slug, email, why string) {
+	snap, ok := ReadCodexUsageSnapshot()
+	if !ok {
+		return "", "", "no codex usage snapshot"
+	}
+	counts := boundCountsFor(LoadJobs(), "codex", bindCountPredicate(now))
+	return decideBindCodex(snap, counts, core.CodexMainEmail(), "", j.AccountSlug, codexSlotUsable, now)
 }
 
 // selectRescueTarget picks the pool slot the rescue would rotate into, and
@@ -798,7 +1128,21 @@ func rescueLimitedCell(j *Job, now time.Time) (toEmail string, outcome string, e
 	// tick nothing spawns, but the same *Job is what the rest of this pass
 	// logs and notifies from.
 	j.AccountSlug, j.AccountEmail, j.AccountAt = slug, email, at
-	return email, "rebound", nil
+	// What the record and the notification call the destination. The email is
+	// preferred because it is what carl recognises, but it can legitimately be
+	// empty — a codex slot's identity is decoded from the JWT in its auth.json,
+	// and an unreadable or half-written file yields no email while the slot is
+	// still perfectly bindable. Reporting "" there would write `rebound
+	// carl@… → ` into the hit record and into the notification: a rescue that
+	// looks like it moved the cell nowhere. The slug always exists (it is the
+	// slot's directory name) and is enough to find the account by, so it is
+	// the fallback. Only this REPORTED value falls back; the row above stores
+	// the real, possibly-empty email.
+	to := email
+	if to == "" {
+		to = slug
+	}
+	return to, "rebound", nil
 }
 
 // resumeCellAgents brings the cell back on the account it is bound to NOW:
@@ -873,7 +1217,19 @@ func resumeCellAgents(j *Job, all []*core.Peer, prompt string) (resumed int, err
 	if zeus == nil || zeus.Pane == "" {
 		return 0, fmt.Errorf("%s: no zeus pane found to resume", j.Slug)
 	}
-	if zeus.Name != ZeusName(j) && !(j.Session != "" && zeus.SessionID == j.Session) {
+	// The --name test is a CLAUDE identity check and has no codex equivalent:
+	// codex takes no --name, and discovery reports a codex peer's Name as the
+	// thread TITLE codex generated from the conversation. Applied to a codex
+	// cell it refuses every round, so no codex cell is ever rescued — and it
+	// refuses silently, one log line per tick, while the cell sits dead.
+	//
+	// What is left for codex is the other half of the same guard, and it is
+	// enough for the same reason the claude arm accepts it alone: the job
+	// file's own recorded session id, or CellZeus' election (name-or-
+	// positional) within this job's own tmux session, with every live side
+	// thread pane already excluded below. The pane being killed is a pane in
+	// the cell's session that is not a thread — which is what zeus is.
+	if j.Agent != "codex" && zeus.Name != ZeusName(j) && !(j.Session != "" && zeus.SessionID == j.Session) {
 		dlogEvent("info", "limit-rescue-skipped", "%s: pane %s is not zeus by identity (name %q, session %q) — not killing it", j.Slug, zeus.Pane, zeus.Name, zeus.SessionID)
 		return 0, nil
 	}
@@ -890,6 +1246,9 @@ func resumeCellAgents(j *Job, all []*core.Peer, prompt string) (resumed int, err
 		dlogEvent("info", "limit-rescue-skipped", "%s: pane %s holds a live side thread — not killing it", j.Slug, zeus.Pane)
 		return 0, nil
 	}
+	if j.Agent == "codex" {
+		return resumeCodexZeus(j, zeus, prompt)
+	}
 	// Same brief + goals + graph concatenation as the other two zeus spawns
 	// (StartCell, ReactivateJob): a rescued zeus is a resumed session, which
 	// does not retain an earlier run's --append-system-prompt, so all three
@@ -903,6 +1262,121 @@ func resumeCellAgents(j *Job, all []*core.Peer, prompt string) (resumed int, err
 		dlogEvent("error", "limit-rescue-failed", "%s: resume of zeus pane %s failed: %v", j.Slug, zeus.Pane, resumeErr)
 		return 0, nil
 	}
+	return 1, nil
+}
+
+// codexRescueHome is the home the rescued process will ACTUALLY run under, and
+// it is deliberately derived by the same test accountEnvPrefix makes rather
+// than from the job row alone.
+//
+// The row's slug is not enough. A codex job can carry a slug that names no
+// usable codex slot — a slot deleted since the bind, or a slug stamped by the
+// CLAUDE binder before codex binding existed, which names a ~/.claude-pool
+// directory with no auth.json in it. accountEnvPrefix answers "" for both, so
+// the respawned process runs under the machine's own ~/.codex; a rescue that
+// believed the row would then place the rollout under a directory the process
+// never reads, and — because PlaceCodexRollout creates its parents —
+// MATERIALIZE that phantom slot under the codex pool, where CodexPoolSlugs
+// lists it as an account forever after. One unusable slug would quietly grow
+// the pool by one dead slot per rescue.
+//
+// So: the stamped slot only when core.CodexSlotUsable says a process can
+// actually log in from it, otherwise ~/.codex. The two functions agree by
+// asking the same question, not by convention.
+func codexRescueHome(j *Job) string {
+	if j.AccountSlug != "" {
+		if dir := slotDirFor("codex", j.AccountSlug); core.CodexSlotUsable(dir) {
+			return dir
+		}
+	}
+	return filepath.Join(util.Home(), ".codex")
+}
+
+// resumeCodexZeus is resumeCellAgents' codex arm, reached once every refusal
+// the two agents share has passed. Four things differ from the claude path.
+//
+// THE PANE MUST HOLD A CODEX. This is the codex twin of the claude arm's
+// --name test, and it is a kill authorization rather than a tidiness check.
+// CellZeus' election has a POSITIONAL fallback — lowest pane index among the
+// session's depth-0 agents — and it accepts a claude as readily as a codex, so
+// a claude carl started by hand in this cell's session can win it. The claude
+// arm's name test is what stops that there; skipped for codex (a codex peer's
+// Name is the thread title codex generated), nothing else would. Not
+// core.RespawnPeerPane's own guard either: it verifies the pane still holds
+// the peer IT WAS GIVEN, so a peer that should never have been chosen passes
+// its own check. The result would be SIGKILLing carl's claude and respawning a
+// codex over it.
+//
+// THE ROLLOUT HAS TO MOVE. A codex conversation lives in a rollout file under
+// the home that ran it, and `codex resume <id>` looks for that file under the
+// home it is STARTED with — measured on codex-cli 0.154.0: run under a
+// different slot it fails outright with `no rollout found for thread id`, and
+// with the file copied to the same relative path under the new home it resumes
+// the conversation and appends there. A rebind changes the home, so without
+// this copy every codex rescue would come back as an empty session with the
+// job's history stranded on the exhausted account. Nothing is ever written
+// into a slot except through this one call (core.PlaceCodexRollout, behind the
+// placeCodexRollout seam), and the source is never modified.
+//
+// A LOST CONVERSATION IS NOT A FAILED RESCUE, BUT IT IS NEVER A `resume`. The
+// cell is dead on an exhausted account either way, so the round still
+// respawns — as a FRESH session carrying codexHandoffPrompt, which hands zeus
+// the old rollout's path and the artifacts dir to read its way back in. Fresh
+// covers three shapes, and all three are the same measured fact: `codex
+// resume <id>` under a home holding no rollout for that id FAILS. The home
+// changed and the placement failed; the home changed and there was no rollout
+// to place; or there is no session id to resume at all. Issuing `resume` in
+// any of them produces a pane that exits immediately — strictly worse than a
+// fresh session that knows where its history is.
+//
+// THE TRUST PROMPT. A codex process starting in a worktree for the first time
+// under a given home blocks on "Do you trust the contents of this directory",
+// and a slot's home has never seen this worktree. Unanswered it is a pane that
+// never runs anything, under a card that reads "working" — the same dialog
+// StartCell already clears with acceptTrustPrompts, needed here for the first
+// time because a claude resume never changes which home it runs under. It runs
+// in a GOROUTINE: it polls for up to 12 seconds, this function is called from
+// the daemon's 15-second tick, and a pane that never shows a dialog would
+// otherwise stall every other job's pass for most of a tick. Nothing waits on
+// its answer — it only presses Enter — so there is nothing to lose by not
+// waiting for it.
+//
+// Everything else is deliberately the claude path's: the command is built by
+// zeusLaunch, which is the one place a codex cell's command shape lives, so
+// the rescued command carries the same brief delivery, the same model flag and
+// the same account prefix a fresh spawn would.
+func resumeCodexZeus(j *Job, zeus *core.Peer, prompt string) (int, error) {
+	if zeus.Agent != "codex" {
+		dlogEvent("info", "limit-rescue-skipped", "%s: pane %s holds a %q, not the codex zeus this job runs — not killing it", j.Slug, zeus.Pane, zeus.Agent)
+		return 0, nil
+	}
+	to := codexRescueHome(j)
+	homeChanged := zeus.CodexHome != to
+	carried := false
+	if homeChanged && zeus.RolloutPath != "" {
+		if _, err := placeCodexRollout(zeus.RolloutPath, zeus.CodexHome, to); err == nil {
+			carried = true
+		} else {
+			// Logged rather than counted out: the round still respawns zeus,
+			// and this line is the only record of WHY the conversation was
+			// lost — the prompt tells zeus, but nothing else tells carl.
+			dlogEvent("error", "limit-rescue-failed", "%s: could not place zeus' rollout into %s — resuming as a fresh codex session: %v", j.Slug, to, err)
+		}
+	}
+	launchPrompt, resumeSession := prompt, zeus.SessionID
+	if (homeChanged && !carried) || zeus.SessionID == "" {
+		launchPrompt, resumeSession = codexHandoffPrompt(j, zeus.RolloutPath, prompt), ""
+	}
+	cmd, cmdErr := zeusLaunch(j, zeus.CWD, launchPrompt, resumeSession)
+	if cmdErr != nil {
+		dlogEvent("error", "limit-rescue-failed", "%s: building zeus' codex resume command failed: %v", j.Slug, cmdErr)
+		return 0, nil
+	}
+	if resumeErr := respawnPeerPane(zeus, cmd); resumeErr != nil {
+		dlogEvent("error", "limit-rescue-failed", "%s: resume of zeus pane %s failed: %v", j.Slug, zeus.Pane, resumeErr)
+		return 0, nil
+	}
+	go acceptTrustPrompts(CellSession(j))
 	return 1, nil
 }
 
@@ -1220,7 +1694,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	if hit.Error != "rate_limit" {
 		return
 	}
-	mode := RotationMode()
+	mode := rescueMode(j)
 	// Only probe when this tick can actually USE the answer — see
 	// rescueProbeDue. The probe is a snapshot read, a full job load, a tmux
 	// round trip and one keychain fork per pool slot, and the two waits it
@@ -1299,6 +1773,11 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		resumePrompt := limitRescueResumePrompt
 		if hit.SwappedAt == 0 {
 			resumePrompt = limitResetResumePrompt
+		}
+		// A codex zeus has no crew, so it gets the same message with the
+		// revive-your-teammates half removed — see codexResumePrompt.
+		if j.Agent == "codex" {
+			resumePrompt = codexResumePrompt(resumePrompt)
 		}
 		resumed, err := resumeCellAgents(j, all, resumePrompt)
 		if err != nil || resumed == 0 {

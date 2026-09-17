@@ -201,6 +201,15 @@ var (
 	// the rescue's resume path is decision logic worth exercising without a
 	// tmux server under it.
 	respawnPeerPane = core.RespawnPeerPane
+	// placeCodexRollout is the codex rescue's other half, and the ONLY way
+	// kraken ever writes inside a codex pool slot: it copies a conversation's
+	// rollout file from the home that ran it to the same relative path under
+	// the home the cell has just been rebound to, because `codex resume <id>`
+	// looks for that file under the home it is started with and fails outright
+	// without it (measured, codex-cli 0.154.0). core.PlaceCodexRollout
+	// unchanged — atomic write, source never modified. A seam so the resume
+	// path is exercisable without copying files under a real pool.
+	placeCodexRollout = core.PlaceCodexRollout
 	// mainIdentityEmail reports who main is RIGHT NOW (~/.claude.json). It is
 	// what the binder and the rescue exclude from the pool: main is carl's
 	// interactive lane, and SwapMainTo routinely mirrors it into a pool slot

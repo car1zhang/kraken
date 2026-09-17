@@ -43,6 +43,18 @@ type Peer struct {
 	// Agent identifies the interactive coding agent in this pane. It is
 	// "claude" or "codex" for agent rows and empty for shell rows.
 	Agent string `json:"agent,omitempty"`
+	// CodexHome is the CODEX_HOME a codex peer is running under — either a
+	// pool slot directory (an account-bound cell) or ~/.codex (the machine
+	// login). RolloutPath is the transcript that codex home holds for this
+	// session, taken straight off the threads row rather than re-derived, so
+	// a reader never has to guess which home to look in.
+	//
+	// Both are json:"-" deliberately: they are absolute paths into a
+	// credential store, they say which account a cell bills, and no client
+	// renders either. Everything that needs them (the transcript readers,
+	// the limit rescue's placement step) lives in-process.
+	CodexHome   string `json:"-"`
+	RolloutPath string `json:"-"`
 	// Role "shell" marks a pane with no claude in it; Cmd/CmdSeconds describe
 	// what it is running ("" = idle at the prompt).
 	Role       string `json:"role"`

@@ -1146,8 +1146,14 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// must not stretch this loop) against the account API's own post-switch
 	// kick running in this same process. Skipped under mirror — tick() there runs
 	// ONLY state derivation + block-event artifact sync, nothing else.
+	// Both pools poll on the same ticks, each in its own goroutine behind its
+	// own single-flight flag, so neither can delay or suppress the other: the
+	// claude pass is up to ~10s of network I/O and the codex pass is a disk
+	// read, and a board that showed one pool's numbers going stale whenever
+	// the other's fetch was slow would be reporting the wrong thing.
 	if !mirror && (d.tickN == 1 || d.tickN%usageEvery == 0) {
 		KickUsagePass()
+		KickCodexUsagePass()
 	}
 
 	// upstream availability poll: refreshes the update button's "N behind"

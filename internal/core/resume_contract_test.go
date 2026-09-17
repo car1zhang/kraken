@@ -261,11 +261,14 @@ func TestContractResumeLogicRespawnGuardComesFirst(t *testing.T) {
 	seams := contractResumeLogicStubSeams(t, true, nil)
 
 	p := contractResumeLogicPeer("resume-sess-guarded")
-	p.Agent = "codex"
+	// An agent kind the guard does not resume. It was "codex" until the codex
+	// account pool gave codex cells a rescue of their own; the obligation
+	// under test is the ORDER of the two refusals, not which agent is refused.
+	p.Agent = "aider"
 
 	want := ResumeGuard(p)
 	if want == nil {
-		t.Fatal("fixture is wrong: ResumeGuard accepted a codex peer")
+		t.Fatal("fixture is wrong: ResumeGuard accepted an agent kind it cannot resume")
 	}
 	got := RespawnPeerPane(p, contractResumeLogicCmd)
 	if got == nil || got.Error() != want.Error() {
