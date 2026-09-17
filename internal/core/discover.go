@@ -25,6 +25,61 @@ type tmuxPane struct {
 	Session   string
 	WindowIdx int
 	Path      string
+	// StartCmd is the command the pane was started with
+	// (tmux's #{pane_start_command}). It is what carries a cell's account
+	// binding — kraken prefixes a bound cell's command with
+	// CODEX_HOME='<slot>' — so reading it back is how discovery learns which
+	// pool account a running codex is billing. Empty when tmux reports none.
+	StartCmd string
+}
+
+// paneStartCommands maps pane id to start command, in a tmux call of its own.
+//
+// It is a second call rather than a sixth field on the format below, and that
+// is the whole point of it. The list-panes parser resolves tabs by taking the
+// session from the END of the line and rejoining everything between the fixed
+// front fields and it as the path — a rule that works for exactly ONE
+// tab-capable field in the middle. A start command can contain anything at
+// all, so adding it to that line would make a tab in a start command corrupt
+// the session name, which is what `k o` and `k s` target. Here the pane id
+// leads and is the one field that provably holds no tab, so everything after
+// the first tab is the command whatever it contains.
+func paneStartCommands() map[string]string {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_start_command}").Output()
+	if err != nil {
+		// silent by design, same as listTmuxPanes: no tmux server, no panes
+		return map[string]string{}
+	}
+	return parsePaneStartCommands(string(out))
+}
+
+// parsePaneStartCommands is the pure half of the call above — split out
+// because the shell-out is the only part that needs a tmux, while the line
+// rule is the part with consequences.
+//
+// Each line is cut at its FIRST tab: before it is the pane id, after it is
+// the command VERBATIM, further tabs and enclosing double quotes and all
+// (tmux hands a command containing spaces back double-quoted, and it is
+// CodexHomeFromCommand's job to peel that, not this function's — a parser
+// that tidied the value would be guessing at a shell's syntax).
+//
+// A line with no tab, or one whose id does not begin with "%", is dropped
+// and affects no other pane. That rule is what bounds the one input this
+// cannot represent: a start command containing a NEWLINE splits across lines
+// here, as it does in every tmux reader in this file, and the continuation
+// lines carry no "%" id — so that pane loses its StartCmd and every other
+// pane is untouched, rather than one pane's command being attributed to
+// another.
+func parsePaneStartCommands(out string) map[string]string {
+	cmds := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		id, cmd, ok := strings.Cut(line, "\t")
+		if !ok || !strings.HasPrefix(id, "%") {
+			continue
+		}
+		cmds[id] = cmd
+	}
+	return cmds
 }
 
 func listTmuxPanes() []tmuxPane {
@@ -45,6 +100,7 @@ func listTmuxPanes() []tmuxPane {
 		}
 		return nil
 	}
+	starts := paneStartCommands()
 	var panes []tmuxPane
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, "\t")
@@ -62,6 +118,7 @@ func listTmuxPanes() []tmuxPane {
 			Session:   f[len(f)-1],
 			WindowIdx: widx,
 			Path:      strings.Join(f[3:len(f)-1], "\t"),
+			StartCmd:  starts[f[0]],
 		})
 	}
 	return panes
@@ -254,10 +311,16 @@ func readCodexSession(pid int, cmd string) (codexSession, bool) {
 		return out, false
 	}
 	for _, line := range strings.Split(string(data), "\n") {
-		path := strings.TrimPrefix(line, "n")
-		if strings.HasPrefix(line, "n") && strings.Contains(path, "/.codex/sessions/") &&
-			strings.HasSuffix(path, ".jsonl") {
-			out.Path = path
+		if !strings.HasPrefix(line, "n") {
+			continue
+		}
+		// IsCodexRollout, not a "/.codex/sessions/" substring: a cell bound to
+		// a pool slot writes its rollout under <pool>/accounts/<slug>/sessions/,
+		// with no ".codex" anywhere in the path, and a substring test would
+		// leave this legacy arm unable to identify exactly the sessions the
+		// account pool creates.
+		if rollout := strings.TrimPrefix(line, "n"); IsCodexRollout(rollout) {
+			out.Path = rollout
 			break
 		}
 	}
@@ -357,21 +420,117 @@ func readCodexModelTail(path string) string {
 	return model
 }
 
-// codexStatePath is the live SQLite index Codex maintains — the successor to
-// the retired append-only session_index.jsonl.
-func codexStatePath() string {
-	return filepath.Join(util.Home(), ".codex", "state_5.sqlite")
+// codexMainHome is the machine's own CODEX_HOME — the one a codex started
+// with no CODEX_HOME in its environment uses, and the fallback for any pane
+// whose start command names no pool slot.
+func codexMainHome() string {
+	return filepath.Join(util.Home(), ".codex")
 }
 
+// codexStatePathIn is the live SQLite index Codex maintains inside ONE codex
+// home. There is one per home: a pool slot records its own threads, and a
+// thread started under a slot is invisible in the machine login's index.
+func codexStatePathIn(home string) string {
+	return filepath.Join(home, "state_5.sqlite")
+}
+
+// codexStatePath is the machine login's index — the successor to the retired
+// append-only session_index.jsonl.
+func codexStatePath() string {
+	return codexStatePathIn(codexMainHome())
+}
+
+// codexHomes lists every codex home kraken knows about: the machine login
+// first, then each pool slot. It is the search order for a thread whose home
+// could not be read off its pane's start command.
+func codexHomes() []string {
+	homes := []string{codexMainHome()}
+	for _, slug := range CodexPoolSlugs() {
+		homes = append(homes, CodexSlotDir(slug))
+	}
+	return homes
+}
+
+// openCodexState opens a codex state_5.sqlite for reading, and the open mode
+// is the whole point of the function. Codex runs its index in WAL mode and
+// checkpoints on exit, so while a codex is LIVE the newest rows — its own
+// thread, the one discovery is looking for — exist only in the -wal file. A
+// read-only open honours that log; an `immutable=1` open does not (SQLite
+// takes immutable to mean "no journal to consult"), and on a fresh pool slot,
+// whose main file is a 4 KB header with everything else still in the WAL,
+// it reads a database with no tables at all. Measured at the codex account
+// pool's live gate (2026-09-17): the slot's own `.tables` was empty under
+// immutable while the plain read-only open returned the live cell's thread.
+//
+// So the plain read-only open is tried first. Honouring the WAL structurally
+// needs the wal-index (the -shm beside the db), and SQLite MATERIALISES that
+// file when it is absent and the directory is writable, read-only connection
+// or not — measured (2026-09-17): a slot whose codex exited without
+// checkpointing, holding state_5.sqlite beside a -wal, gains a 32 KB -shm
+// after one such read, with the database and the log byte-identical
+// afterwards (a read-only connection cannot checkpoint). That is SQLite's
+// own rebuildable side file, identical to the ones codex leaves beside every
+// other index in a slot, and it is the one write beside a slot's index the
+// pool contract carves out.
+//
+// When that open FAILS — probed with one query, since sql.Open itself is lazy;
+// the shape is a directory where the -shm can neither be found nor created —
+// the immutable open is the fallback, which is still correct for every
+// checkpointed row and is what this reader always did. The probe is an OPEN
+// test, not a WAL test: a log SQLite cannot use (unknown magic, a truncated
+// frame) is ignored and reads as a successful open of the main file alone,
+// which is exactly what the fallback would have returned.
+//
+// The fallback logs one event per index, and only when a -wal sits beside
+// it — the one state in which the immutable open can actually lose rows: a
+// live cell it serves then renders with no thread at all, and that symptom
+// is otherwise indistinguishable from "no codex here". With no -wal there is
+// nothing unread and the fallback's answer is complete, so it says nothing.
+// The gate and the once-per-path guard are both load-bearing, because this
+// runs on the discovery tick — the viewer's every second, the board's every
+// few — and the dominant reason a first open fails is that there is no
+// state_5.sqlite in that home at all (a slot codex has never run in), which
+// is ordinary and would otherwise log once per home per tick, forever, into
+// the same file every other event in the binary shares. The guard never
+// re-arms within a process, so a warn is dated to the first time its index
+// fell back, not the last.
+//
+// The 2s busy timeout REPLACES the driver's own 5s default (mattn/go-sqlite3
+// applies `PRAGMA busy_timeout = 5000` to every connection it opens): the
+// probe sits inside that same tick, and a stalled home lookup holds the whole
+// tick, so the ceiling is shorter here than the store's. Callers still treat
+// every error as "no row".
+func openCodexState(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", "file:"+path+"?mode=ro&_busy_timeout=2000")
+	if err == nil {
+		var n int
+		if perr := db.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&n); perr == nil {
+			return db, nil
+		}
+		db.Close()
+	}
+	if _, statErr := os.Stat(path + "-wal"); statErr == nil {
+		if _, seen := codexImmutableLogged.LoadOrStore(path, true); !seen {
+			util.LogEvent("core", "warn", "codex-state-immutable", "codex index "+path+" opened immutable: the read-only open failed, so rows still in its WAL are invisible")
+		}
+	}
+	return sql.Open("sqlite3", "file:"+path+"?mode=ro&immutable=1")
+}
+
+// codexImmutableLogged holds every index path whose immutable fallback has
+// already been logged by this process, so the event above fires once per
+// index rather than once per discovery tick.
+var codexImmutableLogged sync.Map
+
 // readCodexThreadNames returns Codex's user-visible thread titles keyed by
-// thread id, read from the live state_5.sqlite index. It opens the db
-// read-only and immutable (so it never blocks Codex's own writes and ignores
-// the WAL), and follows the defensive-read convention: a missing file, an open
-// error, a query error, or a corrupt db all yield an empty (non-nil) map and
-// never an error or panic. Rows with a NULL or empty title are omitted.
+// thread id, read from the live state_5.sqlite index through openCodexState
+// (read-only, WAL honoured, immutable as the fallback), and follows the
+// defensive-read convention: a missing file, an open error, a query error, or
+// a corrupt db all yield an empty (non-nil) map and never an error or panic.
+// Rows with a NULL or empty title are omitted.
 func readCodexThreadNames() map[string]string {
 	names := map[string]string{}
-	db, err := sql.Open("sqlite3", "file:"+codexStatePath()+"?mode=ro&immutable=1")
+	db, err := openCodexState(codexStatePath())
 	if err != nil {
 		return names
 	}
@@ -404,29 +563,32 @@ type codexThread struct {
 	TokensUsed                         int64
 }
 
-// readCodexThreadByCWD returns the newest-updated Codex thread for a given cwd,
-// the identity source since codex 0.144.6 stopped holding its rollout fd open
-// (lsof-based readCodexSession returns nothing). Opens state_5.sqlite
-// read-only+immutable (the readCodexThreadNames idiom). An empty cwd returns
-// (zero,false) without querying; a no match, a missing/locked/corrupt db, or
-// any error also returns (zero,false), never a panic or a surfaced error.
-func readCodexThreadByCWD(cwd string) (codexThread, bool) {
+// readCodexThreadByCWDIn returns the newest-updated Codex thread for a given
+// cwd inside ONE codex home, together with that row's updated_at so a caller
+// comparing homes can pick the newest across them rather than the first that
+// answers. Opens state_5.sqlite through openCodexState (read-only with the
+// WAL honoured, since a live codex's own thread row lives there until it
+// exits). An empty home or cwd returns (zero,0,false) without querying; a no
+// match, a missing/locked/corrupt db, a home with no threads table, or any
+// other error also returns (zero,0,false), never a panic or a surfaced error —
+// a pool slot that has never run has no index at all, and that is ordinary.
+func readCodexThreadByCWDIn(home, cwd string) (codexThread, int64, bool) {
 	var ct codexThread
-	if cwd == "" {
-		return ct, false
+	if home == "" || cwd == "" {
+		return ct, 0, false
 	}
-	db, err := sql.Open("sqlite3", "file:"+codexStatePath()+"?mode=ro&immutable=1")
+	db, err := openCodexState(codexStatePathIn(home))
 	if err != nil {
-		return ct, false
+		return ct, 0, false
 	}
 	defer db.Close()
 	row := db.QueryRow(
-		`SELECT id, title, model, tokens_used, rollout_path, cwd FROM threads WHERE cwd=? ORDER BY updated_at DESC LIMIT 1`,
+		`SELECT id, title, model, tokens_used, rollout_path, cwd, updated_at FROM threads WHERE cwd=? ORDER BY updated_at DESC LIMIT 1`,
 		cwd)
 	var id, title, model, rollout, rowCWD sql.NullString
-	var tokens sql.NullInt64
-	if err := row.Scan(&id, &title, &model, &tokens, &rollout, &rowCWD); err != nil {
-		return ct, false
+	var tokens, updated sql.NullInt64
+	if err := row.Scan(&id, &title, &model, &tokens, &rollout, &rowCWD, &updated); err != nil {
+		return ct, 0, false
 	}
 	ct = codexThread{
 		ID:          id.String,
@@ -436,17 +598,72 @@ func readCodexThreadByCWD(cwd string) (codexThread, bool) {
 		CWD:         rowCWD.String,
 		TokensUsed:  tokens.Int64,
 	}
-	return ct, true
+	return ct, updated.Int64, true
+}
+
+// readCodexThreadByCWD is the machine-login case of readCodexThreadByCWDIn,
+// kept with its original signature. Discovery itself now resolves every codex
+// pane through codexThreadForPane, so this is a test-facing alias that pins
+// the ~/.codex meaning rather than a production entry point.
+func readCodexThreadByCWD(cwd string) (codexThread, bool) {
+	ct, _, ok := readCodexThreadByCWDIn(codexMainHome(), cwd)
+	return ct, ok
+}
+
+// codexThreadForPane resolves a codex pane's thread, and the home it was
+// found in, from the pane's own cwd.
+//
+// The pane's start command names the home when kraken bound the cell to a
+// pool slot, and ~/.codex is the home otherwise. That home is tried alone
+// first: it is an authoritative answer about which account this pane runs
+// under, and searching further could only replace it with a thread from a
+// different one.
+//
+// Only when that misses does the search widen to every known home, and then
+// the row with the greatest updated_at WINS — not the first home that
+// answers. The homes are searched in a fixed order (machine login, then pool
+// slugs alphabetically), so "first match" would mean "the alphabetically
+// earliest slot that once ran in this directory", which is a real hazard
+// rather than a theoretical one: a cell's worktree is re-used across
+// generations, and an account that ran there weeks ago would outrank the one
+// running there now.
+func codexThreadForPane(startCmd, cwd string) (codexThread, string, bool) {
+	if cwd == "" {
+		return codexThread{}, "", false
+	}
+	home := CodexHomeFromCommand(startCmd)
+	if home == "" {
+		home = codexMainHome()
+	}
+	if ct, _, ok := readCodexThreadByCWDIn(home, cwd); ok {
+		return ct, home, true
+	}
+	var best codexThread
+	var bestHome string
+	var bestUpdated int64
+	found := false
+	for _, h := range codexHomes() {
+		ct, updated, ok := readCodexThreadByCWDIn(h, cwd)
+		if !ok {
+			continue // no index, no threads table, no row for this cwd: skip it
+		}
+		if !found || updated > bestUpdated {
+			best, bestHome, bestUpdated, found = ct, h, updated, true
+		}
+	}
+	// No hit anywhere: the zero thread and an empty home, never a home that
+	// was merely searched.
+	return best, bestHome, found
 }
 
 // codexRolloutPath resolves a Codex thread's rollout transcript path by session
-// id, using the same read-only+immutable open. An empty id, a no match, or any
+// id, through the same openCodexState open. An empty id, a no match, or any
 // error returns "".
 func codexRolloutPath(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	db, err := sql.Open("sqlite3", "file:"+codexStatePath()+"?mode=ro&immutable=1")
+	db, err := openCodexState(codexStatePath())
 	if err != nil {
 		return ""
 	}
@@ -598,14 +815,19 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 			if hit.agent == "codex" {
 				// Identity by cwd: codex 0.144.6 holds no rollout fd open, so
 				// the newest threads row for the pane's cwd is the session.
+				// WHICH index that row comes from is the pane's own start
+				// command to answer — a cell bound to a pool slot records its
+				// threads under that slot and nowhere else.
 				// readCodexSession (lsof) stays as a fallback for older codex
 				// that still holds the rollout open.
 				cwd := procCWD(pid, cmds[pid])
-				if ct, ok := readCodexThreadByCWD(cwd); ok {
+				if ct, home, ok := codexThreadForPane(p.StartCmd, cwd); ok {
 					peer.SessionID = ct.ID
 					peer.Name = ct.Title
 					peer.Model = ct.Model
 					peer.CWD = ct.CWD
+					peer.RolloutPath = ct.RolloutPath
+					peer.CodexHome = home
 				} else if cs, ok := readCodexSession(pid, cmds[pid]); ok {
 					peer.SessionID = cs.ID
 					peer.CWD = cs.CWD

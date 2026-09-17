@@ -192,12 +192,19 @@ func FindPendingQuestion(transcript string) *PendingQuestion {
 		pendingQuestionCacheMu.Unlock()
 	}
 
-	// A codex zeus writes a rollout under ~/.codex/sessions/, not a claude
-	// JSONL transcript, so its pending-question shape (request_user_input) is
-	// scanned differently. Dispatch by path exactly as core.LastBlocks does, so
-	// the caller (board.go) hands us one path and stays agent-agnostic.
+	// A codex zeus writes a rollout under <its codex home>/sessions/, not a
+	// claude JSONL transcript, so its pending-question shape
+	// (request_user_input) is scanned differently. Dispatch by path exactly as
+	// core.LastBlocks does, so the caller (board.go) hands us one path and
+	// stays agent-agnostic.
+	//
+	// core.IsCodexRollout rather than a "/.codex/sessions/" substring: a cell
+	// bound to a codex pool slot writes its rollouts under
+	// ~/.codex-pool/accounts/<slug>/sessions/, which that substring does not
+	// match — the bound cell's pending questions would have been scanned as
+	// claude JSONL and never found.
 	var q *PendingQuestion
-	if strings.Contains(transcript, "/.codex/sessions/") {
+	if core.IsCodexRollout(transcript) {
 		q = scanPendingQuestionCodex(transcript)
 	} else {
 		q = scanPendingQuestion(transcript)

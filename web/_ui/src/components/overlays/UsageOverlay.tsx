@@ -4,6 +4,9 @@ import type { WebUsage, WebUsageAccount } from "../../api/types.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { age, usageColorClass, usageCountdown } from "../../lib/format.ts";
 import { Overlay } from "./Overlay.tsx";
+// the codex row's window SELECTION, owned by the steer modal's account panel —
+// see CodexAccount below for why the rule is imported rather than restated
+import { codexBars } from "./SteerOverlay.tsx";
 import { showToast } from "./Toast.tsx";
 
 // The claude-code-pool usage widget and its drilldown (app.js:3560-3829).
@@ -61,6 +64,28 @@ const bool = (v: unknown): boolean => v === true;
 // reason age() lives there: the HEADER widget and this DRILLDOWN are two
 // surfaces of one rule, and a second copy is a threshold that can silently
 // disagree with itself.
+
+/**
+ * The drilldown panel's heading.
+ *
+ * One pool or two, and that is the whole decision: with codex rows present the
+ * panel is showing BOTH pools, so a title naming only the claude one would be
+ * wrong about half of what is on screen. With none — an empty codex pool, or an
+ * older server that does not send the key at all — the title is exactly what it
+ * has always been, which is what keeps the no-codex machine's panel unchanged
+ * down to its heading.
+ *
+ * A function rather than an inline ternary because it has TWO callers: this
+ * panel's heading and the header widget's tooltip, which renders it too
+ * (chrome/UsageStat.tsx) since the tooltip names what clicking opens. A title
+ * written twice is one that can silently disagree with itself — the rule
+ * lib/format.ts's own header states for usageColorClass.
+ */
+export function usagePanelTitle(usage: WebUsage | undefined): string {
+  return usage?.codex_accounts?.length
+    ? "usage — account pools"
+    : "usage — claude code pool";
+}
 
 function mainAccount(data: WebUsage): WebUsageAccount | undefined {
   const accounts = data.accounts || [];
@@ -205,13 +230,20 @@ function UsageBody({
   );
 
   const accounts = data?.accounts || [];
+  const codexAccounts = data?.codex_accounts || [];
   const main = data ? mainAccount(data) : undefined;
   const manual = data?.rotation_mode === "manual";
+  // The whole codex half is gated on there BEING codex rows: with an empty
+  // pool (and on an older server, where the key is absent entirely) this panel
+  // renders exactly what it rendered before the codex pool existed — title,
+  // section headers and all. A "codex" heading over nothing would advertise a
+  // feature as broken rather than as unconfigured.
+  const hasCodex = codexAccounts.length > 0;
 
   return (
     <>
       <div className="panel-head">
-        <span className="panel-title">usage — claude code pool</span>
+        <span className="panel-title">{usagePanelTitle(data)}</span>
         <span id="usage-mode-chip">
           {/* undefined rotation_mode (older server) renders nothing — the same
               gate as everywhere else in this section */}
@@ -250,6 +282,7 @@ function UsageBody({
             }
           />
         ) : null}
+        {hasCodex ? <div className="u-sect">claude</div> : null}
         {accounts.length ? (
           accounts.map((a) => (
             <Account
@@ -269,8 +302,75 @@ function UsageBody({
         ) : (
           <div className="empty">no usage data yet</div>
         )}
+        {hasCodex ? (
+          <div className="u-pool-sect">
+            <div className="u-sect">codex</div>
+            {codexAccounts.map((a) => (
+              <CodexAccount key={str(a.slug)} a={a} />
+            ))}
+          </div>
+        ) : null}
       </div>
     </>
+  );
+}
+
+/**
+ * One `~/.codex-pool` slot's block.
+ *
+ * Deliberately a separate component from `Account` rather than a flag on it,
+ * because what it DOESN'T have is the point. There is no `make main` button:
+ * codex has no machine-login swap, so the control has nothing to do. There is
+ * no `⧉ ccp` button: ccp manages the claude pool, and a copied `ccp <slug>`
+ * naming a codex slot is a command that would fail. And there is no `current`
+ * chip, because no codex slot is ever the machine's login — `~/.codex` is,
+ * and it is not a pool slot.
+ *
+ * `fetched_at` is the has-ever-run signal (Q3): a slot kraken can bind but
+ * codex has never opened a session in carries usable creds and no rollout to
+ * read limits from, so it reports zeros. Those zeros are not a reading, and
+ * showing them as empty bars would claim a measured 0%. The chip says so
+ * instead, and the bars are withheld.
+ *
+ * WHICH windows a measured row draws is not decided here: `codexBars` is the
+ * one rule, shared with the steer modal's account panel, and it is what stops
+ * a lone weekly window — which core copies into `session` as well — being
+ * drawn twice under two labels as if it were two quotas. This surface keeps
+ * its own `Bar`, so the selected windows still render with the countdown the
+ * drilldown shows everywhere else; only the SELECTION is imported.
+ */
+function CodexAccount({ a }: { a: WebUsageAccount }) {
+  const slug = str(a.slug);
+  const email = str(a.email);
+  const tier = str(a.tier);
+  const fetched = num(a.fetched_at) ?? 0;
+  const measured = fetched > 0;
+  const bars = codexBars(a);
+  return (
+    <div className="u-account">
+      <div className="u-account-head">
+        <span className="u-slug">{slug}</span>
+        {email ? <span className="dim">{email}</span> : null}
+        {tier ? <span className="u-chip">{tier}</span> : null}
+        {measured ? null : (
+          <span className="u-chip u-chip-dim">no usage yet</span>
+        )}
+        <Chips a={a} />
+      </div>
+      {measured && bars.length ? (
+        <div className="u-rows">
+          {bars.map((b) => (
+            <Bar
+              key={b.label}
+              label={b.label}
+              // the window itself, so the countdown survives — codexBars
+              // chose the label, this reads back what it chose
+              w={readWindow(b.label === "weekly" ? a.weekly : a.session)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -20,6 +20,11 @@ func TestMain(m *testing.M) {
 	// touches either. A test that specifically wants to assert on binding
 	// re-swaps this locally.
 	bindGate = func(*Job, string) {}
+	// Same reasoning for the codex usage pass, which the daemon tick kicks:
+	// the real pass walks the machine's ~/.codex-pool and writes
+	// ~/.kraken/usage-codex.json, and no test may touch either. A test that
+	// asserts on the kick re-swaps this locally.
+	runCodexUsagePass = func() error { return nil }
 	// Same reasoning for the dev-env mirror's git probe: the real gitUntracked
 	// shells out to git in a worktree, and no test fixture dir is one. A test
 	// that asserts on the probe re-swaps it locally (swapGitUntracked).

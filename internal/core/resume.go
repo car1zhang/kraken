@@ -40,11 +40,19 @@ import (
 // only invite a resume that drops half of them.
 
 // ResumeGuard rejects peers whose session can't be resumed in place. The
-// conditions are exactly the four a respawn needs to be safe: a claude (not
-// a codex, not a shell row), an addressable pane to respawn, a session id to
-// pass to -r, and an id that was actually READ rather than inferred —
-// resuming a guessed id would drag another claude's conversation into this
+// conditions are exactly the four a respawn needs to be safe: a known agent
+// (not a shell row), an addressable pane to respawn, a session id to pass to
+// the resume flag, and an id that was actually READ rather than inferred —
+// resuming a guessed id would drag another agent's conversation into this
 // pane, which is the same reason BranchGuard refuses one.
+//
+// Codex passes the same four. It used to be refused outright, from back when
+// nothing could relaunch one: `codex resume <id>` (and `codex exec resume
+// <id>`, the form the 2026-09-17 measurement used) resumes a codex
+// conversation exactly as `claude -r <session-id>` resumes a claude, and the
+// four conditions above are about the PANE and the ID, neither of which cares
+// which agent is in it. An agent value that is neither is still refused —
+// there is no third launch command to respawn it with.
 //
 // The session-id conditions are also what makes a teammate unresumable, and
 // that is a fact about tmux teammates rather than a policy: a teammate has
@@ -55,8 +63,8 @@ func ResumeGuard(p *Peer) error {
 	if p.Role == "shell" {
 		return fmt.Errorf("%s is a shell pane — no session to resume", DisplayName(p))
 	}
-	if p.Agent != "claude" {
-		return fmt.Errorf("%s is not a claude (agent %q) — only claude sessions can be resumed", DisplayName(p), p.Agent)
+	if p.Agent != "claude" && p.Agent != "codex" {
+		return fmt.Errorf("%s is neither a claude nor a codex (agent %q) — there is no resume command for it", DisplayName(p), p.Agent)
 	}
 	if p.Pane == "" {
 		return fmt.Errorf("%s has no pane to respawn (in-process teammate)", DisplayName(p))
@@ -92,7 +100,30 @@ func ResumeGuard(p *Peer) error {
 // caller holds). Every error path answers false: refusing a resume costs one
 // retried tick, and the alternative costs a process.
 var paneHoldsClaude = func(pane string, pid int) bool {
-	if pane == "" || pid <= 0 {
+	return paneForegroundAgentIs(pane, pid, "claude")
+}
+
+// paneHoldsAgent is the same check for whichever agent the caller is about to
+// kill. RespawnPeerPane consults it with the peer's OWN Agent, so a codex
+// pane is verified as still holding that codex and a claude pane as still
+// holding that claude — the kind has to be part of the question, because the
+// pid alone can be recycled and "some agent is here" would let a rescue
+// SIGKILL an agent of the other kind that happened to land on the number.
+//
+// It delegates the claude case to paneHoldsClaude rather than duplicating it:
+// that variable is the seam existing callers and tests already swap, and a
+// second independent implementation of it would agree with the first only
+// until one of them was edited.
+var paneHoldsAgent = func(pane string, pid int, agent string) bool {
+	if agent == "claude" {
+		return paneHoldsClaude(pane, pid)
+	}
+	return paneForegroundAgentIs(pane, pid, agent)
+}
+
+// paneForegroundAgentIs is the body both seams share.
+func paneForegroundAgentIs(pane string, pid int, agent string) bool {
+	if pane == "" || pid <= 0 || agent == "" {
 		return false
 	}
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{pane_pid}").Output()
@@ -107,7 +138,7 @@ var paneHoldsClaude = func(pane string, pid int) bool {
 	hits := agentPIDsUnder(panePID, children, cmds)
 	// deepest-first: the first hit is the process attached to the foreground
 	// TUI, which is the one respawn-pane would be killing
-	return len(hits) > 0 && hits[0].agent == "claude" && hits[0].pid == pid
+	return len(hits) > 0 && hits[0].agent == agent && hits[0].pid == pid
 }
 
 // respawnPane replaces a pane's process with cmd: the seam the resume path
@@ -124,9 +155,12 @@ var respawnPane = func(target, cwd, cmd string) error {
 	return nil
 }
 
-// RespawnPeerPane kills the claude in p's pane and runs cmd there instead.
+// RespawnPeerPane kills the agent in p's pane and runs cmd there instead.
 // cmd is the CALLER's full launch command — this function never builds one,
-// for the reason the file header gives.
+// for the reason the file header gives, and that reason is sharper now that
+// the agent may be a codex: the resume flag, the model flag and the account's
+// CODEX_HOME prefix all differ by agent, and a command builder here would
+// have to know all of it.
 //
 // Four steps in this order: the guard, the pre-kill re-verification (the PID
 // refusal below and the pane probe together), the respawn, and the
@@ -156,8 +190,8 @@ func RespawnPeerPane(p *Peer, cmd string) error {
 	if p.PID <= 0 {
 		return fmt.Errorf("%s has no pid — cannot verify what is in pane %s before killing it", DisplayName(p), p.Pane)
 	}
-	if !paneHoldsClaude(p.Pane, p.PID) {
-		return fmt.Errorf("pane %s no longer holds claude pid %d — refusing to kill what is in it now", p.Pane, p.PID)
+	if !paneHoldsAgent(p.Pane, p.PID, p.Agent) {
+		return fmt.Errorf("pane %s no longer holds %s pid %d — refusing to kill what is in it now", p.Pane, p.Agent, p.PID)
 	}
 	if err := respawnPane(p.Pane, PeerCWD(p), cmd); err != nil {
 		return err

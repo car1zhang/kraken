@@ -159,7 +159,7 @@ func jobSummary(body string) string {
 //	EDIT — the job exists. Refuses anything started (deliberately stricter
 //	than editableJob, which lets a done job through), refuses a retired key
 //	and any state:, holds the mtime lock, and writes only
-//	{repo, base, solo, model, body}, so every kraken-owned field survives
+//	{repo, base, solo, model, agent, body}, so every kraken-owned field survives
 //	untouched.
 //
 // The route is mirror-gated at registration: it is a write, and a mirror
@@ -273,9 +273,14 @@ func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed 
 	// Color is deliberately not carried: it is kraken-owned and cosmetic,
 	// set from the board through its own one-field route, and CreateDreamJob
 	// (the other programmatic creator) omits it for the same reason.
+	// Agent IS carried, unlike color: it is part of the job's authored
+	// contract like model:, and a codex job drafted without it would spawn a
+	// claude cell while its text said codex — measured on this very route
+	// during the codex account pool's live gate, where the row came back with
+	// an empty agent column.
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-		Solo: parsed.Solo, Model: parsed.Model,
+		Solo: parsed.Solo, Model: parsed.Model, Agent: parsed.Agent,
 		Body: parsed.Body,
 	}); err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
@@ -336,10 +341,14 @@ func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *j
 	// (the raw save's map) writes slug, color, state, outcome, session,
 	// teardown, run and err as well — every one of them kraken-owned or
 	// identity, and every one of them a field an agent-written full replace
-	// would silently reset. Only the five below are the spec's own.
+	// would silently reset. Only the six below are the spec's own — agent
+	// among them for the create arm's reason: it is authored like model:, and
+	// an edit that changed it while the row kept the old value answered 200
+	// and spawned the other agent (found at the codex account pool's live
+	// gate, on the create arm, and closed on both arms together).
 	//
 	// `err` is absent because the frozen field set for this route is those
-	// five and no more. One consequence is worth writing down rather than
+	// six and no more. One consequence is worth writing down rather than
 	// discovering: a job whose row already carries an `err` (a HUMAN's
 	// unparseable raw save — this route never writes one, it refuses instead)
 	// keeps it after a clean edit here, so it stays pinned to draft with a
@@ -349,7 +358,7 @@ func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *j
 	fields := map[string]any{
 		"repo": parsed.Repo, "base": parsed.Base,
 		"solo": parsed.Solo, "model": parsed.Model,
-		"body": parsed.Body,
+		"agent": parsed.Agent, "body": parsed.Body,
 	}
 	// force=false always: a conflict is surfaced, never overridden. The
 	// override exists for carl looking at a diff in the editor, and iris is

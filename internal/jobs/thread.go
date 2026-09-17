@@ -125,6 +125,29 @@ func threadPromptPath(j *Job, tid string) string {
 	return filepath.Join(existingCellDir(j), "thread-"+tid+"-prompt.md")
 }
 
+// refuseCodexThread is the first line of both spawning verbs (branch, revive):
+// a side thread is a CLAUDE fork, and a codex cell has nothing to fork.
+//
+// Everything a thread is made of is claude machinery. The spawn is `claude
+// --fork-session -r <parent session>` under a kraken-minted session id, which
+// is how a thread comes up holding zeus' conversation while writing to a
+// transcript of its own; codex has no equivalent — `codex resume <id>`
+// CONTINUES a conversation in place, so pointing one at zeus' thread would put
+// a second writer on the conversation carl is trying to ask about rather than
+// branching off it. The model alias, the staged brief and the revive path are
+// all built on the same assumption.
+//
+// It is FIRST, before the store handle and before any liveness check, so a
+// refusal leaves the world exactly as it found it: no reserved row, no staged
+// brief, no tmux window. A refusal that had already opened a window would be
+// worse than the feature being absent.
+func refuseCodexThread(j *Job, verb string) error {
+	if j != nil && j.Agent == "codex" {
+		return fmt.Errorf("%s runs on codex — side threads are claude-only, so there is nothing to %s (open a shell in the cell's session instead: k o %s)", j.Slug, verb, CellSession(j))
+	}
+	return nil
+}
+
 // threadStore resolves the store every thread verb needs. Threads live ONLY in
 // kraken.db — there is no file fallback the way jobs still have one — so a
 // caller running without a wired store (the bubbletea viewer, a file-mode
@@ -647,6 +670,9 @@ func threadWorktree(j *Job) string {
 // before the picker. It is stored on the row, which is what makes a revive
 // come back on the same tier.
 func BranchThread(j *Job, title, seed, model string) (store.Thread, error) {
+	if err := refuseCodexThread(j, "branch"); err != nil {
+		return store.Thread{}, err
+	}
 	st, err := threadStore(j)
 	if err != nil {
 		return store.Thread{}, err
@@ -818,6 +844,9 @@ type windowOpener func(session, dir, name string, env, argv []string) (string, e
 // Everything here is a refusal; the spawn itself is reviveClaimed, which opens
 // with the claim that makes concurrent revives safe.
 func ReviveThread(j *Job, tid string) (store.Thread, error) {
+	if err := refuseCodexThread(j, "revive"); err != nil {
+		return store.Thread{}, err
+	}
 	st, err := threadStore(j)
 	if err != nil {
 		return store.Thread{}, err

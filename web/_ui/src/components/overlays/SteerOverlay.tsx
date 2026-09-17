@@ -27,6 +27,7 @@ import type {
   WebJobAccount,
   WebJobLoad,
   WebUsage,
+  WebUsageAccount,
 } from "../../api/types.ts";
 import {
   JOB_COLORS,
@@ -1020,7 +1021,7 @@ function SteerBody({
               of fact read in the same breath — whose quota, then how much of it
               this job has spent. */}
           <div className="steer-account" id="steer-account" hidden={!hasAccount}>
-            {hasAccount ? <AccountPanel account={job?.account} usage={usage} /> : null}
+            {hasAccount ? <AccountPanel job={job} usage={usage} /> : null}
           </div>
           {/* last because it is ambient: nothing here is actionable, and a
               job that was never measured leaves this hidden entirely rather
@@ -1269,6 +1270,77 @@ function readFablePercent(v: unknown): number | null {
 }
 
 /**
+ * A window's `resets_at` (unix millis), or null. Read beside `readPercent`
+ * rather than folded into it because the panel still draws no countdown: the
+ * stamp is used only to tell two codex windows apart (see `codexBars`).
+ */
+function readResetsAt(v: unknown): number | null {
+  if (!v || typeof v !== "object") return null;
+  const r = (v as Record<string, unknown>).resets_at;
+  return typeof r === "number" ? r : null;
+}
+
+interface AccountBarSpec {
+  label: string;
+  percent: number;
+}
+
+/** The claude pool's bar set: the 5h session window and the Fable model window. */
+function claudeBars(row: WebUsageAccount | undefined): AccountBarSpec[] {
+  const out: AccountBarSpec[] = [];
+  const session = readPercent(row?.session);
+  if (session !== null) out.push({ label: "session 5h", percent: session });
+  const fable = readFablePercent(row?.models);
+  if (fable !== null) out.push({ label: "fable 7d", percent: fable });
+  return out;
+}
+
+/**
+ * The codex pool's bar set: the weekly window, plus the session window only
+ * when it is a genuinely different window.
+ *
+ * `core.CodexSlotUsage` copies a weekly-only reading into `session` as well, so
+ * a build that reports one 7-day window arrives here with two identical
+ * windows. Printing both would show the same number twice under two labels,
+ * which reads as two independent quotas. So the session bar is drawn only when
+ * something about it differs from weekly — its percent or its reset stamp —
+ * which is exactly when the slot really did report a shorter window.
+ *
+ * A row that has never been MEASURED draws nothing at all. `fetched_at` is that
+ * signal: a slot kraken can bind but codex has never opened a session in has
+ * usable creds and no rollout to read limits from, so core reports it with a
+ * `session` of 0% and no stamp. That 0 is an absence of evidence, not a
+ * measurement, and a `session 0%` bar under a live cell is a fabricated number
+ * — the one thing this panel's own header promises never to show. The accounts
+ * drilldown says the same thing in words, with its `no usage yet` chip; both
+ * surfaces read the same field so neither can start claiming a reading the
+ * other withholds.
+ *
+ * Exported because it is the ONE rule for which windows a codex row shows, and
+ * it has two consumers: this panel and the accounts drilldown's codex section.
+ * The drilldown keeps its own `Bar` component and its own countdown — what it
+ * takes from here is only the SELECTION, so the two surfaces can never disagree
+ * about whether a lone weekly window gets drawn twice.
+ */
+export function codexBars(
+  row: WebUsageAccount | undefined,
+): { label: string; percent: number }[] {
+  const out: { label: string; percent: number }[] = [];
+  const fetched = row?.fetched_at;
+  if (typeof fetched !== "number" || fetched <= 0) return out;
+  const weekly = readPercent(row?.weekly);
+  if (weekly !== null) out.push({ label: "weekly", percent: weekly });
+  const session = readPercent(row?.session);
+  if (session === null) return out;
+  const same =
+    weekly !== null &&
+    session === weekly &&
+    readResetsAt(row?.session) === readResetsAt(row?.weekly);
+  if (!same) out.push({ label: "session", percent: session });
+  return out;
+}
+
+/**
  * One usage bar. The MARKUP SHAPE is UsageOverlay's `Bar` — same three-part
  * `.u-row`, same `usageColorClass` fill — rather than an import of it, and the
  * split is deliberate: that component owns the drilldown's row, with its
@@ -1296,6 +1368,32 @@ function AccountBar({ label, percent }: { label: string; percent: number }) {
 }
 
 /**
+ * The usage row a job's binding points at — the ONE join between `/api/board`'s
+ * `webJob.account` and `/api/usage`'s two account arrays.
+ *
+ * Joined on AGENT plus slug rather than on slug alone, and that is a
+ * correctness fix rather than a tidy-up: a pool slug is a slugified email, so
+ * one person's account can name a slot in `~/.claude-pool` AND one in
+ * `~/.codex-pool`. Matched by slug alone, a codex cell bound to a codex slot
+ * would draw the CLAUDE slot's bars — a plausible-looking percentage belonging
+ * to a quota the cell is not spending. Each agent therefore reads its own pool
+ * and never falls back to the other one: no row is the honest answer, a row
+ * from the wrong pool is not.
+ *
+ * Exported because the bar-picking rule is the thing worth pinning, and the
+ * panel that uses it is not reachable on its own.
+ */
+export function pickUsageRow(
+  usage: WebUsage | undefined,
+  job: Pick<WebJob, "agent" | "account">,
+): WebUsageAccount | undefined {
+  const slug = job.account?.slug;
+  if (!usage || !slug) return undefined;
+  const rows = job.agent === "codex" ? usage.codex_accounts : usage.accounts;
+  return (rows ?? []).find((a) => a.slug === slug);
+}
+
+/**
  * Which pool account this cell is spending on, in the steer modal's context
  * block — the drilldown half of the card's `.ac-chip`.
  *
@@ -1304,55 +1402,71 @@ function AccountBar({ label, percent }: { label: string; percent: number }) {
  *     stamped. The age is the part that makes a rebind legible: the limit
  *     rescue moves one cell mid-run, so a fresh stamp on an old job is the
  *     whole story of what just happened to it.
- *   - UNBOUND — "main (machine default)". A cell with no binding is not a cell
- *     with no account; it is the lane every cell ran in before per-cell binding
+ *   - UNBOUND — "main (machine default)" for a claude cell, "~/.codex (machine
+ *     login)" for a codex one. A cell with no binding is not a cell with no
+ *     account; it is the lane every cell ran in before per-cell binding
  *     existed, which happens when the pool was dry or fully excluded at spawn
  *     and whenever rotation is pinned manual. Saying so is the answer; a blank
- *     section would read as the feature being broken.
+ *     section would read as the feature being broken. The two wordings differ
+ *     because the two lanes are different things: claude's machine default is a
+ *     pool slot promoted to main, codex's is the single `~/.codex` login, and
+ *     there is no codex equivalent of "main" to name.
  *
  * The bars come from the chrome's 60s `/api/usage` poll, joined to the binding
- * by SLUG — the one key both payloads carry. A slot the poll does not report
- * (an older server, the daemon down, a slot ccp added since the last fetch)
- * renders NO bars rather than zeros: this panel never fabricates a percentage,
- * which is the same rule TokensPanel applies to an unmeasured job. The poll's
- * lag is stated in the note rather than hidden, because a number that can be a
- * minute old and does not say so is one a reader will act on as current.
+ * by `pickUsageRow` — agent plus slug. A slot the poll does not report (an
+ * older server, the daemon down, a slot added since the last fetch) renders NO
+ * bars rather than zeros: this panel never fabricates a percentage, which is
+ * the same rule TokensPanel applies to an unmeasured job. The poll's lag is
+ * stated in the note rather than hidden, because a number that can be a minute
+ * old and does not say so is one a reader will act on as current.
+ *
+ * The bar SET is per-agent, because the two pools measure different things. A
+ * claude row carries a 5h session window and the per-model Fable window the
+ * cell's lead actually spends on. A codex row carries a weekly window and,
+ * only when the slot reports a genuinely shorter one, a session window — the
+ * codex build measured for this feature reports a single 7-day window, which
+ * `core.CodexSlotUsage` copies into both fields, so drawing both unconditionally
+ * would print one number twice under two labels. There is no Fable bar on a
+ * codex row at all: Fable is not a codex model.
  *
  * Read-only throughout, with no switch control, and that is a fact about the
- * world rather than a scope cut: a RUNNING claude resolves its credential at
+ * world rather than a scope cut: a RUNNING agent resolves its credential at
  * session start and does not re-read a swapped one, so a control that "moved" a
  * live cell would change a database row and nothing about what the cell bills.
  */
 function AccountPanel({
-  account,
+  job,
   usage,
 }: {
-  account: WebJobAccount | undefined;
+  job: WebJob | undefined;
   usage: WebUsage | undefined;
 }) {
+  const codex = job?.agent === "codex";
+  const account: WebJobAccount | undefined = job?.account;
   if (!account) {
     return (
       <div className="ac-panel" data-testid="account-panel">
         <div className="ac-row">
           <span className="ac-k">bound to</span>
-          <span className="ac-v">
-            main <span className="ac-dim">(machine default — no per-cell binding)</span>
-          </span>
+          {codex ? (
+            <span className="ac-v">
+              ~/.codex <span className="ac-dim">(machine login)</span>
+            </span>
+          ) : (
+            <span className="ac-v">
+              main <span className="ac-dim">(machine default — no per-cell binding)</span>
+            </span>
+          )}
         </div>
       </div>
     );
   }
-  // Matched on the slug, which is the slot DIRECTORY name on both sides — never
-  // on the email, which a pool row may not carry at all (a slot ccp has no
-  // identity for is exactly the case the chip falls back to the slug for).
-  const row = (usage?.accounts ?? []).find((a) => a.slug === account.slug);
-  const session = readPercent(row?.session);
-  const fable = readFablePercent(row?.models);
+  const row = pickUsageRow(usage, job ?? {});
   // `at` is unix MILLIS and age() takes SECONDS — the same divide LoadDrill and
   // TokensPanel each spell out. A zero stamp drops the row rather than
   // rendering "0s ago", which would date the binding to right now.
   const when = age(account.at ? Math.floor(account.at / 1000) : 0);
-  const hasBars = session !== null || fable !== null;
+  const bars = codex ? codexBars(row) : claudeBars(row);
   return (
     <div className="ac-panel" data-testid="account-panel">
       <div className="ac-row">
@@ -1360,6 +1474,7 @@ function AccountPanel({
         <span className="ac-v">
           {account.slug}
           {account.email ? <span className="ac-dim"> · {account.email}</span> : null}
+          {codex ? <span className="ac-dim"> · codex pool</span> : null}
         </span>
       </div>
       {when ? (
@@ -1368,10 +1483,11 @@ function AccountPanel({
           <span className="ac-v">{when} ago</span>
         </div>
       ) : null}
-      {hasBars ? (
+      {bars.length ? (
         <div className="u-rows">
-          {session !== null ? <AccountBar label="session 5h" percent={session} /> : null}
-          {fable !== null ? <AccountBar label="fable 7d" percent={fable} /> : null}
+          {bars.map((b) => (
+            <AccountBar key={b.label} label={b.label} percent={b.percent} />
+          ))}
         </div>
       ) : null}
       {/* The provenance line, and it is only ever said where a NUMBER was
@@ -1379,8 +1495,12 @@ function AccountPanel({
           note about a poll that contributed nothing would read as an
           explanation for the missing bars rather than as a caveat on present
           ones. */}
-      {hasBars ? (
-        <div className="ac-note">usage from the 60s /api/usage poll — may lag a minute</div>
+      {bars.length ? (
+        <div className="ac-note">
+          {codex
+            ? "usage from the slot's newest codex rollout — updates when the cell's next turn lands"
+            : "usage from the 60s /api/usage poll — may lag a minute"}
+        </div>
       ) : null}
     </div>
   );

@@ -157,7 +157,7 @@ func TestEdgeResumeGuardRefusesEveryIncompleteShape(t *testing.T) {
 		// contract implies).
 		names string
 	}{
-		{"a codex peer", func(p *Peer) { p.Agent = "codex" }, "codex"},
+		{"an agent kind with no resume", func(p *Peer) { p.Agent = "aider" }, "aider"},
 		{"an agent-less row", func(p *Peer) { p.Agent = "" }, ""},
 		{"no pane to respawn", func(p *Peer) { p.Pane = "" }, "pane"},
 		{"no session id", func(p *Peer) { p.SessionID = "" }, "session"},
@@ -189,11 +189,9 @@ func TestEdgeResumeGuardRefusesEveryIncompleteShape(t *testing.T) {
 	}
 }
 
-// A shell row is refused. The contract states it twice over — as
-// `Agent != "claude"` in the biconditional, and again by name ("codex and
-// shell rows refused"), which is the reading this test takes: Role "shell" is
-// itself disqualifying, exactly as BranchGuard treats it, and not merely a
-// shape that happens to also carry an empty Agent.
+// A shell row is refused. The contract states it by name, which is the reading
+// this test takes: Role "shell" is itself disqualifying, exactly as BranchGuard
+// treats it, and not merely a shape that happens to also carry an empty Agent.
 func TestEdgeResumeGuardRefusesAShellRow(t *testing.T) {
 	edgeResumeEnv(t)
 
@@ -207,7 +205,7 @@ func TestEdgeResumeGuardRefusesAShellRow(t *testing.T) {
 		p := edgeResumePeer()
 		p.Role = "shell"
 		if err := ResumeGuard(p); err == nil {
-			t.Fatal("ResumeGuard accepted a Role==\"shell\" row — the contract names shell rows as refused, alongside codex peers")
+			t.Fatal("ResumeGuard accepted a Role==\"shell\" row — the contract names shell rows as refused")
 		}
 	})
 }
@@ -228,7 +226,7 @@ func TestEdgeRespawnPeerPaneGuardRefusalsStopBeforeEverythingElse(t *testing.T) 
 		name   string
 		mutate func(*Peer)
 	}{
-		{"a codex peer", func(p *Peer) { p.Agent = "codex" }},
+		{"an agent kind with no resume", func(p *Peer) { p.Agent = "aider" }},
 		{"an agent-less row", func(p *Peer) { p.Agent = "" }},
 		{"a shell row", func(p *Peer) { p.Role = "shell" }},
 		{"no pane", func(p *Peer) { p.Pane = "" }},

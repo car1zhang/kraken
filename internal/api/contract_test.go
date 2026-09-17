@@ -1781,14 +1781,19 @@ func TestHealthWireShape(t *testing.T) {
 // --- usage: GET /api/usage (usage.go) ---
 
 var webUsageSpec = map[string]fieldSpec{
-	"available":       {kind: wireBool, required: true},
-	"fetched_at":      {kind: wireNumber, required: true},
-	"age_seconds":     {kind: wireNumber, required: true},
-	"daemon_ok":       {kind: wireBool, required: true},
-	"accounts":        {kind: wireArray, required: true},
-	"rotation_mode":   {kind: wireString, required: true},
-	"rotation_set_by": {kind: wireString, required: false},
-	"rotation_set_at": {kind: wireNumber, required: false},
+	"available":   {kind: wireBool, required: true},
+	"fetched_at":  {kind: wireNumber, required: true},
+	"age_seconds": {kind: wireNumber, required: true},
+	"daemon_ok":   {kind: wireBool, required: true},
+	"accounts":    {kind: wireArray, required: true},
+	// the codex pool's rows: always an array (never null, never absent), one
+	// clock of its own. Elements are core.AccountUsage, so accountUsageSpec
+	// below covers them too — the two pools share the row type.
+	"codex_accounts":   {kind: wireArray, required: true},
+	"codex_fetched_at": {kind: wireNumber, required: false},
+	"rotation_mode":    {kind: wireString, required: true},
+	"rotation_set_by":  {kind: wireString, required: false},
+	"rotation_set_at":  {kind: wireNumber, required: false},
 }
 
 // accountUsageSpec covers core.AccountUsage, the elements of webUsage's
@@ -1822,7 +1827,11 @@ var modelWindowSpec = map[string]fieldSpec{
 }
 
 func TestWebUsageWireShapeEmpty(t *testing.T) {
-	data, err := json.Marshal(webUsage{Accounts: []core.AccountUsage{}, RotationMode: "auto"})
+	data, err := json.Marshal(webUsage{
+		Accounts:      []core.AccountUsage{},
+		CodexAccounts: []core.AccountUsage{},
+		RotationMode:  "auto",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1849,6 +1858,16 @@ func TestWebUsageWireShapePopulated(t *testing.T) {
 			FetchedAt: 1234567890, Stale: true, Error: "e",
 			Reauth: true, NoCreds: true, CooldownUntil: 1234567890,
 		}},
+		// a codex row carries the same type with a narrower set of fields
+		// populated — no models, no current, no cooldown — which is a fact
+		// about the pool rather than about the wire shape
+		CodexFetchedAt: 1234567890,
+		CodexAccounts: []core.AccountUsage{{
+			Slug: "tmp-1", Email: "ops@example.com", Tier: "pro",
+			Session:   &core.UsageWindow{Percent: 12, ResetsAt: 1234567890},
+			Weekly:    &core.UsageWindow{Percent: 12, ResetsAt: 1234567890},
+			FetchedAt: 1234567890,
+		}},
 	}
 	data, err := json.Marshal(wu)
 	if err != nil {
@@ -1871,6 +1890,16 @@ func TestWebUsageWireShapePopulated(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "core.AccountUsage", rowData, accountUsageSpec)
+
+	codexAccounts, ok := resp["codex_accounts"].([]any)
+	if !ok || len(codexAccounts) != 1 {
+		t.Fatalf("codex_accounts = %#v, want a 1-element array", resp["codex_accounts"])
+	}
+	codexRowData, err := json.Marshal(wu.CodexAccounts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "core.AccountUsage (codex)", codexRowData, accountUsageSpec)
 
 	windowData, err := json.Marshal(wu.Accounts[0].Session)
 	if err != nil {

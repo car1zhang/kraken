@@ -839,7 +839,20 @@ func codexZeusLaunch(j *Job, wt, brief, prompt, resumeSession string) (string, e
 		}
 		cmd += " " + core.ShellReadFileArg(spawnPromptPath(j))
 	}
-	return accountEnvPrefix(j) + cmd, nil
+	prefix := accountEnvPrefix(j)
+	if prefix == "" && j.AccountSlug != "" {
+		// The job row says it is bound and the command says it is not, and
+		// that gap is otherwise completely silent: the cell comes up on the
+		// machine's own ~/.codex login while the board's account chip, read
+		// off the same row, claims a private slot. accountEnvPrefix refuses a
+		// slug that names no usable codex slot on purpose (a dead CODEX_HOME
+		// is a pane that never logs in), so this is the one place that refusal
+		// can be said out loud. bind-skipped rather than a new event kind: it
+		// is the same fact the binder's own skips record — this cell is not on
+		// a pool account — noticed one step later.
+		dlogEvent("info", "bind-skipped", "%s: account slug %q names no usable codex slot (%s) — the cell runs on the machine's own ~/.codex login", j.Slug, j.AccountSlug, core.CodexSlotDir(j.AccountSlug))
+	}
+	return prefix + cmd, nil
 }
 
 // zeusLaunch is the agent-aware launch builder both spawn paths (StartCell and
@@ -1890,6 +1903,25 @@ func CellHealth(j *Job, all []*core.Peer) string {
 	zeus := CellZeus(j, all)
 	if zeus == nil {
 		return "zeus process is gone — restart the cell (kill the session, then start it again from the board after cleanup)"
+	}
+	if j != nil && j.Agent == "codex" {
+		// A codex zeus is not a claude and none of the machinery below fits
+		// it: it writes no ~/.claude/sessions file, its transcript is a
+		// rollout rather than a JSONL message log, and — the reason the
+		// name test is skipped rather than adapted — its pane name is the
+		// THREAD TITLE codex picked, never zeus-<slug>. Applying the claude
+		// name test would read every codex cell as "still starting" forever
+		// and never open its rollout, which is exactly the silence the claude
+		// arm's own comment below describes for renamed cells.
+		//
+		// Only the usage limit is classified here. The startup-prompt and
+		// api-error classifications have no codex equivalent yet, and
+		// reporting a reason kraken cannot recognise is worse than reporting
+		// none: RetryableHealth would route it to a nudge that cannot help.
+		if zeus.RolloutPath != "" {
+			return cachedCodexLimitReason(zeus.RolloutPath)
+		}
+		return ""
 	}
 	// found positionally but not yet named: claude is still starting — a
 	// lingering startup prompt needs a human, plain slowness needs patience.

@@ -51,17 +51,84 @@ func cmdAccount(args []string) {
 	cmdAccountSwitch(args[0])
 }
 
-// cmdAccountStatus prints the rotation mode line followed by a table of
-// every known Claude account (main + every pool slot), mirroring the data
-// the per-cell binder itself decides against.
+// cmdAccountStatus prints the rotation mode line, then a table of every known
+// Claude account (main + every pool slot), then — only when the codex usage
+// pass has found rows — a second table of the ~/.codex-pool slots. Both mirror
+// the data the per-cell binder itself decides against. A missing claude
+// snapshot prints a note and does not suppress the codex table.
 func cmdAccountStatus() {
 	printRotationLine()
 	snap, ok := jobs.ReadUsageSnapshot()
 	if !ok {
 		fmt.Println("no usage data yet (daemon hasn't run a usage pass) — try again shortly")
-		return
+	} else {
+		printAccountTable(snap)
 	}
-	printAccountTable(snap)
+	// The codex pool is a SECOND table rather than more rows in the first:
+	// the two pools are disjoint (~/.claude-pool vs ~/.codex-pool/accounts)
+	// and a pool slug is a slugified email, so the same slug can name a slot
+	// in both — merged, neither row would say which login it is. It prints
+	// only when the codex pass has found rows, so a machine with no codex
+	// pool sees exactly what it saw before. Its own read, after the claude
+	// half, so a missing claude snapshot never hides it: a codex-only setup
+	// still gets its table.
+	if codex, ok := jobs.ReadCodexUsageSnapshot(); ok && len(codex.Accounts) > 0 {
+		fmt.Println()
+		printCodexAccountTable(codex)
+	}
+}
+
+// printCodexAccountTable renders the ~/.codex-pool slots the codex binder
+// decides against. Deliberately NOT printAccountTable with a flag: it has no
+// FABLE% column (Fable is not a codex model), no "current" marking (codex has
+// no machine-login swap, so no pool slot is ever the machine's login — ~/.codex
+// is, and it is not a slot), and its flags come from a different set of
+// conditions.
+func printCodexAccountTable(snap core.UsageSnapshot) {
+	color := util.UseColor()
+	fmt.Println(util.Paint(color, util.Cyan, "codex pool"))
+	rows := [][]string{{"SLUG", "EMAIL", "SESSION%", "WEEKLY%", "FLAGS"}}
+	for i, h := range rows[0] {
+		rows[0][i] = util.Paint(color, util.Cyan, h)
+	}
+	for _, a := range snap.Accounts {
+		email := a.Email
+		if email == "" {
+			email = util.Paint(color, util.Dim, "-")
+		}
+		rows = append(rows, []string{
+			a.Slug,
+			email,
+			windowPct(color, a.Session),
+			windowPct(color, a.Weekly),
+			codexAccountFlags(color, a),
+		})
+	}
+	for _, line := range util.FormatTableLines(rows) {
+		fmt.Println(line)
+	}
+}
+
+// codexAccountFlags is accountFlags' codex counterpart, and it is short
+// because most of what accountFlags reports cannot happen here: there is no
+// token refresh to fail (reauth), no cached-fallback pass (stale), no cooldown
+// file and no .disabled marker in the codex pool. What is left is the two
+// states that decide whether the binder can use a slot and whether its numbers
+// mean anything — "no creds" is a slot with no usable auth.json, which the
+// binder skips; "no usage yet" is a usable slot codex has never opened a
+// session in, whose zeroed windows are an absence of evidence rather than a
+// measured 0% (it is still eligible, and binds at 0 percent).
+func codexAccountFlags(color bool, a core.AccountUsage) string {
+	var flags []string
+	if a.NoCreds {
+		flags = append(flags, "no creds")
+	} else if a.FetchedAt == 0 {
+		flags = append(flags, "no usage yet")
+	}
+	if len(flags) == 0 {
+		return util.Paint(color, util.Dim, "-")
+	}
+	return util.Paint(color, util.Yellow, strings.Join(flags, ","))
 }
 
 func printRotationLine() {

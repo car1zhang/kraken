@@ -2390,6 +2390,18 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .u-chip-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
 .u-chip-danger { color: var(--ac2); border-color: color-mix(in srgb, var(--ac2) 50%, transparent); cursor: help; }
 .u-chip-dim { opacity: 0.6; }
+/* pool section headers, present only when there is more than one pool to tell
+   apart — the drilldown lists claude's ~/.claude-pool and codex's
+   ~/.codex-pool, and a slug alone does not say which one a row came from
+   (a pool slug is a slugified email, so the same one can appear in both). */
+.u-sect {
+  font: 600 9px var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 9px;
+}
+.u-pool-sect { margin-top: 14px; }
+/* the heading, not the block, is the section's first child once headers are
+   present, so `.u-account:first-child` no longer reaches the row under it */
+.u-sect + .u-account { padding-top: 0; }
 /* rotation manual-pin banner: top of the usage drilldown body, only when
    rotation_mode is "manual" (see manualBannerHTML in app.js) */
 .u-manual-banner {
