@@ -459,10 +459,11 @@ func graphJobContent(slug, mode, instruction string, ingestCap int) string {
 		"solo: false\n" +
 		"---\n" +
 		"\n" +
-		"Read `.claude/skills/graph/SKILL.md` **by path** from this worktree and follow it\n" +
-		"end to end. Read it by path rather than invoking `/graph`: a personal skill of the\n" +
-		"same name shadows the repo-owned copy, and the repo-owned copy is the one that\n" +
-		"knows about cells.\n" +
+		"Open `.claude/skills/graph/SKILL.md` from this worktree **with the Read tool** and\n" +
+		"follow it end to end. Read it by path rather than invoking `/graph`: a personal skill\n" +
+		"of the same name shadows the repo-owned copy, and the repo-owned copy is the one that\n" +
+		"knows about cells. Never `cat` it — a Bash `cat` of a skill this size lands in a\n" +
+		"persisted file and leaves you a 2KB preview.\n" +
 		"\n"
 	if mode == GraphModeRevision {
 		return head +
