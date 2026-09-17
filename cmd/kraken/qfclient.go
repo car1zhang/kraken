@@ -97,7 +97,8 @@ func qfTimeoutError(err error) error {
 // qfTimeoutErrorAfter is qfTimeoutError for a call that ran under its own
 // deadline rather than qfHTTPTimeout — the message names the deadline that
 // actually expired, so a reader never sees "within 5s" on a call that was
-// given 90.
+// given 90. It wraps err exactly once: runCellSubmit unwraps one level to
+// replace this sentence with its own, and its test pins that depth.
 func qfTimeoutErrorAfter(timeout time.Duration, err error) error {
 	return fmt.Errorf("kraken serve did not respond within %s at %s — the request may have completed server-side; re-read with `get` before retrying rather than assuming it failed: %w", timeout, jobs.ServeBaseURL(), err)
 }
