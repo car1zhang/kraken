@@ -88,6 +88,14 @@ func TestCreateGraphJobBothModes(t *testing.T) {
 			if !strings.Contains(j.Body, ".claude/skills/graph/SKILL.md") {
 				t.Error("spec does not point at the skill by path")
 			}
+			// ... opened with the Read tool: a `cat` of a skill this size
+			// lands in a persisted file with a 2KB preview (measured on a
+			// graph zeus, 2026-09-16).
+			for _, want := range []string{"with the Read tool", "Never `cat` it"} {
+				if !strings.Contains(j.Body, want) {
+					t.Errorf("spec does not say to open the skill %s", want)
+				}
+			}
 			if strings.Contains(j.Body, "invoke `/graph`") && !strings.Contains(j.Body, "rather than invoking `/graph`") {
 				t.Error("spec invokes the skill by name")
 			}

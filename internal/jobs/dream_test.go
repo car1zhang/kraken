@@ -474,6 +474,14 @@ func TestDreamJobContentParsesClean(t *testing.T) {
 	if !strings.Contains(j.Body, ".claude/skills/dream/SKILL.md") {
 		t.Fatal("body must point zeus at the repo-owned skill by path")
 	}
+	// ... and say HOW to open it: "read it by path" alone was read as a
+	// Bash `cat` (six leads, one night), which lands a skill this size in
+	// a persisted file with a 2KB preview.
+	for _, want := range []string{"with the Read tool", "Never `cat` it"} {
+		if !strings.Contains(j.Body, want) {
+			t.Errorf("body must say to open the skill %s:\n%s", want, j.Body)
+		}
+	}
 	if !strings.Contains(j.Body, "kraken feedback sweep --since") {
 		t.Fatal("body must state the sweep window's floor")
 	}
