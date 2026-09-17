@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"kraken/internal/util"
 )
@@ -225,12 +226,25 @@ func runCellSteer(slug, text string) error {
 	return nil
 }
 
+// cellSubmitHTTPTimeout is the client deadline for the submit alone. The
+// other proxy verbs run under qfHTTPTimeout (5s), sized for a row write;
+// POST /api/queue is not a row write — jobs.SubmitJob starts the cell INSIDE
+// the request (git worktree add on a large repo, the dev-env symlink scan,
+// skills materialization, tmux new-session), and three of four measured
+// submits from one night's cells took longer than 5s, each printing the
+// timeout error for a start that had already succeeded. The expiry text
+// still says "re-read before retrying", so the deadline is only generous,
+// never open-ended: a dead serve still fails the agent's turn rather than
+// hanging it.
+const cellSubmitHTTPTimeout = 90 * time.Second
+
 // runCellSubmit posts the submit. /api/queue is the path rather than a
 // "/api/submit" that reads better: the URL is kept for the shipped iOS builds
 // that already post it (register.go), and the action behind it is "start this
-// job's cell, now, synchronously".
+// job's cell, now, synchronously" — which is also why it runs under
+// cellSubmitHTTPTimeout rather than the family's default.
 func runCellSubmit(slug string) error {
-	if _, err := qfPost("/api/queue", map[string]any{"slug": slug}); err != nil {
+	if _, err := qfPostWithTimeout("/api/queue", map[string]any{"slug": slug}, cellSubmitHTTPTimeout); err != nil {
 		return err
 	}
 	logCellAction("cell-submit", slug)
