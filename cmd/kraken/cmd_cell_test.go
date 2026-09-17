@@ -62,6 +62,18 @@ func TestRunCellSubmitRunsUnderTheSubmitDeadline(t *testing.T) {
 	if strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("err = %v, must not say unreachable — a timed-out submit may have already started the cell", err)
 	}
+	// The submit's sentence REPLACES the family's generic one: stacked, the
+	// output said "did not respond" twice and still told the reader to
+	// re-read with a `get` verb the cell family does not have.
+	if n := strings.Count(err.Error(), "did not respond"); n != 1 {
+		t.Errorf("err = %v, want exactly one expiry sentence, got %d", err, n)
+	}
+	if strings.Contains(err.Error(), "re-read with `get`") {
+		t.Errorf("err = %v, must not carry the generic `get` advice", err)
+	}
+	if !qfIsTimeout(err) {
+		t.Errorf("err = %v, want the transport timeout still reachable through the wrap", err)
+	}
 }
 
 // qfPostWithTimeout runs under the deadline it is given, and its expiry

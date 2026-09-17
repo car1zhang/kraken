@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -258,7 +259,12 @@ var cellSubmitHTTPTimeout = 90 * time.Second
 func runCellSubmit(slug string) error {
 	if _, err := qfPostWithTimeout("/api/queue", map[string]any{"slug": slug}, cellSubmitHTTPTimeout); err != nil {
 		if qfIsTimeout(err) {
-			return fmt.Errorf("kraken serve did not respond within %s at %s — the submit may have completed server-side and the cell may already be starting; re-read with `kraken board get %s` before retrying rather than assuming it failed: %w", cellSubmitHTTPTimeout, jobs.ServeBaseURL(), slug, err)
+			// qfPostWithTimeout has already wrapped the transport error in
+			// the family's generic sentence; unwrap one level so this message
+			// REPLACES that sentence rather than stacking on top of it (the
+			// stacked form printed "did not respond" twice and kept the
+			// `get` advice this branch exists to remove).
+			return fmt.Errorf("kraken serve did not respond within %s at %s — the submit may have completed server-side and the cell may already be starting; re-read with `kraken board get %s` before retrying rather than assuming it failed: %w", cellSubmitHTTPTimeout, jobs.ServeBaseURL(), slug, errors.Unwrap(err))
 		}
 		return err
 	}
