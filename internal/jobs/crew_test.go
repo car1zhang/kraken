@@ -71,9 +71,16 @@ func TestZeusBrief(t *testing.T) {
 		// field, with skip as the stated default
 		"Doc gating", "/aim or /info", "doc, spec, or explanation", "DEFAULT",
 		"the job spec is the contract; implement immediately",
-		// Phase 1's two paths, each delegating to its skill BY PATH (a
-		// personal skill of the same name would shadow it)
-		"Phase 1 has TWO paths", "EXPLANATION path", "SPEC path", "BY PATH",
+		// Phase 1's two paths, each delegating to its skill read from the
+		// worktree (a personal skill of the same name would shadow it) — and
+		// read WITH THE READ TOOL, TO END OF FILE: "by path" alone was read
+		// as `cat` by six leads in one night (2026-09-16), each landing a
+		// 25-90KB skill in a persisted file with a 2KB preview, three of them
+		// never opening the persisted copy; and the Read tool itself windows
+		// do/SKILL.md (91KB) at 25K tokens, so the PARTIAL clause is what
+		// keeps the fix from trading one truncation for another
+		"Phase 1 has TWO paths", "EXPLANATION path", "SPEC path",
+		"with the Read tool", "never `cat`", "to end of file", "PARTIAL banner",
 		".claude/skills/info/SKILL.md", ".claude/skills/aim/SKILL.md",
 		"LIGHTER than /aim", "zero questions rows",
 		// the gates themselves are cell policy: /do opens phase 2, and an
