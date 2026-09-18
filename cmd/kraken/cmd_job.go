@@ -69,7 +69,7 @@ func cmdJob(args []string) {
 			util.Die("%v", err)
 		}
 		writeStdout(out)
-		fmt.Fprintf(os.Stderr, "job %s written as a draft — the new mtime is in the JSON above; queueing it is carl's move on the board\n", slug)
+		fmt.Fprintf(os.Stderr, "job %s written as a draft — the new mtime is in the JSON above; it stays a draft until submitted: carl on the board, or `kraken cell submit %s` when your brief lets you start it\n", slug, slug)
 	default:
 		util.Die("usage: k job list|raw|draft ... (unknown op %q)", op)
 	}
