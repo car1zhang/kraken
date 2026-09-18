@@ -343,9 +343,9 @@ Commands:
                       a DRAFT. The route is guarded server-side: it refuses
                       any state:, the retired ready:/prereqs: keys, an
                       unparseable body, and any started job. A draft starts
-                      only when submitted: carl on the board, or 'k cell
-                      submit' from a cell whose brief lets it start jobs — iris
-                      drafts and never submits.
+                      only when submitted: carl on the board, or
+                      'k cell submit' run by kronos on carl's instruction —
+                      iris drafts and never submits.
   k mine digest|reduce [--since <unix-millis>] ...
                       the nightly dream pass' mechanical read of claude's own
                       transcripts under ~/.claude/projects — a pure local file
