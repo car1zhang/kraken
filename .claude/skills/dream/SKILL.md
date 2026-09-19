@@ -445,6 +445,49 @@ durable improvement), and never anything outside the kraken repo.
 carl's review is the only thing standing between a judgment call and a merged mistake. The cell
 branch recycles after each merge, so several narrow PRs from one night cost nothing.
 
+**The COMMIT is the boundary, not the diff — so nothing is committed until the last reviewer has
+cleared it.** "Findings never enter git" is a statement about git objects, and the style reviewer is
+its last gate, so that gate has to run BEFORE `git commit`: review the uncommitted working tree,
+fix in place, and commit only after the final CLEAR — one commit per PR at the moment it first
+leaves the machine. A pass that commits first and reviews second gets a gate that can only fix
+FORWARD — the reviewer catches a quoted transcript line or a real job's details in the diff, the
+fix lands as a second commit on the same branch, the branch is pushed whole, and the evidence is
+then permanently readable in the PR's commit list inside the very PR that removed it from the tree.
+A clean tree proves nothing about the history under it.
+
+Reviewing an uncommitted tree has two mechanics of its own: `git diff` leaves out NEW files, so
+`git add -N` each one first and brief the reviewers with `git diff HEAD` (staged and unstaged
+together) plus the paths from `git status --porcelain`, never a commit-range diff like
+`origin/main...HEAD` (empty before the commit); and one tree holds one uncommitted concern (call
+them A and the next one B), so finish a concern's round and commit it before the next concern's
+first edit, and start that concern on its own branch cut fresh off `origin/main`
+(`git checkout -b <cell branch>-<concern> origin/main`, safe only once A is committed and
+`git status --porcelain` is empty) — B committed on A's branch lands inside A's PR. Never start B
+in a tree that still holds A, and never `git stash` to make room. A fix commit that an open PR's
+CI or carl's review asks for later is ordinary `pr/SKILL.md` work, and it goes through the same
+gate first: make the fix uncommitted, run the style reviewer over that diff and over any new commit
+message or PR-body edit, then commit it as a normal follow-up. Never amend or force-push a PR that
+is already open. The same gate covers everything else that leaves the machine with the change —
+the commit message, the PR title and the PR body — so write those to scratch files outside the
+worktree BEFORE the review round and name them in the style reviewer's brief, and `/pr`'s
+title-and-body step then uses those files verbatim; a body written after the reviewers were
+dispatched is the most public text of the night and the only part nobody read.
+
+If a leak has been committed but NOT pushed, never push that branch as it stands: squash only the
+unpushed commits, in place — `git reset --soft origin/<this branch>` when this branch already has
+an open PR (its commits are on origin under its own name), else
+`git reset --soft "$(git merge-base HEAD origin/main)"` — then one fresh commit whose message the
+style reviewer has read — and push that (a plain push; it never needs force). Never squash onto
+`@{upstream}`: a cell branch is cut from `origin/main` and so TRACKS `origin/main` until a
+`git push -u` re-points it, and a soft reset onto a main that has moved yields one commit that
+reverts everything landed in between. Never `reset --hard`, `checkout -- .` or `stash` to do it:
+each discards uncommitted work that shares this tree. If the leak has already been PUSHED, nothing
+you can do removes it — a force-push leaves the old commit reachable from the PR's timeline. Do not
+force-push or claim it fixed: close the PR (if one was opened), delete that PR's remote branch
+(`git push origin --delete <its branch>`), open the clean rebuild — squashed with the merge-base
+form, never onto the remote branch, which holds the leak — as a new PR, and put the leaked commit's
+SHA and the PR URL at the top of the report so carl can have GitHub purge it.
+
 ## Prompting feedback
 
 The scouts also answer a question pointed the other way: **where did carl's own input make the work
