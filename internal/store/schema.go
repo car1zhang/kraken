@@ -94,7 +94,10 @@ import (
 // re-grown as a compilation of mm items alone, and rebuilds kg_episodes so its
 // closed `kind` CHECK admits 'mental-model' (see schemaV29 and
 // migrateV29MentalModel).
-const schemaVersion = 30
+// Version 31 is data-only: it empties the token rows of exactly the active,
+// started jobs whose zeus/subagent split was mismeasured by the nested-sidecar
+// path rule — the ones the daemon will re-sum (see schemaV31).
+const schemaVersion = 31
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1734,6 +1737,87 @@ const schemaV30 = `
 ALTER TABLE jobs ADD COLUMN agent TEXT NOT NULL DEFAULT '';
 `
 
+// schemaV31 re-sums the jobs whose zeus/subagent token split was wrong, and
+// only those. It adds nothing and changes no shape.
+//
+// WHAT WAS WRONG. core's sidecar test looked at a transcript's IMMEDIATE parent
+// dir, so a sidecar filed deeper under `subagents/` — a Workflow-tool agent
+// lives at <session>/subagents/workflows/wf_<id>/agent-<id>.jsonl — was summed
+// into the job's total correctly and then booked to the LEAD: job_tokens'
+// four zeus_* columns carry delegated work for any job that ran one. The total
+// columns were never affected. core.sidecarParentSession is the fix going
+// forward; this migration is what lets it reach the numbers already stored.
+//
+// WHY ROWS MUST GO, which is schemaV11's and schemaV14's argument and is
+// repeated here because it is the whole justification: the counters only
+// accumulate FORWARD from the byte watermarks in job_token_files, nothing ever
+// re-reads what is behind a watermark, and the error is not a scale factor —
+// it is whatever that job happened to fan out. A stored zeus_* figure can
+// therefore only be corrected by being re-summed from byte zero.
+//
+// WHY ONLY SOME ROWS, which is where this parts company with v11 and v14.
+// Those wiped both tables because every job was affected. Here the affected
+// jobs are identifiable from kraken's own bookkeeping: job_token_files records
+// every transcript PATH it has summed, so a job carries the error exactly when
+// one of its paths has another directory between `subagents/` and the file.
+// Scoping the delete to those job ids matters because of the cost v14's
+// comment asks the next reader to weigh: ~/.claude/projects is not kraken's
+// to keep, so a job whose transcripts have since been pruned comes back from
+// a wipe at ZERO. A machine-wide wipe would pay that for every old job to
+// correct only the jobs that ran a nested sidecar; this one can only zero a
+// job the daemon is still re-summing, and then only if that job both ran a
+// nested sidecar and has already lost its transcripts.
+//
+// WHY ONLY ACTIVE, STARTED JOBS, which is the half a wipe gets wrong silently.
+// The daemon's tokens pass is the only writer of job_tokens, and it re-sums a
+// job only when the job is on the ACTIVE board (store.ListJobs: archived_at IS
+// NULL), is STARTED (jobs.Job.Started: state working, blocked or done), and
+// its `repo:` still resolves (ResolveRepo). The first two are checkable here
+// and are what the statements below filter on; the third is not (it is a
+// filesystem question), so a started job whose checkout has since vanished is
+// emptied and stays empty until one resolves again — accepted as rare, since
+// it needs a recent nested-sidecar run on a repo that has since gone. Three
+// kinds of job the SQL can see therefore never get a row written back — an
+// ARCHIVED one, a HARD-DELETED one (no jobs row at all), and an active job
+// KILLED BACK TO DRAFT, whose state is empty while its token row survives and
+// is still served on its card. Deleting such a job's row does
+// not correct its split: it removes the job's whole token number, transcripts
+// on disk or not, from exactly the retrospective surface the number exists
+// for — for good when the job is archived or deleted, and until carl
+// re-submits it when it is a draft. Both statements therefore require a jobs
+// row that is unarchived AND in a started state, the SQL mirror of the two
+// conditions it can check. Every other job that ran a nested sidecar KEEPS its
+// row: a correct total with a lead share that is too large, which is strictly
+// more than no number at all. Unarchiving or re-submitting one later does not
+// repair it either — its watermarks are intact, so the pass resumes past them.
+//
+// The pattern asks for `/subagents/`, then at least one more `/`, which is
+// "nested below subagents" and nothing narrower — it does not name
+// `workflows`, for the reason sidecarParentSession does not: the layout is
+// Claude Code's to extend. A direct sidecar (`…/subagents/agent-<id>.jsonl`)
+// has no further `/` and does not match. It is deliberately LOOSER than the Go
+// rule in two harmless directions — no depth bound, and LIKE folds ASCII case
+// — each of which can only cause a re-sum that lands on the same answer.
+//
+// job_tokens is emptied FIRST: both statements select the affected ids out of
+// job_token_files, so deleting from that table first would leave the second
+// statement nothing to find.
+//
+// Cost: each emptied job whose repo still resolves gets its token row back on
+// the daemon's next paced pass (jobs/tokens.go), and its "measured Nh ago"
+// line restarts once. No
+// downgradeFreshDB arm exists for this version and none is needed — that
+// helper reproduces an older SHAPE, and this step has none to undo (the same
+// ruling its v11 and v14 notes give their row-deleting halves).
+const schemaV31 = `
+DELETE FROM job_tokens
+ WHERE job_id IN (SELECT job_id FROM job_token_files WHERE path LIKE '%/subagents/%/%')
+   AND job_id IN (SELECT id FROM jobs WHERE archived_at IS NULL AND state IN ('working','blocked','done'));
+DELETE FROM job_token_files
+ WHERE job_id IN (SELECT job_id FROM job_token_files WHERE path LIKE '%/subagents/%/%')
+   AND job_id IN (SELECT id FROM jobs WHERE archived_at IS NULL AND state IN ('working','blocked','done'));
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1870,6 +1954,7 @@ var migrations = map[int]migrationStep{
 	28: {sql: schemaV28},
 	29: {sql: schemaV29, hook: migrateV29MentalModel},
 	30: {sql: schemaV30},
+	31: {sql: schemaV31},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

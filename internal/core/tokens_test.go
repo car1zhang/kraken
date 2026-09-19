@@ -892,6 +892,100 @@ func TestSumTokensDeltaSplitsZeusFromSubagents(t *testing.T) {
 	tokWantZeus(t, got, 10, 100, 1000, 10000)
 }
 
+// TestSumTokensDeltaCountsANestedSidecarAsSubagent is the regression test for
+// the path arm's depth, and it fails against an immediate-parent test.
+//
+// A Workflow-tool agent is filed at
+// <session>/subagents/workflows/wf_<id>/agent-<id>.jsonl — a sidecar, but not
+// DIRECTLY under `subagents/`. Its records carry no `session_id`, and its head
+// carries neither `agent-setting` nor an `agentName`, so the path is the only
+// thing that marks it as delegated: a rule that reads only the file's immediate
+// parent sums it into the total and then books all of it to the lead.
+//
+// The fixture writes the nested file with NO head marker on purpose. With one,
+// the content arms would rescue the classification and the test would pass
+// against the broken path rule.
+func TestSumTokensDeltaCountsANestedSidecarAsSubagent(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	mineWrite(t, projects, "-proj", "zeus.jsonl",
+		tokAgentName(t, "zeus-demo"),
+		mineUser(t, now, "go"),
+		tokAssistantFull(t, now, tokUsage{in: 10, out: 100, cw: 1000, cr: 10000}, "msg_Z", "zeus"),
+	)
+	mineWrite(t, projects, "-proj", filepath.Join("zeus", "subagents", "workflows", "wf_demo", "agent-1.jsonl"),
+		mineUser(t, now, "go"),
+		tokAssistantFull(t, now, tokUsage{in: 7, out: 70, cw: 700, cr: 7000}, "msg_W", ""),
+	)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 17, 170, 1700, 17000, 2)
+	tokWantZeus(t, got, 10, 100, 1000, 10000)
+}
+
+// TestSidecarParentSession pins the one path rule three callers share: which
+// transcripts are sidecars, and which session each hangs off.
+func TestSidecarParentSession(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "home", "projects", "-proj")
+	for _, c := range []struct {
+		name       string
+		rel        []string
+		wantParent string
+		wantOK     bool
+	}{
+		{"root transcript", []string{"sess.jsonl"}, "", false},
+		{"direct sidecar", []string{"sess", "subagents", "agent-1.jsonl"}, "sess", true},
+		{"workflow sidecar", []string{"sess", "subagents", "workflows", "wf_demo", "agent-1.jsonl"}, "sess", true},
+		// one level deeper than any shape written today: still inside the bound
+		{"at the depth bound", []string{"sess", "subagents", "a", "b", "c", "agent-1.jsonl"}, "sess", true},
+		// past the bound: a `subagents` dir this far up is not evidence
+		{"past the depth bound", []string{"sess", "subagents", "a", "b", "c", "d", "agent-1.jsonl"}, "", false},
+		// the name must be the whole component, not a substring of one
+		{"lookalike dir", []string{"sess", "subagents-old", "agent-1.jsonl"}, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := filepath.Join(append([]string{root}, c.rel...)...)
+			parent, ok := sidecarParentSession(p)
+			if parent != c.wantParent || ok != c.wantOK {
+				t.Fatalf("sidecarParentSession(%q) = (%q, %v), want (%q, %v)", p, parent, ok, c.wantParent, c.wantOK)
+			}
+			// fileSessionID must agree: the parent for a sidecar, the stem otherwise.
+			want := c.wantParent
+			if !c.wantOK {
+				want = strings.TrimSuffix(filepath.Base(p), ".jsonl")
+			}
+			if got := fileSessionID(p, filepath.Base(p)); got != want {
+				t.Fatalf("fileSessionID(%q) = %q, want %q", p, got, want)
+			}
+		})
+	}
+}
+
+// TestSidecarParentSessionStopsAtTheProjectsDir pins what the depth bound
+// alone does not: four levels up from a ROOT transcript is the home directory,
+// so a home dir that happens to be named `subagents` is inside the window. The
+// walk has to end at the `projects` dir, or every transcript on such a machine
+// reads as a sidecar and every job's lead share as zero.
+func TestSidecarParentSessionStopsAtTheProjectsDir(t *testing.T) {
+	sep := string(filepath.Separator)
+	projDir := filepath.Join(sep, "Users", "subagents", ".claude", "projects", "-proj")
+
+	rootFile := filepath.Join(projDir, "sess.jsonl")
+	if parent, ok := sidecarParentSession(rootFile); ok {
+		t.Fatalf("root transcript under a home dir named subagents read as a sidecar of %q", parent)
+	}
+	// a real sidecar on the same machine still resolves to its own session
+	side := filepath.Join(projDir, "sess", "subagents", "workflows", "wf_demo", "agent-1.jsonl")
+	if parent, ok := sidecarParentSession(side); !ok || parent != "sess" {
+		t.Fatalf("sidecarParentSession(%q) = (%q, %v), want (\"sess\", true)", side, parent, ok)
+	}
+}
+
 // TestSumTokensDeltaCountsASideThreadAsZeus pins the one classification that
 // is a judgement call rather than a fact about the file: a side thread is
 // `claude --fork-session` of zeus in the same worktree — carl branching off to

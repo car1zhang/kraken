@@ -82,6 +82,10 @@ func undoV29(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// v31 needs no reversal: it changed no shape, only deleted token rows, and
+	// this helper's job is to reproduce an older SHAPE (the ruling the v14 and
+	// v11 notes below give their row-deleting halves).
+	//
 	// Reverse v30: drop the jobs.agent column (added at v30, absent through
 	// v29). Shape-only, no data carried back — the codex/claude choice has no
 	// place to live in a pre-v30 database. Reversed FIRST, since downgrades
@@ -2155,5 +2159,155 @@ func TestSchemaV19ToV20RetiresQueued(t *testing.T) {
 	}
 	if len(order["draft"]) != 1 || order["draft"][0] != other {
 		t.Fatalf("draft board_order = %v, want [%d] — v20 must delete ONLY the queued rows", order["draft"], other)
+	}
+}
+
+// TestSchemaV30ToV31ResumsOnlyNestedSidecarJobs covers the v31 migration, and
+// the half worth testing is what it LEAVES ALONE.
+//
+// v31 exists because a sidecar filed deeper than `subagents/<file>` was booked
+// to the lead, so the zeus_* columns of any job that ran one are wrong and —
+// the counters being accumulate-forward — can only be corrected by a re-sum
+// from byte zero. Unlike v11 and v14 it does not wipe both tables: a job whose
+// transcripts have since been pruned comes back from a wipe at zero, so the
+// delete is scoped to the jobs that carry the error. A test that only checked
+// the affected job was emptied would pass against a machine-wide wipe.
+//
+// Three jobs, one per case the LIKE pattern has to separate: a nested sidecar
+// (emptied, row AND every watermark — a surviving watermark would stop the
+// re-sum it exists to cause), a direct sidecar (untouched — it has no `/`
+// after `subagents/`), and root transcripts only (untouched).
+//
+// Then the three the active-and-started clause has to separate, each carrying
+// a nested path and each left alone: an ARCHIVED job, a job id with no `jobs`
+// row at all (hard-deleted), and an active job back in DRAFT (empty state). The
+// tokens pass re-sums only an unarchived, started job, so nothing would write
+// any of these rows back — deleting one would not correct a split, it would
+// remove the job's only token number.
+//
+// The emptied job is seeded in each of the three started states, since the
+// SQL spells them out and a typo in one would otherwise pass unnoticed.
+func TestSchemaV30ToV31ResumsOnlyNestedSidecarJobs(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kraken.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	mk := func(slug string) int64 {
+		t.Helper()
+		id, err := s.CreateJob(&Job{Slug: slug, Repo: "kraken"})
+		if err != nil {
+			t.Fatalf("CreateJob %s: %v", slug, err)
+		}
+		return id
+	}
+	setState := func(id int64, state string) {
+		t.Helper()
+		if _, err := s.db.Exec(`UPDATE jobs SET state = ? WHERE id = ?`, state, id); err != nil {
+			t.Fatalf("set job %d state %q: %v", id, state, err)
+		}
+	}
+	nested, direct, rootOnly := mk("v30-nested"), mk("v30-direct"), mk("v30-root-only")
+	nestedBlocked, nestedDone := mk("v30-nested-blocked"), mk("v30-nested-done")
+	setState(nested, "working")
+	setState(nestedBlocked, "blocked")
+	setState(nestedDone, "done")
+	setState(direct, "working")
+	setState(rootOnly, "working")
+	// mk leaves state '' — a draft: never started, or killed back to draft
+	draft := mk("v30-draft-nested")
+	archived := mk("v30-archived-nested")
+	setState(archived, "done")
+	if _, err := s.ArchiveJob(archived); err != nil {
+		t.Fatalf("ArchiveJob: %v", err)
+	}
+	// an id no jobs row carries: what a hard-deleted job's token rows look like
+	const orphan = int64(987654)
+
+	downgradeFreshDB(t, s, 30)
+
+	seed := func(jobID int64, paths ...string) {
+		t.Helper()
+		if _, err := s.db.Exec(
+			`INSERT INTO job_tokens (job_id, in_tokens, out_tokens, cache_write, cache_read, sessions, updated_at,
+				zeus_in, zeus_out, zeus_cache_write, zeus_cache_read)
+			 VALUES (?, 11, 22, 33, 44, ?, 1700000000000, 11, 22, 33, 44)`, jobID, len(paths)); err != nil {
+			t.Fatalf("seed token row for job %d: %v", jobID, err)
+		}
+		for _, p := range paths {
+			if _, err := s.db.Exec(
+				`INSERT INTO job_token_files (job_id, path, byte_offset) VALUES (?, ?, 4096)`, jobID, p); err != nil {
+				t.Fatalf("seed watermark %s: %v", p, err)
+			}
+		}
+	}
+	seed(nested,
+		"/h/.claude/projects/-p/sess.jsonl",
+		"/h/.claude/projects/-p/sess/subagents/agent-1.jsonl",
+		"/h/.claude/projects/-p/sess/subagents/workflows/wf_demo/agent-2.jsonl",
+	)
+	seed(direct,
+		"/h/.claude/projects/-q/sess.jsonl",
+		"/h/.claude/projects/-q/sess/subagents/agent-1.jsonl",
+	)
+	seed(rootOnly, "/h/.claude/projects/-r/sess.jsonl")
+	seed(archived,
+		"/h/.claude/projects/-s/sess.jsonl",
+		"/h/.claude/projects/-s/sess/subagents/workflows/wf_demo/agent-1.jsonl",
+	)
+	seed(orphan, "/h/.claude/projects/-t/sess/subagents/workflows/wf_demo/agent-1.jsonl")
+	seed(draft, "/h/.claude/projects/-u/sess/subagents/workflows/wf_demo/agent-1.jsonl")
+	seed(nestedBlocked, "/h/.claude/projects/-v/sess/subagents/workflows/wf_demo/agent-1.jsonl")
+	seed(nestedDone, "/h/.claude/projects/-w/sess/subagents/workflows/wf_demo/agent-1.jsonl")
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate from v30: %v", err)
+	}
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
+	}
+
+	count := func(table string, jobID int64) int {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE job_id = ?`, jobID).Scan(&n); err != nil {
+			t.Fatalf("count %s for job %d: %v", table, jobID, err)
+		}
+		return n
+	}
+	for _, c := range []struct {
+		state string
+		id    int64
+	}{{"working", nested}, {"blocked", nestedBlocked}, {"done", nestedDone}} {
+		if n := count("job_tokens", c.id); n != 0 {
+			t.Errorf("%s nested-sidecar job kept %d token row(s); its zeus half is wrong and must be re-summed", c.state, n)
+		}
+		if n := count("job_token_files", c.id); n != 0 {
+			t.Errorf("%s nested-sidecar job kept %d watermark(s); any survivor stops the re-sum from byte zero", c.state, n)
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		id    int64
+		files int
+	}{
+		{"direct-sidecar", direct, 2},
+		{"root-only", rootOnly, 1},
+		{"archived nested-sidecar", archived, 2},
+		{"hard-deleted nested-sidecar", orphan, 1},
+		{"draft nested-sidecar", draft, 1},
+	} {
+		if n := count("job_tokens", c.id); n != 1 {
+			t.Errorf("%s job has %d token row(s), want 1 — v31 must touch only active, started nested-sidecar jobs", c.name, n)
+		}
+		if n := count("job_token_files", c.id); n != c.files {
+			t.Errorf("%s job has %d watermark(s), want %d", c.name, n, c.files)
+		}
 	}
 }
