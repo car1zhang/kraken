@@ -427,11 +427,79 @@ func tokenRecordOwned(rec tokenRecord, own string) bool {
 // the stem would reject every one of them and silently drop ~24% of a cell's
 // work; the parent id accepts them, which is the correct answer either way.
 func fileSessionID(path, name string) string {
-	if filepath.Base(filepath.Dir(path)) == "subagents" {
-		// <project>/<session-id>/subagents/<name>
-		return filepath.Base(filepath.Dir(filepath.Dir(path)))
+	if parent, ok := sidecarParentSession(path); ok {
+		return parent
 	}
 	return strings.TrimSuffix(name, ".jsonl")
+}
+
+// sidecarMaxDepth bounds how many directory levels above a transcript
+// sidecarParentSession looks for a `subagents` dir. The deepest shape Claude
+// Code writes today puts it three levels up (see sidecarParentSession); four
+// leaves one level of slack for the next nesting.
+//
+// The bound limits how DEEP a sidecar may sit; it is not what keeps the walk
+// inside the transcript tree. Four levels up from a ROOT transcript
+// (~/.claude/projects/<project>/<session>.jsonl) is the home directory itself,
+// so on its own the bound would let a home dir that happens to be NAMED
+// `subagents` turn every transcript on the machine into a sidecar. What stops
+// that is sidecarProjectsDir: the walk ends at the `projects` dir, above which
+// no sidecar can be.
+const sidecarMaxDepth = 4
+
+// sidecarProjectsDir is the name of the directory that holds every project's
+// transcripts (~/.claude/projects). sidecarParentSession stops there: a
+// sidecar hangs off a session, a session sits inside a project dir, and a
+// project dir sits inside this one, so nothing at or above it can be the
+// `subagents` dir of anything. The price is that a sidecar filed beneath a
+// nested dir itself named `projects` would stop the walk short and read as a
+// root transcript; no shape Claude Code writes has one, and that failure
+// misfiles one file where the other misfiles every transcript on the machine.
+const sidecarProjectsDir = "projects"
+
+// sidecarParentSession reports whether path is a subagent SIDECAR — a
+// transcript filed somewhere under a session's `subagents/` dir — and, when it
+// is, the id of the session it hangs off (the dir that HOLDS `subagents/`).
+//
+// It is the ONE statement of "this path is a sidecar", shared by
+// fileSessionID, isAgentTranscript's path arm and the digest's Subagent flag.
+// Those three used to test the file's IMMEDIATE parent each on their own, and
+// agreed with each other while all being wrong about the same files: Claude
+// Code does not file every sidecar directly under `subagents/`. Two shapes
+// exist:
+//
+//	<project>/<session-id>/subagents/agent-<id>.jsonl
+//	<project>/<session-id>/subagents/workflows/wf_<id>/agent-<id>.jsonl
+//
+// The second is an agent run by the Workflow tool. Its records carry no
+// `session_id`, no `agentName` and no `agent-setting`, so the path is the only
+// signal that it is delegated work at all — and an immediate-parent test does
+// not see it, which books the whole fan-out to the LEAD. The total is
+// unaffected (the split partitions a number already summed); the lead's share
+// is what goes wrong, and a fan-out is exactly the case where it goes wrong by
+// the most.
+//
+// Hence an ANCESTOR test, bounded by sidecarMaxDepth and stopped at
+// sidecarProjectsDir, rather than a second hardcoded shape: the layout is
+// Claude Code's to extend, and the next nesting should classify correctly
+// without another edit here.
+func sidecarParentSession(path string) (string, bool) {
+	dir := filepath.Dir(path)
+	for i := 0; i < sidecarMaxDepth; i++ {
+		base := filepath.Base(dir)
+		if base == "subagents" {
+			return filepath.Base(filepath.Dir(dir)), true
+		}
+		if base == sidecarProjectsDir {
+			break
+		}
+		up := filepath.Dir(dir)
+		if up == dir {
+			break
+		}
+		dir = up
+	}
+	return "", false
 }
 
 // ZeusAgentNamePrefix and ThreadAgentNamePrefix are the two `agentName`
@@ -538,10 +606,14 @@ const (
 //
 // THREE ARMS, in the order they are decided:
 //
-//  1. PATH. A file under a `subagents/` dir is an in-process subagent's
-//     sidecar — the same shape fileSessionID already uses to recognise one,
-//     because a sidecar's location identifies it and no file content is
-//     needed to see it.
+//  1. PATH. A file under a `subagents/` dir — at any depth
+//     sidecarParentSession recognises, so a Workflow-tool agent filed under
+//     `subagents/workflows/wf_<id>/` counts exactly as a direct sidecar does
+//     — is an in-process subagent's sidecar. It is the same test
+//     fileSessionID uses to recognise one, because a sidecar's location
+//     identifies it and no file content is needed to see it. For a Workflow
+//     agent it is also the ONLY arm that can answer: its head carries neither
+//     of the two signals below.
 //  2. `agent-setting` in the head. Claude Code writes that record only for an
 //     Agent-tool spawn, so it never lies. It is kept even though arm 3
 //     currently subsumes it entirely (measured: of 1,239 roots carrying
@@ -586,7 +658,7 @@ const (
 // (the split is a partition of a number already summed), so the failure mode
 // is a visibly-too-large lead half rather than a total that is silently wrong.
 func isAgentTranscript(f *os.File, path string) bool {
-	if filepath.Base(filepath.Dir(path)) == "subagents" {
+	if _, ok := sidecarParentSession(path); ok {
 		return true
 	}
 	// A SectionReader rather than a Seek + Read, so this stays a pread like

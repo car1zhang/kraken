@@ -501,6 +501,43 @@ func TestMineTranscriptsSubagentAndCategory(t *testing.T) {
 	}
 }
 
+// TestMineTranscriptsMarksANestedSidecar: a Workflow-tool agent is filed
+// under <session>/subagents/workflows/wf_<id>/, not directly under
+// subagents/, and its head carries no agentName and no agent-setting — so the
+// path is the digest's only way to say the row is delegated work. Both flags
+// have to say so: Subagent is what a consumer ranking sessions reads, and
+// Delegated is the token splitter's own answer for the same file.
+func TestMineTranscriptsMarksANestedSidecar(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	cellDir := "-Users-carl--kraken-cells-demo-job-wt-kraken"
+	mineWrite(t, projects, cellDir, filepath.Join("zeus", "subagents", "workflows", "wf_demo", "agent-def456.jsonl"),
+		mineAssistant(t, now-900, "claude-opus-5", mineToolUse("t1", "Read", map[string]any{"file_path": "/x.go"})))
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	side := mineFindDigest(t, res, "agent-def456.jsonl")
+	if !side.Subagent {
+		t.Error("nested sidecar not marked Subagent")
+	}
+	if !side.Delegated {
+		t.Error("nested sidecar not marked Delegated")
+	}
+	if side.Category != "kraken" {
+		t.Errorf("nested sidecar Category = %q, want kraken", side.Category)
+	}
+	if side.SessionID != "agent-def456" {
+		t.Errorf("nested sidecar SessionID = %q", side.SessionID)
+	}
+	if side.ToolCounts["Read"] != 1 {
+		t.Errorf("nested sidecar tool calls dropped: %v", side.ToolCounts)
+	}
+}
+
 // TestMineTranscriptsSessionIdentity: a digest identifies a session by its
 // in-window slice, and identity is a property of the whole file — a teammate
 // that ran for half an hour and finished just past the window's floor digests

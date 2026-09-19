@@ -66,7 +66,7 @@ type SessionDigest struct {
 	Path            string
 	ProjectDir      string // the munged dir name
 	Category        string // "kraken" (a kraken cell dir) or "other"
-	Subagent        bool   // true for a subagents/agent-*.jsonl sidecar
+	Subagent        bool   // true for a sidecar anywhere under subagents/ (sidecarParentSession)
 	Lines           int    // TIMESTAMPED records inside the window that parsed
 	FirstTS, LastTS int64  // unix millis, from in-file record timestamps
 	// AgentName is the transcript head's `agentName` ("athena-logic-3",
@@ -325,12 +325,16 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	if strings.Contains(project, krakenCellMarker) {
 		category = "kraken"
 	}
+	// One path rule for "is a sidecar", shared with the token splitter: a
+	// second copy of the test here is how the digest and the split once agreed
+	// with each other about a nested sidecar while both were wrong.
+	_, sidecar := sidecarParentSession(path)
 	dg := SessionDigest{
 		SessionID:     strings.TrimSuffix(filepath.Base(path), ".jsonl"),
 		Path:          path,
 		ProjectDir:    project,
 		Category:      category,
-		Subagent:      filepath.Base(filepath.Dir(path)) == "subagents",
+		Subagent:      sidecar,
 		AgentName:     headAgentName(f),
 		Delegated:     isAgentTranscript(f, path),
 		ToolCounts:    map[string]int{},
