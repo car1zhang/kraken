@@ -167,9 +167,21 @@ floor once digested as three anomalous midnight sessions, and the false premise 
 brief). `kraken mine reduce --since <ts> <path>` then emits the **reduced view** of one session
 — user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
 which is about an eighth of the bytes. Carl's MID-TURN messages — typed while a turn was running,
-the course corrections that matter most to the prompting-feedback output — are stored as queue
-records rather than user records and emit as `[user mid-turn]`; kraken's own daemon bumps queue
-through the same channel and read the same way, so judge by the text.
+the course corrections that matter most to the prompting-feedback output — are stored as
+`queue-operation` records and/or `queued_command` attachments rather than user records, and emit
+as `[user mid-turn]`; kraken's own daemon bumps queue through the same channel and read the same
+way, so judge by the text. A subagent's or background task's completion notification is a
+RAW-file question, never a reduced-view one: it is written as an `enqueue` queue-operation record
+keyed by its `<task-id>` and then delivered one of two ways — while the lead's turn is running, as
+a `queued_command` attachment at the lead's next model request (after every tool call in the
+in-flight message has returned: one round late, never dropped), and once the turn has ended, the
+How-to-wait protocol's normal case, as a new `user` record. `reduce` shows neither faithfully — it
+drops a mid-turn notification entirely and renders an idle-delivered one as `[user]` — so a lead
+that announces that every report has landed, with no file check in between, has read that
+attachment in its own context, and a scout counting user records in the reduced view will book a
+one-round delivery lag as a loss. A brief that sends a scout after them names all three shapes and
+says to count distinct task-ids, not records (one notification writes an `enqueue` and then a
+`remove` or a `dequeue`); a brief that called them `queue` records produced exactly that miscount.
 
 **Rank by spend, not by tool-call count — and rank CELLS, scouting each one whole.** A per-session
 ranking selects agent SHAPE rather than anomaly: a diagram renderer whose brief forbids emitting
