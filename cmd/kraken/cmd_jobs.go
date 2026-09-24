@@ -226,6 +226,20 @@ func cmdBashLint() {
 	}
 }
 
+// --- spawn-guard ---
+
+// cmdSpawnGuard is the thin dispatch wrapper for `kraken spawn-guard` — the
+// PreToolUse hook on the Agent tool (jobs.SpawnGuardStdin does the work)
+// that refuses a teammate spawn from below the worktree root. Same protocol
+// and same stance as bash-lint above: exit 2 with the reason on stderr to
+// block, exit 0 silently for everything else, and never a user-facing verb.
+func cmdSpawnGuard() {
+	if msg, block := jobs.SpawnGuardStdin(os.Stdin); block {
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(2)
+	}
+}
+
 // --- k logevent ---
 
 // cmdLogEvent appends one entry to the unified event log — plumbing for

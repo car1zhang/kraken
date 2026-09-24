@@ -63,6 +63,8 @@ func main() {
 		cmdPrHook(rest)
 	case "bash-lint":
 		cmdBashLint()
+	case "spawn-guard":
+		cmdSpawnGuard()
 	case "limit-hook":
 		cmdLimitHook(rest)
 	case "recall-hook":
