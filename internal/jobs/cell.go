@@ -1212,12 +1212,12 @@ var retiredRecallHookEvents = []string{"PostToolUse"}
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
 //
-// It renders FOUR kraken groups across FOUR hook events: the pr-hook group
-// under PostToolUse, the bash-lint group under PreToolUse, the limit-hook
+// It renders FIVE kraken groups across FOUR hook events: the pr-hook group
+// under PostToolUse, the bash-lint and spawn-guard groups under PreToolUse, the limit-hook
 // group under StopFailure (limitHookEntry, the usage-limit rescue), and a
 // recall group under each of recallHookEvents (UserPromptSubmit). The two
 // kinds use DIFFERENT merge rules and the difference is deliberate — pr-hook,
-// bash-lint and limit-hook append when their exact command is absent, recall
+// bash-lint, spawn-guard and limit-hook append when their exact command is absent, recall
 // REPLACES — for the reason spelled out at the recall loop below. It also
 // REMOVES: retiredRecallHookEvents strips the recall group kraken used to
 // install under PostToolUse, which is why that removal pass runs over the very
@@ -1237,6 +1237,12 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	}
 	ensureHookGroup(hooks, "PostToolUse", prHookCommand(slug, krakenBin), krakenHookEntry(slug, krakenBin))
 	ensureHookGroup(hooks, "PreToolUse", bashLintCommand(krakenBin), bashLintHookEntry(krakenBin))
+	// The spawn guard (spawnguard.go): a second PreToolUse group, matched on
+	// the Agent tool, refusing a teammate spawn while the lead's shell is
+	// below the worktree root — the cwd a teammate inherits, and the cwd
+	// this very file binds by. Append-if-absent like bash-lint, keyed on the
+	// exact command string.
+	ensureHookGroup(hooks, "PreToolUse", spawnGuardCommand(krakenBin), spawnGuardHookEntry(krakenBin))
 	// The usage-limit hook (limithook.go): StopFailure fires when a turn dies
 	// on an API error, and the entry's matcher narrows it to the rate_limit
 	// error type — the bucket every 429 lands in, subscription plan limits
