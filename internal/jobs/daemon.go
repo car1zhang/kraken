@@ -961,7 +961,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			// only on success leaves a bailing job due again every tick,
 			// permanently consuming an idle slot while logging nothing).
 			d.PRScan[j.Slug] = now.UnixMilli()
-			d.trackPRs(j)
+			d.trackPRs(j, all, live)
 			d.scanTranscriptPRs(j, all)
 			d.repairPRs(j, all)
 		}
@@ -1380,11 +1380,13 @@ func (d *daemonState) prunePRScan(jobs []*Job) {
 }
 
 // trackPRs reconciles one job's recorded prs: list against what gh
-// reports for the cell branch. Job-file writes only — never tmux, git, or
-// state. Every outcome worth noting gets a dlog line unconditionally (the
-// old reap loop logged only on state change, which is how a failing
-// teardown stayed invisible).
-func (d *daemonState) trackPRs(j *Job) {
+// reports for the cell branch. Job-file writes, plus ONE tmux write — the
+// merge bump into a live cell's zeus pane (mergeBumpMessage below); never
+// git, never state. Every outcome worth noting gets a dlog line
+// unconditionally (the old reap loop logged only on state change, which is
+// how a failing teardown stayed invisible). all and live are the tick's
+// discovery snapshot and live-session set, the same pair watchPRs takes.
+func (d *daemonState) trackPRs(j *Job, all []*core.Peer, live map[string]bool) {
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		// the state-derivation pass only covers live jobs — for done or
@@ -1454,8 +1456,10 @@ func (d *daemonState) trackPRs(j *Job) {
 		// the pass would still be correct if this line were deleted.
 		MarkMMRepoDirty(filepath.Base(repo))
 	}
+	var zeus *core.Peer
+	zeusLookedUp := false
 	for _, url := range newlyMerged {
-		dlogEvent("info", "pr-merged", "%s: merged %s — cell left alone", j.Slug, url)
+		dlogEvent("info", "pr-merged", "%s: merged %s — cell not torn down", j.Slug, url)
 		msg := "PR merged — accept from the board when the job is finished"
 		if j.State == "done" {
 			msg = "PR merged — job already accepted; recorded"
@@ -1467,7 +1471,66 @@ func (d *daemonState) trackPRs(j *Job) {
 		// so a PR is newly-merged exactly once ever. trackPRs runs only inside
 		// the daemon's !mirror block, so the mirror gate is already upstream.
 		enqueueOrchNotice(orchKindPRMerged, j.Slug, msg+" — "+url)
+		// zeus' pane. Carl and kronos both hear about the merge above; the
+		// one party that did not was the agent still working the branch,
+		// which has no other way to learn its PR closed — it keeps pushing
+		// to the dead branch, re-running its checks and reporting it as
+		// awaiting review. Best-effort like the two notices beside it: the
+		// merge is already on disk, there is no per-PR watermark to retry
+		// from, and a cell with no live zeus (torn down, or the job idle)
+		// has nobody to tell. The one send that fails deterministically is
+		// a zeus blocked on an open question or permission prompt — the
+		// pane core.SendMessage refuses to type into — so that cell learns
+		// of the merge only from its own gh reads. A pr-watch bump hits the
+		// same refusal but retries off its per-PR watermark once the prompt
+		// closes; this path carries no such watermark, so the merge bump is
+		// simply lost.
+		if !mergeBumpWanted(j, live) {
+			continue
+		}
+		if !zeusLookedUp {
+			zeus = CellZeus(j, all)
+			zeusLookedUp = true
+		}
+		if zeus == nil {
+			continue
+		}
+		if _, err := core.SendToPeer(zeus, mergeBumpMessage(url)); err != nil {
+			if key := "mergebumpfail:" + j.Slug; d.Notified[key] == 0 {
+				dlogErr("%s: merge-bump send failed for %s: %v", j.Slug, url, err)
+				d.Notified[key] = time.Now().Unix()
+			}
+			continue
+		}
+		delete(d.Notified, "mergebumpfail:"+j.Slug)
+		dlogEvent("info", "pr-merge-bump", "%s: told zeus %s merged", j.Slug, url)
 	}
+}
+
+// mergeBumpWanted gates the merge bump on the two facts that make a pane
+// worth typing into: the job is in a state that HAS a working zeus
+// (working or blocked — a draft has no cell, a done job's zeus has stopped
+// and would only be woken to read old news) and its cell session is live
+// this tick. Pure, so the gate is table-testable without a tick loop; the
+// peer lookup and the send stay in trackPRs.
+func mergeBumpWanted(j *Job, live map[string]bool) bool {
+	if j.State != "working" && j.State != "blocked" {
+		return false
+	}
+	return live[CellSession(j)]
+}
+
+// mergeBumpMessage renders the pane notice for one merged PR. It opens with
+// prWatchPrefix for the reason that constant exists — a machine notice must
+// never read as carl — and then says the three things a lead working a
+// merged branch gets wrong without it: the branch is finished, so no push,
+// no re-run and no "awaiting checks"; a follow-up starts from a recycled
+// branch; and the job may or may not be done, which the lead decides. A
+// closing clause exists because cells and PRs are many-to-one: a lead
+// stopped at a gate for a LATER PR must not read "continue" as that gate
+// opening.
+func mergeBumpMessage(url string) string {
+	return prWatchPrefix + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the pr skill's recycle step). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
 }
 
 // prWatchPrefix opens EVERY message the PR watcher types into a pane. It is
