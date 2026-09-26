@@ -1011,9 +1011,10 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		// is gated on its own feature switch — a machine that runs neither
 		// agent pays one stat and one config read.
 		//
-		// Health first, then rescue, so a limit the health pass records this
-		// tick is acted on this tick rather than one interval later. Both are
-		// no-ops without a store: every record they read and write is a kv row.
+		// Health first, then rescue, then the brief-drift pass, so a limit the
+		// health pass records this tick is acted on this tick rather than one
+		// interval later. All three are no-ops without a store: every record
+		// they read and write is a kv row.
 		if st := ActiveStore(); st != nil {
 			for _, a := range standingAgents() {
 				if a.Enabled == nil || !a.Enabled() {
@@ -1031,6 +1032,11 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				standingNow := time.Now()
 				d.standingHealthPass(a, st, all, live, standingNow)
 				d.standingLimitRescue(a, st, all, live, standingNow)
+				// Last, so a hit the health pass recorded this tick is the
+				// rescue's before the drift pass can read it as open and
+				// defer — and so a rescue's own resume, which re-stages the
+				// brief, is what the drift pass sees on the next tick.
+				d.standingBriefPass(a, st, all, live, standingNow)
 			}
 		}
 	}

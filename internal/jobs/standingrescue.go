@@ -77,6 +77,13 @@ type standingAgent struct {
 	// the session removed from the live map it is handed. It must bypass the
 	// spawn backoff and must report a spawn it did not actually attempt.
 	Respawn func(*store.Store, map[string]bool) error
+	// BriefPath is where the agent's spawn command stages its brief, and
+	// Brief is the brief a spawn would stage NOW. The two disagreeing is the
+	// brief-drift pass' whole signal (standingbrief.go): the file holds what
+	// the running agent was spawned with, the function holds what the
+	// installed binary would hand a fresh one.
+	BriefPath func() string
+	Brief     func() string
 }
 
 // standingAgents is the table the daemon walks. Its ids are exactly
@@ -94,8 +101,10 @@ func standingAgents() []standingAgent {
 				a, ok := ReadKronosAgent(st)
 				return a.SessionID, ok
 			},
-			Find:    findKronos,
-			Respawn: respawnKronos,
+			Find:      findKronos,
+			Respawn:   respawnKronos,
+			BriefPath: kronosBriefPath,
+			Brief:     kronosBrief,
 		},
 		{
 			ID:        IrisSessionName,
@@ -112,8 +121,10 @@ func standingAgents() []standingAgent {
 				a, ok := readIrisAgent(st)
 				return a.SessionID, ok
 			},
-			Find:    findIris,
-			Respawn: respawnIris,
+			Find:      findIris,
+			Respawn:   respawnIris,
+			BriefPath: irisBriefPath,
+			Brief:     irisBrief,
 		},
 	}
 }
