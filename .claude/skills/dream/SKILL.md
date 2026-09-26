@@ -44,6 +44,33 @@ The corollary is freeing — because the local side never travels, the report an
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
 the report worth reading.
 
+One exception to "the local side can hold the real thing", and it binds the AUDIT of a leak rather
+than the report of one: **checking whether a leaked value propagated never greps the literal.** A
+scout sent to confirm that a customer's phone number was out of last night's reports ran
+`grep -c '<the number>'` across them and then a `grep -o` over the watch store's output, and its
+own sidecar now carries the number nine times — a fresh transcript this pass reads the next night,
+minted by the act of proving the value absent. The same happened a month earlier with a
+credential's id half, propagated into three more agents' transcripts by the reviewer prompt that
+proved it gone. The value never appears in a command, which rules out the obvious remedy too —
+`printf '<value>' | shasum` types it. Take the reference hash of the VALUE ALONE from its
+original location, printing nothing but the hash, or from the report that found the leak:
+`sed -n '<line>p' <the file the leak report named> | grep -oE '[0-9]{10}' | head -1 | tr -d '\n' | shasum`
+Then count HITS in each candidate by hashing every shape-match on its own and counting the
+reference hash, so only hashes and a count ever print:
+`grep -oE '[0-9]{10}' <candidate> | while IFS= read -r v; do printf '%s' "$v" | shasum; done | grep -c '<reference hash>'`
+Both sides are framed the same way — the bare value with no trailing newline (`tr -d '\n'` on
+the reference, `printf '%s'` on each match) — or they never match. Never compare hashes of
+match SETS (`grep -o … | sort -u | shasum`): two files hash equal only when they hold exactly the
+same numbers, so a candidate carrying the value plus one unrelated number reads "absent" — a
+false all-clear on the exact question asked. A bare shape count (`grep -cE '[0-9]{10}'`) is an
+upper bound on the hits, never proof of absence. A value too short to be distinctive (a
+four-digit code) is audited by the label it sat under, counted with `grep -c` on the label, and
+its hash is never published outside the local report, since a short value's hash is a
+brute-force away from the value. A redacted prefix that identifies without reproducing
+(`<vendor>_live_…`, the first four digits) does the same job for shapes with no clean pattern.
+Put that rule in the brief of any scout whose question is "did X propagate", and apply it to your
+own hands when you verify the scout.
+
 ## Order of operations
 
 Read in this order. It is not a preference — proposing something carl already settled wastes the
