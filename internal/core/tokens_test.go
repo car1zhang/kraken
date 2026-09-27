@@ -1146,10 +1146,75 @@ func TestIsAgentTranscriptEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("marker past the byte bound reads as the lead", func(t *testing.T) {
-		fat := `{"type":"user","message":{"content":"` + strings.Repeat("x", agentMarkerBytes) + `"}}`
-		if probe(t, write(t, "fat.jsonl", fat, tokAgentSetting(t, "s"))) {
-			t.Fatal("the byte bound must actually bound the probe")
+	t.Run("a line past the byte ceiling is skipped, not fatal", func(t *testing.T) {
+		// The regression this pins: a CLAUDE.md attachment record larger
+		// than the per-line ceiling, flushed ahead of the name, ended the
+		// whole scan and the teammate read as the lead. The over-cap line is
+		// one skipped record; the marker right behind it is found.
+		fat := `{"type":"attachment","message":{"content":"` + strings.Repeat("x", agentMarkerBytes) + `"}}`
+		if !probe(t, write(t, "fat.jsonl", fat, tokAgentSetting(t, "s"))) {
+			t.Fatal("an over-cap line must be skipped, and the marker after it found")
+		}
+		f, err := os.Open(write(t, "fat-name.jsonl", fat, tokAgentName(t, "hephaestus-a")))
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer f.Close()
+		if got := headAgentName(f); got != "hephaestus-a" {
+			t.Fatalf("headAgentName past an over-cap line = %q, want hephaestus-a", got)
+		}
+	})
+
+	t.Run("an over-cap final line with no newline is still skipped", func(t *testing.T) {
+		// An unterminated tail of EXACTLY cap+1 bytes: the in-loop check
+		// trips only past cap+1, so this line reaches the end of the loop
+		// with `over` false and the body-length check after it is the only
+		// guard. This pins that guard; a longer tail would trip `over`
+		// instead and prove nothing about it.
+		prefix, suffix := `{"type":"agent-name","agentName":"hephaestus-a","pad":"`, `"}`
+		body := prefix + strings.Repeat("x", agentMarkerBytes+1-len(prefix)-len(suffix)) + suffix
+		if len(body) != agentMarkerBytes+1 {
+			t.Fatalf("fixture is %d bytes, want %d", len(body), agentMarkerBytes+1)
+		}
+		p := filepath.Join(dir, "tail.jsonl")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if probe(t, p) {
+			t.Fatal("an unterminated over-cap tail must not be decoded")
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer f.Close()
+		if got := headAgentName(f); got != "" {
+			t.Fatalf("headAgentName decoded an unterminated over-cap tail: %q", got)
+		}
+	})
+
+	t.Run("a marker past the window bound reads as the lead", func(t *testing.T) {
+		// Two over-cap lines whose bytes carry the marker's line past the
+		// window: the window is the one bound that still ends the scan.
+		half := `{"type":"attachment","message":{"content":"` + strings.Repeat("x", agentMarkerWindow/2) + `"}}`
+		if probe(t, write(t, "window.jsonl", half, half, tokAgentSetting(t, "s"))) {
+			t.Fatal("the window bound must actually bound the probe")
+		}
+		// A file EXACTLY the window long whose tail is unterminated reads
+		// as cut: from the bytes alone that end is indistinguishable from
+		// the window's, and not-decoded is the conservative side.
+		marker := tokAgentSetting(t, "s")
+		pad := `{"type":"attachment","message":{"content":"` + strings.Repeat("x", agentMarkerWindow-len(marker)-1-46) + `"}}`
+		exact := pad + "\n" + marker
+		if len(exact) != agentMarkerWindow {
+			t.Fatalf("fixture is %d bytes, want %d", len(exact), agentMarkerWindow)
+		}
+		p := filepath.Join(dir, "exact-window.jsonl")
+		if err := os.WriteFile(p, []byte(exact), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if probe(t, p) {
+			t.Fatal("an unterminated tail ending exactly at the window must read as cut")
 		}
 	})
 
