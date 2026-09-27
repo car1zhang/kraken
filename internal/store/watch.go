@@ -178,16 +178,22 @@ func scanWatchItem(row interface{ Scan(...any) error }) (WatchItem, error) {
 //
 // ON A CREATE the counters are this package's, not the caller's: sightings
 // starts at 1, first_seen and last_seen are both now (a first sighting is by
-// definition its own last), and expired_at is 0. A caller replaying history
+// definition its own last), expired_at is 0, and a blank state starts the row
+// at `watching` — the one place that default applies. A caller replaying history
 // sets those afterwards through UpdateWatchItem, which takes them as ordinary
 // agent fields. Verdict/Comment/CommentedAt are not settable here at all —
 // they are carl's, written later only via SetWatchVerdict — so a fresh row
 // always starts unjudged, exactly as AddFeedback starts a row unaddressed.
 func (s *Store) AddWatchItem(w WatchItem) (int64, bool, error) {
-	if w.State == "" {
-		w.State = "watching"
-	} else if err := validateWatchState(w.State); err != nil {
-		return 0, false, err
+	// An empty state skips validation and means "leave it alone" on a fold;
+	// it is defaulted only on the CREATE path below. Defaulting it here made
+	// every fold that sent no state overwrite a shipped or declined row to
+	// watching — the one descriptive field the "non-empty overwrites" rule
+	// did not actually govern, and a demotion nothing surfaced as one.
+	if w.State != "" {
+		if err := validateWatchState(w.State); err != nil {
+			return 0, false, err
+		}
 	}
 	now := time.Now().UnixMilli()
 
@@ -227,6 +233,9 @@ func (s *Store) AddWatchItem(w WatchItem) (int64, bool, error) {
 		return id, true, nil
 	}
 
+	if w.State == "" {
+		w.State = "watching" // a fresh row starts watched; only a create defaults it
+	}
 	res, err := s.db.Exec(
 		`INSERT INTO watch_items (observation, src, dst, predicate, class, state,
 			sightings, first_seen, last_seen, evidence, suggested_fix, pr_url,
