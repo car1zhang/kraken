@@ -63,7 +63,14 @@ the reference, `printf '%s'` on each match) — or they never match. Never compa
 match SETS (`grep -o … | sort -u | shasum`): two files hash equal only when they hold exactly the
 same numbers, so a candidate carrying the value plus one unrelated number reads "absent" — a
 false all-clear on the exact question asked. A bare shape count (`grep -cE '[0-9]{10}'`) is an
-upper bound on the hits, never proof of absence. A value too short to be distinctive (a
+upper bound on the hits, never proof of absence — and a ZERO from the per-match hash is proof of
+absence only for the spellings the shape pattern extracts: a value written `+15550001111` hands
+`[0-9]{10}` the wrong ten digits, `555-000-1111` never matches it at all, and a reference line
+holding two numbers makes `head -1` hash the wrong one. So NORMALIZE before shaping on both
+sides — strip `+`, spaces, dots and dashes (`tr -d '+ .-'`), drop a leading country code where the
+shape has one — pick the reference by the label beside it rather than by position when the line
+holds more than one candidate, and say in the report which spellings the zero covers. A value too
+short to be distinctive (a
 four-digit code) is audited by the label it sat under, counted with `grep -c` on the label, and
 its hash is never published outside the local report, since a short value's hash is a
 brute-force away from the value. A redacted prefix that identifies without reproducing
