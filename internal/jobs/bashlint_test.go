@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// TestLintBashCommandBlocks pins the four fatal shapes bash-lint exists
-// for, each taken from a measured cell failure.
+// TestLintBashCommandBlocks pins the fatal shapes bash-lint exists for,
+// each taken from a measured cell failure.
 func TestLintBashCommandBlocks(t *testing.T) {
 	cases := []struct {
 		name, cmd, want string
