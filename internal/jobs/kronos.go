@@ -566,7 +566,7 @@ func kronosRecallHookEntry(krakenBin string) map[string]any {
 //     installed before that arm retired.
 //   - bash-lint, under PreToolUse, REPLACE-merged like its two siblings (the
 //     command embeds the resolved binary path, the one varying component).
-//     kronos runs every one of its verbs through Bash, so the four zsh shapes
+//     kronos runs every one of its verbs through Bash, so the zsh shapes
 //     that abort or lie silently are exactly as dangerous here as in a cell.
 //   - rearm-hook, under PostCompact, REPLACE-merged for the recall entries'
 //     reason exactly (its command carries the serve address and the binary

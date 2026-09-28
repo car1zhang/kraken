@@ -1604,7 +1604,7 @@ func TestEdgeInstallKronosSettingsReplacesTheBashLintEntry(t *testing.T) {
 // The same type-assertion boundary the PostCompact fix closed, now on
 // PreToolUse: a hand-edited shape that is not an array of groups must be
 // replaced outright rather than silently defeating the install. Silently
-// skipped, kronos runs with NO bash-lint gate at all — the four zsh shapes that
+// skipped, kronos runs with NO bash-lint gate at all — the zsh shapes that
 // abort or lie silently are exactly as dangerous in its pane as in a cell's,
 // and its settings file would look fine.
 func TestEdgeInstallKronosSettingsReplacesANonArrayPreToolUse(t *testing.T) {

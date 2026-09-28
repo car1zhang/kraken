@@ -19,8 +19,10 @@ import (
 //
 // The list is deliberately tiny and deterministic. Every entry is a shape
 // that (a) recurred across many cells and nights, (b) was already named in
-// skill prose that agents measurably keep not applying, and (c) has no
-// legitimate use an agent would miss:
+// skill prose that agents measurably keep not applying — or, for
+// `$PIPESTATUS`, was never named in prose at all, since its failure prints
+// nothing an agent could notice — and (c) has no legitimate use an agent
+// would miss:
 //
 //   - a bare `=word` token (`echo ===`, `===SECTION===`): zsh
 //     equals-expansion kills the whole compound after printing its first
@@ -38,6 +40,13 @@ import (
 //     `status` is a read-only special in zsh (an alias of `$?`), so the
 //     natural idiom `out=$(cmd); status=$?` aborts the whole compound with
 //     `read-only variable: status` before anything after it runs.
+//   - expanding `$PIPESTATUS`: that is bash's name for the pipeline
+//     exit-status array. zsh's is `$pipestatus`, lowercase and one-indexed,
+//     and the bash spelling is simply unset there — so an exit-code probe
+//     written with it prints an empty value, exits 0, and reads as a probe
+//     that ran. It is the one entry that is an EXPANSION rather than a word,
+//     which is why it is checked against its own view of the command: see
+//     bashLintExpansionChecks.
 //   - a mutating `git stash` (bare, or push/pop/apply/drop/…): the one
 //     entry that is not a zsh quirk but a destructive shape — in a cell the
 //     worktree is shared with live teammates, a stash sweeps THEIR
@@ -52,9 +61,12 @@ import (
 //     obscure.
 //
 // False-positive control is structural, not hopeful: every region of a
-// command that is not shell-in-command-position is blanked before any check
-// runs. Heredoc bodies are data (a Python payload carrying `k = None` or
-// `=== banner ===` must never trip a hook — the monolith's gcp guardrail
+// command that is not shell-in-command-position is blanked before any WORD
+// check runs (the expansion checks read a second view that keeps the spans
+// the shell expands in — stated on `lintBashCommand` and
+// `bashLintExpansionChecks`). Heredoc bodies are data (a Python payload
+// carrying `k = None` or `=== banner ===` must never trip a hook — the
+// monolith's gcp guardrail
 // firing on heredoc payloads is the measured counterexample this design
 // avoids); quoted spans go because the whole point of the equals rule is
 // that `echo "==="` is the fix; `[[ … ]]` and `(( … ))` spans go because
@@ -123,6 +135,65 @@ var bashLintChecks = []struct {
 	},
 }
 
+// bashLintExpansionChecks are the shapes that are parameter EXPANSIONS, and
+// they are matched against a different view of the command than
+// bashLintChecks: the shell expands `$name` inside double quotes and inside
+// `[[ … ]]` and inside `(( … ))`, so blanking those spans — right for a check
+// about WORDS, where quoting is the fix — would hide the most common form of
+// the shape (`echo "rc=${PIPESTATUS[0]}"`). Single-quoted spans, heredoc
+// bodies and comments are still blanked: nothing expands in any of them.
+//
+// A check here is a function rather than a pattern because whether a `$` is
+// live turns on the PARITY of the backslashes in front of it, which RE2,
+// having no lookbehind, cannot count.
+var bashLintExpansionChecks = []struct {
+	hit func(text string) bool
+	msg string
+}{
+	{
+		expandsBashPipestatus,
+		"$PIPESTATUS is bash's array and is unset in zsh, so the probe prints an empty value and still exits 0 — zsh spells it $pipestatus, lowercase and one-indexed: ${pipestatus[1]} is the first stage's exit status",
+	},
+}
+
+// expandsBashPipestatus reports whether text expands `$PIPESTATUS` or
+// `${PIPESTATUS…`. Three things make an occurrence NOT an expansion of that
+// name: a longer name that merely starts with it (`$PIPESTATUS_LOG`), a
+// different case (zsh's own `$pipestatus`), and a `$` that is escaped — an
+// ODD run of backslashes in front of it. An even run escapes itself and
+// leaves the `$` live.
+func expandsBashPipestatus(text string) bool {
+	const name = "PIPESTATUS"
+	for i := 0; i < len(text); i++ {
+		if text[i] != '$' {
+			continue
+		}
+		j := i + 1
+		if j < len(text) && text[j] == '{' {
+			j++
+		}
+		if !strings.HasPrefix(text[j:], name) {
+			continue
+		}
+		if end := j + len(name); end < len(text) && isShellNameByte(text[end]) {
+			continue
+		}
+		slashes := 0
+		for k := i - 1; k >= 0 && text[k] == '\\'; k-- {
+			slashes++
+		}
+		if slashes%2 == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// isShellNameByte reports whether c can continue a shell variable name.
+func isShellNameByte(c byte) bool {
+	return c == '_' || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
 // heredocIntroRE matches a heredoc redirection and captures the `-`
 // variant marker and the delimiter: <<EOF, << 'EOF', <<-"PY", etc. The
 // caller screens out `<<<` (herestring) at the MATCH position — the regex
@@ -135,12 +206,22 @@ var heredocIntroRE = regexp.MustCompile(`<<(-?)\s*(["']?)([A-Za-z_][A-Za-z0-9_]*
 // data — a Python script fed via `python3 - <<'PY'` is exactly where `=`
 // signs and the word `timeout` legitimately live.
 func stripHeredocBodies(cmd string) string {
-	lines := strings.Split(cmd, "\n")
+	return dropHeredocBodies(cmd, cmd)
+}
+
+// dropHeredocBodies removes from text the lines that guide identifies as
+// heredoc bodies. The two are byte-aligned views of one command — guide is
+// the view in which heredoc intros can be trusted (arithmetic blanked, so a
+// `<< n` shift is not read as one), text is the view whose remaining lines
+// the caller wants — and stripHeredocBodies is the case where they are one
+// text.
+func dropHeredocBodies(text, guide string) string {
+	lines := strings.Split(text, "\n")
+	guides := strings.Split(guide, "\n")
 	var out []string
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		out = append(out, line)
-		tabbed, delim, ok := heredocMatch(line)
+	for i := 0; i < len(guides) && i < len(lines); i++ {
+		out = append(out, lines[i])
+		tabbed, delim, ok := heredocMatch(guides[i])
 		if !ok {
 			continue
 		}
@@ -149,8 +230,8 @@ func stripHeredocBodies(cmd string) string {
 		// the strip early and lint heredoc data as shell. An unterminated
 		// heredoc swallows the rest — body text must never be linted, and
 		// the command is broken anyway.
-		for i++; i < len(lines); i++ {
-			body := lines[i]
+		for i++; i < len(guides) && i < len(lines); i++ {
+			body := guides[i]
 			if tabbed {
 				body = strings.TrimLeft(body, "\t")
 			}
@@ -339,15 +420,70 @@ func blank(b []byte, from, to int) {
 // stripper's comment. Comments are dropped LAST, which is what makes
 // stripComments' `#` test exact: by then every `#` still standing is
 // outside a quoted span and outside a heredoc body by construction.
+//
+// The expansion checks run over a second view of the same lines:
+// single-quoted spans blanked, and double-quoted, `[[ … ]]` and `(( … ))`
+// spans all left standing, since the shell expands inside each of them. Its
+// heredoc bodies are dropped where the arithmetic-blanked view says they
+// are, and its comments are cut where the FIRST view says they start,
+// because that is the view in which a `#` is known to be outside every
+// quoted span — a `#` inside a double-quoted string is text, and cutting
+// there would hide an expansion that follows it.
 func lintBashCommand(cmd string) string {
-	text := stripComments(stripQuotedAndCond(stripHeredocBodies(stripArith(cmd))))
+	arith := stripArith(cmd)
+	words := stripQuotedAndCond(stripHeredocBodies(arith))
+	text := stripComments(words)
 	var msgs []string
 	for _, c := range bashLintChecks {
 		if c.re.MatchString(text) {
 			msgs = append(msgs, "kraken bash-lint: "+c.msg)
 		}
 	}
+	expanded := cutComments(stripSingleQuoted(dropHeredocBodies(cmd, arith)), words)
+	for _, c := range bashLintExpansionChecks {
+		if c.hit(expanded) {
+			msgs = append(msgs, "kraken bash-lint: "+c.msg)
+		}
+	}
 	return strings.Join(msgs, "\n")
+}
+
+// stripSingleQuoted blanks single-quoted spans only, leaving double-quoted
+// spans standing — the view bashLintExpansionChecks needs. A double-quoted
+// span is still WALKED, so an apostrophe inside one (`"it's"`) does not open
+// a single-quoted span. An unterminated single quote runs to end of input,
+// the same fail-toward-more-blanking choice stripQuotedAndCond makes.
+func stripSingleQuoted(s string) string {
+	b := []byte(s)
+	n := len(b)
+	for i := 0; i < n; i++ {
+		switch {
+		case b[i] == '\\' && i+1 < n:
+			i++ // escaped char: leave both, skip the next
+		case b[i] == '"':
+			j := i + 1
+			for ; j < n; j++ {
+				if b[j] == '\\' {
+					j++
+					continue
+				}
+				if b[j] == '"' {
+					break
+				}
+			}
+			i = j
+		case b[i] == '\'':
+			j := i + 1
+			for ; j < n && b[j] != '\''; j++ {
+			}
+			if j >= n {
+				j = n - 1
+			}
+			blank(b, i, j)
+			i = j
+		}
+	}
+	return string(b)
 }
 
 // stripComments truncates each line at its comment, whole-line and TRAILING
@@ -361,14 +497,30 @@ func lintBashCommand(cmd string) string {
 // that must run last: every other pass preserves byte offsets (see blank)
 // because a later pass depends on them, and nothing runs after this one.
 func stripComments(text string) string {
+	return cutComments(text, text)
+}
+
+// cutComments truncates each line of text at the offset where the SAME line
+// of mask starts its comment. The two are byte-aligned views of one command
+// — every stripper between them blanks in place — so an offset found in one
+// names the same byte in the other. stripComments is the case where the two
+// are one text.
+func cutComments(text, mask string) string {
 	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		for j := 0; j < len(line); j++ {
-			if line[j] != '#' {
+	masks := strings.Split(mask, "\n")
+	for i := range lines {
+		if i >= len(masks) {
+			break
+		}
+		m := masks[i]
+		for j := 0; j < len(m); j++ {
+			if m[j] != '#' {
 				continue
 			}
-			if j == 0 || line[j-1] == ' ' || line[j-1] == '\t' {
-				lines[i] = line[:j]
+			if j == 0 || m[j-1] == ' ' || m[j-1] == '\t' {
+				if j <= len(lines[i]) {
+					lines[i] = lines[i][:j]
+				}
 				break
 			}
 		}
