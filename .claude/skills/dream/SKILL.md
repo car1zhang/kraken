@@ -290,6 +290,22 @@ ways, one of them plain read-write. Never copy the database and query the copy �
 `-wal` the copy is a stale snapshot whose counts are wrong with nothing to signal it. The repo
 clause cannot cover any of this, because the database is not in a repo.
 
+**`TurnDurations` are spans, not turns, and the spans can overlap.** Each entry is one
+`turn_duration` record's `durationMs`, and a record measures BACK from its own timestamp — an
+entry's start is that timestamp minus the duration. Most start at the prompt that opened the
+turn, which is usually some time after the previous entry ended, so the gaps between entries are
+idle time the list does not show. A few start before the previous entry ended: they reach back
+across one or more earlier records, as far as the first record of the file (and so possibly back
+past the `--since` floor, since only the record's own timestamp is windowed), and every one
+measured sat in a session that ran agents. A stop can also write no record at all, leaving a
+later entry to cover it. So a session that ran agents can digest with its whole wall clock as one
+entry beside the turns that clock contains: never sum the list, never read its maximum as one
+long think, and never brief an entry as a turn. Neither the digest nor the reduced view carries
+an entry's end time (the digest lists bare durations and `kraken mine reduce` drops system
+records), so find it in the raw transcript first — `grep '"turn_duration"' <path>` on the row's
+`Path`, matching the `durationMs` — then hand the scout the span, "the transcript records a span
+of N s ending at T", and ask what it covered.
+
 **Hand a scout an observation, never a conclusion — and never a number you have not checked.** This is
 the single most-measured defect in the loop's own history: ten scouts in one night were each briefed
 with a derived figure stated as established fact, phrased so the answer was presupposed ("session [3]
