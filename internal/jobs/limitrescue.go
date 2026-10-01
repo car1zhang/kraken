@@ -1694,6 +1694,14 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	if hit.Error != "rate_limit" {
 		return
 	}
+	// The Fable fallback pre-empts the whole chain: a zeus that ran out of
+	// Fable on an account with session, weekly and Opus room left is switched
+	// to Opus in place rather than rebound and killed (see modelfallback.go).
+	// Claude zeus only — a codex zeus has no Fable tier to fall off.
+	if j.Agent != "codex" && d.tryFableFallback(limitHitKey(j.ID), j.Slug, zeusModel(j), func() string { return cellAccountEmail(j) }, hit,
+		func() *core.Peer { return CellZeus(j, all) }, now) {
+		return
+	}
 	mode := rescueMode(j)
 	// Only probe when this tick can actually USE the answer — see
 	// rescueProbeDue. The probe is a snapshot read, a full job load, a tmux

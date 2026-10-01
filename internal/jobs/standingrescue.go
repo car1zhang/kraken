@@ -77,6 +77,9 @@ type standingAgent struct {
 	// the session removed from the live map it is handed. It must bypass the
 	// spawn backoff and must report a spawn it did not actually attempt.
 	Respawn func(*store.Store, map[string]bool) error
+	// Model is the exact model id the agent is spawned on — what the Fable
+	// fallback reads to decide whether a hit can be a Fable-tier one.
+	Model string
 }
 
 // standingAgents is the table the daemon walks. Its ids are exactly
@@ -96,6 +99,7 @@ func standingAgents() []standingAgent {
 			},
 			Find:    findKronos,
 			Respawn: respawnKronos,
+			Model:   core.KronosModel,
 		},
 		{
 			ID:        IrisSessionName,
@@ -114,6 +118,7 @@ func standingAgents() []standingAgent {
 			},
 			Find:    findIris,
 			Respawn: respawnIris,
+			Model:   core.IrisModel,
 		},
 	}
 }
@@ -496,6 +501,13 @@ func (d *daemonState) standingLimitRescue(a standingAgent, st *store.Store, all 
 	// re-parking would resolve the record and kill the pending reset resume.
 	if hit.SwappedAt == 0 && hit.Attempts >= limitRescueMaxAttempts && hit.ResetAt != 0 &&
 		now.Sub(time.Unix(hit.ResetAt, 0)) < limitResetSettle {
+		return
+	}
+	// The Fable fallback, ahead of any main swap: both standing agents run on
+	// a Fable tier, and switching one to Opus on main moves nothing else on
+	// the machine where a swap moves every unbound cell with it.
+	if live[a.Session] && a.Find != nil && d.tryFableFallback(key, a.ID, a.Model, mainIdentityEmail, hit,
+		func() *core.Peer { return a.Find(all) }, now) {
 		return
 	}
 	target, mainEmail, _ := selectRescueTarget(now)
