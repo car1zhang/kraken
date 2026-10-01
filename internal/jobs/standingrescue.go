@@ -484,7 +484,7 @@ func (d *daemonState) standingLimitRescue(a standingAgent, st *store.Store, all 
 	// already fine — one redundant restart, conversation intact. Accepted:
 	// ordering adoption after liveness would only defer the same kill to the
 	// tick the agent came back on.
-	if swapAt, swapTo := readMainSwap(); swapAt != 0 {
+	if swapAt, swapTo := readMainSwap(); swapAt != 0 && !fableFallbackPending(key, now) {
 		if adopted, changed := adoptLandedSwap(hit, swapAt, swapTo); changed {
 			hit = adopted
 			// A rotate silently becoming a resume is a machine-wide credential

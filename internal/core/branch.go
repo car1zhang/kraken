@@ -294,6 +294,13 @@ const DefaultModel = "claude-opus-5"
 // spawn action never see it.
 const ZeusModel = "claude-fable-5-1"
 
+// FableFallbackModel is the tier the limit rescue's Fable fallback types
+// into a Fable-exhausted pane with /model (jobs/modelfallback.go). It is its
+// own exact id rather than DefaultModel: the fallback wants the strongest
+// non-Fable tier for an agent that was running on Fable, which need not be the
+// tier kraken starts general-purpose claudes on.
+const FableFallbackModel = "claude-opus-5-5"
+
 // CodexZeusModel is ZeusModel's codex-cell analogue: the model a codex zeus
 // runs on when the job's `model:` field is empty, passed as `-m` by
 // jobs.codexModelArgs — its only command-line reader. Pinned for the reason
