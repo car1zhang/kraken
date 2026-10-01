@@ -1642,7 +1642,7 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	// With no watermark the pair reads (0, "") and adoptLandedSwap changes
 	// nothing, so a machine that has never swapped pays one kv read and
 	// behaves exactly as it did before.
-	if swapAt, swapTo := readMainSwap(); swapAt != 0 && j.AccountSlug == "" {
+	if swapAt, swapTo := readMainSwap(); swapAt != 0 && j.AccountSlug == "" && !fableFallbackPending(limitHitKey(j.ID), now) {
 		if adopted, changed := adoptLandedSwap(hit, swapAt, swapTo); changed {
 			hit = adopted
 			if err := saveLimitRescueState(j, hit); err != nil {

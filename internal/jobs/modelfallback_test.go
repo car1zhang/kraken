@@ -16,6 +16,7 @@ func TestFableFallbackDecide(t *testing.T) {
 		return LimitHit{Error: "rate_limit", Details: details, At: now.Unix() - 60, SessionID: sid}
 	}
 	with := func(h LimitHit, f func(*LimitHit)) LimitHit { f(&h); return h }
+	withRec := func(r fallbackRecord, f func(*fallbackRecord)) fallbackRecord { f(&r); return r }
 	acct := func(session, weekly, fable float64) *core.AccountUsage {
 		return &core.AccountUsage{
 			Session: &core.UsageWindow{Percent: session},
@@ -57,7 +58,9 @@ func TestFableFallbackDecide(t *testing.T) {
 		{"same process, late re-delivery", open(fableBanner), fable, healthy, switched(30*time.Second, true), fallbackAbsorb},
 		{"same process, later limit is opus-side", open(generic429), fable, healthy, switched(3*time.Hour, true), fallbackNo},
 		{"same process, prompt still owed", open(fableBanner), fable, healthy, switched(5*time.Minute, false), fallbackPrompt},
-		{"same process, prompt owed too long", open(fableBanner), fable, healthy, switched(time.Hour, false), fallbackNo},
+		{"same process, prompt sent but no turn seen yet", open(fableBanner), fable, healthy, withRec(switched(5*time.Minute, false), func(r *fallbackRecord) { r.PromptedAt = now.Add(-time.Minute).Unix() }), fallbackPrompt},
+		{"same process, re-delivery soon after a late confirmation", open(fableBanner), fable, healthy, withRec(switched(10*time.Minute, true), func(r *fallbackRecord) { r.ConfirmedAt = now.Add(-90 * time.Second).Unix() }), fallbackAbsorb},
+		{"same process, prompt owed too long", open(fableBanner), fable, healthy, switched(time.Hour, false), fallbackExpire},
 		{"same process, prompt owed on an hours-old hit", with(open(fableBanner), func(h *LimitHit) { h.At = now.Add(-5 * time.Hour).Unix() }), fable, healthy, switched(3*time.Minute, false), fallbackPrompt},
 		{"same process, follow-on opus limit inside absorb window", open("You've hit your opus limit"), fable, healthy, switched(30*time.Second, true), fallbackNo},
 		{"respawned process, back on fable", open(fableBanner), fable, healthy, fallbackRecord{At: now.Add(-5 * time.Minute).Unix(), PID: pid + 1, Prompted: true}, fallbackSwitch},

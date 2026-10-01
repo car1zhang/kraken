@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,8 +17,9 @@ import (
 // nothing is wrong with the account — only with the tier. Claude Code's own
 // banner names the remedy ("You've reached your Fable limit. Run
 // /usage-credits to continue or switch models with /model."), so kraken types
-// exactly that: `/model <opus>` into the stalled pane, then a one-line prompt
-// to carry on.
+// exactly that: `/model <opus>` into the stalled pane, then — on a LATER tick,
+// once the slash command has certainly finished — a one-line prompt to carry
+// on, re-sent until the pane shows a turn ran.
 //
 // It runs BEFORE the rotate/resume chain and pre-empts it, for two reasons.
 // It is strictly less disruptive — no rebind, no SIGKILL, so background tasks,
@@ -35,9 +37,8 @@ import (
 // comes back on its spawn-time --model, which is why what the record pins is
 // the PID of the process that was switched.
 
-// fableFallbackModel is the tier a Fable-exhausted agent drops to — the crew
-// tier, which is what DefaultModel names.
-const fableFallbackModel = core.DefaultModel
+// fableFallbackModel is the tier a Fable-exhausted agent drops to.
+const fableFallbackModel = core.FableFallbackModel
 
 const (
 	// fableFallbackAbsorbWindow is how long after a switch a fresh hit on the
@@ -54,6 +55,11 @@ const (
 	// question prompt, a pane race), so a refusal costs one attempt per gap
 	// rather than one per tick.
 	fableFallbackRetryGap = 2 * time.Minute
+	// fableFallbackBumpGap is how long a sent continue prompt is given to show
+	// up as a running turn before it is sent again. A prompt typed into a pane
+	// can land and still start nothing (measured 2026-10-01: a prompt typed one
+	// second after /model left zeus idle until carl typed "continue" himself).
+	fableFallbackBumpGap = time.Minute
 )
 
 // fableBannerRe matches the per-model-tier banner for the Fable tier, with or
@@ -66,12 +72,19 @@ var fableBannerRe = regexp.MustCompile(`(?i)reached your fable\b[^.]*\blimit`)
 // means switching tier cannot help.
 var otherWindowBanners = []string{"hit your session limit", "hit your weekly limit", "hit your opus limit", "usage credits are required"}
 
-// fallbackRecord is one agent's last switch: when, which process, and whether
-// the continue prompt reached it.
+// fallbackRecord is one agent's last switch: when, which process, when the
+// continue prompt was last sent, and whether the process was since seen
+// running — Prompted means CONFIRMED continued, not merely typed at.
 type fallbackRecord struct {
-	At       int64 `json:"at"`
-	PID      int   `json:"pid"`
-	Prompted bool  `json:"prompted"`
+	At  int64 `json:"at"`
+	PID int   `json:"pid"`
+	// PromptedAt is when the continue prompt was last sent (0 = not yet).
+	PromptedAt int64 `json:"prompted_at,omitempty"`
+	// Prompted and ConfirmedAt record the pane being seen running after the
+	// prompt; the absorb window counts from ConfirmedAt, since the switch can
+	// be minutes older than the resolve.
+	Prompted    bool  `json:"prompted"`
+	ConfirmedAt int64 `json:"confirmed_at,omitempty"`
 }
 
 type fallbackVerdict string
@@ -79,8 +92,9 @@ type fallbackVerdict string
 const (
 	fallbackNo     fallbackVerdict = "no"     // not a fallback case — the ordinary chain decides
 	fallbackSwitch fallbackVerdict = "switch" // type /model, then the continue prompt
-	fallbackPrompt fallbackVerdict = "prompt" // already switched; only the continue prompt is owed
+	fallbackPrompt fallbackVerdict = "prompt" // already switched; the continue is owed until the pane runs
 	fallbackAbsorb fallbackVerdict = "absorb" // late re-delivery of a handled exhaustion: resolve silently
+	fallbackExpire fallbackVerdict = "expire" // switched, but no turn confirmed in the prompt window: resolve, never rotate
 )
 
 // fableFallbackCandidate is the cheap half of the decision — no snapshot, no
@@ -134,12 +148,18 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 			if now.Sub(time.Unix(last.At, 0)) < fableFallbackPromptWindow {
 				return fallbackPrompt
 			}
-			return fallbackNo
+			// Rotation would kill a process already on Opus to fix a Fable
+			// window it no longer bills — give up on the continue instead.
+			return fallbackExpire
 		}
 		// The absorb window compares a FRESH hit against the switch, and a
 		// hit naming another window is a real follow-on limit, never a
 		// re-delivery of the Fable one.
-		since := time.Duration(hit.At-last.At) * time.Second
+		ref := last.At
+		if last.ConfirmedAt != 0 {
+			ref = last.ConfirmedAt
+		}
+		since := time.Duration(hit.At-ref) * time.Second
 		if since < 0 {
 			since = -since
 		}
@@ -224,6 +244,29 @@ func fallbackAccount(email string) *core.AccountUsage {
 	return pickFallbackAccount(snap, email)
 }
 
+// transcriptWrittenSince reports whether the peer's transcript was appended
+// to after the given unix second — the confirmation that survives a lead whose
+// session file stays "busy" across turns (resident teammates), where the
+// status clock never moves. A prompt left unsubmitted in the input box writes
+// nothing, so it cannot confirm.
+func transcriptWrittenSince(p *core.Peer, at int64) bool {
+	path, err := core.ReadTranscriptPath(p)
+	if err != nil {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.ModTime().Unix() > at
+}
+
+// fableFallbackPending reports a switch whose continue is still unconfirmed.
+// The rescue passes skip adopting a landed main swap while it holds: adoption
+// stamps SwappedAt, which closes the fallback's gate and sends a pane already
+// on Opus to the kill-and-resume chain.
+func fableFallbackPending(hitKey string, now time.Time) bool {
+	last := readLastFallback(hitKey)
+	return last.PID != 0 && !last.Prompted && now.Sub(time.Unix(last.At, 0)) < fableFallbackPromptWindow
+}
+
 // fableFallbackKey is the kv row holding an agent's last switch, keyed beside
 // the agent's limit-hit row (a job id or a standing agent's id).
 func fableFallbackKey(hitKey string) string {
@@ -267,9 +310,13 @@ func fableFallbackPrompt() string {
 // ~/.claude.json read for main) is paid only once the cheap gates pass.
 //
 // Both sends run SendToPeer's full guard chain (identity re-check, open
-// question prompt refusal). The record is written the moment /model has gone
-// out, so a refused continue prompt is retried alone rather than re-typing
-// /model, and the hit is resolved only once the prompt has landed.
+// question prompt refusal). The switch and the continue are split across
+// ticks: /model goes out and is recorded, and the hit stays unresolved, so
+// the next tick reads fallbackPrompt and owes the continue. That verdict is
+// then held until the pane shows a turn ran since the send — a typed prompt is
+// not proof of a turn — re-sending the prompt every fableFallbackBumpGap, and
+// the hit is resolved on that confirmation, or unconfirmed once
+// fableFallbackPromptWindow runs out (fallbackExpire, never rotation).
 func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email func() string, hit LimitHit, find func() *core.Peer, now time.Time) bool {
 	if !fableFallbackCandidate(hit, agentModel) {
 		return false // cheap gates first — the snapshot, kv and discovery below are not free
@@ -298,7 +345,12 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	switch verdict {
 	case fallbackAbsorb:
 		resolve()
-		dlogEvent("info", "limit-rescue-skipped", "%s: limit re-delivered %s after the switch to %s — same process, resolved without action", label, time.Duration(hit.At-last.At)*time.Second, fableFallbackModel)
+		dlogEvent("info", "limit-rescue-skipped", "%s: limit re-delivered after the switch to %s — same process, resolved without action", label, fableFallbackModel)
+		return true
+	case fallbackExpire:
+		resolve()
+		dlogEvent("error", "limit-rescue-failed", "%s: switched to %s but no turn was seen in %s of continue prompts — resolved, needs a manual nudge", label, fableFallbackModel, fableFallbackPromptWindow)
+		notify("kraken ⇣ "+label, "Fable limit — switched to "+fableFallbackModel+" but the agent never continued")
 		return true
 	case fallbackSwitch:
 		if _, err := core.SendToPeer(p, "/model "+fableFallbackModel); err != nil {
@@ -306,21 +358,41 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 			dlogEvent("error", "limit-rescue-failed", "%s: fable fallback could not switch the pane to %s: %v", label, fableFallbackModel, err)
 			return false
 		}
-		last = fallbackRecord{At: now.Unix(), PID: p.PID}
-		recordLastFallback(hitKey, last)
-		time.Sleep(time.Second) // let the slash command finish before the prompt lands
+		recordLastFallback(hitKey, fallbackRecord{At: now.Unix(), PID: p.PID})
+		dlogEvent("info", "limit-rescue", "%s: fable window exhausted — switched the pane to %s, continue prompt follows next tick", label, fableFallbackModel)
+		return true // the continue goes out once the slash command has certainly finished
 	case fallbackPrompt:
 	default:
 		return false
 	}
-	if _, err := core.SendToPeer(p, fableFallbackPrompt()); err != nil {
-		// The model is switched; only the prompt is owed, and the next tick past
-		// the retry gap sends it alone (fallbackPrompt).
-		d.Poked[retryKey] = now.Unix()
-		dlogEvent("error", "limit-rescue-failed", "%s: switched to %s but the continue prompt was refused: %v", label, fableFallbackModel, err)
-		return true
+	// Evidence of a turn since the send: the pane running or stopped on a
+	// question it asked, or — for a turn that started and finished between two
+	// ticks — the session file's status clock moved past the send. Nothing
+	// counts before the first send: a session file's busy is trusted unrefined
+	// for a few seconds, and could confirm a continue that was never typed.
+	ranSincePrompt := last.PromptedAt != 0 &&
+		(p.Status == "running" || p.Status == "question" || p.StatusAt > last.PromptedAt*1000 ||
+			transcriptWrittenSince(p, last.PromptedAt))
+	if !ranSincePrompt {
+		if last.PromptedAt != 0 && now.Sub(time.Unix(last.PromptedAt, 0)) < fableFallbackBumpGap {
+			return true // a prompt is out and still has time to start a turn
+		}
+		if _, err := core.SendToPeer(p, fableFallbackPrompt()); err != nil {
+			// The model is switched; only the prompt is owed, and the next tick
+			// past the retry gap sends it alone (fallbackPrompt).
+			d.Poked[retryKey] = now.Unix()
+			dlogEvent("error", "limit-rescue-failed", "%s: switched to %s but the continue prompt was refused: %v", label, fableFallbackModel, err)
+			return true
+		}
+		if last.PromptedAt != 0 {
+			dlogEvent("info", "limit-rescue", "%s: continue prompt started no turn — bumped again", label)
+		}
+		last.PromptedAt = now.Unix()
+		recordLastFallback(hitKey, last)
+		return true // confirmed only once a later tick sees a turn ran
 	}
 	last.Prompted = true
+	last.ConfirmedAt = now.Unix()
 	recordLastFallback(hitKey, last)
 	resolve()
 	nkey := "limit:fable:" + hitKey + "|" + strconv.FormatInt(hit.At, 10)
