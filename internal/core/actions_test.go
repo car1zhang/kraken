@@ -109,3 +109,40 @@ func TestNoGhosttyWindowErrIsMatchable(t *testing.T) {
 		t.Fatalf("message lost the session or the set-titles remedy: %q", msg)
 	}
 }
+
+// The confirmation's text as a kronos pane showed it, captured live.
+const modelSwitchDialog = `❯ orch: 3 new item(s) — run: kraken orch inbox
+  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.
+
+✻ Cogitated for 2s · done 11:23 AM
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Switch model?
+   Your next response will be slower and use more tokens
+
+   This conversation is cached for the current model. Switching to Opus 5 means the full history gets re-read on your next message.
+
+   ❯ 1. Yes, switch to Opus 5
+     2. No, go back
+`
+
+func TestModelSwitchConfirmShown(t *testing.T) {
+	if !modelSwitchConfirmShown(modelSwitchDialog) {
+		t.Fatal("the live dialog with Yes highlighted was not recognised")
+	}
+	noHighlight := strings.Replace(strings.Replace(modelSwitchDialog, "❯ 1. Yes", "  1. Yes", 1), "  2. No", "❯ 2. No", 1)
+	if modelSwitchConfirmShown(noHighlight) {
+		t.Error("No highlighted: an Enter would decline, so it must not count")
+	}
+	permission := strings.Replace(modelSwitchDialog, "Switch model?", "Do you want to proceed?", 1)
+	if modelSwitchConfirmShown(permission) {
+		t.Error("a different question with a 'Yes, switch to' line counted")
+	}
+	scrolled := modelSwitchDialog + strings.Repeat("later output\n", modelSwitchConfirmLines)
+	if modelSwitchConfirmShown(scrolled) {
+		t.Error("a dialog scrolled above the last lines counted as open")
+	}
+	if modelSwitchConfirmShown("") {
+		t.Error("empty pane counted")
+	}
+}

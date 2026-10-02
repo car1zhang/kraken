@@ -338,6 +338,18 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	}
 	last := readLastFallback(hitKey)
 	verdict := fableFallbackDecide(hit, agentModel, fallbackAccount(email()), last, p.PID, p.SessionID, now)
+	// /model typed into a cached conversation opens a confirmation dialog,
+	// and SendToPeer refuses every continue prompt while it is open. Accept
+	// it first, ahead of the retry gap those refusals stamp. The continue
+	// goes out on a later tick.
+	if verdict == fallbackPrompt && core.PaneShowsModelSwitchConfirm(p.Pane) {
+		if err := core.ConfirmModelSwitch(p); err != nil {
+			dlogEvent("error", "limit-rescue-failed", "%s: could not accept the switch-model confirmation: %v", label, err)
+			return true
+		}
+		dlogEvent("info", "limit-rescue", "%s: accepted the switch-model confirmation, continue prompt follows next tick", label)
+		return true
+	}
 	retryKey := "fable-retry:" + hitKey
 	if at := d.Poked[retryKey]; at != 0 && now.Sub(time.Unix(at, 0)) < fableFallbackRetryGap {
 		return holdsInRetryGap(verdict)
