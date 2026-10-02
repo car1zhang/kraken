@@ -584,6 +584,66 @@ func SendKey(p *Peer, name string) error {
 	return nil
 }
 
+// modelSwitchYesRe matches the highlighted first option of Claude Code's
+// switch-model confirmation, which it opens when /model is typed into a
+// conversation cached for another model:
+//
+//	Switch model?
+//	...
+//	❯ 1. Yes, switch to Opus 5
+//	  2. No, go back
+var modelSwitchYesRe = regexp.MustCompile(`(?m)^\s*❯\s*1\.\s+Yes, switch to\b`)
+
+// modelSwitchConfirmShown reports whether pane text ends on that confirmation
+// with "Yes" highlighted, so an Enter would accept the switch. Only the last
+// lines count: a dialog scrolled up into the history is no longer open.
+func modelSwitchConfirmShown(text string) bool {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) > modelSwitchConfirmLines {
+		lines = lines[len(lines)-modelSwitchConfirmLines:]
+	}
+	tail := strings.Join(lines, "\n")
+	return strings.Contains(tail, "Switch model?") && modelSwitchYesRe.MatchString(tail)
+}
+
+// modelSwitchConfirmLines is how many trailing pane lines the confirmation
+// check reads. The dialog is under ten lines tall.
+const modelSwitchConfirmLines = 15
+
+// PaneShowsModelSwitchConfirm captures pane and reports whether it is open on
+// the switch-model confirmation with "Yes" highlighted. False on capture error.
+func PaneShowsModelSwitchConfirm(pane string) bool {
+	out, err := exec.Command("tmux", "capture-pane", "-p", "-t", pane).Output()
+	if err != nil {
+		return false
+	}
+	return modelSwitchConfirmShown(string(out))
+}
+
+// ConfirmModelSwitch accepts an open switch-model confirmation in p's pane
+// with Enter. SendMessage refuses a pane with a question open, so a /model
+// typed by the daemon would otherwise sit unanswered on this dialog. The pane
+// is re-verified immediately before the key: still p's claude, and still on
+// the dialog with "Yes" highlighted. Any other question is left alone.
+func ConfirmModelSwitch(p *Peer) error {
+	if !p.Messageable || p.Pane == "" {
+		return fmt.Errorf("%s is an in-process teammate — no pane to answer in", DisplayName(p))
+	}
+	if p.Depth > 0 {
+		return fmt.Errorf("%s is not the foreground agent in pane %s — keys would land in the nested one", DisplayName(p), p.Pane)
+	}
+	if err := checkSendTarget(p); err != nil {
+		return err
+	}
+	if !PaneShowsModelSwitchConfirm(p.Pane) {
+		return fmt.Errorf("%s is not on the switch-model confirmation", DisplayName(p))
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", p.Pane, "Enter").Run(); err != nil {
+		return fmt.Errorf("tmux send-keys Enter: %v", err)
+	}
+	return nil
+}
+
 // CapturePane returns a pane's visible content (tmux capture-pane), the live
 // view the app shows for shells and for agents where the transcript doesn't
 // cover raw terminal I/O. Read-only; safe on any pane.
