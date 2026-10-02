@@ -120,6 +120,23 @@ func TestFableFallbackKeyMirrorsHitKey(t *testing.T) {
 	}
 }
 
+// Inside the retry gap only the verdicts about a process not yet switched may
+// reach the ordinary chain. An expired prompt window used to fall through to
+// rotation there, which kills a process already running on Opus.
+func TestHoldsInRetryGap(t *testing.T) {
+	for v, want := range map[fallbackVerdict]bool{
+		fallbackNo:     false,
+		fallbackSwitch: false,
+		fallbackPrompt: true,
+		fallbackExpire: true,
+		fallbackAbsorb: true,
+	} {
+		if got := holdsInRetryGap(v); got != want {
+			t.Errorf("holdsInRetryGap(%s) = %v, want %v", v, got, want)
+		}
+	}
+}
+
 func TestStandingAgentsCarryTheirModel(t *testing.T) {
 	for _, a := range standingAgents() {
 		if a.Model == "" {
