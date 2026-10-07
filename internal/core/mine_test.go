@@ -325,6 +325,77 @@ func TestMineInputSummaryStripsShellBoilerplate(t *testing.T) {
 	}
 }
 
+// A Bash DISPLAY summary elides heredoc BODIES so the command that runs after
+// the terminator stays visible: a notes append followed by a view read used to
+// show as the append alone (the body filled the window), hiding the read from
+// the reduced view. The identity window is deliberately untouched —
+// TestCallIdentityKeepsDistinctLongInputsDistinct pins that two heredocs
+// differing only in body stay distinct repeats.
+func TestMineInputSummaryElidesHeredocBodies(t *testing.T) {
+	sig := func(cmd string) string {
+		return callSignature("Bash", json.RawMessage(mineJSON(t, map[string]any{"command": cmd})))
+	}
+	notes := "cat >> /tmp/x/work/notes.md <<'EOF'\n# notes for 02\nentrypoint is the sdk cli; brief says read whole\nsecond observation about the join\nEOF\n"
+	a := sig(notes + "cat /tmp/x/views/02-view.txt")
+	b := sig(notes + "sed -n '1,200p' /tmp/x/views/07-view.txt")
+	if !strings.Contains(a, "cat /tmp/x/views/02-view.txt") {
+		t.Errorf("tail command after the heredoc did not reach the signature: %q", a)
+	}
+	if strings.Contains(a, "entrypoint") || strings.Contains(a, "second observation") {
+		t.Errorf("heredoc body survived into the signature: %q", a)
+	}
+	if !strings.Contains(a, "notes.md <<'EOF'") {
+		t.Errorf("the opener line must be kept whole: %q", a)
+	}
+	if a == b {
+		t.Errorf("two distinct tail commands behind one notes heredoc show the same display line: %q", a)
+	}
+	// A <<- opener's terminator may carry leading tabs; an unquoted word, a
+	// double-quoted word and a quoted word with punctuation are openers too.
+	for _, cmd := range []string{
+		"cat <<-EOT\n\tbody line\n\tEOT\necho after",
+		"cat <<EOF\nbody\nEOF\necho after",
+		"cat <<\"END\"\nbody\nEND\necho after",
+		"cat <<'END-OF-FILE'\nbody\nEND-OF-FILE\necho after",
+	} {
+		if got := sig(cmd); !strings.Contains(got, "echo after") || strings.Contains(got, "body") {
+			t.Errorf("heredoc shape %q: got %q", cmd, got)
+		}
+	}
+	// With NOTHING after the terminator there is no tail to rescue, and an
+	// unterminated body has none either: the command shows as typed, so a
+	// stdin script keeps the first line of body that distinguishes it.
+	for _, cmd := range []string{
+		"python3 - <<'EOF'\nimport json\nprint(1)\nEOF",
+		"python3 - <<'EOF'\nimport json\nprint(1)\nEOF\n",
+		"cat <<'EOF'\nbody runs off the end",
+		"git commit -m \"$(cat <<'EOF'\nimport json is the subject\n\nbody\nEOF\n)\"",
+	} {
+		if got := sig(cmd); !strings.Contains(got, "import json") && !strings.Contains(got, "body runs") {
+			t.Errorf("no-tail heredoc lost its body in the display: %q -> %q", cmd, got)
+		}
+	}
+	// A later no-tail heredoc keeps its own body without undoing the elision
+	// of an earlier one: notes, the view read, then more notes.
+	got := elideHeredocBodies("cat >> /tmp/x/notes.md <<'EOF'\nnotes prose one\nEOF\ncat /tmp/x/views/02-view.txt\ncat >> /tmp/x/notes.md <<'EOF'\nnotes prose two\nEOF")
+	if strings.Contains(got, "prose one") || !strings.Contains(got, "cat /tmp/x/views/02-view.txt") || !strings.Contains(got, "prose two") {
+		t.Errorf("notes-view-notes shape: %q", got)
+	}
+	// A here-string has no body — whatever its operand looks like — and a
+	// plain command has no heredoc: all pass through unchanged, tail included.
+	for _, cmd := range []string{
+		"grep -c x <<< \"$VAR\"\necho after",
+		"grep x <<< hello\necho after",
+		"cat <<<'hello world'\necho after",
+		"echo $((x <<2))\necho after",
+		"go test ./internal/core/...",
+	} {
+		if got := sig(cmd); got != "Bash("+strings.Join(strings.Fields(cmd), " ")+")" {
+			t.Errorf("non-heredoc command changed: %q -> %q", cmd, got)
+		}
+	}
+}
+
 // TestCallIdentityKeepsDistinctLongInputsDistinct: RepeatedCalls groups on
 // callIdentity, not the 100-rune display signature. Grouping on the display
 // window collapsed DISTINCT calls whenever their inputs shared a 100-rune
