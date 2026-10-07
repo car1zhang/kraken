@@ -366,7 +366,20 @@ read offsets against the staged file's own line count (a `wc -l` you run yoursel
 alone prove contiguity, not completion — a lead extracted both scouts' offset lists, never fetched
 either file's length, and certified "coverage spot-checks passed" on an instrument structurally
 unable to tell a scout that finished from one that stopped a page short (both happened to have
-finished; the check could not have known). Two axes decide a row's label, and they answer
+finished; the check could not have known). And the extraction itself reads every candidate
+command WHOLE and judges by the tool RESULT, never by a prefix of the command or a path string in
+it: a scout's view read routinely sits at the END of a compound Bash call that OPENS with a notes
+heredoc (`cat >> notes.md <<'EOF'`, the body, the `EOF` line, then `cat <view>`), so a check that
+prints each command's first N characters, matches on `/views/` in a truncated or summarised
+command, or drops commands containing `notes.md` or `scripts/` sees the heredoc head and not the
+read — and the reduced view can hide the same tail (it still truncates past its display window),
+so a scout auditing a sibling from the view is blind to it too. Five leads on five nights hit
+exactly such a filter; four caught it with a second, unfiltered listing, and the fifth published
+the wrong aggregate, demoting three honest READ rows to RAW. The candidate set is EVERY tool call
+of the scout's — Bash, Read, and a Read of a persisted spill file alike — and the arbiter is the
+tool_result: the result of the furthest page CONTAINS the staged view's last line (strip the Read
+tool's line-number prefixes before comparing), and the pages' line counts together reach the
+view's own `wc -l`, whatever the commands looked like. Two axes decide a row's label, and they answer
 different questions. PAGE COVERAGE — not tool choice — separates READ from SAMPLED: READ means
 the reads collectively reach the staged file's LAST line, so a `Read` capped
 at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row says — a brief
