@@ -73,8 +73,9 @@ var fableBannerRe = regexp.MustCompile(`(?i)reached your fable\b[^.]*\blimit`)
 var otherWindowBanners = []string{"hit your session limit", "hit your weekly limit", "hit your opus limit", "usage credits are required"}
 
 // fallbackRecord is one agent's last switch: when, which process, when the
-// continue prompt was last sent, and whether the process was since seen
-// running — Prompted means CONFIRMED continued, not merely typed at.
+// continue prompt was last sent, whether the process was since seen running —
+// Prompted means CONFIRMED continued, not merely typed at — or when it was
+// given up on.
 type fallbackRecord struct {
 	At  int64 `json:"at"`
 	PID int   `json:"pid"`
@@ -85,6 +86,11 @@ type fallbackRecord struct {
 	// be minutes older than the resolve.
 	Prompted    bool  `json:"prompted"`
 	ConfirmedAt int64 `json:"confirmed_at,omitempty"`
+	// ExpiredAt is when the prompt window ran out with no turn confirmed.
+	// Set once; a later hit on the same process is then a re-delivery of an
+	// exhaustion already given up on, never a fresh expiry to resolve and
+	// notify again.
+	ExpiredAt int64 `json:"expired_at,omitempty"`
 }
 
 type fallbackVerdict string
@@ -94,7 +100,7 @@ const (
 	fallbackSwitch fallbackVerdict = "switch" // type /model, then the continue prompt
 	fallbackPrompt fallbackVerdict = "prompt" // already switched; the continue is owed until the pane runs
 	fallbackAbsorb fallbackVerdict = "absorb" // late re-delivery of a handled exhaustion: resolve silently
-	fallbackExpire fallbackVerdict = "expire" // switched, but no turn confirmed in the prompt window: resolve, never rotate
+	fallbackExpire fallbackVerdict = "expire" // switched, but no turn confirmed in the prompt window: resolve once per process, never rotate
 )
 
 // fableFallbackCandidate is the cheap half of the decision — no snapshot, no
@@ -145,6 +151,17 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 		// parked-until-reset wait until the snapshot shows Fable spent, and a
 		// transcript-arm hit's At can itself lag the banner).
 		if !last.Prompted {
+			// An expired switch stays expired. The transcript arm re-records
+			// the banner for as long as the pane sits on it, each a fresh
+			// hit the resolved one no longer folds, and every one of them
+			// would otherwise expire — and notify — again. A hit naming
+			// another window is a real follow-on limit, as below.
+			if last.ExpiredAt != 0 {
+				if namesOtherWindow {
+					return fallbackNo
+				}
+				return fallbackAbsorb
+			}
 			if now.Sub(time.Unix(last.At, 0)) < fableFallbackPromptWindow {
 				return fallbackPrompt
 			}
@@ -316,7 +333,8 @@ func fableFallbackPrompt() string {
 // then held until the pane shows a turn ran since the send — a typed prompt is
 // not proof of a turn — re-sending the prompt every fableFallbackBumpGap, and
 // the hit is resolved on that confirmation, or unconfirmed once
-// fableFallbackPromptWindow runs out (fallbackExpire, never rotation).
+// fableFallbackPromptWindow runs out (fallbackExpire, once per process, never
+// rotation).
 func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email func() string, hit LimitHit, find func() *core.Peer, now time.Time) bool {
 	if !fableFallbackCandidate(hit, agentModel) {
 		return false // cheap gates first — the snapshot, kv and discovery below are not free
@@ -334,9 +352,9 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	if at := d.Poked[retryKey]; at != 0 && now.Sub(time.Unix(at, 0)) < fableFallbackRetryGap {
 		return verdict == fallbackPrompt
 	}
-	resolve := func() {
+	resolve := func(outcome string) {
 		hit.HandledAt = now.Unix()
-		hit.Outcome = "model-fallback"
+		hit.Outcome = outcome
 		hit.LastAttempt = now.Unix()
 		if err := saveLimitRescueStateByKey(hitKey, label, hit); err != nil {
 			dlogErr("%s: persist limit-hit record failed: %v", label, err)
@@ -344,13 +362,28 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	}
 	switch verdict {
 	case fallbackAbsorb:
-		resolve()
+		if last.ExpiredAt != 0 {
+			resolve("model-fallback-expired")
+			dlogEvent("info", "limit-rescue-skipped", "%s: limit re-delivered after the expired switch to %s — same process, still needs a manual nudge", label, fableFallbackModel)
+			return true
+		}
+		resolve("model-fallback")
 		dlogEvent("info", "limit-rescue-skipped", "%s: limit re-delivered after the switch to %s — same process, resolved without action", label, fableFallbackModel)
 		return true
 	case fallbackExpire:
-		resolve()
+		// Stamped before the resolve so a later re-delivery reads as
+		// absorb even if the hit-record persist below fails; the notify
+		// is keyed on the switch as well, so a failed kv write cannot
+		// re-fire it within this daemon's run.
+		last.ExpiredAt = now.Unix()
+		recordLastFallback(hitKey, last)
+		resolve("model-fallback-expired")
 		dlogEvent("error", "limit-rescue-failed", "%s: switched to %s but no turn was seen in %s of continue prompts — resolved, needs a manual nudge", label, fableFallbackModel, fableFallbackPromptWindow)
-		notify("kraken ⇣ "+label, "Fable limit — switched to "+fableFallbackModel+" but the agent never continued")
+		nkey := "limit:fable-expire:" + hitKey + "|" + strconv.FormatInt(last.At, 10)
+		if d.Notified[nkey] == 0 {
+			notify("kraken ⇣ "+label, "Fable limit — switched to "+fableFallbackModel+" but the agent never continued")
+			d.Notified[nkey] = now.Unix()
+		}
 		return true
 	case fallbackSwitch:
 		if _, err := core.SendToPeer(p, "/model "+fableFallbackModel); err != nil {
@@ -394,7 +427,7 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	last.Prompted = true
 	last.ConfirmedAt = now.Unix()
 	recordLastFallback(hitKey, last)
-	resolve()
+	resolve("model-fallback")
 	nkey := "limit:fable:" + hitKey + "|" + strconv.FormatInt(hit.At, 10)
 	if d.Notified[nkey] == 0 {
 		notify("kraken ⇣ "+label, "Fable limit — switched to "+fableFallbackModel+" on the same account")
