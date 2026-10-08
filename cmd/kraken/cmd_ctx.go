@@ -2,38 +2,51 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
-// cmd_ctx.go — `k ctx-hook` and `k rearm-hook`: the two Claude Code hooks
-// kronos' own settings.json installs (jobs' installKronosSettings), kept out
+// cmd_ctx.go — `k ctx-hook` and `k rearm-hook`, two Claude Code hooks kept out
 // of usage() alongside pr-hook and recall-hook for the same reason — they are
 // machinery running inside somebody else's conversation, not verbs a human
 // types.
 //
+// ctx-hook is a statusline command with two installers. Without --slug it is
+// kronos' (jobs' installKronosSettings): it reports to /api/orch/context and
+// prints `kronos NN%`. With --slug it is a cell's (jobs' mergeCellStatusLine,
+// in every cell's settings.json): it reports to /api/cell/context keyed on the
+// slug, and prints the user's own ~/.claude/settings.json statusLine output
+// (run by runUserStatusLine, bounded by ctxHookTimeout) or `<slug> NN%` when
+// there is none or it fails. rearm-hook is kronos' PostCompact hook.
+//
 // Both share one posture, and it is the opposite of every other verb in this
 // binary: THEY NEVER FAIL. A statusline command that exits non-zero or writes
-// to stdout on error puts a broken line in kronos' pane chrome on every
-// render; a PostCompact hook that errors interrupts the turn it fired on.
-// Every failure anywhere — no daemon, no store, a malformed payload, a
-// timeout — degrades to "report nothing", never to a broken pane. That is why
-// neither of these routes through qfPost: its whole contract is to turn a
-// failure into a message and an exit code.
+// to stdout on error puts a broken line in the pane's chrome on every render
+// — kronos' pane or a cell's; a PostCompact hook that errors interrupts the
+// turn it fired on. Every failure anywhere — no daemon, no store, a malformed
+// payload, a timeout — degrades to "report nothing", never to a broken pane.
+// That is why neither of these routes through qfPost: its whole contract is to
+// turn a failure into a message and an exit code.
 //
 // The client timeout is 2s rather than qfHTTPTimeout's 5s. The statusline
-// runs on every render and the compact hook runs at the one moment kronos is
-// already stalled, so a slow or dead kraken serve must cost a blink rather
+// runs on every render and the compact hook runs at the moment a compaction
+// has just finished, so a slow or dead kraken serve must cost a blink rather
 // than a visible hang. The report is telemetry: losing one is free, waiting
 // for one is not.
 
-// ctxHookTimeout bounds both hooks' single round trip. See the file header.
+// ctxHookTimeout bounds both hooks' single round trip, and separately the
+// wrapped user statusline command in runUserStatusLine. See the file header.
 const ctxHookTimeout = 2 * time.Second
 
 // statuslineInput is the subset of Claude Code's statusline JSON these hooks
@@ -65,32 +78,116 @@ type statuslineInput struct {
 // to the default port — invisible on a real deployment (default addr) and
 // found only by the parallel-server drill, where the meter went silently
 // dead. The pin in ctxhook_pin_test.go is that discovery's regression guard.
-func ctxHookFlags(args []string) {
+//
+// It returns the value following --slug ("" when absent, or when --slug is the
+// last word): a cell's statusline command carries it, kronos' does not, and
+// that difference is what selects runCtxHook's cell mode.
+func ctxHookFlags(args []string) string {
+	slug := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--serve-addr":
 			i++
 			if i >= len(args) {
-				return
+				return slug
 			}
 			os.Setenv("KRAKEN_SERVE_ADDR", args[i])
 		case "--db-path":
 			i++
 			if i >= len(args) {
-				return
+				return slug
 			}
 			os.Setenv("KRAKEN_DB_PATH", args[i])
+		case "--slug":
+			i++
+			if i >= len(args) {
+				return slug
+			}
+			slug = args[i]
 		}
 	}
+	return slug
 }
 
 // cmdCtxHook is `kraken ctx-hook`: the statusline command. It reads the
 // harness' JSON from stdin, reports the context percentage to kraken serve
 // (which is what the daemon's warning pass fires off), and prints the one
-// line the pane renders.
+// line the pane renders. With --slug it is a cell's statusline, which also
+// wraps the user's own statusLine command from ~/.claude/settings.json.
 func cmdCtxHook(args []string) {
-	ctxHookFlags(args)
-	runCtxHook(os.Stdin, os.Stdout)
+	runCtxHook(os.Stdin, os.Stdout, ctxHookFlags(args), userStatusLineCommand(util.Home()))
+}
+
+// userStatusLineCommand returns the statusLine.command string from
+// <home>/.claude/settings.json, or "" when the file is missing, unparseable,
+// carries no such key, or the command is itself a ctx-hook (wrapping it would
+// make the statusline run itself). Never errors.
+func userStatusLineCommand(home string) string {
+	raw, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		StatusLine struct {
+			Command string `json:"command"`
+		} `json:"statusLine"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil {
+		return ""
+	}
+	cmd := parsed.StatusLine.Command
+	if strings.Contains(cmd, "ctx-hook") {
+		return ""
+	}
+	return cmd
+}
+
+// runUserStatusLine runs the user's statusline command through /bin/sh -c
+// with the same stdin bytes Claude Code gave this hook, bounded by
+// ctxHookTimeout. ok is false when it failed, timed out, or printed nothing,
+// which sends the caller to its default line.
+func runUserStatusLine(command string, stdin []byte) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), ctxHookTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	c.Stdin = bytes.NewReader(stdin)
+	c.Stderr = io.Discard
+	// A grandchild that inherited stdout would otherwise keep Output waiting
+	// after the shell is killed; WaitDelay bounds that wait.
+	c.WaitDelay = 100 * time.Millisecond
+	out := &cappedBuffer{max: userStatusLineMaxBytes}
+	c.Stdout = out
+	if err := c.Run(); err != nil || ctx.Err() != nil {
+		return "", false
+	}
+	line := strings.TrimRight(out.buf.String(), "\r\n")
+	if strings.TrimSpace(line) == "" {
+		return "", false
+	}
+	return line, true
+}
+
+// userStatusLineMaxBytes caps how much of the wrapped user statusline's stdout
+// runUserStatusLine keeps; bytes past it are discarded.
+const userStatusLineMaxBytes = 64 << 10
+
+// cappedBuffer keeps the first max bytes written to it and discards the rest.
+// Write always reports the full length so the writing command is never handed
+// a short write; only what is retained is bounded.
+type cappedBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if room := b.max - b.buf.Len(); room > 0 {
+		if len(p) > room {
+			b.buf.Write(p[:room])
+		} else {
+			b.buf.Write(p)
+		}
+	}
+	return len(p), nil
 }
 
 // runCtxHook is cmdCtxHook's body, split out so the whole path is exercisable
@@ -100,31 +197,58 @@ func cmdCtxHook(args []string) {
 // attempted, and the LINE IS PRINTED WHATEVER HAPPENED to the report. A
 // statusline that only renders when the daemon answers is a statusline that
 // vanishes exactly when something is wrong.
-func runCtxHook(stdin io.Reader, stdout io.Writer) {
+//
+// slug == "" is kronos' statusline: report to /api/orch/context and print
+// `kronos NN%`. A non-empty slug is a cell's: report to /api/cell/context
+// keyed on the slug, and print the user's own statusline (userStatusLine, run
+// with the same stdin) when there is one and it produced output, else
+// `<slug> NN%`.
+func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine string) {
 	var in statuslineInput
 	// A read or decode failure is not reported anywhere: there is nowhere to
 	// report it to that is not the pane's chrome. The zero value falls
 	// through to the em-dash line, which is the honest rendering of "the
 	// harness said nothing this render".
-	if raw, err := io.ReadAll(io.LimitReader(stdin, 1<<20)); err == nil {
+	var raw []byte
+	if b, err := io.ReadAll(io.LimitReader(stdin, 1<<20)); err == nil {
+		raw = b
 		_ = json.Unmarshal(raw, &in)
 	}
 	pct := in.ContextWindow.UsedPercentage
 	if in.SessionID != "" && pct != nil {
 		// Errors dropped by contract: see the file header. A skipped report
 		// costs one render's telemetry, and the next render sends another.
-		_ = hookPost("/api/orch/context", map[string]any{
-			"session_id":          in.SessionID,
-			"used_percentage":     *pct,
-			"context_window_size": in.ContextWindow.ContextWindowSize,
-		})
+		if slug == "" {
+			_ = hookPost("/api/orch/context", map[string]any{
+				"session_id":          in.SessionID,
+				"used_percentage":     *pct,
+				"context_window_size": in.ContextWindow.ContextWindowSize,
+			})
+		} else {
+			_ = hookPost("/api/cell/context", map[string]any{
+				"slug":                slug,
+				"session_id":          in.SessionID,
+				"used_percentage":     *pct,
+				"context_window_size": in.ContextWindow.ContextWindowSize,
+			})
+		}
+	}
+	label := "kronos"
+	if slug != "" {
+		label = slug
+		if userStatusLine != "" {
+			if line, ok := runUserStatusLine(userStatusLine, raw); ok {
+				fmt.Fprintln(stdout, line)
+				return
+			}
+		}
 	}
 	// The em-dash rather than "0%" for statuslineInput's reason: an unknown
 	// fullness must never render as an empty window, which is the reading a
 	// zero invites at exactly the moment a human glances at the pane.
-	line := "kronos —"
+	line := label + " —"
 	if pct != nil {
-		line = fmt.Sprintf("kronos %.1f%%", *pct)
+		line = fmt.Sprintf("%s %.1f%%", label, *pct)
 	}
 	fmt.Fprintln(stdout, line)
 }

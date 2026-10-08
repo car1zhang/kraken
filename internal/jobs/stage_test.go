@@ -97,6 +97,10 @@ func TestScanStageSignalShapes(t *testing.T) {
 		{"last signal wins across shapes", []string{commandLine(t, "/aim"), skillToolLine(t, "do"), readToolLine(t, "/wt/.claude/skills/pr/SKILL.md")}, "pr"},
 		{"non-pipeline skill ignored", []string{skillToolLine(t, "claude-api")}, ""},
 		{"load is not a stage", []string{skillToolLine(t, "aim"), readToolLine(t, "/wt/.claude/skills/load/SKILL.md")}, "aim"},
+		// A typed /handoff (carl's, or the daemon's auto-handoff) arrives on
+		// the command shape; it compacts the agent and returns it to the phase
+		// it was in, so the badge must stay on that phase.
+		{"handoff is not a stage", []string{commandLine(t, "/do"), commandLine(t, "/handoff"), readToolLine(t, "/wt/.claude/skills/handoff/SKILL.md")}, "do"},
 		{"non-pipeline command ignored", []string{commandLine(t, "/login")}, ""},
 		{"read of non-SKILL file ignored", []string{readToolLine(t, "/wt/.claude/skills/aim/assets/hermes-contract.md")}, ""},
 		{"skills path without .claude ignored", []string{readToolLine(t, "/wt/docs/skills/aim/SKILL.md")}, ""},

@@ -34,6 +34,10 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
 		// it and this is the only test that would notice it failing to embed.
 		"load": "load",
+		// `handoff` governs no phase either: it is typed into a pane (by carl,
+		// or by the daemon's auto-handoff pass) and returns the agent to the
+		// phase it was in. nonStageSkills below is where that is pinned.
+		"handoff": "handoff",
 	}
 	for dir, wantName := range want {
 		data, err := fs.ReadFile(skillsFS, ".claude/skills/"+dir+"/SKILL.md")
@@ -53,10 +57,17 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 	}
 }
 
+// nonStageSkills are the embedded skills that govern no phase and so must NOT
+// be stages: `load` is a lookup consulted mid-phase, and `handoff` is a
+// compaction-with-a-record that leaves the agent in the phase it was in. A
+// `/handoff` read as a stage would overwrite the board's badge with a word
+// that names no phase, on every auto-handoff the daemon types.
+var nonStageSkills = map[string]bool{"load": true, "handoff": true}
+
 // TestPipelineStageSetMatchesEmbeddedSkills holds jobs.PipelineStages'
 // literal set in lockstep with the embedded bundle, in BOTH directions:
-// every embedded skill except `load` (the reference skill — no phase, so no
-// stage) must count as a stage, and every stage must name an embedded skill.
+// every embedded skill except the nonStageSkills (no phase, so no stage)
+// must count as a stage, and every stage must name an embedded skill.
 // The set is a literal in stage.go because jobs.SkillsFS is nil wherever
 // root's init hasn't run; this test is what makes that duplication safe —
 // adding a pipeline skill to the bundle without teaching the stage badge
@@ -74,7 +85,7 @@ func TestPipelineStageSetMatchesEmbeddedSkills(t *testing.T) {
 			continue
 		}
 		embedded[e.Name()] = true
-		want := e.Name() != "load"
+		want := !nonStageSkills[e.Name()]
 		if got := jobs.IsPipelineStage(e.Name()); got != want {
 			t.Errorf("jobs.IsPipelineStage(%q) = %v, want %v", e.Name(), got, want)
 		}
@@ -328,6 +339,32 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// extraction out too, and hits the same wall
 			"never `Explore`",
 		}},
+		// handoff owns the self/spawn/resume procedure and the two queued
+		// commands that make a self-handoff land after the turn ends. The
+		// brief says nothing about any of it (carl or the daemon types the
+		// verb, and the worktree skill loads itself), so this file is the
+		// only home every one of these has.
+		{"handoff", []string{
+			"Inside A Kraken Cell", "<cellDir>/artifacts/",
+			"80-handoff.md", "80-handoff-<your agent name>.md",
+			// the two queued commands, typed through kraken's own send verb
+			// so the question-prompt and nested-agent guards apply
+			"kraken s .", "/compact", "/handoff resume",
+			// self mode clears the estimate (working, not blocked) and ends
+			// the turn with the exact board line
+			"kraken load clear", "handoff written:",
+			// spawn mode spawns TEAMMATES and, per Q2 of job 548, never
+			// compacts the caller
+			"model: opus", "do NOT compact yourself",
+			// the daemon's auto-handoff and the compaction backstop hook,
+			// so an agent knows why a /handoff it never asked for arrived
+			"75%", "kraken handoff-hook", "kraken ctx-hook --slug",
+			// the never-hard-wrap rule; see the same token on aim above
+			"ONE source line",
+			// the feedback prohibition, stated as a prohibition (the verb is
+			// dream's alone — TestOnlyDreamNamesTheFeedbackWriteVerb)
+			"Never run `kraken feedback` write verbs",
+		}},
 	} {
 		src := readEmbedded(t, c.skill+"/SKILL.md")
 		for _, want := range c.want {
@@ -369,7 +406,7 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 // appears in no non-dream skill today, so the looser match costs nothing.
 func TestOnlyDreamNamesTheFeedbackWriteVerb(t *testing.T) {
 	const verb = "feedback addressed"
-	for _, skill := range []string{"aim", "info", "do", "pr"} {
+	for _, skill := range []string{"aim", "info", "do", "pr", "handoff"} {
 		if strings.Contains(readEmbedded(t, skill+"/SKILL.md"), verb) {
 			t.Errorf(".claude/skills/%s/SKILL.md names %q — only dream/SKILL.md may. "+
 				"That column is the nightly pass' alone; a skill an ordinary cell reads "+
@@ -470,10 +507,30 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "pr", "dream", "graph", "load"} {
+	for _, want := range []string{"info", "aim", "do", "pr", "dream", "graph", "load", "handoff"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}
+	}
+}
+
+// TestHandoffSkillIsUserInvokedOnly pins the one frontmatter key that decides
+// who may start a handoff: `disable-model-invocation: true` keeps the model
+// from loading the skill on its own judgement, so a compaction happens only
+// when carl types the verb or the daemon's auto-handoff pass does — the
+// contract carl set in Q3 of job 548 (kraken monitors context; the agent does
+// not decide). The key is read by Claude Code, not by kraken, which is why a
+// test rather than a type holds it: nothing in the binary would notice it
+// going missing, and the symptom would be agents compacting themselves
+// whenever they felt full.
+func TestHandoffSkillIsUserInvokedOnly(t *testing.T) {
+	src := readEmbedded(t, "handoff/SKILL.md")
+	front, _, ok := strings.Cut(strings.TrimPrefix(src, "---\n"), "\n---\n")
+	if !ok {
+		t.Fatal("handoff/SKILL.md has no frontmatter block")
+	}
+	if !strings.Contains(front, "disable-model-invocation: true") {
+		t.Errorf("handoff/SKILL.md frontmatter lacks `disable-model-invocation: true`; got:\n%s", front)
 	}
 }
 

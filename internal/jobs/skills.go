@@ -9,13 +9,15 @@ import (
 )
 
 // SkillsFS holds kraken's kraken-owned skill bundle — the six pipeline skills
-// (info, aim, do, pr, dream, graph), each governing a phase, plus the
-// reference skill load, which governs none and is consulted mid-phase —
-// embedded into the binary at build time. Root's skills_embed.go assigns
-// this during init(), sub-FS'd to the .claude/skills root so each top-level
-// entry here is one skill's own directory. Left nil when the jobs package is
-// exercised without root's init running (e.g. unit tests of other
-// packages) — installSkills treats a nil SkillsFS as a silent no-op.
+// (info, aim, do, pr, dream, graph), each governing a phase, plus two that
+// govern none: load, a reference consulted mid-phase, and handoff, typed into
+// a pane by carl or by the daemon's auto-handoff pass to compact an agent
+// behind a written record — embedded into the binary at build time. Root's
+// skills_embed.go assigns this during init(), sub-FS'd to the .claude/skills
+// root so each top-level entry here is one skill's own directory. Left nil
+// when the jobs package is exercised without root's init running (e.g. unit
+// tests of other packages) — installSkills treats a nil SkillsFS as a silent
+// no-op.
 var SkillsFS fs.FS
 
 // isTracked reports whether <wt>/.claude/skills/<name> is tracked by git in
