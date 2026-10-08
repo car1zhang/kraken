@@ -63,14 +63,36 @@ const (
 )
 
 // fableBannerRe matches the per-model-tier banner for the Fable tier, with or
-// without a version ("Fable limit", "Fable 5 limit").
-var fableBannerRe = regexp.MustCompile(`(?i)reached your fable\b[^.]*\blimit`)
+// without a version ("Fable limit", "Fable 5 limit", "Fable 5.1 limit"). The
+// gap is bounded and line-local rather than "no period", since a dotted
+// version would otherwise end the match.
+var fableBannerRe = regexp.MustCompile(`(?i)reached your fable\b[^\n]{0,12}?\blimit`)
 
 // otherWindowBanners are the banners that say a window OTHER than Fable is
 // exhausted — the non-Fable subset of core's usageLimitMarkers (read.go), so a
-// new window banner added there belongs here too. Any of these in the details
-// means switching tier cannot help.
+// new window banner added there belongs here too. Two readers: the fallback
+// (any of these in the details means switching tier cannot help), and the
+// limit-hit fold, through namesLimitWindow, which adopts a delivery naming a
+// window over stored details that name none.
 var otherWindowBanners = []string{"hit your session limit", "hit your weekly limit", "hit your opus limit", "usage credits are required"}
+
+// namesOtherWindow reports whether details carry one of otherWindowBanners.
+func namesOtherWindow(details string) bool {
+	lower := strings.ToLower(details)
+	for _, m := range otherWindowBanners {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// namesLimitWindow reports whether details carry a usage-limit banner — the
+// Fable banner or one of otherWindowBanners — as opposed to a raw 429 body,
+// which names none.
+func namesLimitWindow(details string) bool {
+	return fableBannerRe.MatchString(details) || namesOtherWindow(details)
+}
 
 // fallbackRecord is one agent's last switch: when, which process, when the
 // continue prompt was last sent, whether the process was since seen running —
@@ -118,8 +140,11 @@ func fableFallbackCandidate(hit LimitHit, agentModel string) bool {
 //
 // Fable exhaustion is read from two independent sources because each alone
 // has a hole: the StopFailure hook delivers a generic 429 body that never
-// names the tier (and a later transcript delivery folding onto it does not
-// replace those details), while the snapshot is a poll that can lag the hit.
+// names the tier (a later transcript delivery folding onto it replaces those
+// details only because mergeLimitHitDelivery adopts a banner that names a
+// window), while the snapshot is a poll that can lag the hit — and whose row
+// for a limited account is often itself an errored 429, which
+// pickFallbackAccount skips, leaving the banner as the only evidence.
 // Headroom can only come from the snapshot — with no row the banner alone is
 // trusted, since its own text offers /model as the remedy and a wrong guess
 // costs one more hit, which then goes to the ordinary chain.
@@ -134,13 +159,7 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 		return fallbackNo
 	}
 	// Whether the details name a non-Fable window — read by both branches below.
-	namesOtherWindow := false
-	lower := strings.ToLower(hit.Details)
-	for _, m := range otherWindowBanners {
-		if strings.Contains(lower, m) {
-			namesOtherWindow = true
-		}
-	}
+	otherWindow := namesOtherWindow(hit.Details)
 	// The process kraken already switched is on Opus: whatever stopped it now
 	// is not its Fable window. The configured model still says Fable, so this
 	// is the only thing that can tell.
@@ -157,7 +176,7 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 			// would otherwise expire — and notify — again. A hit naming
 			// another window is a real follow-on limit, as below.
 			if last.ExpiredAt != 0 {
-				if namesOtherWindow {
+				if otherWindow {
 					return fallbackNo
 				}
 				return fallbackAbsorb
@@ -180,12 +199,12 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 		if since < 0 {
 			since = -since
 		}
-		if since < fableFallbackAbsorbWindow && !namesOtherWindow {
+		if since < fableFallbackAbsorbWindow && !otherWindow {
 			return fallbackAbsorb
 		}
 		return fallbackNo
 	}
-	if namesOtherWindow {
+	if otherWindow {
 		return fallbackNo
 	}
 	banner := fableBannerRe.MatchString(hit.Details)
