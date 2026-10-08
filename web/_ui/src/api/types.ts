@@ -30,6 +30,7 @@
 // drift. This is the one wire shape that lives outside this file, and the
 // import is type-only, so nothing is pulled into the bundle by it.
 import type { Goal } from "../lib/goals.ts";
+import type { MMFlag } from "../lib/mm.ts";
 
 export type { Goal };
 
@@ -152,6 +153,12 @@ export interface WebThread {
    * it always did.
    */
   model?: string;
+  /**
+   * `ask` (carl's question thread, the default) or `mind` (a capture thread
+   * forked by the mind button, the only writer of the mental model). Absent
+   * from an older server, which means `ask`.
+   */
+  role?: "ask" | "mind" | string;
 }
 
 export type PRState = "open" | "merged" | "closed" | string;
@@ -604,6 +611,12 @@ export interface ThreadBlock {
   kind: ThreadBlockKind;
   text?: string;
   inherited?: boolean;
+  /**
+   * The transcript record's uuid (additive, schema v33 era). It is what a mind
+   * capture's `transcript` source points at, stamped on each rendered block as
+   * `data-mind-uuid`. Absent from an older server.
+   */
+  uuid?: string;
   [k: string]: unknown;
 }
 
@@ -614,6 +627,39 @@ export interface ThreadRead {
   pane?: string;
   fork_uuid?: string;
   source?: string;
+  /**
+   * The thread's OWN session id (contract amendment 3). Every rendered thread
+   * block stamps it as `data-mind-session`. Optional only because an older
+   * server omits it.
+   */
+  session?: string;
+}
+
+/** One block of zeus' transcript, `GET /api/job/transcript` (jobs.TranscriptBlock). */
+export interface TranscriptBlock extends ThreadBlock {
+  text: string;
+  from?: string;
+  uuid: string;
+}
+
+/** GET /api/job/transcript?slug=&n= — zeus' stamped session and its last n blocks. */
+export interface JobTranscript {
+  session: string;
+  blocks: TranscriptBlock[];
+}
+
+/**
+ * One contradiction flag as `GET /api/mm/flags` serves it (`webMMFlag`). The
+ * shape lives in lib/mm.ts beside `MMItem`, the mental model's other wire
+ * types; this is the name the API layer knows it by.
+ */
+export type WebMMFlag = MMFlag;
+
+/** POST /api/mm/capture's answer: the mind thread the capture landed in. */
+export interface CaptureToMindResult {
+  tid: string;
+  /** false when an existing mind thread for this zeus turn received it. */
+  created: boolean;
 }
 
 export type ThreadOp = "branch" | "kill" | "revive" | "rename" | "send";

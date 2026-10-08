@@ -225,9 +225,10 @@ func contractGRSeedV31(t *testing.T) (string, map[string]string) {
 }
 
 // "`const schemaVersion = 32`" — "opening a fresh database lands at 32 in one pass."
+// PR 2 ('Carried from PR 1'): the exact version pin is now schemaVersion-relative.
 func TestGraphRemovalSchemaVersionIs32(t *testing.T) {
-	if schemaVersion != 32 {
-		t.Fatalf("schemaVersion = %d, want 32", schemaVersion)
+	if schemaVersion < 32 {
+		t.Fatalf("schemaVersion = %d, want >= 32", schemaVersion)
 	}
 	contractGRIsolate(t)
 	s, err := Open(filepath.Join(t.TempDir(), "kraken.db"))
@@ -235,8 +236,8 @@ func TestGraphRemovalSchemaVersionIs32(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer s.Close()
-	if v := contractGRVersion(t, s.DB()); v != 32 {
-		t.Fatalf("fresh user_version = %d, want 32", v)
+	if v := contractGRVersion(t, s.DB()); v != schemaVersion {
+		t.Fatalf("fresh user_version = %d, want %d", v, schemaVersion)
 	}
 }
 
@@ -265,8 +266,8 @@ func TestGraphRemovalV31MigratesAndDropsEveryKgObject(t *testing.T) {
 	}
 	defer s.Close()
 	db := s.DB()
-	if v := contractGRVersion(t, db); v != 32 {
-		t.Fatalf("user_version after migrating v31 = %d, want 32", v)
+	if v := contractGRVersion(t, db); v != schemaVersion {
+		t.Fatalf("user_version after migrating v31 = %d, want %d", v, schemaVersion)
 	}
 	if got := contractGRKgObjects(t, db); len(got) != 0 {
 		t.Fatalf("kg objects survived v32: %v", got)
@@ -337,8 +338,8 @@ func TestGraphRemovalSecondOpenIsNoOp(t *testing.T) {
 		t.Fatalf("second Open: %v", err)
 	}
 	defer s2.Close()
-	if v := contractGRVersion(t, s2.DB()); v != 32 {
-		t.Fatalf("user_version after second Open = %d, want 32", v)
+	if v := contractGRVersion(t, s2.DB()); v != schemaVersion {
+		t.Fatalf("user_version after second Open = %d, want %d", v, schemaVersion)
 	}
 	if got := contractGRKgObjects(t, s2.DB()); len(got) != 0 {
 		t.Fatalf("kg objects after second Open: %v", got)

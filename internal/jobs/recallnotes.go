@@ -99,7 +99,7 @@ const notesDeliveredPrefix = "notes_delivered:"
 // phase and this block arrives at the moment the rule applies: a row never
 // stops reading as open, so the only record of a note being handled is zeus
 // SAYING so.
-const notesContextHeader = "\nCarl's unread notes on this job (artifact feedback and answers to your questions; each arrives here once — full lists any time: `kraken feedback get <slug>` / `kraken questions get <slug>`). Act on every one and say in your final message what you changed — a feedback row never stops reading as open:\n"
+const notesContextHeader = "\nCarl's unread notes on this job (artifact feedback, answers to your questions, and pending mental-model flags for you to raise or dismiss; each arrives here once — full lists any time: `kraken feedback get <slug>` / `kraken questions get <slug>`). Act on every one and say in your final message what you changed — a feedback row never stops reading as open:\n"
 
 // notesFirstContactLine follows the header the FIRST time a job's notes are
 // delivered at all — the record row does not exist yet. That is the normal
@@ -211,6 +211,20 @@ func unreadNotes(st *store.Store, job *store.Job, delivered map[string]int64) ([
 		}
 		items = append(items, item)
 	}
+	// The third source: pending contradiction flags on this job's mental-model
+	// items, raised by a teammate (or anyone but the lead) and waiting on the
+	// lead's raise/dismiss. Only PENDING ones — a raised or dismissed flag is
+	// already decided, and the lead is the one who decided it.
+	flags, ok := pendingJobFlags(st, job.ID)
+	if !ok {
+		return nil, false
+	}
+	for _, f := range flags {
+		item := noteItem{key: flagNoteKey(f), at: f.CreatedAt}
+		item.line = "- mm flag #" + strconv.FormatInt(f.ID, 10) + " on " + mmFlagItems(f) + " (" + notesWhen(f.CreatedAt) + "): " + notesText(f.Note, job.Slug) + "\n" +
+			"  (verify it, then `kraken mm flag raise " + strconv.FormatInt(f.ID, 10) + " --note \"…\"` or `kraken mm flag dismiss " + strconv.FormatInt(f.ID, 10) + " --note \"…\"`)\n"
+		items = append(items, item)
+	}
 	kept := items[:0]
 	for _, it := range items {
 		if _, seen := delivered[it.key]; !seen {
@@ -238,6 +252,29 @@ func feedbackNoteKey(f store.Feedback) string {
 // is delivered again, which is the conservative reading.
 func questionNoteKey(q store.DocQuestion) string {
 	return "q:" + q.QID + ":" + notesHash(q.Answer+"\x00"+q.AnsweredAt)
+}
+
+// flagNoteKey is a pending mm flag's delivery key: its id alone. A flag's
+// note is never edited after creation, so there is no text to hash — and once
+// the lead raises or dismisses it, it leaves the pending list and its key is
+// pruned like any other note that stopped existing.
+func flagNoteKey(f store.MMFlag) string {
+	return "m:" + strconv.FormatInt(f.ID, 10)
+}
+
+// pendingJobFlags lists jobID's pending flags; false on a store failure.
+func pendingJobFlags(st *store.Store, jobID int64) ([]store.MMFlag, bool) {
+	all, err := st.ListMMFlags("pending")
+	if err != nil {
+		return nil, false
+	}
+	var out []store.MMFlag
+	for _, f := range all {
+		if f.JobID == jobID {
+			out = append(out, f)
+		}
+	}
+	return out, true
 }
 
 // notesHash is the text half of a delivery key: 64-bit FNV-1a, hex. It is a
@@ -455,6 +492,13 @@ func liveNoteKeys(st *store.Store, job *store.Job) (map[string]bool, bool) {
 	}
 	for _, q := range questions {
 		live[questionNoteKey(q)] = true
+	}
+	flags, ok := pendingJobFlags(st, job.ID)
+	if !ok {
+		return nil, false
+	}
+	for _, f := range flags {
+		live[flagNoteKey(f)] = true
 	}
 	return live, true
 }

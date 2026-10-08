@@ -752,6 +752,45 @@ actor APIClient {
         )
     }
 
+    /// Routes highlighted text to the job's mind thread — a fork of zeus that
+    /// turns it into a committed item. Answers the thread's tid; `created`
+    /// says whether this capture branched the thread or was sent to the live
+    /// one. A job with no live cell is a 409 whose message is surfaced as is.
+    func captureToMind(
+        baseURL: String, slug: String, home: String, name: String, text: String
+    ) async throws -> MMCaptured {
+        try await post(
+            baseURL: baseURL, path: "/api/mm/capture",
+            body: MMCaptureRequest(
+                slug: slug, text: text,
+                source: WebCaptureSource(kind: "artifact", slug: slug, home: home, name: name)
+            )
+        )
+    }
+
+    /// Contradiction flags, newest first; `state` narrows to one of
+    /// pending | raised | dismissed | resolved, nil lists every flag.
+    func fetchMMFlags(baseURL: String, state: String?) async throws -> MMFlagsPage {
+        var query: [(String, String)] = []
+        if let state, !state.isEmpty { query.append(("state", state)) }
+        return try await get(baseURL: baseURL, path: "/api/mm/flags", query: query)
+    }
+
+    /// Carl's verdict on a RAISED flag: `drop` also invalidates the flagged
+    /// item, `keep` only resolves the flag.
+    func resolveMMFlag(baseURL: String, id: Int64, resolution: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/mm/flag/resolve",
+            body: MMFlagResolveRequest(id: id, resolution: resolution)
+        )
+    }
+
+    /// An item's source text (frozen artifact bytes, the transcript window,
+    /// a dir listing, a code anchor's text), or `available: false`.
+    func fetchMMSource(baseURL: String, id: Int64) async throws -> MMSource {
+        try await get(baseURL: baseURL, path: "/api/mm/source", query: [("id", String(id))])
+    }
+
     // NB: there is deliberately no markCode verb. `POST /api/mm/code` needs an
     // absolute WORKTREE path, a repo-relative file and a start row — the Zed
     // capture task's world, not the phone's. A phone has no checkout to name.

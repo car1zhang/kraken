@@ -3,11 +3,13 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -250,7 +252,27 @@ func mmVerifyArtifacts(st *store.Store, at int64) error {
 		}
 		return live
 	}
+	var flags []store.MMFlag
+	flagsRead := false
 	for _, it := range items {
+		if it.Source == "capture" {
+			if !flagsRead {
+				all, err := st.ListMMFlags("")
+				if err != nil {
+					note(err)
+					continue
+				}
+				flags, flagsRead = all, true
+			}
+			f, err := mmVerifyCapture(st, it, at, liveSessions, flags)
+			if err != nil {
+				note(err)
+			}
+			if f != nil {
+				flags = append(flags, *f)
+			}
+			continue
+		}
 		if it.Source != "artifact" && it.Source != "artifact-element" {
 			continue
 		}
@@ -316,6 +338,104 @@ func mmVerifyArtifacts(st *store.Store, at int64) error {
 		}
 	}
 	return firstErr
+}
+
+// mmVerifyCapture is the artifact half's rule for a CAPTURED item (Q6): a
+// change to the artifact it was captured from does NOT invalidate it. A
+// captured item is carl's own statement, finalized with the mind thread —
+// the passage was where it came from, not what it claims — so an edited or
+// deleted source is a question for carl rather than a verdict: one flag,
+// raised (RaisedBy "verify"), with drop/keep on the board.
+//
+// Only artifact-sourced captures are checked. Changed means the current
+// bytes' sha differs from the sha carl was reading (source.sha); a source
+// with no sha can only be found deleted. One flag per item per finding: no
+// flag while one for this item is still unresolved, and never a second flag
+// with the same note — a "keep" resolves the flag, and without the second
+// rule the next pass would re-flag the same unchanged finding forever.
+//
+// Returns the flag it created (nil when none) so the caller's per-pass list
+// stays current.
+func mmVerifyCapture(st *store.Store, it store.MMItem, at int64, liveSessions func() map[string]bool, flags []store.MMFlag) (*store.MMFlag, error) {
+	if strings.TrimSpace(it.SourceJSON) == "" {
+		return nil, nil
+	}
+	var src CaptureSource
+	if err := json.Unmarshal([]byte(it.SourceJSON), &src); err != nil || src.Kind != "artifact" || src.Name == "" {
+		return nil, nil
+	}
+	// The owning job is resolved by its immutable id FIRST: archiving frees a
+	// slug, so a slug-first lookup could point a capture at a later job that
+	// reused the name. The slug is consulted only for a genuinely cross-job
+	// capture — the source names a slug other than the owning job's (the
+	// loaded job's, or the item's recorded slug when that job is gone).
+	slug := strings.TrimSpace(src.Slug)
+	var j *Job
+	ownSlug := it.Slug
+	if it.JobID > 0 {
+		loaded, err := mmJobByID(st, it.JobID)
+		if err != nil {
+			return nil, err
+		}
+		if loaded != nil {
+			ownSlug = loaded.Slug
+			// a former slug is still the owning job's: a rename after the
+			// capture must not read as a cross-job pointer, which (the old
+			// name being reserved among active jobs) would resolve nowhere
+			// and silently end the item's verification
+			if slug == "" || slug == loaded.Slug || slices.Contains(loaded.FormerSlugs, slug) {
+				j = loaded
+			}
+		}
+	}
+	if j == nil && slug != "" && (it.JobID <= 0 || slug != ownSlug) {
+		sr, err := st.GetJobBySlug(slug)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		if err == nil && sr != nil {
+			j = jobFromStoreRow(sr, nil)
+		}
+	}
+	if j == nil {
+		return nil, nil // no job, no substrate: mmVerifyArtifacts' "a gone job is not a change"
+	}
+	shadow := it
+	shadow.JobID, shadow.SourceRef = j.ID, src.Name
+	data, present, err := mmArtifactSubstrate(st, j, liveSessions(), shadow)
+	if err != nil {
+		return nil, err
+	}
+	what := ""
+	switch {
+	case !present:
+		what = "deleted"
+	case src.SHA != "" && !strings.EqualFold(store.SHA256Hex(data), src.SHA):
+		what = "changed"
+	default:
+		return nil, nil
+	}
+	note := fmt.Sprintf("artifact %s of job %s was %s since this item was captured from it", src.Name, j.Slug, what)
+	for _, f := range flags {
+		if f.ItemID != it.ID {
+			continue
+		}
+		unresolved := f.State == "pending" || (f.State == "raised" && f.Resolution == "")
+		if unresolved || (f.RaisedBy == "verify" && f.Note == note) {
+			return nil, nil
+		}
+	}
+	f := store.MMFlag{
+		ItemID: it.ID, JobID: it.JobID, Slug: it.Slug,
+		Note: note, State: "raised", RaisedBy: "verify", RaisedAt: at, CreatedAt: at,
+	}
+	id, err := st.AddMMFlag(f)
+	if err != nil {
+		return nil, err
+	}
+	f.ID = id
+	mmFlagRaisedSignal(f)
+	return &f, nil
 }
 
 // mmJobByID loads one job, answering (nil, nil) for a row that no longer

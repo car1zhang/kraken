@@ -1,37 +1,37 @@
-// MODEL mode — the second pane of the memory view, beside LIBRARY
-// (40-ui-mockups.html §4).
+// MODEL mode — the second pane of the memory view, beside LIBRARY.
 //
-// The two are the same object at two removes: the library is what carl chose
-// to keep, and this is what he has actually READ — one row per thing in his
-// head, each frozen at the moment he marked it. Built on the LIBRARY pane's
-// recipe (a header line with a filter, one scroller, one empty state, sharing
-// its `graph-lib*` chrome classes) with its own rows namespaced `mm-`.
+// The mental model is one row per thing carl knows. Since the mind layer
+// (schema v33) a row is COMMITTED by a mind thread — carl highlights text
+// anywhere on the board, the ◆ mind button forks zeus into a mind thread, and
+// that thread runs `kraken mm commit` — so most rows carry a one-line `title`
+// (a claim), a `scope` (`universal`, or a repo plus a repo-relative dir), the
+// highlighted `quote` and a `capture_source` pointer. Rows from before the
+// rework carry none of those and headline their content's first line.
 //
-// Nothing here is a local latch: the list IS the server's, every write goes
-// through the integrator's callbacks and the row's next state is whatever the
-// refetched list says. And nothing here needs the job a row came from — an
-// item outlives its job's teardown, archive and hard delete (no FK, no
-// cascade), which is exactly why the frozen content is stored on the row
-// rather than looked up. The pane therefore renders a long-gone job's readings
-// with no gaps and no lookups.
+// Above the rows sits the FLAGS section: contradictions an agent noticed
+// (`kraken mm flag`) and zeus raised to carl. Each offers `drop item` (the
+// item is invalidated, reason `contradicted`), `keep` (the flag closes), and
+// `open job` (the steer modal of the job whose zeus raised it).
+//
+// Nothing here is a local latch: the lists are the server's, every write is
+// followed by a refetch, and the row's next state is whatever that says.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import type { MMModel } from "../../hooks/useMM.ts";
-import type { MMItem } from "../../lib/mm.ts";
+import { fetchMMSource, resolveMMFlag } from "../../api/client.ts";
+import { useMM, useMMFlags, type MMModel } from "../../hooks/useMM.ts";
+import type { MMCaptureSource, MMFlag, MMItem, MMSourceView } from "../../lib/mm.ts";
 import { age } from "../../lib/format.ts";
 import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
 import { shortDate } from "../../lib/dates.ts";
 
 /**
- * The filter chips, in the mockup's order. Four are a KIND (every item has
- * exactly one) and the fifth cuts across all of them — an invalidated reading
- * is still a reading, and 12 + 29 + 6 is `all`, with `invalidated` a subset of
- * that same total rather than a sixth bucket.
+ * The kind chips. Four are a KIND (every item has exactly one) and the fifth
+ * cuts across them — an invalidated reading is still a reading.
  */
-type MMFilter = "all" | "decision" | "reading" | "note" | "invalidated";
+type MMKindFilter = "all" | "decision" | "reading" | "note" | "invalidated";
 
-const FILTERS: { key: MMFilter; label: string }[] = [
+const FILTERS: { key: MMKindFilter; label: string }[] = [
   { key: "all", label: "all" },
   { key: "decision", label: "decisions" },
   { key: "reading", label: "readings" },
@@ -39,10 +39,13 @@ const FILTERS: { key: MMFilter; label: string }[] = [
   { key: "invalidated", label: "invalidated" },
 ];
 
+/** How long the filter box waits after the last keystroke before it asks. */
+const FILTER_DEBOUNCE_MS = 250;
+
 /** Live is the ABSENCE of the key — the wire has no boolean to read. */
 const isLive = (it: MMItem) => !it.invalidated_at;
 
-const matchesFilter = (it: MMItem, f: MMFilter) =>
+const matchesFilter = (it: MMItem, f: MMKindFilter) =>
   f === "all" ? true : f === "invalidated" ? !isLive(it) : it.kind === f;
 
 /** The row's badge. `reading` reads as READ — it is what carl did, not a genre. */
@@ -52,60 +55,84 @@ const KIND_LABEL: Record<string, string> = {
   note: "note",
 };
 
+/** The first non-empty line of `s`, trimmed; "" when there is none. */
+export function firstLine(s: string): string {
+  return (
+    s
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l !== "") ?? ""
+  );
+}
+
 /**
- * The headline: what this row IS, in one line.
- *
- * For a code reading and a whole-artifact reading the frozen CONTENT is the
- * payload (a block of source, an artifact's name) and the useful headline is
- * where it came from — the anchor's own coordinates, which is what the mockup
- * shows and what carl recognizes. For a decision and a note the content IS the
- * thing, so it leads and the source line goes below.
+ * The headline: the item's `title`, or — for a legacy row with none — the
+ * first line of its content. A row with neither (an empty content is possible
+ * on a whole-artifact reading) falls back to where it came from.
  */
-function headline(it: MMItem): string {
-  if (it.source === "code") {
-    const sha = it.anchor?.anchor_sha;
-    return it.source_ref + (sha ? ` @ ${sha.slice(0, 7)}` : "");
-  }
+export function itemTitle(it: MMItem): string {
+  const t = (it.title ?? "").trim();
+  if (t) return t;
+  const first = firstLine(it.content ?? "");
+  if (first) return first;
   if (it.source === "artifact") return `${it.slug}/${it.source_ref}`;
-  if (it.source === "artifact-element") return elementHeadline(it);
-  return it.content;
-}
-
-/** How much of a marked selection's first line the collapsed row shows. */
-const ELEMENT_HEAD_MAX = 80;
-
-/**
- * A marked selection's one-line headline: its FIRST non-empty line, trimmed
- * and hard-truncated.
- *
- * It needs one of its own for the same reason `code` and `artifact` do — the
- * frozen content is the payload, not the label. Since the locate amendment
- * that content is a block of markdown SOURCE (a whole pipe table, a whole
- * list), and returning it as the headline both filled the collapsed row with a
- * table's worth of raw pipes and, because `bodyText` drops a body that equals
- * its own headline, left the expansion — the markdown rendering carl asked for
- * at the gate — with nothing to render.
- *
- * The first line rather than a "selection from <source_ref>" label: the
- * provenance is already on the meta line below, and what the reader needs in a
- * scannable list is WHICH selection this is. A table's first line is its
- * header row, a list's is its first item — both recognizable at a glance.
- * Truncation counts CODE POINTS, so a cut never lands inside a surrogate pair.
- */
-function elementHeadline(it: MMItem): string {
-  const first = it.content.split("\n").map((l) => l.trim()).find((l) => l !== "");
-  if (!first) return `selection from ${it.source_ref}`;
-  const runes = Array.from(first);
-  return runes.length > ELEMENT_HEAD_MAX
-    ? runes.slice(0, ELEMENT_HEAD_MAX).join("") + "…"
-    : first;
+  return it.source_ref || `mm #${it.id}`;
 }
 
 /**
- * The one-line provenance under the headline. `manual` is a note carl typed,
- * `code` came in from the editor, the rest name the board surface that minted
- * it — which is the part that says how much to trust the frozen text.
+ * The scope chip: `universal`, or `<repo>/<dir>` (`<repo>` alone at the repo
+ * root). Null when the row names no repo and is not universal — every legacy
+ * row, whose scope column defaulted to `repo` with no repo to name.
  */
+export function scopeLabel(it: MMItem): string | null {
+  if (it.scope === "universal") return "universal";
+  const repo = (it.repo ?? "").trim();
+  if (!repo) return null;
+  const dir = (it.dir ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return dir ? `${repo}/${dir}` : repo;
+}
+
+/**
+ * The capture source as `/api/mm` serves it: its own `capture_source` key
+ * (contract amendment 1), null on a legacy row. `source` stays the kind string.
+ */
+function captureSource(it: MMItem): MMCaptureSource | null {
+  return it.capture_source && typeof it.capture_source === "object"
+    ? it.capture_source
+    : null;
+}
+
+const short = (s: string | undefined, n = 8) => (s ? s.slice(0, n) + (s.length > n ? "…" : "") : "");
+
+/** One line saying where a captured item's text came from. */
+export function sourceSummary(src: MMCaptureSource): string {
+  switch (src.kind) {
+    case "artifact":
+      return (
+        "artifact · " +
+        (src.name ?? "?") +
+        (src.sha ? ` @ ${short(src.sha)}` : "") +
+        (src.slug ? ` · ${src.slug}` : "")
+      );
+    case "transcript":
+      return (
+        "transcript" +
+        (src.tid ? ` · thread ${src.tid}` : "") +
+        (src.session ? ` · session ${short(src.session)}` : "") +
+        (src.uuid ? ` · record ${short(src.uuid)}` : "")
+      );
+    case "dir":
+      return `dir · ${src.repo ?? "?"}${src.dir ? "/" + src.dir : ""}`;
+    case "item":
+      return `item · mm #${src.item_id ?? "?"}`;
+    case "manual":
+      return "manual";
+    default:
+      return src.kind || "unknown";
+  }
+}
+
+/** The one-line provenance of a LEGACY row, by the board surface that minted it. */
 const SOURCE_LABEL: Record<string, string> = {
   question: "question",
   artifact: "artifact",
@@ -113,6 +140,7 @@ const SOURCE_LABEL: Record<string, string> = {
   code: "code",
   "agent-output": "agent",
   manual: "manual",
+  capture: "mind",
 };
 
 function MMRow({
@@ -124,67 +152,59 @@ function MMRow({
   removing: boolean;
   onRemove: (id: number) => void;
 }) {
-  // Every row expands, not just the invalidated ones: the headline of a code
-  // reading is coordinates, and the whole point of freezing the text is being
-  // able to read it back. What the CONTRACT requires is the invalidated case —
-  // frozen content plus `invalid_reason` — and that is the same expansion with
-  // one more line in it.
   const [open, setOpen] = useState(false);
+  // The `source` drill-down: null = not asked, "loading" while in flight.
+  const [src, setSrc] = useState<MMSourceView | "loading" | { error: string } | null>(
+    null,
+  );
   const live = isLive(it);
-  const head = headline(it);
+  const title = itemTitle(it);
+  const scope = scopeLabel(it);
+  const capSrc = captureSource(it);
   /**
-   * A marked SELECTION expands as markdown, everything else as frozen text
-   * (carl, gate R1: "marking a list or table doesn't preserve the structure").
-   *
-   * Only `artifact-element`, and the reason is what the two contents ARE. A
-   * selection is a span of an artifact's markdown SOURCE — the server locates
-   * it in the file and stores the source lines, pipes and list markers intact
-   * — so rendering it is showing what carl marked. A code reading's content is
-   * source in some other language, where `#` is a comment and `*` is a
-   * dereference; running that through a markdown renderer would eat characters
-   * that matter. A note and a decision are prose carl typed, and neither has a
-   * headline-plus-body split that reaches this branch anyway.
-   *
-   * A LEGACY element mark — one captured before the server started locating
-   * the source span — holds the rendered text, so it comes out as one
-   * paragraph. That is the honest rendering of what was actually frozen, not a
-   * degradation to repair.
-   *
-   * The hook is called unconditionally with `undefined` off the branch, as
-   * hooks must be, and `useRenderedMD` memoises on the source string — so a
-   * row that is not an element mark parses nothing at all, and the 30s mm poll
-   * leaves an open expansion's DOM (and its scroll) alone.
-   *
-   * `asMD` keys on the SOURCE rather than on `bodyText`, which is what made it
-   * dead code: an element's content used also to be its headline, so the
-   * body-equals-headline rule below emptied it and the branch could never run.
-   * The headline is now a summary of that content (`elementHeadline`), so the
-   * two are separate strings — but the source is the honest condition either
-   * way, and this branch must not depend on a truncation rule to be reachable.
+   * A legacy marked SELECTION expands as markdown (its content is a span of an
+   * artifact's markdown source); a committed item's body is prose the mind
+   * thread wrote, which is markdown too. A code reading's content is source
+   * in some other language and stays verbatim.
    */
-  const asMD = it.source === "artifact-element" && it.content !== "";
+  const asMD =
+    (it.source === "artifact-element" || it.source === "capture") && it.content !== "";
   const bodyHTML = useRenderedMD(asMD ? it.content : undefined);
-  /**
-   * A note's or a decision's headline IS its content, so repeating it in the
-   * expansion would be an empty gesture; the context is what is left to show.
-   * A marked selection is the exception in both directions — its headline is a
-   * truncated first line, and the expansion is the whole point of the row.
-   */
-  const bodyText = asMD ? it.content : head === it.content ? "" : it.content;
+  // A note's headline IS its content; repeating it would be an empty gesture.
+  const bodyText = asMD ? it.content : title === it.content.trim() ? "" : it.content;
+
+  const showSource = async () => {
+    if (src !== null && src !== "loading") {
+      setSrc(null); // a second press folds it away
+      return;
+    }
+    setSrc("loading");
+    try {
+      setSrc(await fetchMMSource(it.id));
+    } catch (e) {
+      setSrc({ error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   return (
-    <div className={"mm-row" + (live ? "" : " dead")}>
+    <div
+      className={"mm-row" + (live ? "" : " dead")}
+      data-mind-kind="item"
+      data-mind-item-id={String(it.id)}
+      data-mind-slug={it.slug || undefined}
+    >
       <div className="mm-rowtop">
         <button
           className="mm-open"
           aria-expanded={open}
-          title={open ? "collapse" : "show what was frozen"}
+          title={open ? "collapse" : "show the body"}
           onClick={() => setOpen((v) => !v)}
         >
           <span className="mm-rowhead">
             <span className={"mm-kind " + it.kind}>
               {KIND_LABEL[it.kind] ?? it.kind}
             </span>
-            <span className="mm-headline">{head}</span>
+            <span className="mm-headline">{title}</span>
           </span>
           {live ? null : (
             <span className="mm-dead">
@@ -194,53 +214,56 @@ function MMRow({
             </span>
           )}
           <span className="mm-meta">
+            {scope ? <span className="mm-scope">{scope}</span> : null}
+            {`#${it.id} · `}
             {SOURCE_LABEL[it.source] ?? it.source}
             {it.slug && it.source !== "artifact" ? ` · ${it.slug}` : ""}
-            {it.source_ref && it.source !== "code" && it.source !== "artifact"
+            {it.source_ref && it.source !== "artifact" && it.source !== "capture"
               ? ` · ${it.source_ref}`
               : ""}
             {it.created_at ? ` · ${age(Math.floor(it.created_at / 1000))}` : ""}
+            {it.revised_at ? " · revised" : ""}
           </span>
         </button>
         {/* Outside the expand button, never nested in it: a button inside a
-            button is invalid markup and swallows its own click (the library
-            row's ✕ makes the same split). */}
+            button is invalid markup and swallows its own click. */}
         <button
-          className="mm-rm"
-          title="drop this mark — the row stays, invalidated"
-          aria-label={`drop the mark on ${head}`}
+          className="mm-act mm-source"
+          title="show what this was captured from"
+          aria-expanded={src !== null}
+          onClick={() => void showSource()}
+        >
+          source
+        </button>
+        <button
+          className="mm-act mm-rm"
+          title="drop this item — the row stays, invalidated"
+          aria-label={`drop ${title}`}
           disabled={removing || !live}
           onClick={() => onRemove(it.id)}
         >
-          ✕
+          drop
         </button>
       </div>
-      {/* A SIBLING of the button rather than its child, for the ✕'s reason:
-          the expansion carries a link, and interactive content inside a
-          button is invalid markup that swallows its own clicks. */}
       {open ? (
         <div className="mm-frozen">
-          {/* The FROZEN text — for an invalidated row this is the whole
-              payoff: what carl knew, kept exactly as it was on the day he read
-              it, which the source it came from no longer says. The "and now"
-              half is deliberately absent: the current bytes are not on this
-              wire, and inventing a diff from a list payload would be a claim
-              this pane cannot make.
-
-              Verbatim in a <pre> for every kind but one — a marked selection
-              renders as markdown, so a marked table expands as a table and a
-              marked list as a list. See `asMD` above for why that is exactly
-              one source and not a default. */}
           {asMD ? (
             <div
               className="mm-frozenmd md"
-              // renderMD escapes before it transforms, so a marked passage of
-              // agent-written markdown is inert — the same argument every
-              // other `.md` body in this app rests on (lib/markdown.ts).
+              // renderMD escapes before it transforms, so agent-written
+              // markdown is inert (lib/markdown.ts)
               dangerouslySetInnerHTML={bodyHTML}
             />
           ) : bodyText ? (
             <pre className="mm-frozentext">{bodyText}</pre>
+          ) : null}
+          {it.quote ? (
+            <div className="mm-quote">
+              <span className="mm-ctxlbl">quote</span> «{it.quote}»
+            </div>
+          ) : null}
+          {capSrc ? (
+            <div className="mm-ctx">source: {sourceSummary(capSrc)}</div>
           ) : null}
           {it.context ? <div className="mm-ctx">{it.context}</div> : null}
           {it.source === "artifact" ? (
@@ -254,30 +277,119 @@ function MMRow({
             </a>
           ) : null}
           <div className="mm-ctx">
-            {it.created_at ? `marked ${shortDate(it.created_at)}` : ""}
+            {it.created_at ? `captured ${shortDate(it.created_at)}` : ""}
+            {it.revised_at ? ` · revised ${shortDate(it.revised_at)}` : ""}
             {!live && it.invalidated_at
               ? ` · invalidated ${shortDate(it.invalidated_at)}`
               : ""}
           </div>
         </div>
       ) : null}
+      {src !== null ? (
+        <div className="mm-frozen mm-sourceview">
+          {src === "loading" ? (
+            <div className="mm-ctx">loading the source…</div>
+          ) : "error" in src ? (
+            <div className="mm-ctx">couldn't load the source: {src.error}</div>
+          ) : !src.available ? (
+            <div className="mm-ctx">
+              source unavailable{src.kind ? ` (${src.kind})` : ""}
+            </div>
+          ) : (
+            <>
+              <div className="mm-ctx">
+                {src.kind}
+                {src.changed ? " · changed since capture" : ""}
+              </div>
+              <pre className="mm-frozentext">{src.text}</pre>
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One raised flag: what zeus put in front of carl, and the three verdicts. */
+function FlagRow({
+  f,
+  busy,
+  onResolve,
+  onOpenJob,
+}: {
+  f: MMFlag;
+  busy: boolean;
+  onResolve: (id: number, resolution: "drop" | "keep") => void;
+  onOpenJob?: (slug: string) => void;
+}) {
+  const subject =
+    (f.item_id ? `#${f.item_id}` : "") +
+    (f.against_id ? `${f.item_id ? " vs " : ""}#${f.against_id}` : "");
+  return (
+    <div className="mm-flag" data-flag-id={String(f.id)}>
+      <div className="mm-flagbody">
+        <div className="mm-flagnote">
+          ⚑ {subject ? `flag on ${subject} — ` : ""}
+          {f.note}
+        </div>
+        <div className="mm-meta">
+          {f.slug ? `raised by zeus of ${f.slug}` : "raised"}
+          {f.raised_at ? ` · ${age(Math.floor(f.raised_at / 1000))}` : ""}
+          {f.raise_note ? ` · «${f.raise_note}»` : ""}
+        </div>
+      </div>
+      <div className="mm-flagacts">
+        <button
+          className="mm-act mm-flagdrop"
+          // not gated on `item_id`: the server resolves a drop on a flag that
+          // names no item as a plain close, so the verdict is always postable
+          disabled={busy}
+          title={
+            f.item_id
+              ? `invalidate mm #${f.item_id} as contradicted and close the flag`
+              : "close the flag (it names no item to invalidate)"
+          }
+          onClick={() => onResolve(f.id, "drop")}
+        >
+          drop item
+        </button>
+        <button
+          className="mm-act mm-flagkeep"
+          disabled={busy}
+          title="keep the item and close the flag"
+          onClick={() => onResolve(f.id, "keep")}
+        >
+          keep
+        </button>
+        {onOpenJob && f.slug ? (
+          <button
+            className="mm-act mm-flagjob"
+            title={`open ${f.slug}`}
+            onClick={() => onOpenJob(f.slug)}
+          >
+            open job
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
 
 export interface MentalModelPaneProps {
   /**
-   * Hidden rather than unmounted, for the library pane's reason: the filter
-   * and any half-typed note are component state, and a toggle back to the
-   * library would otherwise throw them away.
+   * Hidden rather than unmounted: the filter and any half-typed note are
+   * component state, and a toggle back to the library would otherwise throw
+   * them away.
    */
   hidden: boolean;
-  /** App's ONE mm poll, shared with every capture surface. */
+  /** App's ONE unfiltered mm poll. */
   mm: MMModel;
   /** Write a note. Routed through the shared mutate + refetch by the integrator. */
   onAddNote: (text: string) => Promise<void>;
-  /** Drop one mark by id (invalidates it — nothing here deletes). */
+  /** Drop one item by id (invalidates it — nothing here deletes). */
   onRemove: (id: number) => Promise<void>;
+  /** Open the steer modal of a flag's job. Absent hides `open job`. */
+  onOpenJob?: (slug: string) => void;
 }
 
 export function MentalModelPane({
@@ -285,50 +397,97 @@ export function MentalModelPane({
   mm,
   onAddNote,
   onRemove,
+  onOpenJob,
 }: MentalModelPaneProps) {
-  const [filter, setFilter] = useState<MMFilter>("all");
+  const [filter, setFilter] = useState<MMKindFilter>("all");
+  const [q, setQ] = useState("");
+  // The query the server is asked — `q` after the debounce settles.
+  const [askedQ, setAskedQ] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   const [adding, setAdding] = useState(false);
-  // Which rows have a remove in flight — the library pane's per-row guard, and
-  // for its reason: the rows are independent, and locking the whole list
-  // because one is mid-request would be a worse lie than the one it fixes.
   const [removing, setRemoving] = useState<ReadonlySet<number>>(
     () => new Set<number>(),
   );
+  const [resolving, setResolving] = useState<ReadonlySet<number>>(
+    () => new Set<number>(),
+  );
+  const [flagErr, setFlagErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = q.trim();
+    if (t === askedQ) return;
+    const id = window.setTimeout(() => setAskedQ(t), FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [q, askedQ]);
+
+  // The FILTERED list: a second instance of the mm poll, alive only while the
+  // box asks something, so an empty box costs nothing and shows App's list.
+  const filtered = useMM(!hidden && askedQ !== "", { q: askedQ });
+  const { refetch: refetchFiltered } = filtered;
+  useEffect(() => {
+    if (!hidden && askedQ !== "") void refetchFiltered();
+  }, [askedQ, hidden, refetchFiltered]);
+  const source: MMModel = askedQ !== "" ? filtered : mm;
+
+  const flags = useMMFlags(!hidden);
 
   const counts = useMemo(() => {
-    const c: Record<MMFilter, number> = {
-      all: mm.items.length,
+    const c: Record<MMKindFilter, number> = {
+      all: source.items.length,
       decision: 0,
       reading: 0,
       note: 0,
       invalidated: 0,
     };
-    for (const it of mm.items) {
+    for (const it of source.items) {
       if (it.kind === "decision" || it.kind === "reading" || it.kind === "note") {
         c[it.kind]++;
       }
       if (!isLive(it)) c.invalidated++;
     }
     return c;
-  }, [mm.items]);
+  }, [source.items]);
 
   // ARRIVAL ORDER, narrowed and never re-sorted: the server serves newest
   // first and a list that reorders itself is a list you cannot aim at.
   const rows = useMemo(
-    () => mm.items.filter((it) => matchesFilter(it, filter)),
-    [mm.items, filter],
+    () => source.items.filter((it) => matchesFilter(it, filter)),
+    [source.items, filter],
   );
+
+  const refetchBoth = async () => {
+    await mm.refetch();
+    if (askedQ !== "") await refetchFiltered();
+  };
 
   const remove = async (id: number) => {
     if (removing.has(id)) return;
     setRemoving((prev) => new Set(prev).add(id));
-    // No try/catch and no failure branch: the caller routes this through the
-    // shared mutate, which parks the server's own sentence in the clock corner
-    // and never rejects. The row's fate is whatever the refetched list says.
+    // the caller routes this through the shared mutate, which parks a refusal
+    // in the clock corner and never rejects
     await onRemove(id);
+    if (askedQ !== "") await refetchFiltered();
     setRemoving((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const resolve = async (id: number, resolution: "drop" | "keep") => {
+    if (resolving.has(id)) return;
+    setResolving((prev) => new Set(prev).add(id));
+    setFlagErr(null);
+    try {
+      await resolveMMFlag(id, resolution);
+    } catch (e) {
+      setFlagErr(e instanceof Error ? e.message : String(e));
+    }
+    await flags.refetch();
+    // a `drop` invalidated an item, so the rows move too
+    if (resolution === "drop") await refetchBoth();
+    setResolving((prev) => {
       const next = new Set(prev);
       next.delete(id);
       return next;
@@ -340,28 +499,34 @@ export function MentalModelPane({
     if (!text || adding) return;
     setAdding(true);
     await onAddNote(text);
+    if (askedQ !== "") await refetchFiltered();
     setAdding(false);
-    // Cleared unconditionally, like the artifact composer's send: a refusal
-    // has already said so in the clock corner, and re-typing a note is cheaper
-    // than wondering whether the box in front of you was sent.
     setNote("");
     setNoteOpen(false);
   };
 
-  // An endpoint failure says so IN PLACE OF the empty state — "nothing marked
-  // yet" over a failed read would be a claim this pane cannot make.
-  const empty = mm.error
-    ? "couldn't load the mental model: " + mm.error.message
-    : !mm.loaded
+  const empty = source.error
+    ? "couldn't load the mental model: " + source.error.message
+    : !source.loaded
       ? "loading…"
-      : mm.items.length
-        ? "nothing in that filter"
-        : "nothing marked yet — ✓ read in the artifact viewer, → decision on an answered question, or + note here";
+      : askedQ !== ""
+        ? `nothing matches “${askedQ}”`
+        : mm.items.length
+          ? "nothing in that filter"
+          : "nothing captured yet — highlight text anywhere and press ◆ mind, or + note here";
 
   return (
     <section className="graph-lib mm-pane" hidden={hidden}>
       <div className="graph-libhdr">
         <span className="graph-lbl">Mental model</span>
+        <input
+          className="graph-libfilter mm-filter"
+          type="search"
+          placeholder="filter…"
+          aria-label="filter the mental model"
+          value={q}
+          onChange={(ev) => setQ(ev.target.value)}
+        />
         <span className="mm-chips">
           {FILTERS.map((f) => (
             <button
@@ -396,8 +561,7 @@ export function MentalModelPane({
             onChange={(ev) => setNote(ev.target.value)}
             onKeyDown={(ev) => {
               if (ev.key !== "Enter" || !(ev.metaKey || ev.ctrlKey)) return;
-              // the ⌘⏎ pair every composer in this app makes — a CJK
-              // candidate's commit Enter also fires key:"Enter"
+              // a CJK candidate's commit Enter also fires key:"Enter"
               if (ev.nativeEvent.isComposing || ev.nativeEvent.keyCode === 229) {
                 return;
               }
@@ -416,6 +580,21 @@ export function MentalModelPane({
         </div>
       ) : null}
       <div className="graph-libscroll">
+        {flags.flags.length || flagErr ? (
+          <div className="mm-flags" aria-label="raised flags">
+            <div className="graph-lbl mm-flagslbl">Flags</div>
+            {flagErr ? <div className="mm-ctx mm-flagerr">{flagErr}</div> : null}
+            {flags.flags.map((f) => (
+              <FlagRow
+                key={f.id}
+                f={f}
+                busy={resolving.has(f.id)}
+                onResolve={(id, r) => void resolve(id, r)}
+                onOpenJob={onOpenJob}
+              />
+            ))}
+          </div>
+        ) : null}
         {rows.length ? (
           rows.map((it) => (
             <MMRow
@@ -432,3 +611,5 @@ export function MentalModelPane({
     </section>
   );
 }
+
+export default MentalModelPane;

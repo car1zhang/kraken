@@ -990,6 +990,11 @@ func StartCell(j *Job, repo string) error {
 	installHookSettings(wt, j)
 	installSkills(wt, j)
 	linkDevEnv(repo, wt, j)
+	// the mental model's rules files, before zeus' first turn can need them;
+	// a render failure is logged and never fails the spawn
+	if err := renderMMIntoWorktree(ActiveStore(), repo, wt); err != nil {
+		dlogErr("%s: mm render into worktree: %v", j.Slug, err)
+	}
 	launch, err := zeusLaunch(j, wt, jobPrompt(j), "")
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
@@ -2751,6 +2756,10 @@ func ReactivateJob(j *Job, session, message string) error {
 	// running it on the resume path is what retrofits links onto a worktree
 	// created before this feature existed.
 	linkDevEnv(repo, wt, j)
+	// StartCell's reason: the rules files are in place before zeus resumes
+	if err := renderMMIntoWorktree(ActiveStore(), repo, wt); err != nil {
+		dlogErr("%s: mm render into worktree: %v", j.Slug, err)
+	}
 	prompt, hasPrompt := reactivatePrompt(reorient, message, rebaseNote)
 	if !hasPrompt {
 		prompt = "" // spawnCommand omits an empty prompt entirely

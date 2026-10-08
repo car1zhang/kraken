@@ -202,7 +202,7 @@ unbounded — a single line can be an entire inlined skill body — so a page si
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
 (a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep. And
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
-from the watch store and carl's mental model (`kraken mm get`) that touch this scout's assignment — marked "measure, don't
+from the watch store and carl's mental model (`kraken mm get --q "<subject>"`, then `kraken mm show <id>`) that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost kraken's memory
 already held, because nothing in any brief said what was already known.
 

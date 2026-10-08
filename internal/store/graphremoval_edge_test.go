@@ -125,8 +125,8 @@ func TestGraphRemovalEdgeMigrationToleratesAPartialKGFixture(t *testing.T) {
 
 	s2 := edgeGROpen(t, path)
 	defer s2.Close()
-	if v := edgeGRVersion(t, s2); v != 32 {
-		t.Fatalf("user_version after migrating a partial fixture = %d, want 32", v)
+	if v := edgeGRVersion(t, s2); v != schemaVersion {
+		t.Fatalf("user_version after migrating a partial fixture = %d, want %d", v, schemaVersion)
 	}
 	if left := edgeGRKGObjects(t, s2); len(left) != 0 {
 		t.Fatalf("kg objects survived migration 32: %v", left)
@@ -148,8 +148,8 @@ func TestGraphRemovalEdgeMigrationToleratesFTSWithoutEdges(t *testing.T) {
 
 	s2 := edgeGROpen(t, path)
 	defer s2.Close()
-	if v := edgeGRVersion(t, s2); v != 32 {
-		t.Fatalf("user_version = %d, want 32", v)
+	if v := edgeGRVersion(t, s2); v != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
 	if left := edgeGRKGObjects(t, s2); len(left) != 0 {
 		t.Fatalf("kg objects survived migration 32: %v", left)
@@ -170,8 +170,8 @@ func TestGraphRemovalEdgeMigrationToleratesNoKGObjects(t *testing.T) {
 
 	s2 := edgeGROpen(t, path)
 	defer s2.Close()
-	if v := edgeGRVersion(t, s2); v != 32 {
-		t.Fatalf("user_version = %d, want 32", v)
+	if v := edgeGRVersion(t, s2); v != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
 	if left := edgeGRKGObjects(t, s2); len(left) != 0 {
 		t.Fatalf("kg objects present after migrating an empty fixture: %v", left)
@@ -250,9 +250,9 @@ func TestGraphRemovalEdgeThirdOpenIsANoOp(t *testing.T) {
 
 	for i := 2; i <= 4; i++ {
 		si := edgeGROpen(t, path)
-		if v := edgeGRVersion(t, si); v != 32 {
+		if v := edgeGRVersion(t, si); v != schemaVersion {
 			si.Close()
-			t.Fatalf("Open #%d: user_version = %d, want 32", i, v)
+			t.Fatalf("Open #%d: user_version = %d, want %d", i, v, schemaVersion)
 		}
 		if left := edgeGRKGObjects(t, si); len(left) != 0 {
 			si.Close()

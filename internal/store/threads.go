@@ -34,18 +34,30 @@ type Thread struct {
 	SessionID     string
 	ParentSession string
 	ForkUUID      string
-	CWD           string
-	Pane          string
-	Window        string
-	State         string
-	Seed          string
+	// TurnUUID is a mind thread's capture key: the uuid of zeus' last PROMPT
+	// record at branch time, which holds still across every tool call of the
+	// turn (core.LastTurnUUID). jobs.mindThreadFor matches on it; ForkUUID
+	// stays the overlay's inherited-history split for every role. "" for an
+	// ask thread and for a mind thread branched off a zeus with no prompt yet.
+	TurnUUID string
+	CWD      string
+	Pane     string
+	Window   string
+	State    string
+	Seed     string
 	// Model is the model ALIAS carl picked for this thread at branch time —
 	// one of haiku/sonnet/opus/fable — or "" for a thread branched before the
 	// picker existed, or with no pick. The alias rather than the resolved id,
 	// so a revive re-resolves through the one map that owns the mapping
 	// (core.ThreadModels, which this package cannot import — see
 	// validThreadModel below).
-	Model     string
+	Model string
+	// Role is what the thread is FOR: "ask" (carl branched it to ask about the
+	// work — every thread before schema v33) or "mind" (the job's mind thread,
+	// which captures are routed to and which finalizes mental-model items).
+	// An empty Role is stored as "ask", the column's DEFAULT spelled in Go so
+	// AddThreadNext hands back the row as stored.
+	Role      string
 	CreatedAt int64 // unix millis
 	ClosedAt  int64 // unix millis; 0 means still live
 }
@@ -74,6 +86,11 @@ var validThreadState = map[string]bool{"live": true, "closed": true}
 // is all this package stores, and resolving it to a `--model` value stays in
 // core alone.
 var validThreadModel = map[string]bool{"haiku": true, "sonnet": true, "opus": true, "fable": true}
+
+// validThreadRole mirrors schemaV33's CHECK on threads.role, so a bad role is
+// refused with a sentence naming the two values rather than a bare
+// constraint-violation string.
+var validThreadRole = map[string]bool{"ask": true, "mind": true}
 
 // maxThreadSuffix bounds the numeric part of a tid. The regexp above bounds
 // the SHAPE but not the MAGNITUDE, and an unbounded suffix is not a cosmetic
@@ -132,13 +149,13 @@ func validateThreadState(state string) error {
 const threadColumns = `job_id, COALESCE(tid,''), COALESCE(title,''), COALESCE(session_id,''),
 	COALESCE(parent_session,''), COALESCE(fork_uuid,''), COALESCE(cwd,''),
 	COALESCE(pane,''), COALESCE("window",''), COALESCE(state,''), COALESCE(seed,''),
-	COALESCE(model,''), COALESCE(created_at,0), COALESCE(closed_at,0)`
+	COALESCE(model,''), COALESCE(role,'ask'), COALESCE(turn_uuid,''), COALESCE(created_at,0), COALESCE(closed_at,0)`
 
 func scanThread(row interface{ Scan(...any) error }) (*Thread, error) {
 	var t Thread
 	if err := row.Scan(&t.JobID, &t.TID, &t.Title, &t.SessionID, &t.ParentSession,
 		&t.ForkUUID, &t.CWD, &t.Pane, &t.Window, &t.State, &t.Seed, &t.Model,
-		&t.CreatedAt, &t.ClosedAt); err != nil {
+		&t.Role, &t.TurnUUID, &t.CreatedAt, &t.ClosedAt); err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -197,6 +214,30 @@ func (s *Store) GetThread(jobID int64, tid string) (*Thread, error) {
 	return t, nil
 }
 
+// GetThreadBySession finds the thread row whose claude session is sessionID,
+// in ANY state — a closed mind thread still owns the items it committed, so
+// the caller decides what a closed row means. (nil, nil) when no row matches,
+// not ErrNotFound: the ordinary caller is asking "is this session a thread at
+// all?", and for zeus or a teammate the answer is simply no.
+//
+// An empty sessionID matches nothing rather than every row whose session is
+// not yet recorded. Should several rows ever share one session, the newest
+// wins — the FindLiveMMItem tiebreak.
+func (s *Store) GetThreadBySession(sessionID string) (*Thread, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRow(`SELECT `+threadColumns+` FROM threads WHERE session_id = ? ORDER BY id DESC LIMIT 1`, sessionID)
+	t, err := scanThread(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get thread by session %s: %w", sessionID, err)
+	}
+	return t, nil
+}
+
 // normalizeThread applies the two convenience stamps and the two defaults
 // every insert path shares, then validates. Returns the row as it will
 // actually be stored, which is what AddThreadNext hands back to its caller.
@@ -227,6 +268,12 @@ func normalizeThread(t Thread) (Thread, error) {
 	if err := validateThreadModel(t.Model); err != nil {
 		return t, err
 	}
+	if t.Role == "" {
+		t.Role = "ask"
+	}
+	if !validThreadRole[t.Role] {
+		return t, fmt.Errorf("bad thread role %q: want ask or mind", t.Role)
+	}
 	if t.CreatedAt == 0 {
 		t.CreatedAt = time.Now().UnixMilli()
 	}
@@ -254,11 +301,11 @@ func normalizeThread(t Thread) (Thread, error) {
 func insertThreadTx(x execer, t Thread) error {
 	res, err := x.Exec(
 		`INSERT INTO threads (job_id, tid, title, session_id, parent_session, fork_uuid,
-			cwd, pane, "window", state, seed, model, created_at, closed_at)
-			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			cwd, pane, "window", state, seed, model, role, turn_uuid, created_at, closed_at)
+			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 			WHERE NOT EXISTS (SELECT 1 FROM threads WHERE job_id = ? AND tid = ?)`,
 		t.JobID, t.TID, t.Title, t.SessionID, t.ParentSession, t.ForkUUID,
-		t.CWD, t.Pane, t.Window, t.State, t.Seed, t.Model, t.CreatedAt, t.ClosedAt,
+		t.CWD, t.Pane, t.Window, t.State, t.Seed, t.Model, t.Role, t.TurnUUID, t.CreatedAt, t.ClosedAt,
 		t.JobID, t.TID,
 	)
 	if err != nil {

@@ -94,6 +94,8 @@ func undoV29(t *testing.T, s *Store) {
 // colliding on a bare CREATE.
 func undoV32(t *testing.T, s *Store) {
 	t.Helper()
+	// Walking back past v32 means walking back past v33 first.
+	undoV33(t, s)
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'kg_edges'`).Scan(&n); err != nil {
 		t.Fatalf("undo v32 probe: %v", err)
@@ -124,10 +126,63 @@ func undoV32(t *testing.T, s *Store) {
 	}
 }
 
+// undoV33 reverses migration 33: mm_flags goes, threads.role and
+// threads.turn_uuid are dropped, and
+// mm_items is rebuilt in its exact v29 shape (the six-value source CHECK, none
+// of the v33 columns), its rows carried back in their v29 columns. A no-op
+// when mm_flags is already gone, so undoV32 can call it unconditionally.
+func undoV33(t *testing.T, s *Store) {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'mm_flags'`).Scan(&n); err != nil {
+		t.Fatalf("undo v33 probe: %v", err)
+	}
+	if n == 0 {
+		return
+	}
+	for _, stmt := range []string{
+		`DROP TABLE mm_flags`,
+		`ALTER TABLE threads DROP COLUMN role`,
+		`ALTER TABLE threads DROP COLUMN turn_uuid`,
+		`CREATE TABLE mm_items_old (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind           TEXT    NOT NULL CHECK(kind IN ('decision','reading','note')),
+			source         TEXT    NOT NULL CHECK(source IN ('question','artifact','artifact-element','code','agent-output','manual')),
+			job_id         INTEGER NOT NULL DEFAULT 0,
+			slug           TEXT    NOT NULL DEFAULT '',
+			source_ref     TEXT    NOT NULL DEFAULT '',
+			content        TEXT    NOT NULL,
+			context        TEXT    NOT NULL DEFAULT '',
+			content_sha    TEXT    NOT NULL DEFAULT '',
+			snapshot       BLOB    NULL,
+			snapshot_ext   TEXT    NOT NULL DEFAULT '',
+			episode_id     INTEGER NOT NULL DEFAULT 0,
+			created_at     INTEGER NOT NULL DEFAULT 0,
+			invalidated_at INTEGER NULL,
+			invalid_reason TEXT    NOT NULL DEFAULT '',
+			invalid_detail TEXT    NOT NULL DEFAULT ''
+		)`,
+		`INSERT INTO mm_items_old SELECT id, kind, source, job_id, slug, source_ref, content, context,
+			content_sha, snapshot, snapshot_ext, episode_id, created_at, invalidated_at,
+			invalid_reason, invalid_detail FROM mm_items WHERE source <> 'capture'`,
+		`DROP TABLE mm_items`,
+		`ALTER TABLE mm_items_old RENAME TO mm_items`,
+		`CREATE INDEX mm_items_ref ON mm_items(source, job_id, source_ref)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("undo v33 %q: %v", stmt, err)
+		}
+	}
+}
+
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v33: the mind-layer columns, threads.role and mm_flags go.
+	if target < 33 {
+		undoV33(t, s)
+	}
 	// Reverse v32: put the knowledge graph's tables back (empty). Reversed
-	// FIRST, since downgrades unwind newest-first.
+	// after v33, since downgrades unwind newest-first.
 	if target < 32 {
 		undoV32(t, s)
 	}

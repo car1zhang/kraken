@@ -18,7 +18,7 @@ _k() {
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'watchlist:cell-side verb — read/write the dream loop'"'"'s watch items, via kraken serve'
         'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
-        'mm:carl'"'"'s verbs for the mental model — mark/drop code read, note, read it back, serve it to Zed'
+        'mm:the mental model — carl'"'"'s mark/drop/note, the drill-down reads, a mind thread'"'"'s commit, contradiction flags'
         'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
         'job:iris-side verb — list/read jobs and write a draft via kraken serve'
         'board:agent-side verb — read the job board (whole, or one job) via kraken serve'
@@ -195,9 +195,47 @@ _k() {
                     'drop:unmark one item by id'
                     'note:record a free note'
                     'get:print the mental model as JSON (live items unless --all)'
+                    'show:print one item in full as JSON'
+                    'source:print the source material behind one item as JSON'
+                    'commit:finalize an item from a mind thread (item JSON on stdin)'
+                    'revise:rewrite one item from a mind thread (item JSON on stdin)'
+                    'flag:record a contradiction; flag raise|dismiss <id> is the lead'"'"'s verdict'
+                    'flags:print contradiction flags as JSON'
                     'lsp:stdio language server drawing code marks into Zed (run by the extension)'
                 )
                 _describe -t ops 'op' ops
+            elif (( CURRENT == 4 )) && [[ $words[3] == flag ]]; then
+                local -a mmflags
+                mmflags=(
+                    'raise:raise a pending flag to carl (the lead only)'
+                    'dismiss:dismiss a pending flag (the lead only)'
+                    '--item:the item that is contradicted'
+                    '--against:the item it contradicts'
+                    '--note:what contradicts what'
+                    '--slug:the job (defaults to the cell this runs in)'
+                )
+                _describe -t flags 'flag' mmflags
+            elif (( CURRENT > 4 )) && [[ $words[3] == flag ]]; then
+                local -a mmflags
+                if [[ $words[4] == raise || $words[4] == dismiss ]]; then
+                    mmflags=(
+                        '--note:why'
+                    )
+                else
+                    mmflags=(
+                        '--item:the item that is contradicted'
+                        '--against:the item it contradicts'
+                        '--note:what contradicts what'
+                        '--slug:the job (defaults to the cell this runs in)'
+                    )
+                fi
+                _describe -t flags 'flag' mmflags
+            elif (( CURRENT >= 4 )) && [[ $words[3] == flags ]]; then
+                local -a mmflags
+                mmflags=(
+                    '--state:pending, raised, dismissed or resolved'
+                )
+                _describe -t flags 'flag' mmflags
             elif (( CURRENT >= 4 )) && [[ $words[3] == mark ]]; then
                 local -a mmflags
                 mmflags=(
@@ -222,10 +260,15 @@ _k() {
                     )
                     _describe -t flags 'flag' mmflags
                 fi
-            elif (( CURRENT == 4 )) && [[ $words[3] == get ]]; then
+            elif (( CURRENT >= 4 )) && [[ $words[3] == get ]]; then
                 local -a mmflags
                 mmflags=(
                     '--all:include invalidated items, not just live ones'
+                    '--file:code marks anchored in this file'
+                    '--q:case-insensitive search over title, body and quote'
+                    '--repo:items of one repo'
+                    '--dir:items at this repo-relative dir or any ancestor'
+                    '--scope:universal or repo'
                 )
                 _describe -t flags 'flag' mmflags
             fi

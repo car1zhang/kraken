@@ -101,7 +101,11 @@ import (
 // the five kv rows that agent wrote (see schemaV31).
 // Version 32 drops every knowledge-graph table and the graph's kv rows
 // (see schemaV32).
-const schemaVersion = 32
+// Version 33 is the mental-model rework: mm_items gains the title/scope/
+// repo/dir/quote/source_json/thread_session/revised_at columns and admits a
+// seventh source, `capture`; threads gains role; mm_flags is new (see
+// schemaV33).
+const schemaVersion = 33
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1776,6 +1780,161 @@ DROP TABLE IF EXISTS kg_recall;
 DELETE FROM kv WHERE key LIKE 'kg.jobvec%' OR key = 'graph_ingest_last';
 `
 
+// schemaV33 is the mental-model rework's schema half. Three changes: mm_flags
+// is this string (IF NOT EXISTS), while the mm_items rebuild
+// (schemaV33MMItems) and threads.role (schemaV33ThreadsRole) are run by the
+// hook, migrateV33MindLayer, each behind a column probe that keeps the step
+// replayable — see the hook for why.
+//
+//   - mm_items is REBUILT, because its v29 CHECK on `source` must admit a
+//     seventh value (`capture`, an item finalized from text carl highlighted
+//     and routed to the job's mind thread) and SQLite cannot alter a CHECK in
+//     place. The rebuild is the documented twelve-step shape cut to what this
+//     table needs: create mm_items_new with every v29 column declared exactly
+//     as before plus the eight new ones, copy every row across by naming each
+//     old column (so every existing value — the NULL that spells "live", the
+//     snapshot BLOB — lands unchanged, and the new columns take their
+//     DEFAULTs), drop, rename, recreate the one index. Nothing references
+//     mm_items — no FK, no trigger, no view — so the drop strands nothing, and
+//     mm_code_anchors (keyed on item_id, ids preserved) is untouched.
+//   - the AUTOINCREMENT high-water mark is carried across before the drop.
+//     Copying rows only seeds mm_items_new's sqlite_sequence entry with the
+//     largest SURVIVING id, so without the carry an id freed by a deleted top
+//     row could be handed out a second time — and an mm id is a name agents
+//     and carl cite (`kraken mm show <id>`) long after the row was written.
+//     The rename moves the sqlite_sequence entry along with the table.
+//   - threads gains role (ask = carl's question thread, every row before this
+//     step; mind = the job's mind thread) and turn_uuid (a mind thread's
+//     capture key, see schemaV33ThreadsTurn), and mm_flags is new: one row per
+//     contradiction an agent noticed between two items, or between an item and
+//     what it was looking at, carried through pending → raised|dismissed and,
+//     once raised, resolved drop|keep by carl (state `resolved`). No FK and
+//     no cascade on any of it, the mm durability posture (mm.go's header): a
+//     flag outlives its job.
+//
+// Appended rather than folded in, same reason as v28: real kraken.db files
+// already exist at v32.
+const schemaV33 = `
+CREATE TABLE IF NOT EXISTS mm_flags (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	item_id     INTEGER NOT NULL DEFAULT 0,   -- the item flagged; no FK, no cascade
+	against_id  INTEGER NOT NULL DEFAULT 0,   -- the item it contradicts; 0 = the transcript, not an item
+	job_id      INTEGER NOT NULL DEFAULT 0,
+	slug        TEXT    NOT NULL DEFAULT '',
+	session     TEXT    NOT NULL DEFAULT '',  -- the claude session that noticed it
+	note        TEXT    NOT NULL,
+	state       TEXT    NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','raised','dismissed','resolved')),
+	raised_by   TEXT    NOT NULL DEFAULT '',
+	raise_note  TEXT    NOT NULL DEFAULT '',
+	raised_at   INTEGER NOT NULL DEFAULT 0,   -- unix millis of the raise OR the dismissal
+	resolved_at INTEGER NOT NULL DEFAULT 0,   -- unix millis; 0 = carl has not ruled
+	resolution  TEXT    NOT NULL DEFAULT '' CHECK(resolution IN ('','drop','keep')),
+	created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mm_flags_state ON mm_flags(state);
+`
+
+// schemaV33MMItems is v33's mm_items rebuild, run by migrateV33MindLayer only
+// when mm_items does not already carry the v33 columns (see schemaV33).
+const schemaV33MMItems = `
+CREATE TABLE mm_items_new (
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind           TEXT    NOT NULL CHECK(kind IN ('decision','reading','note')),
+	source         TEXT    NOT NULL CHECK(source IN ('question','artifact','artifact-element','code','agent-output','manual','capture')),
+	job_id         INTEGER NOT NULL DEFAULT 0,   -- no FK, no cascade: the item outlives its job
+	slug           TEXT    NOT NULL DEFAULT '',  -- display slug at capture time; identity is job_id
+	source_ref     TEXT    NOT NULL DEFAULT '',  -- qid, artifact name, repo/path:range, content hash
+	content        TEXT    NOT NULL,             -- the item's body: the frozen thing carl knows
+	context        TEXT    NOT NULL DEFAULT '',
+	content_sha    TEXT    NOT NULL DEFAULT '',  -- hex sha256 of the frozen payload (see schemaV29)
+	snapshot       BLOB    NULL,                 -- frozen artifact bytes; NULL = this item has none
+	snapshot_ext   TEXT    NOT NULL DEFAULT '',  -- the snapshot's extension, for its MIME on the way out
+	episode_id     INTEGER NOT NULL DEFAULT 0,   -- vestigial: written by nothing, still served
+	created_at     INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	invalidated_at INTEGER NULL,                 -- unix millis; NULL means live
+	invalid_reason TEXT    NOT NULL DEFAULT '',
+	invalid_detail TEXT    NOT NULL DEFAULT '',
+	title          TEXT    NOT NULL DEFAULT '',  -- the one line the rules files render
+	scope          TEXT    NOT NULL DEFAULT 'repo' CHECK(scope IN ('universal','repo')),
+	repo           TEXT    NOT NULL DEFAULT '',  -- checkout basename a repo-scoped item belongs to
+	dir            TEXT    NOT NULL DEFAULT '',  -- repo-relative directory; '' = the whole repo
+	quote          TEXT    NOT NULL DEFAULT '',  -- the verbatim text carl highlighted
+	source_json    TEXT    NOT NULL DEFAULT '',  -- where the capture came from, as JSON
+	thread_session TEXT    NOT NULL DEFAULT '',  -- the mind thread session that committed it
+	revised_at     INTEGER NOT NULL DEFAULT 0    -- unix millis of the last revise; 0 = never
+);
+INSERT INTO mm_items_new (id, kind, source, job_id, slug, source_ref, content, context,
+	content_sha, snapshot, snapshot_ext, episode_id, created_at, invalidated_at,
+	invalid_reason, invalid_detail)
+	SELECT id, kind, source, job_id, slug, source_ref, content, context,
+	content_sha, snapshot, snapshot_ext, episode_id, created_at, invalidated_at,
+	invalid_reason, invalid_detail
+	FROM mm_items;
+INSERT INTO sqlite_sequence (name, seq)
+	SELECT 'mm_items_new', seq FROM sqlite_sequence
+	WHERE name = 'mm_items'
+	AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'mm_items_new');
+UPDATE sqlite_sequence
+	SET seq = (SELECT seq FROM sqlite_sequence WHERE name = 'mm_items')
+	WHERE name = 'mm_items_new'
+	AND seq < COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'mm_items'), 0);
+DROP TABLE mm_items;
+ALTER TABLE mm_items_new RENAME TO mm_items;
+CREATE INDEX mm_items_ref ON mm_items(source, job_id, source_ref);
+`
+
+// schemaV33ThreadsRole is v33's threads.role, run by migrateV33MindLayer only
+// when the column is not already there (see schemaV33).
+const schemaV33ThreadsRole = `
+ALTER TABLE threads ADD COLUMN role TEXT NOT NULL DEFAULT 'ask' CHECK(role IN ('ask','mind'));
+`
+
+// schemaV33ThreadsTurn is v33's threads.turn_uuid, its own probe-guarded
+// step beside role: the uuid of zeus' last PROMPT record when a mind thread
+// was branched — the key CaptureToMind matches a capture to the turn's mind
+// thread on. It is deliberately NOT fork_uuid, which stays zeus' last record
+// of any kind for every role: fork_uuid is where the thread overlay splits
+// inherited history from the thread's own turns, and keying captures on it
+// would either split a working turn's forty tool calls into forty threads or
+// (anchored at the prompt instead) render all of zeus' turn as the thread's.
+const schemaV33ThreadsTurn = `
+ALTER TABLE threads ADD COLUMN turn_uuid TEXT NOT NULL DEFAULT '';
+`
+
+// migrateV33MindLayer is migrations[33]'s hook: it runs the mm_items rebuild
+// and the threads.role ALTER, each only when the table does not already carry
+// its v33 column.
+//
+// The probe is what makes the step safe to REPLAY, which the earlier steps
+// get for free from IF EXISTS / IF NOT EXISTS and these two cannot: SQLite has
+// no ADD COLUMN IF NOT EXISTS, and a rebuild run over a table that already
+// has the v33 columns would copy only the v29 ones across and silently zero
+// every title, scope and quote. A database whose user_version was set back
+// without its shape being reversed — which is how several migration fixtures
+// in this package's tests build an "older" database — then replays this step
+// as a no-op instead of failing the Open.
+func migrateV33MindLayer(tx *sql.Tx) error {
+	for _, step := range []struct{ table, column, ddl string }{
+		{"mm_items", "title", schemaV33MMItems},
+		{"threads", "role", schemaV33ThreadsRole},
+		{"threads", "turn_uuid", schemaV33ThreadsTurn},
+	} {
+		var n int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, step.table, step.column,
+		).Scan(&n); err != nil {
+			return fmt.Errorf("probe %s.%s: %w", step.table, step.column, err)
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := tx.Exec(step.ddl); err != nil {
+			return fmt.Errorf("add %s.%s: %w", step.table, step.column, err)
+		}
+	}
+	return nil
+}
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1884,8 +2043,13 @@ type migrationStep struct {
 // schemaV31).
 // migrations[32] drops every kg_* table and the graph's kv rows (no hook —
 // plain DROP/DELETE statements, all IF EXISTS; see schemaV32).
+// migrations[33] rebuilds mm_items with the rework's columns and the
+// `capture` source, adds threads.role, and creates mm_flags; the hook,
+// migrateV33MindLayer, runs the rebuild and the ALTER only when each table
+// lacks its v33 column, since neither is expressible as IF NOT EXISTS (see
+// schemaV33).
 // Future schema changes append
-// migrations[33], migrations[34], ... rather than editing an existing
+// migrations[34], migrations[35], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1921,6 +2085,7 @@ var migrations = map[int]migrationStep{
 	30: {sql: schemaV30},
 	31: {sql: schemaV31},
 	32: {sql: schemaV32},
+	33: {sql: schemaV33, hook: migrateV33MindLayer},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

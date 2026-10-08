@@ -50,6 +50,10 @@ type threadsReq struct {
 	// deliberately re-reads the alias off the ROW instead of the request, so
 	// no request can move a thread to another tier mid-conversation.
 	Model string `json:"model,omitempty"`
+	// Role is read by `branch` alone: "ask" (the default, an ordinary side
+	// thread) or "mind" (the thread that may write carl's mental model —
+	// normally branched by POST /api/mm/capture rather than by hand).
+	Role string `json:"role,omitempty"`
 }
 
 // threadsHandler serves GET (the board/client read) and POST (branch, kill,
@@ -163,10 +167,20 @@ func threadsPost(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// role, like model, is an exact menu: refused here as a 400 before
+		// anything is spawned, rather than surfacing as jobs' error later.
+		role := req.Role
+		if role == "" {
+			role = "ask"
+		}
+		if role != "ask" && role != "mind" {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad role — want ask or mind"})
+			return
+		}
 		// text is the seed prompt and is deliberately OPTIONAL: branching
 		// with nothing to say yet is a legitimate move (the overlay's own
 		// seed box may be left blank), and the thread comes up idle.
-		t, err := jobs.BranchThread(j, title, req.Text, req.Model)
+		t, err := jobs.BranchThreadWithRole(j, title, req.Text, req.Model, role)
 		if err != nil {
 			threadErr(w, action, req.Slug, err)
 			return
@@ -327,6 +341,9 @@ func threadReadHandler(w http.ResponseWriter, r *http.Request) {
 		"pane":      t.Pane,
 		"fork_uuid": t.ForkUUID,
 		"source":    "none",
+		// the thread's OWN claude session — what a mind-button capture of one
+		// of its blocks sends as the transcript source's session.
+		"session": t.SessionID,
 	}
 	// Located by the thread's OWN session id, never zeus': a fork writes its
 	// own transcript file, which begins with the whole inherited history
@@ -357,7 +374,9 @@ func threadReadHandler(w http.ResponseWriter, r *http.Request) {
 	split := threadForkSplit(uuids, t.ForkUUID)
 	out := make([]map[string]any, 0, len(blocks))
 	for i, b := range blocks {
-		m := map[string]any{"kind": b.Kind, "text": b.Text}
+		// uuid is the record the block came from — what the mind button
+		// captures as a transcript source's anchor (data-mind-uuid).
+		m := map[string]any{"kind": b.Kind, "text": b.Text, "uuid": b.UUID}
 		if b.From != "" {
 			m["from"] = b.From
 		}

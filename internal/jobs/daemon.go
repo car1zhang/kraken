@@ -1049,6 +1049,10 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// notifications on every death.
 	if !mirror {
 		MMVerifyPass(ActiveStore(), now)
+		// the mental model rendered into rules files (mmrender.go, self-paced
+		// at 60s): it WRITES into real checkouts under ~/Developer, which is
+		// the same reason as the verify pass for never running under mirror
+		MMRenderPass(ActiveStore(), now)
 	}
 
 	// Slack intake (slack.go, iris.go): keep iris alive while Slack is

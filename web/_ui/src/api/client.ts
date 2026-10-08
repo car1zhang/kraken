@@ -13,6 +13,8 @@
 import type {
   BackgroundUploadResult,
   CaptureResult,
+  CaptureToMindResult,
+  JobTranscript,
   DraftResult,
   DreamReports,
   GoalsPage,
@@ -35,7 +37,14 @@ import type {
 // `MMItem` as a lib/mm.ts export because its two pure consumers there are
 // leaves, and a second copy of the shape here would be a second thing to keep
 // in step. Nothing in lib/mm.ts imports this module, so there is no cycle.
-import type { MMCreated, MMPage } from "../lib/mm.ts";
+import type {
+  MMCreated,
+  MMFlagsPage,
+  MMPage,
+  MMQuery,
+  MMSourceView,
+} from "../lib/mm.ts";
+import type { CaptureSource } from "../lib/mind.ts";
 
 /**
  * Same origin in production (the bundle is served off the same mux as /api).
@@ -311,8 +320,57 @@ export const removeFromLibrary = (id: number) =>
  * (the MENTAL MODEL pane) needs the invalidated rows to filter TO, and the
  * three that only test membership discard them in one predicate.
  */
-export const fetchMM = (signal?: AbortSignal) =>
-  getJSON<MMPage>("/api/mm", signal);
+export const fetchMM = (signal?: AbortSignal, query: MMQuery = {}) =>
+  getJSON<MMPage>("/api/mm" + mmQueryString(query), signal);
+
+/**
+ * `?q=&repo=&dir=&scope=&live=` for `GET /api/mm`, with every empty field left
+ * OUT rather than sent as `q=`: the server reads an empty param as "no filter"
+ * anyway, and an unfiltered list keeps the exact bare url it always had.
+ */
+export const mmQueryString = (query: MMQuery): string => {
+  const p = new URLSearchParams();
+  for (const key of ["q", "repo", "dir", "scope"] as const) {
+    const v = query[key]?.trim();
+    if (v) p.set(key, v);
+  }
+  if (query.live) p.set("live", "1");
+  const s = p.toString();
+  return s ? "?" + s : "";
+};
+
+/** Raised (or, with another state, pending/dismissed) contradiction flags. */
+export const fetchMMFlags = (state = "raised", signal?: AbortSignal) =>
+  getJSON<MMFlagsPage>(
+    "/api/mm/flags" + (state ? `?state=${encodeURIComponent(state)}` : ""),
+    signal,
+  );
+
+/**
+ * carl's verdict on a raised flag: `drop` invalidates the flagged item (reason
+ * `contradicted`) and closes the flag, `keep` closes it alone.
+ */
+export const resolveMMFlag = (id: number, resolution: "drop" | "keep") =>
+  postJSON<{ ok: true }>("/api/mm/flag/resolve", { id, resolution });
+
+/** What an item was captured from, as the server can still show it. */
+export const fetchMMSource = (id: number, signal?: AbortSignal) =>
+  getJSON<MMSourceView>(`/api/mm/source?id=${id}`, signal);
+
+/**
+ * Route highlighted text to the job's mind thread — forked from zeus' current
+ * turn, or the live one already forked from it. 409 when the job has no live
+ * cell to fork; the caller shows the server's sentence.
+ */
+export const captureToMind = (slug: string, text: string, source: CaptureSource) =>
+  postJSON<CaptureToMindResult>("/api/mm/capture", { slug, text, source });
+
+/** zeus' last `n` transcript blocks — the steer modal's read-only panel. */
+export const fetchJobTranscript = (slug: string, n = 50, signal?: AbortSignal) =>
+  getJSON<JobTranscript>(
+    `/api/job/transcript?slug=${encodeURIComponent(slug)}&n=${n}`,
+    signal,
+  );
 
 /**
  * Freeze the whole artifact as read. The same {slug, home, name} triple
@@ -362,7 +420,14 @@ export const removeMM = (id: number) => postJSON("/api/mm/remove", { id });
 export const threadOp = (
   slug: string,
   op: ThreadOp,
-  extra: { tid?: string; title?: string; text?: string; model?: string } = {},
+  extra: {
+    tid?: string;
+    title?: string;
+    text?: string;
+    model?: string;
+    /** branch only: `ask` (default) or `mind`. */
+    role?: "ask" | "mind";
+  } = {},
 ) => postJSON<{ ok: true; tid?: string }>("/api/threads", { slug, op, ...extra });
 
 // ------------------------------------------------------------ job editor

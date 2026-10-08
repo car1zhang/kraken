@@ -439,7 +439,7 @@ func TestContractAcctThreadSpawnCommandAppliesTheIdenticalRule(t *testing.T) {
 		t.Fatalf("make cell dir: %v", err)
 	}
 
-	unbound, err := threadSpawnCommand(j, "1", "why is this blocked", "seed text", "", nil)
+	unbound, err := threadSpawnCommand(j, "1", "why is this blocked", "seed text", "", "ask", "", nil)
 	if err != nil {
 		t.Fatalf("threadSpawnCommand unbound: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestContractAcctThreadSpawnCommandAppliesTheIdenticalRule(t *testing.T) {
 	}
 
 	j.AccountSlug = "slot-a"
-	bound, err := threadSpawnCommand(j, "1", "why is this blocked", "seed text", "", nil)
+	bound, err := threadSpawnCommand(j, "1", "why is this blocked", "seed text", "", "ask", "", nil)
 	if err != nil {
 		t.Fatalf("threadSpawnCommand bound: %v", err)
 	}

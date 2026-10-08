@@ -107,7 +107,7 @@ func TestThreadSpawnCommandBranch(t *testing.T) {
 	j := &Job{Slug: "branch-cmd"}
 	threadCellDir(t, j)
 
-	cmd, err := threadSpawnCommand(j, "t1", "why is it blocked", "explain the block", "",
+	cmd, err := threadSpawnCommand(j, "t1", "why is it blocked", "explain the block", "", "ask", "",
 		[]string{"--session-id", "11111111-2222-4333-8444-555555555555", "--fork-session", "-r", "zeus-sess"})
 	if err != nil {
 		t.Fatalf("threadSpawnCommand: %v", err)
@@ -165,7 +165,7 @@ func TestThreadSpawnCommandRevive(t *testing.T) {
 	j := &Job{Slug: "revive-cmd"}
 	threadCellDir(t, j)
 
-	cmd, err := threadSpawnCommand(j, "t2", "the title", "", "", []string{"-r", "thread-sess"})
+	cmd, err := threadSpawnCommand(j, "t2", "the title", "", "", "ask", "", []string{"-r", "thread-sess"})
 	if err != nil {
 		t.Fatalf("threadSpawnCommand: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestConcurrentBranchesNeverShareATID(t *testing.T) {
 	// each thread's staged brief must carry ITS OWN title: the staged paths are
 	// keyed by tid, so distinct tids are exactly what keeps them apart
 	for i, r := range rows {
-		if _, err := threadSpawnCommand(j, r.TID, titles[i], "seed "+titles[i], "", []string{"-r", "x"}); err != nil {
+		if _, err := threadSpawnCommand(j, r.TID, titles[i], "seed "+titles[i], "", "ask", "", []string{"-r", "x"}); err != nil {
 			t.Fatalf("threadSpawnCommand: %v", err)
 		}
 	}
@@ -1087,7 +1087,7 @@ func TestCellZeusIgnoresThreads(t *testing.T) {
 // worktree — every clause below counters a specific prior that history sets.
 func TestThreadBriefStatesTheContract(t *testing.T) {
 	j := &Job{Slug: "brief-job"}
-	brief := threadBrief(j, "t2", "why is the daemon quiet", "/tmp/wt-kraken")
+	brief := threadBrief(j, "t2", "why is the daemon quiet", "/tmp/wt-kraken", "ask")
 	lower := strings.ToLower(brief)
 
 	for _, want := range []struct{ token, why string }{

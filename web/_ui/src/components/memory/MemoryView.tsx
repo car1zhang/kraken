@@ -32,15 +32,16 @@ export interface MemoryViewProps {
    */
   library: LibraryModel;
   /**
-   * The mental model — App's ONE mm poll, shared with every capture surface
-   * (the artifact viewer's ✓ read, its table marks, the steer modal's two)
-   * so a mark dropped in this pane cannot leave a ✓ standing over there.
+   * The mental model — App's ONE unfiltered mm poll. The Model pane runs its
+   * own filtered poll beside it while its filter box holds text.
    */
   mm: MMModel;
   /** Write a note into the mental model. Routed through the shared mutate. */
   onAddNote: (text: string) => Promise<void>;
   /** Drop one mark by id — invalidates the row rather than deleting it. */
   onRemoveMM: (id: number) => Promise<void>;
+  /** A raised flag's `open job`: the steer modal of that job. Optional. */
+  onOpenJob?: (slug: string) => void;
   /**
    * Open a saved snapshot in the artifact viewer, by its LIBRARY url. That url
    * serves the frozen bytes rather than the live file, which is what makes a
@@ -57,6 +58,7 @@ export function MemoryView({
   mm,
   onAddNote,
   onRemoveMM,
+  onOpenJob,
   onOpenArtifact,
   onRemoveSaved,
 }: MemoryViewProps) {
@@ -100,6 +102,7 @@ export function MemoryView({
         mm={mm}
         onAddNote={onAddNote}
         onRemove={onRemoveMM}
+        onOpenJob={onOpenJob}
       />
     </main>
   );

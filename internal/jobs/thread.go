@@ -587,7 +587,12 @@ func liveThreadPanesForOK(j *Job) (panes map[string]bool, ok bool) {
 // than the cell it hangs off would split one conversation's prompt cache
 // across two logins — and on a bound cell the main lane is carl's, not the
 // job's.
-func threadSpawnCommand(j *Job, tid, title, seed, model string, resumeArgs []string) (string, error) {
+//
+// session and role ride in front too (threadEnvPrefix): the thread's own
+// session id and role, so `kraken mm commit` run from the thread's Bash tool
+// can say who is calling without a process-tree walk. Both spawn paths pass
+// the row's values — a revived mind thread is still the mind thread.
+func threadSpawnCommand(j *Job, tid, title, seed, model, role, session string, resumeArgs []string) (string, error) {
 	resolved, err := threadModel(j, model)
 	if err != nil {
 		return "", err
@@ -596,13 +601,32 @@ func threadSpawnCommand(j *Job, tid, title, seed, model string, resumeArgs []str
 	argv = append(argv, resumeArgs...)
 	wt := threadWorktree(j)
 	cmd, err := stagedCommand(argv,
-		spawnInput{"--append-system-prompt", threadBrief(j, tid, title, wt), threadBriefPath(j, tid)},
-		spawnInput{"--", threadSeed(seed), threadPromptPath(j, tid)})
+		spawnInput{"--append-system-prompt", threadBrief(j, tid, title, wt, role), threadBriefPath(j, tid)},
+		spawnInput{"--", threadSeedFor(seed, role), threadPromptPath(j, tid)})
 	if err != nil {
 		return "", err
 	}
-	return accountEnvPrefix(j) + cmd, nil
+	return accountEnvPrefix(j) + threadEnvPrefix(session, role) + cmd, nil
 }
+
+// threadEnvPrefix is the env-assignment prefix that tells a thread's claude —
+// and every `kraken` verb its Bash tool runs — which thread it is:
+// KRAKEN_THREAD_SESSION and KRAKEN_THREAD_ROLE, single-quoted, with a trailing
+// space so it concatenates in front of the launcher like accountEnvPrefix.
+// It rides the command string rather than the window's environment for
+// accountEnvPrefix's measured reason (a respawned pane inherits no client
+// env). "" when there is no session to name: an anonymous assignment would
+// only make the commit gate's refusal harder to read. PURE.
+func threadEnvPrefix(session, role string) string {
+	if session == "" {
+		return ""
+	}
+	return "KRAKEN_THREAD_SESSION='" + shellSingleQuote(session) + "' KRAKEN_THREAD_ROLE='" + shellSingleQuote(role) + "' "
+}
+
+// validThreadRole is the closed set of thread roles, the threads.role CHECK
+// restated so a bad role is refused before any spawn work.
+func validThreadRole(role string) bool { return role == "ask" || role == "mind" }
 
 // threadModel resolves the model a thread's claude is spawned on, in the one
 // place both spawn paths share: carl's own pick for THIS thread when he made
@@ -670,6 +694,18 @@ func threadWorktree(j *Job) string {
 // before the picker. It is stored on the row, which is what makes a revive
 // come back on the same tier.
 func BranchThread(j *Job, title, seed, model string) (store.Thread, error) {
+	return BranchThreadWithRole(j, title, seed, model, "ask")
+}
+
+// BranchThreadWithRole is BranchThread with the thread's role named: "ask"
+// (carl's question thread, every thread before the mental-model rework) or
+// "mind" (the job's mind thread, the only AGENT-side writer of the mental
+// model, which CaptureToMind branches). The role is stored on the row and staged into the
+// pane's env prefix and brief; anything else is refused before any spawn work.
+func BranchThreadWithRole(j *Job, title, seed, model, role string) (store.Thread, error) {
+	if !validThreadRole(role) {
+		return store.Thread{}, fmt.Errorf("bad thread role %q: want ask or mind", role)
+	}
 	if err := refuseCodexThread(j, "branch"); err != nil {
 		return store.Thread{}, err
 	}
@@ -710,9 +746,20 @@ func BranchThread(j *Job, title, seed, model string) (store.Thread, error) {
 	// provenance only, and best effort: no transcript yet (a zeus that hasn't
 	// taken a turn), an unreadable file, or a truncated tail all leave the
 	// anchor blank rather than failing a spawn carl asked for.
-	forkUUID := ""
+	//
+	// A mind thread records a second anchor beside it, the TURN key
+	// (core.LastTurnUUID, zeus' last prompt record): CaptureToMind matches
+	// captures to a mind thread on it, and it must not move while zeus makes
+	// tool calls inside one turn. ForkUUID itself stays the last record for
+	// every role — the thread overlay splits inherited history on it, and a
+	// prompt-anchored split would render the whole of zeus' turn as the
+	// thread's own conversation.
+	forkUUID, turnUUID := "", ""
 	if path, perr := core.ReadTranscriptPath(zeus); perr == nil {
 		forkUUID = core.LastMessageUUID(path)
+		if role == "mind" {
+			turnUUID = core.LastTurnUUID(path)
+		}
 	}
 	// the tid reservation: allocate and insert in one transaction, so two
 	// concurrent branches can never agree on a tid and stomp each other's
@@ -724,16 +771,18 @@ func BranchThread(j *Job, title, seed, model string) (store.Thread, error) {
 		SessionID:     sessionID,
 		ParentSession: zeus.SessionID,
 		ForkUUID:      forkUUID,
+		TurnUUID:      turnUUID,
 		CWD:           wt,
 		State:         "live",
 		Seed:          seed,
 		Model:         model,
+		Role:          role,
 	})
 	if err != nil {
 		return store.Thread{}, err
 	}
 	noteThreadSpawn(j.ID, t.TID)
-	cmd, err := threadSpawnCommand(j, t.TID, title, seed, t.Model,
+	cmd, err := threadSpawnCommand(j, t.TID, title, seed, t.Model, role, sessionID,
 		[]string{"--session-id", sessionID, "--fork-session", "-r", zeus.SessionID})
 	if err != nil {
 		releaseReservedThread(st, j, t.TID)
@@ -907,7 +956,14 @@ func reviveClaimed(st *store.Store, j *Job, t store.Thread, sess, wt string, ope
 	// t.Model, the alias the row was branched with: a revive that dropped it
 	// would silently move the conversation to another tier mid-thread, which
 	// is the one thing a resumed session must not do to carl.
-	cmd, err := threadSpawnCommand(j, t.TID, t.Title, "", t.Model, []string{"-r", t.SessionID})
+	// t.Role and t.SessionID too, for the same reason: a revived mind thread
+	// that came back briefed as an ask thread, or with no session in its env,
+	// would lose the one write it exists to make.
+	role := t.Role
+	if role == "" {
+		role = "ask" // a row from before roles existed
+	}
+	cmd, err := threadSpawnCommand(j, t.TID, t.Title, "", t.Model, role, t.SessionID, []string{"-r", t.SessionID})
 	if err != nil {
 		releaseReservedThread(st, j, t.TID)
 		return store.Thread{}, err

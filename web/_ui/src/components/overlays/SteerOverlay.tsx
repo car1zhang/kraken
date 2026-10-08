@@ -12,6 +12,7 @@ import {
   editFeedback,
   fetchDraft,
   fetchJobForm,
+  fetchJobTranscript,
   killJob,
   openInEditor,
   reactivateJob,
@@ -23,6 +24,7 @@ import {
 } from "../../api/client.ts";
 import type {
   JobForm,
+  JobTranscript,
   WebJob,
   WebJobAccount,
   WebJobLoad,
@@ -48,7 +50,8 @@ import {
   matchArtifactRef,
 } from "../../lib/artifactRefs.ts";
 import { codeRefTarget } from "../../lib/codeRefs.ts";
-import type { MMItem } from "../../lib/mm.ts";
+import { usePoll } from "../../hooks/usePoll.ts";
+import { threadBlockHTML } from "./ThreadOverlay.tsx";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
@@ -216,20 +219,10 @@ export interface SteerOverlayProps {
   onOpenArtifact(url: string, name: string, jobKey: string): void;
   /** Side-thread overlay. `tid` null opens the ⑂ branch dialog. */
   onOpenThread(slug: string, tid: string | null): void;
-
-  // ---- mental model --------------------------------------------------------
-  // App's one mm poll and the two writes this modal can make against it. All
-  // three OPTIONAL, unlike the two actions above, and for the reason
-  // DocQuestions' `onAskBranched` is: an unwired integrator loses a button
-  // rather than gaining a dead one, because each affordance is hidden outright
-  // without its callback. The list itself is the only state any of them
-  // renders from — there is no local latch anywhere in this family.
-  /** The mental model as the server currently reports it. */
-  mm?: MMItem[];
-  /** Freeze what the cell last said about itself (Q1: the detail IS markable). */
-  onMarkDetail?: (slug: string, text: string) => Promise<void>;
-  /** Mint one answered doc question as a decision. */
-  onMarkDecision?: (slug: string, qid: string) => Promise<void>;
+  // The detail's ○ mark known and the questions panel's → decision were
+  // retired with the board's one-shot marks (PR 2, Q10): text reaches the
+  // mental model through the ◆ mind button, and the transcript panel below is
+  // where most of zeus' prose can now be highlighted.
 }
 
 export function SteerOverlay(props: SteerOverlayProps) {
@@ -285,9 +278,6 @@ function SteerBody({
   mutate,
   onOpenArtifact,
   onOpenThread,
-  mm = [],
-  onMarkDetail,
-  onMarkDecision,
   fileSink,
   rename,
 }: SteerOverlayProps & { fileSink: FileSink; rename: RenameControlState }) {
@@ -745,56 +735,6 @@ function SteerBody({
     if (found) lastSweep.current = { detail: detailHTML, spec: specHTML, key: akey };
   }, [detailHTML, specHTML, job?.artifacts]);
 
-  // ---- the detail's read mark ---------------------------------------------
-  //
-  // What zeus says it is stuck on is the one piece of agent prose the board
-  // shows outside an artifact, and Q1 answered that it IS markable — this is
-  // often where the fact carl learns actually arrives.
-  //
-  // The text marked is the detail as RENDERED: `textContent` off the same
-  // element the reader is looking at, so what is frozen is the sentence
-  // without its markdown punctuation. Read in an effect rather than during
-  // render for the obvious reason (the element does not exist on the first
-  // pass) and one more: `textContent` is layout-independent, so it answers the
-  // same string under jsdom as in a browser, which `innerText` would not.
-  // Setting the same string is a no-op re-render, so this is free on the 3s
-  // poll's identical HTML.
-  const [detailText, setDetailText] = useState("");
-  const [markingDetail, setMarkingDetail] = useState(false);
-  useEffect(() => {
-    const host = document.getElementById("steer-detail");
-    setDetailText((host?.textContent || detail || "").trim());
-  }, [detailHTML, detail]);
-  // Server state, the ☆ save rule: a live agent-output item whose frozen
-  // content IS this text. Compared by content rather than by a source_ref the
-  // client would have to sha256 to reproduce — and content equality is the
-  // same question that identity is asking.
-  const detailMarked =
-    !!detailText &&
-    mm.some(
-      (it) =>
-        it.source === "agent-output" &&
-        !it.invalidated_at &&
-        it.content.trim() === detailText,
-    );
-  const markDetailNow = useCallback(async () => {
-    if (!onMarkDetail || !detailText || markingDetail) return;
-    setMarkingDetail(true);
-    await onMarkDetail(jobSlug, detailText);
-    setMarkingDetail(false);
-  }, [onMarkDetail, detailText, markingDetail, jobSlug]);
-
-  /**
-   * The questions panel's decision mint, re-addressed from (qid) to
-   * (slug, qid). The panel knows the question and this modal knows the job.
-   */
-  const markDecision = useCallback(
-    async (qid: string) => {
-      await onMarkDecision?.(jobSlug, qid);
-    },
-    [onMarkDecision, jobSlug],
-  );
-
   return (
     <>
       <div className="panel-head">
@@ -874,7 +814,13 @@ function SteerBody({
           ✕ cancel job
         </button>
       </div>
-      <div className="panel-body answer-body">
+      <div
+        className="panel-body answer-body"
+        // the job any selection inside this modal belongs to — the ◆ mind
+        // button's slug (lib/mind.ts selectionSlug); text with no finer source
+        // (the detail, the spec) posts as `manual` against it
+        data-mind-slug={jobSlug}
+      >
         {/* above the context block, directly under the head button that opens
             it — the same placement the editor gives it, and the same reason:
             it is about the job the title names, not about the cell's state */}
@@ -913,31 +859,15 @@ function SteerBody({
             // renderMD escapes before transforming, so agent text is inert
             dangerouslySetInnerHTML={detailHTML}
           />
-          {/* Under the detail rather than in the head: it is an action ON that
-              paragraph, and the head's controls are all about the JOB. Hidden
-              without a callback (see the props block) and without text to
-              freeze — a detail that renders to nothing is nothing to know. */}
-          {detail && onMarkDetail && detailText ? (
-            <div className="steer-detail-mark">
-              <button
-                className={"mm-markbtn" + (detailMarked ? " on" : "")}
-                id="steer-detail-mark"
-                aria-pressed={detailMarked}
-                disabled={markingDetail || detailMarked}
-                title={
-                  detailMarked
-                    ? "already in your mental model — drop it from the memory view"
-                    : "keep what the cell just said as something you know"
-                }
-                onClick={() => void markDetailNow()}
-              >
-                {detailMarked ? "✓ known" : "○ mark known"}
-              </button>
-            </div>
-          ) : null}
           <div className="last-sent" id="steer-lastsent" hidden={!lastSent}>
             {lastSent ? `me→zeus: ${lastSent}` : ""}
           </div>
+          {/* Q5: zeus' recent transcript, read-only — the one web surface
+              where more than zeus' LAST text block can be read, and so the
+              one where most of what zeus explains can be highlighted for the
+              ◆ mind button. Withheld for an archived job, whose synthetic
+              slug no route answers for. */}
+          {job && !job.archived ? <ZeusTranscriptPanel slug={jobSlug} /> : null}
           {/* Conditional rather than a `hidden={…}` wrapper like its siblings
               above, and deliberately so: "no estimate" is the absence of the
               element, not an element with nothing in it. A hidden wrapper keeps
@@ -991,11 +921,6 @@ function SteerBody({
                 // thread overlay stacks above this modal exactly as a chip
                 // click does — no close/reopen choreography needed here
                 onAskBranched={onOpenThread}
-                mm={mm}
-                // undefined without the integrator's callback, which is what
-                // hides the → decision button rather than offering a press
-                // that can only fail
-                onMarkDecision={onMarkDecision ? markDecision : undefined}
               />
             ) : null}
           </div>
@@ -1160,6 +1085,72 @@ function SteerBody({
  * "estimated  ago" when the stamp is absent, which a present `load` never is
  * (WebJobLoad) — the same defensive-only category as loadROI's zero arms.
  */
+/** How many of zeus' transcript blocks the panel shows. */
+const TRANSCRIPT_BLOCKS = 50;
+/** The modal's cadence — the board poll that re-renders it is 3s too. */
+const TRANSCRIPT_POLL_MS = 3000;
+
+/**
+ * zeus' last 50 transcript blocks, rendered by the thread overlay's block
+ * renderer, each block stamped as a `transcript` mind source (zeus' session +
+ * the record uuid). Read-only: steering is the composer below.
+ *
+ * Painted imperatively and only when the markup CHANGES, for the thread
+ * overlay's reason plus one of the mind button's: re-setting identical
+ * innerHTML every 3s would reset the scroll AND collapse any selection carl
+ * is in the middle of making.
+ */
+function ZeusTranscriptPanel({ slug }: { slug: string }) {
+  const [open, setOpen] = useState(true);
+  const read = usePoll<JobTranscript>(
+    (signal) => fetchJobTranscript(slug, TRANSCRIPT_BLOCKS, signal),
+    TRANSCRIPT_POLL_MS,
+    { enabled: open },
+  );
+  const box = useRef<HTMLDivElement | null>(null);
+  const last = useRef("");
+  const blocks = read.data?.blocks ?? [];
+  const session = read.data?.session ?? "";
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const html = blocks.length
+      ? blocks
+          .map((b) => threadBlockHTML(b, false, "", { session, speaker: "zeus" }))
+          .join("")
+      : "";
+    if (html === last.current) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    const prevTop = el.scrollTop;
+    last.current = html;
+    el.innerHTML = html;
+    el.scrollTop = atBottom ? el.scrollHeight : prevTop;
+  }, [blocks, session]);
+  // Nothing to show is nothing rendered: a job with no stamped session (never
+  // started) answers an empty list, and an empty titled box would read as a
+  // transcript that is somehow blank.
+  const empty = read.data !== undefined && blocks.length === 0;
+  return (
+    <div
+      className="steer-transcript"
+      id="steer-transcript"
+      hidden={empty && !read.error}
+      data-mind-slug={slug}
+    >
+      <button
+        className="steer-transcript-head"
+        aria-expanded={open}
+        title={open ? "hide zeus' transcript" : "show zeus' recent transcript"}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "▾" : "▸"} zeus · last {TRANSCRIPT_BLOCKS} blocks
+        {read.error ? ` · couldn't read: ${read.error.message}` : ""}
+      </button>
+      <div className="convo steer-transcript-body" ref={box} hidden={!open} />
+    </div>
+  );
+}
+
 function LoadDrill({
   load,
   roi,

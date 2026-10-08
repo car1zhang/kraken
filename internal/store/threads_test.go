@@ -40,6 +40,7 @@ func TestThreadRoundTrip(t *testing.T) {
 		Window:        "@3",
 		State:         "live",
 		Seed:          "look at watchPRs",
+		Role:          "mind",
 		CreatedAt:     1000,
 	}
 	if err := s.AddThread(want); err != nil {

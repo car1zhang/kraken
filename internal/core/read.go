@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -207,6 +208,85 @@ func LastBlocks(path string, n int) ([]block, int, error) {
 	}
 }
 
+// BlocksAround returns the blocks within radius of the record carrying uuid,
+// wherever in the transcript it sits: up to radius blocks before the first
+// block stamped with uuid, every block through the last one stamped with it,
+// and up to radius after. first and last index the hit span inside the
+// returned slice; found is false (with nil blocks) when no block carries the
+// uuid.
+//
+// It is the FORWARD counterpart of LastBlocks, for a reader that knows which
+// record it wants rather than how much of the tail: a mental-model item's
+// source pointer can name a record from the start of a 40 MB transcript, which
+// LastBlocks' lastBlocksScanLimit tail can never reach. Memory stays bounded by
+// one line plus 2·radius blocks — the file streams line by line through the
+// same per-line parsers (parseBlocks / parseCodexBlocks, dispatched by
+// IsCodexRollout exactly as LastBlocks does), a ring holds the blocks before
+// the hit, and the scan stops once radius blocks follow the last hit. Lines are
+// read with bufio.Reader rather than a Scanner so one oversized record (a huge
+// tool result) has no ceiling to trip over and fail the whole read.
+func BlocksAround(path, uuid string, radius int) (blocks []block, first, last int, found bool, err error) {
+	if uuid == "" {
+		return nil, 0, 0, false, nil // codex blocks carry no uuid; "" would match them all
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, 0, false, fmt.Errorf("open transcript: %v", err)
+	}
+	defer f.Close()
+	parse := parseBlocks
+	if IsCodexRollout(path) {
+		parse = parseCodexBlocks
+	}
+	radius = max(radius, 0)
+	var before []block // ring of the last radius blocks before the first hit
+	after := 0         // blocks collected since the last hit
+	rd := bufio.NewReaderSize(f, 64*1024)
+	for {
+		line, rerr := rd.ReadString('\n')
+		if line != "" {
+			for _, b := range parse([]string{line}) {
+				switch {
+				case b.UUID == uuid:
+					if !found {
+						found = true
+						blocks = append(blocks, before...)
+						before = nil
+						first = len(blocks)
+					}
+					blocks = append(blocks, b)
+					last = len(blocks) - 1
+					after = 0
+				case found:
+					if after == radius {
+						return blocks, first, last, true, nil
+					}
+					blocks = append(blocks, b)
+					after++
+				default:
+					if radius == 0 {
+						continue
+					}
+					if len(before) == radius {
+						before = append(before[:0], before[1:]...)
+					}
+					before = append(before, b)
+				}
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return nil, 0, 0, false, fmt.Errorf("read transcript: %v", rerr)
+		}
+	}
+	if !found {
+		return nil, 0, 0, false, nil
+	}
+	return blocks, first, last, true, nil
+}
+
 // Stall classifies how the last turn recorded in a transcript ended.
 // Kind "" = healthy/none, "api-error" = the turn died on an API failure
 // (Claude Code appends a synthetic assistant entry only after its own
@@ -344,6 +424,84 @@ func LastMessageUUID(path string) string {
 			return ""
 		}
 	}
+}
+
+// LastTurnUUID returns the uuid of the transcript's last PROMPT record — a
+// `user` record whose content is a prompt carl (or a steer) typed, rather
+// than a tool result or something the harness wrote — or "" when there is
+// none (or the file cannot be read). It is the mind thread's "same turn"
+// key: every tool call zeus makes inside one turn appends records, so
+// LastMessageUUID moves constantly mid-turn, while this one moves only when
+// a new prompt arrives.
+//
+// Deliberately NOT a tail read: one /do turn's tool results can run past
+// lastBlocksScanLimit (10 of 43 zeus transcripts measured on 2026-10-08
+// carried a prompt-to-prompt span over 4 MB, the longest 11.7 MB), and a
+// bounded tail then answers "" for exactly the turns carl reads artifacts
+// during, which branches one mind thread per capture. This runs once per
+// capture or branch, never on a tick, so it reads the whole file forward one
+// line at a time — BlocksAround's reader — and keeps the last prompt it saw.
+//
+// parseBlocks (via userBlocks) already gives a tool_result-only user record
+// no block at all, drops a bare <system-reminder> injection, and parses a
+// harness-wrapped teammate message as a "teammate" block, so none of those
+// count. harnessUserRecord drops the rest of what Claude Code itself writes
+// as `user` records — background-task notifications, slash-command echoes,
+// the compaction summary, an interrupt marker — measured at ~40% of the
+// non-prompt user records in real cell transcripts: carl's next prompt is
+// what starts a new turn, not the daemon's `/color` or a finished Bash task.
+func LastTurnUUID(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	last := ""
+	rd := bufio.NewReaderSize(f, 64*1024)
+	for {
+		line, rerr := rd.ReadString('\n')
+		if line != "" {
+			for _, b := range parseBlocks([]string{line}) {
+				if b.Kind == "user" && b.UUID != "" && !harnessUserRecord(b.Text) {
+					last = b.UUID
+				}
+			}
+		}
+		if rerr != nil {
+			break // EOF, or a read error: the last prompt seen is still the answer
+		}
+	}
+	return last
+}
+
+// harnessUserRecord reports whether a `user` block's text is one Claude Code
+// wrote itself rather than a prompt: a background-task completion, a LOCAL
+// slash command's echo and output (`/model`, `/compact`, the daemon's
+// `/color` — these begin `<command-name>`), a `!` shell command's input and
+// output, the post-compaction summary, or an interrupt marker. Every one of
+// these lands as a user record and parses as a "user" block, and none of
+// them is a new turn. A SKILL invocation is deliberately not here: carl's
+// `/do`, `/pr`, `/aim`, `/info` land as records beginning `<command-message>`
+// (38 of 38 such records in 250 cell transcripts, measured 2026-10-08), and
+// each of those IS carl's next prompt — the turn carl is reading during.
+func harnessUserRecord(text string) bool {
+	t := strings.TrimSpace(text)
+	for _, p := range []string{
+		"<task-notification>",
+		"<command-name>",
+		"<local-command-stdout>",
+		"<local-command-caveat>",
+		"<bash-input>",
+		"<bash-stdout>",
+		"<bash-stderr>",
+		"[Request interrupted",
+		"This session is being continued from a previous conversation",
+	} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // stallText concatenates a message's text content — a plain string, or the
