@@ -20,10 +20,13 @@ import (
 // way a session file's "busy" outlives the turn.
 
 // pipelineStageSet names the six phase-governing skills — the only skill
-// names that count as a stage. `load` is deliberately absent: it is the
-// reference skill (no phase, no cell section — see skills.go's SkillsFS
-// comment), consulted mid-phase, so a `load` hit would overwrite the real
-// phase with a lookup. Every other skill a cell might touch (personal
+// names that count as a stage. `load` and `handoff` are deliberately absent:
+// `load` is a reference skill (no phase, no cell section — see skills.go's
+// SkillsFS comment) consulted mid-phase, so a `load` hit would overwrite the
+// real phase with a lookup; `handoff` is a compaction-with-a-record that
+// returns the agent to the phase it was in, and the daemon types it into a
+// pane on its own, so a `handoff` hit would overwrite the badge with a word
+// that names no phase. Every other skill a cell might touch (personal
 // skills, a target repo's own project skills) is ignored by virtue of not
 // being in this set. Kept as a literal rather than derived from SkillsFS,
 // which is nil whenever root's init hasn't run (unit tests of this package);
@@ -42,8 +45,8 @@ var pipelineStageSet = map[string]bool{
 // IsPipelineStage reports whether a skill name is one of the six
 // phase-governing pipeline skills. Exported for the root package's
 // skills-embed test, which holds this set in lockstep with the embedded
-// bundle (every embedded skill except `load` must be a stage, and a stage
-// cannot outlive its skill).
+// bundle (every embedded skill except `load` and `handoff` must be a stage,
+// and a stage cannot outlive its skill).
 func IsPipelineStage(name string) bool { return pipelineStageSet[name] }
 
 // PipelineStages returns the stage names, sorted. Exported for the same

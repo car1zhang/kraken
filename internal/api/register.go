@@ -189,6 +189,9 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/orch/inbox", orchInboxHandler)
 	mux.HandleFunc("/api/orch/ack", mirrorGated(orchAckHandler))
 	mux.HandleFunc("/api/orch/context", mirrorGated(orchContextHandler))
+	// /api/cell/context is the same statusline report from a CELL's claudes
+	// (`kraken ctx-hook --slug`), feeding the daemon's auto-handoff pass.
+	mux.HandleFunc("/api/cell/context", mirrorGated(cellContextHandler))
 	mux.HandleFunc("/api/graph/recall-rearm", mirrorGated(graphRecallRearmHandler))
 	mux.HandleFunc("/api/kronos", kronosHandler(defaultPeerSource))
 	mux.HandleFunc("/api/job/list", jobListHandler)

@@ -1151,6 +1151,71 @@ func limitHookEntry(slug, krakenBin string) map[string]any {
 	}
 }
 
+// handoffHookCommand builds the exact `kraken handoff-hook` command string a
+// cell's SessionStart compact hook runs. The artifacts dir is passed verbatim
+// with no quoting, like every other path this hook family renders. Shared by
+// handoffHookEntry and mergeHookSettings' append-if-absent check, so the
+// builder and the dedup test cannot drift apart.
+func handoffHookCommand(slug, krakenBin, artifactsDir string) string {
+	return krakenBin + " handoff-hook " + slug + " --artifacts " + artifactsDir + hookCommandFlags()
+}
+
+// handoffHookEntry is the SessionStart group kraken installs into a cell: the
+// "compact" matcher narrows it to the session start that follows a
+// compaction, where `kraken handoff-hook` points the resumed agent at the
+// cell's 80-handoff*.md docs.
+func handoffHookEntry(slug, krakenBin, artifactsDir string) map[string]any {
+	return map[string]any{
+		"matcher": "compact",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": handoffHookCommand(slug, krakenBin, artifactsDir),
+			},
+		},
+	}
+}
+
+// cellArtifactsForSlug resolves the artifacts dir mergeHookSettings bakes into
+// the handoff hook command, since its signature carries a slug and no job. A
+// var so a test can stub it. "" when the slug resolves to no job, which makes
+// the merge skip the SessionStart group.
+var cellArtifactsForSlug = func(slug string) string {
+	j := LoadJobBySlug(slug)
+	if j == nil {
+		return ""
+	}
+	return CellArtifacts(j)
+}
+
+// cellCtxHookCommand builds the statusline command a cell's settings.json
+// runs: `kraken ctx-hook --slug <slug>`, whose cell mode reports the context
+// fill to /api/cell/context and wraps the user's own statusline.
+func cellCtxHookCommand(slug, krakenBin string) string {
+	return krakenBin + " ctx-hook --slug " + slug + hookCommandFlags()
+}
+
+// mergeCellStatusLine applies mergeKronosStatusLine's three-way rule to a
+// cell's settings: absent → install kraken's ctx-hook; an object already
+// running ctx-hook → rewritten to the current command; anything else (another
+// command, or a non-object value) → left alone with one log line.
+func mergeCellStatusLine(parsed map[string]any, slug, krakenBin string) {
+	if existing, ok := parsed["statusLine"].(map[string]any); ok {
+		cmd, _ := existing["command"].(string)
+		if !strings.Contains(cmd, "ctx-hook") {
+			dlogEvent("info", "cell-settings", "%s: statusLine already runs something else — leaving it alone, so the cell's context meter stays off", slug)
+			return
+		}
+	} else if _, present := parsed["statusLine"]; present {
+		dlogEvent("info", "cell-settings", "%s: statusLine is present but not an object — leaving it alone, so the cell's context meter stays off", slug)
+		return
+	}
+	parsed["statusLine"] = map[string]any{
+		"type":    "command",
+		"command": cellCtxHookCommand(slug, krakenBin),
+	}
+}
+
 // recallHookEvents are the hook events mid-conversation recall rides on: one,
 // UserPromptSubmit, which queries on carl's new message and lands in front of
 // the agent before it starts thinking. Carl's prompt is real evidence of what
@@ -1215,14 +1280,18 @@ var retiredRecallHookEvents = []string{"PostToolUse"}
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
 //
-// It renders FOUR kraken groups across FOUR hook events: the pr-hook group
-// under PostToolUse, the bash-lint group under PreToolUse, the limit-hook
-// group under StopFailure (limitHookEntry, the usage-limit rescue), and a
-// recall group under each of recallHookEvents (UserPromptSubmit). The two
-// kinds use DIFFERENT merge rules and the difference is deliberate — pr-hook,
-// bash-lint and limit-hook append when their exact command is absent, recall
-// REPLACES — for the reason spelled out at the recall loop below. It also
-// REMOVES: retiredRecallHookEvents strips the recall group kraken used to
+// It renders FIVE kraken groups across FIVE hook events plus the statusline:
+// the pr-hook group under PostToolUse, the bash-lint group under PreToolUse,
+// the limit-hook group under StopFailure (limitHookEntry, the usage-limit
+// rescue), the handoff-hook group under SessionStart (handoffHookEntry,
+// matcher "compact" — added only when the slug resolves to a job, via
+// cellArtifactsForSlug), a recall group under each of recallHookEvents
+// (UserPromptSubmit), and the ctx-hook statusLine (mergeCellStatusLine). The
+// groups use two DIFFERENT merge rules and the difference is deliberate:
+// pr-hook, bash-lint and limit-hook append when their exact command is absent,
+// while recall and handoff-hook REPLACE (drop every group running that verb,
+// append the current one) — for the reasons spelled out at the handoff block
+// and the recall loop below. It also REMOVES: retiredRecallHookEvents strips the recall group kraken used to
 // install under PostToolUse, which is why that removal pass runs over the very
 // list the pr-hook append just wrote, and why withoutRecallHooks must never
 // match a pr-hook command. Either way, groups kraken did not write and
@@ -1247,6 +1316,21 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	// command carries the slug and the binary path and is therefore its own
 	// identity test.
 	ensureHookGroup(hooks, "StopFailure", limitHookCommand(slug, krakenBin), limitHookEntry(slug, krakenBin))
+	// The handoff hook (cmd_handoffhook.go): SessionStart with the "compact"
+	// matcher, REPLACED like recall's below rather than appended-if-absent.
+	// Its command carries hookCommandFlags(), so a changed --serve-addr or
+	// --db-path would otherwise leave the old command beside the new one.
+	// Every existing SessionStart group running handoff-hook is dropped, the
+	// repo's other groups keep their order, and the current entry is appended
+	// after them. A SessionStart value that exists but is not an array is left
+	// alone, ensureHookGroup's rule. Skipped entirely when the slug resolves to
+	// no job, since there is then no artifacts dir to point at.
+	if dir := cellArtifactsForSlug(slug); dir != "" {
+		groups, ok := hooks["SessionStart"].([]any)
+		if _, exists := hooks["SessionStart"]; ok || !exists {
+			hooks["SessionStart"] = append(withoutHandoffHooks(groups), handoffHookEntry(slug, krakenBin, dir))
+		}
+	}
 	// The recall hook (recall.go) is REPLACED rather than appended-if-absent,
 	// which is the one place this function's two halves differ. PostToolUse's
 	// entry is keyed by slug AND binary path, so an exact-command match is a
@@ -1296,6 +1380,7 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	// an object) is covered by one line rather than by each branch
 	// remembering.
 	parsed["hooks"] = hooks
+	mergeCellStatusLine(parsed, slug, krakenBin)
 	mergeTeammateSettings(parsed)
 	out, err := json.MarshalIndent(parsed, "", "  ")
 	if err != nil {
@@ -1407,10 +1492,11 @@ const recallHookMarker = "recall-hook"
 // (a job slugged pr-hook) mentions " pr-hook" too, so it would be exempted from
 // removal and a fresh group appended beside it on EVERY install, forever.
 //
-// Matching the VERB — the second whitespace field, which is where kraken's own
-// builders put it — removes both collisions structurally rather than trading
-// one for the other, and it still recognizes every command shape ever written:
-// `kraken recall-hook`, `... --serve-addr X --db-path Y`, and the slugged form.
+// Matching the VERB — the first field after the binary that is one of
+// kraken's hook verbs (groupRunsVerb) — removes both collisions structurally
+// rather than trading one for the other, and it still recognizes every command
+// shape ever written: `kraken recall-hook`, `... --serve-addr X --db-path Y`,
+// and the slugged form.
 //
 // A whole GROUP goes, not the matching hook inside it, because kraken writes
 // its recall entry as a group of exactly one hook: a group carrying kraken's
@@ -1430,19 +1516,36 @@ func withoutRecallHooks(groups []any) []any {
 	return out
 }
 
+// handoffHookVerb is the verb that identifies kraken's SessionStart handoff
+// group for mergeHookSettings' replace pass.
+const handoffHookVerb = "handoff-hook"
+
+// withoutHandoffHooks returns groups with every group dropped that runs
+// `kraken handoff-hook` (groupRunsVerb) — the removal half of the handoff
+// group's replace merge, withoutRecallHooks' twin. Groups that are not
+// objects, or run anything else, are kept in order.
+func withoutHandoffHooks(groups []any) []any {
+	var out []any
+	for _, g := range groups {
+		if group, ok := g.(map[string]any); ok && groupRunsVerb(group, handoffHookVerb) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
 // groupRunsVerb reports whether any hook in one settings group RUNS the named
 // kraken verb, as opposed to merely mentioning it.
 //
-// The rule is one line long: the verb counts anywhere in the command EXCEPT the
-// trailing field, which is where every kraken hook builder puts the slug
-// (prHookCommand, limitHookCommand and recallHookCommand all render `<bin>
-// <verb>[ flags][ slug]`). That is precisely enough to separate the two real
-// collisions from each other — `kraken recall-hook pr-hook` (a job slugged
-// pr-hook) matches recall-hook and not pr-hook; `kraken pr-hook recall-hook`
-// (a job slugged recall-hook) matches pr-hook and not recall-hook — while a
-// two-field command (`kraken recall-hook`, the pre-slug shape still sitting in
-// every installed settings.json) is carved back in, since there the verb IS the
-// trailing field.
+// The command's verb is the FIRST field after the binary that is one of
+// kraken's own hook verbs (krakenHookVerbs); the group runs verb iff that
+// field equals it. Every kraken hook builder renders the verb before anything
+// else it appends (slug, flags, --artifacts), so a slug that happens to equal
+// a verb name — `kraken recall-hook pr-hook`, `kraken pr-hook recall-hook`,
+// `kraken handoff-hook recall-hook --artifacts <dir>` — is never mistaken for
+// the verb, wherever in the command the slug lands. The two-field pre-slug
+// shape (`kraken recall-hook`) is matched like any other.
 //
 // Deliberately NOT "the second field": krakenBin is os.Executable's answer, a
 // path this process does not choose and that may contain spaces — `/Users/a
@@ -1470,28 +1573,43 @@ func groupRunsVerb(group map[string]any, verb string) bool {
 		}
 		f := strings.Fields(cmd)
 		for i := 1; i < len(f); i++ {
-			// the trailing field is the slug — except when the command is
-			// exactly `<bin> <verb>`, which carries no slug at all
-			if i == len(f)-1 && i > 1 {
-				continue
-			}
-			if f[i] == verb {
-				return true
+			if krakenHookVerbs[f[i]] {
+				if f[i] == verb {
+					return true
+				}
+				break
 			}
 		}
 	}
 	return false
 }
 
+// krakenHookVerbs are the kraken verbs a settings.json hook or statusline
+// command runs; groupRunsVerb takes the first of these in a command as its verb.
+var krakenHookVerbs = map[string]bool{
+	"pr-hook":      true,
+	"bash-lint":    true,
+	"limit-hook":   true,
+	"recall-hook":  true,
+	"handoff-hook": true,
+	"ctx-hook":     true,
+	"rearm-hook":   true,
+}
+
 // installHookSettings writes (or merges kraken's entries into) the cell's
-// project-scoped Claude Code hook config, <wt>/.claude/settings.json. Kraken's
-// groups go in across four events: a Bash-matcher PostToolUse group so zeus'
-// `gh pr create` calls self-report to `kraken pr-hook`, plus a matcher-less
-// recall group under each of recallHookEvents (UserPromptSubmit) so every
-// prompt in the cell asks `kraken recall-hook` whether the knowledge graph has
-// anything to add (recall.go) — and, on an older cell's file, the removal of
-// the retired PostToolUse recall entry. Called from StartCell after the
-// worktree is up and before claude launches in it.
+// project-scoped Claude Code hook config, <wt>/.claude/settings.json, via
+// mergeHookSettings. Kraken's groups go in across five events: a Bash-matcher
+// PostToolUse group so zeus' `gh pr create` calls self-report to `kraken
+// pr-hook`; a Bash-matcher PreToolUse group running `kraken bash-lint`; a
+// rate_limit-matcher StopFailure group running `kraken limit-hook`; a
+// compact-matcher SessionStart group running `kraken handoff-hook` with the
+// cell's artifacts dir (only when the slug resolves to a job); and a
+// matcher-less recall group under each of recallHookEvents (UserPromptSubmit)
+// so every prompt in the cell asks `kraken recall-hook` whether the knowledge
+// graph has anything to add (recall.go) — and, on an older cell's file, the
+// removal of the retired PostToolUse recall entry. It also installs the
+// `kraken ctx-hook --slug <slug>` statusLine per mergeCellStatusLine. Called
+// from StartCell after the worktree is up and before claude launches in it.
 //
 // Never fails the cell, and each kind is safe to lose for its own reason:
 // PR attachment still happens via the daemon's scan/poll paths, and recall is

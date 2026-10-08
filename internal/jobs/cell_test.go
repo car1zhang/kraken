@@ -202,6 +202,9 @@ func TestMergeHookSettings(t *testing.T) {
 			wantEnv[teamsEnvVar] = "1"
 			c.want["env"] = wantEnv
 			c.want["teammateMode"] = "tmux"
+			// and the cell statusline, folded in for the same reason — this
+			// table is about pr-hook merging
+			c.want["statusLine"] = map[string]any{"type": "command", "command": "kraken ctx-hook --slug foo"}
 			// every render likewise carries recall's matcher-less group under
 			// each of recallHookEvents, APPENDED after whatever that event
 			// already expects (PostToolUse holds the pr-hook group too, and
@@ -1201,4 +1204,93 @@ func TestReactivateJobRestoresArtifacts(t *testing.T) {
 	if !found {
 		t.Fatal("ReactivateJob no longer calls restoreCellArtifacts — a revived cell comes up without its artifacts, and the empty dir wipes the stored mirror at the next teardown")
 	}
+}
+
+// Regression pin (hephaestus, round 3): a slug equal to a kraken hook verb
+// must never read as that verb. groupRunsVerb used to match the verb in any
+// non-trailing field, so a handoff-hook group for a job slugged recall-hook
+// (slug mid-command) was stripped by the recall replace pass.
+func TestGroupRunsVerbIgnoresSlugEqualToVerb(t *testing.T) {
+	group := func(cmd string) map[string]any {
+		return map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd}}}
+	}
+	cases := []struct {
+		cmd, verb string
+		want      bool
+	}{
+		{"kraken handoff-hook recall-hook --artifacts /x/artifacts", "recall-hook", false},
+		{"kraken handoff-hook recall-hook --artifacts /x/artifacts", "handoff-hook", true},
+		{"kraken pr-hook recall-hook", "recall-hook", false},
+		{"kraken pr-hook limit-hook", "limit-hook", false},
+		{"kraken limit-hook pr-hook", "pr-hook", false},
+		{"kraken limit-hook pr-hook", "limit-hook", true},
+		{"kraken recall-hook pr-hook", "recall-hook", true},
+		{"kraken recall-hook", "recall-hook", true},
+		{"/Users/a b/kraken recall-hook foo", "recall-hook", true},
+		{"env FOO=1 kraken recall-hook foo", "recall-hook", true},
+		{"kraken limit-hook --serve-addr 127.0.0.1:9 --agent kronos", "limit-hook", true},
+	}
+	for _, c := range cases {
+		if got := groupRunsVerb(group(c.cmd), c.verb); got != c.want {
+			t.Errorf("groupRunsVerb(%q, %q) = %v, want %v", c.cmd, c.verb, got, c.want)
+		}
+	}
+	if kept := withoutRecallHooks([]any{handoffHookEntry("recall-hook", "kraken", "/x/artifacts")}); len(kept) != 1 {
+		t.Errorf("withoutRecallHooks stripped the handoff group of a job slugged recall-hook: kept %v", kept)
+	}
+}
+
+// Regression pin (hephaestus, round 4): the SessionStart handoff group is
+// replace-merged, so a stale handoff-hook command (e.g. an old --serve-addr)
+// is dropped rather than left beside the current one, the repo's own group
+// keeps its place, and a re-merge is byte-identical.
+func TestMergeHookSettingsReplacesStaleHandoffGroup(t *testing.T) {
+	orig := cellArtifactsForSlug
+	cellArtifactsForSlug = func(string) string { return "/x/artifacts" }
+	t.Cleanup(func() { cellArtifactsForSlug = orig })
+
+	existing := `{"hooks":{"SessionStart":[` +
+		`{"matcher":"compact","hooks":[{"type":"command","command":"kraken handoff-hook foo --artifacts /x/artifacts --serve-addr 127.0.0.1:9"}]},` +
+		`{"matcher":"startup","hooks":[{"type":"command","command":"echo repo"}]}]}}`
+	first, err := mergeHookSettings([]byte(existing), "foo", "kraken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Hooks map[string][]map[string]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(first, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	ss := parsed.Hooks["SessionStart"]
+	if len(ss) != 2 {
+		t.Fatalf("SessionStart has %d groups, want 2 (repo's + current handoff): %s", len(ss), first)
+	}
+	if ss[0]["matcher"] != "startup" {
+		t.Errorf("repo group not first: %v", ss[0])
+	}
+	want := handoffHookEntry("foo", "kraken", "/x/artifacts")
+	if !reflect.DeepEqual(any(ss[1]), hephPinJSONRoundTrip(t, want)) {
+		t.Errorf("handoff group = %v, want %v", ss[1], want)
+	}
+	second, err := mergeHookSettings(first, "foo", "kraken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("re-merge not byte-identical:\n%s\n---\n%s", first, second)
+	}
+}
+
+func hephPinJSONRoundTrip(t *testing.T, v any) any {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

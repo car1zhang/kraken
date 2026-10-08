@@ -67,6 +67,8 @@ func main() {
 		cmdLimitHook(rest)
 	case "recall-hook":
 		cmdRecallHook(rest)
+	case "handoff-hook":
+		cmdHandoffHook(rest)
 	// kronos' two hooks, installed into ~/.kraken/kronos/.claude/settings.json
 	// (statusLine + PostCompact) rather than into a cell's. Kept out of
 	// usage() with the rest of the hook family: neither is a verb a human

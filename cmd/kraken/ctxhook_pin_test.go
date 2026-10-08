@@ -38,3 +38,16 @@ func TestCtxHookFlagsIgnoreJunkAndHalfFlags(t *testing.T) {
 		t.Fatalf("KRAKEN_SERVE_ADDR = %q, want the full flag honoured despite junk neighbours", got)
 	}
 }
+
+// Regression pin (hephaestus, round 4): the wrapped user statusline's stdout
+// is retained only up to userStatusLineMaxBytes, so a flooding command cannot
+// grow memory for the whole timeout; its output still renders.
+func TestRunUserStatusLineCapsStdout(t *testing.T) {
+	line, ok := runUserStatusLine("head -c 200000 /dev/zero | tr '\\0' x", nil)
+	if !ok {
+		t.Fatal("flooding command reported failure, want its (capped) output")
+	}
+	if len(line) != userStatusLineMaxBytes {
+		t.Fatalf("captured %d bytes, want exactly %d", len(line), userStatusLineMaxBytes)
+	}
+}

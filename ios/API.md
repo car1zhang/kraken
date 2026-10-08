@@ -2216,6 +2216,10 @@ Response: `{"ok": true}`.
 
 Errors: 405 (non-POST), 400 (bad json; an unrecognized field; blank `session_id`; absent or out-of-range `used_percentage`), 413, 500 (no store wired, or the write failed). Gated under `--mirror`. **Additive, no contract bump.**
 
+### `POST /api/cell/context` — localhost-only, agent-side (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+A cell claude's statusline hook (`kraken ctx-hook --slug <slug>`) reporting its context fill: body `{"slug", "session_id", "used_percentage", "context_window_size"}` (unknown fields rejected), stored per job and session for the daemon's auto-handoff pass. Once the job has a stamped zeus session, a report from any other session is answered `{"ok": true}` without being stored. Response `{"ok": true}`; errors 405, 400 (bad json, unknown field, blank `slug`/`session_id`, absent or out-of-range `used_percentage`), 404 (no such job), 413, 500. Gated under `--mirror`. **Additive, no contract bump.**
+
 ### `POST /api/graph/recall-rearm` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
 
 kronos' PostCompact hook (`kraken rearm-hook`) dropping the session's `kg_recall` marks, so the facts its compacted-away context used to hold can be delivered again.
