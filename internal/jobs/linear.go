@@ -24,9 +24,9 @@ import (
 // the cell's zeus or land in the job body, depending on whether the job has
 // started.
 //
-// Shaped after graphPass rather than after kickDream: same self-pacing, same
-// single-flighted goroutine, same "a free function owns its own throttle so
-// the daemon.go edit is one line". What it borrows from dream.go instead is
+// Shaped as a self-paced pass rather than after kickDream: a single-flighted
+// goroutine, and "a free function owns its own throttle so the daemon.go edit
+// is one line". What it borrows from dream.go instead is
 // the WATERMARK DISCIPLINE, and there are two watermarks doing two different
 // jobs:
 //
@@ -83,7 +83,7 @@ const linearOverlap = 60 * time.Second
 const linearCommentCap = 400
 
 // linearPollRunning single-flights the poll across ticks, the same shape
-// usagePassRunning and graphSlowRunning use: the poll does network I/O,
+// usagePassRunning and mmCodeRunning use: the poll does network I/O,
 // creates job rows and writes files, and two of those overlapping would race
 // to create the same slug.
 var linearPollRunning atomic.Bool
@@ -168,7 +168,7 @@ type linearSource interface {
 // atomic loads, because a machine with no linear.env must reach a decision
 // rather than a throttle. No store or no configured key returns SILENTLY —
 // an absent ~/.kraken/linear.env means the feature is simply not configured,
-// which is core.ErrNoEmbedder's posture and must not log an error every
+// which is core.ErrNoSlack's posture and must not log an error every
 // fifteen seconds on a machine that never wanted the feature.
 func LinearPass(now time.Time) {
 	st := ActiveStore()

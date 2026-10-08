@@ -51,18 +51,26 @@ func contractWatchV28(t *testing.T) *Store {
 // behind.
 func contractWatchOverlay(t *testing.T, s *Store, src, dst, pred, fact string, o WatchItem) int64 {
 	t.Helper()
-	srcID, err := s.UpsertNode(GraphNode{Name: src})
-	if err != nil {
-		t.Fatalf("UpsertNode %q: %v", src, err)
+	// Raw SQL: the graph accessors went with v32, and this fixture runs on a
+	// v28-shaped database where the kg_* tables exist again.
+	node := func(name string) int64 {
+		t.Helper()
+		if _, err := s.db.Exec(`INSERT INTO kg_nodes (name) VALUES (?) ON CONFLICT DO NOTHING`, name); err != nil {
+			t.Fatalf("seed node %q: %v", name, err)
+		}
+		var id int64
+		if err := s.db.QueryRow(`SELECT id FROM kg_nodes WHERE LOWER(name) = LOWER(?)`, name).Scan(&id); err != nil {
+			t.Fatalf("read node %q: %v", name, err)
+		}
+		return id
 	}
-	dstID, err := s.UpsertNode(GraphNode{Name: dst})
+	srcID, dstID := node(src), node(dst)
+	res, err := s.db.Exec(`INSERT INTO kg_edges (src_id, dst_id, predicate, fact, strength) VALUES (?, ?, ?, ?, 5)`,
+		srcID, dstID, pred, fact)
 	if err != nil {
-		t.Fatalf("UpsertNode %q: %v", dst, err)
+		t.Fatalf("seed edge %q: %v", fact, err)
 	}
-	edgeID, _, err := s.InsertEdge(GraphEdge{SrcID: srcID, DstID: dstID, Predicate: pred, Fact: fact, Strength: 5})
-	if err != nil {
-		t.Fatalf("InsertEdge %q: %v", fact, err)
-	}
+	edgeID, _ := res.LastInsertId()
 	if _, err := s.db.Exec(`INSERT INTO kg_watch (edge_id, class, state, sightings, first_seen,
 		last_seen, evidence, suggested_fix, pr_url, updated_at, verdict, comment, commented_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -117,13 +125,11 @@ func contractWatchCount(t *testing.T, s *Store, table string) int {
 
 // TestContractWatchV29Lands is the shape assertion for the cutover: after a
 // v28 database migrates, the three new tables exist, the overlay table is
-// gone, every kg_* table is EMPTY, and kg_episodes admits the new
-// `mental-model` kind alongside the legacy five.
+// gone, and (since the walk continues to v32) every kg_* table is gone too.
 //
-// The emptiness half is the one worth having a test for. A migration that
-// created the new tables and forgot the wipe would pass every functional test
-// in this package and leave the graph carrying the swept corpus the whole
-// feature exists to retire — silently, since nothing else reads a row count.
+// The kg_* half is the one worth having a test for: a walk that left the
+// graph tables standing would pass every functional test in this package,
+// since nothing else reads them any more.
 func TestContractWatchV29Lands(t *testing.T) {
 	s := contractWatchV28(t)
 
@@ -160,36 +166,13 @@ func TestContractWatchV29Lands(t *testing.T) {
 	if contractWatchTableExists(t, s, "kg_watch") {
 		t.Errorf("kg_watch survived v29")
 	}
+	// migrate() walks on past v29 to v32, which drops every kg_* table — so
+	// what v29 emptied is absent rather than empty on the far side.
 	for _, table := range []string{"kg_edges", "kg_episodes", "kg_nodes", "kg_node_aliases",
-		"kg_recall", "kg_layout", "kg_ingest_cursor"} {
-		if n := contractWatchCount(t, s, table); n != 0 {
-			t.Errorf("%s has %d rows after the v29 wipe, want 0", table, n)
+		"kg_recall", "kg_layout", "kg_ingest_cursor", "kg_edges_fts"} {
+		if contractWatchTableExists(t, s, table) {
+			t.Errorf("%s still exists after the walk to v%d", table, schemaVersion)
 		}
-	}
-	if n := contractWatchCount(t, s, "kg_edges_fts"); n != 0 {
-		t.Errorf("kg_edges_fts has %d rows after the v29 wipe, want 0", n)
-	}
-
-	// The widened CHECK: the new kind is accepted, and the legacy five still
-	// are — widening is the safe direction, since a constraint that stopped
-	// admitting a kind some straggler still writes would fail at runtime.
-	for _, kind := range []string{"mental-model", "transcript", "feedback", "watchlist", "artifact", "job"} {
-		if _, err := s.db.Exec(`INSERT INTO kg_episodes (kind, ref, content, hash, ts, state, created_at)
-			VALUES (?, 'ref', 'content', ?, 1, 'pending', 1)`, kind, "hash-"+kind); err != nil {
-			t.Errorf("kg_episodes rejects kind %q after v29: %v", kind, err)
-		}
-	}
-	// ...and both of its indexes came back with it: a rebuild has to recreate
-	// them by hand, and the unique one is what makes an identical re-mint a
-	// find rather than a duplicate.
-	var idx string
-	if err := s.db.QueryRow(
-		`SELECT name FROM sqlite_master WHERE type='index' AND name='kg_episodes_hash'`).Scan(&idx); err != nil {
-		t.Errorf("kg_episodes_hash index missing after the rebuild: %v", err)
-	}
-	if err := s.db.QueryRow(
-		`SELECT name FROM sqlite_master WHERE type='index' AND name='kg_episodes_state'`).Scan(&idx); err != nil {
-		t.Errorf("kg_episodes_state index missing after the rebuild: %v", err)
 	}
 }
 

@@ -20,9 +20,10 @@ import (
 // what carl says he knows, and everything agent-observed has been swept out of
 // it. A watch row riding an edge would be the one agent observation left
 // inside carl's mental model, and every read of the graph — spawn injection,
-// mid-conversation recall, `k graph search` — would surface it as something
-// carl knows. The retrieval the overlay bought is the exact thing that now has
-// to stop.
+// mid-conversation recall, the graph search verb — would surface it as
+// something carl knows. The retrieval the overlay bought is the exact thing
+// that had to stop. (v32 then removed the knowledge graph altogether; this
+// table never depended on it after v29.)
 //
 // So the observation is a column again, and the table is standalone: no edge,
 // no episode, no join. Two things survive the move deliberately.

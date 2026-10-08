@@ -85,8 +85,6 @@ func main() {
 		cmdWatchlist(rest)
 	case "load":
 		cmdLoad(rest)
-	case "graph":
-		cmdGraph(rest)
 	case "mm":
 		cmdMM(rest)
 	case "slack":
@@ -145,7 +143,7 @@ Commands:
                       the scheduler tick loop (derives working/blocked from
                       cell activity, tracks each job's PRs — merge =
                       notification + board chip, never teardown; it starts
-                      nothing on its own but the nightly dream/graph jobs it
+                      nothing on its own but the nightly dream job it
                       creates itself, since submitting a job on the board is
                       what starts its cell) + nightly backup rotation as
                       background goroutines, and serves the web UI/API (default
@@ -239,25 +237,9 @@ Commands:
                       Both numbers or neither — a half estimate has no ratio,
                       and 'clear' is how an estimate is removed. get prints
                       the pair as JSON ({"load": null} when unestimated).
-  k graph pending|add|done|search|get|stats ...
-                      cell-side verbs for the knowledge graph, proxied the
-                      same way as 'k questions'. pending [--limit N] prints
-                      the episodes still awaiting extraction as JSON, oldest
-                      first; add [--episode <id>] [--json <path>] posts one
-                      extraction turn's whole output ({nodes[], edges[],
-                      invalidate[]}, on stdin when --json is omitted) and
-                      prints the resulting node/edge ids as JSON; done
-                      <episode id> closes one episode, including one nothing
-                      was extracted from; search "<query>" [--limit N] prints
-                      the matching facts as triples ready to paste into
-                      context; get <handle>... dereferences a handle from an
-                      injected fact line — F<edge id> or a bare edge id for
-                      the full untruncated fact, E<episode id> for the
-                      episode it came from — printing each bundle as JSON;
-                      stats prints the node/edge/episode counts as JSON.
   k mm mark|drop|note|get|lsp ...
                       CARL's verbs for the mental model — what he has read,
-                      decided and noted — proxied the same way as 'k graph'.
+                      decided and noted — proxied the same way as 'k questions'.
                       Agents never write it: these are for carl's own shell
                       and the Zed capture task, and no skill documents them.
                       mark --worktree <dir> --file <path> --start-row <n>

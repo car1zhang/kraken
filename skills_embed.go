@@ -12,8 +12,8 @@ import (
 	"kraken/internal/jobs"
 )
 
-// skillsFS embeds kraken's kraken-owned skill bundle — the six pipeline
-// skills (info, aim, do, pr, dream, graph) plus the two phase-less skills,
+// skillsFS embeds kraken's kraken-owned skill bundle — the five pipeline
+// skills (info, aim, do, pr, dream) plus the two phase-less skills,
 // load (a reference) and handoff (a compaction with a written record) — so
 // every cell gets them without a runtime dependency on carl's personal
 // ~/.claude/skills bank. jobs cannot import this package (the util ← core ←

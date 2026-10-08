@@ -39,8 +39,8 @@ import (
 // board must be able to show the model it cannot write), and every POST here
 // is a POST-ONLY path, so each is wrapped with mirrorGated at REGISTRATION
 // rather than gating inline — the legal form when there is no GET on the same
-// path for a route wrapper to take down with it (register.go, /api/graph/add's
-// reasoning). The two GETs live on their own paths for exactly that reason.
+// path for a route wrapper to take down with it (register.go). The two GETs
+// live on their own paths for exactly that reason.
 //
 // Decode discipline is jobload.go's, wholesale: a 1 MB MaxBytesReader (413,
 // distinct from a malformed body's 400), DisallowUnknownFields with a refusal
@@ -181,9 +181,12 @@ type webMMItem struct {
 	SourceRef string `json:"source_ref"`
 	// Content is served WHOLE — never cut. It is what carl read, and the
 	// invalidated view exists precisely to show it back to him in full.
-	Content       string       `json:"content"`
-	Context       string       `json:"context"`
-	CreatedAt     int64        `json:"created_at"` // unix millis
+	Content   string `json:"content"`
+	Context   string `json:"context"`
+	CreatedAt int64  `json:"created_at"` // unix millis
+	// EpisodeID is vestigial — nothing writes it since the knowledge graph
+	// was removed, so it is 0 on every new row — but it stays on the wire
+	// because shipped iOS builds decode `episode_id` as a non-optional key.
 	EpisodeID     int64        `json:"episode_id"`
 	InvalidatedAt int64        `json:"invalidated_at,omitempty"` // unix millis
 	InvalidReason string       `json:"invalid_reason,omitempty"`
@@ -390,8 +393,8 @@ func mmFindLive(w http.ResponseWriter, st *store.Store, source string, jobID int
 // The `already` contract is check-then-act: `FindLiveMMItem` and `AddMMItem`
 // are two statements with no transaction between them, so two concurrent
 // identical marks both miss the probe and both insert — two live items for one
-// artifact, two episodes, and a memory pane showing carl the same reading
-// twice. The producers are real rather than theoretical: a Zed keybinding that
+// artifact, and a memory pane showing carl the same reading twice. The
+// producers are real rather than theoretical: a Zed keybinding that
 // double-fires, the CLI racing a board click, a second tab. The board's own
 // `markingRead`/`markingSel` flags guard exactly one of those three.
 //
@@ -424,7 +427,7 @@ type mmWrite struct {
 	snapshot    []byte
 	hasSnapshot bool
 	// afterInsert runs once the item, its snapshot and its anchor are all
-	// persisted, and BEFORE the episode is minted. It exists for the artifact
+	// persisted. It exists for the artifact
 	// route's supersede, which must not run until the replacement it is
 	// replacing things FOR actually exists — see mmArtifactHandler. A failure
 	// here is a 500 with the item already saved, which the `already` probe
@@ -433,15 +436,11 @@ type mmWrite struct {
 }
 
 // mmCreate is the one write path: persist the item, attach its snapshot and
-// anchor if it has them, run afterInsert, mint the layer-2 episode, answer
-// {"id", "episode"}.
+// anchor if it has them, run afterInsert, answer {"id"}.
 //
-// The ORDER is the whole of it. The item is persisted FIRST and the episode
-// minted last, so a mint failure leaves a real item with no episode rather
-// than an episode pointing at nothing — and the response is then a 500 with
-// the item already saved, which is safe precisely because every route's
-// `already` probe makes the retry idempotent. Going the other way round would
-// make a retry mint a second episode for an item that was never written.
+// The item is persisted FIRST, so a later failure (snapshot, anchor,
+// afterInsert) is a 500 with the item already saved, which is safe precisely
+// because every route's `already` probe makes the retry idempotent.
 //
 // Callers hold mmWriteMu across their probe and this call.
 func mmCreate(w http.ResponseWriter, st *store.Store, wr mmWrite) {
@@ -475,14 +474,8 @@ func mmCreate(w http.ResponseWriter, st *store.Store, wr mmWrite) {
 			return
 		}
 	}
-	episode, err := jobs.MintMMEpisode(st, it, wr.anchor)
-	if err != nil {
-		util.LogEvent("web", "error", "mm-create", "mm-episode: "+err.Error())
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
 	util.LogEvent("web", "info", "mm-create", "mm-create "+it.Source+" "+strconv.FormatInt(id, 10))
-	webJSON(w, http.StatusOK, map[string]any{"id": id, "episode": episode})
+	webJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
 // --- GET /api/mm ---
@@ -539,8 +532,9 @@ func mmListHandler(w http.ResponseWriter, r *http.Request) {
 	// the item being live, and an INVALIDATED code mark is exactly the row
 	// whose anchor a reader most wants (which commit killed it, which PR). Both
 	// queries run to whole slices before the loop starts, which is what keeps
-	// the store's single connection out of the nested-query deadlock
-	// graph.go:573 documents.
+	// the store's single connection out of a nested-query deadlock (a second
+	// query issued while the first's rows are still open would wait on the
+	// one connection forever).
 	//
 	// An anchor read that fails is not fatal to the list: the items are the
 	// payload and an anchor is decoration, so a broken anchor table costs the
@@ -1202,24 +1196,12 @@ func mmDetailHandler(w http.ResponseWriter, r *http.Request) {
 // about that moment, and a row deleted on a mis-click would take its frozen
 // snapshot with it.
 //
-// The unmark must also UNLEARN, and that is why this is not one store call.
-// The nightly /graph cell compiles a live item into entities and facts, and
-// those facts are what `graphContext` appends to every cell spawn and what
-// mid-conversation recall injects. An unmark that retired the item from the
-// memory pane and left its compiled edges live would go on telling every
-// future agent the thing carl had just said he no longer knows — indefinitely,
-// because the verify pass only walks LIVE items, so an item invalidated here
-// is never revisited by anything. Closing edges is core behavior on EVERY
-// invalidation path (the verify pass' own mmInvalidate does it too), not an
-// extra this route opted into.
-//
 // An already-invalidated item answers 200 and re-runs NOTHING. The read is
 // what makes that checkable: store.InvalidateMMItem returns a silent nil for a
 // dead row (deliberately — it must not overwrite the first reason), so without
-// looking first this handler could not tell a real transition from a repeat,
-// and a double-click would close an already-closed episode's edges a second
-// time. Re-removing an item the verify pass already killed therefore neither
-// rewrites the cause of death nor re-fires the unlearning.
+// looking first this handler could not tell a real transition from a repeat.
+// Re-removing an item the verify pass already killed therefore neither
+// rewrites the cause of death nor logs a second removal.
 func mmRemoveHandler(w http.ResponseWriter, r *http.Request) {
 	if !mmPost(w, r) {
 		return
@@ -1261,17 +1243,6 @@ func mmRemoveHandler(w http.ResponseWriter, r *http.Request) {
 		util.LogEvent("web", "error", "mm-remove", "mm-remove: "+err.Error())
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
-	}
-	// The item is already invalidated by the time this runs, so a failure here
-	// is LOGGED rather than returned: answering 500 would tell carl the unmark
-	// did not happen when the half that shows on his screen did, and there is
-	// no retry that could complete the other half — a second remove now takes
-	// the already-invalidated path above. An episode-less item (0) and an
-	// episode with no edges are both silent successes inside CloseMMItemEdges.
-	if closed, err := jobs.CloseMMItemEdges(st, it.EpisodeID, now); err != nil {
-		util.LogEvent("web", "error", "mm-remove", "mm-remove edges "+strconv.FormatInt(req.ID, 10)+": "+err.Error())
-	} else if closed > 0 {
-		util.LogEvent("web", "info", "mm-remove", "mm-remove "+strconv.FormatInt(req.ID, 10)+" closed "+strconv.Itoa(closed)+" edge(s)")
 	}
 	util.LogEvent("web", "info", "mm-remove", "mm-remove "+strconv.FormatInt(req.ID, 10))
 	webJSON(w, http.StatusOK, map[string]bool{"ok": true})

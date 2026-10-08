@@ -361,8 +361,7 @@ describe("the view tabs", () => {
     const tabs = [...container.querySelectorAll(".viewtab")];
     expect(tabs.map((t) => t.textContent)).toEqual([
       "BOARD",
-      // the graph view's tab reads MEMORY — a label change only, everything
-      // internal (the view id, the `graph-` classes, /api/graph) keeps `graph`
+      // the memory view's tab (a legacy `#/graph` hash still lands on it)
       "MEMORY",
       "DREAM",
       "LOG",

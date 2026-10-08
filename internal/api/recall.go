@@ -6,54 +6,49 @@ import (
 	"kraken/internal/jobs"
 )
 
-// recall.go — POST /api/graph/recall: the server half of mid-conversation
-// memory. A cell's UserPromptSubmit/PostToolUse hooks (`kraken
-// recall-hook`) POST the
-// hook payload here; the response is the block that hook emits as
-// additionalContext.
+// recall.go — POST /api/recall: the server half of mid-conversation delivery.
+// A cell's UserPromptSubmit hook (`kraken recall-hook`) POSTs the hook payload
+// here; the response is the block that hook emits as additionalContext —
+// carl's goals and, for the job's lead session, his unread notes (jobs.Recall).
 //
-// Its own file rather than a tenth handler in graph.go because it is the one
-// graph route whose caller is neither a human nor the extraction agent: it is
-// machinery running inside somebody else's conversation, and the failure
-// posture that follows from that (never an error status, never anything but a
-// string) belongs beside the reasoning for it rather than in the middle of the
-// viewer's reads.
+// The route's caller is machinery running inside somebody else's
+// conversation, and the failure posture that follows from that (never an
+// error status for an empty answer, never anything but a string) is stated on
+// the handler below.
 //
-// Additive, like every other graph route — a NEW PATH, no existing shape
-// touched — so it never bumps `apiContract`, and no client that predates it decodes
-// anything differently. Nothing in Models.swift consumes it; the only caller
-// is a hook process on localhost.
+// Nothing in Models.swift consumes it; the only caller is `kraken recall-hook`
+// on localhost.
 
-// graphRecallHandler serves POST /api/graph/recall.
+// recallHandler serves POST /api/recall.
 //
 // A well-formed body ALWAYS gets a 200 carrying whatever jobs.Recall returned,
-// and `""` is a completely ordinary answer: the caller is a hook, and "the
-// graph has nothing to add" is the common case, not a fault. Returning an
-// error status for it would put a red line in the user's hook output on almost
-// every prompt.
+// and `""` is a completely ordinary answer: the caller is a hook, and "nothing
+// new to say" is the common case, not a fault. Returning an error status for
+// it would put a red line in the user's hook output on almost every prompt.
 //
 // The 4xx cases are the ones where the REQUEST is wrong rather than the
 // answer empty — a wrong method, a body that isn't the shape this route takes
 // — which are bugs in the caller and worth being loud about.
-func graphRecallHandler(w http.ResponseWriter, r *http.Request) {
+//
+// Registered mirrorGated: a firing records what it delivered (the notes kv
+// row), which is a write.
+func recallHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req jobs.RecallRequest
-	if !decodeGraphBody(w, r, &req,
+	if !decodeStrictBody(w, r, &req,
 		"this route takes only session_id, event, prompt, transcript_path and slug") {
 		return
 	}
-	st, ok := graphStore(w)
+	st, ok := activeStore(w)
 	if !ok {
 		return
 	}
 	// r.Context() rather than context.Background(): the hook client gives up
-	// at 4s while the embedder Recall calls has a much longer budget of its
-	// own, so a slow embed can outlive the request. Recall checks this
-	// immediately before recording a delivery — a caller that is gone read
-	// nothing, and marking it delivered would withhold those facts from the
-	// session permanently.
+	// at 4s, and Recall checks the context before recording a delivery — a
+	// caller that is gone read nothing, and recording it as delivered would
+	// suppress that block.
 	webJSON(w, http.StatusOK, map[string]string{"context": jobs.Recall(r.Context(), st, req)})
 }

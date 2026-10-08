@@ -99,7 +99,9 @@ import (
 // schemaV30).
 // Version 31 retires the orchestrator agent: it drops orch_inbox and deletes
 // the five kv rows that agent wrote (see schemaV31).
-const schemaVersion = 31
+// Version 32 drops every knowledge-graph table and the graph's kv rows
+// (see schemaV32).
+const schemaVersion = 32
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1742,6 +1744,38 @@ DELETE FROM kv WHERE key IN (
 );
 `
 
+// schemaV32 removes the knowledge graph: every kg_* table the earlier steps
+// created (v15's six plus the FTS5 index and its three sync triggers, v19's
+// kg_recall), and the two kv families only the graph wrote — the job-spec
+// vector cache (`kg.jobvec.<id>` / `kg.jobvechash.<id>`) and the nightly
+// ingest watermark (`graph_ingest_last`). kg_watch is not named: v29 already
+// dropped it after carrying its live rows into watch_items.
+//
+// Every statement is IF EXISTS so the step is safe on any database that
+// reaches it, whatever subset of these objects it holds. Triggers go first and
+// the FTS table before kg_edges, so nothing is left referencing a dropped
+// table mid-step. Dropping the FTS5 virtual table still needs the fts5 module
+// compiled in, which is one reason the sqlite_fts5 build tag stays (v15's DDL,
+// replayed by every fresh database, is the other). The historical steps that
+// created these objects are left exactly as they were.
+//
+// mm_items.episode_id is deliberately kept: nothing writes it any more, but
+// shipped iOS builds decode the `episode_id` key /api/mm serves from it.
+const schemaV32 = `
+DROP TRIGGER IF EXISTS kg_edges_ai;
+DROP TRIGGER IF EXISTS kg_edges_ad;
+DROP TRIGGER IF EXISTS kg_edges_au;
+DROP TABLE IF EXISTS kg_edges_fts;
+DROP TABLE IF EXISTS kg_edges;
+DROP TABLE IF EXISTS kg_node_aliases;
+DROP TABLE IF EXISTS kg_nodes;
+DROP TABLE IF EXISTS kg_episodes;
+DROP TABLE IF EXISTS kg_ingest_cursor;
+DROP TABLE IF EXISTS kg_layout;
+DROP TABLE IF EXISTS kg_recall;
+DELETE FROM kv WHERE key LIKE 'kg.jobvec%' OR key = 'graph_ingest_last';
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1848,8 +1882,10 @@ type migrationStep struct {
 // migrations[31] retires the orchestrator agent: drops orch_inbox and deletes
 // the five kv rows it wrote (no hook — both halves are plain SQL; see
 // schemaV31).
+// migrations[32] drops every kg_* table and the graph's kv rows (no hook —
+// plain DROP/DELETE statements, all IF EXISTS; see schemaV32).
 // Future schema changes append
-// migrations[32], migrations[33], ... rather than editing an existing
+// migrations[33], migrations[34], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1884,6 +1920,7 @@ var migrations = map[int]migrationStep{
 	29: {sql: schemaV29, hook: migrateV29MentalModel},
 	30: {sql: schemaV30},
 	31: {sql: schemaV31},
+	32: {sql: schemaV32},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

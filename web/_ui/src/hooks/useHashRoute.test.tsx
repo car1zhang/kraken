@@ -16,9 +16,7 @@ function ViewHarness() {
       <main id="board" hidden={view !== "board"} />
       <main className="logview" id="log" hidden={view !== "log"} />
       <main className="dreamview" id="dream" hidden={view !== "dream"} />
-      {/* the MEMORY tab's <main> keeps the id/class `graph` — the rename is a
-          label, and every internal name stays put */}
-      <main className="graphview" id="graph" hidden={view !== "memory"} />
+      <main className="memoryview" id="memory" hidden={view !== "memory"} />
     </>
   );
 }

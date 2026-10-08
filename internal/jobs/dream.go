@@ -407,7 +407,7 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		clampNote(clamped) +
 		"\n" +
 		"Findings never enter git. The PR carries the hardened diff and nothing else; the\n" +
-		"evidence goes in `00-dream-report.md` and the knowledge graph's watch overlay.\n"
+		"evidence goes in `00-dream-report.md` and the watch store (`kraken watchlist`).\n"
 }
 
 // anyTranscriptSince reports whether any claude transcript was touched at or

@@ -879,9 +879,9 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 	// A briefless zeus can leave its whole crew inheriting zeus' own tier
 	// instead of Opus, so every zeus spawn must stage the full brief. Since the
 	// codex-cells work, StartCell and ReactivateJob no longer call spawnCommand
-	// directly — both route through zeusLaunch, which computes the brief ONCE
-	// (zeusBrief + the sanctioned injections goalContext/graphContext) and hands
-	// it to spawnCommand for a claude job or to codexZeusLaunch→codexAgentsMD
+	// directly — both route through zeusLaunch, which takes the brief ONCE from
+	// zeusLaunchBrief (zeusBrief + the sanctioned injection goalContext) and
+	// hands it to spawnCommand for a claude job or to codexZeusLaunch→codexAgentsMD
 	// for a codex one. This guard protects that topology: the two entry paths
 	// must go through the single seam, the seam must build the full brief and
 	// use it for both agents, and the limit rescue's own spawnCommand must still
@@ -924,12 +924,12 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 		return found
 	}
 	// hasBriefConcat reports whether fn builds the full brief: a `zeusBrief(...)`
-	// call added to the sanctioned injections goalContext/graphContext. Both are
-	// deliberately OUTSIDE zeusBrief (its two pinning tests measure static policy
-	// text), so the concatenation is part of the spawn contract this guard
-	// protects — the brief half must lead, and each addition is one whose
-	// ""-on-any-failure guarantee keeps a briefless spawn impossible.
-	injections := map[string]bool{"goalContext": true, "graphContext": true}
+	// call added to the sanctioned injection goalContext. It is deliberately
+	// OUTSIDE zeusBrief (its two pinning tests measure static policy text), so
+	// the concatenation is part of the spawn contract this guard protects — the
+	// brief half must lead, and the addition is one whose ""-on-any-failure
+	// guarantee keeps a briefless spawn impossible.
+	injections := map[string]bool{"goalContext": true}
 	hasBriefConcat := func(fn *ast.FuncDecl) bool {
 		if fn == nil {
 			return false
@@ -984,13 +984,17 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 			t.Errorf("%s spawns zeus directly instead of via zeusLaunch — route through the seam so the brief is always staged", entry)
 		}
 	}
-	// The seam builds the full brief and stages it for BOTH agents.
+	// zeusLaunchBrief is the one place the full brief is built.
+	if !hasBriefConcat(funcs["zeusLaunchBrief"]) {
+		t.Errorf("zeusLaunchBrief does not build zeusBrief(j) + goalContext(j) — the single brief source is missing or altered")
+	}
+	// The seam takes the brief from zeusLaunchBrief and stages it for BOTH agents.
 	seam := funcs["zeusLaunch"]
 	if seam == nil {
 		t.Fatal("zeusLaunch not found in package jobs")
 	}
-	if !hasBriefConcat(seam) {
-		t.Errorf("zeusLaunch does not build zeusBrief(j) + goalContext(j) + graphContext(j) — the single brief source is missing or altered")
+	if !callsIdent(seam, "zeusLaunchBrief") {
+		t.Errorf("zeusLaunch does not obtain its brief from zeusLaunchBrief")
 	}
 	if !callsIdent(seam, "spawnCommand") {
 		t.Errorf("zeusLaunch's claude path no longer calls spawnCommand with the brief")
@@ -1003,14 +1007,14 @@ func TestZeusSpawnPathsStageTheBrief(t *testing.T) {
 		t.Errorf("codexZeusLaunch does not write the brief through codexAgentsMD — a codex zeus would spawn briefless")
 	}
 	// The limit rescue is the one remaining direct spawnCommand zeus path; it
-	// must still stage a zeusBrief-led brief. Find every spawnCommand caller
-	// other than the seam and require it builds the full brief.
+	// must still stage the full brief, through zeusLaunchBrief. Find every
+	// spawnCommand caller other than the seam and require it does.
 	for name, fn := range funcs {
 		if name == "zeusLaunch" || !callsIdent(fn, "spawnCommand") {
 			continue
 		}
-		if !hasBriefConcat(fn) {
-			t.Errorf("%s calls spawnCommand without staging zeusBrief(j) + the sanctioned injections — a new zeus spawn path must stage the brief too", name)
+		if !callsIdent(fn, "zeusLaunchBrief") && !hasBriefConcat(fn) {
+			t.Errorf("%s calls spawnCommand without staging zeusLaunchBrief(j) — a new zeus spawn path must stage the brief too", name)
 		}
 	}
 }

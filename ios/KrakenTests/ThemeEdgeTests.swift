@@ -374,8 +374,7 @@ final class ThemeEdgeTests: XCTestCase {
 
     // An unrecognized state is reachable (the wire string is whatever the
     // daemon wrote) and must land on ONE fallback rather than a per-string
-    // colour — the same claim `GraphContractTests` makes about
-    // `KTheme.graphTypeColorUI`. Derived from line 28's byte-for-byte
+    // colour. Derived from line 28's byte-for-byte
     // preservation of the four-way state→colour table, whose `default` arm is
     // what these two strings share.
     func testEveryUnrecognizedStateLandsOnOneColour() {

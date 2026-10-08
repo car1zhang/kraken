@@ -10,7 +10,7 @@ import (
 )
 
 // slackenv.go — the Slack intake bot's credential channel. This is a copy of
-// the openai.env / asc.env loader rather than a shared helper on purpose: each
+// the asc.env loader rather than a shared helper on purpose: each
 // one owns its own allowlist, and an allowlist that is shared is an allowlist
 // that grows by accident. What is shared is the SHAPE, and every piece of it
 // is load-bearing.
@@ -28,7 +28,7 @@ import (
 // Process env wins over the file, so an explicit `export` in a terminal can
 // override it without editing the file first.
 //
-// Failure posture is ErrNoEmbedder's, not ship's: no token means the feature
+// Failure posture is "off", not ship's refusal: no token means the feature
 // is OFF, silently. Every caller treats ErrNoSlack as "not configured" and
 // never logs it as an error, so a machine that has never set Slack up sees
 // nothing at all rather than a failing pass every tick.
@@ -88,8 +88,8 @@ type SlackConfig struct {
 	UserID string
 }
 
-// loadSlackEnv parses SlackEnvPath, same defensive shape as loadASCEnv and
-// loadEmbedEnv: a missing, unreadable, or malformed file is an empty map,
+// loadSlackEnv parses SlackEnvPath, same defensive shape as loadASCEnv: a
+// missing, unreadable, or malformed file is an empty map,
 // never an error. A parse error nobody can act on would be strictly worse
 // than the feature reading as unconfigured, which is the state a human
 // already knows how to fix.

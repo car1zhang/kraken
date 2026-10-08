@@ -761,8 +761,8 @@ func mineInputSummaryN(input json.RawMessage, window int) string {
 
 // reducer applies the reduction rules, one JSONL line at a time. Its line
 // method is the single implementation those rules have: ReduceTranscript
-// (whole file) and ReduceJSONLBytes (a span the graph ingest already holds
-// in memory) both call it, so the two readers cannot drift — the same
+// (whole file) and ReduceJSONLBytes (a span already held in memory) both
+// call it, so the two readers cannot drift — the same
 // one-copy rule core.tokenGroup.commit exists to enforce for the token
 // counters. The one piece of cross-line state is midTurnSeen: one mid-turn
 // message is routinely stored as BOTH a queue-operation and a
@@ -771,9 +771,8 @@ func mineInputSummaryN(input json.RawMessage, window int) string {
 // and a queued message the harness delivers is stored a THIRD way, as the
 // delivered `user` record itself (see queuedAlready), so emitting each
 // record unconditionally would print most steers twice. The
-// dedupe is per-reducer, so a graph-ingest span boundary that splits a
-// message's two records can still store one steer as two episodes — a
-// duplicate, never a loss.
+// dedupe is per-reducer, so a span boundary that splits a message's two
+// records can still emit one steer twice — a duplicate, never a loss.
 type reducer struct {
 	// midTurnSeen holds every mid-turn text already emitted, for collapsing
 	// the enqueue/attachment double-write of one message to one section. A
@@ -943,11 +942,9 @@ func (r *reducer) midTurn(out *bytes.Buffer, text string) {
 }
 
 // ReduceJSONLBytes reduces a JSONL span already in memory, per reducer.line's
-// rules with no since filter (the caller chose the span). The graph ingest
-// uses it so kg_episodes stores decision-relevant text rather than raw
-// records — storing raw would have written the tool-result and attachment
-// mass (the large majority of transcript bytes) into kraken.db at the full
-// drain rate, unboundedly (review finding).
+// rules with no since filter (the caller chose the span). Nothing outside
+// this package calls it today (its one caller was the retired graph ingest);
+// it is kept as the in-memory sibling of ReduceTranscript.
 func ReduceJSONLBytes(data []byte) []byte {
 	var out bytes.Buffer
 	var r reducer
@@ -1082,8 +1079,8 @@ const mineRedactKeep = 5
 // text apart from AgentName, which is deliberately NOT routed through here:
 // an agentName is a name kraken or Claude Code mints (`zeus-<slug>`,
 // `athena-logic`), never user-pasted text, so it carries no credential
-// shape. The outputs that ARE redacted are what every dream reader and the graph
-// ingest copy out of a transcript: a secret pasted into a pane once would
+// shape. The outputs that ARE redacted are what every dream reader copies out
+// of a transcript: a secret pasted into a pane once would
 // otherwise be re-copied into a fresh transcript, and from there into
 // kraken.db, on every later sweep that touches the session. Redacting at
 // emission cannot claw back the original transcript — Claude Code owns that
@@ -1097,26 +1094,6 @@ func redactSecrets(s string) string {
 		return string(r) + "…[redacted]"
 	})
 }
-
-// RedactSecrets is redactSecrets exported, for the one caller outside this
-// package: internal/jobs' Recall, which embeds the user's new message to
-// retrieve against the knowledge graph.
-//
-// That call is the only place in the binary where a raw prompt LEAVES THE
-// MACHINE — the two readers above redact at emission because their output is
-// copied forward into new transcripts and kraken.db, which is a propagation
-// problem; this one is an exfiltration problem, and it is the stricter of the
-// two. A prompt beginning "here's the token: xoxp-…, why is it 401ing?" is
-// exactly the message a user would want the graph to have context for, and
-// exactly the one that must not be POSTed to api.openai.com verbatim.
-//
-// The retrieval's OTHER leg (BM25, store-local) still sees the unredacted
-// query: it never leaves the machine, and redacting it would only lose
-// matches.
-//
-// A wrapper rather than renaming the original, because every existing caller
-// is in-package and the unexported name is what mine.go's own tests reach.
-func RedactSecrets(s string) string { return redactSecrets(s) }
 
 // writeReduced appends one labelled section, skipping blanks and the
 // harness-injected <system-reminder> parts that ride along in user records

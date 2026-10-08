@@ -1,14 +1,12 @@
 import SwiftUI
 import Observation
 
-// The MENTAL MODEL: the third pane of the Memory tab beside the graph and the
-// library, plus the pure decisions and the one shared model every capture
-// surface in the app asks the same question through.
+// The MENTAL MODEL: the second pane of the Memory tab beside the library, plus
+// the pure decisions and the one shared model every capture surface in the app
+// asks the same question through.
 //
-// The three panes are the same object at three removes — the graph is what
-// kraken's agents worked out, the library is what carl chose to KEEP, and this
-// is what he has actually READ. One row per thing in his head, frozen at the
-// moment he marked it.
+// The library is what carl chose to KEEP, and this is what he has actually
+// READ. One row per thing in his head, frozen at the moment he marked it.
 //
 // Two rules run through every line here, and both are the LibraryView posture
 // taken literally:
@@ -379,8 +377,8 @@ final class MMViewModel {
 /// expandable to the text that was frozen.
 ///
 /// Its own `List` in the LibraryList shape rather than a section inside the
-/// graph screen: the two are peers, and the mode switch that selects between
-/// them (GraphView.Mode) is a switch and nothing more.
+/// Library pane: the two are peers, and the mode switch that selects between
+/// them (MemoryRootView.Mode) is a switch and nothing more.
 struct MentalModelList: View {
     let baseURL: String
 
@@ -695,9 +693,9 @@ struct MMRowView: View {
     }
 
     private var stamps: String {
-        var s = item.createdAt > 0 ? "marked " + graphShortDate(ms: item.createdAt) : ""
+        var s = item.createdAt > 0 ? "marked " + memoryShortDate(ms: item.createdAt) : ""
         if let at = item.invalidatedAt, at > 0 {
-            s += (s.isEmpty ? "" : " · ") + "invalidated " + graphShortDate(ms: at)
+            s += (s.isEmpty ? "" : " · ") + "invalidated " + memoryShortDate(ms: at)
         }
         return s
     }

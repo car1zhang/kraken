@@ -26,10 +26,7 @@ import (
 // returns "" and this test fails; against the fix (record the fingerprint of
 // the current rendered state, empty included) it returns the block.
 func TestGoalsRecallReArmsAfterDeleteThenRestore(t *testing.T) {
-	st := storeForGraph(t)
-	// no graph facts: this test is about the goals half, and an empty graph is
-	// what isolates it — Recall's graph block stays "" throughout.
-	withFacts(t, nil)
+	st := storeForRecall(t)
 
 	const slug = "goal-pin"
 	const text = "ship goal tracking"
@@ -45,8 +42,8 @@ func TestGoalsRecallReArmsAfterDeleteThenRestore(t *testing.T) {
 	}
 	add()
 
-	// One session, three prompts. The prompts differ so the graph half's
-	// same-query short-circuit is not what is being measured.
+	// One session, four prompts. The prompts differ so nothing about the
+	// prompt is what is being measured.
 	req := RecallRequest{SessionID: "sess-goal-pin", Event: "UserPromptSubmit", Slug: slug}
 	fire := func(prompt string) string {
 		req.Prompt = prompt
@@ -91,8 +88,7 @@ func TestGoalsRecallReArmsAfterDeleteThenRestore(t *testing.T) {
 // on every prompt that happened to follow a tool call. A firing that was never
 // going to carry goals must leave the recorded state alone.
 func TestGoalsRecallDoesNotRecordStateOnANonGoalsFiring(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 
 	const slug = "goal-pin-tool"
 	if _, err := st.CreateJob(&store.Job{Slug: slug, State: "working"}); err != nil {

@@ -27,7 +27,7 @@ import (
 // It STARTS nothing on its own initiative — submitting a job starts
 // its cell in that same HTTP request (jobs.SubmitJob), so there is no queue
 // pass and no cell cap; the tick's only start attempt is the one it makes for
-// a dream or graph job it just created itself, and that attempt is
+// a dream job it just created itself, and that attempt is
 // single-shot. It owns no state that can't be re-derived from files +
 // discovery — the in-memory dedup maps only suppress duplicate
 // notifications, and losing them on restart merely re-notifies once.
@@ -61,7 +61,7 @@ type DaemonStatus struct {
 	//
 	// It has no writer left. tick() returns a nil error on every path — the
 	// queue pass was the only thing that ever produced one, and the one start
-	// the tick still makes (a dream/graph job it created itself) reports its
+	// the tick still makes (a dream job it created itself) reports its
 	// failure per job, to the event log and a notification, rather than
 	// through this one global string that no client renders per job.
 	//
@@ -1039,23 +1039,9 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		d.tokensPass(jobs, live, now)
 	}
 
-	// graph pass (self-paced internally — see graphPass): fill in missing
-	// embeddings and refresh the cached layout. It no longer INGESTS anything
-	// — episodes are minted by carl's own marks now (mm.go), not swept — so
-	// what is left is the vector and layout upkeep. Beside the token pass
-	// because it shares its shape (local reads, store writes, no pane and no
-	// tmux), and skipped under mirror for the sharper of the usual two
-	// reasons: it both writes the database and spends money on an embeddings
-	// API.
-	if !mirror {
-		graphPass(ActiveStore(), now)
-	}
-
 	// mental-model verify pass (mm.go, self-paced internally at ten minutes):
 	// check every live item against what its substrate says today — artifact
 	// rows inline, code anchors in a single-flighted goroutine that fetches.
-	// Beside the graph pass because the graph is now compiled from these items
-	// alone, so keeping them honest IS keeping the graph honest.
 	//
 	// Skipped under mirror for the sharpest form of the usual two reasons: it
 	// FETCHES INTO REAL CHECKOUTS under ~/Developer — the ones the live
@@ -1092,12 +1078,10 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 
 	// linear pass (self-paced internally — see LinearPass): poll Linear for
 	// issues newly assigned to carl, create a draft job per qualifying one,
-	// and keep the ones that already have a job in step. Beside the graph
-	// pass because it shares its shape — a free function owning its own
-	// throttle and single-flight, so this stays one line, the one difference
-	// being that LinearPass reaches for ActiveStore() itself where graphPass
-	// is handed the store, since its first gate is the config rather than
-	// the store — and skipped under mirror for the sharpest reasons on the
+	// and keep the ones that already have a job in step. A free function
+	// owning its own throttle and single-flight, so this stays one line; it
+	// reaches for ActiveStore() itself, since its first gate is the config
+	// rather than the store — and skipped under mirror for the sharpest reasons on the
 	// list at once: it creates real job rows, downloads real files, and
 	// TYPES INTO A LIVE PANE.
 	if !mirror {
@@ -1156,9 +1140,9 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// — is exactly the class of side effect a read-only scheduler variant must
 	// never have.
 	//
-	// These two are the ONLY starts the daemon makes. Every other job on the
-	// board starts from carl's own submit, synchronously inside that request;
-	// these two have no human in the loop by construction, so the creator
+	// This is the ONLY start the daemon makes. Every other job on the board
+	// starts from carl's own submit, synchronously inside that request; a
+	// dream job has no human in the loop by construction, so the creator
 	// starts what it created, here, on the same tick it created it. The
 	// attempt is single-shot on purpose: a failure notifies loudly and leaves
 	// a DRAFT on the board, which carl can submit by hand, rather than a
@@ -1168,19 +1152,12 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		if created := kickDream(now); created != nil && d.startCreatedJob(created) {
 			cells++
 		}
-		// graph ingest: same once-per-local-day cadence and same
-		// start-what-you-created rule as the dream job above; kickGraph itself
-		// declines when the pending queue is empty or a graph job is already
-		// running.
-		if created := kickGraph(ActiveStore(), now); created != nil && d.startCreatedJob(created) {
-			cells++
-		}
 	}
 	return cells, nil
 }
 
-// startCreatedJob submits a job the tick just created for itself (dream,
-// graph) and reports whether the cell came up. Success logs and notifies
+// startCreatedJob submits a job the tick just created for itself (the dream
+// job) and reports whether the cell came up. Success logs and notifies
 // exactly as the old queue pass did; failure logs, notifies, and returns
 // false — the job stays draft, and nothing retries it.
 //

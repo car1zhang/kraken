@@ -831,9 +831,11 @@ func TestEdgeJGMigrationV26ToV27LeavesNoRowForANullGoalID(t *testing.T) {
 	// arm drops that column; v29's arm drops the three mm tables, puts kg_watch
 	// back, and rebuilds kg_episodes with its pre-v29 CHECK), then to 31 with
 	// the orchestrator's retirement (downgradeFreshDB's v31 arm recreates
-	// orch_inbox, which its v24 arm then drops again for this v26 target).
-	if schemaVersion != 31 {
-		t.Fatalf("schemaVersion = %d, want 31 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
+	// orch_inbox, which its v24 arm then drops again for this v26 target),
+	// then to 32 with the knowledge graph's removal (v32's arm recreates the
+	// kg_* tables).
+	if schemaVersion != 32 {
+		t.Fatalf("schemaVersion = %d, want 32 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
 	}
 	labelled := edgeJGJob(t, s, "jg-mig-labelled")
 	unlabelled := edgeJGJob(t, s, "jg-mig-unlabelled")

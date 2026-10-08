@@ -15,10 +15,8 @@ import (
 // goals widening of Recall (the mid-conversation refresh).
 //
 // Written from the contract text alone. internal/jobs/goalctx.go and the
-// pending diffs to recall.go / cell.go / crew.go were never read; the harness
-// (storeForGraph, withFacts, edge) is pre-existing package state at the base
-// commit, as is recall_contract_test.go's `contractRecall*` namespace — which
-// this file deliberately does not touch.
+// pending diffs to recall.go / cell.go / crew.go were never read; the store
+// harness (storeForRecall, recallhook_test.go) is shared package test state.
 //
 // Dimension: LOGIC — the stated content obligations and the conditions under
 // which a block is emitted. Hostile inputs, panics and the refusal arms beyond
@@ -28,7 +26,7 @@ import (
 
 // contractGoalCtxSpec is the job spec every fixture below carries. It shares
 // no vocabulary with any goal text here, so a goals assertion can never be
-// satisfied by the graph block leaking in.
+// satisfied by the spec leaking in.
 const contractGoalCtxSpec = "rewrite the tmux pane discovery loop"
 
 // contractGoalCtxEnv isolates the embedder credential and the home dir, so
@@ -39,15 +37,11 @@ func contractGoalCtxEnv(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 }
 
-// contractGoalCtxStore opens a scratch store, wires it as the active one, and
-// stubs the graph seam empty — so every block this file observes is the GOALS
-// block and nothing else.
+// contractGoalCtxStore opens a scratch store and wires it as the active one.
 func contractGoalCtxStore(t *testing.T) *store.Store {
 	t.Helper()
 	contractGoalCtxEnv(t)
-	st := storeForGraph(t)
-	withFacts(t, nil)
-	return st
+	return storeForRecall(t)
 }
 
 // contractGoalCtxPeriods is the current (week, day) pair, which is what
@@ -102,8 +96,8 @@ func contractGoalCtxLineWith(t *testing.T, block, needle string) string {
 // goalContext — the "" answers
 // ---------------------------------------------------------------------------
 
-// TestContractGoalCtxEmptyWithoutAStore is rule 3 of the three graphContext
-// rules the contract restates for this function: it never opens its own
+// TestContractGoalCtxEmptyWithoutAStore is rule 3 of goalctx.go's three
+// spawn-path rules: it never opens its own
 // handle, so with no ActiveStore the answer is "" — a cell started outside
 // `kraken serve` must get a byte-identical brief, not a second migrating
 // writer against kraken.db.
@@ -299,8 +293,7 @@ func TestContractGoalCtxIncludesTheLinkedGoalEvenWhenDoneOrStale(t *testing.T) {
 }
 
 // TestContractGoalCtxNamesThePullVerb: the block is a snapshot taken at spawn,
-// so it has to say where the live list lives — the same job graphContext's
-// header does for facts.
+// so it has to say where the live list lives.
 func TestContractGoalCtxNamesThePullVerb(t *testing.T) {
 	st := contractGoalCtxStore(t)
 	week, _ := contractGoalCtxPeriods(t)
@@ -317,8 +310,7 @@ func TestContractGoalCtxNamesThePullVerb(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestContractGoalCtxBytesConstIs700 pins the cap's VALUE, because it is a
-// number two other tests depend on arithmetically (the staged-brief ceiling
-// here, and graphctx_test.go's, extended "by exactly goalContextBytes").
+// number the staged-brief ceiling test here depends on arithmetically.
 func TestContractGoalCtxBytesConstIs700(t *testing.T) {
 	if goalContextBytes != 700 {
 		t.Errorf("goalContextBytes = %d, want 700", goalContextBytes)
@@ -362,10 +354,10 @@ func TestContractGoalCtxTruncatesOnWholeGoalBoundaries(t *testing.T) {
 }
 
 // TestContractGoalCtxKeepsTheStagedBriefUnderItsCeiling is the integration
-// half: cell.go stages zeusBrief + goalContext + graphContext, and the
+// half: cell.go stages zeusLaunchBrief (zeusBrief + goalContext), and the
 // ceiling is zeusBriefCeiling (crew_test.go's shared const — a ratchet there
-// moves this sum with it, with no number here to go stale) plus each
-// injection's declared cap.
+// moves this sum with it, with no number here to go stale) plus the goals
+// block's declared cap.
 func TestContractGoalCtxKeepsTheStagedBriefUnderItsCeiling(t *testing.T) {
 	st := contractGoalCtxStore(t)
 	week, day := contractGoalCtxPeriods(t)
@@ -378,8 +370,8 @@ func TestContractGoalCtxKeepsTheStagedBriefUnderItsCeiling(t *testing.T) {
 	}
 	j := contractGoalCtxJob(t, st, "ceiling", "")
 
-	const ceiling = zeusBriefCeiling + graphContextBytes + goalContextBytes
-	if n := len(zeusBrief(j) + goalContext(j) + graphContext(j)); n > ceiling {
+	const ceiling = zeusBriefCeiling + goalContextBytes
+	if n := len(zeusLaunchBrief(j)); n > ceiling {
 		t.Errorf("staged brief is %d bytes, over the %d-byte combined ceiling", n, ceiling)
 	}
 }
@@ -415,8 +407,8 @@ func TestContractRecallGoalsBlockOnFirstUserPrompt(t *testing.T) {
 // TestContractRecallGoalsSuppressedWhenTheSetIsUnchanged is the change-gate:
 // the block is unsolicited text in someone else's conversation, so an
 // unchanged goal set on a later firing injects NOTHING. The second firing uses
-// a DIFFERENT prompt on purpose — otherwise the pre-existing same-query
-// short-circuit would make the assertion vacuous.
+// a DIFFERENT prompt on purpose, so the suppression is pinned to the goals
+// fingerprint rather than to anything about the prompt.
 func TestContractRecallGoalsSuppressedWhenTheSetIsUnchanged(t *testing.T) {
 	st := contractGoalCtxStore(t)
 	week, _ := contractGoalCtxPeriods(t)
@@ -466,11 +458,10 @@ func TestContractRecallGoalsReEmittedAfterAChange(t *testing.T) {
 	_ = j
 }
 
-// TestContractRecallGoalsDeliveredEvenWhenTheQueryIsUnchanged pins the
-// ORDERING clause literally: goals are decided BEFORE the same-query
-// short-circuit. Carl edits a goal and hits enter on the same text he sent
-// last turn — the refresh must still arrive, or the one moment the feature
-// exists for is the one moment it is swallowed.
+// TestContractRecallGoalsDeliveredEvenWhenTheQueryIsUnchanged: carl edits a
+// goal and hits enter on the same text he sent last turn — the refresh must
+// still arrive, or the one moment the feature exists for is the one moment it
+// is swallowed.
 func TestContractRecallGoalsDeliveredEvenWhenTheQueryIsUnchanged(t *testing.T) {
 	st := contractGoalCtxStore(t)
 	week, _ := contractGoalCtxPeriods(t)
@@ -533,67 +524,6 @@ func TestContractRecallGoalsResolveTheJobBySessionID(t *testing.T) {
 	}
 	if want := goalContext(JobBySlug(LoadJobs(), "recall-by-session")); got != want {
 		t.Errorf("session-resolved block differs from the spawn block:\n got: %q\nwant: %q", got, want)
-	}
-}
-
-// TestContractRecallGoalsEmissionNeverTouchesKgRecall keeps the two channels
-// separate: kg_recall is the graph's once-per-session ledger, and a goals-only
-// firing must leave it completely alone — otherwise a goal refresh would spend
-// the session's fact budget and permanently deny zeus facts nobody read.
-func TestContractRecallGoalsEmissionNeverTouchesKgRecall(t *testing.T) {
-	st := contractGoalCtxStore(t)
-	week, _ := contractGoalCtxPeriods(t)
-	contractGoalCtxAdd(t, st, "week", week, "a goal, not a fact", 0)
-	contractGoalCtxJob(t, st, "recall-kg", "")
-
-	const sid = "sess-kg-untouched"
-	if got := Recall(context.Background(), st, RecallRequest{
-		SessionID: sid, Event: "UserPromptSubmit", Slug: "recall-kg", Prompt: "anything"}); got == "" {
-		t.Fatal("the goals block was not emitted; the assertion below would be vacuous")
-	}
-	marked, err := st.RecalledEdgeIDs(sid)
-	if err != nil {
-		t.Fatalf("RecalledEdgeIDs: %v", err)
-	}
-	if len(marked) != 0 {
-		t.Errorf("goals emission wrote %d kg_recall marks, want 0", len(marked))
-	}
-}
-
-// TestContractRecallGoalsBlockPrecedesTheGraphBlock pins the concatenation
-// order the contract states — goalsBlock + graphBlock — with both halves
-// non-empty, which is the only arrangement in which the order is observable.
-func TestContractRecallGoalsBlockPrecedesTheGraphBlock(t *testing.T) {
-	contractGoalCtxEnv(t)
-	st := storeForGraph(t)
-	const query = "the throttled daemon pass reads transcripts past a byte watermark"
-	withFacts(t, []store.GraphEdge{
-		edge(1, "the throttled daemon pass stamps its watermark before any early bail", 3),
-	})
-
-	week, _ := store.GoalPeriods(time.Now())
-	if _, err := st.AddGoal(store.GoalAdd{Scope: "week", Period: week, Text: "a goal about nothing in particular"}, 1); err != nil {
-		t.Fatalf("AddGoal: %v", err)
-	}
-	row := store.Job{Slug: "recall-order", Repo: "kraken", State: "working", Body: query}
-	if _, err := st.CreateJob(&row); err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-	j := JobBySlug(LoadJobs(), "recall-order")
-	if j == nil {
-		t.Fatal("job not found after create")
-	}
-
-	goals := goalContext(j)
-	graph := graphContext(j)
-	if goals == "" || graph == "" {
-		t.Fatalf("fixture is not both-non-empty (goals %d bytes, graph %d bytes)", len(goals), len(graph))
-	}
-
-	got := Recall(context.Background(), st, RecallRequest{
-		SessionID: "sess-order", Event: "UserPromptSubmit", Slug: "recall-order", Prompt: query})
-	if got != goals+graph {
-		t.Errorf("Recall context = %q, want goalsBlock+graphBlock = %q", got, goals+graph)
 	}
 }
 

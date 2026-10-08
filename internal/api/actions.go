@@ -157,8 +157,8 @@ var submitJobFn = jobs.SubmitJob
 // jobs correctly against a server that no longer has a queued column.
 //
 // Every refusal lives in jobs.SubmitJob rather than here, and its error text
-// surfaces verbatim — the viewer's `s` key and the daemon's own dream/graph
-// starts go through the same function, and a validation split across the
+// surfaces verbatim — the viewer's `s` key and the daemon's own dream-job
+// start go through the same function, and a validation split across the
 // callers is exactly how the old queue action came to refuse an empty spec
 // while the other two start paths did not.
 func webSubmit(req webReq) error {

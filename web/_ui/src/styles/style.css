@@ -59,16 +59,6 @@
   --muted: color-mix(in srgb, var(--ac) 28%, var(--g1));
   --body: color-mix(in srgb, var(--ac) 24%, var(--g2));
   --gridline: color-mix(in srgb, var(--ac) 6%, transparent);
-  /* the graph canvas's edge stroke — the approved 50-graph mockup's recipe
-     (accent over transparent; the mockup drew 22%, bumped to 32% because a
-     1px WebGL line reads darker than the mockup's 1px SVG stroke), so edges
-     read as PURPLE threads rather than the near-black --hairline-2 they
-     briefly wore. Read by graphModel's probe resolver, not by any CSS rule —
-     so this var LOOKS unused to a grep. Deleting it makes every edge fall
-     back to graphModel's pinned dark hex (the resolver reads
-     `var(--graph-edge, <sentinel>)`, so a deleted token is caught; a token
-     redefined to garbage is not — it would silently inherit). */
-  --graph-edge: color-mix(in srgb, var(--ac) 32%, transparent);
   --accent-edge: color-mix(in srgb, var(--ac) 40%, transparent);
   --chip-bg: color-mix(in srgb, var(--ac) 14%, var(--b1));
   --chip-border: color-mix(in srgb, var(--ac) 25%, transparent);
@@ -81,7 +71,7 @@
      picks up its value from the system above. Deleting one is a silent
      repaint of whatever still reads it. --- */
   --ground: var(--bg-board);
-  --hairline: var(--divider); --hairline-2: var(--border-strong);
+  --hairline: var(--divider);
   --text: var(--fg); --text-2: var(--muted);
   --accent: var(--ac);
   /* text ON an accent fill — the board colour, per the kit's active tab */
@@ -119,15 +109,14 @@
   --skill-do: #F5D34D; --skill-do-soft: #332B0E;
   --skill-pr: #4ADE80; --skill-pr-soft: #0F2E1D;
   --skill-dream: #C084FC; --skill-dream-soft: #2A1440;
-  /* /graph, the sixth chip and the GRAPH view's accent. The UI mockup drew it
-     in cyan #22D3EE and flagged the problem in the same breath: that is
-     --polling's exact value, so a graph chip and a polling status pip would be
-     the same pixel colour. Lime is what is left. Measuring hue distance from
-     the five chips (info 213°, aim 0°, do 51°, pr 142°, dream 279°) and from
-     the status hues they sit beside (polling 187°, counter 333°, accent 258°,
-     revealed 40°), 95° is the angle with the widest MINIMUM separation from
-     all of them — 44°, against 15° for the mockup's cyan. */
-  --skill-graph: #87DF49; --skill-graph-soft: #1E3010;
+  /* the MEMORY view's accent — named for the retired /graph chip and GRAPH
+     view it was first picked for, and kept because the Library and Model
+     panes still wear it. Lime because cyan is --polling's exact value; 95° is
+     the hue with the widest MINIMUM separation (44°) from the five skill
+     chips (info 213°, aim 0°, do 51°, pr 142°, dream 279°) and the status
+     hues they sit beside (polling 187°, counter 333°, accent 258°, revealed
+     40°). */
+  --skill-graph: #87DF49;
   --glow-skill-info: 0 0 12px rgba(94, 168, 255, 0.30), 0 0 2px rgba(94, 168, 255, 0.7);
   --text-glow-skill-info: 0 0 1px var(--skill-info), 0 0 9px var(--skill-info);
   --glow-skill-aim: 0 0 12px rgba(255, 107, 107, 0.30), 0 0 2px rgba(255, 107, 107, 0.7);
@@ -138,7 +127,6 @@
   --text-glow-skill-pr: 0 0 1px var(--skill-pr), 0 0 9px var(--skill-pr);
   --glow-skill-dream: 0 0 12px rgba(192, 132, 252, 0.30), 0 0 2px rgba(192, 132, 252, 0.7);
   --text-glow-skill-dream: 0 0 1px var(--skill-dream), 0 0 9px var(--skill-dream);
-  --glow-skill-graph: 0 0 12px rgba(135, 223, 73, 0.30), 0 0 2px rgba(135, 223, 73, 0.7);
   --text-glow-skill-graph: 0 0 1px var(--skill-graph), 0 0 9px var(--skill-graph);
   /* job palette: the eight names Claude Code's own /color command accepts,
      in /color's order, at Claude Code's exact RGB — so a board swatch is the
@@ -205,11 +193,11 @@
   --skill-do: #7B6505; --skill-do-soft: #F7F0D4;
   --skill-pr: #14773B; --skill-pr-soft: #DCF3E4;
   --skill-dream: #7E22CE; --skill-dream-soft: #F3E8FF;
-  /* graph's light sibling is darkened past its naive lime for the same reason
-     info/do/pr are: a 95° hue is at its brightest where white is, so the dark
-     hex is unreadable here. #456F0B measures 4.87 against --raised (#E3E9F1)
-     and 5.29 against its own -soft, both clearing WCAG AA. */
-  --skill-graph: #456F0B; --skill-graph-soft: #EAF6D8;
+  /* the memory accent's light sibling is darkened past its naive lime for the
+     same reason info/do/pr are: a 95° hue is at its brightest where white is,
+     so the dark hex is unreadable here. #456F0B measures 4.87 against
+     --raised (#E3E9F1), clearing WCAG AA. */
+  --skill-graph: #456F0B;
   --glow-skill-info: 0 1px 6px rgba(24, 102, 196, 0.25);
   --text-glow-skill-info: none;
   --glow-skill-aim: 0 1px 6px rgba(196, 43, 43, 0.25);
@@ -220,7 +208,6 @@
   --text-glow-skill-pr: none;
   --glow-skill-dream: 0 1px 6px rgba(126, 34, 206, 0.25);
   --text-glow-skill-dream: none;
-  --glow-skill-graph: 0 1px 6px rgba(69, 111, 11, 0.25);
   --text-glow-skill-graph: none;
   /* job palette, light siblings — darkened per the same rule as the skill
      block above: each clears WCAG AA 4.5:1 against both --raised (#E3E9F1)
@@ -1519,7 +1506,6 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .st-chip-do    { --skill: var(--skill-do);    --skill-soft: var(--skill-do-soft); }
 .st-chip-pr    { --skill: var(--skill-pr);    --skill-soft: var(--skill-pr-soft); }
 .st-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); }
-.st-chip-graph { --skill: var(--skill-graph); --skill-soft: var(--skill-graph-soft); }
 .card:hover .st-chip { border-color: var(--skill); }
 
 /* the account badge (AccountChip): WHICH pool account this cell is burning,
@@ -2779,7 +2765,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 
 /* LIGHT MODE FLATTENS EVERY GLOW. Most of them already vanish because their
    token is `none` there (--glow/--glow-hot/--glow-ok/--glow-warn/--text-glow
-   and the six skill glows), but a handful of rules spell a color-mix halo out
+   and the skill text glows), but a handful of rules spell a color-mix halo out
    inline — the emphasized hover states and the three status pips. They are
    collected here rather than fixed at each site so the rule reads as one
    decision, and so a new inline glow only needs its selector adding. */
@@ -2945,133 +2931,43 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 
 @media (max-width: 900px) { .dreamview { grid-template-columns: 1fr; height: auto; } }
 
-/* ---- GRAPH view (see 40-ui-graph-view.html) ----
-   A filter rail, the sigma canvas, and an inspector, at the log/dream view's
-   height. --skill-graph is the accent throughout, tying the view to its
-   /graph chip.
-   Everything here is namespaced `graph-`: the mockup's own class names (.rail,
-   .stat, .fact, .pill, .desc, .canvas) are generic enough to collide with the
-   board's. */
+/* ---- MEMORY view: LIBRARY | MODEL ----
+   Two list panes at the log/dream view's height. --skill-graph is the accent
+   throughout (the token outlived the retired graph view and its /graph chip;
+   the panes below still wear it). The panes' shared chrome keeps the
+   `graph-lib*` / `graph-lbl` / `graph-stat` names the components carry. */
 
-.graphview {
+.memoryview {
   height: calc(100vh - 64px);
   display: flex; flex-direction: column;
   padding: 12px 16px 16px; gap: 8px;
   position: relative; z-index: 3;
 }
-.graph-hdr { display: flex; align-items: baseline; gap: 12px; }
-.graph-title {
+.memory-hdr { display: flex; align-items: baseline; gap: 12px; }
+.memory-title {
   font: 600 10px var(--display); letter-spacing: 0.2em; text-transform: uppercase;
   color: var(--skill-graph); text-shadow: var(--text-glow-skill-graph);
 }
 .graph-stat { font: 9.5px var(--mono); color: var(--muted); letter-spacing: 0.03em; }
-.graph-stat b { color: var(--fg); font-weight: 600; }
-.graph-stat.err { color: var(--ac2); }
-
-.graph-stage {
-  flex: 1; min-height: 0;
-  display: grid; grid-template-columns: 190px minmax(0, 1fr) 250px;
-  background: color-mix(in srgb, var(--ac) 3%, var(--b1)); border: 1px solid var(--border);
-}
-.graph-rail {
-  border-right: 1px solid var(--border);
-  padding: 12px 11px; overflow-y: auto; min-width: 0;
-  font-size: 10px;
-}
-.graph-rail.r { border-right: 0; border-left: 1px solid var(--border); }
 .graph-lbl {
   font: 700 8.5px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
   color: var(--muted); margin: 0 0 8px;
 }
-.graph-lbl + .graph-lbl, .graph-chk + .graph-lbl, .graph-stat + .graph-lbl,
-.graph-meta + .graph-lbl { margin-top: 18px; }
 
-/* A filter row is a button, not a checkbox: the whole row is the target, and
-   `off` is the only state that needs styling since on is the default. */
-.graph-chk {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 3px 2px; background: none; border: 0;
-  font: 500 10px var(--mono); color: var(--fg); text-align: left;
-}
-
-/* The header's physics toggle: .graph-chk chrome, but the rail authors that
-   class full-width for its rows. Both selectors are one class, so the
-   cascade is SOURCE ORDER — this block must sit after .graph-chk or its
-   width: auto silently loses to the rail's width: 100% (review finding, r2:
-   the first placement did exactly that). The auto margin pushes it to the
-   header's right edge; the header's own gap covers spacing. */
-.graph-chk.graph-physics {
-  width: auto;
-  flex: none;
-  margin-left: auto;
-}
-.graph-chk.off { color: var(--muted); }
-.graph-chk:hover { color: var(--skill-graph); }
-.graph-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.graph-chk.off .graph-dot { opacity: 0.45; }
-.graph-slider { width: 100%; margin: 4px 0 6px; accent-color: var(--ac); }
-.graph-railempty { font: 10px var(--mono); color: var(--muted); line-height: 1.6; }
-
-.graph-canvas { position: relative; overflow: hidden; background: color-mix(in srgb, var(--ac) 2%, var(--b0)); }
-/* sigma owns this element's children — the overlays below are its siblings */
-.graph-gl { position: absolute; inset: 0; }
-.graph-overlay {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  padding: 20px; text-align: center;
-  font: 10px var(--mono); color: var(--muted);
-  background: color-mix(in srgb, var(--ac) 2%, var(--b0)); pointer-events: none;
-}
-.graph-hint {
-  position: absolute; left: 12px; bottom: 10px; pointer-events: none;
-  font: 9px var(--mono); color: var(--muted); letter-spacing: 0.05em;
-}
-.graph-zoom { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 5px; }
-.graph-zbtn {
-  width: 23px; height: 23px; display: grid; place-items: center;
-  border: 1px solid var(--border-strong); background: color-mix(in srgb, var(--ac) 5%, var(--b1));
-  color: var(--muted); font-size: 13px; line-height: 1;
-}
-.graph-zbtn:hover { color: var(--skill-graph); border-color: var(--skill-graph); }
-
-.graph-name { margin: 0 0 6px; font: 600 13px var(--display); letter-spacing: 0.06em; color: var(--fg); }
-/* squared off like the rest of the sheet — the kit has no radii, it shears
-   corners instead */
-.graph-pill {
-  display: inline-block; padding: 1.5px 8px;
-  font: 700 8.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase;
-  background: color-mix(in srgb, var(--skill-graph) 14%, var(--b1)); color: var(--skill-graph);
-}
-.graph-desc {
-  margin: 10px 0 0; padding: 8px 10px;
-  background: color-mix(in srgb, var(--ac) 6%, var(--b1)); border-left: 2px solid var(--skill-graph);
-  font: 10px/1.55 var(--mono); color: var(--fg); overflow-wrap: anywhere;
-}
-.graph-meta { margin-top: 11px; font: 9.5px/1.8 var(--mono); color: var(--muted); }
-.graph-meta b { color: var(--fg); font-weight: 600; }
-.graph-fact {
-  padding: 7px 0; border-top: 1px solid var(--divider);
-  font: 10px/1.5 var(--mono); color: var(--fg); overflow-wrap: anywhere;
-}
-.graph-src { display: block; margin-top: 3px; font: 8.5px var(--mono); color: var(--muted); }
-/* an invalidated fact — still stored, still queryable, visibly superseded */
-.graph-fact.stale { opacity: 0.45; text-decoration: line-through; }
-.graph-fact.stale .graph-src { text-decoration: none; }
-.graph-empty-facts { font: 10px var(--mono); color: var(--muted); }
-
-/* ---- MEMORY's mode switch: GRAPH | LIBRARY ----
+/* ---- MEMORY's mode switch: LIBRARY | MODEL ----
    Two segments in the header, at .graph-lbl's scale rather than the tabs'
    — this is a switch INSIDE a view, and sizing it like the chrome's view tabs
    would make it compete with them. The active segment wears --skill-graph
-   exactly as .graph-title does, so the whole header reads as one family. */
-.graph-modes { display: flex; gap: 1px; }
-.graph-mode {
+   exactly as .memory-title does, so the whole header reads as one family. */
+.memory-modes { display: flex; gap: 1px; }
+.memory-mode {
   background: transparent; border: 1px solid var(--border);
   font: 700 8.5px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
   color: var(--muted); padding: 3px 9px;
   white-space: nowrap;
 }
-.graph-mode:hover:not(.on) { color: var(--fg); border-color: var(--border-strong); }
-.graph-mode.on {
+.memory-mode:hover:not(.on) { color: var(--fg); border-color: var(--border-strong); }
+.memory-mode.on {
   background: color-mix(in srgb, var(--skill-graph) 16%, var(--b1));
   border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
   color: var(--skill-graph);
@@ -3084,8 +2980,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    would only be a second thing to keep in step. */
 .graph-lib { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .graph-libhdr { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; }
-/* the shared .graph-lbl carries a bottom margin for the rail's stacked rows;
-   on one header line it would push the row out of alignment */
+/* the shared .graph-lbl carries a bottom margin; on one header line it would
+   push the row out of alignment */
 .graph-libhdr .graph-lbl { margin: 0; }
 .graph-libfilter {
   width: 190px; padding: 3px 8px;
@@ -3177,7 +3073,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .mm-row + .mm-row { margin-top: 8px; }
 .mm-row:hover { border-color: color-mix(in srgb, var(--skill-graph) 45%, var(--b1)); }
 /* an invalidated item — still stored, still readable, visibly superseded.
-   Dimmed rather than struck through (the graph's .stale rule): the frozen text
+   Dimmed rather than struck through: the frozen text
    is the payoff here, and struck-through prose is prose nobody reads. */
 .mm-row.dead { border-color: color-mix(in srgb, var(--ac2) 35%, var(--border)); }
 .mm-rowtop { display: flex; align-items: stretch; }
@@ -3295,10 +3191,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 
 @media (max-width: 900px) {
-  .graphview { height: auto; }
-  .graph-stage { grid-template-columns: 1fr; }
-  .graph-rail, .graph-rail.r { border: 0; border-bottom: 1px solid var(--border); }
-  .graph-canvas { min-height: 60vh; }
+  .memoryview { height: auto; }
 }
 
 /* ---- side-thread overlay (#thread-overlay — see openThread in app.js) ----

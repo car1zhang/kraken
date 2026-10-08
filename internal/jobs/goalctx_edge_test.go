@@ -26,16 +26,8 @@ import (
 // namespace already carries an `edge`/`edgeRecall*` family and a second blind
 // author is writing beside this file in the same round.
 
-// edgeGoalEnv opens a scratch store, wires it as the active one, and removes
-// the embedder from reach.
-//
-// The HOME override is not cosmetic: core.NewEmbedder falls back to
-// ~/.kraken/openai.env, which EXISTS on the machine this suite runs on, so
-// without it every Recall case below would make a live OpenAI call on the path
-// under test. recall_edge_test.go's edgeRecallEnv makes the same point and for
-// the same reason; this helper is its goals-side twin (a separate one because
-// these cases also need the store WIRED, which that one deliberately does not
-// do).
+// edgeGoalEnv opens a scratch store and wires it as the active one, under a
+// scratch HOME so nothing on the path under test reads the real ~/.kraken.
 func edgeGoalEnv(t *testing.T) *store.Store {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -47,16 +39,6 @@ func edgeGoalEnv(t *testing.T) *store.Store {
 	UseStore(st)
 	t.Cleanup(func() { UseStore(nil); st.Close() })
 	return st
-}
-
-// edgeGoalNoFacts silences the knowledge graph for one test, so anything a
-// Recall case observes is the GOALS block and nothing else. The seam is the
-// same var graphctx_test.go swaps.
-func edgeGoalNoFacts(t *testing.T) {
-	t.Helper()
-	prev := graphFacts
-	graphFacts = func(*store.Store, []float32, string) ([]store.GraphEdge, map[int64]bool) { return nil, nil }
-	t.Cleanup(func() { graphFacts = prev })
 }
 
 // edgeGoalJob creates a store-backed job and returns it through the ordinary
@@ -133,8 +115,8 @@ func TestEdgeGoalContextEmptyForOtherPeriodsOnly(t *testing.T) {
 }
 
 // TestEdgeGoalContextNilJobIsEmpty covers the argument every "never fails a
-// spawn" function is eventually handed. graphContext answers "" for it; a panic
-// here would take the whole cell start down.
+// spawn" function is eventually handed; a panic here would take the whole
+// cell start down.
 func TestEdgeGoalContextNilJobIsEmpty(t *testing.T) {
 	st := edgeGoalEnv(t)
 	_, curDay := edgeGoalPeriods()
@@ -151,8 +133,7 @@ func TestEdgeGoalContextNilJobIsEmpty(t *testing.T) {
 // TestEdgeGoalContextRespectsItsByteCapOnWholeGoalBoundaries pins both halves
 // of the budget. The cap itself keeps the staged brief bounded; the BOUNDARY
 // rule is the one that matters more, because a goal cut mid-line reads as a
-// complete instruction that says something carl never wrote — the same failure
-// graphctx.go refuses by only ever cutting between facts.
+// complete instruction that says something carl never wrote.
 func TestEdgeGoalContextRespectsItsByteCapOnWholeGoalBoundaries(t *testing.T) {
 	st := edgeGoalEnv(t)
 	j := edgeGoalJob(t, st, "over-cap", "")
@@ -302,7 +283,6 @@ func edgeGoalRecallReq(slug, session string) RecallRequest {
 // valid, so the event name is the only thing that can suppress it.
 func TestEdgeGoalRecallNothingOnPostToolUse(t *testing.T) {
 	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
 	edgeGoalJob(t, st, "recall-posttooluse", "sess-posttooluse")
 	_, curDay := edgeGoalPeriods()
 	g := edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "a very current goal"})
@@ -320,7 +300,6 @@ func TestEdgeGoalRecallNothingOnPostToolUse(t *testing.T) {
 // prompt gets nothing — even though nothing else about the firing differs.
 func TestEdgeGoalRecallSuppressedWhenTheSetIsUnchanged(t *testing.T) {
 	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
 	edgeGoalJob(t, st, "recall-unchanged", "sess-unchanged")
 	_, curDay := edgeGoalPeriods()
 	g := edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "write the goals panel"})
@@ -344,7 +323,6 @@ func TestEdgeGoalRecallSuppressedWhenTheSetIsUnchanged(t *testing.T) {
 // the "decided BEFORE the short-circuit" clause exists to prevent.
 func TestEdgeGoalRecallReemitsExactlyOnceAfterAChange(t *testing.T) {
 	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
 	edgeGoalJob(t, st, "recall-changed", "sess-changed")
 	_, curDay := edgeGoalPeriods()
 	first := edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "the original goal"})
@@ -388,7 +366,6 @@ func TestEdgeGoalRecallReemitsExactlyOnceAfterAChange(t *testing.T) {
 // the contract's gate is job resolution, and this is that gate's closed side.
 func TestEdgeGoalRecallNothingWhenNoJobResolves(t *testing.T) {
 	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
 	edgeGoalJob(t, st, "recall-resolvable", "sess-resolvable")
 	_, curDay := edgeGoalPeriods()
 	edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "a goal nobody unresolved should see"})
@@ -413,7 +390,6 @@ func TestEdgeGoalRecallNothingWhenNoJobResolves(t *testing.T) {
 // anything.
 func TestEdgeGoalRecallResolvesBySessionWhenTheSlugIsEmpty(t *testing.T) {
 	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
 	edgeGoalJob(t, st, "recall-by-session", "sess-matches-a-job")
 	_, curDay := edgeGoalPeriods()
 	g := edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "resolve me by session id"})
@@ -421,39 +397,6 @@ func TestEdgeGoalRecallResolvesBySessionWhenTheSlugIsEmpty(t *testing.T) {
 	req := edgeGoalRecallReq("", "sess-matches-a-job")
 	if got := Recall(context.Background(), st, req); !strings.Contains(got, g.Text) {
 		t.Errorf("a firing with no slug but a matching jobs.session got no goals block:\n%q", got)
-	}
-}
-
-// TestEdgeGoalRecallLeavesKgRecallAlone pins the containment rule: the goals
-// block lives entirely outside the graph's once-per-session ledger. Marking a
-// goals delivery in kg_recall would burn edge ids nobody delivered and
-// permanently withhold those facts; and the goals block's own suppressor is
-// in-memory by design, so kg_recall must be untouched in BOTH directions.
-func TestEdgeGoalRecallLeavesKgRecallAlone(t *testing.T) {
-	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
-	edgeGoalJob(t, st, "recall-kg", "sess-kg")
-	_, curDay := edgeGoalPeriods()
-	g := edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "a goal that must not be marked"})
-
-	before, err := st.RecalledEdgeIDs("sess-kg")
-	if err != nil {
-		t.Fatalf("RecalledEdgeIDs before: %v", err)
-	}
-	req := edgeGoalRecallReq("recall-kg", "sess-kg")
-	if got := Recall(context.Background(), st, req); !strings.Contains(got, g.Text) {
-		t.Fatalf("fixture is wrong: no goals block was delivered:\n%q", got)
-	}
-	after, err := st.RecalledEdgeIDs("sess-kg")
-	if err != nil {
-		t.Fatalf("RecalledEdgeIDs after: %v", err)
-	}
-	if len(after) != len(before) {
-		t.Errorf("a goals emission wrote %d kg_recall rows (was %d) — goals live outside that ledger",
-			len(after), len(before))
-	}
-	if len(after) != 0 {
-		t.Errorf("kg_recall carries %v after a goals-only firing, want nothing", after)
 	}
 }
 
@@ -470,12 +413,10 @@ func TestEdgeGoalRecallLeavesKgRecallAlone(t *testing.T) {
 // the goal rendered whole — never a header announcing goals with nothing under
 // it, which asserts that carl has goals while showing none of them.
 //
-// The strict reading asserted here is "": the block is dropped. graphctx.go's
-// TestRenderGraphBlockRefusesAHeaderAlone is the precedent — "a header
-// announcing that the graph knows something, with nothing under it, is worse
-// than no block at all" — and its own fixture is the same shape as the second
-// case below, because a byte budget over a rune-counted renderer is exactly
-// where a "can't happen" branch turns out to be reachable.
+// The strict reading asserted here is "": the block is dropped — a header
+// with nothing under it is worse than no block at all. The second case below
+// exists because a byte budget over a rune-counted renderer is exactly where a
+// "can't happen" branch turns out to be reachable.
 func TestEdgeGoalContextRefusesAHeaderAloneForAnOversizeGoal(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -521,7 +462,6 @@ func TestEdgeGoalContextRefusesAHeaderAloneForAnOversizeGoal(t *testing.T) {
 // every prompt forever, which is rule 2 of this whole surface.
 func TestEdgeGoalRecallNothingWithoutASessionID(t *testing.T) {
 	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
 	edgeGoalJob(t, st, "recall-no-session", "")
 	_, curDay := edgeGoalPeriods()
 	g := edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "a goal with no session to send it to"})
@@ -548,7 +488,6 @@ func TestEdgeGoalRecallNothingWithoutASessionID(t *testing.T) {
 // deliver the edit at all.
 func TestEdgeGoalRecallReemitsAfterATextEdit(t *testing.T) {
 	st := edgeGoalEnv(t)
-	edgeGoalNoFacts(t)
 	edgeGoalJob(t, st, "recall-textedit", "sess-textedit")
 	_, curDay := edgeGoalPeriods()
 	g := edgeGoalAdd(t, st, store.GoalAdd{Scope: "day", Period: curDay, Text: "the original wording"})

@@ -10,7 +10,7 @@ import type { LibraryPage, WebLibraryItem } from "../api/types.ts";
 import { usePoll } from "./usePoll.ts";
 
 /**
- * 30s, the graph poll's interval and its argument.
+ * 30s, the retired graph poll's interval.
  *
  * Nothing in kraken writes this table on its own: a row appears only when carl
  * presses ☆ save and disappears only when he removes one, and BOTH of those go

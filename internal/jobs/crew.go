@@ -148,8 +148,8 @@ func LintSvgPath() string {
 // diagram pipeline, the questions verbs, the build report, the PR
 // conventions, the crew's dispatch/join/arbitration/review choreography —
 // lives in the repo-owned skills that installSkills materializes into the
-// worktree (the six pipeline skills, .claude/skills/{info,aim,do,pr,dream,
-// graph}; load rides along as a procedure-free reference), and the brief
+// worktree (the five pipeline skills, .claude/skills/{info,aim,do,pr,dream};
+// load rides along as a procedure-free reference), and the brief
 // points at them by path rather than restating them.
 //
 // That split is load-bearing twice over. tmux refuses a command over ~16KB,
@@ -215,7 +215,7 @@ func zeusBrief(j *Job) string {
 	// exactly — a skill is read once per phase, and this applies at every
 	// carl-facing writing moment in every phase — and it is a POINTER, not a
 	// procedure: which artifacts a phase writes, and when, stay in the skills.
-	b.WriteString("Before writing anything carl reads — an overview, a caption, a final message, a report — search what he already knows about the subject (`kraken graph search`, `kraken mm get` — the full binary, as its own command: monolith's guardrail kills any compound containing bare `k`): abstract what he knows, spell out what he does not, and carry the same 'carl knows / is unfamiliar with' lines into every teammate brief. When explaining code, citing a file, or briefing a diagram, run `kraken mm get --file <path>` per file cited; mandate the same in every teammate brief that cites code.\n")
+	b.WriteString("Before writing anything carl reads — an overview, a caption, a final message, a report — search what he already knows about the subject (`kraken mm get` — the full binary, as its own command: monolith's guardrail kills any compound containing bare `k`): abstract what he knows, spell out what he does not, and carry the same 'carl knows / is unfamiliar with' lines into every teammate brief. When explaining code, citing a file, or briefing a diagram, run `kraken mm get --file <path>` per file cited; mandate the same in every teammate brief that cites code.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images carl attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path if it wasn't ingested).\n")
 	// The tier is RESOLVED rather than named: zeus is spawned on zeusModel(j)
 	// — codexZeusModel(j) for a codex cell, the same rule on the other

@@ -28,9 +28,9 @@ export function navigateTo(v: View): void {
 /**
  * Views that were RENAMED, mapped to what they are called now.
  *
- * `graph` → `memory` is a LABEL change only: the view's id, its classes, its
- * files and every graph route keep the name `graph`. What moved is the tab and
- * the hash, and both of those are things a browser has already written down —
+ * `graph` → `memory`: the view was the knowledge graph's host before the graph
+ * was retired, and is now the Library · Model view. The tab and the hash both
+ * moved, and both of those are things a browser has already written down —
  * a bookmarked `#/memory` is what carl will make from here on, but the tab he
  * left open yesterday is sitting on `#/graph`, and `kraken-view` in his
  * localStorage says `"graph"` too.
@@ -77,7 +77,7 @@ function parseHash(): View | null {
 /**
  * The four views as real URLs (#/board, #/memory, #/dream, #/log) — Q6.
  * VIEWS' order IS the tab order the chrome renders (log last), and `memory`
- * is the graph view under its renamed tab (RENAMED, above).
+ * is the former graph view's renamed tab (RENAMED, above).
  *
  * The vanilla board had no router at all: the active view was a localStorage
  * string toggling `hidden` attributes, so there was no back button and no

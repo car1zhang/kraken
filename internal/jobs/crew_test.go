@@ -230,9 +230,9 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 	}
 }
 
-// zeusBriefCeiling is the live ceiling, package-visible so the two
-// combined-budget mirrors (goalctx_contract_test.go and graphctx_test.go)
-// reference it instead of restating it. Both used to hardcode `13_500 + …`
+// zeusBriefCeiling is the live ceiling, package-visible so the
+// combined-budget mirror (goalctx_contract_test.go)
+// references it instead of restating it. Both used to hardcode `13_500 + …`
 // with a "shows up here as one number to update" comment, and that mechanism
 // had already failed once — at the 14,000 ceiling both mirrors still said
 // 13,500, silently TIGHTENING the combined-budget guard: the mirrors bounded
@@ -1144,7 +1144,7 @@ func TestSkillsCarryColourRule(t *testing.T) {
 // final message = the whole TLDR) is pinned in TestZeusBrief; this test owns
 // the artifact half.
 func TestSkillsCarryTldrRule(t *testing.T) {
-	for _, skill := range []string{"aim", "info", "do", "dream", "graph"} {
+	for _, skill := range []string{"aim", "info", "do", "dream"} {
 		src := strings.Join(strings.Fields(readRepoSkill(t, skill)), " ")
 		if !strings.Contains(src, "opens with a one-liner stating its main message") {
 			t.Errorf(".claude/skills/%s/SKILL.md dropped the artifact TLDR rule — every md artifact "+

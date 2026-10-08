@@ -37,10 +37,10 @@ import (
 //
 // Same behavior contract as cmd_load.go / cmd_slack.go: reads print the
 // server's JSON to stdout verbatim; a write confirms on stderr (and `draft`
-// additionally prints the server's JSON, which carries the new lock token —
-// same call `k graph add` makes for its returned ids); a 4xx prints the
-// server's own sentence; an unreachable serve names the address; bad args
-// print usage. It NEVER opens kraken.db — only kraken serve writes it.
+// additionally prints the server's JSON, which carries the new lock token);
+// a 4xx prints the server's own sentence; an unreachable serve names the
+// address; bad args print usage. It NEVER opens kraken.db — only kraken serve
+// writes it.
 func cmdJob(args []string) {
 	if len(args) == 0 {
 		util.Die("usage: k job list|raw|draft ...")

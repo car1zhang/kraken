@@ -15,19 +15,14 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@fontsource/chakra-petch": "^5.3.0",
     "@fontsource/ibm-plex-mono": "^5.3.0",
-    "d3-force": "^3.0.0",
-    "graphology": "^0.26.0",
-    "graphology-types": "^0.24.8",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "sigma": "^3.0.3"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
-    "@types/d3-force": "^3.0.10",
     "@types/node": "^26.1.2",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

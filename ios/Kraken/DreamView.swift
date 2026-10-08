@@ -7,7 +7,7 @@ import Observation
 // Reached from the Board's toolbar (the moon control) rather than a tab of its
 // own. That used to be forced — five tabs was the ceiling before iOS collapses
 // a TabView into a "More" list, and the bar was full. The nav restructure took
-// the bar down to four (Board · Sessions · Graph · Settings), so a fifth slot
+// the bar down to four (Board · Sessions · Memory · Settings), so a fifth slot
 // is available and this is now a CHOICE: DREAM is a read-and-judge surface
 // visited once in a while, not a peer of the four places the app lives, and
 // the web board can afford a fourth view tab only because a browser has the

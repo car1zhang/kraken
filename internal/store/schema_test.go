@@ -40,6 +40,9 @@ import (
 // the graph v29 emptied refilled — there is nothing to refill it from.
 func undoV29(t *testing.T, s *Store) {
 	t.Helper()
+	// v29's hook reads and rewrites the kg_* tables v32 dropped, so any walk
+	// back past v29 first needs them present again.
+	undoV32(t, s)
 	for _, stmt := range []string{
 		`DROP TABLE mm_code_anchors`,
 		`DROP TABLE mm_items`,
@@ -80,14 +83,60 @@ func undoV29(t *testing.T, s *Store) {
 	}
 }
 
+// undoV32 reverses migration 32: it recreates every kg_* object v32 dropped,
+// in the shape a real v31 database holds them — v15's six tables, FTS5 index
+// and triggers, v19's kg_recall, and kg_episodes rebuilt with v29's widened
+// kind CHECK. Shape only, no rows (v29 emptied the graph, so a real v29-v31
+// database's kg tables are empty unless mental-model episodes were minted).
+//
+// It is a no-op when kg_edges already exists, so undoV29 can call it
+// unconditionally and downgradeFreshDB can call it too without the two
+// colliding on a bare CREATE.
+func undoV32(t *testing.T, s *Store) {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'kg_edges'`).Scan(&n); err != nil {
+		t.Fatalf("undo v32 probe: %v", err)
+	}
+	if n > 0 {
+		return
+	}
+	for _, stmt := range []string{
+		schemaV15,
+		schemaV19,
+		`DROP TABLE kg_episodes`,
+		`CREATE TABLE kg_episodes (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind       TEXT    NOT NULL CHECK(kind IN ('transcript','feedback','watchlist','artifact','job','mental-model')),
+			ref        TEXT    NOT NULL DEFAULT '',
+			content    TEXT    NOT NULL DEFAULT '',
+			hash       TEXT    NOT NULL,
+			ts         INTEGER NOT NULL DEFAULT 0,
+			state      TEXT    NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','done')),
+			created_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE UNIQUE INDEX kg_episodes_hash ON kg_episodes(hash)`,
+		`CREATE INDEX kg_episodes_state ON kg_episodes(state, id)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("undo v32 %q: %v", stmt, err)
+		}
+	}
+}
+
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v32: put the knowledge graph's tables back (empty). Reversed
+	// FIRST, since downgrades unwind newest-first.
+	if target < 32 {
+		undoV32(t, s)
+	}
 	// Reverse v31: put orch_inbox back in its exact v24 shape (schemaV24 is
 	// that DDL verbatim). Shape-only, like every arm here: the five kv rows
 	// v31 deletes are not recreated, since an older SHAPE is what this helper
 	// reproduces and a kv row is data. The v24 arm below then drops the table
-	// again for any target that predates it. Reversed FIRST, since downgrades
-	// unwind newest-first.
+	// again for any target that predates it. Reversed after v32, since
+	// downgrades unwind newest-first.
 	if target < 31 {
 		if _, err := s.db.Exec(schemaV24); err != nil {
 			t.Fatalf("downgrade to v%d (undo v31) recreate orch_inbox: %v", target, err)

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 )
 
-// SkillsFS holds kraken's kraken-owned skill bundle — the six pipeline skills
-// (info, aim, do, pr, dream, graph), each governing a phase, plus two that
+// SkillsFS holds kraken's kraken-owned skill bundle — the five pipeline skills
+// (info, aim, do, pr, dream), each governing a phase, plus two that
 // govern none: load, a reference consulted mid-phase, and handoff, typed into
 // a pane by carl or by the daemon's auto-handoff pass to compact an agent
 // behind a written record — embedded into the binary at build time. Root's

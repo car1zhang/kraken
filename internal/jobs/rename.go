@@ -59,12 +59,13 @@ type RenameResult struct {
 	Notes   []string
 }
 
-// reservedRenamePrefixes are the job-name prefixes kraken MINTS itself:
-// dream.go's `dream-<date>` and graph.go's `graph-<date>`. Both are keyed on
-// the date and both are looked up by prefix to decide whether tonight's job
-// already exists, so renaming INTO one would make a hand-named job answer to
-// that check, and renaming one AWAY would make the pass create a second job
-// for a night that already had one.
+// reservedRenamePrefixes are the job-name prefixes kraken MINTS (or minted)
+// itself: dream.go's `dream-<date>`, and `graph-<date>` from the retired
+// nightly graph-ingest job, archived generations of which still exist. The
+// dream job is keyed on the date and looked up by prefix to decide whether
+// tonight's job already exists, so renaming INTO one would make a hand-named
+// job answer to that check, and renaming one AWAY would make the pass create
+// a second job for a night that already had one.
 var reservedRenamePrefixes = []string{"dream-", "graph-"}
 
 // maxRenameSlugRunes bounds a renamed slug. Runes rather than bytes because

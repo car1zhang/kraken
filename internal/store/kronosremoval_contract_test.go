@@ -58,8 +58,10 @@ func contractKronosRemovalHasAnyMasterRow(t *testing.T, s *Store, name string) b
 
 // Contract: `const schemaVersion = 31`.
 func TestKronosRemovalContractSchemaVersionIs31(t *testing.T) {
-	if schemaVersion != 31 {
-		t.Fatalf("schemaVersion = %d, want 31", schemaVersion)
+	// At least 31 rather than exactly: the knowledge graph's removal appended
+	// v32 after this step landed, and a later step never un-applies v31.
+	if schemaVersion < 31 {
+		t.Fatalf("schemaVersion = %d, want ≥ 31", schemaVersion)
 	}
 }
 
@@ -73,8 +75,8 @@ func TestKronosRemovalContractFreshStoreShape(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	if v := contractKronosRemovalUserVersion(t, s); v != 31 {
-		t.Errorf("user_version = %d, want 31", v)
+	if v := contractKronosRemovalUserVersion(t, s); v != schemaVersion {
+		t.Errorf("user_version = %d, want the current %d", v, schemaVersion)
 	}
 	if contractKronosRemovalHasAnyMasterRow(t, s, "orch_inbox") {
 		t.Error("a fresh store still has an orch_inbox row in sqlite_master")
@@ -127,8 +129,8 @@ func TestKronosRemovalContractV30MigratesToV31(t *testing.T) {
 	}
 	t.Cleanup(func() { s2.Close() })
 
-	if v := contractKronosRemovalUserVersion(t, s2); v != 31 {
-		t.Errorf("user_version after migration = %d, want 31", v)
+	if v := contractKronosRemovalUserVersion(t, s2); v != schemaVersion {
+		t.Errorf("user_version after migration = %d, want the current %d", v, schemaVersion)
 	}
 	if contractKronosRemovalHasAnyMasterRow(t, s2, "orch_inbox") {
 		t.Error("orch_inbox survived the v31 migration")

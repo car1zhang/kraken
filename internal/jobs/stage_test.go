@@ -112,7 +112,7 @@ func TestScanStageSignalShapes(t *testing.T) {
 		// ever routes a typed /do through it, this case is where the silent
 		// miss becomes a visible decision to revisit.
 		{"system local_command record ignored", []string{`{"type":"system","subtype":"local_command","content":"<command-name>/do</command-name>"}`}, ""},
-		{"malformed line skipped, later signal kept", []string{"{not json", skillToolLine(t, "graph")}, "graph"},
+		{"malformed line skipped, later signal kept", []string{"{not json", skillToolLine(t, "info")}, "info"},
 		{"empty transcript", []string{""}, ""},
 		{"non-stage signal does not clear an earlier stage", []string{skillToolLine(t, "dream"), skillToolLine(t, "claude-api")}, "dream"},
 	}

@@ -27,10 +27,10 @@ import (
 // dream-loop workflow state, and workflow state with its own lifecycle is a
 // table, not a fact.
 //
-// What that costs, stated plainly because it was the point of the edge era:
-// an observation is no longer retrievable through FTS/vector search and no
-// longer rides into a cell's graphContext. Nothing replaces that, and nothing
-// is meant to — the watchlist is read by the nightly pass and by carl on the
+// What that cost, stated plainly because it was the point of the edge era:
+// an observation stopped being retrievable through the graph's search and
+// stopped riding into a cell's spawn brief (and v31 then removed the graph
+// altogether). Nothing replaces that, and nothing is meant to — the watchlist is read by the nightly pass and by carl on the
 // DREAM view, both of which address it directly.
 //
 // Two POST routes, not one, because the row has two owners and
@@ -108,8 +108,7 @@ func watchOneLine(s string) string { return strings.Join(strings.Fields(s), " ")
 // watch_items row id again, but no key was added, renamed or retyped in either
 // direction, so the web DREAM view and the iOS app decode this unchanged and
 // `apiContract` does not bump. src/dst/predicate deliberately stay OFF this
-// wire — a key added to an existing shape is a contract bump (graph.go's
-// header states the policy), and nothing on either client renders them.
+// wire, and nothing on either client renders them.
 type webWatchItem struct {
 	ID          int64  `json:"id"`
 	Observation string `json:"observation"`

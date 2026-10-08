@@ -448,7 +448,7 @@ func edgeMMSeedQuestion(t *testing.T, st *store.Store, jobID int64, qid, answer 
 // that is not about shape: the payload is perfectly well formed and names a real
 // question, and it is still wrong, because an unanswered question is a decision
 // that has not been TAKEN. Minting one would freeze a question as a thing carl
-// knows and then hand it to the graph as a fact.
+// knows.
 func TestEdgeMMDecisionOfAnUnansweredQuestionIsRefused(t *testing.T) {
 	st := useTestStore(t)
 	mux := edgeMMMux(t)

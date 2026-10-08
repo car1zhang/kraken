@@ -18,14 +18,11 @@ import (
 	"kraken/internal/store"
 )
 
-// mm.go — the mental model's daemon-side halves: minting one graph episode per
-// item carl marks, closing that item's derived facts when it dies, and the
-// verify pass that decides when it died.
+// mm.go — the mental model's daemon-side half: the verify pass that decides
+// when an item carl marked has died, and the invalidation that records it.
 //
-// The division of labour is the same one graph.go draws and for the same
-// reason: nothing here spends a model. Compiling episodes into entities and
-// facts is a `/graph` cell's job; this file only mints the provenance unit and
-// keeps the anchors honest, which is mechanical enough to sit on a daemon tick.
+// Nothing here spends a model: keeping the anchors honest is mechanical
+// enough to sit on a daemon tick.
 //
 // One rule shapes every branch below, and it is the invariant carl's mental
 // model rests on: A FAILED READ IS NEVER AN INVALIDATION. A repo that will not
@@ -35,163 +32,6 @@ import (
 // "changed", because invalidation is one-way: nothing ever resurrects an item,
 // so a wrong invalidation is permanent and silent, while a wrong survival costs
 // one more pass.
-
-// mmEpisodeKind is the one episode kind the mental model mints. After the v29
-// cutover it is the only kind anything in this binary writes except the dream
-// loop's watch adds — the sweeps that wrote transcript/feedback/artifact/job
-// episodes are gone (see graph.go).
-const mmEpisodeKind = "mental-model"
-
-// mmEpisodeMaxRunes caps one episode's rendered content. An item's frozen text
-// is already bounded by the route that took it (32K runes for an artifact
-// element, 8K for a note), so this is the backstop rather than the usual case:
-// an episode is a provenance unit for an extraction agent to read, and the
-// item row is the source of truth it can always go back to.
-const mmEpisodeMaxRunes = 4000
-
-// MintMMEpisode writes the pending `mental-model` episode for one item and
-// stamps its id back onto the item.
-//
-// VALIDATE FIRST, and deliberately without a transaction: the store runs on one
-// connection and this writes two rows through two accessors, so a refused mint
-// has to leave ZERO rows rather than half of one. Everything that can refuse is
-// checked before the first write — the same mitigation watchItemAdd carries.
-//
-// Idempotent by construction: AddEpisode dedupes on the content hash, so
-// re-minting an unchanged item returns the existing episode id and writes no
-// second row — and the stamp runs anyway, which is what makes a retry after a
-// failed stamp converge instead of orphaning the episode.
-func MintMMEpisode(st *store.Store, it store.MMItem, anchor *store.MMCodeAnchor) (int64, error) {
-	if st == nil {
-		return 0, fmt.Errorf("mint mm episode: no store")
-	}
-	if it.ID <= 0 {
-		return 0, fmt.Errorf("mint mm episode: item has no id")
-	}
-	if it.CreatedAt <= 0 {
-		return 0, fmt.Errorf("mint mm episode for item %d: item has no creation time", it.ID)
-	}
-	content := MMEpisodeContent(it, anchor)
-	if strings.TrimSpace(content) == "" {
-		return 0, fmt.Errorf("mint mm episode for item %d: empty content", it.ID)
-	}
-	id, err := addEpisode(st, mmEpisodeKind, mmEpisodeRef(it.ID), content, it.CreatedAt)
-	if err != nil {
-		return 0, err
-	}
-	if err := st.SetMMItemEpisode(it.ID, id); err != nil {
-		// The episode row survives, and that is fine: a retry re-mints to the
-		// SAME id (hash dedupe) and stamps again. Returning 0 rather than the
-		// id keeps "error" and "usable id" from being true at once for a
-		// caller that only checks one of them.
-		return 0, fmt.Errorf("mint mm episode for item %d: stamp episode: %w", it.ID, err)
-	}
-	return id, nil
-}
-
-// mmEpisodeRef is an episode's ref for one item — the handle that lets an
-// extraction agent (and `k graph get`) walk back from a fact to the thing carl
-// actually marked.
-func mmEpisodeRef(itemID int64) string { return fmt.Sprintf("mm:%d", itemID) }
-
-// MMEpisodeContent renders one item as episode text.
-//
-// It is a FROZEN GOLDEN FORMAT with exactly one canonical spelling per item —
-// the v16-era `watchEpisodeContent` lesson (that function went with the watch
-// overlay's move out of the graph and is not in the tree any more), where two
-// spellings of one provenance unit read as two different sources to anything
-// sweeping kg_episodes, and the hash dedupe that makes re-minting free stops
-// working the moment the same item renders two ways.
-//
-// A reading's anchor text is preferred over the item's content because the two
-// are written by different halves of the feature and can differ: the item's
-// content is what the capture route stored, while the anchor's Text is what the
-// anchor ladder resolved at the commit it landed on — the blob's bytes rather
-// than the editor buffer's whenever a commit rung matched.
-//
-// What a survived verify rewrites is the anchor's COORDINATES — path, range,
-// sha — never its Text or TextSHA, which are the anchor's identity (see
-// ReanchorMMCodeAnchor). One consequence is worth stating because nothing else
-// says it: the episode minted at capture time is never re-minted after a
-// relocation, so an item whose file was renamed or whose lines shifted keeps an
-// episode whose first content line still names the OLD coordinates. Harmless
-// for retrieval — the sentence is unchanged and the fact reads the same — but
-// an agent dereferencing that handle with `k graph get` gets a path:range that
-// has since moved.
-func MMEpisodeContent(it store.MMItem, anchor *store.MMCodeAnchor) string {
-	lines := []string{fmt.Sprintf("%s %s %s", mmEpisodeKind, it.Kind, mmEpisodeRef(it.ID))}
-	switch it.Kind {
-	case "decision":
-		lines = append(lines, "decided: "+it.Content)
-	case "reading":
-		if anchor != nil {
-			lines = append(lines,
-				fmt.Sprintf("read: %s/%s:%d-%d", anchor.Repo, anchor.Path, anchor.StartLine, anchor.EndLine),
-				anchor.Text)
-		} else {
-			lines = append(lines, fmt.Sprintf("read: %s/%s", it.Slug, it.SourceRef), it.Content)
-		}
-	default:
-		// note, and anything a later kind adds: the content IS the episode.
-		lines = append(lines, it.Content)
-	}
-	if strings.TrimSpace(it.Context) != "" {
-		lines = append(lines, "context: "+it.Context)
-	}
-	return capRunes(strings.Join(lines, "\n"), mmEpisodeMaxRunes)
-}
-
-// capRunes truncates to at most n RUNES. Unlike capString (graph.go, which
-// caps bytes and marks the cut), this appends no marker: the format above is
-// golden, and a marker would make the truncated spelling of an item a second
-// spelling of it.
-func capRunes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	i := 0
-	for idx := range s {
-		if i == n {
-			return s[:idx]
-		}
-		i++
-	}
-	return s
-}
-
-// CloseMMItemEdges invalidates every live fact derived from one item's episode.
-//
-// This is core behaviour rather than housekeeping: after the cutover the graph
-// is compiled from the mental model alone, so a dead item's facts are exactly
-// the facts that must close. The sibling memory job measured the alternative —
-// 13 of 1,825 edges ever invalidated — which is what a graph looks like when
-// closing a window is a habit rather than a mechanism.
-//
-// Every degenerate input is a SUCCESS: episodeID 0 (an item whose mint failed),
-// an episode that no longer exists, an episode with no edges yet (the nightly
-// cell has not compiled it), and an edge already expired. Invalidation runs
-// from the verify pass, and a pass that errored on "there was nothing to close"
-// would turn every ordinary death into a logged failure.
-func CloseMMItemEdges(st *store.Store, episodeID, at int64) (int, error) {
-	if st == nil || episodeID <= 0 {
-		return 0, nil
-	}
-	edges, err := st.EdgesForEpisode(episodeID)
-	if err != nil {
-		return 0, err
-	}
-	closed := 0
-	for _, e := range edges {
-		if e.ExpiredAt != 0 {
-			continue
-		}
-		if err := st.InvalidateEdge(e.ID, at); err != nil {
-			return closed, err
-		}
-		closed++
-	}
-	return closed, nil
-}
 
 // ---------------------------------------------------------------------------
 // The verify pass
@@ -233,13 +73,12 @@ const (
 	mmBreakerMin = 3
 )
 
-// mmLastPass is the pass throttle (unix millis), in-memory like graphLastPass:
-// losing it on a restart costs one extra pass, which is one fetch per marked
+// mmLastPass is the pass throttle (unix millis), held in memory: losing it on a restart costs one extra pass, which is one fetch per marked
 // repo and no writes when nothing moved.
 var mmLastPass atomic.Int64
 
-// mmCodeRunning single-flights the code half — the shape graphSlowRunning and
-// usagePassRunning use, for the sharper version of their reason: this half
+// mmCodeRunning single-flights the code half — the shape usagePassRunning
+// uses, for the sharper version of its reason: this half
 // makes network calls into real checkouts, and two of them overlapping would
 // have two goroutines fetching the same repo and racing each other's
 // re-anchors.
@@ -747,23 +586,21 @@ func mmSubsequence(have, want string) bool {
 // re-read.
 func mmNormalize(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
-// mmInvalidate is the one death path: stamp the item, close its facts, say so
-// once.
+// mmInvalidate is the one death path: stamp the item and say so once.
 //
 // THE ROW TRANSITION IS THE DEDUP, and it is enforced here rather than assumed
 // of the callers. `InvalidateMMItem` is one-way and answers an already-dead
 // row with a silent success — deliberately, so it cannot overwrite the first
 // reason — which means a second call is indistinguishable from a first unless
 // somebody looks. So this re-reads the row and does NOTHING when it is already
-// invalidated: no edge close, no event, and above all no notification. The
+// invalidated: no event, and above all no notification. The
 // property used to be held by the two worklists both filtering to live items,
 // which made it true by luck of the caller; a third caller (carl's own unmark
 // routing through here, say) would have got duplicate "memory stale" pings
 // with nothing failing anywhere.
 //
 // The re-read is also what makes the side effects act on the CURRENT row: the
-// caller's copy came out of a list read earlier in the pass, and the episode
-// id is what the edge close walks.
+// caller's copy came out of a list read earlier in the pass.
 func mmInvalidate(st *store.Store, it store.MMItem, at int64, reason, detail string) {
 	cur, err := st.GetMMItem(it.ID)
 	if err != nil {
@@ -777,12 +614,8 @@ func mmInvalidate(st *store.Store, it store.MMItem, at int64, reason, detail str
 		dlogErr("mm verify: invalidate item %d: %v", cur.ID, err)
 		return
 	}
-	closed, err := CloseMMItemEdges(st, cur.EpisodeID, at)
-	if err != nil {
-		dlogErr("mm verify: close edges for item %d: %v", cur.ID, err)
-	}
-	dlogEvent("info", "mm-invalidated", "mm item %d (%s/%s) invalidated: %s — %s (%d edges closed)",
-		cur.ID, cur.Kind, cur.Source, reason, detail, closed)
+	dlogEvent("info", "mm-invalidated", "mm item %d (%s/%s) invalidated: %s — %s",
+		cur.ID, cur.Kind, cur.Source, reason, detail)
 	notify("kraken — memory stale", mmDeathHeadline(cur, reason))
 }
 
@@ -800,8 +633,8 @@ func mmDeathHeadline(it store.MMItem, reason string) string {
 // The code half
 // ---------------------------------------------------------------------------
 
-// kickMMCode runs the git half in one single-flighted goroutine, the same shape
-// kickGraphSlow uses and for the same reason: it must not sit inside tick().
+// kickMMCode runs the git half in one single-flighted goroutine: it fetches,
+// so it must not sit inside tick().
 func kickMMCode(st *store.Store, at int64) {
 	if !mmCodeRunning.CompareAndSwap(false, true) {
 		return

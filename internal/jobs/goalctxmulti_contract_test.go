@@ -36,16 +36,12 @@ import (
 
 const contractGMNow = int64(1_700_000_000_000)
 
-// contractGMStore opens a scratch store, wires it active, and stubs the graph
-// seam EMPTY — so every block observed here is the goals block and nothing
-// else.
+// contractGMStore opens a scratch store and wires it active.
 func contractGMStore(t *testing.T) *store.Store {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
-	st := storeForGraph(t)
-	withFacts(t, nil)
-	return st
+	return storeForRecall(t)
 }
 
 // contractGMPeriods is the current (week, day) pair renderGoalsBlock reads for.
@@ -426,9 +422,9 @@ func TestContractGMGoalContextMarksEveryLinkEndToEnd(t *testing.T) {
 // every firing would put the same unchanged block in front of it on every
 // prompt for the rest of the session.
 //
-// Every prompt below is distinct, so the graph half's same-query short-circuit
-// is not what is being measured, and the graph seam is stubbed empty so the
-// only thing that can appear is the goals block.
+// Every prompt below is distinct, so nothing about the prompt is what is being
+// measured; the job has no notes, so the only thing that can appear is the
+// goals block.
 func TestContractGMRecallReArmsOnceOnEveryLinkChange(t *testing.T) {
 	st := contractGMStore(t)
 	const slug = "recall-links"

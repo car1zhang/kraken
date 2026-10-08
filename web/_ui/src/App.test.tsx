@@ -13,10 +13,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Always-mounted sibling views, stubbed: GraphView owns a WebGL canvas jsdom
-// cannot create, and the log/dream views poll endpoints of their own. None is
+// Always-mounted sibling views, stubbed: the log/dream views poll endpoints of
+// their own, and the memory view only renders App's library/mm polls. None is
 // part of the wiring under test.
-vi.mock("./components/graph/GraphView.tsx", () => ({ GraphView: () => null }));
+vi.mock("./components/memory/MemoryView.tsx", () => ({
+  MemoryView: () => null,
+  default: () => null,
+}));
 vi.mock("./components/dream/DreamView.tsx", () => ({ DreamView: () => null }));
 vi.mock("./components/log/LogView.tsx", () => ({ LogView: () => null }));
 
