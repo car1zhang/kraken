@@ -1702,11 +1702,24 @@ Errors: 400 (bad JSON, unknown field, missing/non-positive id), 404, 405,
 ### `POST /api/graph/recall` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
 
 Mid-conversation memory (api/recall.go, jobs/recall.go). Its only caller is
-`kraken recall-hook`, wired by every cell worktree as two Claude Code hooks:
-`UserPromptSubmit` (query = the user's new message) and `PostToolUse`
-(matcher-less — every tool call — query = the transcript's last assistant
-text). The hook POSTs its payload here and emits the response as
-`hookSpecificOutput.additionalContext`.
+`kraken recall-hook`, wired by every cell worktree as one Claude Code hook:
+`UserPromptSubmit` (query = the user's new message; the `PostToolUse` arm was
+retired on measurement — `jobs.recallHookEvents`). The hook POSTs its payload
+here and emits the response as `hookSpecificOutput.additionalContext`.
+
+The response is up to THREE blocks concatenated, in this order, each `""`
+when it has nothing to say: carl's **unread notes** for the job
+(jobs/recallnotes.go — every feedback row and every answered question not yet
+delivered, each delivered ONCE per job and note-as-written: the key hashes the
+text, so an edited note or a re-answer arrives again; recorded in the kv row
+`notes_delivered:<job id>` before the block is returned, withdrawn if that
+write fails, never recorded for a caller that has gone; addressed to the job's
+stamped lead session only — a teammate's or side thread's firing gets no
+notes; capped at `notesContextBytes` with the overflow deferred to the next
+prompt in order, and each item cut at `notesItemRunes` with a marker), then
+carl's **goals** (re-delivered whenever the rendered state differs from what
+the session last saw), then the **graph facts** the rest of this section
+describes.
 
 `Stop` is deliberately not wired: Claude Code's hooks reference is explicit
 that `additionalContext` at Stop **continues the turn** rather than
@@ -1734,7 +1747,8 @@ Request:
 | `session_id` | string | required in practice | the dedup key; blank/whitespace always yields an empty context, since without one the same facts would re-inject on every firing |
 | `event` | string | optional | `hook_event_name` verbatim — carried for debugging, never branched on |
 | `prompt` | string | optional | the user's new message — `UserPromptSubmit`'s query |
-| `transcript_path` | string | optional | fallback query source: the transcript's last assistant text, read when `prompt` is empty — `PostToolUse`'s query, since its payload carries no prompt |
+| `transcript_path` | string | optional | fallback query source: the transcript's last assistant text, read when `prompt` is empty (the retired `PostToolUse` arm's query, since that payload carried no prompt) |
+| `slug` | string | optional | the cell's job slug, baked into the installed hook command; what the goals and notes blocks resolve the job by (current slug, then former slugs, then the session as the pre-slug fallback) — empty is legal and stays legal |
 
 Response: `{"context": string}` — the rendered block, or `""`.
 
